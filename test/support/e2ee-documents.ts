@@ -323,7 +323,11 @@ export function newServer(
   const statements: string[] = [];
   const bucket = objectBucket();
   const room = vi.fn(
-    async () => new Response(JSON.stringify({ ok: true }), { status: 200 })
+    // A plaintext room holding nothing: it confirms a migration lock.
+    async () =>
+      new Response(JSON.stringify({ ok: true, latestVersion: null }), {
+        status: 200
+      })
   );
   const env: Record<string, unknown> = {
     ENVIRONMENT: 'development',

@@ -361,35 +361,56 @@ async function tellRoom(
 }
 
 /**
- * Locks the project's room and answers the plaintext version it holds:
- * null when there is no room, it holds none, or it could not be told.
+ * What locking the project's room confirmed: the plaintext version it
+ * holds (null when it holds none, is already encrypted, or the deployment
+ * binds no rooms at all), or that nothing could be confirmed.
+ */
+type RoomLock =
+  { confirmed: true; version: number | null } | { confirmed: false };
+
+/**
+ * Locks the project's room and answers the plaintext version it holds.
+ * Only an explicit answer counts: a room that refused, failed, answered
+ * something unreadable or could not be reached is unconfirmed, never "no
+ * room", since edits it holds unsaved would be lost to the purge.
  */
 async function lockRoom(
   env: MigrationEnv,
   projectId: string
-): Promise<number | null> {
+): Promise<RoomLock> {
   const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
-  if (!rooms || typeof rooms.getByName !== 'function') return null;
+  if (!rooms || typeof rooms.getByName !== 'function') {
+    return { confirmed: true, version: null };
+  }
   const url = new URL('https://project-room.internal/_internal/migration');
   url.searchParams.set('projectId', projectId);
-  const response = await rooms.getByName(projectId).fetch(
-    new Request(url, {
-      method: 'POST',
-      headers: {
-        'x-openzcad-internal-migration': 'v1',
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({ action: 'lock' })
-    })
-  );
-  if (response.status !== 200) return null;
+  let response: Response;
+  try {
+    response = await rooms.getByName(projectId).fetch(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'x-openzcad-internal-migration': 'v1',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ action: 'lock' })
+      })
+    );
+  } catch {
+    return { confirmed: false };
+  }
+  // An encrypted room holds no plaintext to lose.
+  if (response.status === 204) return { confirmed: true, version: null };
+  if (response.status !== 200) return { confirmed: false };
   const answer = (await response.json().catch(() => null)) as {
     latestVersion?: unknown;
   } | null;
-  return typeof answer?.latestVersion === 'number' &&
+  if (!answer || typeof answer !== 'object') return { confirmed: false };
+  if (answer.latestVersion === null) return { confirmed: true, version: null };
+  return typeof answer.latestVersion === 'number' &&
     Number.isSafeInteger(answer.latestVersion)
-    ? answer.latestVersion
-    : null;
+    ? { confirmed: true, version: answer.latestVersion }
+    : { confirmed: false };
 }
 
 const leaseLost = (): never =>
@@ -574,41 +595,49 @@ async function start(
       );
     }
   }
-  // Nothing the room holds may move on while the browser stages. A room
-  // that cannot be told still meets the cutover's check that the
-  // plaintext did not move.
-  let roomVersion: number | null = null;
-  try {
-    roomVersion = await lockRoom(ctx.env, projectId);
-  } catch {
-    // Best effort; see above.
-  }
-  // Slice 7-2: a room holding edits no checkpoint saved yet (its version
-  // is ahead of the account's head) would lose them to the purge. A fresh
-  // start stages nothing then: it is undone at once, and the owner saves
-  // the project first. A resumed staging locked the room when it began.
-  if (
-    existing?.state !== 'staging' &&
-    roomVersion !== null &&
-    roomVersion > project.document_version
-  ) {
-    await runBatch(ctx.db, [
-      ctx.db
-        .prepare(
-          `UPDATE e2ee_project_migrations
-           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
-               lease_expires_at = NULL, updated_at = ?, finished_at = ?
-           WHERE project_id = ? AND state = 'staging' AND lease_id = ?
-             AND staged_version = 0`
-        )
-        .bind(nowIso, nowIso, projectId, leaseId)
-    ]);
-    refuse(
-      409,
-      E2EE_MIGRATION_CODES.roomAhead,
-      'This project has edits from a live session that your account has not saved yet. Open it and save it, then try again.',
-      { roomVersion, accountVersion: project.document_version }
-    );
+  // Nothing the room holds may move on while the browser stages.
+  const room = await lockRoom(ctx.env, projectId);
+  // A resumed staging locked the room (confirmed) when it began, and the
+  // room has refused every write since (PROJECT_MIGRATING): only a fresh
+  // start asks what the room holds.
+  if (existing?.state !== 'staging') {
+    // A fresh start that must stage nothing is undone at once, and the
+    // plaintext is writable again.
+    const undoFreshStart = () =>
+      runBatch(ctx.db, [
+        ctx.db
+          .prepare(
+            `UPDATE e2ee_project_migrations
+             SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+                 lease_expires_at = NULL, updated_at = ?, finished_at = ?
+             WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+               AND staged_version = 0`
+          )
+          .bind(nowIso, nowIso, projectId, leaseId)
+      ]);
+    // A room that confirmed neither its version nor that it holds none
+    // may keep edits no checkpoint saved: the cutover checks only D1 and
+    // the purge would delete them. Fail closed; the owner retries.
+    if (!room.confirmed) {
+      await undoFreshStart();
+      refuse(
+        503,
+        'PROJECT_ROOM_UNAVAILABLE',
+        'The project’s live session could not be locked right now, so nothing was staged. Try again in a moment.'
+      );
+    }
+    // Slice 7-2: a room holding edits no checkpoint saved yet (its
+    // version is ahead of the account's head) would lose them to the
+    // purge. Nothing is staged then; the owner saves the project first.
+    if (room.version !== null && room.version > project.document_version) {
+      await undoFreshStart();
+      refuse(
+        409,
+        E2EE_MIGRATION_CODES.roomAhead,
+        'This project has edits from a live session that your account has not saved yet. Open it and save it, then try again.',
+        { roomVersion: room.version, accountVersion: project.document_version }
+      );
+    }
   }
   return json(
     {
