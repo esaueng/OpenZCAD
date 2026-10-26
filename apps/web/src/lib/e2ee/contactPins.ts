@@ -46,15 +46,22 @@ export interface ContactsListPinRecord {
    */
   readonly confirmed: boolean;
   /**
-   * An approving device's confirmed head older than this pin, waiting to be
-   * checked: the pin becomes confirmed once a list this browser accepts
-   * (which must extend the pin) holds exactly this entry at this sequence.
-   * The pin itself never moves back to it.
+   * The newest approval head this browser received for an existing pin,
+   * not yet checked against it. A grant never replaces a pin: the next
+   * list this browser accepts must extend the pin and, once it reaches
+   * this sequence, hold exactly this entry there. Only then does the
+   * grant's `confirmed` count, and the pin still moves only with that list.
    */
-  readonly confirmAt?: {
-    readonly sequence: number;
-    readonly entryHash: string;
-  } | null;
+  readonly pendingApproval?: ApprovalHeadRecord;
+}
+
+/** An approving device's signed contacts head, waiting to be checked. */
+export interface ApprovalHeadRecord {
+  readonly sequence: number;
+  /** Lowercase hex `contactsEntryHash`. */
+  readonly entryHash: string;
+  /** The approver's own pin was confirmed. */
+  readonly confirmed: boolean;
 }
 
 /** What this browser has been shown of one contact's keys. */
@@ -88,11 +95,13 @@ export interface ContactPinStore {
    * sequence with another hash, under the same identity. Another identity
    * replaces it (the caller already accepted the account's new identity).
    * False, writing nothing, when the stored pin is newer. A confirmed pin
-   * stays confirmed as it moves forward. With `fromApproval` (a head an
-   * approving device signed) the pin never moves backward either: a newer
-   * or equal head is adopted, and a confirmed head older than an
-   * unconfirmed pin is kept beside it as `confirmAt`, to be checked against
-   * the next list this browser accepts.
+   * stays confirmed as it moves forward; `confirmed: true` on a move is the
+   * caller's claim that it checked the list against `pendingApproval`.
+   * With `fromApproval` (a head an approving device signed) a browser with
+   * no pin under this identity adopts the head; otherwise the pin never
+   * moves: the head is recorded as `pendingApproval` (or, when it equals
+   * the pin or is the empty list, its confirmation applies at once), and a
+   * head at the pin's sequence with another hash is refused.
    */
   advanceList(
     userId: string,
@@ -144,25 +153,33 @@ function readListPin(
     pin.sequence === EMPTY_CONTACTS_SEQUENCE &&
     pin.entryHash === EMPTY_CONTACTS_HASH;
   if (!empty && !isSequence(pin.sequence)) return null;
-  const at = pin.confirmAt;
-  const confirmAt =
+  const at = pin.pendingApproval;
+  const pendingApproval =
     typeof at === 'object' &&
     at !== null &&
     isSequence(at.sequence) &&
+    at.sequence !== pin.sequence &&
     typeof at.entryHash === 'string' &&
     HASH.test(at.entryHash) &&
-    at.sequence < pin.sequence
-      ? { sequence: at.sequence, entryHash: at.entryHash }
+    typeof at.confirmed === 'boolean'
+      ? {
+          sequence: at.sequence,
+          entryHash: at.entryHash,
+          confirmed: at.confirmed
+        }
       : null;
   const confirmed =
     pin.confirmed === undefined ? legacyConfirmed : pin.confirmed === true;
-  return {
-    identityKeyHash: pin.identityKeyHash,
-    sequence: pin.sequence,
-    entryHash: pin.entryHash,
+  return withPending(
+    {
+      identityKeyHash: pin.identityKeyHash,
+      sequence: pin.sequence,
+      entryHash: pin.entryHash,
+      confirmed
+    },
     confirmed,
-    ...(confirmed || !confirmAt ? {} : { confirmAt })
-  };
+    pendingApproval
+  );
 }
 
 function readContactPin(value: unknown): ContactPin | null {
@@ -211,37 +228,44 @@ export function advancedListPin(
 ): ContactsListPinRecord | null {
   const valid = readListPin(next, false);
   if (!valid) return null;
+  // Nothing to protect under this identity: a fresh browser pins the head.
   if (!current || current.identityKeyHash !== valid.identityKeyHash) {
-    return valid;
+    return withPending(valid, valid.confirmed, null);
   }
-  if (
-    options.fromApproval &&
-    valid.confirmed &&
-    !current.confirmed &&
-    valid.sequence < current.sequence
-  ) {
-    // This browser already accepted (or wrote) newer entries than the
-    // approver has seen. Rolling the pin back to the approver's head would
-    // let a server hide them again, so keep the pin and confirm it only
-    // once an accepted list shows the approver's head is its ancestor. An
-    // approver that saw the list only empty is an ancestor of any chain.
-    return valid.sequence === EMPTY_CONTACTS_SEQUENCE
-      ? pending(current, true, null)
-      : pending(current, false, {
-          sequence: valid.sequence,
-          entryHash: valid.entryHash
-        });
+  if (options.fromApproval) {
+    // A grant never discards this browser's pin, whichever side is newer:
+    // a server can show an unconfirmed approver a longer fork, or a stale
+    // one an older head. It confirms at once only what needs no list: the
+    // pin itself, or an approver that saw the list only empty.
+    if (
+      valid.sequence === EMPTY_CONTACTS_SEQUENCE ||
+      (valid.sequence === current.sequence &&
+        valid.entryHash === current.entryHash)
+    ) {
+      const confirmed = current.confirmed || valid.confirmed;
+      return withPending(current, confirmed, current.pendingApproval ?? null);
+    }
+    if (valid.sequence === current.sequence) return null;
+    return withPending(current, current.confirmed, {
+      sequence: valid.sequence,
+      entryHash: valid.entryHash,
+      confirmed: valid.confirmed
+    });
   }
   if (!follows(current, valid)) return null;
+  const pendingHead = current.pendingApproval ?? null;
+  // A list reaching the pending head was checked against it by the caller.
+  const resolved =
+    pendingHead !== null && valid.sequence >= pendingHead.sequence;
   const confirmed = current.confirmed || valid.confirmed;
-  return pending(valid, confirmed, confirmed ? null : current.confirmAt);
+  return withPending(valid, confirmed, resolved ? null : pendingHead);
 }
 
-/** `record` as `confirmed`, carrying `confirmAt` only while one is pending. */
-function pending(
+/** `record` as `confirmed`, with `pending` only while it may still confirm. */
+function withPending(
   record: ContactsListPinRecord,
   confirmed: boolean,
-  confirmAt: ContactsListPinRecord['confirmAt']
+  pending: ApprovalHeadRecord | null
 ): ContactsListPinRecord {
   const base = {
     identityKeyHash: record.identityKeyHash,
@@ -249,7 +273,9 @@ function pending(
     entryHash: record.entryHash,
     confirmed
   };
-  return confirmed || !confirmAt ? base : { ...base, confirmAt };
+  return pending && pending.sequence !== record.sequence
+    ? { ...base, pendingApproval: pending }
+    : base;
 }
 
 /** The contact pin to store, or null to refuse. */

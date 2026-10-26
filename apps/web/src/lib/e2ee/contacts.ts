@@ -270,17 +270,18 @@ async function acceptList(
   if (list.userId !== userId) {
     throw new ContactsError('invalid', 'The contacts list names another user.');
   }
-  // An approving device confirmed a head older than this browser's pin.
-  // This list extends the pin, so it is the chain this browser accepted:
-  // the approver's head must be in it, or one of the two was on a fork.
+  // An approving device's head waits beside the pin. This list extends
+  // the pin; once it reaches the head it must hold exactly that entry, or
+  // the approver and this browser were shown different chains: refuse it
+  // as a fork, keeping both. Only a matching head lends its confirmation.
   let confirmedNow = confirmed;
-  const confirmAt = anchor?.confirmed ? null : anchor?.confirmAt;
-  if (confirmAt) {
-    const entry = list.entries[confirmAt.sequence];
-    if (!entry || toHex(entry.hash) !== confirmAt.entryHash) {
+  const pendingHead = anchor?.pendingApproval;
+  if (pendingHead && pendingHead.sequence <= list.pin.sequence) {
+    const entry = list.entries[pendingHead.sequence];
+    if (!entry || toHex(entry.hash) !== pendingHead.entryHash) {
       refused(new E2eeError('chain-broken', 'approval head'), 'contacts list');
     }
-    confirmedNow = true;
+    confirmedNow = confirmed || pendingHead.confirmed;
   }
   requireActive(ctx);
   // The store keeps a confirmed pin confirmed as it moves forward; what

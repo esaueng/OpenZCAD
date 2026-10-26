@@ -158,75 +158,87 @@ describe('contact pins', () => {
         await pins.advanceList('pk', { ...claimed, confirmed: true }),
         name
       ).toBe(false);
-      // An approving device's older head never moves the pin back: it
-      // waits beside it until an accepted list shows it is an ancestor.
+      // An approval head never moves the pin, older or newer: it waits
+      // beside it until an accepted list shows it on the same chain.
+      const approve = (head: object) =>
+        pins.advanceList('pk', { ...passkey, ...head }, { fromApproval: true });
       expect(
-        await pins.advanceList(
-          'pk',
-          { ...claimed, confirmed: true },
-          { fromApproval: true }
-        ),
+        await approve({ sequence: 3, entryHash: H('3'), confirmed: true }),
         name
       ).toBe(true);
       expect(await pins.readList('pk'), name).toEqual({
         ...passkey,
         confirmed: false,
-        confirmAt: { sequence: 3, entryHash: H('3') }
+        pendingApproval: { sequence: 3, entryHash: H('3'), confirmed: true }
       });
-      // The server moving the pin forward keeps it pending.
-      const later = { ...passkey, sequence: 6, entryHash: H('6') };
-      expect(await pins.advanceList('pk', later), name).toBe(true);
-      expect((await pins.readList('pk'))?.confirmAt, name).toEqual({
-        sequence: 3,
-        entryHash: H('3')
-      });
-      // The same height with another hash is a fork: refused.
       expect(
-        await pins.advanceList(
-          'pk',
-          { ...later, entryHash: H('7'), confirmed: true },
-          { fromApproval: true }
-        ),
-        name
-      ).toBe(false);
-      // An equal or newer approval head is adopted, confirmed.
-      expect(
-        await pins.advanceList(
-          'pk',
-          { ...later, confirmed: true },
-          { fromApproval: true }
-        ),
+        await approve({ sequence: 9, entryHash: H('9'), confirmed: true }),
         name
       ).toBe(true);
       expect(await pins.readList('pk'), name).toEqual({
-        ...later,
+        ...passkey,
+        confirmed: false,
+        pendingApproval: { sequence: 9, entryHash: H('9'), confirmed: true }
+      });
+      // A list that has not reached it keeps it pending; one that has
+      // resolves it with whatever the caller checked.
+      const later = { ...passkey, sequence: 6, entryHash: H('6') };
+      expect(await pins.advanceList('pk', later), name).toBe(true);
+      expect((await pins.readList('pk'))?.pendingApproval?.sequence, name).toBe(
+        9
+      );
+      const reached = { ...passkey, sequence: 9, entryHash: H('9') };
+      expect(
+        await pins.advanceList('pk', { ...reached, confirmed: true }),
+        name
+      ).toBe(true);
+      expect(await pins.readList('pk'), name).toEqual({
+        ...reached,
         confirmed: true
       });
-      // A confirmed pin is never rolled back, and an approver that saw the
-      // list only empty confirms an unconfirmed one in place.
+      // The pin's own height with another hash is a fork: refused.
       expect(
-        await pins.advanceList(
-          'pk',
-          { ...claimed, sequence: 2, entryHash: H('2'), confirmed: true },
-          { fromApproval: true }
-        ),
+        await approve({ ...reached, entryHash: H('7'), confirmed: true }),
         name
       ).toBe(false);
+      // A confirmed pin is never replaced by a newer unconfirmed head: it
+      // stays confirmed at its own head, the head only pending.
+      expect(
+        await approve({ sequence: 12, entryHash: H('c'), confirmed: false }),
+        name
+      ).toBe(true);
+      expect(await pins.readList('pk'), name).toEqual({
+        ...reached,
+        confirmed: true,
+        pendingApproval: { sequence: 12, entryHash: H('c'), confirmed: false }
+      });
+      // An approval equal to the pin, or one that saw the list only empty,
+      // confirms in place.
       await pins.advanceList('pk2', passkey);
       expect(
         await pins.advanceList(
           'pk2',
-          { ...empty, confirmed: true },
-          {
-            fromApproval: true
-          }
+          { ...passkey, confirmed: true },
+          { fromApproval: true }
         ),
         name
       ).toBe(true);
-      expect(await pins.readList('pk2'), name).toEqual({
+      expect((await pins.readList('pk2'))?.confirmed, name).toBe(true);
+      await pins.advanceList('pk3', passkey);
+      expect(
+        await pins.advanceList(
+          'pk3',
+          { ...empty, confirmed: true },
+          { fromApproval: true }
+        ),
+        name
+      ).toBe(true);
+      expect(await pins.readList('pk3'), name).toEqual({
         ...passkey,
         confirmed: true
       });
+      // A browser with no pin adopts the head; an unconfirmed approver's
+      // head stays unconfirmed.
       expect(
         await pins.advanceList(
           'other',
@@ -235,7 +247,10 @@ describe('contact pins', () => {
         ),
         name
       ).toBe(true);
-      expect((await pins.readList('other'))?.confirmed, name).toBe(false);
+      expect(await pins.readList('other'), name).toEqual({
+        ...passkey,
+        confirmed: false
+      });
       // A malformed empty marker is refused.
       expect(
         await pins.advanceList('me', { ...empty, entryHash: H('1') }),

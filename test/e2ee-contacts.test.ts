@@ -1093,7 +1093,10 @@ describe('contacts heads in device approval', () => {
     expect((await advanceApprovalAsNewDevice(phone.keys)).step).toBe('done');
     const pinned = await phone.pins.readList(ALICE);
     expect(pinned).toMatchObject({ sequence: 1, confirmed: false });
-    expect(pinned?.confirmAt?.sequence).toBe(0);
+    expect(pinned?.pendingApproval).toMatchObject({
+      sequence: 0,
+      confirmed: true
+    });
 
     // A server serving only through entry 0 would revive Bob: refused.
     const after = ready(await loadEncryption(phone.keys));
@@ -1119,6 +1122,115 @@ describe('contacts heads in device approval', () => {
     expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe(
       'untrusted'
     );
+  });
+
+  it('keeps a confirmed pin when an unconfirmed approver on a longer fork confirms (#936 review)', async () => {
+    type Row = Record<string, string | number>;
+    const entriesOf = (srv: Server): Row[] =>
+      srv.db
+        .prepare(
+          'SELECT * FROM e2ee_contact_entries WHERE user_id = ? ORDER BY sequence'
+        )
+        .all(ALICE) as Row[];
+    const serve = (srv: Server, rows: Row[]) => {
+      srv.db
+        .prepare('DELETE FROM e2ee_contact_entries WHERE user_id = ?')
+        .run(ALICE);
+      for (const row of rows) {
+        const columns = Object.keys(row);
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_contact_entries (${columns.join(', ')})
+             VALUES (${columns.map(() => '?').join(', ')})`
+          )
+          .run(...columns.map((column) => row[column]!));
+      }
+    };
+    // The laptop, confirmed since setup, verified Bob (0) and untrusted
+    // him (1): its pin is confirmed at entry 1.
+    const { srv, alice } = await aliceUntrustedBob();
+    const honest = entriesOf(srv);
+    expect(await alice.pins.readList(ALICE)).toMatchObject({
+      sequence: 1,
+      confirmed: true
+    });
+
+    // A recovery-key phone is shown a fork: entry 0, then its own entries
+    // 1' (Bob untrusted) and 2' (Bob verified again).
+    serve(srv, honest.slice(0, 1));
+    const phone = browser(srv, ALICE);
+    const phoneAccount = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    let forkBook = await loadContacts(phone.contacts, phoneAccount);
+    forkBook = await untrustContact(
+      phone.contacts,
+      phoneAccount,
+      forkBook,
+      BOB,
+      alice.recovery.secret
+    );
+    forkBook = await verifyContact(
+      phone.contacts,
+      phoneAccount,
+      forkBook,
+      await inspectContact(phone.contacts, forkBook, BOB),
+      alice.recovery.secret
+    );
+    expect(forkBook.list?.pin.sequence).toBe(2);
+    expect(forkBook.listConfirmed).toBe(false);
+    const fork = entriesOf(srv);
+    expect(fork[1]!.entry_hash).not.toBe(honest[1]!.entry_hash);
+    serve(srv, honest);
+
+    // The laptop asks the phone to confirm: the grant names entry 2'.
+    const laptopAccount = ready(await loadEncryption(alice.keys));
+    const request = await requestApproval(alice.keys, laptopAccount, 'Laptop');
+    if (request.step !== 'waiting') throw new Error('Expected a request');
+    await approveDevice(
+      phone.keys,
+      ready(await loadEncryption(phone.keys)),
+      await phone.keys.api.getApproval(request.approval.id),
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    expect((await advanceApprovalAsNewDevice(alice.keys)).step).toBe('done');
+    // The laptop's pin did not move to the fork.
+    expect(await alice.pins.readList(ALICE)).toMatchObject({
+      sequence: 1,
+      entryHash: honest[1]!.entry_hash,
+      confirmed: true,
+      pendingApproval: {
+        sequence: 2,
+        entryHash: fork[2]!.entry_hash,
+        confirmed: false
+      }
+    });
+
+    // The server now serves the fork, hiding the untrust: refused.
+    serve(srv, fork);
+    const after = ready(await loadEncryption(alice.keys));
+    await expect(loadContacts(alice.contacts, after)).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ContactsError && error.code === 'fork'
+    );
+    // The original chain is still accepted, confirmed, Bob untrusted.
+    serve(srv, honest);
+    const book = await loadContacts(alice.contacts, after);
+    expect(book.listConfirmed).toBe(true);
+    expect(book.list?.pin.sequence).toBe(1);
+    expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe(
+      'untrusted'
+    );
+    expect(await alice.pins.readList(ALICE)).toMatchObject({
+      sequence: 1,
+      confirmed: true
+    });
   });
 
   it('refuses a list whose entry differs from an older approval head', async () => {
