@@ -693,7 +693,7 @@ export async function verifyContact(
   // The comparison covered this identity and head: clear the downgrade,
   // and remember it was made here, where it counts even while this
   // browser's list pin is unconfirmed.
-  await ctx.pins.advanceContact(
+  const recorded = await ctx.pins.advanceContact(
     ctx.keys.userId,
     {
       contactUserId: view.userId,
@@ -706,6 +706,7 @@ export async function verifyContact(
     },
     { replaceIdentity: true }
   );
+  if (!recorded) staleAnswer('device list');
   // Read again after the pin: the comparison made here counts now.
   return loadContacts(ctx, account);
 }

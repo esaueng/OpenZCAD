@@ -2,6 +2,8 @@
 row: L11
 ---
 
+Local contact comparisons now check the contact pin store's result. If another inspection accepted a newer device-list head meanwhile, the comparison reports the race rather than reporting success without a local verification marker. A real second-device enrollment regression verifies the refused stale comparison and successful retry after inspecting the newer head.
+
 Contact-pin writes compare the full own-list snapshot (main pin and pending approval) in the same memory operation or IndexedDB transaction as the contact update. A replacement identity from an inspection invalidated by a newer approval cannot poison the contact pin before the request reports a fork. Store and real-flow regressions cover directory-response and pre-write races, each changed authority field, absent pins, preserved contact state and a subsequent honest response.
 
 Authenticated pending heads now impose a minimum usable contacts history, including when the approver was unconfirmed. Prefix and empty responses are refused, as are transactional advances below a concurrently added pending head. A second incompatible approval cannot erase unchecked evidence, and confirmation of the same pending head never downgrades it. Retained contacts books are checked against the current main and pending pins before exposing verified contact keys, including approvals arriving during a directory read. Matching complete ancestry consumes the obligation normally. Older assertions accepting a prefix below a pending head now require a visible fork refusal while retaining both heads.

@@ -1323,6 +1323,59 @@ describe('contacts heads in device approval', () => {
     expect((await phone.pins.readList(ALICE))?.confirmed).toBe(false);
   });
 
+  it('reports a local comparison superseded by another contact-pin advance', async () => {
+    const { srv, alice, bob } = await aliceVerifiedBob();
+    const phone = browser(srv, ALICE);
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    const book = await loadContacts(phone.contacts, account);
+    const compared = await inspectContact(phone.contacts, book, BOB);
+    const secondBob = keysFor(srv, BOB);
+    await enrollWithRecoveryKey(
+      secondBob,
+      ready(await loadEncryption(secondBob)),
+      bob.recovery.secret,
+      'Second Bob device'
+    );
+    const advance = phone.pins.advanceContact.bind(phone.pins);
+    const context = {
+      ...phone.contacts,
+      pins: {
+        ...phone.pins,
+        advanceContact: async (
+          ...args: Parameters<ContactPinStore['advanceContact']>
+        ) => {
+          await inspectContact(phone.contacts, book, BOB);
+          return advance(...args);
+        }
+      }
+    };
+    await expect(
+      verifyContact(context, account, book, compared, alice.recovery.secret)
+    ).rejects.toMatchObject({ code: 'fork' });
+    const current = await inspectContact(phone.contacts, book, BOB);
+    expect(current.list!.pin.sequence).toBeGreaterThan(
+      compared.list!.pin.sequence
+    );
+    expect(current.status).toBe('seen');
+    const retried = await verifyContact(
+      phone.contacts,
+      account,
+      book,
+      current,
+      alice.recovery.secret
+    );
+    expect(
+      retried.contacts.find((contact) => contact.userId === BOB)?.standing
+    ).toBe('verified');
+  });
+
   it.each(['during-directory', 'during-pin-write'] as const)(
     'does not persist a replacement identity from a stale contacts book %s',
     async (timing) => {
