@@ -1127,6 +1127,69 @@ describe('turning an encrypted project back into plaintext', () => {
     expect(count(srv, 'artifacts', projectId)).toBe(0);
   });
 
+  it('lands a staged file only while its decrypt staging lasts, and still refuses an ordinary upload (#914 fence)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    const lease = migrationRow(srv, projectId)!.lease_id as string;
+    const leased = withMigrationLease(desktop.d.fetcher, lease);
+    const file = {
+      projectId,
+      fileName: 'late.stl',
+      contentType: 'model/stl',
+      kind: 'stl-export'
+    };
+    // An ordinary plaintext upload of the migrating project is refused.
+    expect(
+      (await srv.call('POST', '/api/uploads', { body: file })).status
+    ).toBe(409);
+    // The lease holder's own staging upload opens, under the decrypt lease.
+    const created = await leased('/api/uploads', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(file)
+    });
+    expect(created.status).toBe(201);
+    const { session } = (await created.json()) as {
+      session: { uploadSessionId: string; uploadUrl: string };
+    };
+    // The staging is abandoned after the session was checked and before
+    // its claim lands: the claim carries the decrypt staging fence, so it
+    // lands nothing, and the lease holder hears that its lease is gone.
+    const create = srv.bucket.createMultipartUpload;
+    srv.bucket.createMultipartUpload = vi.fn(
+      async (...args: Parameters<typeof create>) => {
+        srv.db
+          .prepare(
+            `UPDATE e2ee_project_migrations
+             SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL,
+                 purge_cursor = 'cleanup'
+             WHERE project_id = ?`
+          )
+          .run(projectId);
+        return create(...args);
+      }
+    );
+    const put = await leased(session.uploadUrl, {
+      method: 'PUT',
+      body: text('Late staged file')
+    });
+    expect(put.status).toBe(409);
+    expect(((await put.json()) as { code: string }).code).toBe(
+      E2EE_MIGRATION_CODES.leaseLost
+    );
+    expect(
+      srv.db
+        .prepare('SELECT reservation_state FROM upload_sessions WHERE id = ?')
+        .get(session.uploadSessionId)
+    ).toMatchObject({ reservation_state: 'open' });
+  });
+
   it('abandons a decrypt staging on the sweep once the reverse path is closed to its owner', async () => {
     const srv = roomServer();
     const { projectId } = await encryptedProject(srv, { revisions: 1 });

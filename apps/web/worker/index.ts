@@ -35,6 +35,7 @@ import {
 } from './workspaceSessions';
 import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import {
+  DecryptStagingLeaseError,
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
@@ -166,6 +167,7 @@ import {
 } from './projectMeasurements';
 import {
   assistantConsentRoute,
+  E2EE_MIGRATION_CODES,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
   MAX_ARTIFACT_PART_BYTES,
@@ -2414,6 +2416,14 @@ async function dispatchApiRequest(
       error instanceof ProjectMigratingError
     ) {
       return json({ error: error.message, code: error.code }, 409);
+    }
+    if (error instanceof DecryptStagingLeaseError) {
+      // Slice 7-3: a decrypt staging's upload (create, parts, completion,
+      // finalize) landed nothing; its lease lapsed or its staging ended.
+      return json(
+        { error: error.message, code: E2EE_MIGRATION_CODES.leaseLost },
+        409
+      );
     }
     if (error instanceof RevisionNotFoundError) {
       return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);

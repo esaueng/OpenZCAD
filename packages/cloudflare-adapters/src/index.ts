@@ -725,6 +725,23 @@ export function projectNotMigratingSql(projectIdSql: string): string {
 }
 
 /**
+ * The SQL that holds while the encrypted project whose id is
+ * `projectIdSql` is being turned back into plaintext (slice 7-3,
+ * migration 0042's direction `decrypt`): what a decrypt staging's own
+ * upload statements carry in place of `projectNotMigratingSql`, which
+ * refuses every staging. The session was opened under the live decrypt
+ * lease (`DecryptStagingFence`); this keeps it from landing anything once
+ * that staging was cut over or abandoned. No binds.
+ */
+function projectStagedForDecryptionSql(projectIdSql: string): string {
+  return `EXISTS (SELECT 1 FROM e2ee_project_migrations decrypting
+    JOIN projects decrypting_project ON decrypting_project.id = decrypting.project_id
+    WHERE decrypting.project_id = ${projectIdSql}
+      AND decrypting.direction = 'decrypt' AND decrypting.state = 'staging'
+      AND decrypting_project.storage_format = 2)`;
+}
+
+/**
  * A fence a decrypted (plaintext) staging write carries in its own SQL
  * (ADR-024 Phase 7, slice 7-3): the owner's live decrypt lease.
  */
@@ -834,6 +851,22 @@ interface DurableUploadSession {
    */
   e2eeBlobKind: string | null;
 }
+
+/** An upload session `requireUploadSession` let through, and on what. */
+interface CheckedUploadSession extends DurableUploadSession {
+  /**
+   * Slice 7-3: a plaintext session of an encrypted project being turned
+   * back into plaintext (a decrypt staging's file, which only its lease
+   * holder could open). Its statements carry the decrypt staging fence
+   * instead of the not-migrating one, which would refuse them.
+   */
+  decryptStaged: boolean;
+}
+
+/** What the upload fences need to know of a session (slices 7-1, 7-3). */
+type FencedUpload = Pick<DurableUploadSession, 'e2eeBlobKind'> & {
+  readonly decryptStaged?: boolean;
+};
 
 interface DurableUploadPart {
   partNumber: number;
@@ -4182,7 +4215,7 @@ export class D1R2PersistenceService implements PersistenceService {
   private async requireUploadSession(
     userId: UserId,
     uploadSessionId: string
-  ): Promise<DurableUploadSession> {
+  ): Promise<CheckedUploadSession> {
     const upload = await this.loadUploadSession(uploadSessionId);
     const expiresAt = upload ? Date.parse(upload.expiresAt) : Number.NaN;
     if (!upload || !Number.isFinite(expiresAt) || expiresAt < Date.now()) {
@@ -4202,15 +4235,16 @@ export class D1R2PersistenceService implements PersistenceService {
     // session opened before the project became encrypted writes nothing more,
     // nor (slice 7-1) one opened before its staging began: each statement
     // that advances it carries the same fence (`plaintextUploadFence`).
+    let decryptStaged = false;
     if (upload.e2eeBlobKind === null) {
       // Slice 7-3: the decrypted files of an encrypted project being turned
       // back into plaintext, whose session only the lease holder opened.
       // They are not refused as migrating: the decrypt staging is the
-      // migration they belong to.
-      if (
-        isPlaintextStorageFormat(access.storageFormat) ||
-        !(await this.isStagedForDecryption(upload.projectId))
-      ) {
+      // migration they belong to, and their statements carry its fence.
+      decryptStaged =
+        !isPlaintextStorageFormat(access.storageFormat) &&
+        (await this.isStagedForDecryption(upload.projectId));
+      if (!decryptStaged) {
         assertPlaintextProject(access);
         await this.refuseIfMigrating(upload.projectId);
       }
@@ -4233,7 +4267,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     await this.refreshAccountQuota(access.ownerUserId);
-    return upload;
+    return { ...upload, decryptStaged };
   }
 
   /**
@@ -4279,9 +4313,7 @@ export class D1R2PersistenceService implements PersistenceService {
    * PROJECT_MIGRATING refusals, and once migration 0042 is installed, so
    * with the flag off no upload statement names its table.
    */
-  private async plaintextUploadFenced(
-    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
-  ): Promise<boolean> {
+  private async plaintextUploadFenced(upload?: FencedUpload): Promise<boolean> {
     return (
       (!upload || upload.e2eeBlobKind === null) &&
       isCloudflareFeatureEnabled(this.env, 'E2EE_MIGRATION_ENABLED') &&
@@ -4292,12 +4324,19 @@ export class D1R2PersistenceService implements PersistenceService {
   /**
    * Slice 7-1: refuses a plaintext upload to a project staged for
    * encryption with PROJECT_MIGRATING. Call it only after access was
-   * resolved.
+   * resolved. A decrypt staging's own session (slice 7-3) is refused with
+   * DecryptStagingLeaseError once that staging is over instead.
    */
   private async refuseIfMigrating(
     projectId: string,
-    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+    upload?: FencedUpload
   ): Promise<void> {
+    if (upload?.decryptStaged) {
+      if (!(await this.isStagedForDecryption(projectId))) {
+        throw new DecryptStagingLeaseError();
+      }
+      return;
+    }
     if (
       (await this.plaintextUploadFenced(upload)) &&
       (await this.isStagedForEncryption(projectId))
@@ -4312,11 +4351,17 @@ export class D1R2PersistenceService implements PersistenceService {
    * once that project's move to encrypted storage began
    * (`projectNotMigratingSql`); '' for an encrypted-blob session, which a
    * staging writes, and while the fence is closed (`plaintextUploadFenced`).
+   * A decrypt staging's own session (slice 7-3) carries
+   * `projectStagedForDecryptionSql` instead: it lands only while that
+   * staging lasts, never after its cutover or abandon.
    */
   private async plaintextUploadFence(
     projectIdSql: string,
-    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+    upload?: FencedUpload
   ): Promise<string> {
+    if (upload?.decryptStaged) {
+      return ` AND ${projectStagedForDecryptionSql(projectIdSql)}`;
+    }
     return (await this.plaintextUploadFenced(upload))
       ? ` AND ${projectNotMigratingSql(projectIdSql)}`
       : '';
@@ -5451,7 +5496,8 @@ export class D1R2PersistenceService implements PersistenceService {
     // Slice 7-1: nothing lands once the project's move to encrypted storage
     // began, though the session was checked just before.
     const notMigrating = await this.plaintextUploadFence(
-      'upload_sessions.project_id'
+      'upload_sessions.project_id',
+      upload
     );
     const validSessionSql = `EXISTS (
       SELECT 1 FROM upload_sessions
@@ -5562,7 +5608,7 @@ export class D1R2PersistenceService implements PersistenceService {
         .bind(request.artifactId, request.projectId)
         .first<ArtifactRow>();
       if (existing) return artifactFromRow(existing);
-      await this.refuseIfMigrating(request.projectId);
+      await this.refuseIfMigrating(request.projectId, upload);
       return null;
     }
 
