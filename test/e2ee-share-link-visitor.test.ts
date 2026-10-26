@@ -847,6 +847,145 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     expect(shared.srv.bucket.get.mock.calls.length).toBe(siblingBefore);
   });
 
+  async function inlineSnapshot(address: string) {
+    const { srv, laptop, projectId, blobId } = await sharedWithImport();
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    expect(
+      srv.db
+        .prepare(
+          'SELECT envelope_inline IS NOT NULL AS inline FROM e2ee_share_snapshots WHERE share_id = ?'
+        )
+        .get(link.shareId)
+    ).toEqual({ inline: 1 });
+    const env = {
+      ...srv.env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AUTH_OTP_PEPPER: 'pepper-for-tests'
+    };
+    const now = Date.now();
+    const minute = vi.spyOn(Date, 'now').mockReturnValue(now);
+    onTestFinished(() => minute.mockRestore());
+    const fetchBlob = (id = blobId) =>
+      anonymous(srv, sharedBlobUrl(link.fragment.token, id), env, {
+        'cf-connecting-ip': address
+      });
+    const bodyReads = () =>
+      srv.statements.filter(
+        (sql) =>
+          /\b(?:FROM|JOIN)\s+e2ee_share_snapshots\b/i.test(sql) &&
+          /\benvelope_inline\b|\*/.test(
+            /^\s*SELECT\s+([\s\S]*?)\bFROM\b/i.exec(sql)?.[1] ?? ''
+          )
+      ).length;
+    srv.statements.length = 0;
+    forgetSnapshotBlobIds();
+    return {
+      srv,
+      link,
+      fetchBlob,
+      bodyReads,
+      nextMinute: () => minute.mockReturnValue(now + 60_000)
+    };
+  }
+
+  it('refuses repeated inline downloads before selecting the snapshot body from D1 (#935 review)', async () => {
+    const { srv, fetchBlob, bodyReads } = await inlineSnapshot('203.0.113.17');
+    for (let i = 0; i < 4; i += 1) {
+      expect((await fetchBlob()).status).toBe(200);
+    }
+    const before = bodyReads();
+    for (let i = 0; i < 20; i += 1) {
+      forgetSnapshotBlobIds();
+      expect((await fetchBlob()).status).toBe(429);
+    }
+    expect(bodyReads()).toBe(before);
+    // An allowed load needs the inline body only once, even with warm reads.
+    expect(before).toBe(1);
+    const lookup = srv.statements.find((sql) =>
+      /FROM e2ee_share_links l/.test(sql)
+    );
+    expect(lookup).toBeDefined();
+    // The pre-limit lookup must omit both large fields, including the
+    // authority's potentially 2,048 authors, even though it gates on one.
+    const projection = /^\s*SELECT\s+([\s\S]*?)\bFROM\b/i.exec(lookup!)?.[1];
+    expect(projection).not.toMatch(/\benvelope_inline\b|\bauthority\b|\*/);
+    // Four valid requests already used the load budget. Thirty more plus
+    // the address's 300 exhaust it using ids not masked by the repeat cap.
+    for (let i = 0; i < 330; i += 1) {
+      expect((await fetchBlob(randomBytes(16).toString('hex'))).status).toBe(
+        404
+      );
+    }
+    const spent = bodyReads();
+    for (let i = 0; i < 20; i += 1) {
+      forgetSnapshotBlobIds();
+      expect((await fetchBlob(randomBytes(16).toString('hex'))).status).toBe(
+        429
+      );
+    }
+    expect(bodyReads()).toBe(spent);
+  });
+
+  it('caps cold inline snapshot reads before the 61st D1 body selection (#935 review)', async () => {
+    const { fetchBlob, bodyReads, nextMinute } =
+      await inlineSnapshot('203.0.113.18');
+    for (let i = 0; i < 60; i += 1) {
+      forgetSnapshotBlobIds();
+      expect((await fetchBlob(randomBytes(16).toString('hex'))).status).toBe(
+        404
+      );
+    }
+    expect(bodyReads()).toBe(60);
+    forgetSnapshotBlobIds();
+    expect((await fetchBlob()).status).toBe(429);
+    expect(bodyReads()).toBe(60);
+    nextMinute();
+    expect((await fetchBlob()).status).toBe(200);
+    expect(bodyReads()).toBe(61);
+  });
+
+  it('fences a lazy inline body to the metadata hash and does not cache a missing read (#935 review)', async () => {
+    const { srv, link, fetchBlob, bodyReads } =
+      await inlineSnapshot('203.0.113.19');
+    const stored = srv.db
+      .prepare(
+        'SELECT snapshot_hash FROM e2ee_share_snapshots WHERE share_id = ?'
+      )
+      .get(link.shareId) as { snapshot_hash: string };
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (
+        sql.some((text) =>
+          /SELECT envelope_inline FROM e2ee_share_snapshots/.test(text)
+        )
+      ) {
+        srv.statements.push = push;
+        // A publication replaces the row after authorization metadata was
+        // read but before the lazy body selection executes.
+        srv.db
+          .prepare(
+            'UPDATE e2ee_share_snapshots SET snapshot_hash = ? WHERE share_id = ?'
+          )
+          .run('f'.repeat(64), link.shareId);
+      }
+      return push(...sql);
+    };
+    onTestFinished(() => {
+      srv.statements.push = push;
+    });
+    expect((await fetchBlob()).status).toBe(404);
+    expect(srv.statements.push).toBe(push);
+    expect(bodyReads()).toBe(1);
+    srv.db
+      .prepare(
+        'UPDATE e2ee_share_snapshots SET snapshot_hash = ? WHERE share_id = ?'
+      )
+      .run(stored.snapshot_hash, link.shareId);
+    expect((await fetchBlob()).status).toBe(200);
+    expect(bodyReads()).toBe(2);
+  });
+
   it('keeps the repetition cap when a spent link falls back to the address budget (#935 review)', async () => {
     const shared = await sharedWithImport();
     const references = committedBlobs(shared.srv, shared.projectId, 1);

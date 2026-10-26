@@ -297,11 +297,11 @@ const ENCRYPTED_SHARED_BLOB_RATE_LIMIT = 300;
 // links to its project. The snapshot's blob count cannot amplify this cap.
 const ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT = 4;
 /**
- * Snapshot prefix reads by the blob route per client address and minute,
+ * Uncached snapshot reads by the blob route per client address and minute,
  * across every link (#935 review): a read happens only when an isolate has
  * not cached that snapshot's blob ids, so a load needs one or a few. This
- * bounds what any address can make R2 read for the route independently of
- * the link budgets below (each read is a prefix: at most a header).
+ * bounds D1 inline-body and R2 prefix reads independently of the link
+ * budgets below (R2 reads take only the envelope header).
  */
 const ENCRYPTED_SHARED_BLOB_SNAPSHOT_READ_RATE_LIMIT = 60;
 /**

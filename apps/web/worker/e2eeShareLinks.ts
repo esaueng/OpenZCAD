@@ -1576,20 +1576,23 @@ export async function shareLinkTokenHash(token: string): Promise<string> {
   return sha256Hex(fromBase64Url(token));
 }
 
-/** One link as the anonymous routes serve it, after every gate below. */
-interface ServedLink {
+/** Small authorization metadata: no snapshot body or authority author list. */
+interface ServedBlobLink {
   project_id: string;
   share_id: string;
+  envelope_key: string | null;
+  envelope_bytes: number;
+  snapshot_hash: string;
+}
+
+/** One link as the snapshot route serves it, after every gate below. */
+interface ServedLink extends ServedBlobLink {
   mode: E2eeShareLinkMode;
   authority: string;
   authority_signature: string;
   owner_user_id: string;
   document_version: number;
   key_epoch: number;
-  envelope_inline: string | null;
-  envelope_key: string | null;
-  envelope_bytes: number;
-  snapshot_hash: string;
   signature: string;
   wrapped_for_link_visitors: string;
   author_key: string;
@@ -1603,10 +1606,21 @@ interface ServedLink {
  * 0040 present. Both anonymous routes go through it, so the blob route
  * serves nothing the snapshot route would not.
  */
+function servedLink(
+  db: D1Database,
+  rawToken: string,
+  kind: 'blob'
+): Promise<ServedBlobLink | null>;
+function servedLink(
+  db: D1Database,
+  rawToken: string,
+  kind?: 'snapshot'
+): Promise<ServedLink | null>;
 async function servedLink(
   db: D1Database,
-  rawToken: string
-): Promise<ServedLink | null> {
+  rawToken: string,
+  kind: 'blob' | 'snapshot' = 'snapshot'
+): Promise<ServedBlobLink | ServedLink | null> {
   let token: string;
   try {
     token = decodeURIComponent(rawToken);
@@ -1621,13 +1635,20 @@ async function servedLink(
   ) {
     return null;
   }
+  // Blob requests need only this small projection before their guards.
+  // An authority can name 2,048 authors, so leave it to the snapshot route.
+  const columns =
+    kind === 'blob'
+      ? `l.project_id, l.share_id, s.envelope_key,
+       s.envelope_bytes, s.snapshot_hash`
+      : `l.project_id, l.share_id, l.mode, l.authority,
+       l.authority_signature, p.user_id AS owner_user_id,
+       s.document_version, s.key_epoch,
+       s.envelope_key, s.envelope_bytes, s.snapshot_hash,
+       s.signature, s.wrapped_for_link_visitors, s.author_key`;
   return db
     .prepare(
-      `SELECT l.project_id, l.share_id, l.mode, l.authority,
-              l.authority_signature, p.user_id AS owner_user_id,
-              s.document_version, s.key_epoch, s.envelope_inline,
-              s.envelope_key, s.envelope_bytes, s.snapshot_hash,
-              s.signature, s.wrapped_for_link_visitors, s.author_key
+      `SELECT ${columns}
        FROM e2ee_share_links l
        JOIN projects p ON p.id = l.project_id
        JOIN e2ee_share_snapshots s
@@ -1648,15 +1669,31 @@ async function servedLink(
          ) = 1`
     )
     .bind(await shareLinkTokenHash(token))
-    .first<ServedLink>();
+    .first<ServedBlobLink | ServedLink>();
 }
 
 /** The link's stored snapshot envelope, inline or from the object store. */
 async function servedEnvelope(
-  row: ServedLink,
+  db: D1Database,
+  row: ServedBlobLink,
   bucket: ShareSnapshotBucket | null
 ): Promise<Uint8Array | null> {
-  if (row.envelope_inline !== null) return fromBase64Url(row.envelope_inline);
+  if (row.envelope_key === null) {
+    // Metadata lookup stays cheap even for refused blob requests. Fence the
+    // lazy body read to that exact snapshot so a replacement cannot mix
+    // new bytes with old metadata or populate the old hash's blob-id cache.
+    const inline = await db
+      .prepare(
+        `SELECT envelope_inline FROM e2ee_share_snapshots
+         WHERE project_id = ? AND share_id = ? AND snapshot_hash = ?
+           AND envelope_key IS NULL`
+      )
+      .bind(row.project_id, row.share_id, row.snapshot_hash)
+      .first<{ envelope_inline: string | null }>();
+    return inline?.envelope_inline
+      ? fromBase64Url(inline.envelope_inline)
+      : null;
+  }
   if (row.envelope_key !== null && bucket) {
     const stored = await bucket.get(row.envelope_key);
     if (stored) return new Uint8Array(await stored.arrayBuffer());
@@ -1696,7 +1733,7 @@ export async function handleEncryptedSharedSnapshot(
     currentIdentity(db, row.owner_user_id)
   ]);
   if (!delegation || !identity) return anonymousNotFound();
-  const envelope = await servedEnvelope(row, bucket);
+  const envelope = await servedEnvelope(db, row, bucket);
   if (!envelope) return anonymousNotFound();
   const metadata: E2eeSharedSnapshotMetadata = {
     shareId: row.share_id,
@@ -1732,7 +1769,7 @@ export async function handleEncryptedSharedSnapshot(
 export interface SharedBlobGuard {
   /** A request that names no link the route serves. */
   unbudgeted(): Promise<void>;
-  /** Before any R2 read, an independent repetition cap across project links. */
+  /** Before a snapshot body or blob read, a repetition cap across project links. */
   blob(blobKey: string): Promise<void>;
   /**
    * Before the link's snapshot is read (#935 review): true when this
@@ -1742,7 +1779,7 @@ export interface SharedBlobGuard {
    */
   spent(linkKey: string): Promise<boolean>;
   /**
-   * Before a snapshot's prefix is read from storage, which happens once
+   * Before a snapshot's inline body or R2 prefix is read, once
    * per snapshot and isolate (`snapshotBlobIds`): its own fixed budget per
    * address and minute, across every link.
    */
@@ -1775,15 +1812,15 @@ export function forgetSnapshotBlobIds(): void {
 const SNAPSHOT_PREFIX_GUESS_BYTES = 16 * 1024;
 
 /**
- * What the blob route needs of a link's snapshot, its header's `blobIds`,
- * without its body: from the cache, else from the prefix alone (inline in
- * the row the route already read, or by ranged reads of the R2 object,
- * never the whole body), checked as `parseEnvelope` would against the
- * stored length. Null when the snapshot is not a share snapshot or its
+ * The snapshot header's `blobIds`: from the cache, else from a lazy,
+ * hash-fenced inline D1 body read or ranged R2 prefix reads (which never
+ * download the whole object), checked as `parseEnvelope` would against
+ * the stored length. Null when the snapshot is not a share snapshot or its
  * prefix does not parse; a read that fails is not cached.
  */
 async function snapshotBlobIds(
-  row: ServedLink,
+  db: D1Database,
+  row: ServedBlobLink,
   bucket: ShareSnapshotBucket | null,
   guard: SharedBlobGuard | null
 ): Promise<readonly string[] | null> {
@@ -1798,12 +1835,14 @@ ${row.snapshot_hash}`;
   }
   let head: Uint8Array;
   let length: number;
-  if (row.envelope_inline !== null) {
-    head = fromBase64Url(row.envelope_inline);
+  await guard?.snapshotRead();
+  if (row.envelope_key === null) {
+    const envelope = await servedEnvelope(db, row, null);
+    if (!envelope) return null;
+    head = envelope;
     length = head.byteLength;
   } else {
-    if (row.envelope_key === null || !bucket) return null;
-    await guard?.snapshotRead();
+    if (!bucket) return null;
     const key = row.envelope_key;
     length = row.envelope_bytes;
     const read = async (bytes: number) => {
@@ -1878,11 +1917,11 @@ export interface SharedBlobBucket {
  * model with more imports than the address budget still loads at once.
  * Once that load budget is spent (`spent`, checked before the snapshot is
  * read), requests count against the address's budget without reading the
- * snapshot first, so past both budgets a request costs no R2 read or parse.
- * Within budget, a request never downloads the snapshot's body: the ids
- * its header names come from a per-isolate cache, or once per snapshot
- * and isolate from ranged reads of its prefix, which count against their
- * own per-address budget (`snapshotRead`).
+ * snapshot first, so past both budgets no snapshot body or prefix is read.
+ * Within budget, header ids come from a per-isolate cache or a lazy inline
+ * D1 body read or ranged R2 prefix reads, counted against an independent
+ * per-address budget (`snapshotRead`). The pre-limit lookup selects only
+ * small metadata, never an inline envelope or the authority's author list.
  * An independent per-address, per-project-blob budget (`blob`) applies
  * before either path, so repeating one file cannot consume the whole
  * link allowance or bypass the cap through another link to the project.
@@ -1905,7 +1944,7 @@ export async function handleEncryptedSharedBlob(
   const match = SHARED_BLOB_ROUTE.exec(pathname);
   const blobId = match?.[2] ?? '';
   if (!match || !E2EE_BLOB_ID_PATTERN.test(blobId)) return notServed();
-  const row = await servedLink(db, match[1] ?? '');
+  const row = await servedLink(db, match[1] ?? '', 'blob');
   if (!row || !(await isE2eeContentBlobStorageReady(db))) return notServed();
   // Opaque: neither the project nor the link id reaches the limiter.
   const linkKey = (
@@ -1927,7 +1966,7 @@ ${row.share_id}`)
       await sha256Hex(new TextEncoder().encode(`${row.project_id}\n${blobId}`))
     ).slice(0, 32)
   );
-  const named = await snapshotBlobIds(row, snapshots, guard);
+  const named = await snapshotBlobIds(db, row, snapshots, guard);
   if (!named) return notServed();
   if (!charged) await guard?.load(linkKey, named.length);
   if (!named.includes(blobId)) return anonymousNotFound();
