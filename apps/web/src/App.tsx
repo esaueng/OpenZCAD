@@ -74,6 +74,7 @@ import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
+  emptyExportMessage,
   exportScope,
   exportScopeLabel,
   type ExportScope
@@ -7262,6 +7263,7 @@ export function App() {
       : exportScopeInfo && exportScopeInfo.hiddenExcluded > 0
         ? exportScopeLabel(exportScopeInfo)
         : null;
+  const emptyExportReason = emptyExportMessage(exportScopeInfo);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -15414,7 +15416,7 @@ export function App() {
     }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
   }) {
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const sink = createImportProgressSink();
@@ -15539,7 +15541,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const fileName = `${exportFileStem(doc.name)}.step`;
@@ -15591,7 +15593,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const info = MESH_EXPORT_FILE_INFO[format];
@@ -15644,7 +15646,7 @@ export function App() {
   ) {
     if (!doc || exportBodyIds.length === 0) {
       return Promise.reject(
-        new Error('Create a body before checking printability.')
+        new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
     return geometry.meshQuality(doc, exportBodyIds, deflection, {
@@ -15726,7 +15728,7 @@ export function App() {
         if (exportBodyIds.length > 0) {
           setMeshExportOpen(true);
         } else {
-          setStatus('Create a body before exporting.');
+          setStatus(emptyExportReason);
         }
         break;
       case 'undo':
@@ -26714,7 +26716,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => void handleExportStep()
     },
@@ -26730,7 +26732,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => setMeshExportOpen(true)
     },
@@ -27527,6 +27529,7 @@ export function App() {
           }
           exportScope={exportControlScope}
           exportWithheld={exportWithheldMessage}
+          exportUnavailableReason={emptyExportReason}
           saveState={presentedSaveState}
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
@@ -27651,6 +27654,7 @@ export function App() {
             }
             exportScope={exportControlScope}
             exportWithheld={exportWithheldMessage}
+            exportUnavailableReason={emptyExportReason}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)

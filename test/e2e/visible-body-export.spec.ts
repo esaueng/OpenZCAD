@@ -198,5 +198,11 @@ test('STEP and every mesh format export only visible result bodies through hide,
   await expect(
     fileMenu.getByRole('button', { name: /Export mesh/ })
   ).toBeDisabled();
+  for (const name of [/Export STEP/, /Export mesh/]) {
+    await expect(fileMenu.getByRole('button', { name })).toHaveAttribute(
+      'title',
+      'Show a body before exporting.'
+    );
+  }
   expect(errors).toEqual([]);
 });

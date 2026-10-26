@@ -56,3 +56,11 @@ export function exportScopeLabel(scope: ExportScope): string {
     return `visible bodies (${count}, ${scope.hiddenExcluded} hidden left out)`;
   return `all bodies (${count})`;
 }
+
+/** Recovery guidance when the current scope contains no exportable bodies. */
+export function emptyExportMessage(
+  scope: ExportScope | null,
+  action = 'exporting'
+): string {
+  return `${scope && scope.hiddenExcluded > 0 ? 'Show' : 'Create'} a body before ${action}.`;
+}

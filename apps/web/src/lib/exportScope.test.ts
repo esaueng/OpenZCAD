@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  emptyExportMessage,
   exportScope,
   exportScopeLabel,
   type ExportScopeBody
@@ -25,6 +26,17 @@ const model = [
 ];
 
 describe('exportScope (ZC-199)', () => {
+  it('distinguishes an all-hidden model from a model without bodies', () => {
+    const hidden = exportScope([body('a', { hidden: true })], null);
+    expect(emptyExportMessage(hidden)).toBe('Show a body before exporting.');
+    expect(emptyExportMessage(hidden, 'checking printability')).toBe(
+      'Show a body before checking printability.'
+    );
+    expect(emptyExportMessage(exportScope([], null))).toBe(
+      'Create a body before exporting.'
+    );
+    expect(emptyExportMessage(null)).toBe('Create a body before exporting.');
+  });
   it('exports only visible exportable bodies and counts hidden omissions', () => {
     const scope = exportScope(model, null);
     expect(scope.bodyIds).toEqual(['a', 'c']);
