@@ -19,10 +19,11 @@
  * device list certifies and fenced on that list's head; the first stored
  * wins) and snapshots (a
  * share-snapshot envelope of this project under the current key epoch,
- * signed by a device the caller's newest device list certifies, never
- * older than the link's stored snapshot nor newer than the project's
- * head); a delegation verifies under the account's current identity key,
- * is valid now and names only devices that list certifies; a statement
+ * signed by a device the caller's newest device list certifies and fenced
+ * on that list's head, never older than the link's stored snapshot nor
+ * newer than the project's head); a delegation verifies under the
+ * account's current identity key, is valid now and names only devices that
+ * list certifies, fenced on its head; a statement
  * verifies against the owner's stored delegation, names the link, its key
  * hash and owner fingerprint, is valid now and raises the link's sequence.
  * Browsers and visitors verify all of it themselves.
@@ -500,11 +501,11 @@ async function putDelegation(
   // Only devices the newest device list certifies may be delegated.
   const head = await ctx.db
     .prepare(
-      `SELECT entry FROM e2ee_device_list_entries
+      `SELECT sequence, entry FROM e2ee_device_list_entries
        WHERE user_id = ? AND generation = ? ORDER BY sequence DESC LIMIT 1`
     )
     .bind(ctx.userId, identity.generation)
-    .first<{ entry: string }>();
+    .first<{ sequence: number; entry: string }>();
   let certified: Set<string>;
   try {
     certified = new Set(
@@ -517,9 +518,17 @@ async function putDelegation(
   } catch {
     certified = new Set();
   }
-  if (!delegation.deviceKeys.every((key) => certified.has(b64(key)))) {
+  if (
+    !head ||
+    !delegation.deviceKeys.every((key) => certified.has(b64(key)))
+  ) {
     invalid('A delegation names only devices your device list certifies');
   }
+  // ...and only while that list is still the head (#912 review): a stale
+  // delegation naming a device whose removal lands first cannot win the
+  // race with the renewal that drops it.
+  const list = { generation: identity.generation, headSequence: head.sequence };
+  const fence = deviceListUnchanged(ctx.userId, list);
   const now = new Date().toISOString();
   try {
     const results = await runBatch(ctx.db, [
@@ -528,7 +537,8 @@ async function putDelegation(
           `INSERT INTO e2ee_share_delegations
              (user_id, generation, sequence, statement, signature, expires_at,
               updated_at)
-           SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${ctx.authorization.sql}
+           SELECT ?, ?, ?, ?, ?, ?, ?
+           WHERE ${ctx.authorization.sql} AND ${fence.sql}
            ON CONFLICT (user_id) DO UPDATE SET
              generation = excluded.generation, sequence = excluded.sequence,
              statement = excluded.statement, signature = excluded.signature,
@@ -542,10 +552,16 @@ async function putDelegation(
           signed.text.signature,
           delegation.expiresAt,
           now,
-          ...ctx.authorization.binds
+          ...ctx.authorization.binds,
+          ...fence.binds
         )
     ]);
-    if (!changed(results[0])) sessionRequired();
+    if (!changed(results[0])) {
+      if (await deviceListMoved(ctx.db, ctx.userId, list)) {
+        refuseDeviceListMoved();
+      }
+      sessionRequired();
+    }
   } catch (error) {
     if (
       error instanceof Error &&

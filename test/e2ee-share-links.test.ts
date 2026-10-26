@@ -1403,6 +1403,51 @@ describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
       'stale-devices'
     );
   });
+
+  it('a device-list change between the device check and the write stores nothing (slice 8-C1)', async () => {
+    const { srv, laptop } = await linkedProject();
+    await delegate(laptop);
+    const stored = () =>
+      rows(srv, 'SELECT * FROM e2ee_share_delegations WHERE user_id = ?', OWNER);
+    const before = stored();
+    // A delegation still naming the owner's desktop, whose removal lands
+    // after the devices were checked and before the delegation is written.
+    const stale = await signShareDelegation(owner.identityPrivateKey, {
+      identityKeyHash: owner.list.identityKeyHash,
+      sequence: 50,
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 20 * DAY,
+      deviceKeys: owner.list.devices.map((device) => device.signingKey)
+    });
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => /^\s*INSERT INTO e2ee_share_delegations/.test(s))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    const response = await srv.call('PUT', '/api/e2ee/share-delegation', {
+      body: {
+        statement: toBase64Url(stale.statement),
+        signature: toBase64Url(stale.signature)
+      }
+    });
+    expect(srv.statements.push).toBe(push);
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      'E2EE_DEVICE_LIST_CHANGED'
+    );
+    expect(stored()).toEqual(before);
+  });
 });
 
 describe('an owner device removal (slice 5-10)', { timeout: 120_000 }, () => {
