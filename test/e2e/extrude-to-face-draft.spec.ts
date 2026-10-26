@@ -22,6 +22,9 @@ import {
   expect,
   stubApi,
   expectBodyCount,
+  chooseInPlaceOption,
+  extrudeBar,
+  setInPlaceOptionValues,
   waitForStillViewport
 } from './openzcad-fixtures';
 
@@ -215,34 +218,28 @@ test('creates a drafted extrude up to a face picked in the viewport', async ({
   // Opening Extrude glides the post's profile out from under the card. Let
   // it, then find the ceiling's face in the view that leaves: reopened, the
   // profile is already clear and nothing moves.
-  const card = page.getByRole('region', { name: 'Extrude operation' });
+  const bar = extrudeBar(page);
   await page.locator('.feature-row-main', { hasText: 'Post sketch' }).click();
   await page.keyboard.press('e');
-  await expect(card).toBeVisible();
+  await expect(bar).toBeVisible();
   await waitForStillViewport(page);
   await page.keyboard.press('Escape');
-  await expect(card).toHaveCount(0);
+  await expect(bar).toHaveCount(0);
   const point = await pointOverFace(page, canvas, top.topologyId);
 
   await page.locator('.feature-row-main', { hasText: 'Post sketch' }).click();
   await page.keyboard.press('e');
   // Explicit: inferred, a post through the ceiling would add to it.
-  await page
-    .getByRole('combobox', { name: 'Extrude operation', exact: true })
-    .selectOption('new-body');
-  await card.getByLabel('Extent').selectOption('to-face');
-  await expect(card).toContainText('No face picked yet.');
-  await expect(
-    card.getByRole('button', { name: 'Create', exact: true })
-  ).toBeDisabled();
-  await card.getByRole('button', { name: 'Pick face' }).click();
-  await expect(card).toContainText(
-    'Click a planar face parallel to the sketch'
-  );
+  await chooseInPlaceOption(page, 'Extrude', 'Operation', 'New body');
+  // To face arms its face pick at once; Done waits for the face.
+  await chooseInPlaceOption(page, 'Extrude', 'Extent', 'To face');
+  await expect(bar).toContainText('Click a planar face parallel to the sketch');
+  await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
   await page.mouse.click(point.x, point.y);
-  await expect(card).toContainText('Up to Ceiling Body · face');
-  await card.getByRole('textbox', { name: 'Draft angle' }).fill('2');
-  await card.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(bar).toContainText('Up to Ceiling Body · face');
+  // The draft on its keypad, from Options; Done creates it.
+  await setInPlaceOptionValues(page, 'Extrude', { 'Draft angle': '2' });
+  await bar.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region up to the face as a new body.',
     { timeout: 60_000 }

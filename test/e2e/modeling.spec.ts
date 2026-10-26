@@ -724,9 +724,10 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   // sketch-mode key handler's early return.
   await page.keyboard.press('e');
   await page.getByTestId('direct-manipulation-value').click();
-  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const heightKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await heightKeypad.getByRole('textbox').fill('24');
-  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await heightKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
@@ -938,9 +939,10 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
     })
     .toBeLessThan(0);
   await page.getByTestId('direct-manipulation-value').click();
-  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const heightKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await heightKeypad.getByRole('textbox').fill('24');
-  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await heightKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Extrude' })
@@ -1014,9 +1016,10 @@ test('resolves a negative free-plane extrude preview', async ({ page }) => {
   // A negative height extrudes to the opposite side of the plane and, with
   // nothing there to meet, the exact classification stores a new body.
   await page.getByTestId('direct-manipulation-value').click();
-  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const heightKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await heightKeypad.getByRole('textbox').fill('-24');
-  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await heightKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by -24 mm as a new body',
     { timeout: 20_000 }
@@ -1065,9 +1068,10 @@ test('infers and stores an additive extrude from exact overlap', async ({
   // The commit classifies against the exact kernel: the extrusion overlaps
   // the box, so Add is stored and no second body appears.
   await page.getByTestId('direct-manipulation-value').click();
-  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const heightKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await heightKeypad.getByRole('textbox').fill('24');
-  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await heightKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 24 mm, added to the body',
     { timeout: 20_000 }
@@ -1140,9 +1144,10 @@ test('the Edit Sketch offer does not outlive the mode it was made in', async ({
   await page.mouse.up();
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
   await page.getByTestId('direct-manipulation-value').click();
-  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const heightKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await heightKeypad.getByRole('textbox').fill('24');
-  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await heightKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 24 mm',
     { timeout: 20_000 }
@@ -3797,9 +3802,10 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
     detail: { index: 0 }
   });
   await page.getByTestId('direct-manipulation-value').click();
-  const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const extrudeKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
-  await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await extrudeKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Extrude' })
   ).toBeVisible();
@@ -3885,9 +3891,10 @@ test('each sketch plane label names the plane it actually opens', async ({
     detail: { index: 0 }
   });
   await page.getByTestId('direct-manipulation-value').click();
-  const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const extrudeKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
-  await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await extrudeKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 24 mm',
     { timeout: 20_000 }
@@ -3997,9 +4004,10 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
     detail: { index: 0 }
   });
   await page.getByTestId('direct-manipulation-value').click();
-  const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const extrudeKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
-  await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await extrudeKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 24 mm',
     { timeout: 20_000 }
@@ -4558,9 +4566,10 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
     'Closed sketch profile selected'
   );
   await page.getByTestId('direct-manipulation-value').click();
-  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  const heightKeypad = page.getByRole('dialog', { name: 'Distance value' });
   await heightKeypad.getByRole('textbox').fill('24');
-  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await heightKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 24 mm as a new body',
     { timeout: 20_000 }

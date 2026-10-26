@@ -1,91 +1,48 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
-import {
-  MAX_EXTRUDE_DRAFT_DEG,
-  coerceParamValue
-} from '@openzcad/document-core';
 import type {
   BodyId,
-  ExtrudeEndCondition,
   ExtrudeToFaceTarget,
   ParamValue,
   SketchId,
-  ThroughAllSide,
   UnitSystem
 } from '@openzcad/shared';
-import type { ExtrudeChoice } from '../../lib/extrudeInference';
+import {
+  extrudeDraftAngleError,
+  extrudeDraftValue,
+  extrudeFormValue,
+  extrudeIsThroughAll,
+  extrudeIsToFace,
+  extrudeOffersThroughAll,
+  extrudeShownExtent,
+  extrudeToFaceProblem,
+  extrudeToFaceUnresolved,
+  initialExtrudeDraft,
+  reversedDistance,
+  toFaceReachText,
+  type ExtrudeDraft,
+  type ExtrudeDraftContext,
+  type ExtrudeDraftInitial,
+  type ExtrudeFormValue,
+  type ExtrudeToFacePicking
+} from '../../lib/extrudeDraft';
 import { paramValueText, previewExpression } from '../../lib/model';
 import { ExprInput } from '../ExprInput';
 import { ExtrudeControls } from '../ExtrudeControls';
 import ExtrudeExtentControls from './ExtrudeExtentControls';
 
-export interface ExtrudeFormValue {
-  name: string;
-  sketchId: SketchId;
-  distance: ParamValue;
-  symmetric: boolean;
-  backDistance: ParamValue;
-  choice: ExtrudeChoice;
-  /**
-   * F01: `through-all` is offered for an existing explicit cut only. Absent
-   * reads as blind, which is all the create path ever sends.
-   */
-  endCondition?: ExtrudeEndCondition;
-  throughAllSide?: ThroughAllSide;
-  /** F01 (v29): present exactly with `to-face`. */
-  toFace?: ExtrudeToFaceTarget;
-  /** F01 (v29): absent for straight walls (a typed 0 is sent as absent). */
-  draftAngleDeg?: ParamValue;
-}
-
-/**
- * What the host tells the form about a to-face target: how it reads, and
- * where the build will put it (the signed distance from the sketch plane),
- * or why it cannot reach it from this sketch.
- */
-export interface ExtrudeToFaceInfo {
-  label: string;
-  distance: number | null;
-  pending?: boolean;
-  problem?: string;
-}
-
-/** The host's side of the to-face pick (see `ExtrudeExtentControls`). */
-export interface ExtrudeToFacePicking {
-  /** True while the viewport is waiting for this form's face. */
-  armed: boolean;
-  /** Arms (or, when armed, cancels) the viewport face pick. */
-  onPick(): void;
-  /**
-   * Withdraws this card's armed pick, if any: called when the card unmounts,
-   * so a closed card never leaves the viewport waiting for its face.
-   */
-  cancel(): void;
-  /** How a target reads and where it sits, from the current projection. */
-  describe(target: ExtrudeToFaceTarget): ExtrudeToFaceInfo;
-  /** The stored face no longer resolves (edit only). */
-  unresolved?: boolean;
-  /** Receives the face the viewport pick produced. */
-  setterRef: MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
-}
+export {
+  reversedDistance,
+  type ExtrudeFormValue,
+  type ExtrudeToFaceInfo,
+  type ExtrudeToFacePicking
+} from '../../lib/extrudeDraft';
 
 interface ExtrudeFormProps {
   scope: Record<string, number>;
   units?: UnitSystem;
   sketches: { sketchId: SketchId; name: string }[];
   bodies: { bodyId: BodyId; name: string }[];
-  initial: {
-    name: string;
-    sketchId: SketchId;
-    distance: ParamValue;
-    symmetric?: boolean;
-    backDistance?: ParamValue;
-    operation?: ExtrudeChoice['operation'];
-    targetBodyId?: BodyId;
-    endCondition?: ExtrudeEndCondition;
-    throughAllSide?: ThroughAllSide;
-    toFace?: ExtrudeToFaceTarget;
-    draftAngleDeg?: ParamValue;
-  };
+  initial: ExtrudeDraftInitial;
   /** Absent: To face is not offered (no host to pick the face with). */
   toFacePicking?: ExtrudeToFacePicking;
   creating?: boolean;
@@ -97,36 +54,6 @@ interface ExtrudeFormProps {
   onPreview?(value: ExtrudeFormValue | null): void;
   onSubmit(value: ExtrudeFormValue): void;
   onCancel(): void;
-}
-
-/**
- * The distance with its direction flipped. A negated expression is unwrapped
- * rather than wrapped again, so Reverse twice reads as it started instead of
- * `-(-(10/2))`.
- */
-/** The steepest draft the form takes; the schema's own bound. */
-const MAX_DRAFT_DEG = MAX_EXTRUDE_DRAFT_DEG;
-
-export function reversedDistance(distance: string): string {
-  const text = distance.trim();
-  if (Number.isFinite(Number(text))) {
-    return String(-Number(text));
-  }
-  if (text.startsWith('-(') && text.endsWith(')')) {
-    // Only when that first parenthesis closes at the very end: `-(a)*(b)`
-    // is not a negation of everything after the minus.
-    let depth = 0;
-    for (let index = 1; index < text.length; index += 1) {
-      const char = text[index];
-      if (char === '(') depth += 1;
-      if (char === ')') depth -= 1;
-      if (depth === 0) {
-        if (index === text.length - 1) return text.slice(2, -1).trim();
-        break;
-      }
-    }
-  }
-  return `-(${text})`;
 }
 
 /** The same draft editor for a selected profile and an existing feature. */
@@ -147,42 +74,26 @@ export function ExtrudeForm({
   onSubmit,
   onCancel
 }: ExtrudeFormProps) {
-  const [draft, setDraft] = useState(() => ({
-    name: initial.name,
-    distance: paramValueText(initial.distance),
-    symmetric: initial.symmetric === true,
-    backDistance: paramValueText(initial.backDistance ?? 0),
-    choice: {
-      operation: initial.operation ?? (creating ? 'automatic' : 'new-body'),
-      ...(initial.targetBodyId ? { targetBodyId: initial.targetBodyId } : {})
-    },
-    endCondition: initial.endCondition ?? 'blind',
-    throughAllSide: initial.throughAllSide ?? 'forward',
-    toFace: initial.toFace,
-    draftAngle: paramValueText(initial.draftAngleDeg ?? 0)
-  }));
+  const [draft, setDraft] = useState<ExtrudeDraft>(() =>
+    initialExtrudeDraft(initial, creating)
+  );
+  const ctx: ExtrudeDraftContext = {
+    scope,
+    units,
+    initial,
+    bodies,
+    ...(toFacePicking ? { toFacePicking } : {})
+  };
   // Through all needs one explicit cut target, so it is offered once Cut is
   // chosen, never while the operation is still being inferred.
-  const offersThroughAll = draft.choice.operation === 'cut';
-  const isThroughAll = (next: typeof draft) =>
-    next.choice.operation === 'cut' && next.endCondition === 'through-all';
-  const throughAll = isThroughAll(draft);
+  const offersThroughAll = extrudeOffersThroughAll(draft);
+  const throughAll = extrudeIsThroughAll(draft);
   // F01 (v29): to-face replaces the distance with a picked face; any
   // operation may reach one. A host with no face pick never offers it.
-  const isToFace = (next: typeof draft) =>
-    toFacePicking !== undefined && next.endCondition === 'to-face';
-  const toFace = isToFace(draft);
+  const toFace = extrudeIsToFace(draft, ctx);
   const toFaceInfo =
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
-  // A face picked here that the build would refuse (not parallel to the
-  // sketch, or lying on it) is said before Apply rather than after.
-  const toFaceProblem =
-    toFaceInfo && toFaceInfo.distance === null
-      ? (toFaceInfo.problem ??
-        (toFaceInfo.pending
-          ? 'Checking the target face…'
-          : 'This face is not parallel to the sketch plane, or lies on it; pick a face parallel to the sketch.'))
-      : null;
+  const toFaceProblem = extrudeToFaceProblem(draft, ctx);
   // A new extrude opens at zero until the user drags or types a distance, so
   // the zero-distance error waits for that edit (or an attempt to submit)
   // rather than greeting the card in red. Create stays disabled either way.
@@ -191,105 +102,12 @@ export function ExtrudeForm({
   const angleQuantity = { documentUnits: units, dimension: 'angle' } as const;
   const distance = previewExpression(draft.distance, scope, quantity);
   const back = previewExpression(draft.backDistance, scope, quantity);
-  const valid = valueFor(draft) !== null;
-  const draftError = draftAngleError(draft);
+  const valid = extrudeDraftValue(draft, ctx) !== null;
+  const draftError = extrudeDraftAngleError(draft, ctx);
+  const valueFor = (next: ExtrudeDraft) => extrudeDraftValue(next, ctx);
+  const formValue = (next: ExtrudeDraft) => extrudeFormValue(next, ctx);
 
-  /**
-   * Why the draft cannot apply as typed, or null. It tapers a one-sided
-   * extrusion only, and an angle at a right angle has no finite taper.
-   */
-  function draftAngleError(next: typeof draft): string | null {
-    const a = previewExpression(next.draftAngle, scope, angleQuantity);
-    if (!a.ok || a.value === undefined) return null;
-    if (Math.abs(a.value) >= MAX_DRAFT_DEG) {
-      return `Draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
-    }
-    if (a.value === 0) return null;
-    if (!isToFace(next) && next.symmetric) {
-      return 'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.';
-    }
-    const b = previewExpression(next.backDistance, scope, quantity);
-    if (!isToFace(next) && b.ok && b.value !== undefined && b.value !== 0) {
-      return 'Draft tapers a one-sided extrusion; clear Back distance to draft it.';
-    }
-    return null;
-  }
-
-  function valueFor(next: typeof draft): ExtrudeFormValue | null {
-    const d = previewExpression(next.distance, scope, quantity);
-    const b = previewExpression(next.backDistance, scope, quantity);
-    const targetRequired =
-      next.choice.operation === 'add' ||
-      next.choice.operation === 'cut' ||
-      next.choice.operation === 'intersect';
-    const targetBodyId = targetRequired ? next.choice.targetBodyId : undefined;
-    const nextThroughAll = isThroughAll(next);
-    const nextToFace = isToFace(next);
-    const a = previewExpression(next.draftAngle, scope, angleQuantity);
-    if (
-      !next.name.trim() ||
-      (nextToFace &&
-        // No face yet, or one the build would refuse from this sketch (not
-        // parallel to it, or lying on it): nothing to Create or Apply.
-        (!next.toFace ||
-          // The stored face no longer resolves: only a re-pick can apply.
-          (toFacePicking!.unresolved === true &&
-            next.toFace === initial.toFace) ||
-          toFacePicking!.describe(next.toFace).distance === null)) ||
-      (!nextThroughAll &&
-        (!a.ok || a.value === undefined || draftAngleError(next) !== null)) ||
-      // Through all and to-face ignore the distance; it is kept only for
-      // switching back to blind, so it cannot block Apply.
-      (!nextThroughAll &&
-        !nextToFace &&
-        (!d.ok ||
-          d.value === undefined ||
-          d.value === 0 ||
-          (!next.symmetric &&
-            (!b.ok || b.value === undefined || b.value < 0)))) ||
-      (targetRequired && !bodies.some((body) => body.bodyId === targetBodyId))
-    )
-      return null;
-    return formValue(next);
-  }
-
-  function formValue(next: typeof draft): ExtrudeFormValue {
-    const nextThroughAll = isThroughAll(next);
-    const nextToFace = isToFace(next);
-    const derived = nextThroughAll || nextToFace;
-    // A through-all cut and a to-face extrude derive their span in the
-    // build, so the distance is dormant; a create still needs it non-zero,
-    // so an untouched 0 sends 1.
-    const typed = coerceParamValue(next.distance);
-    const draftAngleDeg = coerceParamValue(next.draftAngle);
-    return {
-      name: next.name.trim(),
-      sketchId: initial.sketchId,
-      // A dormant zero in any form (`0 mm`, a parameter at 0) sends 1 too.
-      distance:
-        derived &&
-        (!typed ||
-          previewExpression(next.distance, scope, quantity).value === 0)
-          ? 1
-          : typed,
-      symmetric: derived ? false : next.symmetric,
-      backDistance:
-        derived || next.symmetric ? 0 : coerceParamValue(next.backDistance),
-      choice: next.choice,
-      endCondition: nextThroughAll
-        ? 'through-all'
-        : nextToFace
-          ? 'to-face'
-          : 'blind',
-      ...(nextThroughAll ? { throughAllSide: next.throughAllSide } : {}),
-      ...(nextToFace && next.toFace ? { toFace: next.toFace } : {}),
-      ...(!nextThroughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
-        ? { draftAngleDeg }
-        : {})
-    };
-  }
-
-  function change(patch: Partial<typeof draft>) {
+  function change(patch: Partial<ExtrudeDraft>) {
     if (
       toFacePicking?.armed &&
       patch.endCondition !== undefined &&
@@ -335,15 +153,7 @@ export function ExtrudeForm({
       // Rounded for the field, but never through zero: a reach shorter than
       // the rounding keeps its exact value, so its sign (which side of the
       // sketch the face is on) still reaches the commit.
-      ...(reach !== null
-        ? {
-            distance: String(
-              Math.round(reach * 1e6) / 1e6 === 0
-                ? reach
-                : Math.round(reach * 1e6) / 1e6
-            )
-          }
-        : {})
+      ...(reach !== null ? { distance: toFaceReachText(reach) } : {})
     });
   };
   const faceReach = toFaceInfo?.distance;
@@ -428,20 +238,12 @@ export function ExtrudeForm({
         />
         {offersThroughAll || toFacePicking ? (
           <ExtrudeExtentControls
-            endCondition={
-              throughAll || toFace
-                ? draft.endCondition
-                : draft.endCondition === 'through-all'
-                  ? 'blind'
-                  : draft.endCondition
-            }
+            endCondition={extrudeShownExtent(draft, ctx)}
             throughAllSide={draft.throughAllSide}
             offersThroughAll={offersThroughAll}
             toFace={{
               label: toFaceInfo?.label ?? null,
-              unresolved:
-                toFacePicking?.unresolved === true &&
-                draft.toFace === initial.toFace,
+              unresolved: extrudeToFaceUnresolved(draft, ctx),
               problem: toFaceProblem,
               armed: toFacePicking?.armed === true,
               onPick: () => toFacePicking?.onPick()

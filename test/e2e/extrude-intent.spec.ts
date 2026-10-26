@@ -4,7 +4,15 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  chooseInPlaceOption,
+  extrudeBar,
+  setInPlaceOptionValues
+} from './openzcad-fixtures';
 
 interface ExtrudeValidationGate {
   hold: boolean;
@@ -108,20 +116,22 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   for (const cancel of ['Escape', 'Dismiss'] as const) {
     await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
     await page.keyboard.press('e');
-    await page
-      .getByRole('combobox', { name: 'Extrude operation', exact: true })
-      .selectOption('cut');
-    // The card's own signed distance: the one way to type the extrusion.
-    const pendingDistance = page
-      .getByRole('region', { name: 'Extrude operation' })
-      .getByRole('textbox', { name: 'Distance', exact: true });
+    await chooseInPlaceOption(page, 'Extrude', 'Operation', 'Cut');
+    // Held before the distance, so its preview is still building when Done
+    // asks for the commit (which then waits on it, busy).
     await page.evaluate(() => {
       (
         Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
       ).hold = true;
     });
-    await pendingDistance.fill('-8');
-    await pendingDistance.press('Enter');
+    // The bar's signed distance, typed on its keypad and left open there:
+    // Done commits what it previewed.
+    const bar = extrudeBar(page);
+    await bar.locator('details.in-place-command-options summary').click();
+    await bar.getByRole('button', { name: 'Distance', exact: true }).click();
+    const keypad = page.locator('.numeric-keypad');
+    await keypad.locator('input').fill('-8');
+    await bar.getByRole('button', { name: 'Done' }).click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -138,6 +148,9 @@ test('cuts two native profiles with explicit intent and retains it through undo 
     await expect(
       page.getByRole('region', { name: 'Extrude operation' })
     ).toHaveAttribute('aria-busy', 'true');
+    // The keypad goes with the Done it fed: nothing left to edit a value
+    // that would not be the one committed.
+    await expect(keypad).toHaveCount(0);
     if (cancel === 'Escape') await page.keyboard.press('Escape');
     else await page.getByRole('button', { name: 'Dismiss Extrude' }).click();
     await expect(page.getByRole('contentinfo')).toContainText(
@@ -158,20 +171,36 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   }
   await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
   await page.keyboard.press('e');
-  const operation = page.getByRole('combobox', {
-    name: 'Extrude operation',
-    exact: true
-  });
-  await expect(operation).toHaveValue('automatic');
-  await operation.selectOption('cut');
-  await expect(page.getByLabel('Extrude target body')).toHaveValue(
-    document.bodyOrder[0]!
-  );
-  const distance = page
-    .getByRole('region', { name: 'Extrude operation' })
-    .getByRole('textbox', { name: 'Distance', exact: true });
-  await distance.fill('-8');
-  await distance.press('Enter');
+  const bar = extrudeBar(page);
+  await expect(
+    bar
+      .getByRole('radiogroup', {
+        name: 'Operation',
+        exact: true,
+        includeHidden: true
+      })
+      .getByRole('radio', {
+        name: 'Automatic',
+        exact: true,
+        includeHidden: true
+      })
+  ).toHaveAttribute('aria-checked', 'true');
+  await chooseInPlaceOption(page, 'Extrude', 'Operation', 'Cut');
+  // The only body is the target, chosen for it.
+  await expect(
+    bar
+      .getByRole('radiogroup', {
+        name: 'Target body',
+        exact: true,
+        includeHidden: true
+      })
+      .locator('[aria-checked="true"]')
+  ).toHaveCount(1);
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '-8' });
+  // Enter finishes, as Done does, once the bar's own controls let it go
+  // (Enter on Options would open them).
+  await page.locator(':focus').blur();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by -8 mm, cut into the body.',
     { timeout: 30_000 }
@@ -252,16 +281,13 @@ test('uses the shared editor for preview, cancel, create and operation changes i
   });
   const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
   const editor = page.getByRole('form', { name: 'Extrude settings' });
+  const bar = extrudeBar(page);
   for (const action of ['cancel', 'create']) {
     await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
     await page.keyboard.press('e');
-    await expect(editor).toContainText('2 selected profiles');
-    await editor
-      .getByLabel('Extrude operation', { exact: true })
-      .selectOption('cut');
-    await editor
-      .getByRole('textbox', { name: 'Distance', exact: true })
-      .fill('-8');
+    await expect(bar).toContainText('2 profiles');
+    await chooseInPlaceOption(page, 'Extrude', 'Operation', 'Cut');
+    await setInPlaceOptionValues(page, 'Extrude', { Distance: '-8' });
     // Wait for the exact Cut preview before confirming or taking evidence.
     await expect
       .poll(
@@ -285,14 +311,11 @@ test('uses the shared editor for preview, cancel, create and operation changes i
       )
       .toBe(2.5);
     await expect(extrusion).toHaveCount(0);
-    await expect(
-      editor.getByRole('button', { name: 'Create', exact: true })
-    ).toBeEnabled();
+    const done = bar.getByRole('button', { name: 'Done' });
+    await expect(done).toBeEnabled();
     if (action === 'cancel') {
       await page.setViewportSize({ width: 1024, height: 768 });
-      await expect(
-        editor.getByRole('button', { name: 'Create', exact: true })
-      ).toBeInViewport();
+      await expect(done).toBeInViewport();
       await page.screenshot({
         path: test.info().outputPath('extrude-compact.png')
       });
@@ -300,15 +323,11 @@ test('uses the shared editor for preview, cancel, create and operation changes i
       await page.screenshot({
         path: test.info().outputPath('extrude-desktop.png')
       });
-      await editor
-        .getByRole('textbox', { name: 'Distance', exact: true })
-        .press('Escape');
-      await expect(editor).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(bar).toHaveCount(0);
       await expect(extrusion).toHaveCount(0);
     } else {
-      await editor
-        .getByRole('textbox', { name: 'Distance', exact: true })
-        .press('Enter');
+      await page.keyboard.press('Enter');
       await expect(extrusion).toHaveCount(1);
     }
   }

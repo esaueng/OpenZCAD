@@ -805,11 +805,21 @@ import {
   reuseRunningExtrudePreview,
   type ResolvedExtrudePreview
 } from './lib/resolvedExtrudePreview';
+import type {
+  ExtrudeFormValue,
+  ExtrudeToFacePicking
+} from './lib/extrudeDraft';
 import {
-  ExtrudeForm,
-  type ExtrudeFormValue,
-  type ExtrudeToFacePicking
-} from './components/forms/ExtrudeForm';
+  ExtrudeCommand,
+  extrudeShownValues,
+  type ExtrudeCommandHandle,
+  type ExtrudeCommandState,
+  type ExtrudeValueId
+} from './components/ExtrudeCommand';
+import {
+  DRAFT_DRAG_LIMIT_DEG,
+  extrudeHandles
+} from './lib/inPlace/extrude';
 import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
@@ -1459,6 +1469,8 @@ import {
   displayedValue,
   isInPlaceTool,
   keypadText,
+  profileHoles,
+  profileOutline,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -4168,12 +4180,25 @@ export function App() {
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
   );
+  /** U09: the in-place Extrude's bar, for Enter, its keypad and handles. */
+  const regionExtrudeCommandRef = useRef<ExtrudeCommandHandle | null>(null);
+  /** The bar's settings as numbers, for the back arrow and the draft rig. */
+  const [regionExtrudeState, setRegionExtrudeState] =
+    useState<ExtrudeCommandState | null>(null);
   /**
-   * The profiles the Extrude command selected. While they are still the
-   * selection, the region card asks for its Distance field to hold the
-   * keyboard; a canvas pick replaces them and leaves it with the workspace.
+   * The bar's distance as a number, for the region arrow to stand at when
+   * it is rebuilt (a new choice), rather than back at its last drag.
    */
-  const extrudeCommandProfiles = useRef<RegionPickData[]>([]);
+  const regionDraftDistance = useRef<number | null>(null);
+  /** The text the open Extrude keypad last left its value at. */
+  const regionKeypadText = useRef<{
+    valueId: ExtrudeValueId;
+    text: string;
+  } | null>(null);
+  /** Why the open Extrude keypad's entry does not evaluate (Done waits). */
+  const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
+    string | null
+  >(null);
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -8527,7 +8552,6 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
-    extrudeCommandProfiles.current = chosen;
     setSelectedProfiles(chosen);
     setTool(null);
     if (activeSketch) {
@@ -16773,7 +16797,13 @@ export function App() {
       (interaction.mode !== 'idle' &&
         interaction.mode !== 'sketch' &&
         (interaction.phase === 'exact-entry' ||
-          interaction.phase === 'failed'));
+          interaction.phase === 'failed')) ||
+      // The in-place Extrude's own values: each keystroke previews, which
+      // sets the region's choice again; leaving the region closes it, and so
+      // does a Done being checked, which commits the value it previewed.
+      (interaction.mode === 'region' &&
+        interaction.phase !== 'validating' &&
+        keypadRef.current?.kind === 'extrude');
     if (!open) {
       setKeypad(null);
     }
@@ -16810,10 +16840,30 @@ export function App() {
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
+  // An Extrude keypad belongs to the value as it left it. Once anything else
+  // changes that value (Reverse, a drag, the arrow) or stops offering it (an
+  // extent or Sides choice), the keypad is closed as it stands: its stale
+  // entry, applied or canceled, would write over the change, and setting
+  // Distance would take the extent back to Distance.
+  useEffect(() => {
+    const open = keypadRef.current;
+    const state = regionExtrudeState;
+    if (open?.kind !== 'extrude' || !open.commandValueId || !state) return;
+    const valueId = open.commandValueId as ExtrudeValueId;
+    const own = regionKeypadText.current;
+    const changedElsewhere =
+      own?.valueId === valueId && state.texts[valueId] !== own.text;
+    if (changedElsewhere || !extrudeShownValues(state).includes(valueId)) {
+      regionKeypadText.current = null;
+      setKeypad(null);
+    }
+  }, [regionExtrudeState]);
   const regionSketchKey =
     interaction.mode === 'region' ? interaction.target.sketchId : null;
   useEffect(() => {
     regionExtrudeSettings.current = null;
+    regionDraftDistance.current = null;
+    setRegionExtrudeState(null);
   }, [regionSketchKey]);
   useEffect(() => {
     extrudeEditRequest.current += 1;
@@ -20240,6 +20290,75 @@ export function App() {
     () => (doc ? [...doc.bodyOrder] : []),
     [doc]
   );
+  /** U09: a dragged or previewed Extrude value as its field's text. */
+  function extrudeValueText(value: number): string {
+    return String(Math.round(value * 1e6) / 1e6);
+  }
+  /**
+   * U09: the keypad for one of the in-place Extrude's values, from its bar
+   * row (`at`, where the row is) or its handle's chip. It opens on the text
+   * the value holds, so an expression is edited as an expression.
+   */
+  function openRegionExtrudeKeypad(
+    valueId: ExtrudeValueId,
+    at?: { x: number; y: number }
+  ): boolean {
+    const command = regionExtrudeCommandRef.current;
+    if (!command || interactionRef.current.mode !== 'region') return false;
+    const text = command.text(valueId);
+    regionKeypadText.current = { valueId, text };
+    const shown = regionExtrudeState?.[valueId];
+    const value =
+      shown !== undefined && Number.isFinite(shown)
+        ? shown
+        : Number.isFinite(Number(text))
+          ? Number(text)
+          : 0;
+    setKeypad({
+      kind: 'extrude',
+      commandValueId: valueId,
+      label:
+        valueId === 'distance'
+          ? 'Distance'
+          : valueId === 'backDistance'
+            ? 'Back distance'
+            : 'Draft angle',
+      initial: text,
+      selectInitial: true,
+      unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
+      baseline: value,
+      baselineRaw: text,
+      ...(at ? { fixedClientAnchor: at } : {})
+    });
+    return true;
+  }
+  /** Moves the Extrude handle a value drives, without a render. */
+  function moveRegionExtrudeHandle(valueId: string, value: number) {
+    if (valueId === 'distance') offsetSetterRef.current?.(value);
+    else commandSetterRef.current?.(valueId, value);
+  }
+  /**
+   * A value the Extrude's handles or keypad set: typed text kept as typed.
+   * The keypad's own writes are remembered, so only someone else's change
+   * to its value closes it.
+   */
+  function setRegionExtrudeValue(
+    valueId: string,
+    value: number,
+    raw?: string,
+    fromKeypad = false
+  ) {
+    if (
+      valueId !== 'distance' &&
+      valueId !== 'backDistance' &&
+      valueId !== 'draftAngle'
+    ) {
+      return;
+    }
+    const text = raw ?? extrudeValueText(value);
+    if (fromKeypad) regionKeypadText.current = { valueId, text };
+    regionExtrudeCommandRef.current?.setValue(valueId, text);
+  }
   /**
    * Opens the keypad on an in-place command's value: from its chip, or from
    * the bar's Options at `at` (a position, which has no handle).
@@ -20318,6 +20437,78 @@ export function App() {
     // a chip-only value's text; it never rebuilds a rig.
     [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
   );
+  /**
+   * U09: the in-place Extrude's back arrow and draft rig, beside the
+   * region's own arrow, on the region the arrow stands on.
+   */
+  const regionExtrudeTarget =
+    interaction.mode === 'region' && interaction.phase !== 'validating'
+      ? interaction.target
+      : null;
+  const regionExtrudeLastValue =
+    interaction.mode === 'region' ? (interaction.lastValue ?? 0) : 0;
+  const regionExtrudeHandles = useMemo(() => {
+    if (!regionExtrudeTarget || inPlace.active) return [];
+    const view = availableSketchViews.find(
+      (candidate) => candidate.sketchId === regionExtrudeTarget.sketchId
+    );
+    if (!view) return [];
+    const profileContext = {
+      sketchViews: availableSketchViews,
+      datumAxes: undefined,
+      datumLabel: () => ''
+    };
+    const profilePick = {
+      sketchId: regionExtrudeTarget.sketchId as SketchId,
+      regionFingerprint: regionExtrudeTarget.regionFingerprint,
+      reference: {
+        regionFingerprint: regionExtrudeTarget.regionFingerprint,
+        samplePoint: regionExtrudeTarget.samplePoint,
+        sourceArea: regionExtrudeTarget.area,
+        sourceEntityIds: regionExtrudeTarget.sourceEntityIds
+      }
+    };
+    const outline = profileOutline(profileContext, profilePick);
+    const finite = (value: number | undefined, fallback: number) =>
+      value !== undefined && Number.isFinite(value) ? value : fallback;
+    const state = {
+      extent: regionExtrudeState?.extent ?? ('blind' as const),
+      symmetric: regionExtrudeState?.symmetric ?? false,
+      distance: finite(regionExtrudeState?.distance, regionExtrudeLastValue),
+      backDistance: finite(regionExtrudeState?.backDistance, 0),
+      draftAngle: finite(regionExtrudeState?.draftAngle, 0)
+    };
+    return extrudeHandles(
+      outline,
+      view.basis.normal,
+      `${regionExtrudeTarget.sketchId}:${regionExtrudeTarget.regionFingerprint}`,
+      state,
+      profileHoles(profileContext, profilePick)
+    ).map((handle) =>
+      handle.valueId === 'draftAngle'
+        ? {
+            ...handle,
+            value: state.draftAngle,
+            min: -DRAFT_DRAG_LIMIT_DEG,
+            max: DRAFT_DRAG_LIMIT_DEG,
+            format: (value: number) => `Draft ${formatNumber(value)}°`
+          }
+        : {
+            ...handle,
+            value: state.backDistance,
+            min: 0,
+            format: (value: number) =>
+              `Back ${formatNumber(value)} ${inPlaceUnits}`
+          }
+    );
+  }, [
+    regionExtrudeTarget,
+    regionExtrudeLastValue,
+    regionExtrudeState,
+    inPlace.active,
+    availableSketchViews,
+    inPlaceUnits
+  ]);
   // A new fillet's or chamfer's picked edges are the selection, lit as the
   // card's list was. An edit leaves the selection alone: History already
   // lights the feature's blend faces, through its preview as edges change.
@@ -21152,7 +21343,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
-      initialValue: interaction.lastValue ?? 0,
+      initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
         .map((target) => ({
@@ -22448,18 +22639,18 @@ export function App() {
     ) {
       return false;
     }
+    // U09: the region's arrow is the in-place Extrude's distance, entered
+    // as its other values are: Enter sets it, Done (or Enter) extrudes.
+    if (interaction.mode === 'region') {
+      return openRegionExtrudeKeypad('distance');
+    }
     // Reopened in place by the chip's Total/Offset switch: a refused preview
     // stays refused (`keypad-open` would clear the failure and re-enable
     // Apply for the value the kernel just turned down).
     if (!keypadRef.current) dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label:
-        totalBaseline === undefined
-          ? interaction.mode === 'region'
-            ? 'Height'
-            : 'Offset'
-          : 'Total',
+      label: totalBaseline === undefined ? 'Offset' : 'Total',
       initial:
         totalBaseline !== undefined || currentOffset !== 0
           ? String(
@@ -22661,6 +22852,16 @@ export function App() {
         baseline,
         open.baselineRaw,
         commandKeypadTouchedRef.current
+      );
+    } else if (open.kind === 'extrude' && open.commandValueId) {
+      // Back to what the value held, typed expression and all.
+      const baseline = open.baseline ?? 0;
+      moveRegionExtrudeHandle(open.commandValueId, baseline);
+      setRegionExtrudeValue(
+        open.commandValueId,
+        baseline,
+        open.baselineRaw,
+        true
       );
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
@@ -25054,6 +25255,22 @@ export function App() {
           return;
         }
       }
+      // U09: Enter finishes the in-place Extrude once it can create; until
+      // then it opens the distance's exact entry, as it always has.
+      if (
+        interaction.mode === 'region' &&
+        event.key === 'Enter' &&
+        !typing &&
+        !(
+          target instanceof Element &&
+          target.closest('[aria-haspopup], [role="menu"], .in-place-command') !==
+            null
+        ) &&
+        regionExtrudeCommandRef.current?.submit() === true
+      ) {
+        event.preventDefault();
+        return;
+      }
       if (movePreview) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -27412,7 +27629,7 @@ export function App() {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
                 setStatus(
-                  'Extrude preview · adjust the settings, then Create to save.'
+                  'Extrude preview · Enter to finish, or adjust it under Options.'
                 );
                 return true;
               }
@@ -27718,14 +27935,42 @@ export function App() {
               if (curve) inPlace.pickCurve(curve);
             }}
             commandHandles={
-              modelingLocked || footprintDragging ? undefined : inPlaceHandles
+              modelingLocked || footprintDragging
+                ? undefined
+                : inPlace.active
+                  ? inPlaceHandles
+                  : regionExtrudeHandles
             }
-            onCommandHandlePreview={inPlace.previewValue}
-            onCommandHandleRelease={inPlace.previewValue}
+            onCommandHandlePreview={(valueId, value) =>
+              inPlace.active
+                ? inPlace.previewValue(valueId, value)
+                : setRegionExtrudeValue(valueId, value)
+            }
+            onCommandHandleRelease={(valueId, value) =>
+              inPlace.active
+                ? inPlace.previewValue(valueId, value)
+                : setRegionExtrudeValue(valueId, value)
+            }
             onOpenCommandKeypad={(valueId, value) =>
-              openInPlaceKeypad(valueId, value)
+              inPlace.active
+                ? openInPlaceKeypad(valueId, value)
+                : openRegionExtrudeKeypad(valueId as ExtrudeValueId)
             }
             commandSetterRef={commandSetterRef}
+            // The in-place Extrude's keypad rides the chip it opened from:
+            // the region arrow's, a handle's, or none from its bar.
+            {...(interaction.mode === 'region' && !inPlace.active
+              ? {
+                  keypadAnchorOwner:
+                    keypad?.kind !== 'extrude' || !keypad.commandValueId
+                      ? ('offset' as const)
+                      : keypad.fixedClientAnchor
+                        ? ('none' as const)
+                        : keypad.commandValueId === 'distance'
+                          ? ('offset' as const)
+                          : { command: keypad.commandValueId }
+                }
+              : {})}
             facePickOnly={toFacePick !== null}
             modeOverlay={
               modelingLocked ? (
@@ -27811,11 +28056,22 @@ export function App() {
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
-                      onPreview={(value) => {
+                      {...(keypad.kind === 'extrude'
+                        ? { onEntryError: setRegionExtrudeEntryError }
+                        : {})}
+                      onPreview={(value, raw) => {
                         if (
                           keypad.kind === 'sketch-dimension' ||
                           keypad.kind === 'sketch-edit'
                         ) {
+                          return;
+                        }
+                        if (keypad.kind === 'extrude') {
+                          // An expression previews as itself, so a Done
+                          // pressed with the keypad still open stores it.
+                          const valueId = keypad.commandValueId ?? '';
+                          moveRegionExtrudeHandle(valueId, value);
+                          setRegionExtrudeValue(valueId, value, raw, true);
                           return;
                         }
                         offsetSetterRef.current?.(value);
@@ -27865,6 +28121,19 @@ export function App() {
                         }
                         // Expressions stay parametric in the stored feature.
                         const isExpression = !Number.isFinite(Number(raw));
+                        if (keypad.kind === 'extrude') {
+                          // A value of the Extrude's bar: Enter sets it, and
+                          // Done (or Enter again) creates the extrusion.
+                          const valueId = keypad.commandValueId ?? '';
+                          moveRegionExtrudeHandle(valueId, value);
+                          setRegionExtrudeValue(
+                            valueId,
+                            value,
+                            isExpression ? raw : undefined,
+                            true
+                          );
+                          return;
+                        }
                         if (keypad.kind === 'edge') {
                           handleEdgeCommit(
                             value,
@@ -28026,15 +28295,6 @@ export function App() {
           hideSketchToolCard || calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
-              focusRequest={
-                selectedProfiles === extrudeCommandProfiles.current &&
-                selectedProfiles
-              }
-              focusReady={
-                !geometryBusy &&
-                (interaction.mode !== 'region' ||
-                  interaction.phase !== 'validating')
-              }
               selectAllEdges={
                 interaction.mode === 'edges' &&
                 edgeModifierBody?.topology &&
@@ -28061,75 +28321,6 @@ export function App() {
                   : undefined
               }
               onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
-              children={
-                interaction.mode === 'region' ? (
-                  <ExtrudeForm
-                    key={`extrude-${interaction.target.sketchId}`}
-                    creating
-                    initial={{
-                      name: 'Extrude',
-                      sketchId: interaction.target.sketchId as SketchId,
-                      distance: 0
-                    }}
-                    sketches={sketchOptions}
-                    scope={parameterScope.scope}
-                    units={doc.units}
-                    profileCount={Math.max(1, selectedProfiles.length)}
-                    bodies={doc.bodyOrder.flatMap((bodyId) => {
-                      const body = doc.derived.bodyRepresentations[bodyId];
-                      return body && !body.consumed
-                        ? [{ bodyId, name: body.name }]
-                        : [];
-                    })}
-                    disabled={
-                      geometryBusy || interaction.phase === 'validating'
-                    }
-                    submitLabel="Create"
-                    distanceSetterRef={regionDistanceSetter}
-                    toFacePicking={extrudeToFacePicking(
-                      'create',
-                      interaction.target.sketchId as SketchId
-                    )}
-                    onDraft={(value) => {
-                      regionExtrudeSettings.current = value;
-                      dispatchInteraction({
-                        type: 'set-extrude-choice',
-                        choice: value.choice
-                      });
-                    }}
-                    onPreview={(value) => {
-                      setLastValidPreview(null);
-                      if (!value) {
-                        regionExtrudePreview.clear();
-                        return;
-                      }
-                      const distance = resolveDocumentValue(value.distance);
-                      offsetSetterRef.current?.(distance);
-                      dispatchInteraction({
-                        type: 'set-extrude-choice',
-                        choice: value.choice
-                      });
-                      // The last preview stays up until this one lands:
-                      // clearing first showed the bare sketch for a whole
-                      // rebuild on every keystroke.
-                      regionExtrudePreview.replace(distance);
-                    }}
-                    onSubmit={(value) => {
-                      regionExtrudeSettings.current = value;
-                      handleRegionExtrudeCommit(
-                        resolveDocumentValue(value.distance),
-                        value.distance
-                      );
-                    }}
-                    onCancel={() => {
-                      if (cancelPendingRegionExtrusion()) return;
-                      regionExtrudePreview.clear();
-                      dispatchInteraction({ type: 'clear' });
-                      cancelPanel();
-                    }}
-                  />
-                ) : undefined
-              }
               onAction={handleSelectionAction}
               onEditCulprit={handleEditCulpritFeature}
               onViewDetails={() => setActivityLogOpen(true)}
@@ -28675,6 +28866,89 @@ export function App() {
                   }}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
+                />
+              ) : interaction.mode === 'region' && !modelingLocked ? (
+                <ExtrudeCommand
+                  key={`extrude-${interaction.target.sketchId}`}
+                  initial={{
+                    name: 'Extrude',
+                    sketchId: interaction.target.sketchId as SketchId,
+                    distance: 0
+                  }}
+                  scope={parameterScope.scope}
+                  units={doc.units}
+                  profileCount={Math.max(1, selectedProfiles.length)}
+                  bodies={doc.bodyOrder.flatMap((bodyId) => {
+                    const body = doc.derived.bodyRepresentations[bodyId];
+                    return body && !body.consumed
+                      ? [{ bodyId, name: body.name }]
+                      : [];
+                  })}
+                  disabled={geometryBusy || interaction.phase === 'validating'}
+                  entryRefusal={
+                    keypad?.kind === 'extrude' && regionExtrudeEntryError
+                      ? `${keypad.label}: ${regionExtrudeEntryError}.`
+                      : null
+                  }
+                  distanceSetterRef={regionDistanceSetter}
+                  commandRef={regionExtrudeCommandRef}
+                  toFacePicking={extrudeToFacePicking(
+                    'create',
+                    interaction.target.sketchId as SketchId
+                  )}
+                  onOpenValue={(valueId, at) =>
+                    openRegionExtrudeKeypad(valueId, at)
+                  }
+                  onDraft={(state) => {
+                    regionExtrudeSettings.current = state.value;
+                    regionDraftDistance.current = Number.isFinite(
+                      state.distance
+                    )
+                      ? state.distance
+                      : null;
+                    setRegionExtrudeState(state);
+                    // A new choice is the region's to infer from, and any
+                    // change clears a refusal; a value alone is neither,
+                    // and must not rebuild the region's arrow under a drag.
+                    const current = interactionRef.current;
+                    if (
+                      current.mode !== 'region' ||
+                      current.phase === 'failed' ||
+                      JSON.stringify(current.extrudeChoice) !==
+                        JSON.stringify(state.value.choice)
+                    ) {
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: state.value.choice
+                      });
+                    }
+                  }}
+                  onPreview={(value) => {
+                    setLastValidPreview(null);
+                    if (!value) {
+                      regionExtrudePreview.clear();
+                      return;
+                    }
+                    const distance = resolveDocumentValue(value.distance);
+                    offsetSetterRef.current?.(distance);
+                    // The last preview stays up until this one lands:
+                    // clearing first showed the bare sketch for a whole
+                    // rebuild on every keystroke.
+                    regionExtrudePreview.replace(distance);
+                  }}
+                  onSubmit={(value) => {
+                    regionExtrudeSettings.current = value;
+                    handleRegionExtrudeCommit(
+                      resolveDocumentValue(value.distance),
+                      value.distance
+                    );
+                  }}
+                  onCancel={() => {
+                    if (cancelPendingRegionExtrusion()) return;
+                    regionExtrudePreview.clear();
+                    dispatchInteraction({ type: 'clear' });
+                    cancelPanel();
+                  }}
                 />
               ) : movePreview &&
                 !modelingLocked &&

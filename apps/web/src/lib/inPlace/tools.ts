@@ -281,6 +281,8 @@ export interface InPlaceSketchView {
   regions: readonly {
     regionFingerprint: number;
     outer: readonly { x: number; y: number }[];
+    /** Its inner loops (a washer's bore), when the view carries them. */
+    holes?: readonly (readonly { x: number; y: number }[])[];
     /** The authored entities bounding it, which survive a renumbering. */
     sourceEntityIds?: readonly string[];
   }[];
@@ -724,6 +726,23 @@ export function profileOutline(
     : revolveProfileRegions(view.regions, pick);
   return regions.flatMap((region) =>
     region.outer.map((point) => toWorld(view.basis, point))
+  );
+}
+
+/**
+ * The picked region's inner loops in world space, each its own polyline:
+ * what a point inside the profile must also stay out of.
+ */
+export function profileHoles(
+  ctx: InPlaceContext,
+  pick: ProfilePick
+): Vector3[][] {
+  const view = viewFor(ctx, pick.sketchId);
+  if (!view || pick.implicit) return [];
+  return revolveProfileRegions(view.regions, pick).flatMap((region) =>
+    (region.holes ?? []).map((loop) =>
+      loop.map((point) => toWorld(view.basis, point))
+    )
   );
 }
 

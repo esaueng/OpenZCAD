@@ -7,11 +7,16 @@ import {
   test,
   expect,
   stubApi,
-  seedUnitlessImportUnits
+  seedUnitlessImportUnits,
+  expectBodyCount,
+  extrudeBar
 } from './openzcad-fixtures';
 
+// U09: the in-place Extrude has no field to hand the keyboard to. While an
+// exact operation holds the model its Done waits; once it lets go a typed
+// digit is the distance, and Enter on it extrudes.
 for (const moveKeyboard of [false, true]) {
-  test(`Extrude ${moveKeyboard ? 'keeps a later canvas gesture in control of the keyboard' : 'focuses Distance after the exact operation enables it'}`, async ({
+  test(`Extrude ${moveKeyboard ? 'keeps the keyboard with the workspace across a canvas press' : 'takes a typed distance once the exact operation lets go'}`, async ({
     page
   }) => {
     test.setTimeout(90_000);
@@ -70,25 +75,27 @@ for (const moveKeyboard of [false, true]) {
       .setInputFiles('samples/simple-block.stl');
     await expect.poll(() => archiving).toBe(true);
     await page.keyboard.press('e');
-    const distance = page
-      .getByRole('region', { name: 'Extrude operation' })
-      .getByRole('textbox', { name: 'Distance', exact: true });
-    await expect(distance).toBeDisabled();
-    await expect(distance).not.toBeFocused();
+    const bar = extrudeBar(page);
+    await expect(bar).toBeVisible();
+    await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
+    // Nothing in the bar holds the keyboard.
+    await expect(bar.locator(':focus')).toHaveCount(0);
     if (moveKeyboard) {
-      // A background canvas press need not focus an element, but still ends
-      // the command's claim on the keyboard before its field is enabled.
+      // A background canvas press leaves the keys with the workspace too.
       await page.locator('.viewer-host canvas').dispatchEvent('pointerdown');
     }
     release();
-    await expect(distance).toBeEnabled();
-    if (moveKeyboard) {
-      await expect(distance).not.toBeFocused();
-      await expect(distance).toHaveValue('0');
-    } else {
-      await expect(distance).toBeFocused();
-      await page.keyboard.type('10');
-      await expect(distance).toHaveValue('10');
-    }
+    // The import lands; the keys were the workspace's all along.
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('7');
+    const keypad = page.locator('.numeric-keypad');
+    await expect(keypad.locator('input')).toHaveValue('7');
+    // Enter sets the distance; Done extrudes it.
+    await keypad.locator('input').press('Enter');
+    await expect(keypad).toHaveCount(0);
+    await bar.getByRole('button', { name: 'Done' }).click();
+    await expect(
+      page.locator('.feature-row-main', { hasText: 'Extrude' })
+    ).toHaveCount(1, { timeout: 30_000 });
   });
 }
