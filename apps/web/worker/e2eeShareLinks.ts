@@ -37,6 +37,10 @@
  * opaque 404. The plaintext `/api/share/:token` route is untouched and
  * keeps refusing format 2.
  *
+ * The anonymous blob route (slice 5-11), `GET /api/e2ee/share/:token/
+ * blobs/:blobId`, serves the owner's ciphertext of a content blob that the
+ * link's current snapshot names in its header, behind the same gates.
+ *
  * Served by `handleE2eeRequest` after the key rollout gate and, for writes,
  * the session/erasure write authorization; here: E2EE_PROJECTS_ENABLED,
  * migrations 0031, 0032 and 0040 (503 without them), format-2 projects
@@ -62,6 +66,7 @@ import {
   type ShareDelegation
 } from '@openzcad/crypto';
 import {
+  E2EE_BLOB_ID_PATTERN,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   decodeE2eeFrame,
   encodeE2eeFrame,
@@ -78,6 +83,7 @@ import {
   type E2eeSharedSnapshotMetadata
 } from '@openzcad/shared';
 import {
+  isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeShareLinkStorageReady,
   isProjectStorageFormatReady
@@ -109,6 +115,7 @@ const LINKS_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/share-links(?:\/([^/]+)(?:\/(keys|authority|snapshot))?)?$/;
 const DELEGATION_ROUTE = '/api/e2ee/share-delegation';
 const SHARED_ROUTE = /^\/api\/e2ee\/share\/([^/]+)$/;
+const SHARED_BLOB_ROUTE = /^\/api\/e2ee\/share\/([^/]+)\/blobs\/([^/]+)$/;
 
 /** The owner-side share-link routes and the delegation route. */
 export function isE2eeShareLinkPath(pathname: string): boolean {
@@ -118,6 +125,11 @@ export function isE2eeShareLinkPath(pathname: string): boolean {
 /** The anonymous encrypted share route. */
 export function isEncryptedSharedSnapshotPath(pathname: string): boolean {
   return SHARED_ROUTE.test(pathname);
+}
+
+/** The anonymous route for a shared snapshot's content blobs (slice 5-11). */
+export function isEncryptedSharedBlobPath(pathname: string): boolean {
+  return SHARED_BLOB_ROUTE.test(pathname);
 }
 
 const WRAP_BYTES = 41;
@@ -1317,45 +1329,50 @@ export async function shareLinkTokenHash(token: string): Promise<string> {
   return sha256Hex(fromBase64Url(token));
 }
 
+/** One link as the anonymous routes serve it, after every gate below. */
+interface ServedLink {
+  project_id: string;
+  share_id: string;
+  mode: E2eeShareLinkMode;
+  authority: string;
+  authority_signature: string;
+  owner_user_id: string;
+  document_version: number;
+  key_epoch: number;
+  envelope_inline: string | null;
+  envelope_key: string | null;
+  signature: string;
+  wrapped_for_link_visitors: string;
+  author_key: string;
+}
+
 /**
- * `GET /api/e2ee/share/:token`, anonymous: the capability token in the path
- * is the whole authorization. `open` is the deployment's decision (the
- * E2EE_PROJECTS_ENABLED flag and the global sharing rollout); anything that
- * cannot be served is one opaque 404, as on the plaintext route.
+ * The link a token names, or null: format-2 projects only, never trashed,
+ * a live (not revoked) link with a statement and a published snapshot, and
+ * only while the owner's own sharing switch is on (re-evaluated per read,
+ * as for plaintext links), with the tables of migrations 0031, 0032 and
+ * 0040 present. Both anonymous routes go through it, so the blob route
+ * serves nothing the snapshot route would not.
  */
-export async function handleEncryptedSharedSnapshot(
-  pathname: string,
-  db: D1Database | undefined,
-  bucket: ShareSnapshotBucket | null,
-  open: boolean
-): Promise<Response> {
-  const notFound = () =>
-    new Response(JSON.stringify({ error: 'Share link not found.' }), {
-      status: 404,
-      headers: {
-        'content-type': 'application/json',
-        'cache-control': 'no-store'
-      }
-    });
-  if (!open || !db) return notFound();
-  const match = SHARED_ROUTE.exec(pathname);
+async function servedLink(
+  db: D1Database,
+  rawToken: string
+): Promise<ServedLink | null> {
   let token: string;
   try {
-    token = decodeURIComponent(match?.[1] ?? '');
+    token = decodeURIComponent(rawToken);
   } catch {
-    return notFound();
+    return null;
   }
-  if (!TOKEN.test(token)) return notFound();
+  if (!TOKEN.test(token)) return null;
   if (
     !(await isProjectStorageFormatReady(db)) ||
     !(await isE2eeProjectGroupStorageReady(db)) ||
     !(await isE2eeShareLinkStorageReady(db))
   ) {
-    return notFound();
+    return null;
   }
-  // Format-2 projects only, never trashed, and only while the owner's own
-  // sharing switch is on (re-evaluated per read, as for plaintext links).
-  const row = await db
+  return db
     .prepare(
       `SELECT l.project_id, l.share_id, l.mode, l.authority,
               l.authority_signature, p.user_id AS owner_user_id,
@@ -1382,35 +1399,56 @@ export async function handleEncryptedSharedSnapshot(
          ) = 1`
     )
     .bind(await shareLinkTokenHash(token))
-    .first<{
-      project_id: string;
-      share_id: string;
-      mode: E2eeShareLinkMode;
-      authority: string;
-      authority_signature: string;
-      owner_user_id: string;
-      document_version: number;
-      key_epoch: number;
-      envelope_inline: string | null;
-      envelope_key: string | null;
-      signature: string;
-      wrapped_for_link_visitors: string;
-      author_key: string;
-    }>();
-  if (!row) return notFound();
+    .first<ServedLink>();
+}
+
+/** The link's stored snapshot envelope, inline or from the object store. */
+async function servedEnvelope(
+  row: ServedLink,
+  bucket: ShareSnapshotBucket | null
+): Promise<Uint8Array | null> {
+  if (row.envelope_inline !== null) return fromBase64Url(row.envelope_inline);
+  if (row.envelope_key !== null && bucket) {
+    const stored = await bucket.get(row.envelope_key);
+    if (stored) return new Uint8Array(await stored.arrayBuffer());
+  }
+  return null;
+}
+
+function anonymousNotFound(): Response {
+  return new Response(JSON.stringify({ error: 'Share link not found.' }), {
+    status: 404,
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'no-store'
+    }
+  });
+}
+
+/**
+ * `GET /api/e2ee/share/:token`, anonymous: the capability token in the path
+ * is the whole authorization. `open` is the deployment's decision (the
+ * E2EE_PROJECTS_ENABLED flag and the global sharing rollout); anything that
+ * cannot be served is one opaque 404, as on the plaintext route.
+ */
+export async function handleEncryptedSharedSnapshot(
+  pathname: string,
+  db: D1Database | undefined,
+  bucket: ShareSnapshotBucket | null,
+  open: boolean
+): Promise<Response> {
+  if (!open || !db) return anonymousNotFound();
+  const match = SHARED_ROUTE.exec(pathname);
+  if (!match) return anonymousNotFound();
+  const row = await servedLink(db, match[1] ?? '');
+  if (!row) return anonymousNotFound();
   const [delegation, identity] = await Promise.all([
     delegationRow(db, row.owner_user_id),
     currentIdentity(db, row.owner_user_id)
   ]);
-  if (!delegation || !identity) return notFound();
-  let envelope: Uint8Array | null = null;
-  if (row.envelope_inline !== null) {
-    envelope = fromBase64Url(row.envelope_inline);
-  } else if (row.envelope_key !== null && bucket) {
-    const stored = await bucket.get(row.envelope_key);
-    if (stored) envelope = new Uint8Array(await stored.arrayBuffer());
-  }
-  if (!envelope) return notFound();
+  if (!delegation || !identity) return anonymousNotFound();
+  const envelope = await servedEnvelope(row, bucket);
+  if (!envelope) return anonymousNotFound();
   const metadata: E2eeSharedSnapshotMetadata = {
     shareId: row.share_id,
     mode: row.mode,
@@ -1431,6 +1469,93 @@ export async function handleEncryptedSharedSnapshot(
     status: 200,
     headers: {
       'content-type': E2EE_FRAME_CONTENT_TYPE,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer'
+    }
+  });
+}
+
+/** Where the owner's encrypted content blobs live (the artifact bucket). */
+export interface SharedBlobBucket {
+  get(key: string): Promise<{
+    body?: ReadableStream<Uint8Array>;
+    arrayBuffer(): Promise<ArrayBuffer>;
+  } | null>;
+}
+
+/**
+ * `GET /api/e2ee/share/:token/blobs/:blobId`, anonymous (slice 5-11): the
+ * ciphertext of one content blob the link's current snapshot names, the
+ * owner's own bytes for that project, unchanged. The token goes through
+ * every gate of the snapshot route (`servedLink`); the blob id must be one
+ * the stored snapshot envelope's header lists in `blobIds` and a committed
+ * blob of the link's project. The server never holds a blob's key: a
+ * visitor decrypts it with the reference in the snapshot body, which also
+ * authenticates its ciphertext hash and length. Everything else is the
+ * same opaque 404; a blob row whose object is missing is 503, as for
+ * members.
+ */
+export async function handleEncryptedSharedBlob(
+  pathname: string,
+  db: D1Database | undefined,
+  snapshots: ShareSnapshotBucket | null,
+  blobs: SharedBlobBucket | null,
+  open: boolean
+): Promise<Response> {
+  if (!open || !db || !blobs) return anonymousNotFound();
+  const match = SHARED_BLOB_ROUTE.exec(pathname);
+  const blobId = match?.[2] ?? '';
+  if (!match || !E2EE_BLOB_ID_PATTERN.test(blobId)) {
+    return anonymousNotFound();
+  }
+  const row = await servedLink(db, match[1] ?? '');
+  if (!row || !(await isE2eeContentBlobStorageReady(db))) {
+    return anonymousNotFound();
+  }
+  const envelope = await servedEnvelope(row, snapshots);
+  if (!envelope) return anonymousNotFound();
+  let named: readonly string[];
+  try {
+    const { header } = parseEnvelope(envelope);
+    if (header.class !== 'project' || header.kind !== 'share-snapshot') {
+      return anonymousNotFound();
+    }
+    named = header.blobIds;
+  } catch {
+    return anonymousNotFound();
+  }
+  if (!named.includes(blobId)) return anonymousNotFound();
+  const blob = await db
+    .prepare(
+      `SELECT object_key, ciphertext_bytes FROM e2ee_content_blobs
+       WHERE project_id = ? AND blob_id = ? AND state = 'committed'`
+    )
+    .bind(row.project_id, blobId)
+    .first<{ object_key: string; ciphertext_bytes: number }>();
+  if (!blob) return anonymousNotFound();
+  const stored = await blobs.get(blob.object_key);
+  if (!stored) {
+    return new Response(
+      JSON.stringify({
+        error: 'This encrypted file cannot be read right now.',
+        code: 'E2EE_BLOB_UNAVAILABLE'
+      }),
+      {
+        status: 503,
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': 'no-store'
+        }
+      }
+    );
+  }
+  // Streamed: a blob can be far larger than a Worker may buffer.
+  return new Response(stored.body ?? (await stored.arrayBuffer()), {
+    status: 200,
+    headers: {
+      'content-type': 'application/octet-stream',
+      'content-length': String(blob.ciphertext_bytes),
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer'
