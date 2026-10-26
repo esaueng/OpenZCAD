@@ -135,6 +135,24 @@ describe('watching an open plaintext project for a migration elsewhere', () => {
     stop();
   });
 
+  it('keeps a finished encryption locked: the open plaintext was replaced (#924 review)', async () => {
+    let state: E2eeMigrationState | null = 'purging';
+    const { status, focus, stop } = watch(() => state);
+    await vi.advanceTimersByTimeAsync(0);
+    expect([...migrationLockedProjects()]).toEqual([PROJECT]);
+    // The other device's purge finishes: the workspace still holds the
+    // plaintext the encrypted copy replaced, so nothing unlocks.
+    state = 'done';
+    await vi.advanceTimersByTimeAsync(10_000);
+    focus.fire('focus');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(status).toHaveBeenCalledTimes(2);
+    expect([...migrationLockedProjects()]).toEqual([PROJECT]);
+    await vi.advanceTimersByTimeAsync(MIGRATION_WATCH_INTERVAL_MS);
+    expect([...migrationLockedProjects()]).toEqual([PROJECT]);
+    stop();
+  });
+
   it('asks again when the page regains focus or becomes visible, at most every few seconds', async () => {
     let state: E2eeMigrationState | null = null;
     const { status, focus, visibility, stop } = watch(() => state);

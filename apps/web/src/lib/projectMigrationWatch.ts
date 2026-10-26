@@ -45,7 +45,12 @@ export const MIGRATION_WATCH_INTERVAL_MS = 30_000;
 /** Focus and visibility ask at most this often. */
 export const MIGRATION_WATCH_FOCUS_GAP_MS = 5_000;
 
-/** The plaintext is locked, or already replaced, by this migration. */
+/**
+ * The plaintext is locked, or already replaced, by this migration. A
+ * finished one stays locked: the open workspace still holds the plaintext
+ * the encrypted copy replaced, so its edits would save nowhere. It unlocks
+ * only once the workspace closes or reopens the project (#924 review).
+ */
 export function migrationLocksPlaintext(
   migration: E2eeProjectMigrationRecord | null
 ): boolean {
@@ -54,7 +59,8 @@ export function migrationLocksPlaintext(
     migration.direction === 'encrypt' &&
     (migration.state === 'staging' ||
       migration.state === 'cutover' ||
-      migration.state === 'purging')
+      migration.state === 'purging' ||
+      migration.state === 'done')
   );
 }
 
