@@ -1,3 +1,4 @@
+import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
 
 export type DesktopMenuCommand =
@@ -114,6 +115,147 @@ export async function desktopCollaborationUrl(
   return url.toString();
 }
 
+interface NativeBlobStreamStart {
+  status: number;
+  contentType?: string | null;
+  contentLength?: number | null;
+  /** Set for a 200 body, which stays in Rust until read. */
+  streamId?: string | null;
+  body: number[];
+}
+
+type NativeInvoke = typeof tauriInvoke;
+
+/**
+ * The encrypted content blob reads Rust streams instead of buffering
+ * (`blob_stream_destination` in `desktop_auth.rs`, which has the final say):
+ * a share link's anonymous read and a member's read of a project's blob. A
+ * 128 MiB import source or mesh payload is larger than the buffered bridge's
+ * 50 MiB response cap.
+ */
+const NATIVE_BLOB_STREAM_PATH =
+  /^\/api\/e2ee\/(?:share|projects)\/[A-Za-z0-9_-]{1,256}\/blobs\/[0-9a-f]{32}$/;
+
+function isNativeBlobStreamPath(path: string): boolean {
+  return NATIVE_BLOB_STREAM_PATH.test(path);
+}
+
+function abortError(): DOMException {
+  return new DOMException('The operation was aborted.', 'AbortError');
+}
+
+function nativeChunk(value: unknown): Uint8Array<ArrayBuffer> {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(
+      value.buffer,
+      value.byteOffset,
+      value.byteLength
+    ).slice();
+  }
+  if (Array.isArray(value)) return Uint8Array.from(value as number[]);
+  throw new Error('The OpenZCAD cloud download returned invalid data.');
+}
+
+function nativeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * A blob download whose body Rust holds and hands over one bounded piece per
+ * read of this response, keeping only a few network chunks ahead of the
+ * reader, so the caller's own size cap bounds what the WebView buffers and
+ * every piece is progress for its idle budget. Cancelling the body or
+ * aborting `signal` ends the native download.
+ */
+async function nativeBlobStream(
+  invoke: NativeInvoke,
+  path: string,
+  signal: AbortSignal
+): Promise<Response> {
+  const started = await invoke<NativeBlobStreamStart>(
+    'desktop_blob_stream_open',
+    { path }
+  );
+  const streamId = started.streamId ?? null;
+  let finished = false;
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  function release(): boolean {
+    if (finished) return false;
+    finished = true;
+    signal.removeEventListener('abort', aborted);
+    return true;
+  }
+  function cancelNative(): void {
+    if (streamId === null) return;
+    void invoke('desktop_blob_stream_cancel', { streamId }).catch(
+      () => undefined
+    );
+  }
+  function aborted(): void {
+    if (!release()) return;
+    cancelNative();
+    controller?.error(abortError());
+  }
+  try {
+    assertCloudFunctionsEnabled();
+  } catch (error) {
+    release();
+    cancelNative();
+    throw error;
+  }
+  if (signal.aborted) {
+    release();
+    cancelNative();
+    throw abortError();
+  }
+  const headers = new Headers();
+  if (started.contentType) headers.set('content-type', started.contentType);
+  if (streamId === null) {
+    finished = true;
+    return new Response(new Uint8Array(started.body), {
+      status: started.status,
+      headers
+    });
+  }
+  if (typeof started.contentLength === 'number') {
+    headers.set('content-length', String(started.contentLength));
+  }
+  signal.addEventListener('abort', aborted, { once: true });
+  const body = new ReadableStream<Uint8Array>(
+    {
+      start(streamController) {
+        controller = streamController;
+      },
+      async pull(streamController) {
+        let chunk: Uint8Array<ArrayBuffer>;
+        try {
+          chunk = nativeChunk(
+            await invoke<unknown>('desktop_blob_stream_read', { streamId })
+          );
+        } catch (error) {
+          // Rust has released a stream whose read failed.
+          if (release()) streamController.error(nativeError(error));
+          return;
+        }
+        if (finished) return;
+        if (chunk.byteLength === 0) {
+          release();
+          streamController.close();
+          return;
+        }
+        streamController.enqueue(chunk);
+      },
+      cancel() {
+        if (release()) cancelNative();
+      }
+    },
+    // Read only when the caller asks: Rust holds the rest of the body.
+    { highWaterMark: 0 }
+  );
+  return new Response(body, { status: started.status, headers });
+}
+
 /**
  * Routes cloud requests through Rust so bearer credentials never enter the
  * WebView, localStorage, URLs, logs, or frontend bundles.
@@ -131,6 +273,14 @@ export async function desktopFetch(
   }
   const headers = new Headers(init.headers);
   const { invoke } = await import('@tauri-apps/api/core');
+  const path = apiPath(input);
+  if (
+    (init.method ?? 'GET').toUpperCase() === 'GET' &&
+    (init.body === undefined || init.body === null) &&
+    isNativeBlobStreamPath(path)
+  ) {
+    return nativeBlobStream(invoke, path, signal);
+  }
   const body = await requestBodyBytes(init.body);
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
@@ -138,7 +288,7 @@ export async function desktopFetch(
   const result = await invoke<NativeApiResponse>('desktop_api_request', {
     request: {
       method: init.method ?? 'GET',
-      path: apiPath(input),
+      path,
       contentType: headers.get('content-type') ?? undefined,
       body
     }
