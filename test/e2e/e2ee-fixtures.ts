@@ -40,6 +40,11 @@ export interface E2eeServer {
   /** E2EE_PROJECTS_ENABLED for the account (encrypted projects, Phase 4). */
   projectsEnabled: boolean;
   /**
+   * E2EE_MIGRATION_ENABLED for the account (ADR-024 Phase 7): slice 7-4's
+   * members publish KeyPackages for a shared plaintext project's re-add.
+   */
+  migrationEnabled: boolean;
+  /**
    * Runs an account's key flows in Node, as another device would; the
    * signed-in account unless another one (`addE2eeUser`) is named.
    */
@@ -144,7 +149,8 @@ function memoryBucket(objects: Map<string, Uint8Array>) {
 
 export function createE2eeServer({
   enabled = true,
-  projectsEnabled = false
+  projectsEnabled = false,
+  migrationEnabled = false
 } = {}): E2eeServer {
   const db = migratedDatabase();
   db.prepare(
@@ -155,6 +161,7 @@ export function createE2eeServer({
     db,
     enabled,
     projectsEnabled,
+    migrationEnabled,
     objects,
     mailbox: [],
     bucket: memoryBucket(objects),
@@ -213,7 +220,8 @@ async function call(
     session,
     server.enabled,
     server.projectsEnabled,
-    invitationHost(server, userId)
+    invitationHost(server, userId),
+    server.migrationEnabled
   );
   await server.afterResponse?.(request, response);
   return response;

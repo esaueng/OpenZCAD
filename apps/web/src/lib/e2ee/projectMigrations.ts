@@ -12,12 +12,22 @@
  *   resumes from its journal (`projectMigrationEngine.ts`), in this tab or
  *   after a reload: the lease is kept in this browser's storage, so a
  *   reloaded page resumes at once instead of waiting for it to lapse.
+ * - **Shared projects** (slice 7-4): a project whose members are not all
+ *   ready waits (phase `members`, with the list) and the run moves on;
+ *   running again checks once more. After a shared project's cutover, the
+ *   page offers encrypted links and invitations in place of the plaintext
+ *   ones it revoked (`reissueLinks`, `reinvite`).
  */
 import type { ProjectSummary } from '@openzcad/shared';
 import { rememberProjectFormats } from '../api';
 import { desktopFetch } from '../desktopBridge';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
+import type { InvitationContext } from './invitations';
 import { getKeySessionRevision } from './keySession';
+import {
+  reinviteToEncryptedProject,
+  reissuePlaintextShareLinks
+} from './migrationMembers';
 import {
   createMigrationPlaintextSource,
   type MigrationPlaintextSource
@@ -36,6 +46,7 @@ import {
   createProjectMigrationsApi,
   type ProjectMigrationsApi
 } from './projectMigrationsApi';
+import type { CreatedShareLink, ShareLinksContext } from './shareLinks';
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -74,6 +85,15 @@ export interface MigrationControllerDeps {
   readonly locks?: MigrationLocks | null;
   readonly leases?: MigrationLeaseStore;
   readonly renewEveryMs?: number;
+  /**
+   * Slice 7-4: the page's share links and invitations of encrypted
+   * projects, with which a migrated project's revoked plaintext links and
+   * invitations are reissued.
+   */
+  readonly followUps?: {
+    shareLinks(): Promise<ShareLinksContext>;
+    invitations(): Promise<InvitationContext>;
+  };
   /** Builds the engine to drive instead of the page's own (tests). */
   createEngine?(
     onProgress: (progress: MigrationProgress) => void
@@ -90,6 +110,19 @@ export interface MigrationController {
   pause(): void;
   /** Drops a project's staging and unlocks its plaintext. */
   cancel(projectId: string): Promise<void>;
+  /**
+   * Slice 7-4 (decision M8): new encrypted links, of the same modes, for
+   * the plaintext links a migrated project's cutover revoked.
+   */
+  reissueLinks(projectId: string): Promise<CreatedShareLink[]>;
+  /**
+   * Slice 7-4: encrypted invitations, with the same roles, to the people
+   * whose plaintext invitations the cutover revoked.
+   */
+  reinvite(projectId: string): Promise<{
+    invited: string[];
+    failed: { email: string; error: unknown }[];
+  }>;
 }
 
 /** Leases kept in this browser's storage, per account and project. */
@@ -123,6 +156,7 @@ export function localStorageLeases(userId: string): MigrationLeaseStore {
 
 const ACTIVE = new Set([
   'starting',
+  'readding',
   'revisions',
   'head',
   'details',
@@ -377,6 +411,15 @@ export function createMigrationController(
                     plaintextLocked: true
                   }
                 : waiting(project))
+          ),
+          // Slice 7-4: an encrypted project keeps its row while it still
+          // offers encrypted links or invitations in place of revoked ones.
+          ...state.projects.filter(
+            (progress) =>
+              progress.phase === 'done' &&
+              !summaries.some((p) => p.projectId === progress.projectId) &&
+              ((progress.revoked?.shareLinks.length ?? 0) > 0 ||
+                (progress.revoked?.invitations.length ?? 0) > 0)
           )
         ]
       });
@@ -398,17 +441,19 @@ export function createMigrationController(
           (p) => p.projectId === project.projectId
         );
         if (progress?.phase === 'done') continue;
-        // A project that failed waits for its own retry.
+        // A project that failed waits for its own retry (one waiting for
+        // its members is checked again on every run).
         if (!wanted && progress?.phase === 'error') continue;
         try {
           await (await engineFor()).migrate(project, signal);
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
-          // Reported on the project by the engine; or, before it ran:
-          if (
-            state.projects.find((p) => p.projectId === project.projectId)
-              ?.phase !== 'error'
-          ) {
+          // Reported on the project by the engine (an error, or members
+          // not ready yet); or, before it ran:
+          const reported = state.projects.find(
+            (p) => p.projectId === project.projectId
+          )?.phase;
+          if (reported !== 'error' && reported !== 'members') {
             update({
               ...waiting(project),
               phase: 'error',
@@ -421,6 +466,23 @@ export function createMigrationController(
       pause = null;
       set({ running: false, pausing: false });
     }
+  }
+
+  const followUps = deps.followUps ?? {
+    shareLinks: async () =>
+      (await (await import('./encryptedProjects')).encryptedShareLinks()).ctx,
+    invitations: async () =>
+      (await import('./encryptedProjects')).encryptedInvitations()
+  };
+
+  /** The project's revoked lists, after a change to one of them. */
+  function setRevoked(
+    projectId: string,
+    change: Partial<NonNullable<MigrationProgress['revoked']>>
+  ) {
+    const progress = state.projects.find((p) => p.projectId === projectId);
+    if (!progress?.revoked) return;
+    update({ ...progress, revoked: { ...progress.revoked, ...change } });
   }
 
   return {
@@ -449,6 +511,37 @@ export function createMigrationController(
       if (!pause) return;
       set({ pausing: true });
       pause.abort();
+    },
+    async reissueLinks(projectId) {
+      const revoked = state.projects.find(
+        (p) => p.projectId === projectId
+      )?.revoked;
+      if (!revoked?.shareLinks.length) return [];
+      const created = await reissuePlaintextShareLinks(
+        await followUps.shareLinks(),
+        projectId,
+        revoked.shareLinks
+      );
+      setRevoked(projectId, { shareLinks: [] });
+      return created;
+    },
+    async reinvite(projectId) {
+      const revoked = state.projects.find(
+        (p) => p.projectId === projectId
+      )?.revoked;
+      if (!revoked?.invitations.length) return { invited: [], failed: [] };
+      const result = await reinviteToEncryptedProject(
+        await followUps.invitations(),
+        projectId,
+        revoked.invitations
+      );
+      const failed = new Set(result.failed.map((failure) => failure.email));
+      setRevoked(projectId, {
+        invitations: revoked.invitations.filter((invitation) =>
+          failed.has(invitation.email)
+        )
+      });
+      return result;
     },
     async cancel(projectId) {
       if (state.running) return;
