@@ -1056,6 +1056,10 @@ async function putSnapshot(
       'The envelope is not signed by the device it names.'
     );
   }
+  // ...and a removal of that device landing first makes the write refuse,
+  // as for encrypted document writes (#912 review): a removed device's
+  // snapshot cannot replace what certified devices published.
+  const signerList = deviceListUnchanged(ctx.userId, device);
   await liveLink(ctx.db, projectId, shareId);
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (header.keyEpoch !== current) stale(current);
@@ -1135,6 +1139,7 @@ async function putSnapshot(
                WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL)
              AND EXISTS (SELECT 1 FROM e2ee_project_groups
                WHERE project_id = ? AND key_epoch_base + epoch = ?)
+             AND ${signerList.sql}
            ON CONFLICT (project_id, share_id) DO UPDATE SET
              document_version = excluded.document_version,
              key_epoch = excluded.key_epoch,
@@ -1172,7 +1177,8 @@ async function putSnapshot(
           projectId,
           shareId,
           projectId,
-          header.keyEpoch
+          header.keyEpoch,
+          ...signerList.binds
         )
     ]);
   } catch (error) {
@@ -1181,6 +1187,9 @@ async function putSnapshot(
   }
   if (!changed(results[1])) {
     await discard();
+    if (await deviceListMoved(ctx.db, ctx.userId, device)) {
+      refuseDeviceListMoved();
+    }
     await liveLink(ctx.db, projectId, shareId);
     const after = await currentKeyEpoch(ctx.db, projectId);
     if (after !== header.keyEpoch) stale(after);

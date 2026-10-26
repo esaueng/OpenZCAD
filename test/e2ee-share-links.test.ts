@@ -2025,4 +2025,57 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
     expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(0);
     expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(0);
   });
+
+  it('a device-list change between the signer check and the snapshot write stores nothing', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const before = rows(
+      srv,
+      'SELECT * FROM e2ee_share_snapshots WHERE share_id = ?',
+      link.shareId
+    );
+    const sealed = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING
+    });
+    // The owner's list moves on (a removal of the signer, say) after the
+    // signer was checked and before the snapshot lands.
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => /^\s*INSERT INTO e2ee_share_snapshots/.test(s))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    const response = await putRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      link.shareId,
+      sealed
+    );
+    expect(srv.statements.push).toBe(push);
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      'E2EE_DEVICE_LIST_CHANGED'
+    );
+    expect(
+      rows(
+        srv,
+        'SELECT * FROM e2ee_share_snapshots WHERE share_id = ?',
+        link.shareId
+      )
+    ).toEqual(before);
+    expect(snapshotObjects(srv, projectId)).toEqual([]);
+  });
 });
