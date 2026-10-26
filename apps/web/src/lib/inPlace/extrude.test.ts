@@ -126,6 +126,44 @@ describe('in-place Extrude handles', () => {
     ).toEqual(['draftAngle']);
   });
 
+  it("finds a concave profile's inside from its winding, not its middle", () => {
+    // A C open to +X, its back the longest side along x = 0: the vertex
+    // mean (x = 6.7) lies beyond the arms' inner (reflex) side at x = 4.
+    const c: Vector3[] = [
+      { x: 0, y: 0, z: 0 },
+      { x: 20, y: 0, z: 0 },
+      { x: 20, y: 2, z: 0 },
+      { x: 4, y: 2, z: 0 },
+      { x: 4, y: 28, z: 0 },
+      { x: 20, y: 28, z: 0 },
+      { x: 20, y: 30, z: 0 },
+      { x: 0, y: 30, z: 0 }
+    ];
+    const hinge = extrudeDraftHinge(c, up)!;
+    // The back, x = 0 from y = 30 to 0, whose inside is +X.
+    expect(hinge.foot).toEqual({ x: 0, y: 15, z: 0 });
+    expect(hinge.inward.x).toBeCloseTo(1);
+    // A bridge whose underside (the notch's roof, y = 8) is its longest
+    // side, a reflex one: the vertex mean (y ≈ 5.3) lies outside, under it,
+    // but the material is above. Read either way round, the inside is +Y.
+    const bridge: Vector3[] = [
+      { x: 0, y: 0, z: 0 },
+      { x: 2, y: 0, z: 0 },
+      { x: 2, y: 8, z: 0 },
+      { x: 38, y: 8, z: 0 },
+      { x: 38, y: 0, z: 0 },
+      { x: 40, y: 0, z: 0 },
+      { x: 40, y: 10, z: 0 },
+      { x: 20, y: 12, z: 0 },
+      { x: 0, y: 10, z: 0 }
+    ];
+    for (const outline of [bridge, [...bridge].reverse()]) {
+      const roof = extrudeDraftHinge(outline, up)!;
+      expect(roof.foot).toEqual({ x: 20, y: 8, z: 0 });
+      expect(roof.inward.y).toBeCloseTo(1);
+    }
+  });
+
   it('has no hinge on a degenerate outline', () => {
     expect(extrudeDraftHinge(outline.slice(0, 2), up)).toBeNull();
     expect(

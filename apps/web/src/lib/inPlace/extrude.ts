@@ -85,6 +85,21 @@ export function extrudeTakesDraft(state: ExtrudeHandleState): boolean {
 }
 
 /**
+ * Twice the outline's signed area about `normal`: positive when it runs
+ * counter-clockwise seen from the normal's tip, so its inside lies left of
+ * each side (`normal × side`).
+ */
+function windingAbout(outline: readonly Vector3[], normal: Vector3): number {
+  let total = 0;
+  for (let index = 0; index < outline.length; index += 1) {
+    const a = outline[index]!;
+    const b = outline[(index + 1) % outline.length]!;
+    total += dot(cross(a, b), normal);
+  }
+  return total;
+}
+
+/**
  * Where the draft rig stands: the middle of the outline's longest side, the
  * way the wall leaves the sketch, and the way into the profile there. Null
  * when the outline has no side to hinge on.
@@ -112,10 +127,11 @@ export function extrudeDraftHinge(
     },
     0.5
   );
-  // Into the profile: towards its middle, square to the side, in the plane.
+  // Into the profile: square to the side, in the plane, on the side the
+  // outline's winding puts its inside. Its middle would not do: a concave
+  // profile's middle can lie across a reflex side's line.
   const across = unit(cross(n, along));
-  const toMiddle = sub(mean(outline), foot);
-  const inward = dot(toMiddle, across) < 0 ? scaled(across, -1) : across;
+  const inward = windingAbout(outline, n) < 0 ? scaled(across, -1) : across;
   let min = { ...outline[0]! };
   let max = { ...outline[0]! };
   for (const point of outline) {
