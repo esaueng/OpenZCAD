@@ -12,17 +12,19 @@
  * snapshot; per account, the newest identity-signed share delegation.
  *
  * It still checks what it can, as defense in depth: the owner registers
- * and states links and forgets them (signed by a device the owner's newest
- * device list certifies over the link and the current key epoch, fenced on
- * that list's head); the owner and editors post key wraps (for the
+ * links and forgets them (signed by a device the owner's newest device list
+ * certifies over the link and the current key epoch, fenced on that list's
+ * head; a registration's signature covers every field stored) and states
+ * them; the owner and editors post key wraps (for the
  * group's current key epoch only, signed by a device the caller's newest
  * device list certifies and fenced on that list's head; the first stored
  * wins) and snapshots (a
  * share-snapshot envelope of this project under the current key epoch,
- * signed by a device the caller's newest device list certifies, never
- * older than the link's stored snapshot nor newer than the project's
- * head); a delegation verifies under the account's current identity key,
- * is valid now and names only devices that list certifies; a statement
+ * signed by a device the caller's newest device list certifies and fenced
+ * on that list's head, never older than the link's stored snapshot nor
+ * newer than the project's head); a delegation verifies under the
+ * account's current identity key, is valid now and names only devices that
+ * list certifies, fenced on its head; a statement
  * verifies against the owner's stored delegation, names the link, its key
  * hash and owner fingerprint, is valid now and raises the link's sequence.
  * Browsers and visitors verify all of it themselves.
@@ -53,7 +55,10 @@ import {
   decodeShareDelegation,
   decodeDeviceListEntry,
   fromBase64Url,
+  envelopePrefixLength,
+  fromHex,
   parseEnvelope,
+  parseEnvelopeShape,
   publicKeyHash,
   toBase64Url,
   toHex,
@@ -62,6 +67,7 @@ import {
   verifyShareDelegation,
   verifyShareKeyWrap,
   verifyShareLinkForget,
+  verifyShareLinkRegistration,
   versionHash,
   type ShareDelegation
 } from '@openzcad/crypto';
@@ -83,6 +89,7 @@ import {
   type E2eeSharedSnapshotMetadata
 } from '@openzcad/shared';
 import {
+  e2eeShareSnapshotPrefix,
   isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeShareLinkStorageReady,
@@ -153,8 +160,17 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 /** What `handleE2eeShareLinkRequest` needs of the R2 project bucket. */
 export interface ShareSnapshotBucket {
   put(key: string, body: ArrayBuffer | Uint8Array): Promise<unknown>;
-  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+  /** `range`: R2's ranged read (the blob route reads only the prefix). */
+  get(
+    key: string,
+    options?: { range?: { offset: number; length: number } }
+  ): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
   delete(key: string): Promise<void>;
+  /** R2's listing; a forgotten link's prefix is swept with it. */
+  list?(options: { prefix: string }): Promise<{
+    objects: readonly { key: string }[];
+    truncated: boolean;
+  }>;
 }
 
 interface Context {
@@ -495,11 +511,11 @@ async function putDelegation(
   // Only devices the newest device list certifies may be delegated.
   const head = await ctx.db
     .prepare(
-      `SELECT entry FROM e2ee_device_list_entries
+      `SELECT sequence, entry FROM e2ee_device_list_entries
        WHERE user_id = ? AND generation = ? ORDER BY sequence DESC LIMIT 1`
     )
     .bind(ctx.userId, identity.generation)
-    .first<{ entry: string }>();
+    .first<{ sequence: number; entry: string }>();
   let certified: Set<string>;
   try {
     certified = new Set(
@@ -512,9 +528,14 @@ async function putDelegation(
   } catch {
     certified = new Set();
   }
-  if (!delegation.deviceKeys.every((key) => certified.has(b64(key)))) {
+  if (!head || !delegation.deviceKeys.every((key) => certified.has(b64(key)))) {
     invalid('A delegation names only devices your device list certifies');
   }
+  // ...and only while that list is still the head (#912 review): a stale
+  // delegation naming a device whose removal lands first cannot win the
+  // race with the renewal that drops it.
+  const list = { generation: identity.generation, headSequence: head.sequence };
+  const fence = deviceListUnchanged(ctx.userId, list);
   const now = new Date().toISOString();
   try {
     const results = await runBatch(ctx.db, [
@@ -523,7 +544,8 @@ async function putDelegation(
           `INSERT INTO e2ee_share_delegations
              (user_id, generation, sequence, statement, signature, expires_at,
               updated_at)
-           SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${ctx.authorization.sql}
+           SELECT ?, ?, ?, ?, ?, ?, ?
+           WHERE ${ctx.authorization.sql} AND ${fence.sql}
            ON CONFLICT (user_id) DO UPDATE SET
              generation = excluded.generation, sequence = excluded.sequence,
              statement = excluded.statement, signature = excluded.signature,
@@ -537,10 +559,16 @@ async function putDelegation(
           signed.text.signature,
           delegation.expiresAt,
           now,
-          ...ctx.authorization.binds
+          ...ctx.authorization.binds,
+          ...fence.binds
         )
     ]);
-    if (!changed(results[0])) sessionRequired();
+    if (!changed(results[0])) {
+      if (await deviceListMoved(ctx.db, ctx.userId, list)) {
+        refuseDeviceListMoved();
+      }
+      sessionRequired();
+    }
   } catch (error) {
     if (
       error instanceof Error &&
@@ -572,19 +600,22 @@ async function createLink(
   }
   const tokenHash = body.tokenHash;
   const mode = modeField(body.mode);
-  const shareKeyHash = bytesField(body.shareKeyHash, 'shareKeyHash', {
+  const keyHash = bytesField(body.shareKeyHash, 'shareKeyHash', {
     exact: HASH_BYTES
-  }).text;
-  const ownerIdentityHash = bytesField(
-    body.ownerIdentityHash,
-    'ownerIdentityHash',
-    { exact: HASH_BYTES }
-  ).text;
+  });
+  const shareKeyHash = keyHash.text;
+  const ownerHash = bytesField(body.ownerIdentityHash, 'ownerIdentityHash', {
+    exact: HASH_BYTES
+  });
+  const ownerIdentityHash = ownerHash.text;
   const key = record(body.key, 'key');
   const keyEpoch = uintField(key.keyEpoch, 'key.keyEpoch');
-  const wrapped = bytesField(key.wrapped, 'key.wrapped', {
-    exact: WRAP_BYTES
-  }).text;
+  const wrap = bytesField(key.wrapped, 'key.wrapped', { exact: WRAP_BYTES });
+  const wrapped = wrap.text;
+  const deviceId = idField(body.deviceId, 'deviceId');
+  const signature = bytesField(body.signature, 'signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  }).bytes;
   const identity = await currentIdentity(ctx.db, ctx.userId);
   if (identity?.hash !== ownerIdentityHash) {
     refuse(
@@ -595,20 +626,57 @@ async function createLink(
   }
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (keyEpoch !== current) stale(current);
-  const live = await ctx.db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM e2ee_share_links
-       WHERE project_id = ? AND revoked_at IS NULL`
-    )
-    .bind(projectId)
-    .first<{ n: number }>();
-  if ((live?.n ?? 0) >= MAX_LIVE_SHARE_LINKS) {
+  // A link serves for as long as it lives, so the owner account is not
+  // enough (#912 review): only a device the owner's newest device list
+  // certifies may register one, proven by its signature over everything
+  // stored here. An owner device removed while its session stays signed in
+  // cannot register links, nor fill the project's live-link limit...
+  const device = await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
+  let verified: boolean;
+  try {
+    verified = await verifyShareLinkRegistration(
+      device.signingKey,
+      {
+        projectId,
+        shareId,
+        tokenHash: fromHex(tokenHash),
+        mode,
+        shareKeyHash: keyHash.bytes,
+        ownerIdentityKeyHash: ownerHash.bytes,
+        keyEpoch,
+        wrapped: wrap.bytes
+      },
+      signature
+    );
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    refuse(
+      400,
+      'E2EE_SIGNATURE_INVALID',
+      'The link registration is not signed by the device it names.'
+    );
+  }
+  // ...and a removal of that device landing first makes the insert refuse.
+  const signerList = deviceListUnchanged(ctx.userId, device);
+  const linkLimit: () => never = () =>
     refuse(
       409,
       'E2EE_SHARE_LINK_LIMIT',
       `A project keeps at most ${MAX_LIVE_SHARE_LINKS} share links. Revoke one first.`
     );
-  }
+  const liveLinks = async () =>
+    (
+      await ctx.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM e2ee_share_links
+           WHERE project_id = ? AND revoked_at IS NULL`
+        )
+        .bind(projectId)
+        .first<{ n: number }>()
+    )?.n ?? 0;
+  if ((await liveLinks()) >= MAX_LIVE_SHARE_LINKS) linkLimit();
   const now = new Date().toISOString();
   const results = await runBatch(ctx.db, [
     ctx.db
@@ -619,7 +687,10 @@ async function createLink(
          SELECT ?, ?, ?, ?, ?, ?, ?, ?
          WHERE ${ctx.authorization.sql} AND ${PROJECT_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
-             WHERE project_id = ? AND key_epoch_base + epoch = ?)`
+             WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND (SELECT COUNT(*) FROM e2ee_share_links
+             WHERE project_id = ? AND revoked_at IS NULL) < ?
+           AND ${signerList.sql}`
       )
       .bind(
         projectId,
@@ -634,7 +705,10 @@ async function createLink(
         projectId,
         ctx.userId,
         projectId,
-        keyEpoch
+        keyEpoch,
+        projectId,
+        MAX_LIVE_SHARE_LINKS,
+        ...signerList.binds
       ),
     ctx.db
       .prepare(
@@ -646,8 +720,12 @@ async function createLink(
       .bind(projectId, shareId, keyEpoch, wrapped, ctx.userId, now)
   ]);
   if (!changed(results[0]) || !changed(results[1])) {
+    if (await deviceListMoved(ctx.db, ctx.userId, device)) {
+      refuseDeviceListMoved();
+    }
     const after = await currentKeyEpoch(ctx.db, projectId);
     if (after !== keyEpoch) stale(after);
+    if ((await liveLinks()) >= MAX_LIVE_SHARE_LINKS) linkLimit();
     sessionRequired();
   }
   return json(await oneLink(ctx.db, projectId, shareId), 201);
@@ -668,7 +746,11 @@ async function forgetLink(
   if (!row) {
     refuse(404, 'E2EE_SHARE_LINK_NOT_FOUND', 'This share link does not exist.');
   }
-  if (row.revoked_at !== null) return json({ ok: true });
+  if (row.revoked_at !== null) {
+    // Asked again: what a failed delete left behind is retried.
+    await reclaimForgottenSnapshots(ctx, projectId, shareId);
+    return json({ ok: true });
+  }
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (keyEpoch !== current) stale(current);
   // Forgetting is permanent and breaks every URL of the link, so the owner
@@ -696,13 +778,6 @@ async function forgetLink(
   }
   // ...and a removal of that device landing first makes the batch refuse.
   const signerList = deviceListUnchanged(ctx.userId, device);
-  const snapshot = await ctx.db
-    .prepare(
-      `SELECT envelope_key FROM e2ee_share_snapshots
-       WHERE project_id = ? AND share_id = ?`
-    )
-    .bind(projectId, shareId)
-    .first<{ envelope_key: string | null }>();
   const now = new Date().toISOString();
   const results = await runBatch(ctx.db, [
     ctx.db
@@ -727,14 +802,7 @@ async function forgetLink(
         keyEpoch,
         ...signerList.binds
       ),
-    ctx.db
-      .prepare(
-        `DELETE FROM e2ee_share_snapshots
-         WHERE project_id = ? AND share_id = ? AND EXISTS (
-           SELECT 1 FROM e2ee_share_links WHERE project_id = ? AND share_id = ?
-             AND revoked_at = ?)`
-      )
-      .bind(projectId, shareId, projectId, shareId, now),
+    // The snapshot row stays until its object is deleted (below).
     ctx.db
       .prepare(
         `DELETE FROM e2ee_share_keys
@@ -746,7 +814,10 @@ async function forgetLink(
   ]);
   if (!changed(results[0])) {
     const after = await linkRow(ctx.db, projectId, shareId);
-    if (after?.revoked_at) return json({ ok: true });
+    if (after?.revoked_at) {
+      await reclaimForgottenSnapshots(ctx, projectId, shareId);
+      return json({ ok: true });
+    }
     if (await deviceListMoved(ctx.db, ctx.userId, device)) {
       refuseDeviceListMoved();
     }
@@ -754,9 +825,7 @@ async function forgetLink(
     if (epoch !== keyEpoch) stale(epoch);
     sessionRequired();
   }
-  if (snapshot?.envelope_key && ctx.bucket) {
-    await ctx.bucket.delete(snapshot.envelope_key).catch(() => undefined);
-  }
+  await reclaimForgottenSnapshots(ctx, projectId, shareId);
   return json({ ok: true });
 }
 
@@ -1060,6 +1129,10 @@ async function putSnapshot(
       'The envelope is not signed by the device it names.'
     );
   }
+  // ...and a removal of that device landing first makes the write refuse,
+  // as for encrypted document writes (#912 review): a removed device's
+  // snapshot cannot replace what certified devices published.
+  const signerList = deviceListUnchanged(ctx.userId, device);
   await liveLink(ctx.db, projectId, shareId);
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (header.keyEpoch !== current) stale(current);
@@ -1072,11 +1145,11 @@ async function putSnapshot(
   }
   const previous = await ctx.db
     .prepare(
-      `SELECT document_version, envelope_key FROM e2ee_share_snapshots
+      `SELECT document_version FROM e2ee_share_snapshots
        WHERE project_id = ? AND share_id = ?`
     )
     .bind(projectId, shareId)
-    .first<{ document_version: number; envelope_key: string | null }>();
+    .first<{ document_version: number }>();
   const snapshotStale: () => never = () =>
     refuse(
       409,
@@ -1100,19 +1173,32 @@ async function putSnapshot(
     }
     inline = b64(payload);
   } else {
-    // Opaque: the project id the row names and the envelope's hash.
-    objectKey = `e2ee/${projectId}/s/${hash}`;
+    // Under this link and this write alone (#912 review): no other link's
+    // row, and no other write of this link, ever names the object, so
+    // replacing or forgetting one link cannot delete what another serves.
+    objectKey = await snapshotObjectKey(projectId, shareId, hash);
     await ctx.bucket.put(objectKey, payload);
   }
   const now = new Date().toISOString();
+  // Only this request's own object, which no row names unless the write
+  // below committed.
   const discard = async () => {
-    if (objectKey && objectKey !== previous?.envelope_key && ctx.bucket) {
+    if (objectKey && ctx.bucket) {
       await ctx.bucket.delete(objectKey).catch(() => undefined);
     }
   };
   let results;
   try {
     results = await runBatch(ctx.db, [
+      // The object the write replaces, read in the same transaction: a
+      // concurrent write at the same (or another) version that landed after
+      // `previous` was read is what this one replaces, and is deleted.
+      ctx.db
+        .prepare(
+          `SELECT envelope_key FROM e2ee_share_snapshots
+           WHERE project_id = ? AND share_id = ?`
+        )
+        .bind(projectId, shareId),
       ctx.db
         .prepare(
           `INSERT INTO e2ee_share_snapshots
@@ -1126,6 +1212,7 @@ async function putSnapshot(
                WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL)
              AND EXISTS (SELECT 1 FROM e2ee_project_groups
                WHERE project_id = ? AND key_epoch_base + epoch = ?)
+             AND ${signerList.sql}
            ON CONFLICT (project_id, share_id) DO UPDATE SET
              document_version = excluded.document_version,
              key_epoch = excluded.key_epoch,
@@ -1163,15 +1250,19 @@ async function putSnapshot(
           projectId,
           shareId,
           projectId,
-          header.keyEpoch
+          header.keyEpoch,
+          ...signerList.binds
         )
     ]);
   } catch (error) {
     await discard();
     throw error;
   }
-  if (!changed(results[0])) {
+  if (!changed(results[1])) {
     await discard();
+    if (await deviceListMoved(ctx.db, ctx.userId, device)) {
+      refuseDeviceListMoved();
+    }
     await liveLink(ctx.db, projectId, shareId);
     const after = await currentKeyEpoch(ctx.db, projectId);
     if (after !== header.keyEpoch) stale(after);
@@ -1185,14 +1276,171 @@ async function putSnapshot(
     if (now2 && now2.document_version > header.documentVersion) snapshotStale();
     sessionRequired();
   }
-  if (
-    previous?.envelope_key &&
-    previous.envelope_key !== objectKey &&
-    ctx.bucket
-  ) {
-    await ctx.bucket.delete(previous.envelope_key).catch(() => undefined);
+  const replaced =
+    (results[0]?.results?.[0] as { envelope_key: string | null } | undefined)
+      ?.envelope_key ?? null;
+  if (replaced && replaced !== objectKey) {
+    await deleteSnapshotObject(ctx, projectId, shareId, replaced);
   }
   return json(await oneLink(ctx.db, projectId, shareId));
+}
+
+// --- Snapshot objects ----------------------------------------------------------
+
+/**
+ * Where a snapshot body above the inline size lives in R2:
+ * `e2ee/<project>/s/<link>/<envelope hash>-<nonce>`. `<link>` is the first
+ * 128 bits of SHA-256 of the link id, so the key stays opaque and every
+ * object of one link shares a prefix; the nonce makes each write's object
+ * its own. Rows written before #912's review name `e2ee/<project>/s/<hash>`,
+ * which two links could share.
+ */
+async function snapshotObjectKey(
+  projectId: string,
+  shareId: string,
+  hash: string
+): Promise<string> {
+  const nonce = toHex(crypto.getRandomValues(new Uint8Array(16)));
+  return `${await snapshotObjectPrefix(projectId, shareId)}${hash}-${nonce}`;
+}
+
+async function snapshotObjectPrefix(
+  projectId: string,
+  shareId: string
+): Promise<string> {
+  const link = (await sha256Hex(new TextEncoder().encode(shareId))).slice(
+    0,
+    32
+  );
+  return `${e2eeShareSnapshotPrefix(projectId)}${link}/`;
+}
+
+/**
+ * Deletes a snapshot object no row names any more, once retried. Never one
+ * another link's row still names (an object stored before #912's review,
+ * keyed by envelope hash alone). Whether it is gone.
+ */
+async function deleteSnapshotObject(
+  ctx: Context,
+  projectId: string,
+  shareId: string,
+  key: string
+): Promise<boolean> {
+  if (!ctx.bucket) return false;
+  const shared = await ctx.db
+    .prepare(
+      `SELECT 1 AS named FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id <> ? AND envelope_key = ? LIMIT 1`
+    )
+    .bind(projectId, shareId, key)
+    .first<{ named: number }>();
+  if (shared) return true;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await ctx.bucket.delete(key);
+      return true;
+    } catch {
+      // Retried once; a later forget of the link sweeps its prefix.
+    }
+  }
+  return false;
+}
+
+/** Forgotten links whose leftovers one request also retries. */
+const RECLAIM_OTHERS = 5;
+/** Listing pages one sweep of a link's prefix reads at most. */
+const SWEEP_PAGES = 10;
+
+/**
+ * Deletes what forgotten links still hold in R2, then their snapshot rows
+ * (#912 review): `shareId`'s, and a few other forgotten links' of the
+ * project that a failed delete left behind. A forgotten link's row keeps
+ * naming its object until the delete succeeded (and its prefix was swept
+ * of objects a failed replacement left), so a failed delete never drops
+ * the only reference to an object: it is retried here on the next forget,
+ * and the project's purge deletes every object a row names.
+ */
+async function reclaimForgottenSnapshots(
+  ctx: Context,
+  projectId: string,
+  shareId: string
+): Promise<void> {
+  const others = await ctx.db
+    .prepare(
+      `SELECT s.share_id FROM e2ee_share_snapshots s
+       JOIN e2ee_share_links l
+         ON l.project_id = s.project_id AND l.share_id = s.share_id
+       WHERE s.project_id = ? AND s.share_id <> ?
+         AND l.revoked_at IS NOT NULL
+       ORDER BY l.revoked_at LIMIT ?`
+    )
+    .bind(projectId, shareId, RECLAIM_OTHERS)
+    .all<{ share_id: string }>();
+  for (const id of [
+    shareId,
+    ...(others.results ?? []).map((row) => row.share_id)
+  ]) {
+    await reclaimForgottenSnapshot(ctx, projectId, id);
+  }
+}
+
+async function reclaimForgottenSnapshot(
+  ctx: Context,
+  projectId: string,
+  shareId: string
+): Promise<void> {
+  const row = await ctx.db
+    .prepare(
+      `SELECT s.envelope_key FROM e2ee_share_snapshots s
+       JOIN e2ee_share_links l
+         ON l.project_id = s.project_id AND l.share_id = s.share_id
+       WHERE s.project_id = ? AND s.share_id = ?
+         AND l.revoked_at IS NOT NULL`
+    )
+    .bind(projectId, shareId)
+    .first<{ envelope_key: string | null }>();
+  let gone = row?.envelope_key
+    ? await deleteSnapshotObject(ctx, projectId, shareId, row.envelope_key)
+    : true;
+  if (ctx.bucket && !(await sweepLinkObjects(ctx.bucket, projectId, shareId))) {
+    gone = false;
+  }
+  if (!row || !gone) return;
+  await ctx.db
+    .prepare(
+      `DELETE FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id = ? AND envelope_key IS ?
+         AND EXISTS (SELECT 1 FROM e2ee_share_links
+           WHERE project_id = ? AND share_id = ? AND revoked_at IS NOT NULL)`
+    )
+    .bind(projectId, shareId, row.envelope_key, projectId, shareId)
+    .run();
+}
+
+/**
+ * Deletes every object under a forgotten link's prefix: replaced objects a
+ * failed delete left there. A write racing the forget cannot land (its
+ * link is revoked) and deletes its own object. Whether the prefix is
+ * empty; a bucket that cannot list has nothing found here.
+ */
+async function sweepLinkObjects(
+  bucket: ShareSnapshotBucket,
+  projectId: string,
+  shareId: string
+): Promise<boolean> {
+  if (typeof bucket.list !== 'function') return true;
+  const prefix = await snapshotObjectPrefix(projectId, shareId);
+  try {
+    // Listed again from the start each time: everything listed is deleted.
+    for (let page = 0; page < SWEEP_PAGES; page += 1) {
+      const listed = await bucket.list({ prefix });
+      await Promise.all(listed.objects.map((o) => bucket.delete(o.key)));
+      if (!listed.truncated) return true;
+    }
+  } catch {
+    // Kept for the next forget.
+  }
+  return false;
 }
 
 // --- Dispatch ----------------------------------------------------------------
@@ -1329,18 +1577,23 @@ export async function shareLinkTokenHash(token: string): Promise<string> {
   return sha256Hex(fromBase64Url(token));
 }
 
-/** One link as the anonymous routes serve it, after every gate below. */
-interface ServedLink {
+/** Small authorization metadata: no snapshot body or authority author list. */
+interface ServedBlobLink {
   project_id: string;
   share_id: string;
+  envelope_key: string | null;
+  envelope_bytes: number;
+  snapshot_hash: string;
+}
+
+/** One link as the snapshot route serves it, after every gate below. */
+interface ServedLink extends ServedBlobLink {
   mode: E2eeShareLinkMode;
   authority: string;
   authority_signature: string;
   owner_user_id: string;
   document_version: number;
   key_epoch: number;
-  envelope_inline: string | null;
-  envelope_key: string | null;
   signature: string;
   wrapped_for_link_visitors: string;
   author_key: string;
@@ -1354,10 +1607,21 @@ interface ServedLink {
  * 0040 present. Both anonymous routes go through it, so the blob route
  * serves nothing the snapshot route would not.
  */
+function servedLink(
+  db: D1Database,
+  rawToken: string,
+  kind: 'blob'
+): Promise<ServedBlobLink | null>;
+function servedLink(
+  db: D1Database,
+  rawToken: string,
+  kind?: 'snapshot'
+): Promise<ServedLink | null>;
 async function servedLink(
   db: D1Database,
-  rawToken: string
-): Promise<ServedLink | null> {
+  rawToken: string,
+  kind: 'blob' | 'snapshot' = 'snapshot'
+): Promise<ServedBlobLink | ServedLink | null> {
   let token: string;
   try {
     token = decodeURIComponent(rawToken);
@@ -1372,13 +1636,20 @@ async function servedLink(
   ) {
     return null;
   }
+  // Blob requests need only this small projection before their guards.
+  // An authority can name 2,048 authors, so leave it to the snapshot route.
+  const columns =
+    kind === 'blob'
+      ? `l.project_id, l.share_id, s.envelope_key,
+       s.envelope_bytes, s.snapshot_hash`
+      : `l.project_id, l.share_id, l.mode, l.authority,
+       l.authority_signature, p.user_id AS owner_user_id,
+       s.document_version, s.key_epoch,
+       s.envelope_key, s.envelope_bytes, s.snapshot_hash,
+       s.signature, s.wrapped_for_link_visitors, s.author_key`;
   return db
     .prepare(
-      `SELECT l.project_id, l.share_id, l.mode, l.authority,
-              l.authority_signature, p.user_id AS owner_user_id,
-              s.document_version, s.key_epoch, s.envelope_inline,
-              s.envelope_key, s.signature, s.wrapped_for_link_visitors,
-              s.author_key
+      `SELECT ${columns}
        FROM e2ee_share_links l
        JOIN projects p ON p.id = l.project_id
        JOIN e2ee_share_snapshots s
@@ -1399,15 +1670,31 @@ async function servedLink(
          ) = 1`
     )
     .bind(await shareLinkTokenHash(token))
-    .first<ServedLink>();
+    .first<ServedBlobLink | ServedLink>();
 }
 
 /** The link's stored snapshot envelope, inline or from the object store. */
 async function servedEnvelope(
-  row: ServedLink,
+  db: D1Database,
+  row: ServedBlobLink,
   bucket: ShareSnapshotBucket | null
 ): Promise<Uint8Array | null> {
-  if (row.envelope_inline !== null) return fromBase64Url(row.envelope_inline);
+  if (row.envelope_key === null) {
+    // Metadata lookup stays cheap even for refused blob requests. Fence the
+    // lazy body read to that exact snapshot so a replacement cannot mix
+    // new bytes with old metadata or populate the old hash's blob-id cache.
+    const inline = await db
+      .prepare(
+        `SELECT envelope_inline FROM e2ee_share_snapshots
+         WHERE project_id = ? AND share_id = ? AND snapshot_hash = ?
+           AND envelope_key IS NULL`
+      )
+      .bind(row.project_id, row.share_id, row.snapshot_hash)
+      .first<{ envelope_inline: string | null }>();
+    return inline?.envelope_inline
+      ? fromBase64Url(inline.envelope_inline)
+      : null;
+  }
   if (row.envelope_key !== null && bucket) {
     const stored = await bucket.get(row.envelope_key);
     if (stored) return new Uint8Array(await stored.arrayBuffer());
@@ -1447,7 +1734,7 @@ export async function handleEncryptedSharedSnapshot(
     currentIdentity(db, row.owner_user_id)
   ]);
   if (!delegation || !identity) return anonymousNotFound();
-  const envelope = await servedEnvelope(row, bucket);
+  const envelope = await servedEnvelope(db, row, bucket);
   if (!envelope) return anonymousNotFound();
   const metadata: E2eeSharedSnapshotMetadata = {
     shareId: row.share_id,
@@ -1476,6 +1763,136 @@ export async function handleEncryptedSharedSnapshot(
   });
 }
 
+/**
+ * The anonymous blob route's rate limit (`worker/index.ts`). Each may
+ * throw the limiter's 429.
+ */
+export interface SharedBlobGuard {
+  /** A request that names no link the route serves. */
+  unbudgeted(): Promise<void>;
+  /** Read-only early refusal; unknown ids must never allocate a counter. */
+  blobAvailable(blobKey: string): Promise<void>;
+  /** Atomic admission of a snapshot-named blob, before reading its content. */
+  blob(blobKey: string): Promise<void>;
+  /**
+   * Before the link's snapshot is read (#935 review): true when this
+   * address already went over its load budget for `linkKey` this minute.
+   * The request is then charged to the address's own budget here, which
+   * throws its 429 once that is spent too, and `load` is not called.
+   */
+  spent(linkKey: string): Promise<boolean>;
+  /**
+   * Before a snapshot's inline body or R2 prefix is read, once
+   * per snapshot and isolate (`snapshotBlobIds`): its own fixed budget per
+   * address and minute, across every link.
+   */
+  snapshotRead(): Promise<void>;
+  /**
+   * A request within a load of the link `linkKey` names, of `blobs` blobs;
+   * going over that load's budget is what `spent` reports afterwards.
+   */
+  load(linkKey: string, blobs: number): Promise<void>;
+}
+
+/**
+ * The blob ids each share snapshot's header names, or null for a snapshot
+ * the blob route cannot serve from (#935 review), per isolate. A snapshot
+ * is immutable under its hash (a new write is a new hash), so an entry
+ * never goes stale; the cache is bounded by the ids it holds (a header
+ * names at most 4,096), least recently used first out.
+ */
+const SNAPSHOT_BLOB_ID_CACHE_IDS = 32_768;
+const snapshotBlobIdCache = new Map<string, readonly string[] | null>();
+let snapshotBlobIdCacheIds = 0;
+
+/** Empties the cache above: a fresh isolate (tests). */
+export function forgetSnapshotBlobIds(): void {
+  snapshotBlobIdCache.clear();
+  snapshotBlobIdCacheIds = 0;
+}
+
+/** The first ranged read of an R2 snapshot's prefix (most fit in it). */
+const SNAPSHOT_PREFIX_GUESS_BYTES = 16 * 1024;
+
+/**
+ * The snapshot header's `blobIds`: from the cache, else from a lazy,
+ * hash-fenced inline D1 body read or ranged R2 prefix reads (which never
+ * download the whole object), checked as `parseEnvelope` would against
+ * the stored length. Null when the snapshot is not a share snapshot or its
+ * prefix does not parse; a read that fails is not cached.
+ */
+async function snapshotBlobIds(
+  db: D1Database,
+  row: ServedBlobLink,
+  bucket: ShareSnapshotBucket | null,
+  guard: SharedBlobGuard | null
+): Promise<readonly string[] | null> {
+  const cacheKey = `${row.project_id}
+${row.share_id}
+${row.snapshot_hash}`;
+  const cached = snapshotBlobIdCache.get(cacheKey);
+  if (cached !== undefined) {
+    snapshotBlobIdCache.delete(cacheKey);
+    snapshotBlobIdCache.set(cacheKey, cached);
+    return cached;
+  }
+  let head: Uint8Array;
+  let length: number;
+  await guard?.snapshotRead();
+  if (row.envelope_key === null) {
+    const envelope = await servedEnvelope(db, row, null);
+    if (!envelope) return null;
+    head = envelope;
+    length = head.byteLength;
+  } else {
+    if (!bucket) return null;
+    const key = row.envelope_key;
+    length = row.envelope_bytes;
+    const read = async (bytes: number) => {
+      const stored = await bucket.get(key, {
+        range: { offset: 0, length: bytes }
+      });
+      if (!stored) return null;
+      // A bucket that ignores the range still yields the whole object.
+      const all = new Uint8Array(await stored.arrayBuffer());
+      return all.byteLength > bytes ? all.subarray(0, bytes) : all;
+    };
+    const first = await read(Math.min(length, SNAPSHOT_PREFIX_GUESS_BYTES));
+    if (!first) return null;
+    let prefix: number | null = null;
+    try {
+      prefix = envelopePrefixLength(first);
+    } catch {
+      // Not an envelope: parsed (and refused) below.
+    }
+    if (prefix !== null && prefix > first.byteLength && prefix <= length) {
+      const whole = await read(prefix);
+      if (!whole) return null;
+      head = whole;
+    } else {
+      head = first;
+    }
+  }
+  let named: readonly string[] | null;
+  try {
+    const { header } = parseEnvelopeShape(head, length);
+    named =
+      header.class === 'project' && header.kind === 'share-snapshot'
+        ? header.blobIds
+        : null;
+  } catch {
+    named = null;
+  }
+  snapshotBlobIdCache.set(cacheKey, named);
+  snapshotBlobIdCacheIds += Math.max(1, named?.length ?? 0);
+  for (const [oldest, ids] of snapshotBlobIdCache) {
+    if (snapshotBlobIdCacheIds <= SNAPSHOT_BLOB_ID_CACHE_IDS) break;
+    snapshotBlobIdCache.delete(oldest);
+    snapshotBlobIdCacheIds -= Math.max(1, ids?.length ?? 0);
+  }
+  return named;
+}
+
 /** Where the owner's encrypted content blobs live (the artifact bucket). */
 export interface SharedBlobBucket {
   get(key: string): Promise<{
@@ -1495,37 +1912,70 @@ export interface SharedBlobBucket {
  * authenticates its ciphertext hash and length. Everything else is the
  * same opaque 404; a blob row whose object is missing is 503, as for
  * members.
+ *
+ * `guard` is the deployment's rate limit (#923 review): a request that
+ * names no servable link counts against the address's own budget
+ * (`unbudgeted`); one that does counts as part of a load of that link
+ * (`load`), whose budget is sized to the blobs its snapshot names, so a
+ * model with more imports than the address budget still loads at once.
+ * Once that load budget is spent (`spent`, checked before the snapshot is
+ * read), requests count against the address's budget without reading the
+ * snapshot first, so past both budgets no snapshot body or prefix is read.
+ * Within budget, header ids come from a per-isolate cache or a lazy inline
+ * D1 body read or ranged R2 prefix reads, counted against an independent
+ * per-address budget (`snapshotRead`). The pre-limit lookup selects only
+ * small metadata, never an inline envelope or the authority's author list.
+ * An independent per-address, per-project-blob budget rejects repeats before
+ * membership reads with a read-only lookup (`blobAvailable`). Only ids the
+ * snapshot names allocate that counter (`blob`), so attacker-chosen unnamed
+ * ids cannot create unbounded rows; those use the fixed address budget.
  */
 export async function handleEncryptedSharedBlob(
   pathname: string,
   db: D1Database | undefined,
   snapshots: ShareSnapshotBucket | null,
   blobs: SharedBlobBucket | null,
-  open: boolean
+  open: boolean,
+  guard: SharedBlobGuard | null = null
 ): Promise<Response> {
   if (!open || !db || !blobs) return anonymousNotFound();
+  // Set once `spent` has charged this request to the address's budget.
+  let charged = false;
+  const notServed = async () => {
+    if (!charged) await guard?.unbudgeted();
+    return anonymousNotFound();
+  };
   const match = SHARED_BLOB_ROUTE.exec(pathname);
   const blobId = match?.[2] ?? '';
-  if (!match || !E2EE_BLOB_ID_PATTERN.test(blobId)) {
-    return anonymousNotFound();
-  }
-  const row = await servedLink(db, match[1] ?? '');
-  if (!row || !(await isE2eeContentBlobStorageReady(db))) {
-    return anonymousNotFound();
-  }
-  const envelope = await servedEnvelope(row, snapshots);
-  if (!envelope) return anonymousNotFound();
-  let named: readonly string[];
-  try {
-    const { header } = parseEnvelope(envelope);
-    if (header.class !== 'project' || header.kind !== 'share-snapshot') {
-      return anonymousNotFound();
-    }
-    named = header.blobIds;
-  } catch {
-    return anonymousNotFound();
-  }
-  if (!named.includes(blobId)) return anonymousNotFound();
+  if (!match || !E2EE_BLOB_ID_PATTERN.test(blobId)) return notServed();
+  const row = await servedLink(db, match[1] ?? '', 'blob');
+  if (!row || !(await isE2eeContentBlobStorageReady(db))) return notServed();
+  // Opaque: neither the project nor the link id reaches the limiter.
+  const linkKey = (
+    await sha256Hex(
+      new TextEncoder().encode(`${row.project_id}
+${row.share_id}`)
+    )
+  ).slice(0, 32);
+  // The link's budget is sized from its snapshot, but a spent one is known
+  // without it (#935 review): once this address is past both budgets, a
+  // request reads nothing from R2 and parses no envelope.
+  charged = (await guard?.spent(linkKey)) ?? false;
+  // Project-scoped rather than link-scoped: another token for the same
+  // object must not buy another repetition allowance. Both ordinary and
+  // fallback requests check existing usage before any R2 read; no row is
+  // allocated for an id before snapshot membership has been verified.
+  const blobKey = (
+    await sha256Hex(new TextEncoder().encode(`${row.project_id}\n${blobId}`))
+  ).slice(0, 32);
+  await guard?.blobAvailable(blobKey);
+  const named = await snapshotBlobIds(db, row, snapshots, guard);
+  if (!named?.includes(blobId)) return notServed();
+  // The atomic increment remains after the read-only check: concurrent
+  // requests cannot all pass the fourth-download boundary or consume the
+  // link/address allowance for downloads rejected by that boundary.
+  await guard?.blob(blobKey);
+  if (!charged) await guard?.load(linkKey, named.length);
   const blob = await db
     .prepare(
       `SELECT object_key, ciphertext_bytes FROM e2ee_content_blobs

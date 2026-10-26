@@ -1007,7 +1007,14 @@ describe('cloudflare adapters', () => {
     const prepare = vi.fn((query: string) => {
       statements.push(query);
       // first() answers the schema probes for later tables: not installed.
-      return { bind: () => ({ all, query, first: async () => null }) };
+      return {
+        bind: () => ({
+          all,
+          query,
+          first: async () => null,
+          run: async () => ({ success: true })
+        })
+      };
     });
     const roomFetch = vi.fn(
       async (_request: Request) => new Response(null, { status: 204 })
@@ -1057,6 +1064,7 @@ describe('cloudflare adapters', () => {
     const batch = vi.fn(async () => []);
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        run: async () => ({ success: true }),
         first: async () => null,
         all: async () => ({
           results: query.includes('SELECT object_key')
@@ -1087,6 +1095,7 @@ describe('cloudflare adapters', () => {
     });
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        run: async () => ({ success: true }),
         first: async () => null,
         all: async () => ({
           results: query.includes('SELECT object_key')
@@ -1231,7 +1240,8 @@ describe('cloudflare adapters', () => {
         ARTIFACTS: {
           get: async () => null,
           put: async () => null,
-          delete: async () => undefined
+          delete: async () => undefined,
+          list: async () => ({ objects: [], truncated: false })
         } as unknown as R2Bucket
       });
 

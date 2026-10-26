@@ -6,7 +6,8 @@ import {
   handleEncryptedSharedBlob,
   handleEncryptedSharedSnapshot,
   isEncryptedSharedBlobPath,
-  isEncryptedSharedSnapshotPath
+  isEncryptedSharedSnapshotPath,
+  type SharedBlobGuard
 } from './e2eeShareLinks';
 import { blobBucket } from './e2eeContentBlobs';
 import type { E2eeInvitationHost } from './e2eeInvitations';
@@ -29,7 +30,13 @@ import {
   stagedRevisionAuthor
 } from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
-import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
+import {
+  assertApiRateLimitAvailable,
+  enforceApiRateLimit,
+  isApiRateLimitSpent,
+  markApiRateLimitSpent,
+  publicRequestBucket
+} from './apiRateLimit';
 import {
   FREECAD_WORKER_PATH,
   serveFreecadWorkerAsset
@@ -290,6 +297,26 @@ const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
  */
 const ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT = 60;
 const ENCRYPTED_SHARED_BLOB_RATE_LIMIT = 300;
+// Two loads plus two retries of each blob per address and minute, across
+// links to its project. The snapshot's blob count cannot amplify this cap.
+const ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT = 4;
+/**
+ * Uncached snapshot reads by the blob route per client address and minute,
+ * across every link (#935 review): a read happens only when an isolate has
+ * not cached that snapshot's blob ids, so a load needs one or a few. This
+ * bounds D1 inline-body and R2 prefix reads independently of the link
+ * budgets below (R2 reads take only the envelope header).
+ */
+const ENCRYPTED_SHARED_BLOB_SNAPSHOT_READ_RATE_LIMIT = 60;
+/**
+ * Blob reads count per link load instead (slice 8-C1, #923 review): per
+ * address, link and minute, twice the blobs the link's snapshot names plus
+ * a few, so a model with more imports than the address budget loads at
+ * once (and again on a reload). Past that, and for every request naming no
+ * servable link, the address's own budget above applies.
+ */
+const ENCRYPTED_SHARED_LOAD_BLOB_FACTOR = 2;
+const ENCRYPTED_SHARED_LOAD_BLOB_SLACK = 32;
 const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
@@ -978,26 +1005,81 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const open =
       isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
       projectCollaborationRollout(env).sharingEnabled;
-    if (open && env.ENVIRONMENT !== 'development') {
+    const limited = open && env.ENVIRONMENT !== 'development';
+    if (limited && !encryptedSharedBlob) {
       await enforceApiRateLimit(
         env,
-        await publicRequestBucket(
-          request,
-          env,
-          encryptedSharedBlob ? 'e2ee-share-blob' : 'e2ee-share'
-        ),
-        encryptedSharedBlob
-          ? ENCRYPTED_SHARED_BLOB_RATE_LIMIT
-          : ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT
+        await publicRequestBucket(request, env, 'e2ee-share'),
+        ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT
       );
     }
+    // A blob counts within a load of its link, or else per address (#923).
+    const address = limited
+      ? await publicRequestBucket(request, env, 'e2ee-share-blob')
+      : null;
+    const perAddress = () =>
+      enforceApiRateLimit(env, address!, ENCRYPTED_SHARED_BLOB_RATE_LIMIT);
+    // A load over its budget is marked so later requests skip the snapshot
+    // read that sizes it (#935 review): they go to the address's budget.
+    const spentMark = (linkKey: string) => `${address}:${linkKey}:spent`;
+    const blobGuard: SharedBlobGuard | null = address
+      ? {
+          unbudgeted: perAddress,
+          blobAvailable: async (blobKey) =>
+            assertApiRateLimitAvailable(
+              env,
+              `${address}:blob:${blobKey}`,
+              ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT
+            ),
+          blob: async (blobKey) =>
+            enforceApiRateLimit(
+              env,
+              `${address}:blob:${blobKey}`,
+              ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT
+            ),
+          spent: async (linkKey) => {
+            if (!(await isApiRateLimitSpent(env, spentMark(linkKey)))) {
+              return false;
+            }
+            await perAddress();
+            return true;
+          },
+          snapshotRead: async () =>
+            enforceApiRateLimit(
+              env,
+              await publicRequestBucket(
+                request,
+                env,
+                'e2ee-share-blob-snapshot'
+              ),
+              ENCRYPTED_SHARED_BLOB_SNAPSHOT_READ_RATE_LIMIT
+            ),
+          load: async (linkKey, blobs) => {
+            try {
+              await enforceApiRateLimit(
+                env,
+                `${address}:${linkKey}`,
+                blobs * ENCRYPTED_SHARED_LOAD_BLOB_FACTOR +
+                  ENCRYPTED_SHARED_LOAD_BLOB_SLACK
+              );
+            } catch (error) {
+              if (!(error instanceof HttpError) || error.status !== 429) {
+                throw error;
+              }
+              await markApiRateLimitSpent(env, spentMark(linkKey));
+              await perAddress();
+            }
+          }
+        }
+      : null;
     return encryptedSharedBlob
       ? handleEncryptedSharedBlob(
           pathname,
           env.DB,
           projectBucket(env),
           blobBucket(env),
-          open
+          open,
+          blobGuard
         )
       : handleEncryptedSharedSnapshot(
           pathname,

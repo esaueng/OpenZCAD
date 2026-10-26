@@ -139,10 +139,17 @@ function fixture(inline = false) {
       await hooks.head?.();
       return value ? { size: value.length } : null;
     },
-    delete: async (key: string) => {
+    delete: async (key: string | string[]) => {
       await hooks.delete?.();
-      objects.delete(key);
+      for (const item of typeof key === 'string' ? [key] : key)
+        objects.delete(item);
     },
+    list: async ({ prefix = '' } = {}) => ({
+      objects: [...objects.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => ({ key })),
+      truncated: false
+    }),
     createMultipartUpload: async (key: string) => {
       const uploadId = `multipart-${++id}`;
       multipart.set(uploadId, new Map());
