@@ -3391,30 +3391,6 @@ export function App() {
     }
     sketchPickingRef.current = sketchPicking;
   }, [sketchPicking, retireStatusMessage]);
-  // A sketch or feature form takes the stage: model panels and "More tools"
-  // step aside and return when it ends, the preference untouched. A drag
-  // on the model leaves them in place (see `effectivePanels`).
-  const panelFeature = selectedFeatureNode
-    ? doc?.nodes[selectedFeatureNode.id]
-    : null;
-  const panels = usePanelSuspension(panelState, {
-    sketching: interaction.mode === 'sketch',
-    editing:
-      panelState.workspaceMode === 'build' &&
-      movePreview === null &&
-      ((tool !== null && tool !== 'transform') ||
-        (selectedFeatureNode !== null &&
-          featureSelectionSource !== 'inferred' &&
-          panelFeature?.kind === 'feature' &&
-          panelFeature.data.featureKind !== 'sketch' &&
-          panelFeature.data.featureKind !== 'transform')),
-    sessionId:
-      interaction.mode === 'sketch'
-        // A new sketch acquires its canonical ID on the first entity; that
-        // is still the same editing session and must keep a manual release.
-        ? 'active'
-        : `${tool ?? 'edit'}:${featureSelectionSource !== 'inferred' ? selectedFeatureNode?.id ?? '' : ''}`
-  });
   const toolRef = useRef(tool);
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
@@ -5083,6 +5059,30 @@ export function App() {
         ? 'drawing'
         : 'view'
       : panelState.workspaceMode;
+  // A sketch or feature form takes the stage: model panels and "More tools"
+  // step aside and return when it ends, the preference untouched. A drag
+  // on the model leaves them in place (see `effectivePanels`).
+  const panelFeature = selectedFeatureNode
+    ? doc?.nodes[selectedFeatureNode.id]
+    : null;
+  const panels = usePanelSuspension(panelState, {
+    workspaceMode: resolvedWorkspaceMode,
+    sketching: interaction.mode === 'sketch',
+    editing:
+      movePreview === null &&
+      ((tool !== null && tool !== 'transform') ||
+        (selectedFeatureNode !== null &&
+          featureSelectionSource !== 'inferred' &&
+          panelFeature?.kind === 'feature' &&
+          panelFeature.data.featureKind !== 'sketch' &&
+          panelFeature.data.featureKind !== 'transform')),
+    sessionId:
+      interaction.mode === 'sketch'
+        // A new sketch acquires its canonical ID on the first entity; that
+        // is still the same editing session and must keep a manual release.
+        ? 'active'
+        : `${tool ?? 'edit'}:${featureSelectionSource !== 'inferred' ? selectedFeatureNode?.id ?? '' : ''}`
+  });
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';

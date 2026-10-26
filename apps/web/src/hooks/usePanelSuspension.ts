@@ -2,7 +2,8 @@ import { useCallback, useState } from 'react';
 import {
   effectivePanels,
   type PanelState,
-  type SuspendablePanel
+  type SuspendablePanel,
+  type WorkspaceMode
 } from '../lib/panelState';
 
 type ReleaseRequests = Record<SuspendablePanel, number> & { version: number };
@@ -16,13 +17,21 @@ type ReleaseRequests = Record<SuspendablePanel, number> & { version: number };
  */
 export function usePanelSuspension(
   state: Pick<PanelState, 'commandFoldOpen'>,
-  mode: { sketching: boolean; editing?: boolean; sessionId?: string | null }
+  mode: {
+    sketching: boolean;
+    editing?: boolean;
+    sessionId?: string | null;
+    workspaceMode?: WorkspaceMode;
+  }
 ) {
-  const session = mode.sketching
-    ? `sketch:${mode.sessionId ?? ''}`
-    : mode.editing
-      ? `feature:${mode.sessionId ?? ''}`
-      : null;
+  const session =
+    (mode.workspaceMode ?? 'build') !== 'build'
+      ? null
+      : mode.sketching
+        ? `sketch:${mode.sessionId ?? ''}`
+        : mode.editing
+          ? `feature:${mode.sessionId ?? ''}`
+          : null;
   const suspended = session !== null;
   const [lastSession, setLastSession] = useState(session);
   const [requests, setRequests] = useState<ReleaseRequests>({

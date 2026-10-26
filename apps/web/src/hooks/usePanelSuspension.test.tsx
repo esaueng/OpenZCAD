@@ -1,12 +1,14 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { usePanelSuspension } from './usePanelSuspension';
+import type { WorkspaceMode } from '../lib/panelState';
 
 interface Props {
   commandFoldOpen: boolean;
   sketching: boolean;
   editing?: boolean;
   sessionId?: string;
+  workspaceMode?: WorkspaceMode;
 }
 
 const IDLE: Props = {
@@ -16,16 +18,44 @@ const IDLE: Props = {
 
 function renderSuspension(initialProps: Props = IDLE) {
   return renderHook(
-    ({ commandFoldOpen, sketching, editing, sessionId }: Props) =>
+    ({
+      commandFoldOpen,
+      sketching,
+      editing,
+      sessionId,
+      workspaceMode
+    }: Props) =>
       usePanelSuspension(
         { commandFoldOpen },
-        { sketching, editing, sessionId }
+        { sketching, editing, sessionId, workspaceMode }
       ),
     { initialProps }
   );
 }
 
 describe('usePanelSuspension', () => {
+  it.each(['view', 'tweak', 'drawing'] as const)(
+    'keeps panels visible when the resolved mode is %s and editing state is stale',
+    (workspaceMode) => {
+      const { result, rerender } = renderSuspension({
+        ...IDLE,
+        editing: true,
+        workspaceMode,
+        sessionId: 'selected-feature'
+      });
+      expect(result.current.panelsHidden).toBe(false);
+      expect(result.current.foldHidden).toBe(false);
+      expect(result.current.commandFoldOpen).toBe(true);
+      rerender({
+        ...IDLE,
+        editing: true,
+        workspaceMode: 'build',
+        sessionId: 'selected-feature'
+      });
+      expect(result.current.panelsHidden).toBe(true);
+    }
+  );
+
   it('honors an explicit panel request batched with opening another form', () => {
     const { result, rerender } = renderSuspension({
       ...IDLE,
