@@ -83,7 +83,9 @@ interface RoomServer extends Server {
   /** What each project's room starts with: its plaintext latest, if any. */
   roomSeed: Map<string, ProjectDocument>;
   /** Answers the rooms' internal migration requests instead, while set. */
-  roomFault: ((request: Request) => Promise<Response>) | null;
+  roomFault:
+    | ((request: Request, room: ProjectCollaborationRoom) => Promise<Response>)
+    | null;
 }
 
 /** The real room class behind PROJECT_ROOM, seeded per project. */
@@ -126,7 +128,7 @@ function roomServer(accounts: readonly Account[] = [owner, other]): RoomServer {
       return {
         fetch: (request: Request) =>
           new URL(request.url).pathname === '/_internal/migration'
-            ? fault(request)
+            ? fault(request, real)
             : real.fetch(request)
       };
     }
@@ -635,6 +637,43 @@ describe('encrypting an existing project', () => {
 
     // A fresh browser opens it with its history intact.
     await expectOpensWithHistory(srv, plain);
+  });
+
+  it('marks a project cut over whose purge stopped, and resumes the purge after', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    // The room cannot be cleared once: the purge stops after the cutover.
+    let purgeFails = true;
+    srv.roomFault = async (request, room) => {
+      const { action } = (await request.clone().json()) as { action: string };
+      if (action === 'purge' && purgeFails) {
+        purgeFails = false;
+        return new Response('Overloaded.', { status: 500 });
+      }
+      return room.fetch(request);
+    };
+    const laptop = engineOn(srv, owner, 'owner_laptop');
+    expect(await codeOfCall(migrateFully(laptop, projectId))).toBe(
+      'PROJECT_ROOM_UNAVAILABLE'
+    );
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'purging' });
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'error',
+      cutOver: true,
+      error: { code: 'PROJECT_ROOM_UNAVAILABLE', retryable: true }
+    });
+    // Retried with the listing's (now encrypted) summary: the purge
+    // resumes and finishes.
+    const summary = await laptop.summary(projectId);
+    expect(summary.storageFormat).toBe(2);
+    await laptop.engine.migrate(summary);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'done',
+      cutOver: true
+    });
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
   });
 
   it('refuses a shared project and leaves it as it was', async () => {

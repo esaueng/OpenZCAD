@@ -129,6 +129,12 @@ export interface MigrationProgress {
   /** Plaintext bytes encrypted so far: documents and files. */
   readonly bytesDone: number;
   readonly bytesTotal: number;
+  /**
+   * The project is cut over to encrypted storage, and its plaintext copy
+   * is deleted only once the purge completes: until then a stop is
+   * retried (the purge resumes), never cancelled.
+   */
+  readonly cutOver?: boolean;
   readonly error?: MigrationError;
 }
 
@@ -397,7 +403,9 @@ export function createProjectMigrationEngine(
       revisionsDone: 0,
       revisionsTotal: project.revisionCount,
       bytesDone: 0,
-      bytesTotal: 0
+      bytesTotal: 0,
+      // Listed as encrypted already: only its purge can remain.
+      ...(project.storageFormat === 2 ? { cutOver: true } : {})
     };
     const report = (change: Partial<MigrationProgress>) => {
       progress = { ...progress, ...change };
@@ -456,7 +464,7 @@ export function createProjectMigrationEngine(
     if (status?.state === 'cutover' || status?.state === 'purging') {
       leases.delete(projectId);
       deps.onCutover?.(projectId);
-      return purgeAll(projectId, (phase) => report({ phase }));
+      return purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
     }
     if (status?.state === 'done' && (project.storageFormat ?? 1) === 2) {
       return report({ phase: 'done' });
@@ -489,7 +497,7 @@ export function createProjectMigrationEngine(
     currentLease = null;
     deps.onCutover?.(projectId);
     await check('purge');
-    await purgeAll(projectId, (phase) => report({ phase }));
+    await purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
   }
 
   function renewLease(projectId: string, lease: string) {

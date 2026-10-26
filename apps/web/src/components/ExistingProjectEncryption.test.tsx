@@ -19,6 +19,7 @@ import {
   type ProjectMigrationEngine
 } from '../lib/e2ee/projectMigrationEngine';
 import type { MigrationPlaintextSource } from '../lib/e2ee/migrationPlaintextSource';
+import type { ProjectMigrationsApi } from '../lib/e2ee/projectMigrationsApi';
 import {
   migratingProjects,
   setMigratingProjects
@@ -97,12 +98,16 @@ function fakeEngine(
 
 function controllerWith(
   fake: ReturnType<typeof fakeEngine>,
-  locks: MigrationLocks | null = null
+  locks: MigrationLocks | null = null,
+  sources: {
+    plaintext?: MigrationPlaintextSource;
+    migrations?: ProjectMigrationsApi;
+  } = {}
 ) {
   const controller = createMigrationController({
     userId: 'user_alice',
-    plaintext: plaintextSource(),
-    migrations: {} as never,
+    plaintext: sources.plaintext ?? plaintextSource(),
+    migrations: sources.migrations ?? ({} as never),
     openStaging: async () => {
       throw new Error('not used');
     },
@@ -181,6 +186,83 @@ describe('the migration controller', () => {
     expect(fake.migrated).toEqual(['proj_old']);
     expect(controller.getState().projects[0]?.phase).toBe('paused');
     expect([...migratingProjects()]).toEqual([]);
+  });
+});
+
+describe('a project cut over before its purge finished', () => {
+  it('stays listed as finishing, and its retry resumes the purge', async () => {
+    // Listed as plaintext until the cutover, encrypted after.
+    let storageFormat: 1 | 2 = 1;
+    const plaintext = {
+      listProjects: async () => [
+        project('proj_old', 'Older bracket', '2026-10-01T00:00:00.000Z', {
+          storageFormat
+        })
+      ]
+    } as unknown as MigrationPlaintextSource;
+    const status = vi.fn(async () => ({
+      migration: { state: storageFormat === 2 ? 'purging' : 'staging' }
+    }));
+    const migrations = { status } as unknown as ProjectMigrationsApi;
+    let purgeFails = true;
+    const fake = fakeEngine(async (_summary, report) => {
+      report({ phase: 'cutover' });
+      storageFormat = 2;
+      report({ phase: 'purging', cutOver: true });
+      if (purgeFails) {
+        report({
+          phase: 'error',
+          error: {
+            code: 'PROJECT_ROOM_UNAVAILABLE',
+            message: 'The project’s room could not be cleared right now.',
+            retryable: true
+          }
+        });
+        throw new Error('purge failed');
+      }
+      report({ phase: 'done' });
+    });
+    const controller = controllerWith(fake, null, { plaintext, migrations });
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Encrypt projects' })
+    );
+    const row = await screen.findByRole('listitem', { name: 'Older bracket' });
+    expect(
+      await within(row).findByText(
+        'Stopped before the plaintext copy was deleted'
+      )
+    ).toBeTruthy();
+    await waitFor(() => expect(controller.getState().running).toBe(false));
+
+    // Listed again, now encrypted: it stays, as still finishing, and can
+    // only be retried (an abandon after the cutover is refused).
+    await act(() => controller.refresh());
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_old', phase: 'error', cutOver: true }
+    ]);
+    expect(status).toHaveBeenCalledWith('proj_old');
+    expect(
+      screen.getByText('1 project still finishing encryption')
+    ).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.queryByText('All your projects are encrypted')).toBeNull();
+
+    // The retry runs the engine again, which resumes the purge.
+    purgeFails = false;
+    fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
+    await waitFor(() =>
+      expect(within(row).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(fake.migrated).toEqual(['proj_old', 'proj_old']);
+    expect(screen.getByText('All your projects are encrypted')).toBeTruthy();
   });
 });
 

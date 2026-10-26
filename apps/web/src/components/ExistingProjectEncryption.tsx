@@ -49,7 +49,9 @@ function phaseLabel(progress: MigrationProgress): string {
     case 'paused':
       return 'Paused';
     case 'error':
-      return 'Stopped';
+      return progress.cutOver
+        ? 'Stopped before the plaintext copy was deleted'
+        : 'Stopped';
   }
 }
 
@@ -115,6 +117,9 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
     () => state.projects.filter((p) => p.phase !== 'done'),
     [state.projects]
   );
+  // Cut over, with the plaintext copy not yet purged: still finishing.
+  const finishing = remaining.filter((p) => p.cutOver).length;
+  const plaintext = remaining.length - finishing;
   const resumable = state.projects.some((p) => p.phase === 'paused');
 
   return (
@@ -181,9 +186,11 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
       ) : null}
       <SettingRow
         title={
-          remaining.length
-            ? `${remaining.length} project${remaining.length === 1 ? '' : 's'} not encrypted`
-            : 'All your projects are encrypted'
+          plaintext
+            ? `${plaintext} project${plaintext === 1 ? '' : 's'} not encrypted`
+            : finishing
+              ? `${finishing} project${finishing === 1 ? '' : 's'} still finishing encryption`
+              : 'All your projects are encrypted'
         }
         hint="Oldest first, one at a time."
       >
@@ -275,16 +282,18 @@ function ProjectRow({
               <RefreshCcw size={13} aria-hidden="true" />
               {progress.phase === 'paused' ? 'Resume' : 'Retry'}
             </button>
-            <button
-              className="secondary"
-              type="button"
-              disabled={busy}
-              title="Drops what was encrypted so far and unlocks the plaintext project."
-              onClick={() => void controller.cancel(progress.projectId)}
-            >
-              <X size={13} aria-hidden="true" />
-              Cancel
-            </button>
+            {progress.cutOver ? null : (
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                title="Drops what was encrypted so far and unlocks the plaintext project."
+                onClick={() => void controller.cancel(progress.projectId)}
+              >
+                <X size={13} aria-hidden="true" />
+                Cancel
+              </button>
+            )}
           </span>
         ) : null}
       </SettingRow>
