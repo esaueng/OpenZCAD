@@ -21,7 +21,13 @@ import {
   type ProjectSummary,
   type ProjectWorkspaceSession
 } from '@openzcad/shared';
+import { signShareDelegation } from '@openzcad/crypto';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import {
+  createShareLink,
+  renewShareDelegation,
+  revokeShareLink
+} from '../apps/web/src/lib/e2ee/shareLinks';
 import {
   createProjectMigrationsApi,
   withMigrationLease
@@ -744,6 +750,49 @@ describe('turning an encrypted project back into plaintext', () => {
     expectNoCiphertext(srv, projectId);
     const opened = await expectOpensAsPlaintext(srv, encrypted);
     expect(opened.version).toBe(encryptedVersion + 1);
+  });
+
+  it('reads save states whose bodies carry a share-link set (body v2, slice 5-10)', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 1 });
+    const { projectId } = encrypted;
+    const laptop = device(srv, owner, 'owner_laptop', {
+      mls: encrypted.encryptor.mls,
+      pins: encrypted.encryptor.pins
+    });
+    await renewShareDelegation(laptop.shareLinks, (value) =>
+      signShareDelegation(owner.identityPrivateKey, value)
+    );
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    // A save state taken while the link is active, then the revocation:
+    // both bodies are version 2, one with a grant, one with a tombstone.
+    const linked = await laptop.store.shareHead(projectId);
+    expect(linked.shareLinks?.links.map((l) => l.shareId)).toEqual([
+      created.shareId
+    ]);
+    await laptop.store.saveRevision({
+      projectId: linked.document.projectId,
+      reason: 'Secret linked',
+      expectedVersion: linked.version,
+      document: linked.document
+    });
+    await revokeShareLink(laptop.shareLinks, projectId, created.shareId);
+    // Only a revoked link remains, so the project may stop being encrypted.
+    const desktop = reverseOn(srv, owner, 'owner_desktop', { from: laptop });
+    await decryptFully(desktop, projectId);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'done',
+      revision_count: 2
+    });
+    expect(formatOf(srv, projectId)).toBe(1);
+    expectNoCiphertext(srv, projectId);
+    const reasons = rows<{ reason: string }>(
+      srv,
+      'SELECT reason FROM revisions WHERE project_id = ? ORDER BY created_at',
+      projectId
+    ).map((r) => r.reason);
+    expect(reasons).toEqual(['Secret one', 'Secret linked']);
   });
 
   it('refuses encrypted writes and the room while staging, and counts staged plaintext toward nothing', async () => {
