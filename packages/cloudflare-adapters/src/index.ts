@@ -6,6 +6,7 @@ export {
   accountAiLimits
 } from './account-tiers';
 import {
+  E2EE_MIGRATION_CODES,
   documentStructureError,
   documentEnvelopeError,
   accountReadFieldsError,
@@ -788,6 +789,29 @@ export interface EncryptedBlobStaging {
   readonly now: number;
 }
 
+/**
+ * The upload-session metadata key that names the staging lease an
+ * encrypted-blob session of a plaintext project was opened under (slice
+ * 7-1). Only encrypted-blob sessions carry it.
+ */
+const STAGING_LEASE_METADATA_KEY = 'stagingLease';
+
+/**
+ * The SQL that holds while the upload session `<alias>` (a row of
+ * upload_sessions) was opened under its project's live staging lease, read
+ * from its own metadata (migration 0042). Every statement that advances a
+ * staged encrypted-blob session carries it, so once the lease lapses or
+ * moves to another device the browser that opened it writes no more parts
+ * and completes nothing. `now` is in milliseconds; no binds.
+ */
+export function uploadStagingLeaseSql(alias: string, now: number): string {
+  return `EXISTS (SELECT 1 FROM e2ee_project_migrations lease
+    WHERE lease.project_id = ${alias}.project_id
+      AND lease.direction = 'encrypt' AND lease.state = 'staging'
+      AND lease.lease_id = json_extract(${alias}.metadata_json, '$.${STAGING_LEASE_METADATA_KEY}')
+      AND lease.lease_expires_at > ${Math.floor(now)})`;
+}
+
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
   projectId: string,
@@ -858,6 +882,11 @@ interface DurableUploadSession {
    * null for an ordinary artifact upload (and for every session before it).
    */
   e2eeBlobKind: string | null;
+  /**
+   * Slice 7-1: the staging lease an encrypted-blob session of a plaintext
+   * project staged for encryption was opened under; null otherwise.
+   */
+  stagingLease: string | null;
 }
 
 /** An upload session `requireUploadSession` let through, and on what. */
@@ -4095,7 +4124,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE id = ? AND reservation_state = 'open'
            AND multipart_upload_id IS NULL AND reserved_bytes = 0
            AND single_part = 0
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}${this.stagingLeaseFence(upload)}`
         )
           .bind(multipart.uploadId, uploadSessionId)
           .run();
@@ -4110,6 +4139,7 @@ export class D1R2PersistenceService implements PersistenceService {
       if (claimed !== 1) {
         await multipart.abort().catch(() => undefined);
         await this.refuseIfMigrating(upload.projectId, upload);
+        await this.refuseIfStagingLeaseLost(upload);
         throw new ArtifactStorageError('Upload session changed during upload.');
       }
       uploadId = multipart.uploadId;
@@ -4199,6 +4229,10 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError('Upload reservation state is invalid.');
     }
+    const metadata = parseStoredUploadMetadata(upload.metadata_json);
+    const stagingLease = upload.e2ee_blob_kind
+      ? metadata[STAGING_LEASE_METADATA_KEY]
+      : undefined;
     return {
       uploadSessionId: upload.id,
       artifactId: upload.artifact_id,
@@ -4207,7 +4241,7 @@ export class D1R2PersistenceService implements PersistenceService {
       fileName: upload.file_name,
       contentType: upload.content_type,
       kind: upload.kind,
-      metadata: parseStoredUploadMetadata(upload.metadata_json),
+      metadata,
       ownerUserId: toUserId(upload.owner_user_id),
       reservedBytes: upload.reserved_bytes,
       reservationState: upload.reservation_state,
@@ -4216,7 +4250,8 @@ export class D1R2PersistenceService implements PersistenceService {
       uploadProtocolVersion: upload.upload_protocol_version,
       completionStartedAt: upload.completion_started_at,
       expiresAt: upload.expires_at,
-      e2eeBlobKind: upload.e2ee_blob_kind ?? null
+      e2eeBlobKind: upload.e2ee_blob_kind ?? null,
+      stagingLease: typeof stagingLease === 'string' ? stagingLease : null
     };
   }
 
@@ -4242,7 +4277,11 @@ export class D1R2PersistenceService implements PersistenceService {
     // a plaintext project only ordinary artifacts, part by part. A plaintext
     // session opened before the project became encrypted writes nothing more,
     // nor (slice 7-1) one opened before its staging began: each statement
-    // that advances it carries the same fence (`plaintextUploadFence`).
+    // that advances it carries the same fence (`plaintextUploadFence`). An
+    // encrypted-blob session of a staged project advances only while the
+    // lease that opened it is the live one, so after a takeover the browser
+    // left behind writes nothing more to the upload or its reservation
+    // (#914 review; `stagingLeaseFence` in each advancing statement).
     let decryptStaged = false;
     if (upload.e2eeBlobKind === null) {
       // Slice 7-3: the decrypted files of an encrypted project being turned
@@ -4256,10 +4295,9 @@ export class D1R2PersistenceService implements PersistenceService {
         assertPlaintextProject(access);
         await this.refuseIfMigrating(upload.projectId);
       }
-    } else if (
-      isPlaintextStorageFormat(access.storageFormat) &&
-      !(await this.isStagedForEncryption(upload.projectId))
-    ) {
+    } else if (upload.stagingLease !== null) {
+      await this.refuseIfStagingLeaseLost(upload);
+    } else if (isPlaintextStorageFormat(access.storageFormat)) {
       throw new ArtifactStorageError(
         'This upload carries an encrypted blob, but the project is not end-to-end encrypted.'
       );
@@ -4280,8 +4318,7 @@ export class D1R2PersistenceService implements PersistenceService {
 
   /**
    * Whether a plaintext project is being staged for encryption (slice 7-1,
-   * migration 0042): its encrypted-blob sessions, which only the lease
-   * holder could open, carry their bytes as an encrypted project's would.
+   * migration 0042), so its plaintext uploads refuse (`refuseIfMigrating`).
    */
   /**
    * Whether an encrypted project is being turned back into plaintext
@@ -4312,6 +4349,51 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(projectId)
       .first<{ staged: number }>();
     return row?.staged === 1;
+  }
+
+  /**
+   * Slice 7-1: refuses a staged encrypted-blob session (`stagingLease` set)
+   * whose lease lapsed, moved to another device, or whose staging ended,
+   * with 409 E2EE_MIGRATION_LEASE_LOST. A no-op for any other session.
+   */
+  private async refuseIfStagingLeaseLost(
+    upload: Pick<DurableUploadSession, 'projectId' | 'stagingLease'>
+  ): Promise<void> {
+    if (upload.stagingLease === null) return;
+    const row = (await isE2eeProjectMigrationStorageReady(this.env.DB))
+      ? await this.env
+          .DB!.prepare(
+            `SELECT 1 AS held FROM e2ee_project_migrations m
+             JOIN projects p ON p.id = m.project_id
+             WHERE m.project_id = ? AND m.direction = 'encrypt'
+               AND m.state = 'staging' AND m.lease_id = ?
+               AND m.lease_expires_at > ? AND p.storage_format = 1`
+          )
+          .bind(upload.projectId, upload.stagingLease, Date.now())
+          .first<{ held: number }>()
+      : null;
+    if (row?.held !== 1) {
+      throw new EncryptedBlobError(
+        409,
+        E2EE_MIGRATION_CODES.leaseLost,
+        'This project’s migration lease lapsed or moved to another device. Start the migration again to resume.'
+      );
+    }
+  }
+
+  /**
+   * ` AND <fence>` for a statement that advances `upload`, a staged
+   * encrypted-blob session, so it lands nothing once the lease it was
+   * opened under is no longer live (`uploadStagingLeaseSql` on `alias`,
+   * a row of upload_sessions); '' for any other session.
+   */
+  private stagingLeaseFence(
+    upload: Pick<DurableUploadSession, 'stagingLease'>,
+    alias = 'upload_sessions'
+  ): string {
+    return upload.stagingLease === null
+      ? ''
+      : ` AND ${uploadStagingLeaseSql(alias, Date.now())}`;
   }
 
   /**
@@ -4550,7 +4632,7 @@ export class D1R2PersistenceService implements PersistenceService {
              completion_started_at = NULL
          WHERE id = ? AND reservation_state = 'open'
            AND multipart_upload_id IS NULL AND reserved_bytes = 0
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}${this.stagingLeaseFence(session)}`
       )
         .bind(upload.uploadId, uploadSessionId)
         .run();
@@ -4632,23 +4714,43 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload part is invalid or too large.');
     }
     const reservationToken = crypto.randomUUID();
+    // A staged session reserves the part only under its live lease.
+    const leaseFence = this.stagingLeaseFence(session);
+    let reserved: number | undefined;
     try {
-      await this.env.DB.prepare(
+      const result = await this.env.DB.prepare(
         `INSERT INTO artifact_upload_parts
          (upload_session_id, part_number, bytes, etag, reservation_token)
-         VALUES (?, ?, ?, NULL, ?)
+         ${
+           leaseFence
+             ? `SELECT ?, ?, ?, NULL, ?
+         WHERE EXISTS (SELECT 1 FROM upload_sessions
+                       WHERE id = ?${leaseFence})`
+             : 'VALUES (?, ?, ?, NULL, ?)'
+         }
          ON CONFLICT(upload_session_id, part_number) DO UPDATE SET
            bytes = excluded.bytes,
            etag = NULL,
            reservation_token = excluded.reservation_token`
       )
-        .bind(uploadSessionId, partNumber, body.byteLength, reservationToken)
+        .bind(
+          uploadSessionId,
+          partNumber,
+          body.byteLength,
+          reservationToken,
+          ...(leaseFence ? [uploadSessionId] : [])
+        )
         .run();
+      reserved = result.meta?.changes;
     } catch (error) {
       throw artifactAccountingError(
         error,
         (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
       );
+    }
+    if (leaseFence && reserved !== 1) {
+      await this.refuseIfStagingLeaseLost(session);
+      throw new ArtifactStorageError('Upload part could not be reserved.');
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
       session.objectKey,
@@ -4669,7 +4771,7 @@ export class D1R2PersistenceService implements PersistenceService {
            AND EXISTS (
              SELECT 1 FROM upload_sessions
              WHERE id = ? AND reservation_state = 'uploading'
-               AND multipart_upload_id = ?${notMigrating}
+               AND multipart_upload_id = ?${notMigrating}${this.stagingLeaseFence(session)}
            )`
       )
         .bind(
@@ -4691,6 +4793,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     if (recorded !== 1) {
       await this.refuseIfMigrating(session.projectId, session);
+      await this.refuseIfStagingLeaseLost(session);
       throw new ArtifactStorageError(
         'Upload part was replaced concurrently; retry the part.'
       );
@@ -4745,7 +4848,7 @@ export class D1R2PersistenceService implements PersistenceService {
          SET reservation_state = 'completing', completion_started_at = ?
          WHERE id = ? AND reservation_state = 'uploading'
            AND multipart_upload_id = ?
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}${this.stagingLeaseFence(session)}`
       )
         .bind(Date.now(), uploadSessionId, request.uploadId)
         .run();
@@ -5105,6 +5208,18 @@ export class D1R2PersistenceService implements PersistenceService {
           'That blob id is already in use.'
         );
       }
+      // Slice 7-1: a session opened under another staging lease (one that
+      // lapsed or moved here, or a staging since cut over) can no longer
+      // advance; its upload and reservation are dropped and this caller
+      // starts afresh (#914 review).
+      if (session.stagingLease !== (staging?.leaseId ?? null)) {
+        if (!(await this.cleanupUploadSession(session))) {
+          throw new ArtifactStorageError(
+            'An earlier upload of this file is still finishing. Try again shortly.'
+          );
+        }
+        return null;
+      }
       return {
         committed: false,
         session: {
@@ -5131,7 +5246,7 @@ export class D1R2PersistenceService implements PersistenceService {
           kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
           reservation_state, multipart_upload_id, completion_started_at,
           upload_protocol_version, e2ee_blob_kind)
-         SELECT ?, ?, ?, ?, ?, 'application/octet-stream', 'e2ee-blob', '{}',
+         SELECT ?, ?, ?, ?, ?, 'application/octet-stream', 'e2ee-blob', ?,
                 ?, ?, 0, 'open', NULL, NULL, 1, ?
          WHERE ${authorization.sql}
            AND EXISTS (
@@ -5152,6 +5267,9 @@ export class D1R2PersistenceService implements PersistenceService {
           encryptedBlobObjectKey(request.projectId, request.blobId),
           // Opaque: the file's name stays inside the encrypted document.
           request.blobId,
+          JSON.stringify(
+            staging ? { [STAGING_LEASE_METADATA_KEY]: staging.leaseId } : {}
+          ),
           expiresAt,
           access.ownerUserId,
           request.kind,
@@ -5286,6 +5404,7 @@ export class D1R2PersistenceService implements PersistenceService {
         AND reservation_state = 'completed' AND reserved_bytes = ?
         AND multipart_upload_id IS NOT NULL
         AND completion_started_at IS NULL
+        AND json_extract(metadata_json, '$.${STAGING_LEASE_METADATA_KEY}') IS ?
     ) AND EXISTS (
       SELECT 1 FROM projects
       WHERE id = ? AND user_id = ? AND ${format.sql}
@@ -5303,6 +5422,7 @@ export class D1R2PersistenceService implements PersistenceService {
       access.ownerUserId,
       kind,
       stored.size,
+      staging?.leaseId ?? null,
       request.projectId,
       access.ownerUserId,
       ...format.binds,
