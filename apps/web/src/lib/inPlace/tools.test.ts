@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyId, FeatureId, SketchId } from '@openzcad/shared';
+import {
+  CURRENT_CANONICAL_BASIS_REVISION,
+  canonicalPlaneBasis,
+  planeIntersectionDatumAxis
+} from '@openzcad/geometry';
+import type {
+  BodyId,
+  DatumAxisDefinition,
+  FeatureId,
+  SketchId
+} from '@openzcad/shared';
 import { TOOL_META } from '../tools';
 import { placementFrame } from './primitives';
 import {
@@ -9,12 +19,17 @@ import {
   displayedValue,
   isInPlaceTool,
   keypadText,
+  principalAxisDefinition,
+  requestNewAxis,
+  resolveNewAxis,
+  stepTotal,
   valueInRange,
   type BodyPick,
   type EdgePick,
   type FacePick,
   type InPlaceContext,
   type InPlaceSlots,
+  type ProfilePick,
   profileOutline
 } from './tools';
 
@@ -527,7 +542,7 @@ describe('body tools', () => {
     });
   });
 
-  it('rotate about axis: only datum axes, stored by reference', () => {
+  it('rotate about axis: a datum axis is stored by reference', () => {
     const spec = IN_PLACE_TOOL_SPECS['axis-rotate'];
     const [axis] = axisCandidatesFor(EMPTY, CTX, 'datum');
     expect(axis?.id).toBe('datum:axis_1');
@@ -849,6 +864,73 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(neutral('base', '-Z')).toEqual({ x: '15', y: '10', z: '6' });
     expect(neutral('point')).toEqual({ x: '12', y: '6', z: '4' });
     expect(neutral('origin')).toEqual({ x: '0', y: '0', z: '0' });
+  });
+
+  describe('the draft angle rig', () => {
+    const ctx: InPlaceContext = {
+      ...CTX,
+      bodyBounds: () => ({
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 10, y: 10, z: 10 }
+      })
+    };
+    // The +X wall of a 10 mm box standing on the ground.
+    const side: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 21,
+      topologyId: 'f21',
+      surfaceType: 'plane',
+      normal: { x: 1, y: 0, z: 0 },
+      centroid: { x: 10, y: 5, z: 5 }
+    };
+    const handle = (options: Record<string, string>, face = side) =>
+      IN_PLACE_TOOL_SPECS.draft.handles(
+        { ...EMPTY, faces: [face] },
+        { angle: 3 },
+        ctx,
+        options
+      )[0]!;
+
+    it('hinges on the line where the face meets the neutral plane', () => {
+      const rig = handle({ pull: '+Z', neutral: 'base' });
+      expect(rig.kind).toBe('angle');
+      if (rig.kind !== 'angle') return;
+      expect(rig.params.center).toEqual({ x: 10, y: 5, z: 0 });
+      // Up the wall to its middle, turning about the hinge so that a
+      // positive drag leans the wall out of the body (+X), as a positive
+      // draft does above its neutral plane.
+      expect(rig.params.startDirection).toEqual({ x: 0, y: 0, z: 1 });
+      expect(rig.params.axis.y).toBeCloseTo(1);
+      expect(rig.params.radius).toBeCloseTo(5);
+    });
+
+    it('runs down the face from a hinge above it', () => {
+      const rig = handle({ pull: '+Z', neutral: 'top' });
+      if (rig.kind !== 'angle') throw new Error('expected an angle rig');
+      expect(rig.params.center).toEqual({ x: 10, y: 5, z: 10 });
+      expect(rig.params.startDirection.z).toBeCloseTo(-1);
+      // Same turn sense: below its hinge a positive draft leans the wall in.
+      expect(rig.params.axis.y).toBeCloseTo(1);
+    });
+
+    it('rebuilds when the hinge moves, never for the angle alone', () => {
+      const base = handle({ pull: '+Z', neutral: 'base' });
+      const top = handle({ pull: '+Z', neutral: 'top' });
+      expect(base.key).not.toBe(top.key);
+      const steeper = IN_PLACE_TOOL_SPECS.draft.handles(
+        { ...EMPTY, faces: [side] },
+        { angle: 12 },
+        ctx,
+        { pull: '+Z', neutral: 'base' }
+      )[0]!;
+      expect(steeper.key).toBe(base.key);
+    });
+
+    it('keeps a chip for a face square to the pull or with no normal', () => {
+      expect(handle({ pull: '+Z', neutral: 'base' }, TOP).kind).toBe('chip');
+      const curved = { ...side, normal: undefined, surfaceType: 'cylinder' };
+      expect(handle({ pull: '+Z', neutral: 'base' }, curved).kind).toBe('chip');
+    });
   });
 });
 
@@ -1274,5 +1356,239 @@ describe('primitives run in place', () => {
     expect(shorter.map((handle) => handle.key)).toEqual(
       handles.map((handle) => handle.key)
     );
+  });
+});
+
+describe('axes and directions picked in the model', () => {
+  const EDGE_AXIS: DatumAxisDefinition = {
+    kind: 'edge',
+    source: {
+      type: 'edge',
+      bodyId: 'body_a' as BodyId,
+      edgeReference: {} as never
+    }
+  };
+  const picked = (origin = { x: 0, y: 0, z: 0 }) => ({
+    id: 'edge:body_a:7',
+    label: 'The picked edge',
+    origin,
+    direction: { x: 0, y: 1, z: 0 },
+    choice: { define: EDGE_AXIS }
+  });
+
+  it('a world axis is the line two principal planes meet in, along it', () => {
+    for (const world of ['x', 'y', 'z'] as const) {
+      const definition = principalAxisDefinition(world);
+      if (definition.kind !== 'plane-intersection') throw new Error(world);
+      const [a, b] = definition.sources.map((source) => {
+        if (source.type !== 'canonical') throw new Error(world);
+        return canonicalPlaneBasis(
+          source.plane,
+          source.basisRevision ?? CURRENT_CANONICAL_BASIS_REVISION
+        );
+      });
+      const line = planeIntersectionDatumAxis(
+        a!,
+        b!,
+        definition.reverseDirection
+      );
+      expect(line.origin).toEqual({ x: 0, y: 0, z: 0 });
+      expect(line.direction[world]).toBeCloseTo(1);
+    }
+  });
+
+  it('revolve: a picked edge in the profile plane is a new datum axis', () => {
+    const spec = IN_PLACE_TOOL_SPECS.revolve;
+    const profile: ProfilePick = {
+      sketchId: 'sketch_1' as SketchId,
+      reference: { all: true, sourceEntityIds: ['a'] },
+      regionFingerprint: 1
+    };
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchViews: [
+        {
+          sketchId: 'sketch_1' as SketchId,
+          basis: {
+            origin: { x: 0, y: 0, z: 0 },
+            u: { x: 1, y: 0, z: 0 },
+            v: { x: 0, y: 1, z: 0 },
+            normal: { x: 0, y: 0, z: 1 }
+          },
+          regions: []
+        }
+      ]
+    };
+    const slots = { ...EMPTY, profiles: [profile] };
+    expect(spec.axisPicks).toBe(true);
+    expect(spec.refuseAxis?.(slots, picked(), ctx)).toBeNull();
+    // A line off the sketch plane is refused before the build would be.
+    expect(spec.refuseAxis?.(slots, picked({ x: 0, y: 0, z: 3 }), ctx)).toMatch(
+      /leaves the profile's sketch plane/
+    );
+    const request = spec.request(
+      { ...slots, axis: picked() },
+      { angle: 180 },
+      {},
+      ctx
+    )!;
+    expect(request).toMatchObject({
+      tool: 'revolve',
+      axis: { newAxis: EDGE_AXIS },
+      angleDeg: 180
+    });
+    expect(requestNewAxis(request)).toBe(EDGE_AXIS);
+    expect(resolveNewAxis(request, 'axis_9' as FeatureId)).toMatchObject({
+      axis: { datumFeatureId: 'axis_9' }
+    });
+    // Unresolved, it has no axis to turn about.
+    expect(resolveNewAxis(request, null)).toBeNull();
+  });
+
+  it('revolve: offers a world axis in the sketch plane that is not its own', () => {
+    const view = {
+      sketchId: 'sketch_1' as SketchId,
+      // On the XZ plane, lifted 3 along Z: the X axis is in the plane but
+      // is not the sketch's horizontal, which runs at z = 3.
+      basis: {
+        origin: { x: 5, y: 0, z: 3 },
+        u: { x: 1, y: 0, z: 0 },
+        v: { x: 0, y: 0, z: 1 },
+        normal: { x: 0, y: -1, z: 0 }
+      },
+      regions: []
+    };
+    const ids = axisCandidatesFor(
+      {
+        ...EMPTY,
+        profiles: [
+          {
+            sketchId: 'sketch_1' as SketchId,
+            reference: { all: true, sourceEntityIds: ['a'] },
+            regionFingerprint: 1
+          }
+        ]
+      },
+      { ...CTX, datumAxes: {}, sketchViews: [view] }
+    ).map((candidate) => candidate.id);
+    expect(ids).toEqual([
+      'sketch-horizontal',
+      'sketch-vertical',
+      'world-x',
+      'world-z'
+    ]);
+  });
+
+  it('rotate about axis: an edge, a cylinder or a world axis, added as a datum', () => {
+    const spec = IN_PLACE_TOOL_SPECS['axis-rotate'];
+    expect(spec.axisSource).toBe('world');
+    expect(spec.axisPicks).toBe(true);
+    const [x] = axisCandidatesFor(EMPTY, CTX, 'world');
+    expect(
+      spec.request(
+        { ...EMPTY, bodies: [BODY], axis: x! },
+        { angle: 45 },
+        {},
+        CTX
+      )
+    ).toMatchObject({
+      axisRotation: {
+        axis: { type: 'new-axis', definition: principalAxisDefinition('x') },
+        angleDeg: 45
+      }
+    });
+    const turn = spec.request(
+      { ...EMPTY, bodies: [BODY], axis: picked() },
+      { angle: 30 },
+      {},
+      CTX
+    )!;
+    expect(requestNewAxis(turn)).toBe(EDGE_AXIS);
+    expect(resolveNewAxis(turn, 'axis_9' as FeatureId)).toMatchObject({
+      axisRotation: {
+        axis: { type: 'datum-axis', datumFeatureId: 'axis_9' },
+        angleDeg: 30
+      }
+    });
+  });
+
+  it('circular pattern: a picked edge rings the copies about a new datum', () => {
+    const spec = IN_PLACE_TOOL_SPECS['circular-pattern'];
+    const request = spec.request(
+      { ...EMPTY, bodies: [BODY], axis: picked() },
+      { count: 4, angle: 360 },
+      {},
+      CTX
+    )!;
+    expect(request).toMatchObject({
+      axis: 'z',
+      axisRef: { type: 'new-axis', definition: EDGE_AXIS }
+    });
+    expect(resolveNewAxis(request, 'axis_9' as FeatureId)).toMatchObject({
+      axisRef: { type: 'datum-axis', datumFeatureId: 'axis_9' }
+    });
+    // A world axis stays the pattern's own axis, with no datum.
+    const [, y] = axisCandidatesFor(EMPTY, CTX, 'world');
+    const world = spec.request(
+      { ...EMPTY, bodies: [BODY], axis: y! },
+      { count: 4 },
+      {},
+      CTX
+    )!;
+    expect(world).toMatchObject({ axis: 'y' });
+    expect(world).not.toHaveProperty('axisRef');
+    expect(requestNewAxis(world)).toBeNull();
+  });
+
+  it('circular pattern: a fixed step stores the total its copies span', () => {
+    const spec = IN_PLACE_TOOL_SPECS['circular-pattern'];
+    const [, , z] = axisCandidatesFor(EMPTY, CTX, 'world');
+    const slots = { ...EMPTY, bodies: [BODY], axis: z! };
+    expect(
+      spec.request(slots, { count: 4, step: 30 }, { spacing: 'step' }, CTX)
+    ).toMatchObject({ angleDeg: 90, count: 4 });
+    // A step that closes the ring is the whole turn.
+    expect(
+      spec.request(slots, { count: 6, step: 60 }, { spacing: 'step' }, CTX)
+    ).toMatchObject({ angleDeg: 360 });
+    expect(stepTotal(-45, 8)).toBe(-360);
+    expect(stepTotal('s', 4)).toBe('(s) * ((4) - 1)');
+    expect(stepTotal(15, 'n')).toBe('(15) * ((n) - 1)');
+    // The angle rig drags the step, not the total.
+    expect(
+      spec
+        .handles(slots, {}, CTX, { spacing: 'step' })
+        .map((handle) => handle.valueId)
+    ).toEqual(['step', 'count']);
+    expect(spec.hint(slots, { spacing: 'step' })).toMatch(/Drag the step/);
+  });
+
+  it('linear pattern: a picked direction is an axis, or a custom vector', () => {
+    const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    expect(spec.takeDirection?.({ x: 0, y: 0, z: 2 })).toEqual({
+      options: { axis: 'z' },
+      values: {}
+    });
+    // Against an axis is a vector: the stored axis has no sign.
+    expect(spec.takeDirection?.({ x: -3, y: 0, z: 0 })).toEqual({
+      options: { axis: 'custom' },
+      values: { dirX: -1, dirY: 0, dirZ: 0 }
+    });
+    // A slight tilt off X is kept, not snapped onto X.
+    const slight = spec.takeDirection?.({ x: 1, y: 1e-5, z: 0 });
+    expect(slight?.options).toEqual({ axis: 'custom' });
+    expect(slight?.values.dirY).toBeCloseTo(1e-5, 12);
+    const tilted = spec.takeDirection?.({ x: 1, y: 1, z: 1e-12 });
+    expect(tilted?.options).toEqual({ axis: 'custom' });
+    expect(tilted?.values.dirX).toBeCloseTo(Math.SQRT1_2);
+    expect(tilted?.values.dirZ).toBe(0);
+    expect(
+      spec.request(
+        { ...EMPTY, bodies: [BODY] },
+        { spacing: 10, count: 3, ...tilted!.values },
+        tilted!.options,
+        CTX
+      )
+    ).toMatchObject({ direction: { x: tilted!.values.dirX, z: 0 } });
   });
 });

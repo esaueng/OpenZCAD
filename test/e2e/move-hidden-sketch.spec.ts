@@ -5,7 +5,13 @@ import {
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
-import { expect, setSelectionFilter, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  setSelectionFilter,
+  stubApi,
+  test,
+  openMoveOptions
+} from './openzcad-fixtures';
 
 /**
  * A sketch an extrude consumed is hidden, and the Move of it used to look the
@@ -142,8 +148,9 @@ test('Move applies to a sketch its extrude has hidden, from the card', async ({
   await expect(status).toContainText('Move sketch');
   // The sketch being moved shows for the Move, so it takes the gizmo.
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /\d/);
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('20');
-  await move.getByRole('button', { name: /Apply move/ }).click();
+  await move.getByRole('button', { name: 'Done' }).click();
 
   await expect(move).toHaveCount(0);
   await expect(status).toContainText('Moved Profile');
@@ -179,6 +186,7 @@ test('Move applies to a hidden sketch from the unapplied-Move dialog', async ({
   await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   await expect(status).toContainText('Move sketch');
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('20');
   await page.locator('.feature-row-main', { hasText: /^Plate$/ }).click();
   await expect(ask).toBeVisible();
@@ -223,6 +231,7 @@ test('a pick on the hidden moving sketch preserves Cancel and never replays afte
     await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
     await page.getByRole('button', { name: /^Move \(M\)/ }).click();
     await expect(status).toContainText('Move sketch');
+    await openMoveOptions(move);
     await move.getByLabel('Move X in mm').fill('20');
   }
 

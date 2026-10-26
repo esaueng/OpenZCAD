@@ -36,6 +36,7 @@ import {
 import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import {
   DecryptStagingLeaseError,
+  EncryptedBlobError,
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
@@ -659,8 +660,8 @@ function encryptedInvitationHost(
     },
     emailConfigured: Boolean(
       env.EMAIL &&
-        env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
-        env.PUBLIC_APP_ORIGIN?.trim()
+      env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
+      env.PUBLIC_APP_ORIGIN?.trim()
     ),
     sendInvitationEmail: async (details) => {
       const config = projectInvitationEmailConfig(env);
@@ -729,15 +730,16 @@ async function assertAssistantProjectAllowed(
   const userId = identity.userId;
   // Before migration 0031 every project is plaintext.
   if (!(await isProjectStorageFormatReady(env.DB))) return null;
-  const row = await env.DB!.prepare(
-    `SELECT p.storage_format FROM projects p
+  const row = await env
+    .DB!.prepare(
+      `SELECT p.storage_format FROM projects p
      WHERE p.id = ? AND (
        p.user_id = ? OR EXISTS (
          SELECT 1 FROM project_members pm
          WHERE pm.project_id = p.id AND pm.user_id = ?
        )
      )`
-  )
+    )
     .bind(projectId, userId, userId)
     .first<{ storage_format: number | null }>();
   if (row && row.storage_format !== null && row.storage_format !== 1) {
@@ -1980,7 +1982,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const expectedRevision = parseDeleteProjectMeasurementsRequest(
       await readJsonBody(request, 1024)
     );
-    await deleteProjectMeasurements(env.DB!, projectId, userId, expectedRevision);
+    await deleteProjectMeasurements(
+      env.DB!,
+      projectId,
+      userId,
+      expectedRevision
+    );
     return new Response(null, { status: 204 });
   }
 
@@ -2424,6 +2431,10 @@ async function dispatchApiRequest(
         { error: error.message, code: E2EE_MIGRATION_CODES.leaseLost },
         409
       );
+    }
+    // Slice 7-1: a staged encrypted-blob upload whose lease moved on.
+    if (error instanceof EncryptedBlobError) {
+      return json({ error: error.message, code: error.code }, error.status);
     }
     if (error instanceof RevisionNotFoundError) {
       return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);

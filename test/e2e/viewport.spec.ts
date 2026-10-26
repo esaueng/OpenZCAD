@@ -10,7 +10,8 @@ import {
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY,
   revealModelPanel,
-  finishInPlaceCommand
+  finishInPlaceCommand,
+  openMoveOptions
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
@@ -1354,8 +1355,9 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const moveControls = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(moveControls);
   await moveControls.getByLabel('Move X in mm').fill('-90');
-  await moveControls.getByRole('button', { name: 'Apply move' }).click();
+  await moveControls.getByRole('button', { name: 'Done' }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Move' })
   ).toBeVisible();
@@ -2117,6 +2119,7 @@ test('the selection callout follows the body it names through a move', async ({
 
   // The callout lives in the overlay group rather than under the body, so it
   // used to sit still while the body slid out from under its own name.
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('40');
   await expect.poll(placement).not.toBe(resting);
   const moved = await placement();
@@ -2126,6 +2129,7 @@ test('the selection callout follows the body it names through a move', async ({
   // the anchor sits directly above the centre of the bounding box, which is on
   // the Z axis of the rotation, and a Z turn leaves a point on its own axis
   // exactly where it was.
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Rotate Y in degrees').fill('90');
   await expect.poll(placement).not.toBe(moved);
 
@@ -2433,6 +2437,7 @@ test('the frozen shadow map thaws for a moving body but not for the camera', asy
   await page.keyboard.press('m');
   const move = page.getByRole('form', { name: 'Move controls' });
   await expect(move).toBeVisible();
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('40');
   await expect.poll(refreshes).toBeGreaterThan(settled);
 

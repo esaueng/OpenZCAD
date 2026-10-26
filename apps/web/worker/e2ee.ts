@@ -1042,7 +1042,9 @@ function removedDevices(
  * counts as encrypted here: its staged versions, project info and key
  * archives become the encrypted project at the cutover, which checks no
  * signer itself, so a replacement that drops their signer would leave the
- * migrated project unreadable. An abandoned staging is never cut over.
+ * migrated project unreadable. Nor may it drop a device that joined the
+ * staged group (an MLS leaf), which signs nothing yet holds the key the
+ * cutover exposes ciphertext under. An abandoned staging is never cut over.
  *
  * Returns a fence for the identity write itself, so a version such a
  * device signs meanwhile makes the write refuse; encrypted writes, staged
@@ -1060,13 +1062,12 @@ async function projectSignerFence(
   ) {
     return { sql: '1 = 1', binds: [] };
   }
-  const staged = (await isE2eeProjectMigrationStorageReady(db))
-    ? ` OR ${STAGED_FOR_ENCRYPTION_SQL}`
-    : '';
+  const migrations = await isE2eeProjectMigrationStorageReady(db);
   const fence = signedProjectsFence(
     userId,
-    `p.storage_format = 2${staged}`,
-    removedDeviceIds
+    `p.storage_format = 2${migrations ? ` OR ${STAGED_FOR_ENCRYPTION_SQL}` : ''}`,
+    removedDeviceIds,
+    migrations ? STAGED_FOR_ENCRYPTION_SQL : undefined
   );
   await refuseIfSigned(db, fence);
   return fence;
@@ -1079,14 +1080,28 @@ const STAGED_FOR_ENCRYPTION_SQL = `EXISTS (SELECT 1 FROM e2ee_project_migrations
 
 /**
  * Holds while no project `p` of the user matching `projects` has a
- * version, envelope or key archive signed by one of `deviceIds`.
+ * version, envelope or key archive signed by one of `deviceIds`, nor,
+ * among those also matching `leavesIn`, an MLS leaf of one of them.
+ *
+ * A leaf matters only for a project staged for encryption: a device that
+ * joined the staged group holds its key without signing anything, and no
+ * cutoff or rotation can reach the project before the cutover (format-2
+ * projects get both, so their leaves hold nothing up).
  */
 function signedProjectsFence(
   userId: string,
   projects: string,
-  deviceIds: readonly string[]
+  deviceIds: readonly string[],
+  leavesIn?: string
 ): { sql: string; binds: string[] } {
   const marks = deviceIds.map(() => '?').join(', ');
+  const leaves = leavesIn
+    ? `
+           OR ((${leavesIn})
+               AND EXISTS (SELECT 1 FROM e2ee_project_leaves l
+                           WHERE l.project_id = p.id AND l.user_id = p.user_id
+                             AND l.device_id IN (${marks})))`
+    : '';
   return {
     sql: `NOT EXISTS (SELECT 1 FROM projects p
        WHERE p.user_id = ? AND (${projects})
@@ -1098,8 +1113,14 @@ function signedProjectsFence(
                         AND e.signer_device_id IN (${marks}))
            OR EXISTS (SELECT 1 FROM e2ee_key_archives a
                       WHERE a.project_id = p.id
-                        AND a.signer_device_id IN (${marks}))))`,
-    binds: [userId, ...deviceIds, ...deviceIds, ...deviceIds]
+                        AND a.signer_device_id IN (${marks}))${leaves}))`,
+    binds: [
+      userId,
+      ...deviceIds,
+      ...deviceIds,
+      ...deviceIds,
+      ...(leavesIn ? deviceIds : [])
+    ]
   };
 }
 
@@ -1112,15 +1133,20 @@ function signedProjectsFence(
  * migrated project holding records by a revoked signer without a cutoff,
  * which browsers refuse. So such a revocation waits until the staging is
  * cut over (its project is then format 2 and gets a cutoff) or abandoned.
- * A device that signed nothing staged is revoked as before.
+ * The same holds for a device that joined a staged group (an MLS leaf):
+ * it signs nothing, but holds the key the cutover exposes ciphertext
+ * under, and only a format-2 project gets the rotation that would drop it.
+ * A device that signed nothing staged and holds no staged leaf is revoked
+ * as before.
  *
  * Returns a fence for the device-list entry's insert. `signed` refuses a
- * record the device stages meanwhile; staged writes are fenced on the
- * device list in turn (`deviceListUnchanged`). `encrypted` holds while the
- * account owns as many format-2 projects as when checked, so a cutover
- * landing in between, which the cutoffs' own fence misses when there were
- * none to name, makes the append refuse and the browser sign cutoffs
- * again. Nothing to check before migration 0042.
+ * record the device stages, or a leaf it adds, meanwhile; staged writes and
+ * group joins are fenced on the device list in turn
+ * (`deviceListUnchanged`). `encrypted` holds while the account owns as
+ * many format-2 projects as when checked, so a cutover landing in between,
+ * which the cutoffs' own fence misses when there were none to name, makes
+ * the append refuse and the browser sign cutoffs again. Nothing to check
+ * before migration 0042.
  */
 async function stagedSignerFence(
   db: D1Database,
@@ -1143,7 +1169,8 @@ async function stagedSignerFence(
   const signed = signedProjectsFence(
     userId,
     STAGED_FOR_ENCRYPTION_SQL,
-    revokedDeviceIds
+    revokedDeviceIds,
+    STAGED_FOR_ENCRYPTION_SQL
   );
   await refuseIfSigned(db, signed, STAGED_SIGNER_MESSAGE);
   const countEncrypted = `(SELECT COUNT(*) FROM projects
@@ -1165,7 +1192,7 @@ async function stagedSignerFence(
 }
 
 const STAGED_SIGNER_MESSAGE =
-  'This device helped encrypt a project that is still being encrypted. Finish or cancel that encryption, then remove the device. Nothing was changed.';
+  'This device holds keys to a project that is still being encrypted. Finish or cancel that encryption, then remove the device. Nothing was changed.';
 
 async function refuseIfSigned(
   db: D1Database,

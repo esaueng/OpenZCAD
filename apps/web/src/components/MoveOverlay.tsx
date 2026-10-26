@@ -1,13 +1,15 @@
-import { CardHeader } from './CardHeader';
+import { Check, MoreHorizontal, X } from 'lucide-react';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
-import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 
 /*
- * The Move panel. Its own module, loaded only once a Move starts, so its
- * fields stay off the entry chunk (App.tsx lazy-loads it); the banner and the
- * closed-profile action stay in DirectModelingOverlays.
+ * The Move bar (U09): the gizmo is the command, so this is the in-place
+ * Cancel / Done pill every command finishes on, with the exact numbers, the
+ * name, the body and Copy behind its Options. Its own module, loaded only
+ * once a Move starts, so its fields stay off the entry chunk (App.tsx
+ * lazy-loads it); the banner and the closed-profile action stay in
+ * DirectModelingOverlays.
  */
 
 export interface MoveOverlayValues {
@@ -238,9 +240,10 @@ export function MoveOverlay({
       [group]: { ...values[group], [axis]: next }
     });
   };
+  const title = hideRotation ? 'Move' : 'Move / Rotate';
   return (
     <form
-      className="extrude-controller move-controller"
+      className="in-place-command move-command"
       aria-label="Move controls"
       onSubmit={(event) => {
         event.preventDefault();
@@ -249,97 +252,116 @@ export function MoveOverlay({
         }
       }}
     >
-      <CardHeader
-        title={hideRotation ? 'Move' : 'Move / Rotate'}
-        eyebrow={CARD_EYEBROWS.direct}
-        closeLabel="Cancel move"
-        onClose={onCancel}
-      />
-      {name !== undefined && onName ? (
-        <label className="field move-name">
-          <span>Name</span>
-          <input
-            value={name}
-            onChange={(event) => onName(event.target.value)}
-          />
-        </label>
-      ) : null}
-      {targets && targets.length > 1 && onTargetBody ? (
-        <label className="field move-target">
-          <span>Body</span>
-          <select
-            value={targetBodyId ?? ''}
-            onChange={(event) => onTargetBody(event.target.value)}
-          >
-            {targets.map((target) => (
-              <option key={target.bodyId} value={target.bodyId}>
-                {target.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <p>{bodyName}</p>
-      )}
-      <div className="move-grid" role="group" aria-label="Translation">
-        {MOVE_AXES.map((axis) => (
-          <label key={`t-${axis}`}>
-            <span className={`move-axis move-axis-${axis}`}>
-              d{axis.toUpperCase()}
-            </span>
-            <span className="extrude-distance-input">
-              <MoveNumberInput
-                step={snap?.move ?? 1}
-                value={fieldValue(values.translation[axis])}
-                label={`Move ${axis.toUpperCase()} in ${units}`}
-                onValue={(next) => setValue('translation', axis, next)}
+      <span className="in-place-command-title">{title}</span>
+      <span className="in-place-command-hint" title={bodyName}>
+        {copy ? 'A copy of ' : ''}
+        <span className="move-target-name">{bodyName}</span> · drag the gizmo,
+        or type exact values under Options
+      </span>
+      {/* The gizmo is the Move: its exact numbers, name, body and copy are
+          rare enough to sit behind Options, as every in-place command's. */}
+      <details className="in-place-command-options">
+        <summary aria-label={`${title} options`}>
+          <MoreHorizontal size={14} aria-hidden="true" />
+        </summary>
+        <div className="in-place-command-options-panel move-options">
+          {name !== undefined && onName ? (
+            <label className="field move-name">
+              <span>Name</span>
+              <input
+                value={name}
+                onChange={(event) => onName(event.target.value)}
               />
-              <b>{unitText}</b>
-            </span>
-          </label>
-        ))}
-      </div>
-      {/* Not rendered rather than `hidden`: `.move-grid { display: grid }`
+            </label>
+          ) : null}
+          {targets && targets.length > 1 && onTargetBody ? (
+            <label className="field move-target">
+              <span>Body</span>
+              <select
+                value={targetBodyId ?? ''}
+                onChange={(event) => onTargetBody(event.target.value)}
+              >
+                {targets.map((target) => (
+                  <option key={target.bodyId} value={target.bodyId}>
+                    {target.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <div className="move-grid" role="group" aria-label="Translation">
+            {MOVE_AXES.map((axis) => (
+              <label key={`t-${axis}`}>
+                <span className={`move-axis move-axis-${axis}`}>
+                  d{axis.toUpperCase()}
+                </span>
+                <span className="extrude-distance-input">
+                  <MoveNumberInput
+                    step={snap?.move ?? 1}
+                    value={fieldValue(values.translation[axis])}
+                    label={`Move ${axis.toUpperCase()} in ${units}`}
+                    onValue={(next) => setValue('translation', axis, next)}
+                  />
+                  <b>{unitText}</b>
+                </span>
+              </label>
+            ))}
+          </div>
+          {/* Not rendered rather than `hidden`: `.move-grid { display: grid }`
           beat the attribute, so a sketch move showed rotation fields whose
           values its commit silently dropped. */}
-      {hideRotation ? null : (
-        <div className="move-grid" role="group" aria-label="Rotation">
-          {MOVE_AXES.map((axis) => (
-            <label key={`r-${axis}`}>
-              <span className={`move-axis move-axis-${axis}`}>
-                r{axis.toUpperCase()}
-              </span>
-              <span className="extrude-distance-input">
-                <MoveNumberInput
-                  step={snap?.rotate ?? 1}
-                  value={fieldValue(values.rotationDeg[axis])}
-                  label={`Rotate ${axis.toUpperCase()} in degrees`}
-                  onValue={(next) => setValue('rotationDeg', axis, next)}
-                />
-                <b>°</b>
-              </span>
+          {hideRotation ? null : (
+            <div className="move-grid" role="group" aria-label="Rotation">
+              {MOVE_AXES.map((axis) => (
+                <label key={`r-${axis}`}>
+                  <span className={`move-axis move-axis-${axis}`}>
+                    r{axis.toUpperCase()}
+                  </span>
+                  <span className="extrude-distance-input">
+                    <MoveNumberInput
+                      step={snap?.rotate ?? 1}
+                      value={fieldValue(values.rotationDeg[axis])}
+                      label={`Rotate ${axis.toUpperCase()} in degrees`}
+                      onValue={(next) => setValue('rotationDeg', axis, next)}
+                    />
+                    <b>°</b>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          {copy !== undefined && onCopy ? (
+            <label className="field transform-copy">
+              <input
+                type="checkbox"
+                checked={copy}
+                onChange={(event) => onCopy(event.target.checked)}
+              />
+              <span>Copy (keep the original)</span>
             </label>
-          ))}
+          ) : null}
         </div>
-      )}
-      {copy !== undefined && onCopy ? (
-        <label className="field transform-copy">
-          <input
-            type="checkbox"
-            checked={copy}
-            onChange={(event) => onCopy(event.target.checked)}
-          />
-          <span>Copy (keep the original)</span>
-        </label>
-      ) : null}
-      <div className="form-actions">
-        <button type="submit" className="primary" disabled={!canApply}>
-          {copy ? 'Apply copy' : 'Apply move'}
-        </button>
-        <button type="button" className="secondary" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
+      </details>
+      <button
+        type="button"
+        className="in-place-command-cancel"
+        onClick={onCancel}
+        aria-keyshortcuts="Escape"
+      >
+        <X size={14} aria-hidden="true" />
+        Cancel
+        <kbd aria-hidden="true">Esc</kbd>
+      </button>
+      <button
+        type="submit"
+        className="in-place-command-done"
+        disabled={!canApply}
+        aria-keyshortcuts="Enter"
+      >
+        <Check size={14} aria-hidden="true" />
+        Done
+        <kbd aria-hidden="true">↵</kbd>
+      </button>
     </form>
   );
 }
