@@ -3,9 +3,12 @@ import {
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import {
+  noteProjectMigrating,
   registerProjectFlush,
+  useMigrationElsewhere,
   useMigrationLockedProjects
 } from './lib/migrationStatus';
+import { useProjectMigrationWatch } from './lib/projectMigrationWatch';
 import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
@@ -3864,17 +3867,13 @@ export function App() {
    * to check it is not a render.
    */
   const [projectOpenElsewhere, setProjectOpenElsewhere] = useState(false);
-  /**
-   * The open project whose cloud autosave was refused because it is being
-   * encrypted (PROJECT_MIGRATING), by this tab's run or another tab's or
-   * device's: read-only until another project opens or the page reloads.
-   */
-  const [migrationRefusedProjectId, setMigrationRefusedProjectId] = useState<
-    string | null
-  >(null);
-  // This tab's own runs: read-only while encrypting, or while a paused or
-  // stopped staging keeps the plaintext locked.
+  // Read-only while being encrypted: this tab's own runs (encrypting, or a
+  // paused or stopped staging that keeps the plaintext locked), and a
+  // migration this page learned of from another tab or device (its room
+  // closed for the move, a save was refused with PROJECT_MIGRATING, or the
+  // migration watch below asked), until the account says it was abandoned.
   const migrationLockedProjectIds = useMigrationLockedProjects();
+  const migrationElsewhereProjectIds = useMigrationElsewhere();
   const projectOpenElsewhereRef = useRef(projectOpenElsewhere);
   projectOpenElsewhereRef.current = projectOpenElsewhere;
   /**
@@ -4864,10 +4863,37 @@ export function App() {
   // read-only seat, since the account refuses its writes meanwhile and the
   // encrypted copy that replaces it would not carry them.
   const projectMigrating = Boolean(
-    doc &&
-    (migrationLockedProjectIds.has(doc.projectId) ||
-      migrationRefusedProjectId === doc.projectId)
+    doc && migrationLockedProjectIds.has(doc.projectId)
   );
+  // An open plaintext cloud project this account owns learns at once when
+  // another tab or device starts encrypting it, not only once a save is
+  // refused (none is, with cloud autosave off, and one is only after the
+  // debounce with it on): its room closing for the move, and its migration
+  // status asked on open, on focus and now and then
+  // (`projectMigrationWatch.ts`).
+  useProjectMigrationWatch(
+    doc &&
+      session &&
+      !shareSession &&
+      activeProjectIsCloud &&
+      !encryptedProjectOpen &&
+      doc.ownerUserId === session.userId
+      ? doc.projectId
+      : null,
+    session?.userId ?? null
+  );
+  // Meanwhile nothing this page queued is sent (the plaintext takes no
+  // writes), and it stays shown as not saved; it is sent once the account
+  // says the staging was abandoned.
+  const migratingElsewhere = Boolean(
+    doc && migrationElsewhereProjectIds.has(doc.projectId)
+  );
+  useEffect(() => {
+    const autosave = cloudProjectAutosaveRef.current;
+    if (!openProjectId || !autosave) return;
+    if (migratingElsewhere) autosave.haltForMigration(openProjectId);
+    else autosave.resumeAfterMigration(openProjectId);
+  }, [migratingElsewhere, openProjectId]);
   const migrationEditReason = projectMigrating
     ? 'This project is being end-to-end encrypted'
     : null;
@@ -5391,16 +5417,21 @@ export function App() {
           setStatus(
             'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
           );
+        } else if (
+          status.state === 'refused' &&
+          status.projectId &&
+          status.error instanceof ApiError &&
+          status.error.code === PROJECT_MIGRATING_CODE
+        ) {
+          // Being encrypted (ADR-024 Phase 7): the workspace locks editing
+          // until the account says the staging was abandoned, and keeps
+          // the lock's own notice.
+          noteProjectMigrating(status.projectId);
+          if (!projectOpenElsewhereRef.current) {
+            setStatus(PROJECT_MIGRATING_NOTICE, { sticky: true });
+          }
         } else if (status.state === 'refused') {
           setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
-          // Being encrypted (ADR-024 Phase 7): the workspace locks editing.
-          if (
-            status.projectId &&
-            status.error instanceof ApiError &&
-            status.error.code === PROJECT_MIGRATING_CODE
-          ) {
-            setMigrationRefusedProjectId(status.projectId);
-          }
           // A write refused as read-only: an encrypted member was demoted
           // (slice 5-4). Its page re-reads the role and locks editing.
           if (
@@ -5554,11 +5585,6 @@ export function App() {
    */
   useLayoutEffect(() => {
     const projectId = doc?.projectId ?? null;
-    // A refusal while encrypting is the open project's; another one opening
-    // asks the account afresh.
-    setMigrationRefusedProjectId((current) =>
-      current === projectId ? current : null
-    );
     if (!projectId || shareSession) {
       // A shared-link session never writes device storage, so it has no
       // claim to make — and must not contest one. The owner opening their

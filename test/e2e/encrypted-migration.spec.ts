@@ -153,12 +153,16 @@ async function seedPlaintextProject(server: E2eeServer): Promise<string> {
 /**
  * The page's account routes go to the Worker. `hold` may keep a request
  * from it (the page reloads while it waits); answering nothing is how a
- * closed tab looks to the account.
+ * closed tab looks to the account, and `'fail'` fails the request as a
+ * dropped connection does.
  */
 async function serveWorker(
   page: Page,
   server: E2eeServer,
-  hold: (method: string, path: string) => Promise<void> | void = () => undefined
+  hold: (
+    method: string,
+    path: string
+  ) => Promise<void | 'fail'> | void | 'fail' = () => undefined
 ) {
   await page.route(
     /\/api\/(projects|artifacts|uploads|e2ee|account)(\/|\?|$)/,
@@ -167,7 +171,10 @@ async function serveWorker(
       const url = new URL(request.url());
       const path = `${url.pathname}${url.search}`;
       try {
-        await hold(request.method(), url.pathname);
+        if ((await hold(request.method(), url.pathname)) === 'fail') {
+          await route.abort('failed');
+          return;
+        }
       } catch {
         // Never answered: the page reloads while it waits.
         return;
@@ -390,4 +397,121 @@ test('encrypts an existing project, resumes after a reload, and opens it', async
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await expect(page.getByText(/could not be fetched/)).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+/**
+ * ADR-024 Phase 7, slice 7-2 (#922 review): the project is open on another
+ * device when this one starts encrypting it. That workspace learns of it
+ * from the project's migration status (asked on open, on focus and every
+ * half minute), not from a refused save, and locks itself read-only; once
+ * the encryption is cancelled here, it unlocks.
+ */
+test('locks the project on another device while it is encrypted, and unlocks it after a cancel', async ({
+  page,
+  browser
+}) => {
+  test.setTimeout(180_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const server = createE2eeServer({ projectsEnabled: true });
+  const projectId = await seedPlaintextProject(server);
+
+  // The other device: its own browser, the same account.
+  const other = await browser.newContext();
+  try {
+    const elsewhere = await other.newPage();
+    elsewhere.on('pageerror', (error) => errors.push(error.message));
+    await stubApi(elsewhere);
+    await serveWorker(elsewhere, server);
+    await elsewhere.goto('/');
+    await elsewhere
+      .locator('.start-tile-project', { hasText: 'Secret migrated' })
+      .locator('.start-tile-open')
+      .click({ timeout: SYNC_BUDGET_MS });
+    await expectBodyCount(elsewhere, 1);
+    const build = elsewhere
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'Build' });
+    await expect(build).toBeEnabled({ timeout: SYNC_BUDGET_MS });
+
+    // This device starts encrypting it, and its first save state waits.
+    let releaseHeld!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseHeld = resolve;
+    });
+    let reached = false;
+    await stubApi(page);
+    await serveWorker(page, server, async (method, path) => {
+      if (
+        !reached &&
+        method === 'POST' &&
+        path === `/api/e2ee/projects/${projectId}/revisions`
+      ) {
+        reached = true;
+        await held;
+        return 'fail';
+      }
+    });
+    await page.goto('/');
+    await seedE2eeDevice(page, server);
+    const settings = await openEncryptionSettings(page);
+    await expect(settings.getByText('1 project not encrypted')).toBeVisible({
+      timeout: SYNC_BUDGET_MS
+    });
+    await settings.getByRole('button', { name: 'Encrypt projects' }).click();
+    await expect.poll(() => reached, { timeout: SYNC_BUDGET_MS }).toBe(true);
+
+    // The other device's workspace locks itself as soon as it asks (here
+    // on regaining focus), with no save refused first.
+    await expect
+      .poll(
+        async () => {
+          await elsewhere.evaluate(() =>
+            window.dispatchEvent(new Event('focus'))
+          );
+          return build.isDisabled();
+        },
+        { timeout: SYNC_BUDGET_MS, intervals: [6_000] }
+      )
+      .toBe(true);
+    await elsewhere.keyboard.press('b');
+    await expect(elsewhere.getByRole('contentinfo')).toContainText(
+      'Cannot use Box: This project is being end-to-end encrypted.'
+    );
+
+    // The save state's request fails here; the stopped encryption is
+    // cancelled, which abandons the staging and unlocks the plaintext.
+    releaseHeld();
+    const row = settings.getByRole('listitem', { name: 'Secret migrated' });
+    await row
+      .getByRole('button', { name: 'Cancel' })
+      .click({ timeout: SYNC_BUDGET_MS });
+    await expect(row.getByText('Not encrypted')).toBeVisible({
+      timeout: SYNC_BUDGET_MS
+    });
+    expect(
+      server.db
+        .prepare(
+          'SELECT state FROM e2ee_project_migrations WHERE project_id = ?'
+        )
+        .get(projectId)
+    ).toEqual({ state: 'abandoned' });
+    await expect
+      .poll(
+        async () => {
+          await elsewhere.evaluate(() =>
+            window.dispatchEvent(new Event('focus'))
+          );
+          return build.isEnabled();
+        },
+        { timeout: SYNC_BUDGET_MS, intervals: [6_000] }
+      )
+      .toBe(true);
+    await expect(elsewhere.getByRole('contentinfo')).toContainText(
+      'Editing is unlocked: this project is no longer being encrypted.'
+    );
+    expect(errors).toEqual([]);
+  } finally {
+    await other.close();
+  }
 });
