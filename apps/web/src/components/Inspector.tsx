@@ -1622,7 +1622,7 @@ export function Inspector(props: InspectorProps) {
               units={units}
               document={props.massPropertiesDocument}
               worker={props.massPropertiesWorker}
-              lastApplied={Boolean(form)}
+              lastApplied={Boolean(form) || editingInPlace}
             />
           </>
         )}
@@ -1635,7 +1635,7 @@ export function Inspector(props: InspectorProps) {
               units={units}
               document={props.massPropertiesDocument}
               worker={props.massPropertiesWorker}
-              lastApplied={Boolean(form)}
+              lastApplied={Boolean(form) || editingInPlace}
             />
           </>
         )}
@@ -1703,6 +1703,7 @@ export function Inspector(props: InspectorProps) {
             units={units}
             document={props.massPropertiesDocument}
             worker={props.massPropertiesWorker}
+            lastApplied={editingInPlace}
           />
         )}
         <div className="object-definition-row">

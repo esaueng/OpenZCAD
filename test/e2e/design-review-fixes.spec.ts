@@ -113,6 +113,9 @@ test('precise hole creation, honest properties, recoverable errors and compact e
   });
   await expect(edit).toBeVisible();
   await enterCommandValue(page, 'diameter', '100');
+  await expect(inspector(page)).toContainText('Measurements (last applied)');
+  await expect(inspector(page)).toContainText('23214.6');
+  await expect(inspector(page)).toContainText('last applied model');
   await expect(edit.getByRole('status')).toContainText(
     'This cut would remove the entire target body'
   );

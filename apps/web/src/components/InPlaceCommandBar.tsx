@@ -97,13 +97,21 @@ export function InPlaceCommandBar({
       aria-label={`${title} command`}
     >
       <span className="in-place-command-title">{title}</span>
-      <span className="in-place-command-hint" role="status" aria-live="polite">
+      <span
+        className="in-place-command-hint"
+        role="status"
+        aria-live="polite"
+        title={refusalSummary ?? refusal ?? undefined}
+      >
         {refusalSummary ?? refusal ?? hint}
       </span>
       {refusalSummary && (
         <details className="in-place-command-options">
           <summary>Technical details</summary>
-          <div className="in-place-command-options-panel">{refusal}</div>
+          <div className="in-place-command-options-panel">
+            <p>{refusalSummary}</p>
+            <p>{refusal}</p>
+          </div>
         </details>
       )}
       {onPreciseValues && (
