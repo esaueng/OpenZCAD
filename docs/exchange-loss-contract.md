@@ -13,6 +13,11 @@ No neutral format carries feature history. A reimported file is always
 geometry: features, sketches, parameters and constraints stay in the
 OpenZCAD project.
 
+STEP and mesh exports include only visible result bodies. Hide, Isolate and
+on/off parameters all affect export scope; consumed source bodies stay out.
+A selected visible body exports alone. If every body is hidden, export is
+disabled. Show a body in the viewport to include it in the file.
+
 ## Units
 
 - **Export unit:** Settings → General → _Export units_. The mesh export

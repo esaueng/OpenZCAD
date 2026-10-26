@@ -25,16 +25,8 @@ const model = [
 ];
 
 describe('exportScope (ZC-199)', () => {
-  it('writes every exportable body, hidden ones included, and says so', () => {
-    const scope = exportScope(model, null, true);
-    expect(scope.bodyIds).toEqual(['a', 'b', 'c']);
-    expect(scope.hiddenIncluded).toBe(1);
-    expect(scope.withheldIds).toEqual(['e']);
-    expect(exportScopeLabel(scope)).toBe('all bodies (3, 1 hidden)');
-  });
-
-  it('leaves hidden bodies out when asked, and counts them', () => {
-    const scope = exportScope(model, null, false);
+  it('exports only visible exportable bodies and counts hidden omissions', () => {
+    const scope = exportScope(model, null);
     expect(scope.bodyIds).toEqual(['a', 'c']);
     expect(scope.hiddenExcluded).toBe(1);
     expect(scope.withheldIds).toEqual([]);
@@ -43,35 +35,54 @@ describe('exportScope (ZC-199)', () => {
     );
   });
 
-  it('exports a selected body alone, hidden or not, unless its step failed', () => {
-    expect(exportScope(model, 'b', false)).toMatchObject({
-      bodyIds: ['b'],
+  it('exports a visible selected body alone unless its step failed', () => {
+    expect(exportScope(model, 'c')).toMatchObject({
+      bodyIds: ['c'],
       selection: true
     });
-    expect(exportScope(model, 'e', true)).toMatchObject({
+    expect(exportScope([body('a', { withheld: true })], 'a')).toMatchObject({
       bodyIds: [],
-      withheldIds: ['e']
+      withheldIds: ['a']
     });
     // A selection that cannot export falls back to the whole model.
-    expect(exportScope(model, 'd', true).selection).toBe(false);
+    expect(exportScope(model, 'd').selection).toBe(false);
+  });
+
+  it('ignores hidden selections and exports the visible bodies instead', () => {
+    for (const selected of ['b', 'e']) {
+      expect(exportScope(model, selected)).toMatchObject({
+        bodyIds: ['a', 'c'],
+        selection: false
+      });
+    }
+    expect(exportScope([body('a', { hidden: true })], 'a').bodyIds).toEqual([]);
+  });
+
+  it('tracks hide, isolate and show changes without retaining old scope', () => {
+    const bodies = [body('a'), body('b')];
+    expect(exportScope(bodies, null).bodyIds).toEqual(['a', 'b']);
+    bodies[0]!.hidden = true;
+    expect(exportScope(bodies, null).bodyIds).toEqual(['b']);
+    bodies[1]!.hidden = true;
+    expect(exportScope(bodies, null).bodyIds).toEqual([]);
+    bodies[0]!.hidden = false;
+    expect(exportScope(bodies, null).bodyIds).toEqual(['a']);
   });
 
   it('never counts a withheld hidden body as left out', () => {
-    // 'e' is hidden and withheld: including hidden bodies cannot add it.
-    const scope = exportScope(model, null, false);
+    const scope = exportScope(model, null);
     expect(scope.hiddenExcluded).toBe(1);
     const onlyWithheld = exportScope(
       [body('a'), body('e', { hidden: true, withheld: true })],
-      null,
-      false
+      null
     );
     expect(onlyWithheld.hiddenExcluded).toBe(0);
     expect(exportScopeLabel(onlyWithheld)).toBe('all bodies (1)');
   });
 
   it('labels a model with nothing hidden plainly', () => {
-    expect(
-      exportScopeLabel(exportScope([body('a'), body('b')], null, false))
-    ).toBe('all bodies (2)');
+    expect(exportScopeLabel(exportScope([body('a'), body('b')], null))).toBe(
+      'all bodies (2)'
+    );
   });
 });
