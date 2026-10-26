@@ -71,6 +71,8 @@ import {
   PROJECT_FENCE,
   RouteError,
   bytesField,
+  deviceListMoved,
+  deviceListUnchanged,
   idField,
   invalid,
   json,
@@ -1116,6 +1118,19 @@ export async function prepareAddCommit(
   };
   const invitation = await check();
   const invitee = invitation.accepted_by_user_id!;
+  // Slice 7-4: a staged re-add's leaves are fenced on the member's device
+  // list. Nothing but the owner's lease holder commits to a staged group,
+  // so a member's device removed after its leaf landed there is refused
+  // until the cutover or an abandon (`e2ee.ts`'s staged-leaf fence); one
+  // removed before must not land a leaf either, so each added device must
+  // be certified in the member's newest list, which must still be theirs
+  // when the batch runs.
+  const inviteeList = input.staged
+    ? await certifiedInviteeList(db, invitee, stated)
+    : null;
+  const inviteeFence = inviteeList
+    ? deviceListUnchanged(invitee, inviteeList)
+    : null;
   const nowMs = Date.now();
   const pairs = stated
     .map(() => '(device_id = ? AND key_package_hash = ?)')
@@ -1132,7 +1147,12 @@ export async function prepareAddCommit(
     AND (SELECT COUNT(*) ${claimedRows}) = ?
     AND (SELECT COUNT(*) ${claimedRows} AND (${pairs})) = ?
     AND (EXISTS (SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?)
-      OR (SELECT COUNT(*) FROM project_members WHERE project_id = ?) < ?)`;
+      OR (SELECT COUNT(*) FROM project_members WHERE project_id = ?) < ?)${
+        inviteeFence
+          ? `
+    AND ${inviteeFence.sql}`
+          : ''
+      }`;
   const gateBinds = [
     projectId,
     userId,
@@ -1148,7 +1168,8 @@ export async function prepareAddCommit(
     projectId,
     invitee,
     projectId,
-    PROJECT_MEMBER_CAP
+    PROJECT_MEMBER_CAP,
+    ...(inviteeFence?.binds ?? [])
   ];
   return {
     invitee: { userId: invitee, role: invitation.role },
@@ -1252,6 +1273,9 @@ export async function prepareAddCommit(
     ],
     explain: async () => {
       await check();
+      if (inviteeList && (await deviceListMoved(db, invitee, inviteeList))) {
+        refuseInviteeDevicesMoved();
+      }
       refuse(
         409,
         'E2EE_ADD_MISMATCH',
@@ -1259,6 +1283,54 @@ export async function prepareAddCommit(
       );
     }
   };
+}
+
+/**
+ * Slice 7-4: the member's newest device-list head, in which every device a
+ * staged re-add adds is certified. Refused like any stale claim
+ * (`E2EE_ADD_MISMATCH`), so the owner's browser drops it.
+ */
+async function certifiedInviteeList(
+  db: D1Database,
+  invitee: string,
+  stated: readonly { readonly deviceId: string }[]
+): Promise<{ generation: number; headSequence: number }> {
+  let head: { generation: number; headSequence: number } | null = null;
+  for (const entry of stated) {
+    let current: { generation: number; headSequence: number };
+    try {
+      current = await requireCertifiedDevice(db, invitee, entry.deviceId);
+    } catch (error) {
+      if (
+        error instanceof RouteError &&
+        error.code === 'E2EE_DEVICE_NOT_CERTIFIED'
+      ) {
+        refuseInviteeDevicesMoved();
+      }
+      throw error;
+    }
+    if (
+      head &&
+      (head.generation !== current.generation ||
+        head.headSequence !== current.headSequence)
+    ) {
+      refuseInviteeDevicesMoved();
+    }
+    head = {
+      generation: current.generation,
+      headSequence: current.headSequence
+    };
+  }
+  if (!head) invalid('An Add carries at least one KeyPackage');
+  return head;
+}
+
+function refuseInviteeDevicesMoved(): never {
+  refuse(
+    409,
+    'E2EE_ADD_MISMATCH',
+    'A device this Commit adds is no longer in the member’s device list. Nothing was changed.'
+  );
 }
 
 // --- Dispatch ----------------------------------------------------------------------

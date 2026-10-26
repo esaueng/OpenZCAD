@@ -688,6 +688,78 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     await ownerSide.migrate(projectId);
     expect(formatOf(srv, projectId)).toBe(2);
   });
+
+  it('lands a re-add only while the member’s device list is the one it was checked against (#918)', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    // Each member's device list moves (a new head, as a removal on another
+    // of their devices writes) after the Add was checked and before its
+    // batch runs.
+    let move = false;
+    const moved = new Set<string>();
+    const record = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (move && sql.some((s) => s.includes('INSERT INTO e2ee_mls_commits'))) {
+        move = false;
+        for (const userId of [OTHER, THIRD]) {
+          moved.add(userId);
+          srv.db
+            .prepare(
+              `INSERT INTO e2ee_device_list_entries
+                 (user_id, generation, sequence, entry, signature, entry_hash,
+                  created_at)
+               SELECT user_id, generation, sequence + 1, entry, signature,
+                      entry_hash, created_at
+               FROM e2ee_device_list_entries WHERE user_id = ?
+               ORDER BY generation DESC, sequence DESC LIMIT 1`
+            )
+            .run(userId);
+        }
+      }
+      return record(...sql);
+    };
+    const ownerSide = ownerEngine(w, {
+      beforeStep: (step) => {
+        if (step === 'readd' && moved.size === 0) move = true;
+      }
+    });
+    await failure(ownerSide.migrate(projectId));
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    const refused = await failure(ownerSide.migrate(projectId));
+    expect(refused.code).toBe('E2EE_ADD_MISMATCH');
+    expect(moved.size).toBe(2);
+    // Nothing landed: no member leaf in the staged group, no Welcome, and
+    // the project is still plaintext.
+    for (const table of ['e2ee_welcomes', 'e2ee_project_leaves']) {
+      expect(
+        rows(
+          srv,
+          `SELECT * FROM ${table} WHERE project_id = ? AND user_id <> ?`,
+          projectId,
+          OWNER
+        ),
+        table
+      ).toEqual([]);
+    }
+    expect(formatOf(srv, projectId)).toBe(1);
+
+    // Once the members publish again against their current lists, the
+    // resumed staging re-adds them and cuts over.
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.migrate(projectId);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
 });
 
 // --- The room after the cutover (slice 7-4 with slice 5-6) ----------------------------

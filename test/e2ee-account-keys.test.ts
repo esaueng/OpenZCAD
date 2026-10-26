@@ -807,6 +807,88 @@ describe('removing a device', () => {
     expect(entries()).toBe(before + 2);
   });
 
+  it('waits while the device was re-added to another owner’s project staged for encryption (slice 7-4)', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const phoneId = phone.account.device!.deviceId;
+    // Bob's plaintext project, shared with USER, staged for encryption by
+    // Bob's laptop; Bob re-added USER's phone there (slice 7-4's Add).
+    const now = '2026-10-25T00:00:00.000Z';
+    srv.db
+      .prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
+      .run('user_bob', 'bob@example.com', now);
+    srv.db
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json,
+           document_version, updated_at, storage_format)
+         VALUES ('proj_bobs', 'user_bob', '', '{}', 1, ?, 1)`
+      )
+      .run(now);
+    srv.db
+      .prepare(
+        `INSERT INTO project_members
+           (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+         VALUES ('proj_bobs', ?, 'editor', 'user_bob', 1, 1)`
+      )
+      .run(USER);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_migrations (project_id, direction, state,
+           owner_user_id, device_id, lease_id, lease_expires_at,
+           source_version, started_at, updated_at)
+         VALUES ('proj_bobs', 'encrypt', 'staging', 'user_bob', 'bob_laptop',
+                 ?, ?, 1, ?, ?)`
+      )
+      .run('l'.repeat(43), Date.now() + 60_000, now, now);
+    const readd = () =>
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_leaves (project_id, user_id, device_id,
+             leaf_key, certification, created_at)
+           VALUES ('proj_bobs', ?, ?, ?, ?, ?)`
+        )
+        .run(
+          USER,
+          phoneId,
+          phoneId.padEnd(87, 'k').slice(0, 87),
+          'c'.repeat(98),
+          now
+        );
+    const entries = () =>
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries');
+    const remove = async () =>
+      removeDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        phoneId,
+        recovery.secret
+      );
+    const before = entries();
+    // Re-added between the check and the append's batch: its fence refuses.
+    srv.beforeWrite = async (sql) => {
+      if (!sql.includes('INSERT INTO e2ee_device_list_entries')) return;
+      srv.beforeWrite = undefined;
+      readd();
+    };
+    expect((await refusal(remove())).code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
+    expect(srv.beforeWrite).toBeUndefined();
+    expect(entries()).toBe(before);
+    // Re-added before the request: the check refuses it.
+    expect((await refusal(remove())).code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
+    expect(entries()).toBe(before);
+    // Once Bob abandons, the staged group never becomes the project's.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL
+         WHERE project_id = 'proj_bobs'`
+      )
+      .run();
+    ready(await remove());
+    expect(entries()).toBe(before + 1);
+  });
+
   it('signs cutoffs again when a staging cuts over during the removal (#914 review)', async () => {
     const srv = server();
     const { recovery, laptop } = await setUp(srv);
@@ -1121,6 +1203,70 @@ describe('replacing the recovery key', () => {
         `UPDATE e2ee_project_migrations
          SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL
          WHERE project_id = 'proj_staged'`
+      )
+      .run();
+    ready(await replace());
+    expect(generation()).toMatchObject({ generation: 2 });
+  });
+
+  it('keeps a device re-added to another owner’s staged project out of a replacement (slice 7-4)', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const phoneId = phone.account.device!.deviceId;
+    const now = '2026-10-25T00:00:00.000Z';
+    srv.db
+      .prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
+      .run('user_bob', 'bob@example.com', now);
+    srv.db
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json,
+           document_version, updated_at, storage_format)
+         VALUES ('proj_bobs', 'user_bob', '', '{}', 1, ?, 1)`
+      )
+      .run(now);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_migrations (project_id, direction, state,
+           owner_user_id, device_id, lease_id, lease_expires_at,
+           source_version, started_at, updated_at)
+         VALUES ('proj_bobs', 'encrypt', 'staging', 'user_bob', 'bob_laptop',
+                 ?, ?, 1, ?, ?)`
+      )
+      .run('l'.repeat(43), Date.now() + 60_000, now, now);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_leaves (project_id, user_id, device_id,
+           leaf_key, certification, created_at)
+         VALUES ('proj_bobs', ?, ?, ?, ?, ?)`
+      )
+      .run(
+        USER,
+        phoneId,
+        phoneId.padEnd(87, 'k').slice(0, 87),
+        'c'.repeat(98),
+        now
+      );
+    const replace = async () =>
+      replaceRecoveryKey(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        (await generateRecoveryKey()).secret,
+        recovery.secret
+      );
+    const generation = () =>
+      srv.db
+        .prepare(
+          'SELECT MAX(generation) AS generation FROM e2ee_identities WHERE user_id = ?'
+        )
+        .get(USER);
+    expect((await refusal(replace())).code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
+    expect(generation()).toMatchObject({ generation: 1 });
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL
+         WHERE project_id = 'proj_bobs'`
       )
       .run();
     ready(await replace());
