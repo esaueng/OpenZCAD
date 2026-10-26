@@ -1,12 +1,14 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import type * as DesktopBridge from '../desktopBridge';
+import type * as AccountKeys from './accountKeys';
 
 const fakes = vi.hoisted(() => ({ fetch: vi.fn(), load: vi.fn() }));
 vi.mock('../desktopBridge', async (original) => ({
-  ...(await original<typeof import('../desktopBridge')>()),
+  ...(await original<typeof DesktopBridge>()),
   desktopFetch: fakes.fetch
 }));
 vi.mock('./accountKeys', async (original) => ({
-  ...(await original<typeof import('./accountKeys')>()),
+  ...(await original<typeof AccountKeys>()),
   loadEncryption: fakes.load
 }));
 
