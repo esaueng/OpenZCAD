@@ -152,9 +152,16 @@ function newServer(db: DatabaseSync = migratedDatabase()): Server {
       const body = bucket.objects.get(key);
       return body ? { size: body.byteLength } : null;
     }),
-    delete: vi.fn(async (key: string) => {
-      bucket.objects.delete(key);
-    })
+    delete: vi.fn(async (key: string | string[]) => {
+      for (const item of typeof key === 'string' ? [key] : key)
+        bucket.objects.delete(item);
+    }),
+    list: vi.fn(async ({ prefix = '' }: { prefix?: string } = {}) => ({
+      objects: [...bucket.objects.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => ({ key })),
+      truncated: false
+    }))
   };
   const env: Record<string, unknown> = {
     ENVIRONMENT: 'development',

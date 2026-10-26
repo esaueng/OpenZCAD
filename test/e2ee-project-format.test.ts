@@ -54,7 +54,8 @@ function objectBucket() {
       throw new Error('R2 must not be read for an encrypted project');
     }),
     head: vi.fn(async () => null),
-    delete: vi.fn(async () => undefined)
+    delete: vi.fn(async () => undefined),
+    list: vi.fn(async () => ({ objects: [], truncated: false }))
   };
 }
 
