@@ -1154,6 +1154,9 @@ Estimates are judgment, not measurement.
 
 Total: 18–23 PRs.
 
+Phase 8's outside review starts from the
+[review packet](../reviews/adr-024-e2ee-review-packet.md).
+
 ## Consequences
 
 - Lost keys mean lost cloud data. Support cannot recover or inspect a project;
