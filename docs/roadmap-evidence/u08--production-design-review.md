@@ -8,4 +8,6 @@ History details suspend panels only while a primitive form or the selected featu
 
 Sketch plane selection and the entered sketch share one suspension identity. A browser regression reopens History at the plane prompt, keeps it visible after choosing the plane, then verifies a new sketch session suspends it again.
 
+Delete accepts a selected feature from the current complete validated commit while the background worker catches up. Canonical document-version checks still apply, and other selection edits retain worker-readiness checks. The timing-controlled browser regression holds worker analysis after Fillet commit: deletion fails before the fix, then removes the selected Fillet and completes its rebuild after the gate is released. Existing staged-geometry refusal checks remain covered.
+
 Production design review (PR #890): feature forms suspend model panels and the extra-tools fold while preserving the saved layout and camera. Explicit panel requests override suspension for their editing session; direct switches between sketch or feature sessions reset the release. Header controls own their full 24px hit rectangles in both themes (`usePanelSuspension.test.tsx`, `design-review-fixes.spec.ts`, `panel-dock.spec.ts`).

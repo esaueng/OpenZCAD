@@ -7054,10 +7054,14 @@ export function App() {
       modelingEditFeatureId: modelingEditFeature?.id ?? null
     }
   );
-  function validateSelectionEdit(): boolean {
+  function validateSelectionEdit(
+    { acceptCompleteCommit = false }: { acceptCompleteCommit?: boolean } = {}
+  ): boolean {
     if (
       managerRef.current?.document.version !== doc?.version ||
-      !requireExactGeometryReady()
+      !(acceptCompleteCommit
+        ? requireDisplayedGeometryComplete()
+        : requireExactGeometryReady())
     ) {
       setStatus(
         'The model changed. Select the feature again before editing it.'
@@ -26022,7 +26026,9 @@ export function App() {
               interaction.phase !== 'armed' &&
               interaction.phase !== 'failed'
             ) &&
-            validateSelectionEdit()
+            // Deleting a document feature can use a complete validated commit
+            // while its worker catches up, just as picking its face can.
+            validateSelectionEdit({ acceptCompleteCommit: true })
           ) {
             event.preventDefault();
             handleDeleteFeature(
