@@ -54,7 +54,10 @@
  *   staged plaintext save state under its id, the staged head is newer
  *   than the encrypted head, which did not move; it flips `storage_format`
  *   to 1 at the staged head, and moves the account's artifact usage from
- *   the encrypted blobs to the staged files.
+ *   the encrypted blobs to the staged files. It refuses (413, the quota
+ *   codes) when the owner's usage after it would exceed their artifact or
+ *   project storage limit, in the same statement that ends the staging's
+ *   quota exemption.
  * - The purge clears the room's encrypted ledger, then drops the groups,
  *   versions, envelopes, blobs and their R2 objects, wraps and archives a
  *   bounded step at a time, as an abandoned encrypt staging's cleanup does.
@@ -1943,6 +1946,114 @@ async function stagedPlaintextCounts(
   };
 }
 
+/** A SQL condition with its binds. */
+interface Condition {
+  readonly sql: string;
+  readonly binds: readonly unknown[];
+}
+
+/**
+ * The owner's limits as a decrypt cutover leaves them. Staged files and
+ * documents count toward nothing while staging (migration 0043), so a lease
+ * holder could stage more than the encrypted project held; the cutover,
+ * which ends that exemption, must not publish it over quota. Each condition
+ * holds when the cutover would go over a limit; the cutover's own statement
+ * carries their negation, so nothing between the check and the batch can
+ * move them, and the refusal names which one held.
+ *
+ * - Files: the account's artifact usage after the cutover (its finalized
+ *   and reserved bytes, plus the staged files, less the encrypted blobs it
+ *   stops counting, as the cutover's usage update computes it) over the
+ *   limit, when the cutover raises it (migration 0022's rule: what does
+ *   not grow the usage passes).
+ * - Documents: the owner's project storage once this project leaves the
+ *   staged view (every document object and storage asset of their projects
+ *   not staged for decryption, this one's included) over the limit, as
+ *   migration 0043's insert triggers sum it.
+ *
+ * Defaults as the triggers': 2 GiB for an account without its own limit.
+ */
+function decryptCutoverQuota(
+  projectId: string,
+  userId: string
+): { files: Condition; storage: Condition } {
+  const stagedFiles = `(SELECT COALESCE(SUM(qa.bytes), 0) FROM artifacts qa
+    WHERE qa.project_id = ?)`;
+  const blobs = `(SELECT COALESCE(SUM(qb.ciphertext_bytes), 0)
+    FROM e2ee_content_blobs qb WHERE qb.project_id = ?)`;
+  const counted = (table: string, alias: string) =>
+    `COALESCE((SELECT SUM(${alias}.stored_bytes) FROM ${table} ${alias}
+      JOIN projects ${alias}p ON ${alias}p.id = ${alias}.project_id
+      WHERE ${alias}p.user_id = ?
+        AND (${alias}p.id = ? OR ${alias}p.id NOT IN (
+          SELECT project_id FROM e2ee_decrypt_staged_projects))), 0)`;
+  return {
+    files: {
+      sql: `(${stagedFiles} > ${blobs}
+        AND COALESCE((SELECT qu.finalized_bytes + qu.reserved_bytes
+                      FROM artifact_account_usage qu
+                      WHERE qu.owner_user_id = ?), 0)
+            + ${stagedFiles} - ${blobs}
+          > COALESCE((SELECT artifact_limit_bytes FROM users WHERE id = ?),
+                     2147483648))`,
+      binds: [projectId, projectId, userId, projectId, projectId, userId]
+    },
+    storage: {
+      sql: `(${counted('project_document_objects', 'qo')}
+        + ${counted('project_storage_assets', 'qs')}
+        > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = ?),
+                   2147483648))`,
+      binds: [userId, projectId, userId, projectId, userId]
+    }
+  };
+}
+
+/**
+ * Refuses with the account's quota code when a decrypt cutover would go
+ * over the owner's limits (`decryptCutoverQuota`), as an ordinary upload
+ * or save over them is refused: 413 ARTIFACT_QUOTA_EXCEEDED or
+ * PROJECT_STORAGE_QUOTA with the limit. Nothing is changed: the project
+ * stays encrypted, and its staging stays in place to be abandoned.
+ */
+async function refuseOverQuota(
+  db: D1Database,
+  projectId: string,
+  userId: string
+): Promise<void> {
+  const quota = decryptCutoverQuota(projectId, userId);
+  const row = await db
+    .prepare(
+      `SELECT ${quota.files.sql} AS files, ${quota.storage.sql} AS storage,
+              (SELECT artifact_limit_bytes FROM users WHERE id = ?)
+                AS artifact_limit,
+              (SELECT project_storage_limit_bytes FROM users WHERE id = ?)
+                AS storage_limit`
+    )
+    .bind(...quota.files.binds, ...quota.storage.binds, userId, userId)
+    .first<{
+      files: number;
+      storage: number;
+      artifact_limit: number | null;
+      storage_limit: number | null;
+    }>();
+  if (row?.files) {
+    refuse(
+      413,
+      'ARTIFACT_QUOTA_EXCEEDED',
+      'Your account does not have room for this project’s files as plaintext. Nothing was changed; the project stays encrypted.',
+      { limitBytes: row.artifact_limit ?? 2147483648 }
+    );
+  }
+  if (row?.storage) {
+    refuse(
+      413,
+      'PROJECT_STORAGE_QUOTA',
+      'Your account does not have project storage left for this project as plaintext. Nothing was changed; the project stays encrypted.',
+      { limitBytes: row.storage_limit ?? 2147483648 }
+    );
+  }
+}
+
 async function cutoverDecrypt(
   ctx: Context,
   projectId: string,
@@ -2024,6 +2135,8 @@ async function cutoverDecrypt(
       }
     );
   }
+  await refuseOverQuota(ctx.db, projectId, ctx.userId);
+  const quota = decryptCutoverQuota(projectId, ctx.userId);
   const counts = await stagedPlaintextCounts(ctx.db, projectId);
   const nowIso = new Date(now).toISOString();
   const cut = {
@@ -2055,7 +2168,9 @@ async function cutoverDecrypt(
            AND EXISTS (SELECT 1 FROM project_document_objects
                        WHERE id = ? AND project_id = ? AND state = 'committed')
            AND NOT EXISTS (${UNCOVERED_DECRYPT_SQL})
-           AND ${device.sql}`
+           AND ${device.sql}
+           AND NOT ${quota.files.sql}
+           AND NOT ${quota.storage.sql}`
       )
       .bind(
         counts.revisions,
@@ -2079,7 +2194,9 @@ async function cutoverDecrypt(
         head.objectId,
         projectId,
         projectId,
-        ...device.binds
+        ...device.binds,
+        ...quota.files.binds,
+        ...quota.storage.binds
       ),
     // The format flips with the staged head; the encrypted rows go in the
     // purge.
@@ -2144,6 +2261,8 @@ async function cutoverDecrypt(
     if (await deviceListMoved(ctx.db, ctx.userId, device.key)) {
       refuseDeviceListMoved();
     }
+    // A file or document landed meanwhile that takes the owner over a limit.
+    await refuseOverQuota(ctx.db, projectId, ctx.userId);
     refuse(
       409,
       E2EE_MIGRATION_CODES.stale,

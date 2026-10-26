@@ -3388,6 +3388,41 @@ export class D1R2PersistenceService implements PersistenceService {
     return { bytes: row.accounted_total, count: row.count };
   }
 
+  /**
+   * Slice 7-3: a decrypt staging's files count toward no quota until the
+   * cutover (migration 0043), which refuses one that would leave the owner
+   * over their artifact limit. This refuses a further staged file early,
+   * once the files staged so far would already do so at the cutover: the
+   * account's usage, plus the staged files, less the project's encrypted
+   * blobs the cutover stops counting. Advisory only; the cutover's check is
+   * the one that holds.
+   */
+  private async assertDecryptStagingFileCapacity(
+    ownerUserId: UserId,
+    projectId: string
+  ): Promise<void> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT
+           COALESCE((SELECT finalized_bytes + reserved_bytes
+                     FROM artifact_account_usage
+                     WHERE owner_user_id = ?), 0) AS used,
+           (SELECT COALESCE(SUM(bytes), 0) FROM artifacts
+            WHERE project_id = ?) AS staged,
+           (SELECT COALESCE(SUM(ciphertext_bytes), 0) FROM e2ee_content_blobs
+            WHERE project_id = ?) AS blobs`
+      )
+      .bind(ownerUserId, projectId, projectId)
+      .first<{ used: number; staged: number; blobs: number }>();
+    const used = row?.used ?? 0;
+    const staged = row?.staged ?? 0;
+    const blobs = row?.blobs ?? 0;
+    const { artifactLimitBytes } = await this.ownerEntitlements(ownerUserId);
+    if (staged > blobs && used + staged - blobs >= artifactLimitBytes) {
+      throw new ArtifactQuotaError(artifactLimitBytes);
+    }
+  }
+
   private async ownerEntitlements(ownerUserId: UserId) {
     const owner = await this.env
       .DB!.prepare('SELECT email FROM users WHERE id = ?')
@@ -3962,6 +3997,12 @@ export class D1R2PersistenceService implements PersistenceService {
     // Expired cross-account uploads are reclaimed by the scheduled sweeper.
     await this.purgeExpiredUploadSessionsForOwner(userId);
     await this.refreshAccountQuota(access.ownerUserId);
+    if (staging) {
+      await this.assertDecryptStagingFileCapacity(
+        access.ownerUserId,
+        request.projectId
+      );
+    }
     const session = createUploadSessionRecord(request);
     const notMigrating = staging
       ? ''
