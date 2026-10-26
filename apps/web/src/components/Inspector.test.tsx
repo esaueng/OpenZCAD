@@ -330,6 +330,9 @@ describe('Inspector feature provenance', () => {
     });
     expect(inspector).not.toHaveClass('object-readout');
     expect(within(inspector).getByLabelText('Move X in mm')).toHaveValue('2');
+    expect(
+      within(inspector).getByText('Measurements (last applied)')
+    ).toBeVisible();
     fireEvent.click(within(inspector).getByLabelText('More actions'));
     expect(
       within(inspector).getByRole('button', { name: /Delete feature/ })
@@ -415,6 +418,7 @@ describe('Inspector feature provenance', () => {
     const inspector = screen.getByRole('region', {
       name: 'Feature inspector'
     });
+    expect(within(inspector).getByText('Measurements')).toBeVisible();
     expect(
       within(inspector).queryByLabelText('Radius')
     ).not.toBeInTheDocument();
@@ -425,6 +429,7 @@ describe('Inspector feature provenance', () => {
     expect(onEditModelingFeature).toHaveBeenCalledWith(feature);
     // While its in-place command edits it, there is nothing to re-arm.
     rerender(<Inspector {...props} inPlaceEditFeatureId={feature.featureId} />);
+    expect(screen.getByText('Measurements (last applied)')).toBeVisible();
     expect(
       screen.queryByRole('button', { name: 'Edit fillet' })
     ).not.toBeInTheDocument();
@@ -1028,6 +1033,38 @@ describe('mass properties tensor, axes and density', () => {
 });
 
 describe('direct-edit readout', () => {
+  it('keeps imported mesh details labeled as current measurements', () => {
+    const meshFeature: FeatureNode = {
+      ...feature,
+      featureKind: 'imported-mesh',
+      name: 'Imported mesh',
+      data: {
+        featureKind: 'imported-mesh',
+        artifactId: 'artifact-mesh' as Extract<
+          FeatureNode['data'],
+          { featureKind: 'imported-mesh' }
+        >['artifactId'],
+        sourceName: 'bracket.stl',
+        triangleCount: 12,
+        vertices: [],
+        indices: []
+      }
+    };
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: meshFeature,
+          selectedTopology: null,
+          commandSession: null,
+          featureSelectionSource: 'pinned'
+        })}
+      />
+    );
+    expect(screen.getByText('bracket.stl')).toBeVisible();
+    expect(screen.getByText('Measurements')).toBeVisible();
+    expect(screen.getByText('live')).toBeVisible();
+    expect(screen.queryByText('last applied model')).toBeNull();
+  });
   /*
     The readout printed `String()` of each stored value: raw floats with no
     unit, and the countersink angle as 1.5707963267948966 "(rad)" while the
@@ -1074,6 +1111,9 @@ describe('direct-edit readout', () => {
     expect(within(inspector).getByText('10.123 in')).toBeVisible();
     expect(within(inspector).getByText('included angle')).toBeVisible();
     expect(within(inspector).getByText('90°')).toBeVisible();
+    expect(within(inspector).getByText('Measurements')).toBeVisible();
+    expect(within(inspector).getByText('live')).toBeVisible();
+    expect(within(inspector).queryByText('last applied model')).toBeNull();
   });
 });
 

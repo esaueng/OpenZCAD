@@ -1197,8 +1197,10 @@ export function Inspector(props: InspectorProps) {
     const editKey = `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`;
     const data = selectedFeature.data;
     let form: ReactNode = null;
+    let editableFormOpen = false;
 
     if (data.featureKind === 'primitive') {
+      editableFormOpen = true;
       const placement = primitivePlacement(props.document, selectedFeature);
       form = (
         <PrimitiveForm
@@ -1234,7 +1236,8 @@ export function Inspector(props: InspectorProps) {
     ) {
       // Text sketches get their own form: the closed-shape form below would
       // present them as a rectangle, and applying it would replace the text.
-      form = isValidTextSketchObject(selectedSketchObject) ? (
+      editableFormOpen = isValidTextSketchObject(selectedSketchObject);
+      form = editableFormOpen ? (
         <>
           <TextSketchForm
             key={editKey}
@@ -1278,6 +1281,7 @@ export function Inspector(props: InspectorProps) {
       selectedSketchObject &&
       selectedSketch.planeRef.type === 'canonical'
     ) {
+      editableFormOpen = true;
       form = (
         <SketchForm
           key={editKey}
@@ -1306,6 +1310,7 @@ export function Inspector(props: InspectorProps) {
         />
       );
     } else if (data.featureKind === 'transform') {
+      editableFormOpen = true;
       form = (
         <TransformForm
           key={editKey}
@@ -1520,7 +1525,10 @@ export function Inspector(props: InspectorProps) {
     const inPlaceTool =
       inPlaceToolForFeature(data) ??
       (data.featureKind === 'extrude' ? ('extrude' as const) : null);
-    if (inPlaceTool) form = null;
+    if (inPlaceTool) {
+      form = null;
+      editableFormOpen = false;
+    }
     const editingInPlace =
       inPlaceTool !== null &&
       props.inPlaceEditFeatureId === selectedFeature.featureId;
@@ -1622,7 +1630,7 @@ export function Inspector(props: InspectorProps) {
               units={units}
               document={props.massPropertiesDocument}
               worker={props.massPropertiesWorker}
-              lastApplied={Boolean(form) || editingInPlace}
+              lastApplied={editableFormOpen || editingInPlace}
             />
           </>
         )}
@@ -1635,7 +1643,7 @@ export function Inspector(props: InspectorProps) {
               units={units}
               document={props.massPropertiesDocument}
               worker={props.massPropertiesWorker}
-              lastApplied={Boolean(form) || editingInPlace}
+              lastApplied={editableFormOpen || editingInPlace}
             />
           </>
         )}
