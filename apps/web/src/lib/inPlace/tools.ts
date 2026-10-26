@@ -1,4 +1,10 @@
-import type { PlaneBasis } from '@openzcad/geometry';
+import {
+  canonicalPlaneBasis,
+  newCanonicalPlaneRef,
+  planeIntersectionDatumAxis,
+  requireRevolveAxisInPlane,
+  type PlaneBasis
+} from '@openzcad/geometry';
 import {
   MAX_HELICAL_SWEEP_TURNS,
   type BodyId,
@@ -6,6 +12,7 @@ import {
   type BooleanOperation,
   type DatumAxisDefinition,
   type DatumAxisLine,
+  type DatumAxisRef,
   type EdgeTopologyReferenceV5,
   type FaceTopologyReferenceV5,
   type FeatureData,
@@ -24,6 +31,8 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import {
+  collinear,
+  lineInPlane,
   revolveAxisCandidates,
   revolveProfileRegions,
   revolveRigPlacement,
@@ -304,6 +313,15 @@ export interface InPlaceContext {
   imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
 }
 
+/**
+ * The datum axis a turn or a ring is about: one already in History, or a
+ * line picked in the model that Done adds as a datum axis first (the stored
+ * features only name datum axes), in the same step.
+ */
+export type InPlaceAxisRef =
+  | { type: 'datum-axis'; datumFeatureId: FeatureId }
+  | { type: 'new-axis'; definition: DatumAxisDefinition };
+
 /** What to build, without names or ids; App turns it into the command. */
 export type InPlaceRequest =
   | {
@@ -311,7 +329,14 @@ export type InPlaceRequest =
       sketchId: SketchId;
       /** Absent only for an edited revolve that never stored one. */
       profile?: SketchProfileReference;
-      axis: { axis: RevolveAxis } | { datumFeatureId: FeatureId };
+      /**
+       * `newAxis` is a line picked in the model (an edge, a cylinder, a
+       * principal axis): App adds it as a datum axis and turns about that.
+       */
+      axis:
+        | { axis: RevolveAxis }
+        | { datumFeatureId: FeatureId }
+        | { newAxis: DatumAxisDefinition };
       /** Absent is a full turn, stored exactly as before partial revolves. */
       angleDeg?: ParamValue;
     }
@@ -358,10 +383,7 @@ export type InPlaceRequest =
       translation: ParametricVector3;
       scale?: ParamValue;
       pivot?: ParametricVector3;
-      axisRotation?: {
-        axis: { type: 'datum-axis'; datumFeatureId: FeatureId };
-        angleDeg: ParamValue;
-      };
+      axisRotation?: { axis: InPlaceAxisRef; angleDeg: ParamValue };
       copy?: boolean;
     }
   | {
@@ -392,7 +414,7 @@ export type InPlaceRequest =
       axis2?: 'x' | 'y' | 'z';
       spacing2?: ParamValue;
       count2?: ParamValue;
-      axisRef?: { type: 'datum-axis'; datumFeatureId: FeatureId };
+      axisRef?: InPlaceAxisRef;
       /** A linear pattern's own repeat vector, replacing `axis`. */
       direction?: ParametricVector3;
     }
@@ -411,6 +433,79 @@ export type InPlaceRequest =
       tool: 'reference-image';
       image: ReferenceImage;
     };
+
+type ResolvedAxis<R> = R extends { tool: 'revolve' }
+  ? Omit<R, 'axis'> & {
+      axis: { axis: RevolveAxis } | { datumFeatureId: FeatureId };
+    }
+  : R extends { tool: 'transform' }
+    ? Omit<R, 'axisRotation'> & {
+        axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
+      }
+    : R extends { tool: 'pattern' }
+      ? Omit<R, 'axisRef'> & { axisRef?: DatumAxisRef }
+      : R;
+
+/** A request whose axis, if any, is a datum axis already in the document. */
+export type ResolvedInPlaceRequest = ResolvedAxis<InPlaceRequest>;
+
+/** The datum axis a request adds before it (a picked line), else null. */
+export function requestNewAxis(
+  request: InPlaceRequest
+): DatumAxisDefinition | null {
+  if (request.tool === 'revolve') {
+    return 'newAxis' in request.axis ? request.axis.newAxis : null;
+  }
+  const ref =
+    request.tool === 'transform'
+      ? request.axisRotation?.axis
+      : request.tool === 'pattern'
+        ? request.axisRef
+        : undefined;
+  return ref?.type === 'new-axis' ? ref.definition : null;
+}
+
+/**
+ * The request turning about the datum `featureId` names where it asked for
+ * a new axis; a request that asks for none comes back as it is. Null when it
+ * asks for one and no datum is given.
+ */
+export function resolveNewAxis<R extends InPlaceRequest>(
+  request: R,
+  featureId: FeatureId | null
+): ResolvedAxis<R> | null {
+  return resolveAxisOf(request, featureId) as ResolvedAxis<R> | null;
+}
+
+function resolveAxisOf(
+  request: InPlaceRequest,
+  featureId: FeatureId | null
+): ResolvedInPlaceRequest | null {
+  const datum = (): DatumAxisRef | null =>
+    featureId ? { type: 'datum-axis', datumFeatureId: featureId } : null;
+  if (request.tool === 'revolve') {
+    if (!('newAxis' in request.axis)) {
+      return { ...request, axis: request.axis };
+    }
+    return featureId
+      ? { ...request, axis: { datumFeatureId: featureId } }
+      : null;
+  }
+  if (request.tool === 'transform') {
+    const { axisRotation, ...rest } = request;
+    if (!axisRotation) return rest;
+    const axis =
+      axisRotation.axis.type === 'new-axis' ? datum() : axisRotation.axis;
+    return axis ? { ...rest, axisRotation: { ...axisRotation, axis } } : null;
+  }
+  if (request.tool === 'pattern') {
+    const { axisRef, ...rest } = request;
+    if (!axisRef) return rest;
+    const axis = axisRef.type === 'new-axis' ? datum() : axisRef;
+    return axis ? { ...rest, axisRef: axis } : null;
+  }
+  return request;
+}
 
 /** A handle the viewport draws for one value. */
 export type HandleSpec =
@@ -488,6 +583,29 @@ export interface InPlaceToolSpec {
    * world axes through the origin as well as datum axes.
    */
   axisSource?: 'sketch' | 'datum' | 'world';
+  /**
+   * A straight model edge or a cylinder's (or cone's) face may be the axis,
+   * as well as the listed lines: the command adds it as a datum axis.
+   */
+  axisPicks?: boolean;
+  /**
+   * Why a picked line cannot be this command's axis (a revolve's must lie in
+   * its profile's plane), else null.
+   */
+  refuseAxis?(
+    slots: InPlaceSlots,
+    axis: Pick<RevolveAxisCandidate, 'origin' | 'direction'>,
+    ctx: InPlaceContext
+  ): string | null;
+  /**
+   * A direction picked in the model (a straight edge, a flat face's normal,
+   * an axis line) as the options and values it sets: a linear pattern's
+   * repeat vector. Its axis lines are then directions, not an axis slot.
+   */
+  takeDirection?(direction: Vector3): {
+    options: Record<string, string>;
+    values: Record<string, number>;
+  };
   faceFilter?: 'planar';
   /**
    * While this option has this value, a click places a point (a draft's
@@ -642,9 +760,95 @@ export function axisCandidatesFor(
   }
   const first = slots.profiles[0];
   const view = first ? viewFor(ctx, first.sketchId) : null;
-  return view
-    ? revolveAxisCandidates(view.basis, ctx.datumAxes, ctx.datumLabel, keep)
-    : [];
+  if (!view) return [];
+  const own = revolveAxisCandidates(
+    view.basis,
+    ctx.datumAxes,
+    ctx.datumLabel,
+    keep
+  );
+  // A world axis in the sketch's plane that is not already one of its own
+  // (a sketch on an offset or face plane through the origin).
+  return [...own, ...principalAxesInPlane(view.basis, own)];
+}
+
+/**
+ * The two principal planes each world axis is where they meet, in the order
+ * whose normals' cross product runs along it.
+ */
+const PRINCIPAL_AXIS_PLANES = {
+  x: ['XY', 'XZ'],
+  y: ['XY', 'YZ'],
+  z: ['XZ', 'YZ']
+} as const;
+
+/**
+ * A world axis through the origin as a datum axis definition: the line two
+ * principal planes meet in, turned to run along the axis. A turn about it
+ * then needs no datum of the user's own.
+ */
+export function principalAxisDefinition(
+  world: 'x' | 'y' | 'z'
+): DatumAxisDefinition {
+  const [a, b] = PRINCIPAL_AXIS_PLANES[world].map((plane) =>
+    newCanonicalPlaneRef(plane, 0)
+  ) as [
+    ReturnType<typeof newCanonicalPlaneRef>,
+    ReturnType<typeof newCanonicalPlaneRef>
+  ];
+  const line = planeIntersectionDatumAxis(
+    canonicalPlaneBasis(a.plane, a.basisRevision),
+    canonicalPlaneBasis(b.plane, b.basisRevision)
+  );
+  const reversed = dot(line.direction, AXIS_VECTORS[world]!) < 0;
+  return {
+    kind: 'plane-intersection',
+    sources: [a, b],
+    ...(reversed ? { reverseDirection: true } : {})
+  };
+}
+
+/**
+ * A turn's axis as the request names it: a datum axis by id, or a picked
+ * line or world axis that Done adds as a datum axis first. Null for a
+ * choice no turn stores (a sketch axis, a typed helix axis).
+ */
+function turnAxisRef(
+  choice: RevolveAxisCandidate['choice']
+): InPlaceAxisRef | null {
+  if ('datumFeatureId' in choice) {
+    return { type: 'datum-axis', datumFeatureId: choice.datumFeatureId };
+  }
+  if ('define' in choice)
+    return { type: 'new-axis', definition: choice.define };
+  if ('world' in choice) {
+    return {
+      type: 'new-axis',
+      definition: principalAxisDefinition(choice.world)
+    };
+  }
+  return null;
+}
+
+/** World axes lying in a sketch's plane that no other candidate runs along. */
+function principalAxesInPlane(
+  basis: PlaneBasis,
+  others: readonly RevolveAxisCandidate[]
+): RevolveAxisCandidate[] {
+  const origin = { x: 0, y: 0, z: 0 };
+  return (['x', 'y', 'z'] as const).flatMap((world) => {
+    const line = { origin, direction: AXIS_VECTORS[world]! };
+    if (!lineInPlane(line, basis)) return [];
+    if (others.some((other) => collinear(other, line))) return [];
+    return [
+      {
+        id: `world-${world}`,
+        label: `${world.toUpperCase()} axis`,
+        ...line,
+        choice: { world }
+      }
+    ];
+  });
 }
 
 function unit(vector: Vector3): Vector3 {
@@ -667,6 +871,7 @@ const revolve: InPlaceToolSpec = {
   title: 'Revolve',
   profileMode: 'one',
   wantsAxis: true,
+  axisPicks: true,
   wantsPath: false,
   values: [
     {
@@ -682,17 +887,38 @@ const revolve: InPlaceToolSpec = {
   ],
   hint(slots) {
     if (slots.profiles.length === 0) return 'Pick a sketch profile to revolve';
-    if (!slots.axis) return 'Pick the axis to turn around';
+    if (!slots.axis)
+      return 'Pick the axis to turn around: a sketch line, an edge, a cylinder or a datum axis';
     return `Drag the angle, or type a value · ${FINISH}`;
   },
   ready: (slots) => slots.profiles.length > 0 && slots.axis !== null,
+  refuseAxis(slots, axis, ctx) {
+    const pick = slots.profiles[0];
+    const view = pick ? viewFor(ctx, pick.sketchId) : null;
+    if (!view) return 'Pick the profile first, then its axis';
+    // The kernel's own test, so a line the preview takes the build takes.
+    try {
+      requireRevolveAxisInPlane(axis, view.basis, '');
+      return null;
+    } catch {
+      return "That line leaves the profile's sketch plane; a revolve turns about a line in its plane";
+    }
+  },
   request(slots, values) {
     const pick = slots.profiles[0];
     const choice = slots.axis?.choice;
-    // A revolve turns about a sketch or datum axis; it never offers a world
-    // axis, which its feature could not store.
-    if (!pick || !choice || 'world' in choice || 'saved' in choice) {
-      return null;
+    if (!pick || !choice || 'saved' in choice) return null;
+    // A sketch axis or a datum is stored as it is; a picked line or a world
+    // axis becomes a datum axis Done adds first.
+    let axis: Extract<InPlaceRequest, { tool: 'revolve' }>['axis'];
+    if ('axis' in choice) axis = { axis: choice.axis };
+    else {
+      const ref = turnAxisRef(choice);
+      if (!ref) return null;
+      axis =
+        ref.type === 'datum-axis'
+          ? { datumFeatureId: ref.datumFeatureId }
+          : { newAxis: ref.definition };
     }
     const angle = values.angle ?? 360;
     return {
@@ -700,7 +926,7 @@ const revolve: InPlaceToolSpec = {
       sketchId: pick.sketchId,
       // An edited revolve that stores no profile keeps none.
       ...(pick.implicit ? {} : { profile: pick.reference }),
-      axis: choice,
+      axis,
       ...(angle === 360 ? {} : { angleDeg: angle })
     };
   },
@@ -1849,6 +2075,101 @@ function clickedFace(slots: InPlaceSlots): FacePick | undefined {
   return slots.faces.find((face) => face.point !== undefined);
 }
 
+/** A draft's pull and the point its neutral plane passes through. */
+function draftFrame(
+  slots: InPlaceSlots,
+  numbers: Record<string, number>,
+  options: Record<string, string>,
+  ctx: InPlaceContext
+): { pull: Vector3; neutral: Vector3 } | null {
+  const first = slots.faces[0];
+  if (!first) return null;
+  const clicked = clickedFace(slots);
+  const pull =
+    options.pull === 'custom'
+      ? typedNumbers(numbers, 'pull', { x: 0, y: 0, z: 1 })
+      : (PULL_DIRECTIONS[options.pull ?? '+Z'] ?? PULL_DIRECTIONS['+Z']!);
+  if (Math.hypot(pull.x, pull.y, pull.z) === 0) return null;
+  const neutral =
+    options.neutral === 'custom'
+      ? typedNumbers(numbers, 'neutral', { x: 0, y: 0, z: 0 })
+      : draftNeutralPoint(
+          options.neutral,
+          pull,
+          options.neutral === 'point' && clicked ? clicked : first,
+          ctx
+        );
+  return { pull, neutral };
+}
+
+/**
+ * The angle rig a drafted face turns on: hinged where the face meets the
+ * neutral plane, its arm running up the face from there toward the face's
+ * middle. Zero is the face as it stands; a positive drag leans the face out
+ * of the body away from the neutral plane, as a positive draft angle does.
+ * Null for a face with no normal to tilt (a curved one) or one square to the
+ * pull, which a draft cannot lean.
+ */
+export function draftHingeRig(
+  face: FacePick,
+  pull: Vector3,
+  neutral: Vector3,
+  size: number
+): {
+  center: Vector3;
+  axis: Vector3;
+  startDirection: Vector3;
+  radius: number;
+} | null {
+  const middle = face.centroid ?? face.center ?? face.point;
+  if (!face.normal || !middle) return null;
+  const normal = unit(face.normal);
+  const along = unit(pull);
+  // The pull's part in the face: the way up the face from its hinge.
+  const across = dot(along, normal);
+  const up = {
+    x: along.x - normal.x * across,
+    y: along.y - normal.y * across,
+    z: along.z - normal.z * across
+  };
+  const climb = dot(up, along);
+  if (climb < 1e-6) return null;
+  // Slide the face's middle down (or up) the face onto the neutral plane.
+  const rise =
+    dot(
+      {
+        x: middle.x - neutral.x,
+        y: middle.y - neutral.y,
+        z: middle.z - neutral.z
+      },
+      along
+    ) / climb;
+  const center = {
+    x: middle.x - up.x * rise,
+    y: middle.y - up.y * rise,
+    z: middle.z - up.z * rise
+  };
+  const upward = unit(up);
+  const reach = Math.hypot(
+    middle.x - center.x,
+    middle.y - center.y,
+    middle.z - center.z
+  );
+  // Below the hinge the arm runs down the face: the same turn leans that
+  // part of it inward, as the kernel's draft does.
+  const startDirection = reach > 1e-9 && rise < 0 ? scaled(upward, -1) : upward;
+  return {
+    center,
+    axis: unit({
+      x: upward.y * normal.z - upward.z * normal.y,
+      y: upward.z * normal.x - upward.x * normal.z,
+      z: upward.x * normal.y - upward.y * normal.x
+    }),
+    startDirection,
+    radius: Math.max(reach, size / 2, 1e-3)
+  };
+}
+
 const draft: InPlaceToolSpec = {
   id: 'draft',
   title: 'Draft',
@@ -1948,7 +2269,7 @@ const draft: InPlaceToolSpec = {
       }
     };
   },
-  handles(slots, _values, ctx, options) {
+  handles(slots, values, ctx, options) {
     const face = slots.faces[0];
     const anchor = face ? (face.centroid ?? face.center ?? face.point) : null;
     if (!face || !anchor) return [];
@@ -1962,13 +2283,39 @@ const draft: InPlaceToolSpec = {
       ...anchor,
       z: anchor.z + spread * index
     });
+    // The angle turns the face on its hinge; a face it cannot lean (curved,
+    // or square to the pull) keeps a typed chip.
+    const frame = draftFrame(slots, values, options, ctx);
+    const rig = frame
+      ? draftHingeRig(face, frame.pull, frame.neutral, spread * 2)
+      : null;
     return [
-      {
-        valueId: 'angle',
-        kind: 'chip',
-        key: `${faceKey(face)}:angle`,
-        params: { anchor }
-      },
+      rig
+        ? {
+            valueId: 'angle',
+            kind: 'angle',
+            key: keyOf(
+              faceKey(face),
+              'angle',
+              rig.center.x,
+              rig.center.y,
+              rig.center.z,
+              rig.axis.x,
+              rig.axis.y,
+              rig.axis.z,
+              rig.startDirection.x,
+              rig.startDirection.y,
+              rig.startDirection.z,
+              rig.radius
+            ),
+            params: rig
+          }
+        : {
+            valueId: 'angle',
+            kind: 'chip',
+            key: `${faceKey(face)}:angle`,
+            params: { anchor }
+          },
       ...(options.pull === 'custom'
         ? vectorChips('pull', faceKey(face), row(1), spread)
         : []),
@@ -2511,7 +2858,8 @@ const axisRotate: InPlaceToolSpec = {
   profileMode: 'none',
   bodyMode: 'one',
   wantsAxis: true,
-  axisSource: 'datum',
+  axisSource: 'world',
+  axisPicks: true,
   wantsPath: false,
   values: [
     {
@@ -2526,25 +2874,20 @@ const axisRotate: InPlaceToolSpec = {
   options: [COPY_OPTION],
   hint(slots) {
     if (slots.bodies.length === 0) return 'Click the body to rotate';
-    if (!slots.axis) return 'Pick a datum axis to turn about';
+    if (!slots.axis)
+      return 'Pick the axis to turn about: an edge, a cylinder, X, Y, Z or a datum axis';
     return `Drag the angle, or type a value · ${FINISH}`;
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
   request(slots, values, options) {
     const body = slots.bodies[0];
-    const axis = slots.axis;
-    if (!body || !axis || !('datumFeatureId' in axis.choice)) return null;
+    const axis = slots.axis ? turnAxisRef(slots.axis.choice) : null;
+    if (!body || !axis) return null;
     return {
       tool: 'transform',
       targetBodyId: body.bodyId,
       translation: { x: 0, y: 0, z: 0 },
-      axisRotation: {
-        axis: {
-          type: 'datum-axis',
-          datumFeatureId: axis.choice.datumFeatureId
-        },
-        angleDeg: values.angle ?? 90
-      },
+      axisRotation: { axis, angleDeg: values.angle ?? 90 },
       ...(options.copy === 'yes' ? { copy: true } : {})
     };
   },
@@ -2657,12 +3000,40 @@ function axisOf(value: string | undefined): 'x' | 'y' | 'z' {
   return value === 'y' || value === 'z' ? value : 'x';
 }
 
+/** Float noise a picked direction drops, so an edge along X reads as X. */
+const DIRECTION_QUANTUM = 1e-9;
+
 const linearPattern: InPlaceToolSpec = {
   id: 'linear-pattern',
   title: 'Linear pattern',
   profileMode: 'none',
   bodyMode: 'one',
-  wantsAxis: false,
+  // Datum axes are drawn to pick as a direction, as an edge or a flat face
+  // is; none is an axis slot the pattern needs.
+  wantsAxis: true,
+  axisSource: 'datum',
+  takeDirection(direction): {
+    options: Record<string, string>;
+    values: Record<string, number>;
+  } {
+    const length = Math.hypot(direction.x, direction.y, direction.z);
+    const parts = (['x', 'y', 'z'] as const).map((part) => {
+      const value = direction[part] / (length || 1);
+      return Math.abs(value) <= DIRECTION_QUANTUM ? 0 : value;
+    });
+    // Along a world axis, it is that axis, as the card would have stored it:
+    // only when nothing is left across it (a slight tilt is still a tilt).
+    const world = (['x', 'y', 'z'] as const).find(
+      (_axis, index) =>
+        Math.abs(parts[index]! - 1) <= DIRECTION_QUANTUM &&
+        parts.every((part, other) => other === index || part === 0)
+    );
+    if (world) return { options: { axis: world }, values: {} };
+    return {
+      options: { axis: 'custom' },
+      values: { dirX: parts[0]!, dirY: parts[1]!, dirZ: parts[2]! }
+    };
+  },
   wantsPath: false,
   values: [
     // Signed: a negative spacing repeats the other way, as the card allowed.
@@ -2694,12 +3065,13 @@ const linearPattern: InPlaceToolSpec = {
   hint: (slots) =>
     slots.bodies.length === 0
       ? 'Click the body to repeat'
-      : `Drag the spacing, tap the count · ${FINISH}`,
+      : `Drag the spacing, tap the count · an edge, a flat face or an axis sets the direction · ${FINISH}`,
   ready: (slots) => slots.bodies.length > 0,
   request(slots, values, options, ctx) {
     const body = slots.bodies[0];
     if (!body) return null;
-    // A custom vector is stored as given, expressions and all.
+    // A custom vector is stored as given, expressions and all; a picked
+    // direction is one too, as its numbers.
     const direction =
       options.axis === 'custom'
         ? {
@@ -2775,6 +3147,7 @@ const circularPattern: InPlaceToolSpec = {
   bodyMode: 'one',
   wantsAxis: true,
   axisSource: 'world',
+  axisPicks: true,
   wantsPath: false,
   values: [
     {
@@ -2785,6 +3158,9 @@ const circularPattern: InPlaceToolSpec = {
       // Signed and unbounded, as the pattern itself takes it: a negative
       // total turns the copies the other way.
     },
+    // Fixed step: the turn from each copy to the next, which a count change
+    // keeps (the total follows).
+    { id: 'step', label: 'Step', unit: 'angle', initial: 60 },
     {
       id: 'count',
       label: 'Count',
@@ -2795,46 +3171,68 @@ const circularPattern: InPlaceToolSpec = {
       integer: true
     }
   ],
-  hint(slots) {
+  options: [
+    {
+      id: 'spacing',
+      label: 'Spacing',
+      choices: [
+        {
+          value: 'equal',
+          label: 'Equal spacing',
+          note: 'The copies share the total angle.'
+        },
+        {
+          value: 'step',
+          label: 'Fixed step',
+          note: 'Each copy turns the step from the one before; a new count keeps it.'
+        }
+      ],
+      initial: 'equal'
+    }
+  ],
+  hint(slots, options) {
     if (slots.bodies.length === 0) return 'Click the body to repeat';
     if (!slots.axis)
-      return 'Pick the axis to repeat about: X, Y, Z or a datum axis';
-    return `Drag the total angle, tap the count · ${FINISH}`;
+      return 'Pick the axis to repeat about: an edge, a cylinder, X, Y, Z or a datum axis';
+    return options?.spacing === 'step'
+      ? `Drag the step, tap the count · ${FINISH}`
+      : `Drag the total angle, tap the count · ${FINISH}`;
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
-  request(slots, values) {
+  request(slots, values, options) {
     const body = slots.bodies[0];
     const choice = slots.axis?.choice;
     if (!body || !choice) return null;
+    // A datum axis, or a picked line Done adds as one, replaces the world
+    // axis the card stores beside it.
+    const axisRef = 'world' in choice ? null : turnAxisRef(choice);
+    if (!('world' in choice) && !axisRef) return null;
+    const count = values.count ?? 6;
     return {
       tool: 'pattern',
       targetBodyId: body.bodyId,
       patternKind: 'circular',
-      count: values.count ?? 6,
-      // A datum axis replaces the world axis the card stores beside it.
+      count,
       axis: 'world' in choice ? choice.world : 'z',
-      ...('datumFeatureId' in choice
-        ? {
-            axisRef: {
-              type: 'datum-axis' as const,
-              datumFeatureId: choice.datumFeatureId
-            }
-          }
-        : {}),
-      angleDeg: values.angle ?? 360
+      ...(axisRef ? { axisRef } : {}),
+      angleDeg:
+        options.spacing === 'step'
+          ? stepTotal(values.step ?? 60, count)
+          : (values.angle ?? 360)
     };
   },
-  handles(slots) {
+  handles(slots, _values, _ctx, options) {
     const body = slots.bodies[0];
     if (!body || !slots.axis) return [];
     const placement = bodyTurnRig(body, slots.axis);
-    const key = `${bodyKey(body)}:angle:${slots.axis.id}`;
+    const valueId = options.spacing === 'step' ? 'step' : 'angle';
+    const key = `${bodyKey(body)}:${valueId}:${slots.axis.id}`;
     return [
       // A body with no extent to turn a rig around types its angle.
       placement
-        ? { valueId: 'angle', kind: 'angle', key, params: placement }
+        ? { valueId, kind: 'angle', key, params: placement }
         : {
-            valueId: 'angle',
+            valueId,
             kind: 'chip',
             key,
             params: { anchor: body.max }
@@ -2848,6 +3246,23 @@ const circularPattern: InPlaceToolSpec = {
     ];
   }
 };
+
+/**
+ * The total a fixed step stores. A pattern spreads `count` copies over its
+ * total (a whole turn's step is total ÷ count, any other's total ÷ (count −
+ * 1)), so a step that closes the ring stores the whole turn and any other
+ * step × (count − 1). Typed expressions stay expressions.
+ */
+export function stepTotal(step: ParamValue, count: ParamValue): ParamValue {
+  if (typeof step === 'number' && typeof count === 'number') {
+    const ring = step * count;
+    if (Math.abs(Math.abs(ring) - 360) <= 1e-9) return Math.sign(ring) * 360;
+    return step * (count - 1);
+  }
+  // An expression's step × (count − 1) lands its copies where a whole
+  // turn's would when the step closes the ring, so it needs no case.
+  return `(${String(step)}) * ((${String(count)}) - 1)`;
+}
 
 const gridPattern: InPlaceToolSpec = {
   id: 'grid-pattern',

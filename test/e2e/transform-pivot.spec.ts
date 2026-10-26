@@ -2,7 +2,8 @@ import {
   createPrimitiveInPlace,
   test,
   expect,
-  stubApi
+  stubApi,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 /**
@@ -26,9 +27,10 @@ test('a gizmo rotation stores its pivot, and editing the angle keeps it', async 
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
   await expect(overlay).toBeVisible();
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('12');
   await overlay.getByLabel('Rotate Z in degrees').fill('45');
-  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expect(overlay).toBeHidden();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -75,8 +77,9 @@ test('a translation-only gizmo Move still stores its pivot', async ({
 
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('12');
-  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expect(overlay).toBeHidden();
 
   // A turn added later in the edit card stays about the body's centre.

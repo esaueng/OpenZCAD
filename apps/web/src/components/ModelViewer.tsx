@@ -9472,6 +9472,11 @@ export function ModelViewer({
         )[0];
         const axisId = axisHit?.object.userData.pickAxis as string | undefined;
         if (axisId) {
+          // The press is the line's, as a locked handle's is: its release
+          // must not also pick the edge or face drawn under the line, which
+          // an in-place command would take as another axis (U09).
+          lockedHandlePointerId = event.pointerId;
+          gestures.capture(event, null);
           event.preventDefault();
           onPickAxisRef.current?.(axisId);
           requestRender();

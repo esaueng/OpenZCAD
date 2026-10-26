@@ -4,7 +4,8 @@ import {
   expect,
   expectBodyCount,
   expectConsumedBodyCount,
-  stubApi
+  stubApi,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 type CopyPublicationGate = { hold: boolean; held: number; release(): void };
@@ -30,6 +31,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
   await expect(overlay).toBeVisible();
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('40');
   await overlay
     .getByRole('checkbox', { name: 'Copy (keep the original)' })
@@ -38,8 +40,9 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await expect(page.getByText('3D viewer could not be rendered.')).toHaveCount(
     0
   );
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Name').fill('Copy');
-  await overlay.getByRole('button', { name: 'Apply copy' }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expect(overlay).toBeHidden();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -73,10 +76,11 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await page.locator('.body-row-main').first().click();
   await page.keyboard.press('m');
+  await openMoveOptions(overlay);
   await overlay
     .getByRole('checkbox', { name: 'Copy (keep the original)' })
     .check();
-  await overlay.getByRole('button', { name: 'Apply copy' }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expectBodyCount(page, 3);
   await expect(rows.filter({ hasText: /copy 1$/ })).toHaveCount(1);
   await expect(rows.filter({ hasText: /copy 2$/ })).toHaveCount(1);
@@ -123,6 +127,7 @@ test('a coincident copy asks before a tool, history, measure or selection transi
   const copy = overlay.getByRole('checkbox', {
     name: 'Copy (keep the original)'
   });
+  await openMoveOptions(overlay);
   await copy.check();
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
   const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
@@ -198,6 +203,7 @@ test('keeps the applied copy visible until the exact worker publishes it', async
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('40');
   await overlay
     .getByRole('checkbox', { name: 'Copy (keep the original)' })
@@ -208,7 +214,7 @@ test('keeps the applied copy visible until the exact worker publishes it', async
       window as typeof window & { copyPublicationGate: CopyPublicationGate }
     ).copyPublicationGate.hold = true;
   });
-  await overlay.getByRole('button', { name: 'Apply copy' }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expect(overlay).toBeHidden();
   await expect
     .poll(() =>

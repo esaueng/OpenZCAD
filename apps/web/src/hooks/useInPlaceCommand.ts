@@ -3,7 +3,8 @@ import type {
   BodyId,
   ParamValue,
   ParametricVector3,
-  ProjectDocument
+  ProjectDocument,
+  Vector3
 } from '@openzcad/shared';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
@@ -181,6 +182,7 @@ function sessionFromSeed(
       bodies: seed.slots.bodies,
       plane: seed.slots.plane,
       edges: seed.slots.edges,
+      axisLine: null,
       // A datum, a picture or a primitive is never edited here: no sources,
       // no image, no placement.
       placement: null,
@@ -201,6 +203,11 @@ interface Session {
   slots: {
     profiles: ProfilePick[];
     axisId: string | null;
+    /**
+     * A line picked in the model as the axis (a straight edge, a cylinder),
+     * offered beside the listed ones until the slot it fills empties.
+     */
+    axisLine: RevolveAxisCandidate | null;
     path: CurvePick[];
     guide: CurvePick[];
     faces: FacePick[];
@@ -285,6 +292,14 @@ export interface InPlaceCommand {
     from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies' | 'edges'>
   ): void;
   pickAxis(axisId: string): void;
+  /**
+   * A line picked in the model (a straight edge, a cylinder's axis) as the
+   * axis, or as the direction of a command that takes one; a picked line
+   * clicked again comes back out. Refused (false) when the tool takes none.
+   */
+  pickAxisLine(line: RevolveAxisCandidate): boolean;
+  /** A direction picked in the model (a flat face's normal); false if none is taken. */
+  pickDirection(direction: Vector3): boolean;
   pickCurve(curve: CurvePick, additive?: boolean): void;
   /** A face click: refused (false) when the tool takes no such face. */
   pickFace(face: FacePick): boolean;
@@ -456,6 +471,7 @@ export function useInPlaceCommand(
   );
 
   const profiles = session?.slots.profiles;
+  const axisLine = session?.slots.axisLine ?? null;
   const bodyCount = session?.slots.bodies.length ?? 0;
   const axisCandidates = useMemo(() => {
     if (!spec?.wantsAxis || !profiles) return [];
@@ -502,6 +518,8 @@ export function useInPlaceCommand(
         });
       }
     }
+    // A line picked in the model stands first, beside the listed ones.
+    if (axisLine) own.unshift(axisLine);
     if (spec.axisSource === 'datum' || spec.axisSource === 'world') {
       // A body's turn: its axis lines, once the body is picked.
       return bodyCount > 0
@@ -524,6 +542,7 @@ export function useInPlaceCommand(
   }, [
     spec,
     profiles,
+    axisLine,
     bodyCount,
     ctx,
     editSeed,
@@ -552,6 +571,13 @@ export function useInPlaceCommand(
         : EMPTY_SLOTS,
     [session, axisCandidates]
   );
+  // Read by the pick callbacks, which outlive a render.
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+  const axisCandidatesRef = useRef(axisCandidates);
+  axisCandidatesRef.current = axisCandidates;
 
   const heldValues = useMemo(() => session?.values ?? {}, [session?.values]);
   /** Every value as a number, its initial one where none is set. */
@@ -1059,6 +1085,7 @@ export function useInPlaceCommand(
                 ? initial.slice(0, 1)
                 : initial,
           axisId: null,
+          axisLine: null,
           path: [],
           guide: [],
           faces: toolSpec.faceMode
@@ -1141,7 +1168,8 @@ export function useInPlaceCommand(
         slots: {
           ...current.slots,
           profiles: [pick],
-          axisId: sameSketch ? current.slots.axisId : null
+          axisId: sameSketch ? current.slots.axisId : null,
+          axisLine: sameSketch ? current.slots.axisLine : null
         }
       };
     });
@@ -1199,12 +1227,79 @@ export function useInPlaceCommand(
     []
   );
 
-  const pickAxis = useCallback((axisId: string) => {
-    if (committingRef.current) return;
-    setSession((current) =>
-      current ? { ...current, slots: { ...current.slots, axisId } } : current
-    );
+  /** A picked direction as the options and values its tool sets from it. */
+  const takeDirection = useCallback((direction: Vector3) => {
+    if (committingRef.current) return false;
+    const current = sessionRef.current;
+    const taken = current
+      ? IN_PLACE_TOOL_SPECS[current.tool].takeDirection?.(direction)
+      : undefined;
+    if (!current || !taken) return false;
+    setSession((latest) => {
+      if (!latest || latest.tool !== current.tool) return latest;
+      const ids = Object.keys(taken.values);
+      return {
+        ...latest,
+        options: { ...latest.options, ...taken.options },
+        values: { ...latest.values, ...taken.values },
+        // Set as picked, they replace any expression typed for them.
+        raws: Object.fromEntries(
+          Object.entries(latest.raws).filter(([id]) => !ids.includes(id))
+        ),
+        touched: [...latest.touched.filter((id) => !ids.includes(id)), ...ids]
+      };
+    });
+    return true;
   }, []);
+
+  const pickAxis = useCallback(
+    (axisId: string) => {
+      if (committingRef.current) return;
+      // A command taking a direction reads a listed line as one.
+      const line = axisCandidatesRef.current.find(
+        (candidate) => candidate.id === axisId
+      );
+      if (line && takeDirection(line.direction)) return;
+      setSession((current) =>
+        current ? { ...current, slots: { ...current.slots, axisId } } : current
+      );
+    },
+    [takeDirection]
+  );
+
+  const pickAxisLine = useCallback(
+    (line: RevolveAxisCandidate) => {
+      if (committingRef.current) return false;
+      const current = sessionRef.current;
+      const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+      if (!current || !toolSpec) return false;
+      if (toolSpec.takeDirection) return takeDirection(line.direction);
+      if (!toolSpec.axisPicks) return false;
+      const reason = toolSpec.refuseAxis?.(
+        slotsRef.current,
+        line,
+        ctxRef.current
+      );
+      if (reason) {
+        optionsRef.current.onStatus(reason);
+        return true;
+      }
+      setSession((latest) => {
+        if (!latest || latest.tool !== current.tool) return latest;
+        const again = latest.slots.axisId === line.id;
+        return {
+          ...latest,
+          slots: {
+            ...latest.slots,
+            axisLine: again ? null : line,
+            axisId: again ? null : line.id
+          }
+        };
+      });
+      return true;
+    },
+    [takeDirection]
+  );
 
   const pickCurve = useCallback((curve: CurvePick, additive = true) => {
     if (committingRef.current) return;
@@ -1324,7 +1419,8 @@ export function useInPlaceCommand(
         slots: {
           ...latest.slots,
           bodies: next,
-          axisId: sameFirst ? latest.slots.axisId : null
+          axisId: sameFirst ? latest.slots.axisId : null,
+          axisLine: sameFirst ? latest.slots.axisLine : null
         }
       };
     });
@@ -1869,6 +1965,8 @@ export function useInPlaceCommand(
     setProfiles,
     setPicks,
     pickAxis,
+    pickAxisLine,
+    pickDirection: takeDirection,
     pickCurve,
     pickFace,
     addFaces,

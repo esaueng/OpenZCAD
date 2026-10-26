@@ -1201,7 +1201,8 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   await expect(submit).toBeInViewport();
   await inspector.getByRole('button', { name: 'Cancel' }).click();
 
-  // The Move panel is a command card too: it heads the lane.
+  // A Move is no card (U09): its bar takes the command row over the search
+  // bar, as every in-place command's does, and the lane holds nothing.
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
   await page.keyboard.press('Escape');
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
@@ -1210,13 +1211,15 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   await expect(move).toBeVisible();
   await expect(
     page
-      .locator('.stage-right > .command-float')
+      .locator('.command-bar-lane')
       .getByRole('form', { name: 'Move controls' })
   ).toBeVisible();
-  const card = await box(page.locator('.stage-right > .command-float'));
-  expect(overlaps(card, await box(page.locator('.panel-column')))).toBe(false);
-  await move.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.locator('.stage-right > .command-float')).toHaveCount(0);
+  expect(
+    overlaps(await box(move), await box(page.locator('.panel-column')))
+  ).toBe(false);
+  await move.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(move).toHaveCount(0);
 });
 
 // EDGE-02's successor: the header controls are real 24px targets that own
