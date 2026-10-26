@@ -1705,7 +1705,10 @@ mod tests {
             tokio::time::advance(NATIVE_BLOB_STREAM_UNREAD - Duration::from_secs(1)).await;
             tokio::task::yield_now().await;
             assert_eq!(streams.lock().unwrap().len(), 1);
-            tokio::time::advance(super::NATIVE_BLOB_REAP_INTERVAL).await;
+            // The first jump wakes the reaper at 59 seconds, which schedules
+            // its next check there. Allow the full idle + reap bound (65s),
+            // including Tokio's millisecond timer rounding at that deadline.
+            tokio::time::advance(super::NATIVE_BLOB_REAP_INTERVAL + Duration::from_secs(1)).await;
             tokio::task::yield_now().await;
             assert!(streams.lock().unwrap().is_empty());
             assert!(aborted(&mut observer));
