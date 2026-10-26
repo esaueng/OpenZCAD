@@ -2,6 +2,7 @@ import {
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
+import { registerProjectFlush } from './lib/migrationStatus';
 import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
@@ -3889,6 +3890,16 @@ export function App() {
     return localAutosave.flush();
   }, [localAutosave]);
   flushPendingLocalSaveRef.current = flushPendingLocalSave;
+  // Encrypting an existing project (ADR-024 Phase 7, slice 7-2) first
+  // saves this page's pending edits to it, here and to the account.
+  useEffect(() => {
+    registerProjectFlush(async (projectId) => {
+      if (managerRef.current?.document.projectId !== projectId) return;
+      await flushPendingLocalSaveRef.current();
+      await cloudProjectAutosaveRef.current?.flushPending();
+    });
+    return () => registerProjectFlush(null);
+  }, []);
   const previewPresentationMs = useRef(0);
   const reusableRadiusPreview = useRef<{
     candidate: RadiusPreviewCandidate;

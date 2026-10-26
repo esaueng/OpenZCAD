@@ -79,6 +79,12 @@ export interface VersionPinStore {
     key: string,
     next: EnvelopePin
   ): Promise<boolean>;
+  /**
+   * Forgets one project's pins: only for a migration's staged ciphertext
+   * the account dropped (an abandon, slice 7-2), whose project is still
+   * plaintext, so the next staging is not taken for a rollback.
+   */
+  forget?(userId: string, projectId: string): Promise<void>;
 }
 
 const HASH = /^[0-9a-f]{64}$/;
@@ -264,7 +270,12 @@ export function memoryVersionPins(): VersionPinStore {
         raisedInfo(current, sequence, hash ?? null)
       ),
     advanceEnvelope: async (userId, projectId, key, next) =>
-      update(userId, projectId, (current) => raisedEnvelope(current, key, next))
+      update(userId, projectId, (current) =>
+        raisedEnvelope(current, key, next)
+      ),
+    forget: async (userId, projectId) => {
+      pins.delete(id(userId, projectId));
+    }
   };
 }
 
@@ -345,7 +356,17 @@ export function indexedDbVersionPins(): VersionPinStore {
         await transact(userId, projectId, (current) =>
           raisedEnvelope(current, key, next)
         )
-      ).changed
+      ).changed,
+    forget: async (userId, projectId) => {
+      const db = await openDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(PINS, 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('IndexedDB version pin delete failed'));
+        tx.objectStore(PINS).delete([userId, projectId]);
+      });
+    }
   };
 }
 

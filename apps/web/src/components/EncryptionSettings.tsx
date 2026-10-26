@@ -72,6 +72,7 @@ import {
 } from '../lib/e2ee/keySession';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
+import { ExistingProjectEncryption } from './ExistingProjectEncryption';
 import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
 import { EncryptionContacts } from './EncryptionContacts';
 import { EncryptedInvitations } from './EncryptedInvitations';
@@ -261,6 +262,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
         </>
       )}
       <ProjectEncryptionPreference
+        userId={userId}
+        unlocked={state.kind === 'ready' && state.account.unlocked}
+      />
+      <ExistingProjectEncryption
         userId={userId}
         unlocked={state.kind === 'ready' && state.account.unlocked}
       />
