@@ -1680,12 +1680,14 @@ describe('staged upload sessions', () => {
     expect(put.status).toBe(204);
     // Each session records the lease that opened it.
     const leaseOf = (id: string) =>
-      JSON.parse(
-        (
-          srv.db
-            .prepare('SELECT metadata_json FROM upload_sessions WHERE id = ?')
-            .get(id) as { metadata_json: string }
-        ).metadata_json
+      (
+        JSON.parse(
+          (
+            srv.db
+              .prepare('SELECT metadata_json FROM upload_sessions WHERE id = ?')
+              .get(id) as { metadata_json: string }
+          ).metadata_json
+        ) as { decryptLease?: string }
       ).decryptLease;
     expect(leaseOf(session.uploadSessionId)).toBe(opener);
     expect(leaseOf(fresh.uploadSessionId)).toBe(taken.leaseId);
@@ -1764,7 +1766,7 @@ describe('staged upload sessions', () => {
     expect(
       (
         await srv.call('PUT', session.uploadUrl, {
-          raw: text('After the cutover') as Uint8Array<ArrayBuffer>
+          raw: text('After the cutover')
         })
       ).status
     ).toBe(204);
