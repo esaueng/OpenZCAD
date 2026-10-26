@@ -51,6 +51,18 @@ const active: EncryptedShareLinksState = {
 };
 
 describe('EncryptedShareLinks (slice 5-10)', () => {
+  it('loads a saved removal warning after the dialog was closed and acknowledges its exact cursor', async () => {
+    const saved = { ...active, removalNotice: 'epoch-12' };
+    const newer = { ...active, removalNotice: 'epoch-13' };
+    const client = fakeClient([saved, newer]);
+    client.dismissRemoval = vi.fn(async () => undefined);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(await screen.findByText(/Someone lost access/)).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(client.dismissRemoval).toHaveBeenCalledWith('proj_x', 'epoch-12');
+    expect(await screen.findByText(/Someone lost access/)).toBeVisible();
+  });
+
   it('creates, copies and revokes links, with each one’s status', async () => {
     const empty: EncryptedShareLinksState = {
       links: [],

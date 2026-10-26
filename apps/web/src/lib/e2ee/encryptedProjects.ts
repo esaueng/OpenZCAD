@@ -282,6 +282,18 @@ async function openStore(
           shareCtx ? shareLinksAfterDeviceRemoval(shareCtx, removal) : null
         )
         .catch(() => undefined);
+      const notice: MembersRemoved = {
+        projectId: removal.projectId,
+        keyEpoch: removal.keyEpoch,
+        userIds: [...new Set(removal.devices.map((device) => device.userId))]
+      };
+      for (const listener of removalListeners) {
+        try {
+          listener(notice);
+        } catch {
+          /* Other listeners still hear it. */
+        }
+      }
     },
     // A Commit refused because this account's devices changed elsewhere
     // (#908 review): `account` is stale, so the next operation opens the

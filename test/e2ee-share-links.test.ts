@@ -89,6 +89,7 @@ import {
   type CreatedShareLink
 } from '../apps/web/src/lib/e2ee/shareLinks';
 import { sqliteD1 } from './support/sqlite-d1';
+import { memoryShareWorkStore } from '../apps/web/src/lib/e2ee/shareWorkStore';
 import {
   OTHER,
   OWNER,
@@ -1935,6 +1936,43 @@ describe('what a visitor refuses (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
+  it('keeps current-identity links and retired work across a failed delete and reload', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    const old = await createShareLink(ctx, projectId, 'view');
+    const current = await createShareLink(ctx, projectId, 'tweak');
+    srv.db.exec('DROP TRIGGER e2ee_share_link_immutable');
+    srv.db
+      .prepare(
+        'UPDATE e2ee_share_links SET owner_identity_hash = ? WHERE share_id = ?'
+      )
+      .run(toBase64Url(other.list.identityKeyHash), old.shareId);
+    const down = failingForget(ctx, Infinity);
+    const first = await maintainShareLinks(down.ctx, projectId);
+    expect(first.retired).toEqual([{ shareId: old.shareId, mode: 'view' }]);
+    expect(
+      first.revocations.failed.some((item) => item.shareId === old.shareId)
+    ).toBe(true);
+    const reloaded = { ...laptop.shareLinks, work };
+    const again = await maintainShareLinks(reloaded, projectId);
+    expect(again.retired).toEqual(first.retired);
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links.map(
+        (link) => link.shareId
+      )
+    ).toEqual([current.shareId]);
+    const replaced = await reissueShareLinks(
+      reloaded,
+      projectId,
+      again.retired
+    );
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0]!.mode).toBe('view');
+    expect((await work.read(OWNER, projectId)).retired).toEqual([]);
+  });
+
   it('tombstones every link that names an earlier identity and offers reissue', async () => {
     const { srv, laptop, projectId } = await linkedProject();
     await delegate(laptop);
@@ -1966,6 +2004,163 @@ describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
     );
     expect(reissued).toHaveLength(1);
     expect((await visit(srv, reissued[0]!.url)).verified.mode).toBe('tweak');
+  });
+});
+
+describe('durable browser share work', { timeout: 120_000 }, () => {
+  it.each(['before-acceptance', 'after-acceptance'] as const)(
+    'recovers registration %s with the same grant, id and wrapped key',
+    async (failure) => {
+      const { srv, laptop, projectId } = await linkedProject();
+      const work = memoryShareWorkStore();
+      await delegate(laptop);
+      let first = true;
+      const ctx = {
+        ...laptop.shareLinks,
+        work,
+        api: {
+          ...laptop.shareLinks.api,
+          create: async (
+            ...args: Parameters<typeof laptop.shareLinks.api.create>
+          ) => {
+            if (!first) return laptop.shareLinks.api.create(...args);
+            first = false;
+            if (failure === 'after-acceptance')
+              await laptop.shareLinks.api.create(...args);
+            throw new Error('Registration response unavailable');
+          }
+        }
+      };
+      let completed: CreatedShareLink | undefined;
+      if (failure === 'before-acceptance')
+        await expect(createShareLink(ctx, projectId, 'view')).rejects.toThrow(
+          /unavailable/
+        );
+      else completed = await createShareLink(ctx, projectId, 'view');
+      const saved = await work.read(OWNER, projectId);
+      expect(saved.pending).toHaveLength(
+        failure === 'before-acceptance' ? 1 : 0
+      );
+      const before = await laptop.store.shareHead(projectId);
+      expect(before.shareLinks?.links).toHaveLength(1);
+      await maintainShareLinks({ ...laptop.shareLinks, work }, projectId);
+      const view = await listShareLinks(laptop.shareLinks, projectId);
+      expect(view.links).toHaveLength(1);
+      expect(view.links[0]!.shareId).toBe(before.shareLinks!.links[0]!.shareId);
+      expect((await laptop.store.shareHead(projectId)).version).toBe(
+        before.version
+      );
+      expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+      const url = completed?.url ?? view.links[0]!.url!;
+      expect((await visit(srv, url)).verified.mode).toBe('view');
+      const fragment = parseShareFragment(url.slice(url.indexOf('#')))!;
+      expect(JSON.stringify(saved)).not.toContain(
+        toBase64Url(fragment.shareKey)
+      );
+      expect(JSON.stringify(saved)).not.toContain(fragment.token);
+    }
+  );
+
+  it('does not turn an ordinary revoked row into a replacement and derives modes from verified sources', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const ctx = { ...laptop.shareLinks, work: memoryShareWorkStore() };
+    await delegate(laptop);
+    const revoked = await createShareLink(ctx, projectId, 'view');
+    const active = await createShareLink(ctx, projectId, 'view');
+    await expect(
+      revokeShareLink(
+        failingForget(ctx, Infinity).ctx,
+        projectId,
+        revoked.shareId
+      )
+    ).rejects.toBeInstanceOf(ShareLinksError);
+    const created = await reissueShareLinks(ctx, projectId, [
+      { shareId: revoked.shareId, mode: 'tweak' },
+      { shareId: active.shareId, mode: 'tweak' }
+    ]);
+    expect(created).toHaveLength(1);
+    expect(created[0]!.mode).toBe('view');
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links.map(
+        (link) => link.shareId
+      )
+    ).toEqual([created[0]!.shareId]);
+  });
+
+  it('resumes a partial batch after reload without another replacement of a completed source', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    const first = await createShareLink(ctx, projectId, 'view');
+    const second = await createShareLink(ctx, projectId, 'tweak');
+    let calls = 0;
+    const down = {
+      ...ctx,
+      api: {
+        ...ctx.api,
+        create: async (...args: Parameters<typeof ctx.api.create>) => {
+          if (++calls === 2) throw new Error('Second registration unavailable');
+          return ctx.api.create(...args);
+        }
+      }
+    };
+    await expect(
+      reissueShareLinks(down, projectId, [first, second])
+    ).rejects.toThrow(/unavailable/);
+    const stopped = await work.read(OWNER, projectId);
+    expect(stopped.replacements).toHaveLength(1);
+    expect(stopped.pending).toHaveLength(1);
+    expect(stopped.retired).toEqual([
+      { shareId: second.shareId, mode: 'tweak' }
+    ]);
+    const result = await reissueShareLinks(
+      { ...laptop.shareLinks, work },
+      projectId,
+      [first, second]
+    );
+    expect(result).toHaveLength(2);
+    expect(new Set(result.map((link) => link.shareId)).size).toBe(2);
+    expect(
+      result.some((link) => link.shareId === stopped.replacements[0]!.shareId)
+    ).toBe(true);
+    expect(
+      result.some((link) => link.shareId === stopped.pending[0]!.shareId)
+    ).toBe(true);
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links
+    ).toHaveLength(2);
+    expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+    for (const link of result)
+      expect((await visit(srv, link.url)).verified.mode).toBe(link.mode);
+  });
+
+  it('cancels pending registration when its grant is explicitly revoked', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    await delegate(laptop);
+    const down = {
+      ...laptop.shareLinks,
+      work,
+      api: {
+        ...laptop.shareLinks.api,
+        create: async () => {
+          throw new Error('Offline');
+        }
+      }
+    };
+    await expect(createShareLink(down, projectId, 'view')).rejects.toThrow(
+      /Offline/
+    );
+    const job = (await work.read(OWNER, projectId)).pending[0]!;
+    const recovered = { ...laptop.shareLinks, work };
+    await revokeShareLink(recovered, projectId, job.shareId);
+    expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+    await maintainShareLinks(recovered, projectId);
+    expect((await laptop.store.shareHead(projectId)).shareLinks?.links).toEqual(
+      []
+    );
+    expect(await reissueShareLinks(recovered, projectId, [job])).toEqual([]);
   });
 });
 
@@ -2367,7 +2562,10 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
       [aKey, envelopeKey(srv, projectId, b.shareId)!].sort()
     );
     // ...and so does forgetting b.
-    await revokeShareLink(laptop.shareLinks, projectId, b.shareId);
+    // Isolate object deletion from the normal background publisher, which
+    // may legitimately replace a's large snapshot with a new inline one.
+    const quiet = reload(srv, laptop, { members: othersOf(owner) });
+    await revokeShareLink(quiet.shareLinks, projectId, b.shareId);
     expect((await served(srv, b.fragment.token)).status).toBe(404);
     expect((await served(srv, a.fragment.token)).status).toBe(200);
     expect(snapshotObjects(srv, projectId)).toEqual([aKey]);

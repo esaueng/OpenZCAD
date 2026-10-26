@@ -103,9 +103,19 @@ import {
 } from './projectGroups';
 import { ownerDeviceList, projectOwnerOf } from './shareLinkSet';
 import {
+  memoryShareWorkStore,
+  shareWorkStore,
+  withShareWorkLock,
+  type PendingShareCreation,
+  type ShareWorkStore,
+  type ShareWorkLink
+} from './shareWorkStore';
+import { getKeySessionRevision } from './keySession';
+import {
   shareLinkToken,
   shareLinkTokenHash,
   shareLinkUrl,
+  parseShareFragment,
   type ShareFragmentParts
 } from './shareLinkFragment';
 
@@ -121,6 +131,7 @@ export const SHARE_AUTHORITY_RENEWAL_MS = 2 * DAY_MS;
 const SCHEMA_VERSION = 1;
 
 export type ShareLinksErrorCode =
+  | 'work-conflict'
   | 'not-owner'
   | 'read-only-device'
   | 'link-not-found'
@@ -140,6 +151,7 @@ export class ShareLinksError extends Error {
 
 /** What the share-link flows need of the page. */
 export interface ShareLinksContext {
+  readonly work?: ShareWorkStore;
   readonly groups: ProjectGroupContext;
   readonly store: {
     shareHead(projectId: string): Promise<EncryptedShareHead>;
@@ -175,6 +187,113 @@ function randomBytes(ctx: ShareLinksContext, length: number): Uint8Array {
 }
 
 const nowOf = (ctx: { readonly now?: () => number }) => (ctx.now ?? Date.now)();
+
+const memoryWork = new WeakMap<ShareLinksContext, ShareWorkStore>();
+export function shareWorkFor(ctx: ShareLinksContext): ShareWorkStore {
+  if (ctx.work) return ctx.work;
+  if (typeof indexedDB !== 'undefined') return shareWorkStore();
+  let store = memoryWork.get(ctx);
+  if (!store) {
+    store = memoryShareWorkStore();
+    memoryWork.set(ctx, store);
+  }
+  return store;
+}
+
+export async function acknowledgeShareRemoval(
+  ctx: ShareLinksContext,
+  projectId: string,
+  notice: string
+): Promise<void> {
+  await shareWorkFor(ctx).update(
+    ctx.groups.account.userId,
+    projectId,
+    (current) => ({
+      ...current,
+      notice: current.notice === notice ? null : current.notice
+    })
+  );
+}
+
+async function rememberShareRemoval(
+  ctx: ShareLinksContext,
+  removal: MembersRemoved | MemberDevicesRemoved
+): Promise<void> {
+  await shareWorkFor(ctx).update(
+    ctx.groups.account.userId,
+    removal.projectId,
+    (current) =>
+      current.removalEpoch >= removal.keyEpoch
+        ? current
+        : {
+            ...current,
+            removalEpoch: removal.keyEpoch,
+            notice: String(removal.keyEpoch)
+          }
+  );
+}
+
+async function rememberRetired(
+  ctx: ShareLinksContext,
+  projectId: string,
+  links: readonly ShareWorkLink[]
+): Promise<void> {
+  await shareWorkFor(ctx).update(
+    ctx.groups.account.userId,
+    projectId,
+    (current) => ({
+      ...current,
+      retired: [
+        ...new Map(
+          [...current.retired, ...links].map((link) => [link.shareId, link])
+        ).values()
+      ]
+    })
+  );
+}
+
+async function discardRevokedWork(
+  ctx: ShareLinksContext,
+  projectId: string,
+  head: EncryptedShareHead
+): Promise<void> {
+  const revoked = head.shareLinks?.tombstonedIds;
+  if (!revoked?.size) return;
+  const identity = b64(ctx.groups.account.list.identityKeyHash);
+  await shareWorkFor(ctx).update(
+    ctx.groups.account.userId,
+    projectId,
+    (current) => {
+      const cancelled = current.pending.filter(
+        (job) => revoked.has(job.shareId) && job.ownerIdentityHash === identity
+      );
+      const sources = new Set(
+        cancelled.flatMap((job) => (job.sourceId ? [job.sourceId] : []))
+      );
+      return {
+        ...current,
+        pending: current.pending.filter((job) => !cancelled.includes(job)),
+        retired: current.retired.filter((link) => !sources.has(link.shareId))
+      };
+    }
+  );
+}
+
+function workLock<T>(
+  ctx: ShareLinksContext,
+  projectId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const revision = getKeySessionRevision();
+  return withShareWorkLock(ctx.groups.account.userId, projectId, async () => {
+    if (getKeySessionRevision() !== revision)
+      throw new ShareLinksError(
+        'work-conflict',
+        'The encryption session changed. Reopen sharing.'
+      );
+    return work();
+  });
+}
 
 /** What the delegation flows need: no store, so a removal can renew it. */
 export type ShareDelegationContext = Pick<
@@ -762,36 +881,136 @@ export async function createShareLink(
   projectId: string,
   mode: ShareLinkMode
 ): Promise<CreatedShareLink> {
+  const revision = getKeySessionRevision();
+  return withShareWorkLock(ctx.groups.account.userId, projectId, async () => {
+    if (getKeySessionRevision() !== revision)
+      throw new ShareLinksError(
+        'work-conflict',
+        'The encryption session changed. Reopen sharing.'
+      );
+    const pending = (
+      await shareWorkFor(ctx).read(ctx.groups.account.userId, projectId)
+    ).pending.find((job) => job.sourceId === null && job.mode === mode);
+    return createStoredShareLink(ctx, projectId, mode, pending);
+  });
+}
+
+class ShareGrantAlreadyWritten extends Error {}
+
+async function createStoredShareLink(
+  ctx: ShareLinksContext,
+  projectId: string,
+  mode: ShareLinkMode,
+  saved?: PendingShareCreation,
+  sourceId: string | null = null
+): Promise<CreatedShareLink> {
+  const revision = getKeySessionRevision();
+  const active = () => {
+    if (getKeySessionRevision() !== revision)
+      throw new ShareLinksError(
+        'work-conflict',
+        'The encryption session changed. Reopen sharing.'
+      );
+  };
   const { device, record: own } = requireDevice(ctx);
   const before = await ctx.store.shareHead(projectId);
   await requireOwner(ctx, projectId, before.keyEpoch);
-  const shareKey = randomBytes(ctx, 32);
-  const shareId = `shr_${b64(randomBytes(ctx, 16))}`;
+  const work = shareWorkFor(ctx);
+  const userId = ctx.groups.account.userId;
+  const identity = b64(ctx.groups.account.list.identityKeyHash);
+  if (saved && (saved.ownerIdentityHash !== identity || saved.mode !== mode))
+    throw new ShareLinksError(
+      'work-conflict',
+      'Saved sharing belongs to an earlier owner identity. Reissue it from the retired list.'
+    );
+  const shareId = saved?.shareId ?? `shr_${b64(randomBytes(ctx, 16))}`;
+  const shareKey = saved
+    ? await openShareKey(
+        await projectKeyForEpoch(ctx.groups, projectId, saved.keyEpoch),
+        fromBase64Url(saved.wrapped),
+        { projectId, keyEpoch: saved.keyEpoch, shareId },
+        fromBase64Url(saved.shareKeyHash)
+      )
+    : randomBytes(ctx, 32);
   const keyHash = await shareKeyHash(shareKey);
+  if (!saved) {
+    const job: PendingShareCreation = {
+      shareId,
+      mode,
+      ownerIdentityHash: identity,
+      shareKeyHash: b64(keyHash),
+      sourceId,
+      keyEpoch: before.keyEpoch,
+      wrapped: b64(
+        await wrapKey(
+          await projectKeyForEpoch(ctx.groups, projectId, before.keyEpoch),
+          shareKey,
+          {
+            purpose: 'share-key',
+            projectId,
+            keyEpoch: before.keyEpoch,
+            shareId
+          }
+        )
+      )
+    };
+    active();
+    await work.update(userId, projectId, (current) => ({
+      ...current,
+      pending: [...current.pending, job]
+    }));
+  }
   const token = await shareLinkToken(shareKey);
-  const head = await ctx.store.writeShareLinks(
-    projectId,
-    async (current, keyEpoch) => {
-      const grant = await signShareLinkGrant(device.signing.privateKey, {
-        projectId,
-        shareId,
-        shareKeyHash: keyHash,
-        mode,
-        keyEpoch,
-        issuedAt: nowOf(ctx),
-        signerKeyHash: own.signingKeyHash
-      });
-      const entries = entriesOf(current);
-      return sortedSet(
-        [...entries.grants, { id: shareId, signed: grant }],
-        entries.tombstones
-      );
-    }
-  );
+  let head: EncryptedShareHead;
+  try {
+    head = await ctx.store.writeShareLinks(
+      projectId,
+      async (current, keyEpoch) => {
+        active();
+        if (current?.tombstonedIds.has(shareId))
+          throw new ShareLinksError(
+            'work-conflict',
+            'This saved link was revoked and will not be recreated.'
+          );
+        const existing = current?.links.find(
+          (link) => link.shareId === shareId
+        );
+        if (existing) {
+          if (
+            existing.mode !== mode ||
+            !sameBytes(existing.shareKeyHash, keyHash)
+          )
+            throw new ShareLinksError(
+              'work-conflict',
+              'The saved link differs from the project grant.'
+            );
+          throw new ShareGrantAlreadyWritten();
+        }
+        const grant = await signShareLinkGrant(device.signing.privateKey, {
+          projectId,
+          shareId,
+          shareKeyHash: keyHash,
+          mode,
+          keyEpoch,
+          issuedAt: nowOf(ctx),
+          signerKeyHash: own.signingKeyHash
+        });
+        const entries = entriesOf(current);
+        return sortedSet(
+          [...entries.grants, { id: shareId, signed: grant }],
+          entries.tombstones
+        );
+      }
+    );
+  } catch (error) {
+    if (!(error instanceof ShareGrantAlreadyWritten)) throw error;
+    head = await ctx.store.shareHead(projectId);
+  }
   const list = ctx.groups.account.list;
   // Signed by this device ("OZN", `signShareLinkRegistration`) over every
   // field: the server registers a link only for a certified owner device.
   const register = async (keyEpoch: number) => {
+    active();
     const tokenHash = await shareLinkTokenHash(token);
     const wrapped = await wrapKey(
       await projectKeyForEpoch(ctx.groups, projectId, keyEpoch),
@@ -811,6 +1030,7 @@ export async function createShareLink(
         wrapped
       }
     );
+    active();
     return ctx.api.create(projectId, {
       shareId,
       tokenHash,
@@ -826,9 +1046,52 @@ export async function createShareLink(
     await register(head.keyEpoch);
   } catch (error) {
     // The group moved on after the version: wrap under the new epoch.
-    if ((error as { code?: string }).code !== 'E2EE_EPOCH_STALE') throw error;
-    await register((await joinProjectGroup(ctx.groups, projectId)).keyEpoch);
+    if ((error as { code?: string }).code === 'E2EE_EPOCH_STALE') {
+      await register((await joinProjectGroup(ctx.groups, projectId)).keyEpoch);
+    } else {
+      // Registration may have committed while its response was lost. Recover
+      // the same id/key rather than creating another grant on retry.
+      const recorded = (await ctx.api.list(projectId)).links.find(
+        (link) => link.shareId === shareId
+      );
+      if (
+        !recorded ||
+        recorded.mode !== mode ||
+        recorded.ownerIdentityHash !== identity ||
+        recorded.shareKeyHash !== b64(keyHash)
+      )
+        throw error;
+      await shareKeyFor(
+        ctx,
+        projectId,
+        shareId,
+        keyHash,
+        recorded,
+        Math.max(...recorded.keys.map((key) => key.keyEpoch))
+      );
+    }
   }
+  active();
+  const origin = saved?.sourceId ?? sourceId;
+  await work.update(userId, projectId, (current) => ({
+    ...current,
+    pending: current.pending.filter((job) => job.shareId !== shareId),
+    retired: origin
+      ? current.retired.filter((link) => link.shareId !== origin)
+      : current.retired,
+    replacements: origin
+      ? [
+          ...current.replacements.filter(
+            (link) =>
+              link.sourceId !== origin &&
+              head.shareLinks?.links.some(
+                (active) => active.shareId === link.shareId
+              )
+          ),
+          { sourceId: origin, shareId }
+        ]
+      : current.replacements
+  }));
   const pending: string[] = [];
   const stated = await issueShareAuthorities(ctx, projectId, {
     only: [shareId],
@@ -957,6 +1220,24 @@ class AlreadyRevoked extends Error {}
  * tombstone stands and the next attempt asks again.
  */
 export async function revokeShareLinks(
+  ctx: ShareLinksContext,
+  projectId: string,
+  shareIds: readonly string[]
+): Promise<EncryptedShareHead> {
+  return workLock(ctx, projectId, async () => {
+    try {
+      return await revokeShareLinksUnderLock(ctx, projectId, shareIds);
+    } finally {
+      await discardRevokedWork(
+        ctx,
+        projectId,
+        await ctx.store.shareHead(projectId)
+      );
+    }
+  });
+}
+
+async function revokeShareLinksUnderLock(
   ctx: ShareLinksContext,
   projectId: string,
   shareIds: readonly string[]
@@ -1172,46 +1453,137 @@ export async function maintainShareLinks(
   projectId: string,
   options: { readonly force?: boolean } = {}
 ): Promise<ShareLinkUpkeep> {
+  return workLock(ctx, projectId, () =>
+    maintainShareLinksUnderLock(ctx, projectId, options)
+  );
+}
+
+async function maintainShareLinksUnderLock(
+  ctx: ShareLinksContext,
+  projectId: string,
+  options: { readonly force?: boolean }
+): Promise<ShareLinkUpkeep> {
+  const workState = await shareWorkFor(ctx).read(
+    ctx.groups.account.userId,
+    projectId
+  );
   const empty: ShareLinkUpkeep = {
     authorities: { issued: [], current: [], needsConfirmation: [], failed: [] },
-    retired: [],
+    retired: workState.retired,
     revocations: { forgotten: [], failed: [] },
     head: null
   };
   if (!ctx.groups.device) return empty;
   let head = await ctx.store.shareHead(projectId);
   const links = head.shareLinks?.links ?? [];
-  if (!links.length && !head.shareLinks?.tombstonedIds.size) {
+  if (
+    !links.length &&
+    !head.shareLinks?.tombstonedIds.size &&
+    !workState.pending.length
+  ) {
     return { ...empty, head };
   }
   const owner = await projectOwnerOf(ctx.groups, projectId, head.keyEpoch);
   if (owner !== ctx.groups.account.userId) return { ...empty, head };
+  await discardRevokedWork(ctx, projectId, head);
   const listed = await ctx.api.list(projectId);
-  const revocations = await forgetRevokedShareLinks(ctx, projectId, {
+  let revocations = await forgetRevokedShareLinks(ctx, projectId, {
     head,
     listed
   });
-  if (!links.length) return { ...empty, revocations, head };
+  if (!links.length && !workState.pending.length)
+    return { ...empty, revocations, head };
   const identity = b64(ctx.groups.account.list.identityKeyHash);
-  const stale = listed.links.some(
-    (record) =>
-      record.ownerIdentityHash !== identity &&
-      links.some((link) => link.shareId === record.shareId)
+  const saved = await shareWorkFor(ctx).read(
+    ctx.groups.account.userId,
+    projectId
   );
-  let retired: { shareId: string; mode: ShareLinkMode }[] = [];
-  if (stale) {
-    retired = links.map((link) => ({ shareId: link.shareId, mode: link.mode }));
-    head = await revokeShareLinks(
-      ctx,
-      projectId,
-      retired.map((link) => link.shareId)
-    );
+  const staleJobs = saved.pending.filter(
+    (job) => job.ownerIdentityHash !== identity
+  );
+  const staleIds = new Set([
+    ...staleJobs.map((job) => job.shareId),
+    ...listed.links
+      .filter((record) => record.ownerIdentityHash !== identity)
+      .map((record) => record.shareId)
+  ]);
+  const origins = new Map(
+    staleJobs
+      .filter((job) => job.sourceId)
+      .map((job) => [job.shareId, job.sourceId!])
+  );
+  const retired = [
+    ...links
+      .filter((link) => staleIds.has(link.shareId))
+      .map((link) => ({
+        shareId: origins.get(link.shareId) ?? link.shareId,
+        mode: link.mode
+      })),
+    ...staleJobs.map((job) => ({
+      shareId: job.sourceId ?? job.shareId,
+      mode: job.mode
+    }))
+  ];
+  if (retired.length) {
+    await rememberRetired(ctx, projectId, retired);
+    try {
+      const known = [...staleIds].filter(
+        (id) =>
+          head.shareLinks?.links.some((link) => link.shareId === id) ||
+          head.shareLinks?.tombstonedIds.has(id)
+      );
+      if (known.length)
+        head = await revokeShareLinksUnderLock(ctx, projectId, known);
+    } catch (error) {
+      if (
+        !(error instanceof ShareLinksError) ||
+        error.code !== 'revocation-pending'
+      )
+        throw error;
+      head = await ctx.store.shareHead(projectId);
+      const retry = await forgetRevokedShareLinks(ctx, projectId, { head });
+      revocations = {
+        forgotten: [...revocations.forgotten, ...retry.forgotten],
+        failed: [...revocations.failed, ...retry.failed]
+      };
+    }
   }
+  if (staleJobs.length)
+    await shareWorkFor(ctx).update(
+      ctx.groups.account.userId,
+      projectId,
+      (current) => ({
+        ...current,
+        pending: current.pending.filter((job) => !staleIds.has(job.shareId))
+      })
+    );
+  const resume = await shareWorkFor(ctx).read(
+    ctx.groups.account.userId,
+    projectId
+  );
+  for (const job of resume.pending) {
+    if (head.shareLinks?.tombstonedIds.has(job.shareId)) continue;
+    if (
+      job.sourceId &&
+      !resume.retired.some((link) => link.shareId === job.sourceId)
+    )
+      continue;
+    await createStoredShareLink(ctx, projectId, job.mode, job);
+  }
+  if (resume.pending.length) head = await ctx.store.shareHead(projectId);
   const authorities = await issueShareAuthorities(ctx, projectId, {
     head,
     ...(options.force ? { force: true } : {})
   });
-  return { authorities, retired, revocations, head };
+  await publishShareSnapshots(ctx, projectId, head);
+  return {
+    authorities,
+    retired: (
+      await shareWorkFor(ctx).read(ctx.groups.account.userId, projectId)
+    ).retired,
+    revocations,
+    head
+  };
 }
 
 /**
@@ -1224,22 +1596,76 @@ export async function reissueShareLinks(
   projectId: string,
   links: readonly { shareId: string; mode: ShareLinkMode }[]
 ): Promise<CreatedShareLink[]> {
-  const head = await ctx.store.shareHead(projectId);
-  const active = links.filter((link) =>
-    head.shareLinks?.links.some((l) => l.shareId === link.shareId)
-  );
-  if (active.length) {
-    await revokeShareLinks(
-      ctx,
-      projectId,
-      active.map((link) => link.shareId)
+  return workLock(ctx, projectId, async () => {
+    const head = await ctx.store.shareHead(projectId);
+    await requireOwner(ctx, projectId, head.keyEpoch);
+    const store = shareWorkFor(ctx),
+      userId = ctx.groups.account.userId;
+    const saved = await store.read(userId, projectId);
+    const sources = new Map(
+      [...saved.retired, ...(head.shareLinks?.links ?? [])].map((link) => [
+        link.shareId,
+        { shareId: link.shareId, mode: link.mode }
+      ])
     );
-  }
-  const created: CreatedShareLink[] = [];
-  for (const link of links) {
-    created.push(await createShareLink(ctx, projectId, link.mode));
-  }
-  return created;
+    const selected = [...new Set(links.map((link) => link.shareId))].flatMap(
+      (id) => (sources.has(id) ? [sources.get(id)!] : [])
+    );
+    // Commit the authorized sources/modes before tombstones or remote deletes.
+    await rememberRetired(ctx, projectId, selected);
+    if (selected.length)
+      await revokeShareLinksUnderLock(
+        ctx,
+        projectId,
+        selected.map((link) => link.shareId)
+      );
+    const created: CreatedShareLink[] = [];
+    for (const link of selected) {
+      const current = await store.read(userId, projectId);
+      const pending = current.pending.find(
+        (job) => job.sourceId === link.shareId
+      );
+      created.push(
+        await createStoredShareLink(
+          ctx,
+          projectId,
+          link.mode,
+          pending,
+          link.shareId
+        )
+      );
+    }
+    // A prior partial batch already registered some replacements. Their
+    // encrypted grants and server wraps reconstruct the same URLs on retry.
+    const complete = (await store.read(userId, projectId)).replacements;
+    const previous = complete.filter(
+      (item) =>
+        links.some((link) => link.shareId === item.sourceId) &&
+        !created.some((link) => link.shareId === item.shareId)
+    );
+    if (previous.length) {
+      const view = await listShareLinks(ctx, projectId);
+      for (const item of previous) {
+        const link = view.links.find(
+          (link) =>
+            link.shareId === item.shareId &&
+            link.status !== 'revocation-pending'
+        );
+        const fragment = link?.url
+          ? parseShareFragment(link.url.slice(link.url.indexOf('#')))
+          : null;
+        if (link?.url && fragment)
+          created.push({
+            shareId: link.shareId,
+            mode: link.mode,
+            url: link.url,
+            fragment,
+            pending: link.status === 'active' ? [] : ['publication']
+          });
+      }
+    }
+    return created;
+  });
 }
 
 /**
@@ -1252,6 +1678,7 @@ export async function shareLinksAfterRemoval(
   ctx: ShareLinksContext,
   removal: MembersRemoved
 ): Promise<AuthorityOutcome | null> {
+  await rememberShareRemoval(ctx, removal);
   if (!ctx.groups.device) return null;
   const head = await ctx.store.shareHead(removal.projectId);
   // No request unless the head tombstones links; never fails the hook.
@@ -1281,6 +1708,7 @@ export async function shareLinksAfterDeviceRemoval(
   ctx: ShareLinksContext,
   removal: MemberDevicesRemoved
 ): Promise<AuthorityOutcome | null> {
+  await rememberShareRemoval(ctx, removal);
   if (!ctx.groups.device) return null;
   const head = await ctx.store.shareHead(removal.projectId);
   // No request unless the head tombstones links; never fails the hook.
