@@ -239,6 +239,7 @@
 .object-row:hover .row-visibility,
 .object-row.hidden-body .row-visibility,
 .body-row:hover .row-visibility,
+.body-row.selected .row-visibility,
 .body-row.hidden-body .row-visibility,
 .row-visibility:focus-visible {
   opacity: 1;
@@ -251,6 +252,12 @@
 
 .row-visibility.is-hidden {
   color: var(--color-warning);
+}
+
+.row-visibility.is-active {
+  opacity: 1;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
 }
 
 .feature-row.hidden-body .feature-name,

@@ -70,7 +70,11 @@ import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
-import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
+import {
+  activeIsolatedBodyId,
+  toggleBodyIsolation,
+  type BodyIsolation
+} from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
@@ -144,6 +148,7 @@ import {
   Redo2,
   Ruler,
   Save,
+  Scan,
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
@@ -3066,8 +3071,7 @@ export function App() {
         : [],
     [doc, hiddenBodyIds]
   );
-  // Not persisted: isolation is a temporary view, and a reload shows the
-  // user's own hidden set.
+  // The view's hidden set persists; the prior isolation snapshot is session-local.
   const [bodyIsolation, setBodyIsolation] = useState<
     (BodyIsolation & { projectId: string }) | null
   >(null);
@@ -3534,13 +3538,15 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
-    toggleBodyVisibility
+    toggleBodyVisibility,
+    isolateBody
   });
   viewportMenuHandlersRef.current = {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
-    toggleBodyVisibility
+    toggleBodyVisibility,
+    isolateBody
   };
   const managerRef = useRef<CommandManager | null>(null);
   const parameterEditRequest = useRef(0);
@@ -6824,6 +6830,25 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
+  const isolatedBodyId = useMemo(
+    () =>
+      activeIsolatedBodyId(
+        partBodies.map((body) => body.bodyId),
+        hiddenBodyIds,
+        localHiddenBodyIds,
+        bodyIsolation?.projectId === doc?.projectId ? bodyIsolation : null
+      ),
+    [
+      partBodies,
+      hiddenBodyIds,
+      localHiddenBodyIds,
+      bodyIsolation,
+      doc?.projectId
+    ]
+  );
+  // End the session permanently when its view changes. Merely hiding the
+  // indicator would let an old snapshot revive if the same set returns later.
+  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
   // Only whether a face offset is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
@@ -11008,6 +11033,22 @@ export function App() {
    * than showing everything.
    */
   function isolateBody(bodyId: string) {
+    const body = partBodies.find((candidate) => candidate.bodyId === bodyId);
+    if (!body) {
+      setStatus('Select a result body to isolate.');
+      return;
+    }
+    if (parameterHiddenBodyIds.has(bodyId as BodyId)) {
+      const parameter =
+        doc &&
+        listParameters(doc).find((entry) =>
+          entry.toggle?.bodyIds.includes(bodyId as BodyId)
+        );
+      setStatus(
+        `Turn on ${parameter?.name ?? 'its visibility parameter'} before isolating ${body.name}.`
+      );
+      return;
+    }
     const isolation =
       bodyIsolation && bodyIsolation.projectId === doc?.projectId
         ? bodyIsolation
@@ -24724,6 +24765,19 @@ export function App() {
         },
         {
           item: {
+            id: 'isolate',
+            label:
+              isolatedBodyId === selection.bodyId
+                ? 'Exit isolation'
+                : 'Isolate body',
+            icon: <Scan size={13} aria-hidden="true" />
+          },
+          run: runCurrent((handlers) =>
+            handlers.isolateBody(menuSelection.selection.bodyId)
+          )
+        },
+        {
+          item: {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
@@ -26612,6 +26666,24 @@ export function App() {
       run: showAllBodies
     },
     {
+      id: 'view-isolate-body',
+      label: isolatedBodyId ? 'Exit isolation' : 'Isolate selected body',
+      group: 'View',
+      keywords: ['isolate', 'solo', 'body', 'export'],
+      icon: <Scan size={16} aria-hidden="true" />,
+      disabledReason: isolatedBodyId
+        ? null
+        : !selectedBody || selectedBody.consumed
+          ? 'Select a result body first'
+          : parameterHiddenBodyIds.has(selectedBody.bodyId)
+            ? 'Turn on its visibility parameter first'
+            : null,
+      run: () => {
+        const bodyId = isolatedBodyId ?? selectedBody?.bodyId;
+        if (bodyId) isolateBody(bodyId);
+      }
+    },
+    {
       // The dock's section toggle had no palette entry: "section" found
       // nothing, so the only way in was an unlabelled dock icon.
       id: 'view-section',
@@ -27352,6 +27424,8 @@ export function App() {
       onSelectBody={handleSelectBodyFromTree}
       selectedBodyIds={selectedBodyIds}
       onToggleBodyVisibility={toggleBodyVisibility}
+      onIsolateBody={isolateBody}
+      isolatedBodyId={isolatedBodyId}
       onRenameBody={editDisabledReason ? undefined : handleRenameBody}
       bodyAppearancePreview={bodyAppearancePreview}
       onPreviewBodyAppearance={previewBodyAppearance}
