@@ -6,6 +6,7 @@
 export type MlsErrorKind = 'policy' | 'mls' | 'state' | 'input' | 'worker';
 
 export type PolicyReasonCode =
+  | 'checkpoint-invalid'
   | 'credential-invalid'
   | 'credential-revoked'
   | 'credential-unknown'
