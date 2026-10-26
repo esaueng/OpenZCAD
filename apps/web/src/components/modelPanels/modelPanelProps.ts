@@ -70,6 +70,9 @@ export interface ModelPanelSource {
   onSelectFeature(nodeId: string): void;
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
+  /** Isolate a live result body, or restore its prior visibility. */
+  onIsolateBody?(bodyId: string): void;
+  isolatedBodyId?: string | null;
   /** Renames a body in place from Objects (ZC-127): one undoable step. */
   onRenameBody?(bodyId: BodyId, name: string): void;
   bodyAppearancePreview?: BodyAppearancePreview | null;

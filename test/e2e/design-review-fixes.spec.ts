@@ -190,7 +190,7 @@ test('a drawing follows a finishing body on explicit Update and saves from Draw'
     .toBe(true);
   await enterCommandValue(page, 'radius', '2');
   await finishInPlaceCommand(page, 'Fillet');
-  await expect(page.getByRole('contentinfo')).toContainText('Fillet applied', {
+  await expect(page.getByRole('contentinfo')).toContainText('Filleted edges', {
     timeout: 30_000
   });
   await mode(page, 'Draw').click();

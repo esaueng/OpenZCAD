@@ -91,7 +91,7 @@ test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
   await expectBodyCount(page, 1);
 });
 
-test('viewport context menu hides a body and the sidebar eye restores it', async ({
+test('viewport context menu isolates or hides a body and the sidebar eye restores it', async ({
   page
 }) => {
   await stubApi(page);
@@ -122,6 +122,26 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   await expect(
     menu.getByRole('menuitem', { name: /Move \/ Rotate/ })
   ).toBeVisible();
+  await menu
+    .getByRole('menuitem', { name: 'Isolate body', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: /^Exit isolation of / })
+  ).toBeVisible();
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width / 2, y: bounds.height / 2 }
+  });
+  await menu
+    .getByRole('menuitem', { name: 'Exit isolation', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: /^Exit isolation of / })
+  ).toHaveCount(0);
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width / 2, y: bounds.height / 2 }
+  });
   await menu.getByRole('menuitem', { name: 'Hide body' }).click();
   await expect(menu).toBeHidden();
 

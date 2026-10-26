@@ -27,11 +27,7 @@ import {
   commandFactories,
   type AnyCommand
 } from '@openzcad/command-system';
-import {
-  DEFAULT_BODY_COLOR,
-  edgeTopologyWitnessHash,
-  toUserId
-} from '@openzcad/shared';
+import { edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { BodyStats, Inspector } from './Inspector';

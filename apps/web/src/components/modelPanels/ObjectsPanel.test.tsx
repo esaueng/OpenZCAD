@@ -64,6 +64,35 @@ function renderPanel(overrides: Partial<PanelProps> = {}) {
 }
 
 describe('ObjectsPanel', () => {
+  it('isolates result bodies and exposes Exit isolation without changing selection', async () => {
+    const user = userEvent.setup();
+    const plate = body('body-1', 'Plate');
+    const source = body('body-0', 'Source', true);
+    const onIsolateBody = vi.fn();
+    const { props, rerender } = renderPanel({
+      features: [feature(1, { bodyId: plate.bodyId })],
+      representations: { [plate.bodyId]: plate, [source.bodyId]: source },
+      selectedBodyIds: [plate.bodyId],
+      onIsolateBody
+    });
+    const isolate = screen.getByRole('button', { name: 'Isolate body Plate' });
+    expect(isolate).toHaveAttribute('aria-pressed', 'false');
+    await user.click(isolate);
+    expect(onIsolateBody).toHaveBeenCalledWith(plate.bodyId);
+    expect(props.onSelectBody).not.toHaveBeenCalled();
+    rerender(<Harness {...props} isolatedBodyId={plate.bodyId} />);
+    const exit = screen.getByRole('button', {
+      name: 'Exit isolation of Plate'
+    });
+    expect(exit).toHaveAttribute('aria-pressed', 'true');
+    await user.click(exit);
+    expect(onIsolateBody).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole('button', { name: /1 source body/ }));
+    expect(
+      screen.queryByRole('button', { name: 'Isolate body Source' })
+    ).toBeNull();
+  });
+
   it('edits a body color from its row without changing selection; Escape returns focus', async () => {
     const user = userEvent.setup();
     const plate = { ...body('body-1', 'Plate'), color: DEFAULT_BODY_COLOR };
