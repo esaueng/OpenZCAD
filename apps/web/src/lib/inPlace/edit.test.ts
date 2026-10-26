@@ -40,8 +40,9 @@ import {
   IN_PLACE_TOOL_SPECS,
   type FacePick,
   type InPlaceContext,
-  type InPlaceRequest,
-  type InPlaceSlots
+  type ResolvedInPlaceRequest,
+  type InPlaceSlots,
+  resolveNewAxis
 } from './tools';
 
 const BODY = 'body_a' as BodyId;
@@ -105,7 +106,7 @@ function feature(data: FeatureData, bodyId?: BodyId): FeatureNode {
 function untouched(
   node: FeatureNode,
   changed: Record<string, number> = {}
-): InPlaceRequest | null {
+): ResolvedInPlaceRequest | null {
   const armed = inPlaceEditSeed(node, EDIT_CTX)!;
   const spec = IN_PLACE_TOOL_SPECS[armed.tool];
   const axis =
@@ -163,7 +164,8 @@ function untouched(
   for (const [id, raw] of Object.entries(armed.seed.raws)) {
     if (!(id in changed)) values[id] = raw;
   }
-  return spec.request(slots, values, armed.seed.options, ctx, numbers);
+  const request = spec.request(slots, values, armed.seed.options, ctx, numbers);
+  return request && resolveNewAxis(request, null);
 }
 
 describe('which in-place command edits a stored feature', () => {
@@ -370,7 +372,10 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(request).not.toHaveProperty('profile');
     const update = inPlaceFeatureUpdate(
       { featureId: node.featureId, name: node.name, data },
-      request as Exclude<InPlaceRequest, { tool: 'modeling' | 'edge-modifier' }>
+      request as Exclude<
+        ResolvedInPlaceRequest,
+        { tool: 'modeling' | 'edge-modifier' }
+      >
     );
     expect(update).toEqual({
       featureId: 'feat_1',
@@ -398,7 +403,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     };
     const node = feature(data, 'body_p' as BodyId);
     const request = untouched(node) as Extract<
-      InPlaceRequest,
+      ResolvedInPlaceRequest,
       { tool: 'pattern' }
     >;
     expect(request).toMatchObject({
@@ -435,7 +440,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(armed.seed.raws.dirY).toBe('tilt');
     // A new Y part is stored as the vector's, the rest as stored.
     const request = untouched(node, { dirY: 2 }) as Extract<
-      InPlaceRequest,
+      ResolvedInPlaceRequest,
       { tool: 'pattern' }
     >;
     expect(
@@ -461,12 +466,12 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(armed.seed.options.end).toBe('point');
     expect(armed.seed.raws.apexY).toBe('off');
     const untouchedRequest = untouched(node) as Extract<
-      InPlaceRequest,
+      ResolvedInPlaceRequest,
       { tool: 'loft' }
     >;
     expect(untouchedRequest.endPoint).toEqual({ x: 3, y: 'off', z: 40 });
     const moved = untouched(node, { apexX: 9 }) as Extract<
-      InPlaceRequest,
+      ResolvedInPlaceRequest,
       { tool: 'loft' }
     >;
     expect(moved.endPoint).toEqual({ x: 9, y: 'off', z: 40 });
@@ -484,7 +489,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     };
     const node = feature(data, 'body_p' as BodyId);
     const request = untouched(node) as Extract<
-      InPlaceRequest,
+      ResolvedInPlaceRequest,
       { tool: 'pattern' }
     >;
     const update = inPlaceFeatureUpdate(
@@ -498,7 +503,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     const followed = inPlaceFeatureUpdate(
       { featureId: node.featureId, name: node.name, data },
       untouched(node, { spacing: 15, count: 4 }) as Extract<
-        InPlaceRequest,
+        ResolvedInPlaceRequest,
         { tool: 'pattern' }
       >
     );
@@ -509,7 +514,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     const pinned = inPlaceFeatureUpdate(
       { featureId: node.featureId, name: node.name, data },
       untouched(node, { spacing2: 12, count2: 3 }) as Extract<
-        InPlaceRequest,
+        ResolvedInPlaceRequest,
         { tool: 'pattern' }
       >
     );
