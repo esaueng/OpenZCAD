@@ -16,7 +16,7 @@ jobs:
     # Real WKWebView, Keychain and macOS distribution remain in the manual
     # Apple Silicon workflow; this job never packages or publishes an app.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -26,9 +26,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Install native build prerequisites
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends build-essential libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - name: Prepare Rust toolchain
         run: rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
       - name: Check native host
