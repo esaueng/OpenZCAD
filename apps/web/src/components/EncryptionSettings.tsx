@@ -62,6 +62,7 @@ import {
 } from '../lib/e2ee/passkeys';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { invalidateAccountKeyReads } from '../lib/e2ee/unlockedKeys';
+import { encryptionStateChanged } from '../lib/e2ee/encryptionStateEvents';
 import {
   getKeySessionRevision,
   getKeySessionVersion,
@@ -120,6 +121,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
     const revision = getKeySessionRevision();
     return {
       userId,
+      readScope: lifetime,
       api: createE2eeApi(),
       store: deviceKeyStore(),
       createDeviceKeys: deviceKeyFactory(),
@@ -142,7 +144,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
       try {
         const next = await work();
         if (!isCurrent()) return false;
-        if (next) setState(next);
+        if (next) {
+          setState(next);
+          encryptionStateChanged(userId);
+        }
         return true;
       } catch (caught) {
         if (!isCurrent()) return false;
@@ -153,7 +158,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
         if (isCurrent()) setBusy(false);
       }
     },
-    [lifetime]
+    [lifetime, userId]
   );
 
   const reload = useCallback(() => run(() => loadEncryption(ctx)), [ctx, run]);
@@ -165,7 +170,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
     return () => {
       lifetime.active = false;
       lifetime.generation++;
-      invalidateAccountKeyReads(userId);
+      invalidateAccountKeyReads(userId, lifetime);
     };
   }, [reload, lifetime, userId]);
 

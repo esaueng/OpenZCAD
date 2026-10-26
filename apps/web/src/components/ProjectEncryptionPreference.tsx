@@ -11,6 +11,7 @@ import {
   type ProjectPreferenceState
 } from '../lib/e2ee/projectPreferences';
 import { unlockedAccount } from '../lib/e2ee/unlockedKeys';
+import { encryptionStateChanged } from '../lib/e2ee/encryptionStateEvents';
 import {
   isSupportedProjectFormat,
   PROJECT_STORAGE_FORMAT_E2EE_V1
@@ -89,7 +90,7 @@ export function ProjectEncryptionPreference({
 
   const choose = async (encryptNewProjects: boolean) => {
     const ctx = context();
-    if (!ctx || !state || required) return;
+    if (!ctx || !state || (required && !encryptNewProjects)) return;
     setBusy(true);
     setError(null);
     try {
@@ -100,6 +101,7 @@ export function ProjectEncryptionPreference({
           preferenceFloor(state)
         )
       );
+      encryptionStateChanged(userId);
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -136,7 +138,22 @@ export function ProjectEncryptionPreference({
         </Notice>
       ) : null}
       {state?.kind === 'refused' ? (
-        <Notice tone="warning" role="alert">
+        <Notice
+          tone="warning"
+          role="alert"
+          action={
+            required ? (
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => void choose(true)}
+              >
+                Confirm encryption
+              </button>
+            ) : undefined
+          }
+        >
           {state.message}
         </Notice>
       ) : null}

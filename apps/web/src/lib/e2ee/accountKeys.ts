@@ -135,6 +135,8 @@ export interface DeviceKeyPairs {
 
 export interface E2eeContext {
   readonly userId: string;
+  /** Cancelling one settings view leaves independent migration reads alive. */
+  readonly readScope?: object;
   readonly api: E2eeApi;
   readonly store: DeviceKeyStore;
   readonly now?: () => number;
@@ -711,7 +713,7 @@ async function persistDeviceList(
 export async function loadEncryption(
   ctx: E2eeContext
 ): Promise<EncryptionState> {
-  const readCurrent = captureAccountKeyRead(ctx.userId);
+  const readCurrent = captureAccountKeyRead(ctx.userId, ctx.readScope);
   const isCurrent = () => readCurrent() && ctx.isCurrent?.() !== false;
   const requireCurrent = () => {
     ctx.assertActive?.();
@@ -846,7 +848,7 @@ export async function loadEncryption(
 export type UnlockAuthorization = Uint8Array | 'passkey';
 
 function passkeyContext(ctx: E2eeContext): E2eeContext {
-  const guard = keyOperationGuard(ctx.userId);
+  const guard = keyOperationGuard(ctx.userId, ctx.readScope);
   return {
     ...ctx,
     assertActive: () => {

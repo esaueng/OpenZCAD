@@ -178,6 +178,54 @@ async function clickEncryptProjects() {
 }
 
 describe('the migration controller', () => {
+  it('does not start from a delayed lock callback after its account lifetime ends', async () => {
+    let release!: () => Promise<void>;
+    const locks: MigrationLocks = {
+      request: (_name, _options, callback) =>
+        new Promise((resolve, reject) => {
+          release = async () => {
+            try {
+              resolve(await callback({}));
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          };
+        })
+    };
+    const fake = fakeEngine(async () => undefined);
+    const controller = controllerWith(fake, locks);
+    const lifetime = new AbortController();
+    const running = controller.run(undefined, lifetime.signal);
+    lifetime.abort();
+    await release();
+    await running;
+    expect(fake.migrated).toEqual([]);
+    expect(controller.getState().running).toBe(false);
+  });
+
+  it('forwards account teardown to an in-flight migration and stops before the next project', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fake = fakeEngine(async (_summary, report, signal) => {
+      report({ phase: 'revisions' });
+      await gate;
+      expect(signal?.aborted).toBe(true);
+      report({ phase: 'paused' });
+      throw new MigrationPausedError();
+    });
+    const controller = controllerWith(fake);
+    const lifetime = new AbortController();
+    const running = controller.run(undefined, lifetime.signal);
+    await waitFor(() => expect(fake.migrated).toEqual(['proj_old']));
+    lifetime.abort();
+    release();
+    await running;
+    expect(fake.migrated).toEqual(['proj_old']);
+    expect(controller.getState().projects[0]?.phase).toBe('paused');
+  });
+
   it('encrypts plaintext projects oldest first and moves on past a failure', async () => {
     const fake = fakeEngine(async (summary, report) => {
       if (summary.projectId === 'proj_old') {

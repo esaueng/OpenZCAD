@@ -106,7 +106,7 @@ export interface MigrationController {
   /** Lists the account's plaintext projects. */
   refresh(): Promise<void>;
   /** Encrypts every listed project, or only `projectIds`, oldest first. */
-  run(projectIds?: readonly string[]): Promise<void>;
+  run(projectIds?: readonly string[], signal?: AbortSignal): Promise<void>;
   pause(): void;
   /** Drops a project's staging and unlocks its plaintext. */
   cancel(projectId: string): Promise<void>;
@@ -501,8 +501,12 @@ export function createMigrationController(
     }
   }
 
-  async function work(projectIds?: readonly string[]) {
-    const signal = (pause = new AbortController()).signal;
+  async function work(projectIds?: readonly string[], external?: AbortSignal) {
+    if (external?.aborted) return;
+    const stop = (pause = new AbortController());
+    const signal = stop.signal;
+    const abort = () => stop.abort();
+    external?.addEventListener('abort', abort, { once: true });
     set({ running: true, pausing: false, otherTab: false });
     try {
       await refresh();
@@ -536,6 +540,7 @@ export function createMigrationController(
         }
       }
     } finally {
+      external?.removeEventListener('abort', abort);
       pause = null;
       set({ running: false, pausing: false });
     }
@@ -565,18 +570,19 @@ export function createMigrationController(
       return () => listeners.delete(listener);
     },
     refresh,
-    async run(projectIds) {
-      if (state.running) return;
-      if (!locks) return work(projectIds);
+    async run(projectIds, signal) {
+      if (state.running || signal?.aborted) return;
+      if (!locks) return work(projectIds, signal);
       await locks.request(
         `openzcad-e2ee-migration:${deps.userId}`,
         { ifAvailable: true },
         async (lock) => {
+          if (signal?.aborted) return;
           if (!lock) {
             set({ otherTab: true });
             return;
           }
-          await work(projectIds);
+          await work(projectIds, signal);
         }
       );
     },
@@ -658,7 +664,7 @@ export function pageMigrationController(userId: string): MigrationController {
     controller = createMigrationController({
       userId,
       openStaging: async () =>
-        (await import('./encryptedProjects')).openMigrationStaging()
+        (await import('./encryptedProjects')).openMigrationStaging(userId)
     });
     controllers.set(userId, { controller, revision });
   }

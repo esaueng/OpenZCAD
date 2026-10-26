@@ -3249,6 +3249,30 @@ export function App() {
     lockAccountsExcept(sessionUserId);
   }, [sessionUserId]);
   useEffect(() => {
+    if (!sessionUserId || !cloudFunctionsEnabled) return;
+    let stopped = false;
+    let migration: { dispose(): void } | undefined;
+    void import('./lib/e2ee/automaticMigration')
+      .then(({ automaticProjectMigration }) => {
+        if (stopped) return;
+        const current = automaticProjectMigration(sessionUserId, (message) => {
+          if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+          setSettingsMessage(message);
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+        });
+        migration = current;
+        void current.check();
+      })
+      .catch(() => {
+        if (!stopped)
+          setSettingsMessage('Automatic encryption could not load. Reload to try again.');
+      });
+    return () => {
+      stopped = true;
+      migration?.dispose();
+    };
+  }, [sessionUserId, cloudFunctionsEnabled]);
+  useEffect(() => {
     const online = () => organizationBackground.resume();
     const changed = (event: StorageEvent) => {
       if (event.key === ORGANIZATION_SESSION_KEY)
