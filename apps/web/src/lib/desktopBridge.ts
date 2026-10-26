@@ -189,6 +189,7 @@ function releaseNativeBlobStreamSlot(): void {
  * once. A caller whose signal aborts while waiting leaves the queue.
  */
 function nativeBlobStreamSlot(signal: AbortSignal): Promise<() => void> {
+  if (signal.aborted) return Promise.reject(abortError());
   const held = (): (() => void) => {
     let released = false;
     return () => {

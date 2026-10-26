@@ -635,6 +635,44 @@ describe('desktop bridge', () => {
     expect(opened()).toBe(6);
   });
 
+  it('rejects a request aborted during the Tauri await before queue registration', async () => {
+    markDesktopRuntime();
+    const opened = mockNumberedNativeStreams();
+    const held = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        desktopFetch(sharedBlobUrl(`token-held-${index}`, BLOB_ID))
+      )
+    );
+    const controller = new AbortController();
+    const outcome = desktopFetch(
+      sharedBlobUrl('token-abort-before-queue', BLOB_ID),
+      {
+        signal: controller.signal
+      }
+    ).then(
+      () => 'resolved',
+      (error: unknown) => (error instanceof Error ? error.name : 'unknown')
+    );
+    // desktopFetch checked the signal, then yielded to tauriCore(). Abort
+    // before nativeBlobStreamSlot registers its waiter, with all slots held.
+    controller.abort();
+    try {
+      expect(
+        await Promise.race([outcome, settle().then(() => 'pending')])
+      ).toBe('AbortError');
+      expect(opened()).toBe(4);
+    } finally {
+      await Promise.all(held.map((response) => response.body!.cancel()));
+      await outcome;
+    }
+    // The rejected request neither opened a stream nor left a queue entry.
+    const later = await desktopFetch(
+      sharedBlobUrl('token-after-abort', BLOB_ID)
+    );
+    expect(opened()).toBe(5);
+    await later.arrayBuffer();
+  });
+
   it('drops a queued blob read whose request is aborted', async () => {
     markDesktopRuntime();
     const opened = mockNumberedNativeStreams();
