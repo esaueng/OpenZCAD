@@ -65,3 +65,35 @@
   border-radius: 6px;
   background: var(--color-surface-2);
 }
+
+/* Settings › Encryption › Encrypt existing projects (ADR-024 Phase 7). */
+.encryption-migration-notes {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+}
+
+.encryption-migration-notes ul {
+  margin: 0;
+  padding-left: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.encryption-migration-list {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.encryption-migration-item {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.encryption-migration-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--color-warning);
+}

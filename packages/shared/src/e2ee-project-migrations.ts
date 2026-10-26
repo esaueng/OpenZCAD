@@ -127,6 +127,12 @@ export const E2EE_MIGRATION_CODES = Object.freeze({
    * `sourceVersion + 1` on.
    */
   headBehind: 'E2EE_MIGRATION_HEAD_BEHIND',
+  /**
+   * The project's room holds edits the account never saved (slice 7-2):
+   * nothing is staged and the plaintext stays unlocked; open the project
+   * and save it, then start again.
+   */
+  roomAhead: 'E2EE_MIGRATION_ROOM_AHEAD',
   /** Staged rows of an earlier attempt remain; finish the abandon first. */
   cleanupPending: 'E2EE_MIGRATION_CLEANUP_PENDING',
   /** The request does not fit the migration's state. */
