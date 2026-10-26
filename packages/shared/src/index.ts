@@ -3313,6 +3313,12 @@ export const ENCRYPTED_PROJECT_SHARING_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_SHARING_UNAVAILABLE';
 /** An account that opted in to encryption may not store new plaintext projects. */
 export const ENCRYPTED_PROJECTS_REQUIRED_CODE = 'ENCRYPTED_PROJECTS_REQUIRED';
+/**
+ * End-to-end encryption is the default for this account (E2EE_DEFAULT_ON,
+ * ADR-024 Phase 8): a plaintext share link or invitation, or turning
+ * "Encrypt new projects" off, is refused with 409 and this code.
+ */
+export const E2EE_DEFAULT_ON_CODE = 'E2EE_DEFAULT_ON';
 /** The assistant is off on encrypted projects until per-project consent (D7). */
 export const ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE';
@@ -3850,6 +3856,14 @@ export interface E2eeConfigResponse {
    * (true) only then.
    */
   reverseEnabled?: boolean;
+  /**
+   * End-to-end encryption is the default (E2EE_DEFAULT_ON with migration
+   * open, ADR-024 Phase 8, slice 8-1): the Worker stores no new plaintext
+   * project, plaintext share link or plaintext invitation for this account,
+   * the "Encrypt new projects" opt-out and the reverse path are closed.
+   * Present (true) only then, and only with `migrationEnabled`.
+   */
+  defaultOn?: boolean;
 }
 
 /**

@@ -1,7 +1,3 @@
-import type {
-  ExtrudeFormValue,
-  ExtrudeToFacePicking
-} from './forms/ExtrudeForm';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
@@ -45,7 +41,6 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import {
-  ExtrudeForm,
   PrimitiveForm,
   SketchForm,
   TextSketchForm,
@@ -53,7 +48,6 @@ import {
   type BodyOption,
   type SketchFormValue,
   type TextSketchFormValue,
-  type SketchOption,
   type TransformFormValue
 } from './forms/FeatureForms';
 import { TOOL_META, type ToolId } from '../lib/tools';
@@ -135,12 +129,6 @@ export interface InspectorCallbacks {
   onEditModelingFeature?(feature: FeatureNode): void;
   /** The feature an in-place command is editing now, if any. */
   inPlaceEditFeatureId?: FeatureId | null;
-  onApplyExtrude(feature: FeatureNode, value: ExtrudeFormValue): void;
-  onPreviewExtrude(feature: FeatureNode, value: ExtrudeFormValue | null): void;
-  extrudeBusy?: boolean;
-  extrudeTargets: { bodyId: BodyId; name: string }[];
-  /** F01 (v29): the viewport face pick an extrude edit's To face uses. */
-  extrudeToFacePicking?(feature: FeatureNode): ExtrudeToFacePicking;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
   onResizeThroughHole(
     selection: TopologySelection,
@@ -222,7 +210,6 @@ interface InspectorProps extends InspectorCallbacks {
    */
   bodyRepresentations?: Readonly<Record<string, BodyRepresentation>>;
   scope: Record<string, number>;
-  sketches: SketchOption[];
   bodies: BodyOption[];
   units: UnitSystem;
   /**
@@ -1317,7 +1304,6 @@ export function Inspector(props: InspectorProps) {
     selectedTopology,
     selectedEdges,
     scope,
-    sketches,
     bodies,
     units,
     commandSession,
@@ -1501,49 +1487,6 @@ export function Inspector(props: InspectorProps) {
         <SketchAttachmentSummary
           sketch={selectedSketch}
           onConvert={props.onConvertSketchToFixedPlane}
-        />
-      );
-    } else if (data.featureKind === 'extrude') {
-      form = (
-        <ExtrudeForm
-          key={editKey}
-          scope={scope}
-          units={units}
-          sketches={sketches}
-          initial={{
-            name: selectedFeature.name,
-            sketchId: data.sketchId,
-            distance: data.distance,
-            ...(data.symmetric ? { symmetric: true } : {}),
-            ...(data.backDistance !== undefined
-              ? { backDistance: data.backDistance }
-              : {}),
-            operation: data.operation,
-            targetBodyId: data.targetBodyId,
-            ...(data.endCondition === 'through-all'
-              ? {
-                  endCondition: 'through-all' as const,
-                  ...(data.throughAllSide
-                    ? { throughAllSide: data.throughAllSide }
-                    : {})
-                }
-              : {}),
-            ...(data.endCondition === 'to-face' && data.toFace
-              ? { endCondition: 'to-face' as const, toFace: data.toFace }
-              : {}),
-            ...(data.draftAngleDeg !== undefined
-              ? { draftAngleDeg: data.draftAngleDeg }
-              : {})
-          }}
-          {...(props.extrudeToFacePicking
-            ? { toFacePicking: props.extrudeToFacePicking(selectedFeature) }
-            : {})}
-          submitLabel="Apply"
-          disabled={props.extrudeBusy}
-          bodies={props.extrudeTargets}
-          onPreview={(value) => props.onPreviewExtrude(selectedFeature, value)}
-          onSubmit={(value) => props.onApplyExtrude(selectedFeature, value)}
-          onCancel={props.onCancel}
         />
       );
     } else if (data.featureKind === 'transform') {
@@ -1757,7 +1700,10 @@ export function Inspector(props: InspectorProps) {
     // U09 phase 7: a feature an in-place command made is edited by that
     // command, on the model, never by a form here; the panel keeps its
     // readout. Its Edit button re-arms the command if it was not armed.
-    const inPlaceTool = inPlaceToolForFeature(data);
+    // An extrude too: History re-arms the in-place Extrude on it.
+    const inPlaceTool =
+      inPlaceToolForFeature(data) ??
+      (data.featureKind === 'extrude' ? ('extrude' as const) : null);
     if (inPlaceTool) form = null;
     const editingInPlace =
       inPlaceTool !== null &&

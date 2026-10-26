@@ -9,7 +9,8 @@ import {
   test,
   expect,
   stubApi,
-  waitForStillViewport
+  waitForStillViewport,
+  setInPlaceOptionValues
 } from './openzcad-fixtures';
 
 /*
@@ -161,12 +162,7 @@ for (const size of [
       )
     ).toBe(true);
     // A value change keeps the view where the pick put it.
-    const distance = card.getByRole('textbox', {
-      name: 'Distance',
-      exact: true
-    });
-    await distance.fill('5');
-    await distance.press('Tab');
+    await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
     await waitForStillViewport(page);
     const typed = await projected(canvas, centroid);
     expect(Math.abs(typed.x - after.x)).toBeLessThan(1);

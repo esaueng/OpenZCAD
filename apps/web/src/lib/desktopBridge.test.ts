@@ -10,6 +10,7 @@ import {
   isDesktopApp,
   NativeDeviceKeysError,
   nativeCadFile,
+  openExternalUrl,
   protectDesktopClose,
   saveCadBinaryFile
 } from './desktopBridge';
@@ -125,6 +126,30 @@ describe('desktop bridge', () => {
       'Cloud features are disabled on this device.'
     );
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('opens external pages natively only in the desktop app', async () => {
+    await expect(openExternalUrl('https://zcad.app/privacy')).resolves.toBe(
+      false
+    );
+    expect(invoke).not.toHaveBeenCalled();
+
+    markDesktopRuntime();
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    await expect(openExternalUrl('https://zcad.app/privacy')).resolves.toBe(
+      true
+    );
+    expect(invoke).toHaveBeenCalledWith('open_external_url', {
+      url: 'https://zcad.app/privacy'
+    });
+
+    // The native allowlist refusal reaches the caller.
+    vi.mocked(invoke).mockRejectedValue(
+      'That link is not an approved OpenZCAD link.'
+    );
+    await expect(openExternalUrl('https://evil.example/')).rejects.toBe(
+      'That link is not an approved OpenZCAD link.'
+    );
   });
 
   it('detects the Tauri runtime without changing browser behavior', () => {

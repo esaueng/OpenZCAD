@@ -1,5 +1,10 @@
 # OpenZCAD privacy policy (draft)
 
+> **Superseded.** The policy to publish is now the page
+> `apps/web/public/privacy.html`; see [privacy-policy.md](privacy-policy.md)
+> for its status. This draft stays only for its reviewer traces and
+> open questions, and can be deleted once the page is published.
+
 > **Draft for review. Not published.** The owner and a legal reviewer must
 > approve this text before it is published or linked from the app. It is not
 > legal advice. It describes what the code on `main` does as of 2026-10-22;

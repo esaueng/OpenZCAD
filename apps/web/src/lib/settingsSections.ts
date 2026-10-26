@@ -252,9 +252,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'privacy',
     label: 'Privacy & data',
-    detail: 'Analytics and data deletion',
+    detail: 'Privacy policy, analytics and data deletion',
     group: 'Cloud and data',
     settings: [
+      'Privacy policy',
       'Usage analytics',
       'Diagnostic report',
       'Cloud account statistics',
@@ -265,6 +266,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Delete all cloud data'
     ],
     searchTerms: [
+      'privacy policy',
+      'personal data',
       'delete account',
       'erase account',
       'optional usage analytics',

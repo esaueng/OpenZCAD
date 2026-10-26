@@ -25,7 +25,8 @@ import {
   decryptStagingFor,
   decryptStagingRouteProject,
   stageDecryptedHead,
-  stageDecryptedRevision
+  stageDecryptedRevision,
+  stagedRevisionAuthor
 } from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
@@ -47,6 +48,7 @@ import {
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
+  isE2eeDefaultOn,
   isE2eeKeysEnabled,
   isE2eeMigrationEnabled,
   isE2eeProjectsEnabled,
@@ -175,6 +177,7 @@ import {
 } from './projectMeasurements';
 import {
   assistantConsentRoute,
+  E2EE_DEFAULT_ON_CODE,
   E2EE_MIGRATION_CODES,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
@@ -712,11 +715,19 @@ function emailDeliveryErrorCode(error: unknown): string {
  * Decision D2: once an account opts in to encrypting new projects, the
  * Worker stores no new plaintext project for it — create, adopt or copy.
  * Only while encrypted projects are open to the account.
+ *
+ * ADR-024 slice 8-1: where encryption is the default (`isE2eeDefaultOn`),
+ * none is stored whatever the account's preference.
  */
 async function assertPlaintextCreationAllowed(
   env: Env,
   session: { userId: string; email?: string | null }
 ): Promise<void> {
+  if (isE2eeDefaultOn(env, session.email ?? undefined)) {
+    throw new EncryptedProjectsRequiredError(
+      'New projects are end-to-end encrypted. Update OpenZCAD to create encrypted projects.'
+    );
+  }
   if (
     isE2eeProjectsEnabled(env, session.email ?? undefined) &&
     (await accountRequiresEncryptedProjects(env.DB, session.userId))
@@ -736,6 +747,25 @@ async function assertPlaintextCreationAllowed(
  * caller owns or is a member of is looked up, so the answer reveals nothing
  * about other accounts' projects.
  */
+/**
+ * ADR-024 slice 8-1: where encryption is the default, no plaintext share
+ * link or invitation is created. Called once the project is known to be
+ * the caller's own plaintext project, so an outsider still meets 404 and an
+ * encrypted project still meets its own sharing refusal.
+ */
+function assertPlaintextSharingAllowed(
+  env: Env,
+  session: { email?: string | null }
+): void {
+  if (isE2eeDefaultOn(env, session.email ?? undefined)) {
+    throw new SharingRequestError(
+      409,
+      E2EE_DEFAULT_ON_CODE,
+      'Projects are end-to-end encrypted now. Encrypt this project first, then share it.'
+    );
+  }
+}
+
 async function assertAssistantProjectAllowed(
   env: Env,
   identity: { userId: string; email?: string | null },
@@ -1369,7 +1399,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         isE2eeReverseEnabled(env, session.email),
         // Slice 7-3: as for plaintext writes, the global flags decide.
         isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED') &&
-          isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED')
+          isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED'),
+        isE2eeDefaultOn(env, session.email)
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);
@@ -1705,6 +1736,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     assertShareableProject(
       await persistence.requireProjectOwner(userId, projectId)
     );
+    assertPlaintextSharingAllowed(env, session);
     const project = await persistence.loadProject(userId, projectId);
     if (!project) {
       throw new ProjectNotFoundError(projectId);
@@ -1766,6 +1798,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && shareLinksMatch) {
+    if (isE2eeDefaultOn(env, session.email)) {
+      assertShareableProject(
+        await persistence.requireProjectOwner(userId, shareLinksMatch[1]!)
+      );
+      assertPlaintextSharingAllowed(env, session);
+    }
     return json(
       await createShareLink(
         persistence,
@@ -2089,7 +2127,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           userId,
           payload,
           opened.storage,
-          decryptStaging
+          decryptStaging,
+          stagedRevisionAuthor(opened.body)
         )
       );
     }
@@ -2166,7 +2205,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (uploadStaging) {
       return json(
         await persistence.createUploadSession(userId, payload, {
-          decryptStaging: uploadStaging.fence
+          decryptStaging: {
+            ...uploadStaging.fence,
+            leaseId: uploadStaging.lease.leaseId
+          }
         }),
         201
       );
@@ -2379,14 +2421,19 @@ export default {
     await createPersistenceService(env).purgeExpiredUploadSessions();
     // Purges and abandons of project migrations a browser left behind, and
     // of stagings whose owner may no longer migrate (or, for a decrypt
-    // staging, no longer use the reverse path, slice 7-3).
+    // staging, no longer use the reverse path, slice 7-3). Where encryption
+    // is the default (slice 8-1), every decrypt staging, leased or not.
     await sweepProjectMigrations(
       env,
       isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED'),
       (email, direction) =>
         direction === 'decrypt'
           ? isE2eeReverseEnabled(env, email)
-          : isE2eeMigrationEnabled(env, email)
+          : isE2eeMigrationEnabled(env, email),
+      Date.now(),
+      isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON')
+        ? (email) => isE2eeDefaultOn(env, email)
+        : undefined
     );
     await publishCensus(env);
   },

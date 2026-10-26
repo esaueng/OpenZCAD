@@ -281,6 +281,8 @@ export interface InPlaceSketchView {
   regions: readonly {
     regionFingerprint: number;
     outer: readonly { x: number; y: number }[];
+    /** Its inner loops (a washer's bore), when the view carries them. */
+    holes?: readonly (readonly { x: number; y: number }[])[];
     /** The authored entities bounding it, which survive a renumbering. */
     sourceEntityIds?: readonly string[];
   }[];
@@ -725,6 +727,33 @@ export function profileOutline(
   return regions.flatMap((region) =>
     region.outer.map((point) => toWorld(view.basis, point))
   );
+}
+
+/**
+ * The picked region's first cell in world space: its outline and its inner
+ * loops (a washer's bore), each its own polyline. One cell, unlike
+ * `profileOutline`: a pick naming several (a word's glyphs) has handles on
+ * its first. An implicit pick (an extrude or revolve stored before profiles)
+ * is the sketch's first region.
+ */
+export function profileRegionLoops(
+  ctx: Pick<InPlaceContext, 'sketchViews'>,
+  pick: ProfilePick
+): { outline: Vector3[]; holes: Vector3[][] } | null {
+  const view = ctx.sketchViews.find(
+    (candidate) => candidate.sketchId === pick.sketchId
+  );
+  if (!view) return null;
+  const region = pick.implicit
+    ? view.regions[0]
+    : revolveProfileRegions(view.regions, pick)[0];
+  if (!region) return null;
+  return {
+    outline: region.outer.map((point) => toWorld(view.basis, point)),
+    holes: (region.holes ?? []).map((loop) =>
+      loop.map((point) => toWorld(view.basis, point))
+    )
+  };
 }
 
 /** The axes a profile's sketch offers: its own two, and in-plane datums. */
