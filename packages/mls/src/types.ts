@@ -136,10 +136,17 @@ export interface RejoinPsk {
 
 /** Full public transcript through the target epoch, decrypted by the app.
  * Retain the epoch-zero signed GroupInfo when creating the archive. Records
- * are the unchanged EpochRecordV1 bytes for epochs 1..target, in order.
+ * are the unchanged EpochRecordV1 bytes for epochs anchor+1..target, in order.
  * Verification authenticates the transcript/tree, not past device-list policy.
  */
 export interface JoinArchive {
+  /**
+   * The replay anchor: the epoch-zero signed GroupInfo, or an owner-signed
+   * checkpoint (ADR-024): a GroupInfo of a later epoch K, signed by a leaf
+   * its own roles list as owner and that an unrevoked device of the owner
+   * certifies in the directory, carrying the tree and removal records. With
+   * a checkpoint, `epochRecords` start at epoch K + 1.
+   */
   initialGroupInfo: Uint8Array;
   epochRecords: Uint8Array[];
 }
