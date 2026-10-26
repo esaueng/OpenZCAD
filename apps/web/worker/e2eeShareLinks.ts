@@ -155,6 +155,11 @@ export interface ShareSnapshotBucket {
   put(key: string, body: ArrayBuffer | Uint8Array): Promise<unknown>;
   get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
   delete(key: string): Promise<void>;
+  /** R2's listing; a forgotten link's prefix is swept with it. */
+  list?(options: { prefix: string }): Promise<{
+    objects: readonly { key: string }[];
+    truncated: boolean;
+  }>;
 }
 
 interface Context {
@@ -668,7 +673,11 @@ async function forgetLink(
   if (!row) {
     refuse(404, 'E2EE_SHARE_LINK_NOT_FOUND', 'This share link does not exist.');
   }
-  if (row.revoked_at !== null) return json({ ok: true });
+  if (row.revoked_at !== null) {
+    // Asked again: what a failed delete left behind is retried.
+    await reclaimForgottenSnapshots(ctx, projectId, shareId);
+    return json({ ok: true });
+  }
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (keyEpoch !== current) stale(current);
   // Forgetting is permanent and breaks every URL of the link, so the owner
@@ -696,13 +705,6 @@ async function forgetLink(
   }
   // ...and a removal of that device landing first makes the batch refuse.
   const signerList = deviceListUnchanged(ctx.userId, device);
-  const snapshot = await ctx.db
-    .prepare(
-      `SELECT envelope_key FROM e2ee_share_snapshots
-       WHERE project_id = ? AND share_id = ?`
-    )
-    .bind(projectId, shareId)
-    .first<{ envelope_key: string | null }>();
   const now = new Date().toISOString();
   const results = await runBatch(ctx.db, [
     ctx.db
@@ -727,14 +729,7 @@ async function forgetLink(
         keyEpoch,
         ...signerList.binds
       ),
-    ctx.db
-      .prepare(
-        `DELETE FROM e2ee_share_snapshots
-         WHERE project_id = ? AND share_id = ? AND EXISTS (
-           SELECT 1 FROM e2ee_share_links WHERE project_id = ? AND share_id = ?
-             AND revoked_at = ?)`
-      )
-      .bind(projectId, shareId, projectId, shareId, now),
+    // The snapshot row stays until its object is deleted (below).
     ctx.db
       .prepare(
         `DELETE FROM e2ee_share_keys
@@ -746,7 +741,10 @@ async function forgetLink(
   ]);
   if (!changed(results[0])) {
     const after = await linkRow(ctx.db, projectId, shareId);
-    if (after?.revoked_at) return json({ ok: true });
+    if (after?.revoked_at) {
+      await reclaimForgottenSnapshots(ctx, projectId, shareId);
+      return json({ ok: true });
+    }
     if (await deviceListMoved(ctx.db, ctx.userId, device)) {
       refuseDeviceListMoved();
     }
@@ -754,9 +752,7 @@ async function forgetLink(
     if (epoch !== keyEpoch) stale(epoch);
     sessionRequired();
   }
-  if (snapshot?.envelope_key) {
-    await deleteSnapshotObject(ctx, projectId, shareId, snapshot.envelope_key);
-  }
+  await reclaimForgottenSnapshots(ctx, projectId, shareId);
   return json({ ok: true });
 }
 
@@ -1264,6 +1260,103 @@ async function deleteSnapshotObject(
     } catch {
       // Retried once; a later forget of the link sweeps its prefix.
     }
+  }
+  return false;
+}
+
+/** Forgotten links whose leftovers one request also retries. */
+const RECLAIM_OTHERS = 5;
+/** Listing pages one sweep of a link's prefix reads at most. */
+const SWEEP_PAGES = 10;
+
+/**
+ * Deletes what forgotten links still hold in R2, then their snapshot rows
+ * (#912 review): `shareId`'s, and a few other forgotten links' of the
+ * project that a failed delete left behind. A forgotten link's row keeps
+ * naming its object until the delete succeeded (and its prefix was swept
+ * of objects a failed replacement left), so a failed delete never drops
+ * the only reference to an object: it is retried here on the next forget,
+ * and the project's purge deletes every object a row names.
+ */
+async function reclaimForgottenSnapshots(
+  ctx: Context,
+  projectId: string,
+  shareId: string
+): Promise<void> {
+  const others = await ctx.db
+    .prepare(
+      `SELECT s.share_id FROM e2ee_share_snapshots s
+       JOIN e2ee_share_links l
+         ON l.project_id = s.project_id AND l.share_id = s.share_id
+       WHERE s.project_id = ? AND s.share_id <> ?
+         AND l.revoked_at IS NOT NULL
+       ORDER BY l.revoked_at LIMIT ?`
+    )
+    .bind(projectId, shareId, RECLAIM_OTHERS)
+    .all<{ share_id: string }>();
+  for (const id of [
+    shareId,
+    ...(others.results ?? []).map((row) => row.share_id)
+  ]) {
+    await reclaimForgottenSnapshot(ctx, projectId, id);
+  }
+}
+
+async function reclaimForgottenSnapshot(
+  ctx: Context,
+  projectId: string,
+  shareId: string
+): Promise<void> {
+  const row = await ctx.db
+    .prepare(
+      `SELECT s.envelope_key FROM e2ee_share_snapshots s
+       JOIN e2ee_share_links l
+         ON l.project_id = s.project_id AND l.share_id = s.share_id
+       WHERE s.project_id = ? AND s.share_id = ?
+         AND l.revoked_at IS NOT NULL`
+    )
+    .bind(projectId, shareId)
+    .first<{ envelope_key: string | null }>();
+  let gone = row?.envelope_key
+    ? await deleteSnapshotObject(ctx, projectId, shareId, row.envelope_key)
+    : true;
+  if (ctx.bucket && !(await sweepLinkObjects(ctx.bucket, projectId, shareId))) {
+    gone = false;
+  }
+  if (!row || !gone) return;
+  await ctx.db
+    .prepare(
+      `DELETE FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id = ? AND envelope_key IS ?
+         AND EXISTS (SELECT 1 FROM e2ee_share_links
+           WHERE project_id = ? AND share_id = ? AND revoked_at IS NOT NULL)`
+    )
+    .bind(projectId, shareId, row.envelope_key, projectId, shareId)
+    .run();
+}
+
+/**
+ * Deletes every object under a forgotten link's prefix: replaced objects a
+ * failed delete left there. A write racing the forget cannot land (its
+ * link is revoked) and deletes its own object. Whether the prefix is
+ * empty; a bucket that cannot list has nothing found here.
+ */
+async function sweepLinkObjects(
+  bucket: ShareSnapshotBucket,
+  projectId: string,
+  shareId: string
+): Promise<boolean> {
+  if (typeof bucket.list !== 'function') return true;
+  const prefix = await snapshotObjectPrefix(projectId, shareId);
+  try {
+    // Listed again from the start each time: everything listed is deleted.
+    for (let page = 0; page < SWEEP_PAGES; page += 1) {
+      const listed = await bucket.list({ prefix });
+      await Promise.all(listed.objects.map((o) => bucket.delete(o.key)));
+      if (!listed.truncated) return true;
+    }
+  } catch {
+    // Kept for the next forget.
   }
   return false;
 }

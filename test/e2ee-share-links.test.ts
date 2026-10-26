@@ -1979,4 +1979,50 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
     expect(snapshotObjects(srv, projectId)).toEqual([key]);
     expect((await served(srv, link.fragment.token)).status).toBe(200);
   });
+
+  it('keeps a forgotten link’s row naming its object until R2 deletes it, and retries on the next forget', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const a = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const b = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const big = () =>
+      sealRawSnapshot(srv, laptop, projectId, a.shareId, {
+        document,
+        padding: R2_PADDING
+      });
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, a.shareId, await big()))
+        .status
+    ).toBe(200);
+    const del = srv.bucket.delete.getMockImplementation()!;
+    srv.bucket.delete.mockImplementation(async () => {
+      throw new Error('R2 is unavailable');
+    });
+    // A replacement whose delete fails leaves its old object under the
+    // link's prefix...
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, a.shareId, await big()))
+        .status
+    ).toBe(200);
+    const key = envelopeKey(srv, projectId, a.shareId)!;
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    // ...and a forget whose delete fails keeps the row naming the object.
+    await revokeShareLink(laptop.shareLinks, projectId, a.shareId);
+    expect((await served(srv, a.fragment.token)).status).toBe(404);
+    expect(linkRow(srv, projectId, a.shareId)!.revoked_at).not.toBe(null);
+    expect(envelopeKey(srv, projectId, a.shareId)).toBe(key);
+    expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(1);
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    // The listing names only the live link.
+    const listed = (await (
+      await srv.call('GET', `/api/e2ee/projects/${projectId}/share-links`)
+    ).json()) as { links: { shareId: string }[] };
+    expect(listed.links.map((link) => link.shareId)).toEqual([b.shareId]);
+    // R2 recovers: the next forget deletes both, then the row.
+    srv.bucket.delete.mockImplementation(del);
+    await revokeShareLink(laptop.shareLinks, projectId, b.shareId);
+    expect(snapshotObjects(srv, projectId)).toEqual([]);
+    expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(0);
+    expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(0);
+  });
 });
