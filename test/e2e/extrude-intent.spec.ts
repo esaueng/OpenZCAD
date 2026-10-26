@@ -9,9 +9,12 @@ import {
   expect,
   stubApi,
   expectBodyCount,
+  setInPlaceOptionValues,
+  barChoice,
+  chooseBarOption,
+  editExtrudeFromHistory,
   chooseInPlaceOption,
-  extrudeBar,
-  setInPlaceOptionValues
+  extrudeBar
 } from './openzcad-fixtures';
 
 interface ExtrudeValidationGate {
@@ -207,14 +210,16 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   );
   await expectBodyCount(page, 1);
   const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
-  await extrusion.click();
-  await expect(page.getByLabel('Stored extrude operation')).toHaveValue('cut');
+  await expect(
+    barChoice(await editExtrudeFromHistory(page, extrusion), 'Operation', 'Cut')
+  ).toHaveAttribute('aria-checked', 'true');
   await page.getByRole('button', { name: 'Close panel' }).click();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(extrusion).toHaveCount(0);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
-  await extrusion.click();
-  await expect(page.getByLabel('Stored extrude operation')).toHaveValue('cut');
+  await expect(
+    barChoice(await editExtrudeFromHistory(page, extrusion), 'Operation', 'Cut')
+  ).toHaveAttribute('aria-checked', 'true');
   // Redo renders before its debounced device write. Reopen the saved result,
   // rather than racing that write and occasionally loading the pre-redo model.
   await expect(
@@ -225,8 +230,9 @@ test('cuts two native profiles with explicit intent and retains it through undo 
     timeout: 30_000
   });
   await expectBodyCount(page, 1);
-  await extrusion.click();
-  await expect(page.getByLabel('Stored extrude operation')).toHaveValue('cut');
+  await expect(
+    barChoice(await editExtrudeFromHistory(page, extrusion), 'Operation', 'Cut')
+  ).toHaveAttribute('aria-checked', 'true');
 });
 
 test('uses the shared editor for preview, cancel, create and operation changes in history', async ({
@@ -280,7 +286,6 @@ test('uses the shared editor for preview, cancel, create and operation changes i
     timeout: 30_000
   });
   const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
-  const editor = page.getByRole('form', { name: 'Extrude settings' });
   const bar = extrudeBar(page);
   for (const action of ['cancel', 'create']) {
     await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
@@ -332,28 +337,38 @@ test('uses the shared editor for preview, cancel, create and operation changes i
     }
   }
   await expectBodyCount(page, 1);
-  await extrusion.click();
-  await expect(editor.getByLabel('Stored extrude operation')).toHaveValue(
-    'cut'
+  // History re-arms the same command on the stored cut, which keeps its
+  // operation (an edit never infers one).
+  let edit = await editExtrudeFromHistory(page, extrusion);
+  await expect(barChoice(edit, 'Operation', 'Cut')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
-  await editor.getByLabel('Stored extrude operation').selectOption('new-body');
-  await expect(editor.getByLabel('Extrude target body')).toHaveCount(0);
+  await chooseBarOption(edit, 'Operation', 'New body');
+  await expect(
+    edit.getByRole('radiogroup', {
+      name: 'Target body',
+      exact: true,
+      includeHidden: true
+    })
+  ).toHaveCount(0);
   // Cancelling the two-body preview restores the stored Cut.
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
     timeout: 30_000
   });
-  await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(editor).toHaveCount(0);
+  await edit.getByRole('button', { name: 'Cancel' }).click();
+  await expect(edit).toHaveCount(0);
   await expectBodyCount(page, 1);
-  await extrusion.click();
-  await expect(editor.getByLabel('Stored extrude operation')).toHaveValue(
-    'cut'
+  edit = await editExtrudeFromHistory(page, extrusion);
+  await expect(barChoice(edit, 'Operation', 'Cut')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
-  await editor.getByLabel('Stored extrude operation').selectOption('new-body');
-  await editor.getByRole('button', { name: 'Apply', exact: true }).click();
+  await chooseBarOption(edit, 'Operation', 'New body');
+  await edit.getByRole('button', { name: 'Done' }).click();
   await expectBodyCount(page, 2);
-  // An applied edit closes its card, as Create does (F19).
-  await expect(editor).toHaveCount(0);
+  // An applied edit closes, as Create does (F19).
+  await expect(edit).toHaveCount(0);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expectBodyCount(page, 1);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
@@ -363,15 +378,23 @@ test('uses the shared editor for preview, cancel, create and operation changes i
   ).not.toContainText('Saving');
   await page.reload();
   await expectBodyCount(page, 2);
-  await extrusion.click();
-  await expect(editor.getByLabel('Stored extrude operation')).toHaveValue(
-    'new-body'
+  edit = await editExtrudeFromHistory(page, extrusion);
+  await expect(barChoice(edit, 'Operation', 'New body')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
-  await editor.getByLabel('Stored extrude operation').selectOption('cut');
-  await expect(editor.getByLabel('Extrude target body')).toHaveValue(
-    document.bodyOrder[0]!
-  );
-  await editor.getByRole('button', { name: 'Apply', exact: true }).click();
+  await chooseBarOption(edit, 'Operation', 'Cut');
+  // The only earlier body is the target, chosen for it.
+  await expect(
+    edit
+      .getByRole('radiogroup', {
+        name: 'Target body',
+        exact: true,
+        includeHidden: true
+      })
+      .locator('[aria-checked="true"]')
+  ).toHaveCount(1);
+  await edit.getByRole('button', { name: 'Done' }).click();
   await expectBodyCount(page, 1);
   expect(errors).toEqual([]);
 });
@@ -386,30 +409,33 @@ test('refuses an extrusion edit that invalidates a downstream fillet without sav
   const feature = page.locator('.feature-row-main', {
     hasText: 'Extrude base'
   });
-  await feature.click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const distance = inspector.getByRole('textbox', {
-    name: 'Distance',
-    exact: true
+  // The edit runs in place; its refusals are said in its bar.
+  const edit = await editExtrudeFromHistory(page, feature, 'Extrude base');
+  await setInPlaceOptionValues(page, 'Edit Extrude base', {
+    Distance: 'base_t + 1'
   });
-  await distance.fill('base_t + 1');
-  await expect(inspector.getByRole('alert')).toContainText(
-    'Base corner fillets',
-    { timeout: 30_000 }
-  );
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(inspector.getByRole('alert')).toContainText(
-    'A selected edge no longer exists',
-    { timeout: 30_000 }
-  );
-  await expect(distance).toHaveValue('base_t + 1');
+  await expect(edit).toContainText('Base corner fillets', {
+    timeout: 30_000
+  });
+  await edit.getByRole('button', { name: 'Done' }).click();
+  await expect(edit).toContainText('A selected edge no longer exists', {
+    timeout: 30_000
+  });
+  const options = edit.locator('details.in-place-command-options');
+  const distance = edit.getByRole('button', { name: 'Distance', exact: true });
+  await options.locator('summary').click();
+  await expect(distance).toHaveText('base_t + 1');
+  await options.locator('summary').click();
   await expect(
     page.getByRole('button', { name: 'Undo', exact: true })
   ).toBeDisabled();
-  await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(inspector).toHaveCount(0);
-  await feature.click();
-  await expect(distance).toHaveValue('base_t');
+  await edit.getByRole('button', { name: 'Cancel' }).click();
+  await expect(edit).toHaveCount(0);
+  const again = await editExtrudeFromHistory(page, feature, 'Extrude base');
+  await again.locator('details.in-place-command-options summary').click();
+  await expect(
+    again.getByRole('button', { name: 'Distance', exact: true })
+  ).toHaveText('base_t');
   await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
   await expectBodyCount(page, 1);
 });

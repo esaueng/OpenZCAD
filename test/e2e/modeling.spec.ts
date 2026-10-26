@@ -26,7 +26,10 @@ import {
   pickObjectsBody,
   pickPlanarFace,
   blendEdgesInPlace,
-  openMoveOptions
+  openMoveOptions,
+  barChoice,
+  editExtrudeFromHistory,
+  setBarValues
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', async ({
@@ -950,17 +953,18 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
 
   // The rig commit leaves nothing selected; editing goes through the history
   // row, same as any committed feature.
-  await page.locator('.feature-row-main', { hasText: 'Extrude' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toBeVisible();
+  const edit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
+  );
   // A healthy extrude, freshly clicked. Its source sketch is consumed and so
   // not rendered, which used to read as every profile reference failing to
   // resolve — and the footer accused the feature of a broken reference.
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Broken profile reference'
   );
-  await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
-  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await setBarValues(page, edit, { Distance: '32' });
+  await edit.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude');
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
   // The feature inspector intentionally floats over the rail at this viewport.
@@ -968,12 +972,14 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   await page.keyboard.press('Control+z');
   await page.keyboard.press('Control+Shift+z');
   await expect(page.getByRole('contentinfo')).toContainText('Redo');
-  await page.locator('.feature-row-main', { hasText: 'Extrude' }).click();
+  const reopened = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
+  );
+  await reopened.locator('details.in-place-command-options summary').click();
   await expect(
-    page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('textbox', { name: /^Distance/ })
-  ).toHaveValue('32');
+    reopened.getByRole('button', { name: 'Distance', exact: true })
+  ).toHaveText('32 mm');
   expect(consoleErrors).toEqual([]);
 });
 
@@ -1098,19 +1104,20 @@ test('infers and stores an additive extrude from exact overlap', async ({
     exact: true
   });
   await expect(extrudeFeature).toBeVisible();
-  await extrudeFeature.click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toBeVisible();
-  await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
-    'add'
+  // History re-arms the in-place Extrude on it, its stored Add kept.
+  let edit = await editExtrudeFromHistory(page, extrudeFeature, 'Extrude');
+  await expect(barChoice(edit, 'Operation', 'Add')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
-  await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
-  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await setBarValues(page, edit, { Distance: '32' });
+  await edit.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude');
-  await expect(inspector).toHaveCount(0);
-  await extrudeFeature.click();
-  await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
-    'add'
+  await expect(edit).toHaveCount(0);
+  edit = await editExtrudeFromHistory(page, extrudeFeature, 'Extrude');
+  await expect(barChoice(edit, 'Operation', 'Add')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
   await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
@@ -3755,7 +3762,6 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   await page.goto('/');
   await page.getByLabel('Project name').fill('Panel Guards');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   // WF-10: a name nobody typed should say what the feature does. Switching the
   // operation used to leave "Union" on a subtract, so the history row, the body
@@ -3813,24 +3819,19 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   // Leave the extrude flow before selecting its feature: the panel stays out
   // of the way while a viewport command owns the screen.
   await page.keyboard.press('Escape');
-  await page
-    .locator('.feature-row-main', { hasText: 'Extrude' })
-    .first()
-    .click();
-  // exact: the extrude panel now also carries a "Back distance" field,
-  // which a substring label match resolves alongside this one.
-  const distance = inspector.getByLabel('Distance', { exact: true });
-  await distance.fill('0');
-  await expect(inspector.getByText('Distance cannot be zero')).toBeVisible();
-  await expect(
-    inspector.getByRole('button', { name: /^Apply/ })
-  ).toBeDisabled();
+  const edit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude' }).first()
+  );
+  await setBarValues(page, edit, { Distance: '0' });
+  await expect(edit).toContainText('Distance cannot be zero');
+  await expect(edit.getByRole('button', { name: 'Done' })).toBeDisabled();
 
   // Negative is documented as valid — extrude below the plane — so the guard
   // must not swallow it.
-  await distance.fill('-8');
-  await expect(inspector.getByText('Distance cannot be zero')).toHaveCount(0);
-  await expect(inspector.getByRole('button', { name: /^Apply/ })).toBeEnabled();
+  await setBarValues(page, edit, { Distance: '-8' });
+  await expect(edit).not.toContainText('Distance cannot be zero');
+  await expect(edit.getByRole('button', { name: 'Done' })).toBeEnabled();
 });
 
 test('each sketch plane label names the plane it actually opens', async ({

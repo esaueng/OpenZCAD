@@ -140,7 +140,6 @@ function makeProps(
     selectedTopology: frontFace,
     selectedEdges: [],
     scope: {},
-    sketches: [],
     bodies: [{ bodyId, name: body.name, consumed: false }],
     units: 'mm',
     commandSession: {
@@ -161,9 +160,6 @@ function makeProps(
     onConvertSketchToFixedPlane: vi.fn(),
     onApplyTextSketch: vi.fn(),
     onEditSketchInViewport: vi.fn(),
-    onApplyExtrude: vi.fn(),
-    onPreviewExtrude: vi.fn(),
-    extrudeTargets: [],
     onApplyTransform: vi.fn(),
     onResizeThroughHole: vi.fn(),
     onRemoveFaceFeature: vi.fn(),

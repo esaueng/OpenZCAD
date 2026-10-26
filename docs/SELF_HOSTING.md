@@ -60,8 +60,9 @@ pnpm selfhost:check
 
 The preflight rejects unresolved placeholders, missing or duplicate bindings,
 invalid Worker names and routes, secrets placed in `vars`, official OpenZCAD
-resource identifiers, and an attempt to run the official deployment from a
-fork. It does not contact or require access to the official Cloudflare account.
+resource identifiers, an attempt to run the official deployment from a fork,
+and end-to-end encryption flags that are misspelled or turned on out of order
+(see [End-to-end encryption](#end-to-end-encryption)). It does not contact or require access to the official Cloudflare account.
 
 ## Provision Cloudflare resources
 
@@ -250,3 +251,195 @@ it.
 
 Never run `wrangler d1 delete`, `wrangler r2 bucket delete`, or `wrangler
 delete` as part of an update.
+
+## End-to-end encryption
+
+OpenZCAD can encrypt project data in the browser before it reaches your
+Worker ([ADR-024](adrs/ADR-024-end-to-end-encrypted-projects.md)). Every
+encryption flag ships closed, in the official deployment and in
+`wrangler.selfhost.example.jsonc`. Read this section before turning any of
+them on: you cannot recover encrypted content from server storage for a user
+who loses every unlock method. Solo projects are then lost apart from local
+copies; a shared project's remaining members can still open and export it
+for the user.
+
+### What the server still sees
+
+Encryption protects project content, not everything about it. Your Worker,
+D1 database, R2 bucket and Durable Objects still hold, in plaintext:
+
+- account emails and display names
+- member lists and roles
+- project and revision counts, blob sizes and counts
+- timestamps, version numbers and save cadence
+- presence during live editing
+- schema versions and the envelope header fields
+- each user's device list: device labels, when devices and unlock methods were
+  added or removed, and their public keys
+
+Project names, checkpoint names, revision reasons, upload file names,
+thumbnails, measurements, workspace view state and archived exports are
+encrypted. R2 object keys use opaque ids only.
+
+Your backups therefore hold ciphertext plus the metadata above. A D1 export or
+R2 copy of an encrypted project is unreadable without a member's keys, to you
+and to anyone who obtains the backup. A browser remembers the newest version
+it has seen of each project and refuses an older one as a rollback, so
+restoring a backup older than what a member has already opened locks that
+member out of the restored project rather than rewinding it.
+
+The built-in assistant cannot read ciphertext. On an encrypted project it asks
+each user once per project, listing exactly what leaves the device, before any
+request reaches the AI provider you configured.
+
+### Requirements
+
+- **Migrations 0029 through 0043.** Apply every tracked D1 migration before
+  turning a flag on; `pnpm deploy:selfhost` applies them before it publishes
+  code. The encryption migrations are `0029_e2ee_account_keys.sql` through
+  `0043_e2ee_reverse_staging.sql`. There is no `0035`: that number is an
+  intentional gap, not a missing file. While a migration a flag needs is
+  missing, its routes answer 503 and `/api/e2ee/config` reports the feature as
+  off.
+- **HTTPS.** Key handling uses WebCrypto, which browsers expose only in a
+  secure context. Serve the app from the HTTPS origin in `PUBLIC_APP_ORIGIN`
+  (a custom domain or `workers.dev`); over plain HTTP on any host other than
+  `localhost`, browsers cannot create or unlock keys.
+- **A stable hostname.** Passkeys are registered with the exact hostname as
+  their relying party, and each browser keeps its device keys in storage for
+  that origin. If you move to another domain, or from `workers.dev` to a custom
+  domain, existing passkeys stop unlocking and every browser starts without
+  its device keys. Users then unlock with their recovery key and add their
+  passkeys again. Choose the final domain before enabling encryption, and warn
+  users before any later move.
+- **The shipped Content Security Policy.** The MLS engine and the encrypted
+  document decoder run as module Workers loaded from your origin, and MLS runs
+  in WebAssembly. `apps/web/public/_headers` already allows this with
+  `script-src 'self' 'wasm-unsafe-eval'` and `worker-src 'self' blob:`. If you
+  put another proxy or CDN in front of the Worker, keep those directives and do
+  not add a stricter policy on top.
+
+### Flags
+
+Set each flag in `vars` as the string `"true"` or `"false"`, and turn them on
+one deployment at a time in this order. A flag opens nothing unless the one
+before it is on. `pnpm selfhost:check` refuses a configuration in which a flag
+is on while its predecessor is off, any `E2EE_` name this release does not
+read (a misspelled flag would otherwise stay off without a word; the error
+names the closest flag), and any value that is not a recognised string: an
+unquoted JSON `true` reaches the Worker as a boolean, which it reads as off.
+
+1. `E2EE_KEYS_ENABLED`: account keys, device lists, passkeys, the required
+   recovery key and device approval, under Settings › Encryption.
+2. `E2EE_PROJECTS_ENABLED`: encrypted projects. Each account opts in with
+   Settings › Encryption › Encrypt new projects; once it does, your server
+   refuses new plaintext projects for that account.
+3. `E2EE_MIGRATION_ENABLED`: owners move their existing plaintext projects to
+   encrypted storage.
+4. `E2EE_DEFAULT_ON` (planned, not in this release): new projects encrypted for
+   every account.
+5. `E2EE_PLAINTEXT_FROZEN` (planned, not in this release): plaintext writes
+   refused.
+
+This version does not read the two planned flags, so the preflight accepts
+them only as `"false"`. A later Phase 8 release adds them after the outside
+review of the cryptography and key flows.
+
+`E2EE_REVERSE_ENABLED` is an optional, beta-only path that needs step 3. It
+lets an owner turn an encrypted project back into plaintext while nobody else
+holds it and the owner's "Encrypt new projects" opt-in is off. A later release
+removes it; after that the only way out is the export described below.
+
+`E2EE_CANARY_EMAILS` is a Worker secret, never a `var`. It opens the key routes
+to the listed accounts while `E2EE_KEYS_ENABLED` stays off, which is how the
+official beta stages its rollout. The self-host preflight cannot see secrets,
+so it does not accept `E2EE_PROJECTS_ENABLED` while `E2EE_KEYS_ENABLED` is off;
+try encryption on a separate test instance instead.
+
+After each deployment, sign in and open `/api/e2ee/config`. It reports
+`enabled` (the key routes) and `projectsEnabled`, and adds `migrationEnabled`
+and `reverseEnabled` once each is on and its migration is installed.
+
+Turning flags off deletes nothing, but clear account opt-ins before closing
+the project routes:
+
+1. While `E2EE_KEYS_ENABLED` and `E2EE_PROJECTS_ENABLED` are still on, have
+   every opted-in account turn off Settings › Encryption › Encrypt new
+   projects. This saves an authenticated preference; turning off a deployment
+   flag does not clear it. Confirm that no opt-ins remain with this read-only
+   query against your self-host configuration:
+
+   ```bash
+   pnpm --filter @openzcad/web exec wrangler d1 execute DB --remote --config ../../wrangler.selfhost.jsonc \
+     --command "SELECT COUNT(*) AS opted_in_accounts FROM e2ee_project_preferences WHERE encrypt_new_projects = 1"
+   ```
+
+   Wait for the count to reach zero before disabling project encryption. Keep
+   it enabled if an opted-in account has not cleared its preference.
+
+2. Turn off `E2EE_REVERSE_ENABLED`, then `E2EE_MIGRATION_ENABLED`, then
+   `E2EE_PROJECTS_ENABLED`, and finally `E2EE_KEYS_ENABLED`, checking the
+   configuration before deploying. While project encryption is off, encrypted
+   projects cannot be opened. Turning off migration also stops its hourly
+   sweep: any unfinished plaintext purge keeps that leftover plaintext until
+   migration is enabled again.
+
+**If project encryption was already turned off with opt-ins remaining:**
+migration 0031's database trigger still refuses plaintext creates for those
+accounts (`ENCRYPTED_PROJECTS_REQUIRED`), and the preference route is closed,
+so they cannot opt out. Re-enable `E2EE_KEYS_ENABLED`, then
+`E2EE_PROJECTS_ENABLED`, check `/api/e2ee/config`, and have those accounts
+unlock encryption and clear their opt-ins as in step 1. Migration and reverse
+can stay off during this recovery. Confirm the count is zero, then resume the
+shutdown order. Do not drop the trigger or edit the MAC-protected preference
+rows directly.
+
+### Recovery and data loss
+
+- **No escrow.** The server never holds a key that decrypts a project, so you
+  cannot recover, inspect or answer a support request from the stored data. A
+  user who loses their recovery key, every passkey and every approved device
+  loses access to their encrypted cloud projects. Projects nobody else is a
+  member of are then gone, apart from local copies on the user's devices. A
+  shared project's remaining members still hold its key: one of them can open
+  it and export an `.openzcad` backup for the user.
+- **Leaving encryption.** During the beta an owner can use the reverse path if
+  you enable it. Otherwise, and always once it is removed, the exit is to
+  export each project as an `.openzcad` file (a plaintext file the user keeps)
+  and delete it from the cloud.
+- **Plaintext retained after migration.** Moving a project to encrypted
+  storage deletes its plaintext from D1, R2 and the collaboration room. D1 Time
+  Travel and the room's point-in-time recovery (it is a SQLite-backed Durable
+  Object) can keep that plaintext for up to 30 days afterwards, and a backup
+  you took before the migration keeps it until you delete the backup. Tell
+  your users.
+
+### Rollout on an instance with plaintext projects
+
+1. Back up D1 and R2 as described above, update, and confirm that the
+   deployment applied migrations 0029 through 0043.
+2. Set `E2EE_KEYS_ENABLED` to `"true"`, run `pnpm selfhost:check`, deploy, and
+   check `/api/e2ee/config`. With a test account, set up encryption, save the
+   recovery key, and add a passkey and a second device.
+3. Set `E2EE_PROJECTS_ENABLED` to `"true"` and deploy. Accounts can now opt in
+   to encrypting new projects.
+4. Set `E2EE_MIGRATION_ENABLED` to `"true"` and deploy. Each owner encrypts
+   their projects from Settings › Encryption › Encrypt existing projects: the
+   owner's browser encrypts every retained revision and file, and only then
+   does the Worker delete the plaintext. The server encrypts nothing itself, so
+   a project stays plaintext until its owner does this.
+5. Watch the hourly cron. It finishes, a few at a time, purges and abandons
+   that a browser left idle for an hour. These read-only queries show progress:
+
+   ```bash
+   pnpm --filter @openzcad/web exec wrangler d1 execute DB --remote --config ../../wrangler.selfhost.jsonc --command "SELECT storage_format, COUNT(*) FROM projects GROUP BY storage_format"
+   pnpm --filter @openzcad/web exec wrangler d1 execute DB --remote --config ../../wrangler.selfhost.jsonc --command "SELECT direction, state, COUNT(*) FROM e2ee_project_migrations GROUP BY direction, state"
+   ```
+
+   `storage_format` 1 is plaintext and 2 is encrypted. A row that stays in
+   `cutover` or `purging` for more than a few hours still has plaintext to
+   delete; check the Worker logs for the scheduled run.
+
+6. Encrypting new projects by default and freezing plaintext writes are later
+   Phase 8 steps. They wait for an outside review and are not available in
+   this release.

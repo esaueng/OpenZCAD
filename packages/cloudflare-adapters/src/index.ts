@@ -253,6 +253,16 @@ export interface CloudflareEnv {
    * Phase 8 deletes it.
    */
   E2EE_REVERSE_ENABLED?: string;
+  /**
+   * Makes end-to-end encryption the default (ADR-024 Phase 8, slice 8-1):
+   * no plaintext project creation, adoption or duplication for anyone,
+   * no plaintext share links or invitations on plaintext projects, the
+   * "Encrypt new projects" opt-out and the reverse path closed, and the
+   * hourly sweep abandons any live decrypt staging. Closed unless set to a
+   * true value, and only for accounts migration is open to
+   * (E2EE_MIGRATION_ENABLED). Held until the outside review is done.
+   */
+  E2EE_DEFAULT_ON?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_GROWING_HOLDER_ENABLED?: string;
   AI_PATCH_HOLE_CONTROL_ENABLED?: string;
@@ -342,6 +352,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'E2EE_PROJECTS_ENABLED',
   'E2EE_MIGRATION_ENABLED',
   'E2EE_REVERSE_ENABLED',
+  'E2EE_DEFAULT_ON',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_GROWING_HOLDER_ENABLED',
   'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -473,6 +484,11 @@ export function isE2eeMigrationEnabled(
  * plaintext (ADR-024 Phase 7, slice 7-3, the beta-only reverse path):
  * migration must be open to it (`isE2eeMigrationEnabled`) and
  * E2EE_REVERSE_ENABLED itself must be on. All default closed.
+ *
+ * Phase 8, slice 8-1: closed again wherever encryption is the default
+ * (`isE2eeDefaultOn`), as if E2EE_REVERSE_ENABLED were off for the account:
+ * no decrypt start, cutover or staging write, and the sweep abandons the
+ * account's decrypt stagings.
  */
 export function isE2eeReverseEnabled(
   env: CloudflareEnv,
@@ -480,6 +496,21 @@ export function isE2eeReverseEnabled(
 ): boolean {
   return (
     isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED') &&
+    isE2eeMigrationEnabled(env, email) &&
+    !isE2eeDefaultOn(env, email)
+  );
+}
+
+/**
+ * Whether end-to-end encryption is the default for one authenticated account
+ * (ADR-024 Phase 8, slice 8-1): E2EE_DEFAULT_ON must be on and migration must
+ * be open to the account (`isE2eeMigrationEnabled`), so the key routes,
+ * encrypted projects and migration are all available before plaintext
+ * creation closes. All default closed.
+ */
+export function isE2eeDefaultOn(env: CloudflareEnv, email?: string): boolean {
+  return (
+    isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON') &&
     isE2eeMigrationEnabled(env, email)
   );
 }
@@ -4577,6 +4608,82 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   /**
+   * ` AND <fence>` on a row `upload_sessions` for a statement that
+   * advances `session` under the lease it was opened with, of either
+   * staging direction: a staged encrypted-blob session's staging lease
+   * (`stagingLeaseFence`), or a decrypt staging's file session's decrypt
+   * lease (`uploadDecryptLeaseSql`); '' for any other session.
+   */
+  private uploadLeaseFence(session: CheckedUploadSession): string {
+    return session.decryptStaged
+      ? ` AND ${uploadDecryptLeaseSql('upload_sessions', Date.now())}`
+      : this.stagingLeaseFence(session);
+  }
+
+  /**
+   * Refuses with 409 E2EE_MIGRATION_LEASE_LOST once the lease `session`
+   * was opened under, of either direction, is no longer live
+   * (`refuseIfDecryptLeaseLost`, `refuseIfStagingLeaseLost`); a no-op for
+   * any other session.
+   */
+  private async refuseIfUploadLeaseLost(
+    session: CheckedUploadSession
+  ): Promise<void> {
+    if (session.decryptStaged) {
+      await this.refuseIfDecryptLeaseLost(session);
+    } else {
+      await this.refuseIfStagingLeaseLost(session);
+    }
+  }
+
+  /**
+   * After a move to `completed` landed nothing (#918 follow-up): when the
+   * lease the session was opened under is no longer live, releases the
+   * session and refuses with 409 E2EE_MIGRATION_LEASE_LOST
+   * (`refuseIfUploadLeaseLost`); otherwise returns. Call it only once R2
+   * has no completion of the session in flight (R2's `complete()`
+   * returned, or the object is already there): the release then drops the
+   * stale object and reservation at once, so the new holder's upload of
+   * the same blob need not wait out the completion window
+   * (`cleanupUploadSession`).
+   */
+  private async refuseIfCompletionLeaseLost(
+    uploadSessionId: string,
+    session: CheckedUploadSession
+  ): Promise<void> {
+    try {
+      await this.refuseIfUploadLeaseLost(session);
+    } catch (error) {
+      // Only a confirmed lease loss releases the session: a failed lease
+      // query proves nothing, and the completed object may be another
+      // request's success (#933 review).
+      const leaseLost =
+        error instanceof DecryptStagingLeaseError ||
+        (error instanceof EncryptedBlobError &&
+          error.code === E2EE_MIGRATION_CODES.leaseLost);
+      if (!leaseLost) throw error;
+      try {
+        const released = await this.env
+          .DB!.prepare(
+            `UPDATE upload_sessions
+             SET reservation_state = 'aborting', completion_started_at = NULL
+             WHERE id = ? AND reservation_state IN ('completing', 'completed')
+               AND multipart_upload_id = ?`
+          )
+          .bind(uploadSessionId, session.multipartUploadId)
+          .run();
+        if (released.meta?.changes === 1) {
+          const current = await this.loadUploadSession(uploadSessionId);
+          if (current) await this.cleanupUploadSession(current);
+        }
+      } catch {
+        // The new holder's own cleanup drops it once the window passed.
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Whether a plaintext upload (`upload` absent, or one without an
    * encrypted-blob marker) must respect the migration state (slice 7-1):
    * only while E2EE_MIGRATION_ENABLED is on, as the Worker's
@@ -4902,8 +5009,9 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload part is invalid or too large.');
     }
     const reservationToken = crypto.randomUUID();
-    // A staged session reserves the part only under its live lease.
-    const leaseFence = this.stagingLeaseFence(session);
+    // A staged session reserves the part only under its live lease, of
+    // either direction (#925 follow-up: a decrypt staging's session too).
+    const leaseFence = this.uploadLeaseFence(session);
     let reserved: number | undefined;
     try {
       const result = await this.env.DB.prepare(
@@ -4937,7 +5045,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     if (leaseFence && reserved !== 1) {
-      await this.refuseIfStagingLeaseLost(session);
+      await this.refuseIfUploadLeaseLost(session);
       throw new ArtifactStorageError('Upload part could not be reserved.');
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
@@ -5054,14 +5162,17 @@ export class D1R2PersistenceService implements PersistenceService {
     if (session.reservationState === 'completing' && !frozeCompletion) {
       const stored = await this.env.ARTIFACTS!.head(session.objectKey);
       if (stored?.size === session.reservedBytes) {
-        await this.env.DB.prepare(
+        const reconciled = await this.env.DB.prepare(
           `UPDATE upload_sessions
            SET reservation_state = 'completed', completion_started_at = NULL
            WHERE id = ? AND reservation_state = 'completing'
-             AND multipart_upload_id = ? AND reserved_bytes = ?`
+             AND multipart_upload_id = ? AND reserved_bytes = ?${this.uploadLeaseFence(session)}`
         )
           .bind(uploadSessionId, request.uploadId, session.reservedBytes)
           .run();
+        if (reconciled.meta?.changes !== 1) {
+          await this.refuseIfCompletionLeaseLost(uploadSessionId, session);
+        }
         await this.cleanupClaimedUpload(uploadSessionId, session);
         return;
       }
@@ -5145,15 +5256,19 @@ export class D1R2PersistenceService implements PersistenceService {
         throw error;
       }
     }
+    // The last move carries the lease fence too (#918 follow-up): a
+    // takeover while R2 completed the object lets the stale holder finish
+    // nothing, and releases the session for the new holder.
     const completed = await this.env.DB.prepare(
       `UPDATE upload_sessions
        SET reservation_state = 'completed', completion_started_at = NULL
        WHERE id = ? AND reservation_state = 'completing'
-         AND multipart_upload_id = ? AND reserved_bytes = ?`
+         AND multipart_upload_id = ? AND reserved_bytes = ?${this.uploadLeaseFence(session)}`
     )
       .bind(uploadSessionId, request.uploadId, session.reservedBytes)
       .run();
     if (completed.meta?.changes !== 1) {
+      await this.refuseIfCompletionLeaseLost(uploadSessionId, session);
       const current = await this.requireUploadSession(userId, uploadSessionId);
       if (
         current.reservationState !== 'completed' ||

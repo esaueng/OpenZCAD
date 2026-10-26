@@ -10,11 +10,12 @@ import {
   expect,
   stubApi,
   revealModelPanel,
-  chooseInPlaceOption,
-  extrudeBar,
   enterCommandValue,
   setInPlaceOptionValues,
-  waitForStillViewport
+  waitForStillViewport,
+  editExtrudeFromHistory,
+  chooseInPlaceOption,
+  extrudeBar
 } from './openzcad-fixtures';
 
 /**
@@ -388,11 +389,10 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   await bar.getByRole('button', { name: 'Done' }).click();
   await expect(bar).toHaveCount(0, { timeout: 30_000 });
   await revealModelPanel(page, 'History');
-  await extrusion.last().click();
+  const edit = await editExtrudeFromHistory(page, extrusion.last());
+  await edit.locator('details.in-place-command-options summary').click();
   await expect(
-    page
-      .getByRole('form', { name: 'Extrude settings' })
-      .getByRole('textbox', { name: 'Distance', exact: true })
-  ).toHaveValue('4 + 8');
+    edit.getByRole('button', { name: 'Distance', exact: true })
+  ).toHaveText('4 + 8');
   expect(errors).toEqual([]);
 });
