@@ -124,9 +124,14 @@ test('cuts two native profiles with explicit intent and retains it through undo 
         Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
       ).hold = true;
     });
-    // The bar's signed distance, typed on its keypad, then Done.
-    await setInPlaceOptionValues(page, 'Extrude', { Distance: '-8' });
-    await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
+    // The bar's signed distance, typed on its keypad and left open there:
+    // Done commits what it previewed.
+    const bar = extrudeBar(page);
+    await bar.locator('details.in-place-command-options summary').click();
+    await bar.getByRole('button', { name: 'Distance', exact: true }).click();
+    const keypad = page.locator('.numeric-keypad');
+    await keypad.locator('input').fill('-8');
+    await bar.getByRole('button', { name: 'Done' }).click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -143,6 +148,9 @@ test('cuts two native profiles with explicit intent and retains it through undo 
     await expect(
       page.getByRole('region', { name: 'Extrude operation' })
     ).toHaveAttribute('aria-busy', 'true');
+    // The keypad goes with the Done it fed: nothing left to edit a value
+    // that would not be the one committed.
+    await expect(keypad).toHaveCount(0);
     if (cancel === 'Escape') await page.keyboard.press('Escape');
     else await page.getByRole('button', { name: 'Dismiss Extrude' }).click();
     await expect(page.getByRole('contentinfo')).toContainText(

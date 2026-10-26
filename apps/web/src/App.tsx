@@ -16803,8 +16803,11 @@ export function App() {
         (interaction.phase === 'exact-entry' ||
           interaction.phase === 'failed')) ||
       // The in-place Extrude's own values: each keystroke previews, which
-      // sets the region's choice again; only leaving the region closes it.
-      (interaction.mode === 'region' && keypadRef.current?.kind === 'extrude');
+      // sets the region's choice again; leaving the region closes it, and so
+      // does a Done being checked, which commits the value it previewed.
+      (interaction.mode === 'region' &&
+        interaction.phase !== 'validating' &&
+        keypadRef.current?.kind === 'extrude');
     if (!open) {
       setKeypad(null);
     }
