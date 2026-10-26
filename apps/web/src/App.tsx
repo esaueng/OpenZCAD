@@ -2523,6 +2523,8 @@ export function App() {
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [automaticMigrationLoadError, setAutomaticMigrationLoadError] =
+    useState<string | null>(null);
   const [settingsMessage, setSettingsMessage] = useState(
     pendingInvitationToken
       ? 'Sign in to open the shared project automatically.'
@@ -3249,6 +3251,7 @@ export function App() {
     lockAccountsExcept(sessionUserId);
   }, [sessionUserId]);
   useEffect(() => {
+    setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
     let stopped = false;
     let migration: { dispose(): void } | undefined;
@@ -3265,8 +3268,11 @@ export function App() {
         void current.check();
       })
       .catch(() => {
-        if (!stopped)
-          setSettingsMessage('Automatic encryption could not load. Reload to try again.');
+        if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+        setAutomaticMigrationLoadError(
+          'Automatic encryption could not load. Reload to try again.'
+        );
+        setSettingsOpen(true);
       });
     return () => {
       stopped = true;
@@ -26099,7 +26105,7 @@ export function App() {
           health={deploymentHealth}
           session={session}
           busy={settingsBusy}
-          message={settingsMessage}
+          message={automaticMigrationLoadError ?? settingsMessage}
           initialSection={
             pendingInvitationToken || desktopAuthorizationAttempt
               ? 'account'

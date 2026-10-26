@@ -6,6 +6,30 @@ import {
   seedE2eeDevice
 } from './e2ee-fixtures';
 
+test('shows the reload instruction when automatic migration fails to download', async ({
+  page,
+  context
+}) => {
+  await stubApi(page);
+  await installE2eeServer(context, createE2eeServer());
+  await page.route(/\/assets\/automaticMigration-[^/]+\.js$/, (route) =>
+    route.abort('failed')
+  );
+  const cloudSave = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/settings' &&
+      response.request().method() === 'PATCH'
+  );
+  await page.goto('/');
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(settings).toBeVisible({ timeout: 15_000 });
+  // A later successful profile save must not replace the reload instruction.
+  await cloudSave;
+  await expect(settings).toContainText(
+    'Automatic encryption could not load. Reload to try again.'
+  );
+});
+
 test('default-on opens Encryption setup immediately when Settings was closed', async ({
   page,
   context
