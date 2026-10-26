@@ -2221,3 +2221,111 @@ describe("useInPlaceCommand: editing a fillet's edge set", () => {
     );
   });
 });
+
+describe('useInPlaceCommand: axes and directions picked in the model', () => {
+  const EDGE_AXIS = {
+    kind: 'edge' as const,
+    source: {
+      type: 'edge' as const,
+      bodyId: 'body_a' as BodyId,
+      edgeReference: {} as never
+    }
+  };
+  /** A model edge along Z at x = 40, in the FRONT sketch's plane (y = 0). */
+  const line = (y = 0) => ({
+    id: `edge:body_a:${y}`,
+    label: 'The picked edge',
+    origin: { x: 40, y, z: 0 },
+    direction: { x: 0, y: 0, z: 1 },
+    choice: { define: EDGE_AXIS }
+  });
+  const BOX = {
+    bodyId: 'body_a' as BodyId,
+    min: { x: 0, y: 0, z: 0 },
+    max: { x: 10, y: 10, z: 10 }
+  };
+
+  it('a revolve takes a picked edge in its plane, and lets it go again', () => {
+    const onStatus = vi.fn();
+    const { hook } = setup({ onStatus });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => {
+      hook.result.current.pickAxisLine(line());
+    });
+    expect(hook.result.current.axisCandidates[0]?.id).toBe('edge:body_a:0');
+    expect(hook.result.current.slots.axis?.id).toBe('edge:body_a:0');
+    expect(hook.result.current.request).toMatchObject({
+      tool: 'revolve',
+      axis: { newAxis: EDGE_AXIS }
+    });
+    // Clicked again, it comes back out.
+    act(() => {
+      hook.result.current.pickAxisLine(line());
+    });
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).not.toContain(
+      'edge:body_a:0'
+    );
+    // Off the profile's plane, it is refused in words.
+    act(() => {
+      hook.result.current.pickAxisLine(line(5));
+    });
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(onStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/leaves the profile's sketch plane/)
+    );
+  });
+
+  it('a new profile on another sketch lets the picked line go', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => {
+      hook.result.current.pickAxisLine(line());
+    });
+    act(() => hook.result.current.pickProfile(SECOND));
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).not.toContain(
+      'edge:body_a:0'
+    );
+  });
+
+  it('a linear pattern reads a picked line or face normal as its direction', () => {
+    const { hook } = setup({
+      datumAxes: {
+        ['axis_1' as FeatureId]: {
+          origin: { x: 0, y: 0, z: 0 },
+          direction: { x: 0, y: 1, z: 1 }
+        }
+      }
+    });
+    act(() => hook.result.current.start('linear-pattern', [], [], [BOX]));
+    act(() => {
+      hook.result.current.pickDirection({ x: 0, y: 0, z: -2 });
+    });
+    expect(hook.result.current.options.axis).toBe('custom');
+    expect(hook.result.current.values).toMatchObject({
+      dirX: 0,
+      dirY: 0,
+      dirZ: -1
+    });
+    expect(hook.result.current.touched).toEqual(
+      expect.arrayContaining(['dirX', 'dirY', 'dirZ'])
+    );
+    // A drawn datum axis is a direction too, not an axis slot.
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).toEqual([
+      'datum:axis_1'
+    ]);
+    act(() => hook.result.current.pickAxis('datum:axis_1'));
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(hook.result.current.values.dirY).toBeCloseTo(Math.SQRT1_2);
+    // Along a world axis, it is that axis.
+    act(() => {
+      hook.result.current.pickAxisLine({
+        ...line(),
+        direction: { x: 1, y: 0, z: 0 }
+      });
+    });
+    expect(hook.result.current.options.axis).toBe('x');
+    expect(hook.result.current.request).toMatchObject({ axis: 'x' });
+  });
+});
