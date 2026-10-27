@@ -60,6 +60,8 @@ import {
   authorCutoffKey,
   EnvelopeKey,
   VersionLogError,
+  MAX_VERSION_LOG_BYTES,
+  MAX_VERSION_LOG_RECORDS,
   checkBlobReferences,
   encodeProjectInfoBody,
   encryptProjectEnvelope,
@@ -68,6 +70,7 @@ import {
   fromHex,
   parseEnvelope,
   signProjectEnvelope,
+  shareLinkSetCommitment,
   toBase64Url,
   toHex,
   unwrapKey,
@@ -262,7 +265,6 @@ export interface EncryptedProjectContext {
 /** How far a fresh browser lets a head's signature trail account activity. */
 export const STALE_HEAD_WARNING_MS = 10 * 60 * 1000;
 const SCHEMA_VERSION = 1;
-const LOG_WINDOW = 4096;
 /** The most log records one head read follows (judgment). */
 const MAX_LOG_RECORDS = 64 * 1024;
 
@@ -553,6 +555,14 @@ function asApiError(error: unknown): unknown {
 const integrity = (reason: EncryptedIntegrityReason, message: string) =>
   new EncryptedProjectIntegrityError(reason, message);
 
+/** A concurrent owner refresh may prune a cursor between log pages. */
+class VersionHistoryPageChanged extends Error {}
+
+const retryableHistory = (error: unknown): error is Error =>
+  error instanceof VersionHistoryPageChanged ||
+  (error instanceof EncryptedProjectIntegrityError &&
+    (error.reason === 'fork' || error.reason === 'share-links'));
+
 function logFailure(error: VersionLogError): EncryptedProjectIntegrityError {
   switch (error.reason) {
     case 'pinned-missing':
@@ -837,10 +847,13 @@ export function createEncryptedProjectStore(
           'This project’s version history is too long to check here.'
         );
       }
-      const page = await api.versions(projectId, last.documentVersion);
+      const page = await api.versions(
+        projectId,
+        last.documentVersion,
+        head.documentVersion
+      );
       if (page.log[0]?.versionHash !== last.versionHash) {
-        throw integrity(
-          'fork',
+        throw new VersionHistoryPageChanged(
           'The account’s version history pages do not join.'
         );
       }
@@ -863,7 +876,8 @@ export function createEncryptedProjectStore(
 
   /**
    * `verifyVersionLog` from the pin, in overlapping windows of at most
-   * 4,096 records, each signature resolved through `verifyAuthoredLogRecord`.
+   * 4,096 records and 64 MiB of prefix/hash bytes, each signature resolved
+   * through `verifyAuthoredLogRecord`. The overlap authenticates each join.
    */
   async function verifyLog(
     projectId: string,
@@ -875,11 +889,29 @@ export function createEncryptedProjectStore(
     let pinned = pinHash;
     let unauthorized: number | null = null;
     let missingKey: ProjectGroupError | null = null;
-    for (let start = 0; ; start += LOG_WINDOW - 1) {
-      const window = entries.slice(start, start + LOG_WINDOW);
+    const shareHistory = new Map<
+      string,
+      {
+        header: ProjectEnvelopeHeader;
+        owner: boolean;
+      }
+    >();
+    for (let start = 0; ;) {
+      let end = start;
+      let total = 0;
+      const records: VersionLogRecord[] = [];
+      while (end < entries.length && records.length < MAX_VERSION_LOG_RECORDS) {
+        const record = recordOf(entries[end]!);
+        const size = record.prefix.length + record.versionHash.length;
+        if (records.length > 0 && total + size > MAX_VERSION_LOG_BYTES) break;
+        records.push(record);
+        total += size;
+        end++;
+      }
+      const window = entries.slice(start, end);
       let authorship: AuthorshipError | null = null;
       try {
-        const verified = await verifyVersionLog(window.map(recordOf), {
+        const verified = await verifyVersionLog(records, {
           ...(pinned ? { pinnedVersionHash: fromHex(pinned) } : {}),
           projectId,
           resolveSigningKey: async ({ index, record, header }) => {
@@ -917,6 +949,20 @@ export function createEncryptedProjectStore(
                 return null;
               }
               const authorList = lists.find((l) => l.userId === author.userId);
+              const roles = await epochRoles(
+                groups,
+                projectId,
+                header.keyEpoch
+              );
+              shareHistory.set(entry.versionHash, {
+                header,
+                owner: roles.users.some(
+                  (role) =>
+                    role.userId === author.userId &&
+                    role.role === 'owner' &&
+                    role.since <= header.keyEpoch - keyEpochBase
+                )
+              });
               return authorList
                 ? signingKeyOf(authorList, author.deviceId)
                 : null;
@@ -950,7 +996,56 @@ export function createEncryptedProjectStore(
         if (error instanceof VersionLogError) throw logFailure(error);
         throw error;
       }
-      if (start + LOG_WINDOW >= entries.length) return;
+      if (end >= entries.length) break;
+      start = end - 1;
+    }
+    // The signed prefix makes the entire link set visible in the retained
+    // log, including overwritten autosaves. A fresh reader needs an owner
+    // baseline; a trusted version pin can resume an already checked chain.
+    let commitment: Uint8Array | undefined;
+    const known = heads.get(projectId);
+    for (const [index, entry] of entries.entries()) {
+      const verified = shareHistory.get(entry.versionHash)!;
+      const next = verified.header.shareLinkSetHash;
+      const direct =
+        !!known &&
+        verified.header.previousVersionHash !== null &&
+        toHex(verified.header.previousVersionHash) === known.hash;
+      if (!next) {
+        if (commitment)
+          throw integrity(
+            'share-links',
+            'The document link-set history was downgraded.'
+          );
+        if (index === entries.length - 1 && !verified.owner && !direct) {
+          throw integrity(
+            'share-links',
+            'This legacy editor head needs an owner-authenticated link-set baseline.'
+          );
+        }
+        continue;
+      }
+      if (!commitment) {
+        const knownSet = direct
+          ? await shareLinkSetCommitment(known.shareLinks?.set)
+          : null;
+        if (
+          !verified.owner &&
+          !(index === 0 && entry.versionHash === pinHash) &&
+          !(knownSet && sameBytes(knownSet, next))
+        ) {
+          throw integrity(
+            'share-links',
+            'This project has no owner-authenticated link-set baseline.'
+          );
+        }
+      } else if (!sameBytes(commitment, next) && !verified.owner) {
+        throw integrity(
+          'share-links',
+          'Only the owner may change the active link set.'
+        );
+      }
+      commitment = next;
     }
   }
 
@@ -1137,13 +1232,22 @@ export function createEncryptedProjectStore(
           `The account offered version ${head.documentVersion} of this project, older than version ${pin.documentVersion} this browser already accepted. Your work stays on this device.`
         );
       }
-      const entries = await collectLog(
-        projectId,
-        metadata.log,
-        metadata.more,
-        head
-      );
-      await verifyLog(projectId, pinHash, entries);
+      let entries: E2eeVersionLogEntry[];
+      try {
+        entries = await collectLog(
+          projectId,
+          metadata.log,
+          metadata.more,
+          head
+        );
+        await verifyLog(projectId, pinHash, entries);
+      } catch (error) {
+        if (!retryableHistory(error)) throw error;
+        if (attempt < 2) continue;
+        throw error instanceof VersionHistoryPageChanged
+          ? integrity('fork', error.message)
+          : error;
+      }
       const author = await authorOf(projectId, envelope, bytes(head.signature));
       const header = author.header;
       const hash = toHex(author.versionHash);
@@ -1909,16 +2013,15 @@ export function createEncryptedProjectStore(
    */
   async function roomLog(
     projectId: string,
-    since: number,
+    since: number | undefined,
     head: E2eeVersionLogEntry
   ): Promise<E2eeVersionLogEntry[]> {
     const entries: E2eeVersionLogEntry[] = [];
     for (let from = since; ;) {
-      const page = await api.versions(projectId, from);
+      const page = await api.versions(projectId, from, head.documentVersion);
       const last = entries.at(-1);
       if (last && page.log[0]?.versionHash !== last.versionHash) {
-        throw integrity(
-          'fork',
+        throw new VersionHistoryPageChanged(
           'The account’s version history pages do not join.'
         );
       }
@@ -1972,12 +2075,20 @@ export function createEncryptedProjectStore(
           `The room offered version ${record.documentVersion} of this project, older than version ${pin.documentVersion} this browser already accepted. Your work stays on this device.`
         );
       }
-      const entries = await roomLog(
-        projectId,
-        pin && pinHash ? pin.documentVersion : record.documentVersion,
-        record
-      );
-      await verifyLog(projectId, pinHash, entries);
+      let entries: E2eeVersionLogEntry[];
+      try {
+        entries = await roomLog(
+          projectId,
+          pin && pinHash ? pin.documentVersion : undefined,
+          record
+        );
+        await verifyLog(projectId, pinHash, entries);
+      } catch (error) {
+        if (!retryableHistory(error)) throw error;
+        // The old relayed head lost its proof. Read the current account head
+        // from the original durable pin; never accept the incomplete chain.
+        return readHead(projectId);
+      }
       const author = await authorOf(
         projectId,
         envelope,
