@@ -360,7 +360,7 @@ export function MoveOverlay({
       >
         <Check size={14} aria-hidden="true" />
         Done
-        <kbd aria-hidden="true">↵</kbd>
+        <kbd aria-hidden="true">Enter</kbd>
       </button>
     </form>
   );
