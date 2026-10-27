@@ -186,6 +186,16 @@
   background: var(--color-surface-hover);
 }
 
+/* The reason an action is unavailable still needs normal text contrast. */
+.context-menu-item:disabled {
+  opacity: 1;
+}
+
+.context-menu-item:disabled
+  :is(.context-menu-icon, .context-menu-action-label, kbd) {
+  opacity: var(--opacity-disabled);
+}
+
 /* The error text tone, as every menu's destructive item uses: the fill
    red is under 4.5:1 as text on the dark surface. */
 .context-menu-item.danger {
@@ -217,7 +227,7 @@
   max-width: 220px;
   font-size: 11px;
   line-height: 1.35;
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
   white-space: normal;
 }
 

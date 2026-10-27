@@ -203,7 +203,9 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   await setInPlaceOptionValues(page, 'Extrude', { Distance: '-8' });
   // Enter finishes, as Done does, once the bar's own controls let it go
   // (Enter on Options would open them).
-  await page.locator(':focus').blur();
+  await page.evaluate(() =>
+    (window.document.activeElement as HTMLElement)?.blur()
+  );
   await page.keyboard.press('Enter');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by -8 mm, cut into the body.',

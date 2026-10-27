@@ -32,6 +32,17 @@ describe('keypadClampPosition', () => {
     ).toBeLessThanOrEqual(VIEWPORT.width - 8);
   });
 
+  it('keeps an old desktop anchor inside a resized phone viewport', () => {
+    const placement = keypadClampPosition({ x: 1200, y: 820 }, SIZE, {
+      width: 390,
+      height: 360
+    });
+    expect(placement.x).toBeGreaterThanOrEqual(8);
+    expect(placement.x + SIZE.width).toBeLessThanOrEqual(382);
+    expect(placement.y).toBeGreaterThanOrEqual(8);
+    expect(placement.y + SIZE.height).toBeLessThanOrEqual(352);
+  });
+
   it('never goes above the top margin', () => {
     const placement = keypadClampPosition(
       { x: 500, y: 690 },

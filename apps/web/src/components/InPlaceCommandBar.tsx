@@ -213,6 +213,11 @@ export function InPlaceCommandBar({
                   aria-labelledby={`in-place-value-${value.id}`}
                   onClick={(event) => {
                     const box = event.currentTarget.getBoundingClientRect();
+                    // Exact entry takes over from Options. Leaving its flyout
+                    // open covers the keypad in the command lane's context.
+                    event.currentTarget
+                      .closest('details')
+                      ?.removeAttribute('open');
                     onValue?.(value.id, { x: box.left, y: box.bottom });
                   }}
                 >

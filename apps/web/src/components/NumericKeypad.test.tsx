@@ -32,6 +32,63 @@ function setup(initial: string, selectInitial?: boolean) {
 }
 
 describe('numeric entry first character', () => {
+  it('accepts the first rig anchor after the initial resize notification, then stays anchored on resize', () => {
+    let notify = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          notify = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const host = document.createElement('div');
+    Object.defineProperties(host, {
+      clientWidth: { value: 1000, configurable: true },
+      clientHeight: { value: 800 }
+    });
+    document.body.append(host);
+    const anchor = {
+      current: null as ((point: { x: number; y: number } | null) => void) | null
+    };
+    const view = render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Height',
+          initial: '10',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={anchor}
+        onPreview={() => undefined}
+        onCommit={() => undefined}
+        onCancel={() => undefined}
+      />,
+      { container: host }
+    );
+    try {
+      const keypad = screen.getByRole('dialog', { name: 'Height value' });
+      notify(); // ResizeObserver delivers once even without a size change.
+      anchor.current?.({ x: 800, y: 100 });
+      expect(keypad).toHaveStyle({ left: '684px', top: '114px' });
+      anchor.current?.({ x: 200, y: 400 });
+      expect(keypad).toHaveStyle({ left: '684px', top: '114px' });
+      Object.defineProperty(host, 'clientWidth', { value: 390 });
+      notify();
+      expect(parseFloat(keypad.style.left) + 232).toBeLessThanOrEqual(382);
+      anchor.current?.({ x: 200, y: 400 });
+      expect(keypad.style.top).toBe('114px');
+    } finally {
+      view.unmount();
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('uses the rig anchor rather than the transformed chip bounds for its first placement', () => {
     const host = document.createElement('div');
     Object.defineProperties(host, {

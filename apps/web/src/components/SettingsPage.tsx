@@ -380,6 +380,7 @@ type TurnstileApi = {
     options: {
       sitekey: string;
       action: string;
+      size: 'normal' | 'compact';
       callback(token: string): void;
       'expired-callback'(): void;
       'error-callback'(): void;
@@ -404,8 +405,26 @@ function TurnstileWidget({
   const widgetIdRef = useRef<string | null>(null);
   const [state, setState] = useState<TurnstileState>('loading');
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [size, setSize] = useState<'normal' | 'compact' | null>(null);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const measure = () =>
+      setSize(
+        container.getBoundingClientRect().width < 300 ? 'compact' : 'normal'
+      );
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(container);
+    return () => observer?.disconnect();
+  }, []);
 
   useEffect(() => {
+    if (!size) return;
     let disposed = false;
     setState('loading');
     onToken('');
@@ -425,15 +444,19 @@ function TurnstileWidget({
         widgetIdRef.current = turnstile.render(containerRef.current, {
           sitekey: siteKey,
           action: 'email-code',
+          size,
           callback: (token) => {
+            if (disposed) return;
             onToken(token);
             setState('verified');
           },
           'expired-callback': () => {
+            if (disposed) return;
             onToken('');
             setState('expired');
           },
           'error-callback': () => {
+            if (disposed) return;
             onToken('');
             setState('error');
           }
@@ -484,7 +507,7 @@ function TurnstileWidget({
         widgetIdRef.current = null;
       }
     };
-  }, [loadAttempt, onToken, siteKey]);
+  }, [loadAttempt, onToken, siteKey, size]);
 
   useEffect(() => {
     const turnstile = (window as typeof window & { turnstile?: TurnstileApi })

@@ -795,6 +795,12 @@
 .settings-auth-controls {
   display: grid;
   gap: var(--sp-2);
+  min-width: 0;
+}
+
+.settings-auth-controls > *,
+.settings-turnstile-shell {
+  min-width: 0;
 }
 
 .settings-auth-controls .settings-button-row {
@@ -1151,7 +1157,7 @@
   }
 
   .settings-auth-form {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
