@@ -26,7 +26,9 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 export class LegacyProjectTransportError extends Error {
   constructor(
     cause: unknown,
-    readonly status?: number
+    readonly status?: number,
+    readonly code?: string,
+    readonly details?: Record<string, unknown>
   ) {
     super('The project download did not complete.', { cause });
   }
@@ -87,6 +89,28 @@ function parse(bytes: Uint8Array): unknown {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   new JsonComplexityGuard().consume(text);
   return JSON.parse(text) as unknown;
+}
+
+async function assetFailure(response: Response): Promise<never> {
+  let details: Record<string, unknown> | undefined;
+  try {
+    const value = parse(await boundedBody(response, 64 * 1024));
+    if (value !== null && typeof value === 'object' && !Array.isArray(value))
+      details = value as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof LegacyProjectTransportError) throw error;
+    // An absent, oversized or non-JSON error body does not change its status.
+  }
+  throw new LegacyProjectTransportError(
+    new Error(
+      typeof details?.error === 'string'
+        ? details.error
+        : 'A stored project asset is unavailable.'
+    ),
+    response.status,
+    typeof details?.code === 'string' ? details.code : undefined,
+    details
+  );
 }
 
 export async function readLegacyProjectFrame(
@@ -184,7 +208,7 @@ export async function readLegacyProjectFrame(
               'A stored project asset is unavailable.'
             );
             if (asset.status === 404) throw unavailable;
-            throw new LegacyProjectTransportError(unavailable, asset.status);
+            return assetFailure(asset);
           }
           const stored = await boundedBody(
             asset,

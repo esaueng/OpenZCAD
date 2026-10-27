@@ -276,7 +276,13 @@ async function requestJson<T>(
       )) as T;
     } catch (error) {
       if (error instanceof LegacyProjectTransportError) {
-        if (error.status) throw new ApiError(error.status, error.message);
+        if (error.status)
+          throw new ApiError(
+            error.status,
+            error.cause instanceof Error ? error.cause.message : error.message,
+            error.code,
+            error.details
+          );
         throw error.cause;
       }
       throw new ApiError(

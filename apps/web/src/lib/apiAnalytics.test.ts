@@ -5,6 +5,7 @@ import { desktopFetch } from './desktopBridge';
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { prepareProjectStorageSnapshot } from '@openzcad/persistence';
 import { createMigrationPlaintextSource } from './e2ee/migrationPlaintextSource';
+import { encryptedProjectStore } from './e2ee/encryptedProjects';
 import {
   toUserId,
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
@@ -25,6 +26,7 @@ vi.mock('./analytics', () => ({
   durationBucket: vi.fn(() => 'lt_100ms')
 }));
 vi.mock('./desktopBridge', () => ({ desktopFetch: vi.fn() }));
+vi.mock('./e2ee/encryptedProjects', () => ({ encryptedProjectStore: vi.fn() }));
 
 beforeEach(() => {
   vi.mocked(isAnalyticsEnabled).mockReturnValue(true);
@@ -32,6 +34,62 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe('project download size observations', () => {
+  it('falls back to encrypted reads when migration finalizes between frame and asset', async () => {
+    const imported = importStepBody(
+      createProjectDocument('Migrating', toUserId('owner')),
+      {
+        name: 'Part',
+        artifactId: 'artifact_local_migrating',
+        sourceName: 'part.step',
+        stepText: 'ISO-10303-21;\nEND-ISO-10303-21;'
+      }
+    ).document;
+    const prepared = await prepareProjectStorageSnapshot(imported);
+    const frame = encodeE2eeFrame(
+      {
+        version: 1,
+        projectId: imported.projectId,
+        kind: 'snapshot',
+        aliases: [],
+        storedBytes: prepared.storedBody.length,
+        logicalBytes: prepared.logicalBytes,
+        checksumSha256: prepared.checksumSha256
+      },
+      prepared.storedBody
+    );
+    const loadProject = vi.fn().mockResolvedValue(imported);
+    vi.mocked(encryptedProjectStore).mockResolvedValue({
+      loadProject
+    } as unknown as Awaited<ReturnType<typeof encryptedProjectStore>>);
+    for (const reader of [createMigrationPlaintextSource(), api]) {
+      vi.mocked(desktopFetch)
+        .mockResolvedValueOnce(
+          new Response(frame, {
+            headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+          })
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: 'Project is now encrypted.',
+              code: 'PROJECT_FORMAT_UNSUPPORTED'
+            }),
+            { status: 409 }
+          )
+        );
+      if (reader === api)
+        expect(await reader.loadProject(imported.projectId)).toEqual(imported);
+      else
+        await expect(
+          reader.loadProject(imported.projectId)
+        ).rejects.toMatchObject({
+          status: 409,
+          code: 'PROJECT_FORMAT_UNSUPPORTED'
+        });
+    }
+    expect(loadProject).toHaveBeenCalledExactlyOnceWith(imported.projectId);
+  });
+
   it('preserves an asset network failure after receiving the project frame', async () => {
     const imported = importStepBody(document, {
       name: 'Part',

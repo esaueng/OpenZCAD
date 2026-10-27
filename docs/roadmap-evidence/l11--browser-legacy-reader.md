@@ -33,3 +33,7 @@ heads on reload. Raw-read negotiation exposed the previous missing API,
 which had relied on the preview server's HTML fallback. The existing error
 assertions remain intact: fillet/reload journeys, both raw-reader journeys,
 six object journeys and all three unit-bearing text reopen journeys pass.
+Asset HTTP errors also preserve bounded JSON error codes and details, so
+finalizing encryption between the frame and asset reads takes the existing
+encrypted-format fallback immediately. The race regression failed before
+that correction and passes afterward for both account and migration reads.
