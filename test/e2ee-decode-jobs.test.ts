@@ -567,19 +567,29 @@ describe('worker requests', () => {
 });
 describe('seal jobs', () => {
   it('derives a V2 commitment and refuses a different signed header/body set', async () => {
-    const body = { document: { projectId: HEADER.projectId }, blobs: [], revisionVersionHashes: new Map() };
+    const body = {
+      document: { projectId: HEADER.projectId },
+      blobs: [],
+      revisionVersionHashes: new Map()
+    };
     const expected = await shareLinkSetCommitment();
     const good = await sealDocumentJob({
-      type: 'seal-document', header: HEADER, ...body
+      type: 'seal-document',
+      header: HEADER,
+      ...body
     });
     expect(good.envelope[3]).toBe(2);
-    expect((parseEnvelope(good.envelope).header as ProjectEnvelopeHeader).shareLinkSetHash).toEqual(expected);
+    expect(
+      (parseEnvelope(good.envelope).header as ProjectEnvelopeHeader)
+        .shareLinkSetHash
+    ).toEqual(expected);
     const mismatch = await sealed(encodeEncryptedDocumentBody(body, HEADER), {
       shareLinkSetHash: patternBytes(32, 0xaa)
     });
     await rejectsWith(decodeDocument(mismatch), 'malformed');
-    await expect(decodeDocument({ envelope: good.envelope, versionKey: good.versionKey }))
-      .resolves.toMatchObject({ value: { document: body.document } });
+    await expect(
+      decodeDocument({ envelope: good.envelope, versionKey: good.versionKey })
+    ).resolves.toMatchObject({ value: { document: body.document } });
   });
   it('encrypts a document body the decode job reads back', async () => {
     const document = { projectId: 'project-decode', name: 'Sealed' };

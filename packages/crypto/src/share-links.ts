@@ -1556,18 +1556,26 @@ export function sameShareLinkSet(a: ShareLinkSet, b: ShareLinkSet): boolean {
 }
 
 /** Canonical, domain-separated commitment to the entire signed link set. */
-export async function shareLinkSetCommitment(set?: ShareLinkSet): Promise<Bytes> {
+export async function shareLinkSetCommitment(
+  set?: ShareLinkSet
+): Promise<Bytes> {
   // Snapshot, validate and sort before hashing; order in a caller's array is
   // immaterial, while every statement and signature byte is committed.
   const { grants, tombstones } = checkShareLinkSet(
-    set ?? { grants: [], tombstones: [] }, 'invalid-argument', undefined, true
+    set ?? { grants: [], tombstones: [] },
+    'invalid-argument',
+    undefined,
+    true
   );
   const writer = new ByteWriter().bytes(label('share link set v1'));
   for (const entries of [grants, tombstones]) {
     writer.u32(entries.length);
     for (const { signed } of entries) {
-      writer.u32(signed.statement.byteLength).bytes(signed.statement)
-        .u32(signed.signature.byteLength).bytes(signed.signature);
+      writer
+        .u32(signed.statement.byteLength)
+        .bytes(signed.statement)
+        .u32(signed.signature.byteLength)
+        .bytes(signed.signature);
     }
   }
   return sha256(writer.finish());

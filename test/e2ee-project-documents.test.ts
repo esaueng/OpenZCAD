@@ -231,7 +231,8 @@ async function handVersion(
     ),
     schemaVersion: 1,
     ...(!init.kind || init.kind === 'document'
-      ? { shareLinkSetHash: await shareLinkSetCommitment() } : {}),
+      ? { shareLinkSetHash: await shareLinkSetCommitment() }
+      : {}),
     ...init
   };
   const plaintext =
@@ -349,6 +350,64 @@ async function save(
 }
 
 // --- Version integrity ------------------------------------------------------
+
+it('bounds a fresh-read baseline to the captured head while an owner save races', async () => {
+  const srv = server();
+  const laptop = device(srv, owner, 'owner_laptop');
+  const { document } = await createEncrypted(laptop);
+  const projectId = document.projectId;
+  const next = await handVersion(
+    laptop,
+    projectId,
+    {
+      documentVersion: document.version + 1,
+      keyEpoch: 0,
+      previousVersionHash: fromHex(headOf(srv, projectId).version_hash)
+    },
+    { expectedVersion: document.version, document }
+  );
+  const push = srv.statements.push.bind(srv.statements);
+  let raced = false;
+  srv.statements.push = (...sql: string[]) => {
+    if (
+      sql.some((statement) =>
+        statement.includes('SELECT MAX(v.document_version) AS version')
+      )
+    ) {
+      srv.statements.push = push;
+      raced = true;
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_versions
+        (project_id, document_version, version_hash, key_epoch, prefix, signature,
+         signer_user_id, signer_device_id, envelope_inline, envelope_bytes, wrapped_version_key, created_at)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'now')`
+        )
+        .run(
+          projectId,
+          document.version + 1,
+          next.hash,
+          toBase64Url(parseEnvelope(next.envelope).prefix),
+          next.upload.signature,
+          OWNER,
+          next.upload.signerDeviceId,
+          toBase64Url(next.envelope),
+          next.envelope.length,
+          next.upload.wrappedVersionKey
+        );
+      srv.db
+        .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+        .run(document.version + 1, projectId);
+    }
+    return push(...sql);
+  };
+  const loaded = await laptop.documents.loadDocument(projectId);
+  expect(raced).toBe(true);
+  expect(loaded.metadata.head.documentVersion).toBe(document.version);
+  expect(loaded.metadata.log.at(-1)?.versionHash).toBe(
+    loaded.metadata.head.versionHash
+  );
+});
 
 describe('version integrity', () => {
   it('refuses a rolled-back head and keeps its pin', async () => {
@@ -1012,7 +1071,9 @@ describe('writes', () => {
     // next head before retention looks for bodies nothing retains.
     const push = srv.statements.push.bind(srv.statements);
     srv.statements.push = (...sql: string[]) => {
-      if (sql.some((s) => s.includes('SELECT document_version, envelope_key'))) {
+      if (
+        sql.some((s) => s.includes('SELECT document_version, envelope_key'))
+      ) {
         srv.statements.push = push;
         srv.db
           .prepare(

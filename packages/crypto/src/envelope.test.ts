@@ -126,22 +126,37 @@ describe('project envelopes', () => {
     const commitment = patternBytes(32, 0x73);
     const legacy = await sealProject(plaintext);
     expect(legacy[3]).toBe(1);
-    const current = await sealProject(plaintext, { shareLinkSetHash: commitment });
+    const current = await sealProject(plaintext, {
+      shareLinkSetHash: commitment
+    });
     expect(current[3]).toBe(2);
     const header = parseEnvelope(current).header as ProjectEnvelopeHeader;
     expect(header.shareLinkSetHash).toEqual(commitment);
     header.shareLinkSetHash!.fill(0);
     expect(header.shareLinkSetHash).toEqual(commitment);
-    await expect(decryptProjectEnvelope(KEY, current)).resolves.toMatchObject({ plaintext });
+    await expect(decryptProjectEnvelope(KEY, current)).resolves.toMatchObject({
+      plaintext
+    });
     const altered = current.slice();
     altered[parseEnvelope(current).prefix.length - 1]! ^= 1;
-    await expect(decryptProjectEnvelope(KEY, altered)).rejects.toBeInstanceOf(E2eeError);
+    await expect(decryptProjectEnvelope(KEY, altered)).rejects.toBeInstanceOf(
+      E2eeError
+    );
     const downgraded = current.slice();
     downgraded[3] = 1;
     expect(() => parseEnvelope(downgraded)).toThrow(/trailing/);
-    const truncated = current.slice(0, parseEnvelope(current).prefix.length - 1);
+    const truncated = current.slice(
+      0,
+      parseEnvelope(current).prefix.length - 1
+    );
     expect(() => parseEnvelope(truncated)).toThrow();
-    await rejectsWith(sealProject(plaintext, { kind: 'measurements', shareLinkSetHash: commitment }), 'invalid-argument');
+    await rejectsWith(
+      sealProject(plaintext, {
+        kind: 'measurements',
+        shareLinkSetHash: commitment
+      }),
+      'invalid-argument'
+    );
   });
   it.each([0, 1, CHUNK - 1, CHUNK, CHUNK + 1, CHUNK * 3, CHUNK * 3 + 10])(
     'round-trips %i bytes',

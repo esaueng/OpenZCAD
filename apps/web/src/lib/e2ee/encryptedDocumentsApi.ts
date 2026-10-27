@@ -47,7 +47,11 @@ export interface EncryptedDocumentsApi {
     projectId: string,
     since?: number
   ): Promise<{ metadata: E2eeDocumentHeadMetadata; envelope: Uint8Array }>;
-  versions(projectId: string, since?: number): Promise<E2eeVersionLogResponse>;
+  versions(
+    projectId: string,
+    since?: number,
+    through?: number
+  ): Promise<E2eeVersionLogResponse>;
   revisions(projectId: string): Promise<E2eeRevisionsResponse>;
   /** Null when the account no longer keeps that save state. */
   revision(
@@ -148,8 +152,14 @@ export function createEncryptedDocumentsApi(
           `${base(projectId)}/document${since === undefined ? '' : `?since=${since}`}`
         )
       ),
-    versions: (projectId, since) =>
-      sendJson(`${base(projectId)}/versions${since === undefined ? '' : `?since=${since}`}`),
+    versions: (projectId, since, through) => {
+      const query = new URLSearchParams();
+      if (since !== undefined) query.set('since', String(since));
+      if (through !== undefined) query.set('through', String(through));
+      return sendJson(
+        `${base(projectId)}/versions${query.size ? `?${query}` : ''}`
+      );
+    },
     revisions: (projectId) => sendJson(`${base(projectId)}/revisions`),
     revision: async (projectId, revisionId) => {
       try {

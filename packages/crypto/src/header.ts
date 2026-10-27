@@ -235,8 +235,10 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
   if (!isHash(header.epochBindingHash)) {
     fail(code, 'epochBindingHash must be 32 bytes');
   }
-  if (header.shareLinkSetHash !== undefined &&
-      (header.kind !== 'document' || !isHash(header.shareLinkSetHash))) {
+  if (
+    header.shareLinkSetHash !== undefined &&
+    (header.kind !== 'document' || !isHash(header.shareLinkSetHash))
+  ) {
     fail(code, 'shareLinkSetHash requires a document and 32 bytes');
   }
   if (!isUint(header.schemaVersion, MAX_U32)) {
@@ -340,8 +342,11 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
   );
   return new ByteWriter()
     .bytes(Uint8Array.from(ENVELOPE_MAGIC))
-    .u8(header.class === 'project' && header.shareLinkSetHash
-      ? ENVELOPE_VERSION_2 : ENVELOPE_VERSION_1)
+    .u8(
+      header.class === 'project' && header.shareLinkSetHash
+        ? ENVELOPE_VERSION_2
+        : ENVELOPE_VERSION_1
+    )
     .u32(headerBytes.byteLength)
     .bytes(headerBytes)
     .finish();
@@ -413,7 +418,8 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
   const plaintextLength = reader.u64();
   let header: EnvelopeHeader;
   if (classCode === CLASS_CODES.content) {
-    if (version === ENVELOPE_VERSION_2) fail('malformed', 'V2 requires a document');
+    if (version === ENVELOPE_VERSION_2)
+      fail('malformed', 'V2 requires a document');
     const kind = CONTENT_BLOB_KINDS[kindCode - 1];
     if (kind === undefined) fail('malformed', 'Unknown content blob kind');
     header = {
@@ -442,8 +448,10 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
     if (version === ENVELOPE_VERSION_2 && kind !== 'document') {
       fail('malformed', 'V2 requires a document');
     }
-    const shareLinkSetHash = version === ENVELOPE_VERSION_2
-      ? copyBytes(reader.bytes(HASH_BYTES)) : undefined;
+    const shareLinkSetHash =
+      version === ENVELOPE_VERSION_2
+        ? copyBytes(reader.bytes(HASH_BYTES))
+        : undefined;
     header = {
       class: 'project',
       kind,
@@ -471,10 +479,11 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
         get: () => copyBytes(epochBindingHash)
       }
     });
-    if (shareLinkSetHash) Object.defineProperty(header, 'shareLinkSetHash', {
-      enumerable: true,
-      get: () => copyBytes(shareLinkSetHash)
-    });
+    if (shareLinkSetHash)
+      Object.defineProperty(header, 'shareLinkSetHash', {
+        enumerable: true,
+        get: () => copyBytes(shareLinkSetHash)
+      });
   } else {
     fail('malformed', 'Unknown envelope class');
   }

@@ -21,6 +21,9 @@ import {
 import worker from '../apps/web/worker/index';
 import {
   ShareLinkError,
+  EnvelopeKey,
+  decryptProjectEnvelope,
+  encryptProjectEnvelope,
   decodeShareAuthority,
   epochBinding,
   fromBase64Url,
@@ -35,6 +38,7 @@ import {
   toBase64Url,
   toHex,
   wrapKey,
+  versionHash,
   type ShareLinkSet
 } from '@openzcad/crypto';
 import {
@@ -295,7 +299,8 @@ async function writeWithLinks(
   d: Device,
   projectId: string,
   base: ProjectDocument,
-  shareLinks: ShareLinkSet
+  shareLinks: ShareLinkSet,
+  legacy = false
 ) {
   await catchUpProjectGroup(d.groups, projectId);
   const keys = await d.sessions.epochMaterial({
@@ -306,7 +311,7 @@ async function writeWithLinks(
   const current = head(srv, projectId);
   const keyEpoch = serverKeyEpoch(srv, projectId);
   const documentVersion = current.document_version + 1;
-  const sealed = await sealDocumentJob({
+  let sealed = await sealDocumentJob({
     type: 'seal-document',
     header: {
       kind: 'document',
@@ -325,6 +330,21 @@ async function writeWithLinks(
     revisionVersionHashes: new Map(),
     shareLinks
   });
+  if (legacy) {
+    const { header, plaintext } = await decryptProjectEnvelope(
+      sealed.versionKey,
+      sealed.envelope
+    );
+    const oldHeader = { ...header, shareLinkSetHash: undefined };
+    const key = EnvelopeKey.generate();
+    const envelope = await encryptProjectEnvelope(key, oldHeader, plaintext);
+    sealed = {
+      type: 'seal-document',
+      envelope,
+      versionKey: key.bytes,
+      versionHash: await versionHash(envelope)
+    };
+  }
   const hash = toHex(sealed.versionHash);
   const signer = d.account.devices.get(d.deviceId!)!;
   return d.documents.saveDocument(
@@ -678,6 +698,68 @@ describe('registering a link (slice 8-C1)', { timeout: 120_000 }, () => {
 });
 
 describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
+  it.each([false, true])(
+    'accepts a directly verified legacy owner parent followed by an unchanged editor save (V1=%s)',
+    async (legacy) => {
+      const { srv, laptop, member, projectId, document } =
+        await linkedProject();
+      await writeWithLinks(
+        srv,
+        laptop,
+        projectId,
+        document,
+        { grants: [], tombstones: [] },
+        true
+      );
+      const ownerReader = reload(srv, laptop, {
+        members: othersOf(owner),
+        pins: memoryVersionPins()
+      });
+      const editor = reload(srv, member, {
+        members: othersOf(other),
+        pins: memoryVersionPins()
+      });
+      await ownerReader.store.loadProject(projectId);
+      const opened = await editor.store.loadProject(projectId);
+      if (legacy)
+        await writeWithLinks(
+          srv,
+          member,
+          projectId,
+          opened,
+          { grants: [], tombstones: [] },
+          true
+        );
+      else
+        await editor.store.saveProjectDocument({
+          projectId,
+          expectedVersion: opened.version,
+          document: edited(opened)
+        });
+      await expect(
+        ownerReader.store.loadProject(projectId)
+      ).resolves.toMatchObject({ projectId });
+    }
+  );
+
+  it('opens a retained room ancestor when a newer owner head exists', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    const prior = await laptop.documents.loadDocument(projectId);
+    await laptop.store.saveProjectDocument({
+      projectId,
+      expectedVersion: document.version,
+      document: edited(document)
+    });
+    const fresh = reload(srv, laptop, {
+      members: othersOf(owner),
+      pins: memoryVersionPins()
+    });
+    await expect(
+      fresh.store
+        .roomAccess()
+        .openHead(projectId, prior.metadata.head, prior.envelope)
+    ).resolves.toMatchObject({ version: prior.metadata.head.documentVersion });
+  });
   it('tombstones it in a version, the server forgets it, and a dropped tombstone is refused', async () => {
     const { srv, laptop, member, projectId } = await linkedProject();
     await delegate(laptop);
@@ -742,23 +824,35 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
       // The skipped reader pins the state before the owner adds the link.
       const reader = reload(srv, laptop, {
         members: othersOf(owner),
-        ...(mode === 'fresh' || mode === 'room' ? { pins: memoryVersionPins() } : {})
+        ...(mode === 'fresh' || mode === 'room'
+          ? { pins: memoryVersionPins() }
+          : {})
       });
       await createShareLink(laptop.shareLinks, projectId, 'view');
       const granted = await laptop.store.shareHead(projectId);
       if (mode === 'reload') await reader.store.loadProject(projectId);
       await writeWithLinks(srv, member, projectId, granted.document, {
-        grants: [], tombstones: []
+        grants: [],
+        tombstones: []
       });
       // Restoring the set at the tip must not hide the unauthorized drop.
-      await writeWithLinks(srv, member, projectId, granted.document, granted.shareLinks!.set);
+      await writeWithLinks(
+        srv,
+        member,
+        projectId,
+        granted.document,
+        granted.shareLinks!.set
+      );
       const before = await reader.pins.read(OWNER, projectId);
       const pageReader = reload(srv, reader, { members: othersOf(owner) });
       if (mode === 'room') {
         const loaded = await member.documents.loadDocument(projectId);
-        await integrity(pageReader.store.roomAccess().openHead(
-          projectId, loaded.metadata.head, loaded.envelope
-        ), 'share-links');
+        await integrity(
+          pageReader.store
+            .roomAccess()
+            .openHead(projectId, loaded.metadata.head, loaded.envelope),
+          'share-links'
+        );
       } else {
         await integrity(pageReader.store.loadProject(projectId), 'share-links');
       }
@@ -771,20 +865,43 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
     await delegate(laptop);
     const created = await createShareLink(laptop.shareLinks, projectId, 'view');
     const granted = await member.store.shareHead(projectId);
-    await writeWithLinks(srv, member, projectId, granted.document, granted.shareLinks!.set);
-    const fresh = reload(srv, laptop, { members: othersOf(owner), pins: memoryVersionPins() });
-    expect((await fresh.store.shareHead(projectId)).shareLinks?.links.map((link) => link.shareId))
-      .toEqual([created.shareId]);
+    await writeWithLinks(
+      srv,
+      member,
+      projectId,
+      granted.document,
+      granted.shareLinks!.set
+    );
+    const fresh = reload(srv, laptop, {
+      members: othersOf(owner),
+      pins: memoryVersionPins()
+    });
+    expect(
+      (await fresh.store.shareHead(projectId)).shareLinks?.links.map(
+        (link) => link.shareId
+      )
+    ).toEqual([created.shareId]);
   });
 
   it('refuses a missing owner baseline even when the remaining editor head is validly signed', async () => {
     const { srv, laptop, member, projectId } = await linkedProject();
     const granted = await member.store.shareHead(projectId);
-    await writeWithLinks(srv, member, projectId, granted.document,
-      granted.shareLinks?.set ?? { grants: [], tombstones: [] });
-    srv.db.prepare('DELETE FROM e2ee_project_versions WHERE project_id = ? AND document_version < ?')
+    await writeWithLinks(
+      srv,
+      member,
+      projectId,
+      granted.document,
+      granted.shareLinks?.set ?? { grants: [], tombstones: [] }
+    );
+    srv.db
+      .prepare(
+        'DELETE FROM e2ee_project_versions WHERE project_id = ? AND document_version < ?'
+      )
       .run(projectId, head(srv, projectId).document_version);
-    const fresh = reload(srv, laptop, { members: othersOf(owner), pins: memoryVersionPins() });
+    const fresh = reload(srv, laptop, {
+      members: othersOf(owner),
+      pins: memoryVersionPins()
+    });
     await integrity(fresh.store.loadProject(projectId), 'share-links');
     expect(await fresh.pins.read(OWNER, projectId)).toBeNull();
   });
@@ -792,27 +909,63 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
   it('retains ancestry past 2,000 editor autosaves until a newer owner baseline exists', async () => {
     const { srv, laptop, member, projectId, document } = await linkedProject();
     const baseline = head(srv, projectId).document_version;
-    const columns = (srv.db.prepare("PRAGMA table_info('e2ee_project_versions')").all() as { name: string }[])
-      .map((column) => column.name);
+    const columns = (
+      srv.db.prepare("PRAGMA table_info('e2ee_project_versions')").all() as {
+        name: string;
+      }[]
+    ).map((column) => column.name);
     // Synthetic log-only rows isolate retention from signature verification,
     // whose real signed paths are exercised by the ancestry tests above.
-    const selected = columns.map((name) => name === 'document_version' ? '?'
-      : name === 'version_hash' ? '?'
-      : name === 'signer_user_id' ? '?'
-      : name === 'envelope_inline' || name === 'envelope_key' ? 'NULL' : name).join(', ');
-    const insert = srv.db.prepare(`INSERT INTO e2ee_project_versions (${columns.join(', ')})
+    const selected = columns
+      .map((name) =>
+        name === 'document_version'
+          ? '?'
+          : name === 'version_hash'
+            ? '?'
+            : name === 'signer_user_id'
+              ? '?'
+              : name === 'envelope_inline' || name === 'envelope_key'
+                ? 'NULL'
+                : name
+      )
+      .join(', ');
+    const insert = srv.db
+      .prepare(`INSERT INTO e2ee_project_versions (${columns.join(', ')})
       SELECT ${selected} FROM e2ee_project_versions WHERE project_id = ? AND document_version = ?`);
     for (let index = 1; index <= 2001; index++) {
-      insert.run(baseline + index, index.toString(16).padStart(64, '0'), OTHER, projectId, baseline);
+      insert.run(
+        baseline + index,
+        index.toString(16).padStart(64, '0'),
+        OTHER,
+        projectId,
+        baseline
+      );
     }
-    srv.db.prepare('UPDATE projects SET document_version = ? WHERE id = ?').run(baseline + 2001, projectId);
-    await writeWithLinks(srv, member, projectId, document, { grants: [], tombstones: [] });
-    expect(rows<{ document_version: number }>(srv,
-      'SELECT document_version FROM e2ee_project_versions WHERE project_id = ? ORDER BY document_version', projectId)[0]!.document_version)
-      .toBe(baseline);
-    await writeWithLinks(srv, laptop, projectId, document, { grants: [], tombstones: [] });
-    expect(rows<{ n: number }>(srv,
-      'SELECT COUNT(*) AS n FROM e2ee_project_versions WHERE project_id = ?', projectId)[0]!.n).toBe(2000);
+    srv.db
+      .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+      .run(baseline + 2001, projectId);
+    await writeWithLinks(srv, member, projectId, document, {
+      grants: [],
+      tombstones: []
+    });
+    expect(
+      rows<{ document_version: number }>(
+        srv,
+        'SELECT document_version FROM e2ee_project_versions WHERE project_id = ? ORDER BY document_version',
+        projectId
+      )[0]!.document_version
+    ).toBe(baseline);
+    await writeWithLinks(srv, laptop, projectId, document, {
+      grants: [],
+      tombstones: []
+    });
+    expect(
+      rows<{ n: number }>(
+        srv,
+        'SELECT COUNT(*) AS n FROM e2ee_project_versions WHERE project_id = ?',
+        projectId
+      )[0]!.n
+    ).toBe(2000);
   });
 
   it('asks the server again when its forget fails after the tombstone, and a second revoke does not throw', async () => {
