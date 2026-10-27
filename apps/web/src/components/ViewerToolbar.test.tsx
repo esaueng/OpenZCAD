@@ -57,7 +57,7 @@ function renderToolbar(
 describe('the section panel', () => {
   it('names the clipped preview and refuses to export it', () => {
     renderToolbar({ kind: 'clipping' });
-    expect(screen.getByText('Clipping preview')).toBeTruthy();
+    expect(screen.getByText('Preview')).toBeTruthy();
     expect(
       screen.getByText(/release the slider for section curves/)
     ).toBeTruthy();
@@ -72,7 +72,7 @@ describe('the section panel', () => {
       { kind: 'exact', regions: [], area: 187.4538, missed: 0, unsectioned: 0 },
       { onExportSectionDxf }
     );
-    expect(screen.getByText('Exact section')).toBeTruthy();
+    expect(screen.getByText('Exact')).toBeTruthy();
     expect(screen.getByText('187.45 mm² of material')).toBeTruthy();
     const button = screen.getByLabelText('Export the exact section as DXF');
     expect(button).toHaveProperty('disabled', false);
@@ -107,7 +107,7 @@ describe('the section panel', () => {
     // The kernel section IS on screen for the body that came out exact, so
     // the rail still names it; the drawing would be missing the other body's
     // material, and `exportSectionDxf` refuses rather than dropping it.
-    expect(screen.getByText('Exact section')).toBeTruthy();
+    expect(screen.getByText('Partial')).toBeTruthy();
     expect(
       screen.getByText(
         '540 mm² of material, 1 body has no exact section, so there is no drawing to export'
@@ -124,7 +124,7 @@ describe('the section panel', () => {
       kind: 'refused',
       detail: 'The section plane does not pass through this body.'
     });
-    expect(screen.getByText('No exact section')).toBeTruthy();
+    expect(screen.getByText('Preview')).toBeTruthy();
     expect(
       screen.getByText('The section plane does not pass through this body.')
     ).toBeTruthy();
@@ -143,7 +143,10 @@ describe('the section panel', () => {
     expect(onSectionCommit).not.toHaveBeenCalled();
     fireEvent.pointerUp(slider);
     expect(onSectionCommit).toHaveBeenCalledOnce();
+    fireEvent.change(slider, { target: { value: '5' } });
     fireEvent.keyUp(slider, { key: 'ArrowRight' });
+    expect(onSectionCommit).toHaveBeenCalledTimes(2);
+    fireEvent.blur(slider);
     expect(onSectionCommit).toHaveBeenCalledTimes(2);
   });
 });
@@ -344,14 +347,14 @@ describe('the section button and its panel', () => {
         button.getAttribute('aria-pressed')
       ])
     ).toEqual([
-      ['XY', 'true'],
-      ['XZ', 'false'],
-      ['YZ', 'false']
+      ['TopXY', 'true'],
+      ['FrontXZ', 'false'],
+      ['SideYZ', 'false']
     ]);
-    fireEvent.click(screen.getByRole('button', { name: 'YZ plane' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Side (YZ plane)' }));
     expect(onSectionPlane).toHaveBeenCalledWith('YZ');
     // The plane already cutting is not re-requested (it would re-centre).
-    fireEvent.click(screen.getByRole('button', { name: 'XY plane' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Top (XY plane)' }));
     expect(onSectionPlane).toHaveBeenCalledOnce();
   });
 
@@ -360,7 +363,7 @@ describe('the section button and its panel', () => {
     renderSection({ plane: 'XY', offset: 3 }, { onToggleSection });
     // A press on the panel, with nothing focused after it (Safari does not
     // focus a clicked button), is enough for Escape to belong to the panel.
-    const plane = screen.getByRole('button', { name: 'XZ plane' });
+    const plane = screen.getByRole('button', { name: 'Front (XZ plane)' });
     fireEvent.pointerDown(plane);
     fireEvent.click(plane);
     expect(document.activeElement).toBe(document.body);
@@ -375,10 +378,39 @@ describe('the section button and its panel', () => {
     expect(onToggleSection).not.toHaveBeenCalled();
   });
 
+  it('closes only the controls and reopens the same cut, position and direction', () => {
+    const onToggleSection = vi.fn();
+    renderSection(
+      { plane: 'YZ', offset: 4.25, flipped: true },
+      { onToggleSection }
+    );
+    expect(screen.getByLabelText('Cut position')).toHaveValue(4.25);
+    expect(screen.getByLabelText('Flip cut direction')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    fireEvent.click(screen.getByLabelText('Close section controls'));
+    expect(panel()).toBeNull();
+    expect(sectionButton()).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(sectionButton());
+    expect(screen.getByLabelText('Cut position')).toHaveValue(4.25);
+    expect(screen.getByLabelText('Flip cut direction')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(screen.getByLabelText('Side (YZ plane)')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(onToggleSection).not.toHaveBeenCalled();
+  });
+
   it('leaves Escape to the workspace while the user is elsewhere', () => {
     renderSection({ plane: 'XY', offset: 3 });
     // Pressed on the panel, then moved on to a field: Escape is the field's.
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'XZ plane' }));
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'Front (XZ plane)' })
+    );
     const elsewhere = document.createElement('input');
     document.body.append(elsewhere);
     elsewhere.focus();

@@ -376,7 +376,7 @@ import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { sweepFacetingAdvisories } from './lib/sweepFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
-import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
+import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
@@ -3038,6 +3038,7 @@ export function App() {
     snapshot: projectViewSnapshot,
     onCameraChange: updateCameraPose,
     onCameraSettled: persistCameraPose,
+    persistSection: persistSectionView,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
   // Read at callback time: the section slider's release handler runs after
@@ -3048,6 +3049,8 @@ export function App() {
   // one set of visible bodies. Everything that invalidates it bumps this
   // token, and an answer that arrives under an old token is dropped.
   const sectionTokenRef = useRef(0);
+  const pendingSectionRestoreRef = useRef<string | null>(null);
+  const restoredSectionRequestTokenRef = useRef<number | null>(null);
   // Key by membership so an unrelated dimension edit keeps the viewport's
   // body array stable instead of disposing and uploading identical meshes.
   const parameterHiddenBodyKey = useMemo(
@@ -8018,6 +8021,9 @@ export function App() {
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
     if (restoreView) {
+      clearSectionOutline();
+      restoredSectionRequestTokenRef.current = null;
+      pendingSectionRestoreRef.current = normalized.projectId;
       restoreProjectView(normalized.projectId, {
         projection: appSettings.viewport.defaultProjection,
         showGrid: appSettings.viewport.showGrid,
@@ -10388,6 +10394,7 @@ export function App() {
             };
           });
           requestView({ pose: view.camera, projection: view.projection });
+          persistSectionView(view.sectionView);
           if (view.sectionView) void requestExactSection(view.sectionView);
           setStatus(`${view.name}.`);
         },
@@ -10475,6 +10482,12 @@ export function App() {
     setSectionOutline({ kind: 'computing' });
     const next = await resolveSectionOutline(geometry, view, section);
     if (token === sectionTokenRef.current) {
+      if (
+        restoredSectionRequestTokenRef.current === token &&
+        pendingSectionRestoreRef.current === view.document.projectId
+      ) {
+        pendingSectionRestoreRef.current = null;
+      }
       setSectionOutline(next);
     }
   }
@@ -10511,6 +10524,9 @@ export function App() {
   const sectionBodyKey = viewportGeometry.bodies
     .map((body) => body.bodyId)
     .join('|');
+  // A scene starting or retiring can report a new empty array. Only a
+  // different set of posed bodies invalidates an exact section.
+  const sectionPosedBodyKey = viewportGeometry.drawnElsewhere.join('|');
   /**
    * The live document is keyed by VERSION and everything drawn in its place
    * by IDENTITY, because that is how truthful each one is. `doc` is re-minted
@@ -10521,52 +10537,102 @@ export function App() {
   const drawnInstead =
     viewportGeometry.document === doc ? null : viewportGeometry.document;
   useEffect(clearSectionOutline, [
+    doc?.projectId,
     doc?.version,
     drawnInstead,
     viewportGeometry.standIns,
-    viewportGeometry.drawnElsewhere,
+    sectionPosedBodyKey,
     sectionBodyKey
   ]);
 
+  const restoreExactSectionRef = useRef(requestExactSection);
+  restoreExactSectionRef.current = requestExactSection;
+  useEffect(() => {
+    if (!doc || pendingSectionRestoreRef.current !== doc.projectId) return;
+    const section = viewerSettings.sectionView;
+    if (!section) {
+      pendingSectionRestoreRef.current = null;
+      return;
+    }
+    // Stored clipping settings arrive before the worker has rebuilt the
+    // project. Recreate their exact curves once this document is on screen.
+    if (
+      !geometry.isReadyFor(doc) ||
+      viewportGeometry.document !== doc ||
+      viewportGeometry.standIns?.length ||
+      viewportGeometry.drawnElsewhere.length
+    ) {
+      return;
+    }
+    // A final viewport/rebuild update can invalidate the first request.
+    // Keep the restore pending until a current answer is actually applied;
+    // the token prevents duplicate requests for an unchanged source.
+    if (restoredSectionRequestTokenRef.current === sectionTokenRef.current) {
+      return;
+    }
+    restoredSectionRequestTokenRef.current = sectionTokenRef.current + 1;
+    void restoreExactSectionRef.current(section);
+  }, [
+    doc,
+    geometry,
+    viewportGeometry,
+    viewerSettings.sectionView,
+    sectionOutline.kind
+  ]);
+
   // Follows the live section too, so a project's restored cut comes back on
-  // its own plane after being switched off and on.
-  const rememberedSectionPlane = useRememberedSectionPlane(
-    viewerSettings.sectionView
+  // its own plane, position and direction after being switched off and on.
+  const rememberedSection = useRememberedSection(
+    viewerSettings.sectionView,
+    doc?.projectId
   );
 
   /**
    * Switches the section view on or off. The rail button and the palette
    * both toggle: cycling through every plane to reach "off" took up to three
    * clicks. The plane is chosen inside the section panel (`setSectionPlane`),
-   * and switching back on returns to the plane last used.
+   * and switching back on restores the complete cut last used.
    */
   function toggleSectionView() {
+    pendingSectionRestoreRef.current = null;
     if (viewerSettings.sectionView) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
+      persistSectionView(undefined);
       clearSectionOutline();
       setStatus('Section view off.');
       return;
     }
-    setSectionPlane(rememberedSectionPlane.current);
+    const remembered = rememberedSection.current;
+    if (remembered) {
+      setViewerSettings((current) => ({ ...current, sectionView: remembered }));
+      persistSectionView(remembered);
+      void requestExactSection(remembered);
+    } else {
+      setSectionPlane('XY');
+    }
   }
 
   /** Cuts on `plane`, starting at the model's centre along its axis. */
   function setSectionPlane(plane: SectionPlaneId) {
+    pendingSectionRestoreRef.current = null;
     const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
+    const section = { plane, offset };
     // The previous plane's exact section describes a cut that is gone.
     clearSectionOutline();
     setViewerSettings((current) => ({
       ...current,
-      sectionView: { plane, offset }
+      sectionView: section
     }));
+    persistSectionView(section);
     // The panel beside the rail carries the slider and the tooltip says the
     // cut is display-only; the lane line only names the plane.
     setStatus(`Section view: ${plane} plane · the model is untouched.`);
-    void requestExactSection({ plane, offset });
+    void requestExactSection(section);
   }
 
   function setSectionOffset(offset: number) {
+    pendingSectionRestoreRef.current = null;
     // The cut has moved, so the exact section that was on screen belongs to
     // a plane that is no longer there. Back to the clipped preview.
     clearSectionOutline();
@@ -10575,6 +10641,18 @@ export function App() {
         ? { ...current, sectionView: { ...current.sectionView, offset } }
         : current
     );
+  }
+
+  function flipSectionDirection() {
+    const section = viewerSettingsRef.current.sectionView;
+    if (!section) return;
+    // The plane itself has not moved, so its exact curves remain valid.
+    const next = { ...section, flipped: !section.flipped };
+    setViewerSettings((current) => ({
+      ...current,
+      sectionView: next
+    }));
+    persistSectionView(next);
   }
 
   /** Write the exact section — never the display caps — as a DXF drawing. */
@@ -28686,9 +28764,14 @@ export function App() {
             onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
             // The slider was released, or a key repeat ended: cut it exactly.
-            onSectionCommit={() =>
-              void requestExactSection(viewerSettingsRef.current.sectionView)
-            }
+            onSectionFlip={flipSectionDirection}
+            onSectionCommit={(offset) => {
+              const section = viewerSettingsRef.current.sectionView;
+              const next =
+                section && offset !== undefined ? { ...section, offset } : section;
+              persistSectionView(next);
+              void requestExactSection(next);
+            }}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}
           />

@@ -8,6 +8,13 @@ import {
   openMoveOptions
 } from './openzcad-fixtures';
 import type { Download, Page } from '@playwright/test';
+import {
+  addPrimitiveFeature,
+  createProjectDocument,
+  duplicateProjectDocument
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
+import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
 interface SectionGeometry {
   triangles: number;
@@ -170,12 +177,117 @@ async function openExactSection(page: Page) {
     page.getByRole('slider', { name: 'Section plane offset' })
   ).toBeVisible();
   await expect(
-    page.locator('.rail-section-state-kind', { hasText: 'Exact section' })
+    page.locator('.rail-section-state-kind', { hasText: 'Exact' })
   ).toBeVisible({ timeout: 30_000 });
   await expect
     .poll(async () => (await sectionState(page)).exactSections.length)
     .toBe(1);
 }
+
+test('restores each duplicated project’s own exact section with shared body IDs and versions', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  const owner = toUserId('user_e2e');
+  const source = addPrimitiveFeature(
+    createProjectDocument('Section source', owner),
+    {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, depth: 30, height: 20 }
+    }
+  );
+  const copy = duplicateProjectDocument(source, 'Section copy', owner);
+  const feature = Object.values(copy.nodes).find(
+    (node) => node.kind === 'feature' && node.data.featureKind === 'primitive'
+  );
+  if (
+    !feature ||
+    feature.kind !== 'feature' ||
+    feature.data.featureKind !== 'primitive'
+  )
+    throw new Error('Missing fixture primitive');
+  feature.data.dimensions.width = 20;
+  copy.version = source.version;
+  expect(copy.bodyOrder).toEqual(source.bodyOrder);
+  const documents = [source, copy];
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({
+          json: {
+            projects: documents.map((document) => ({
+              projectId: document.projectId,
+              name: document.name,
+              revisionCount: document.checkpoints.length,
+              updatedAt: document.derived.updatedAt
+            }))
+          }
+        })
+      : route.fallback()
+  );
+  await page.route('**/api/projects/*', (route) => {
+    const id = new URL(route.request().url()).pathname.split('/').at(-1);
+    const document = documents.find((document) => document.projectId === id);
+    return route.request().method() === 'GET' && document
+      ? route.fulfill({ json: document })
+      : route.fallback();
+  });
+  await page.addInitScript(
+    ({ key, projectIds }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          version: 1,
+          activeProjectId: null,
+          pointerRevision: 0,
+          views: Object.fromEntries(
+            projectIds.map((id) => [
+              id,
+              {
+                camera: {
+                  position: [80, 80, 80],
+                  target: [20, 15, 10],
+                  orthographicZoom: 1
+                },
+                projection: 'perspective',
+                settings: {
+                  showGrid: true,
+                  displayMode: 'shaded-edges',
+                  sectionView: { plane: 'XY', offset: 5 }
+                },
+                hiddenBodyIds: [],
+                updatedAt: Date.now()
+              }
+            ])
+          )
+        })
+      );
+    },
+    {
+      key: WORKSPACE_SESSION_STORAGE_KEY,
+      projectIds: documents.map((document) => document.projectId)
+    }
+  );
+  await page.goto('/');
+  for (const [name, area] of [
+    ['Section source', 800],
+    ['Section copy', 400],
+    ['Section source', 800]
+  ] as const) {
+    await page.getByRole('button', { name: new RegExp(`^${name} `) }).click();
+    await expect(page.locator('.rail-section-state-kind')).toHaveText('Exact', {
+      timeout: 30_000
+    });
+    await expect(page.locator('.rail-section-state-detail')).toContainText(
+      `${area} mm² of material`
+    );
+    await expect(
+      page.getByRole('button', { name: 'Export the exact section as DXF' })
+    ).toBeEnabled();
+    await page.getByTitle('Back to projects').click();
+  }
+});
 
 test('exports the exact section of a transformed body as a measured DXF', async ({
   page
@@ -249,6 +361,23 @@ test('exports the exact section of a transformed body as a measured DXF', async 
   await expect(page.getByRole('contentinfo')).toContainText(
     'Exported the XY section to Transformed-Section-section.dxf.'
   );
+
+  // A persisted cut restores its exact curves, not only its clipping settings.
+  const position = page.getByLabel('Cut position', { exact: true });
+  await position.fill('11.125');
+  await position.press('Enter');
+  await page.getByRole('button', { name: 'Flip cut direction' }).click();
+  await expect(exportButton).toBeEnabled();
+  await page.reload();
+  await expect(position).toHaveValue('11.125', { timeout: 30_000 });
+  await expect(
+    page.getByRole('button', { name: 'Flip cut direction' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect(page.locator('.rail-section-state-kind')).toHaveText('Exact');
+  await expect
+    .poll(async () => (await sectionState(page)).exactSections.length)
+    .toBe(1);
 });
 
 test('keeps a section hole in the exact DXF and shuts export during a posed preview', async ({
@@ -330,7 +459,7 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('2');
   await expect(page.locator('.rail-section-state-kind')).toContainText(
-    'Clipping preview'
+    'Preview'
   );
   // A Move's bar holds the command row, not the lane (U09), so the section
   // controls stay up; the export under them is disabled while it poses.

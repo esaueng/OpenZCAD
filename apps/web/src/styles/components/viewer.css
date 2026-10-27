@@ -198,55 +198,73 @@
   position: relative;
 }
 
-/* Opens above the section button while a cut is active. Beside it, the
-   panel reaches across the viewport into the model tree at narrow widths;
-   upward it stays over the viewport wherever the bar itself fits. */
+/* Compact section controls share the rail's popover placement. */
 .rail-section-panel {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(100% + 7px);
   display: flex;
-  /* The cut's state line reads as a caption under the slider it belongs to;
-     side by side, the panel grows wider than the rail has room for. */
   flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  width: 232px;
-  padding: 8px 10px;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 296px;
+  padding: 12px;
+  color: var(--color-text);
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
 }
 
-.rail-section-slider {
-  width: 100%;
+.rail-section-heading,
+.rail-section-position,
+.rail-section-footer {
+  display: flex;
+  align-items: center;
 }
 
-/* Which plane cuts: chosen here, so the rail button only switches the cut
-   on and off. Three equal segments, the current one lit as the rail's own
-   active buttons are. */
+.rail-section-heading,
+.rail-section-position {
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-base);
+}
+
+.rail-section-heading .rail-section-icon {
+  min-height: 20px;
+  height: 20px;
+}
+
+.rail-section-heading strong {
+  font-weight: var(--fw-semibold);
+}
+
 .rail-section-planes {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 2px;
+  gap: 6px;
 }
 
-/* Sized as the Standard views rows beside it: a 26px target at 12px. */
 .rail-section-plane {
-  min-height: 26px;
-  padding: 0 6px;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 42px;
+  padding: 4px 6px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-base);
 }
 
-.rail-section-plane:hover:not([aria-pressed='true']) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
+.rail-section-plane small {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
 }
 
 .rail-section-plane[aria-pressed='true'] {
@@ -255,49 +273,137 @@
   border-color: var(--color-accent-border);
 }
 
-/* The cut's own status line: which of the two section pipelines is on
-   screen, and either its measured area or why there is no exact one. */
-.rail-section-state {
+.rail-section-plane[aria-pressed='true'] small {
+  color: inherit;
+}
+
+.rail-section-position label {
+  color: var(--color-text-muted);
+}
+
+.rail-section-value {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 0;
-  font-size: var(--fs-xs);
-  line-height: 1.3;
-}
-
-.rail-section-state-kind {
-  color: var(--color-text-muted);
-}
-
-.rail-section-state.is-exact .rail-section-state-kind {
-  color: var(--color-accent);
-}
-
-.rail-section-state.is-refused .rail-section-state-kind {
-  color: var(--color-warning);
-}
-
-.rail-section-state-detail {
-  color: var(--color-text-muted);
-}
-
-.rail-section-export {
-  align-self: flex-end;
-  min-height: 24px;
-  padding: 0 8px;
-  color: var(--color-text-muted);
+  align-items: center;
+  gap: 5px;
+  width: 128px;
+  min-height: 28px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  background: var(--color-bg);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+.rail-section-value:focus-within {
+  border-color: var(--color-accent);
+}
+
+.rail-section-value input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0;
+  height: 26px;
+  min-height: 0;
+  box-sizing: border-box;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font: inherit;
+  outline: none;
+  box-shadow: none;
+}
+
+.rail-section-value > span {
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
 }
 
-.rail-section-export:hover:not(:disabled) {
+.rail-section-slider {
+  width: 100%;
+  min-height: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.rail-section-footer {
+  gap: 3px;
+  padding-top: 8px;
+  border-top: var(--border-thin);
+}
+
+.rail-section-action,
+.rail-section-icon,
+.rail-section-export {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 2px 4px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.rail-section-icon {
+  width: 24px;
+  padding: 0;
+}
+
+.rail-section-action:hover:not(:disabled),
+.rail-section-icon:hover,
+.rail-section-export:hover:not(:disabled),
+.rail-section-plane:hover:not([aria-pressed='true']) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
-.rail-section-export:disabled {
+.rail-section-action[aria-pressed='true'] {
+  color: var(--color-accent);
+}
+
+.rail-section-state {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--color-warning);
+  white-space: nowrap;
+}
+
+.rail-section-state-kind::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.rail-section-state.is-exact {
+  color: var(--color-accent);
+}
+
+.rail-section-state.is-computing {
+  color: var(--color-text-muted);
+}
+
+.rail-section-state-detail {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.rail-section-export:disabled,
+.rail-section-action:disabled {
   opacity: var(--opacity-disabled);
 }
 

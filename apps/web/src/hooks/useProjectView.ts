@@ -8,6 +8,7 @@ import {
 import type {
   DisplayMode,
   ProjectionMode,
+  SectionViewSettings,
   ViewerSettings,
   ViewportCameraState
 } from '@openzcad/viewport';
@@ -51,6 +52,8 @@ export interface ProjectView {
   onCameraChange(projectId: string | null, camera: ViewportCameraState): void;
   /** The viewport pose settled; persist the final pose against this project. */
   onCameraSettled(projectId: string | null, camera: ViewportCameraState): void;
+  /** Persist a settled cut; intermediate slider frames remain in memory. */
+  persistSection(section: SectionViewSettings | undefined): void;
   apply(view: ProjectViewState): void;
   snapshot(): ProjectViewState | null;
   /** Closing a project: drop the remembered pose so the next one refits. */
@@ -166,6 +169,14 @@ export function useProjectView(projectId: string | null): ProjectView {
       cameraRef.current = camera;
       if (id) {
         persist(id, camera);
+      }
+    },
+    persistSection(sectionView) {
+      const camera = cameraRef.current;
+      if (projectId && camera) {
+        persist(projectId, camera, {
+          settings: { ...settings, sectionView }
+        });
       }
     },
     snapshot() {

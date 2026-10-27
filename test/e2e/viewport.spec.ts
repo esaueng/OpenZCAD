@@ -1893,7 +1893,7 @@ test('view keys still work after returning from the Extrude distance field', asy
 
 test('section view toggles, picks its plane in the panel, cuts exactly at rest, and cuts nothing from the model', async ({
   page
-}) => {
+}, testInfo) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Section Cutaway');
@@ -1978,7 +1978,7 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   expect(drawn.triangles).toBeGreaterThanOrEqual(2);
   atPlane(drawn);
   await expect(
-    page.locator('.rail-section-state-kind', { hasText: 'Exact section' })
+    page.locator('.rail-section-state-kind', { hasText: 'Exact' })
   ).toBeVisible();
 
   // Moving the plane hands the viewport back to the clipped preview at once
@@ -2001,13 +2001,33 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   // The plane is chosen in the panel; the cut is display-only, so the
   // feature tree and the body list never change while switching planes.
   const planes = page.getByRole('group', { name: 'Section plane' });
-  await planes.getByRole('button', { name: 'XZ plane' }).click();
+  await planes.getByRole('button', { name: 'Front (XZ plane)' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: XZ plane/);
   await expect(
-    planes.getByRole('button', { name: 'XZ plane' })
+    planes.getByRole('button', { name: 'Front (XZ plane)' })
   ).toHaveAttribute('aria-pressed', 'true');
-  await planes.getByRole('button', { name: 'YZ plane' }).click();
+  await planes.getByRole('button', { name: 'Side (YZ plane)' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: YZ plane/);
+
+  // Compact controls preserve the complete cut when their close button is used.
+  const position = page.getByLabel('Cut position', { exact: true });
+  await position.fill('3.125');
+  await position.press('Enter');
+  await expect(slider).toHaveValue('3.125');
+  const flip = page.getByRole('button', { name: 'Flip cut direction' });
+  await flip.click();
+  await expect(flip).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Close section controls' }).click();
+  await expect(slider).toHaveCount(0);
+  await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
+  await sectionButton.click();
+  await expect(position).toHaveValue('3.125');
+  await expect(flip).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    planes.getByRole('button', { name: 'Side (YZ plane)' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  // Escape belongs to the panel while one of its controls has focus.
+  await flip.focus();
 
   // Escape puts the panel away and leaves the cut on; the views flyout and
   // the section panel are never open together.
@@ -2034,9 +2054,39 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
       return state.sectionCaps.length + state.exactSections.length;
     })
     .toBe(0);
+  // Switching the cut off and on also restores its offset and direction.
+  await sectionButton.click();
+  await expect(position).toHaveValue('3.125');
+  await expect(flip).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Center cut' }).click();
+  const middle =
+    (Number(await slider.getAttribute('min')) +
+      Number(await slider.getAttribute('max'))) /
+    2;
+  await expect(position).toHaveValue(String(middle));
+  await page.screenshot({
+    path: testInfo.outputPath('compact-section-desktop.png')
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(slider).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        (await page.locator('.rail-section-panel').boundingBox())?.x ?? -1
+    )
+    .toBeGreaterThanOrEqual(0);
+  const panelBox = await page.locator('.rail-section-panel').boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect(panelBox!.x).toBeGreaterThanOrEqual(0);
+  expect(panelBox!.y).toBeGreaterThanOrEqual(0);
+  expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(390);
+  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(844);
+  await page.screenshot({
+    path: testInfo.outputPath('compact-section-narrow.png')
+  });
 });
 
 test('the control reference shows the mouse bindings, not just the keys', async ({

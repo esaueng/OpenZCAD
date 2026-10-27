@@ -389,7 +389,8 @@ interface ViewerShellProps {
   onToggleSection(): void;
   onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
-  onSectionCommit(): void;
+  onSectionCommit(offset?: number): void;
+  onSectionFlip?(): void;
   onExportSectionDxf(): void;
   /**
    * What the section view is showing. The viewport's kernel geometry is
@@ -544,6 +545,7 @@ export function ViewerShell({
   onSectionPlane,
   onSectionOffset,
   onSectionCommit,
+  onSectionFlip,
   onExportSectionDxf,
   sectionOutline
 }: ViewerShellProps) {
@@ -659,6 +661,7 @@ export function ViewerShell({
       onSectionPlane={onSectionPlane}
       onSectionOffset={onSectionOffset}
       onSectionCommit={onSectionCommit}
+      onSectionFlip={onSectionFlip}
       onExportSectionDxf={onExportSectionDxf}
       sectionOutline={drawnSection}
       units={units}
