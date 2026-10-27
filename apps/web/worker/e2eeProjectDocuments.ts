@@ -44,6 +44,7 @@ import {
   E2EE_BLOB_ID_PATTERN,
   E2EE_FRAME_CONTENT_TYPE,
   E2EE_VERSION_LOG_PAGE,
+  E2EE_VERSION_LOG_PAGE_BYTES,
   E2EE_VERSION_LOG_RETAINED_HEADS,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_DOCUMENT_VERSION_ADVANCE,
@@ -2023,16 +2024,48 @@ async function logPage(
 ): Promise<E2eeVersionLogResponse> {
   const { results } = await db
     .prepare(
-      `SELECT ${LOG_COLUMNS} FROM e2ee_project_versions
-       WHERE project_id = ? AND document_version >= ? AND document_version <= ?
-       ORDER BY document_version LIMIT ?`
+      `WITH sizes AS (
+         SELECT document_version,
+           LENGTH(prefix) + LENGTH(signature) + LENGTH(version_hash)
+             + 6 * (COALESCE(LENGTH(signer_user_id), 4)
+                    + LENGTH(signer_device_id) + LENGTH(created_at)) + 512 AS entry_bytes
+         FROM e2ee_project_versions
+         WHERE project_id = ? AND document_version >= ? AND document_version <= ?
+         ORDER BY document_version LIMIT ?
+       ), page AS (
+         SELECT document_version, entry_bytes,
+           SUM(entry_bytes) OVER (ORDER BY document_version) AS page_bytes FROM sizes
+       )
+       SELECT ${LOG_COLUMNS.split(',')
+         .map((column) => `v.${column.trim()}`)
+         .join(', ')}, page.page_bytes
+       FROM page JOIN e2ee_project_versions v
+         ON v.project_id = ? AND v.document_version = page.document_version
+       WHERE page.page_bytes <= ? OR page.page_bytes - page.entry_bytes <= ?
+       ORDER BY v.document_version`
     )
-    .bind(projectId, since, through, E2EE_VERSION_LOG_PAGE + 1)
-    .all<VersionRow>();
+    .bind(
+      projectId,
+      since,
+      through,
+      E2EE_VERSION_LOG_PAGE + 1,
+      projectId,
+      E2EE_VERSION_LOG_PAGE_BYTES,
+      E2EE_VERSION_LOG_PAGE_BYTES
+    )
+    .all<VersionRow & { page_bytes: number }>();
   const rows = results ?? [];
+  // Size-only window rows stay inside SQLite; large prefixes are retrieved
+  // only for this bounded page and its one lookahead. Prefix/signature/hash
+  // are base64/hex; 6 bytes per other character plus 512 bounds JSON escaping,
+  // field names, punctuation and safe-integer digits. A maximal legal prefix
+  // still fits, so overlapping pages always make progress.
+  const accepted = rows
+    .filter((row) => row.page_bytes <= E2EE_VERSION_LOG_PAGE_BYTES)
+    .slice(0, E2EE_VERSION_LOG_PAGE);
   return {
-    log: rows.slice(0, E2EE_VERSION_LOG_PAGE).map(logEntry),
-    more: rows.length > E2EE_VERSION_LOG_PAGE
+    log: accepted.map(logEntry),
+    more: rows.length > accepted.length
   };
 }
 

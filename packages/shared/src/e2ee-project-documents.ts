@@ -285,6 +285,8 @@ export interface E2eeListProjectsExtension {
 
 /** How many version log records one response carries at most. */
 export const E2EE_VERSION_LOG_PAGE = 1024;
+/** Reserve the other half of a document frame for its head and project metadata. */
+export const E2EE_VERSION_LOG_PAGE_BYTES = MAX_E2EE_FRAME_METADATA_BYTES / 2;
 /** Decision D6: the log keeps the last 2,000 heads plus every retained revision. */
 export const E2EE_VERSION_LOG_RETAINED_HEADS = 2000;
 
