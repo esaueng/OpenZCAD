@@ -204,11 +204,30 @@ fn replay_authority(
     directory: Arc<dyn DeviceListVerifier>,
     owner: &[u8],
 ) -> Res<ReplayResult> {
-    let anchor_epoch = message(anchor)?
+    let info = message(anchor)?
         .into_group_info()
-        .ok_or_else(|| invalid("anchor is not a GroupInfo"))?
-        .group_context()
-        .epoch;
+        .ok_or_else(|| invalid("anchor is not a GroupInfo"))?;
+    let anchor_epoch = info.group_context().epoch;
+    // Preserve a precise checkpoint refusal before general tree credential
+    // validation. This preflight can only refuse; observe_group still verifies
+    // its signature and tree before any state is accepted.
+    if anchor_epoch > 0 {
+        use mls_rs::extension::built_in::RatchetTreeExt;
+        let tree = info
+            .extensions()
+            .get_as::<RatchetTreeExt>()
+            .map_err(|_| invalid("malformed checkpoint tree"))?
+            .ok_or_else(|| invalid("missing checkpoint tree"))?;
+        let roles =
+            ProjectRoles::from_extensions(&info.group_context().extensions).map_err(|r| Error::policy(vec![r]))?;
+        checkpoint_removals(
+            anchor,
+            info.group_context(),
+            &roles,
+            &tree.tree_data.roster().members(),
+            directory.as_ref(),
+        )?;
+    }
     let state = PolicyState::default();
     state.directory.set(directory.at_epoch(anchor_epoch));
     let client = ExternalClient::builder()
@@ -237,6 +256,16 @@ fn replay_authority(
             ) != Some(Role::Owner)
         {
             return Err(invalid("expected the project's initial owner GroupInfo"));
+        }
+        let credential =
+            DeviceCredential::from_identity(&members[0].signing_identity).map_err(|r| Error::policy(vec![r]))?;
+        if directory.at_epoch(0).credential_status(
+            &credential.user_id,
+            &credential.device_id,
+            members[0].signing_identity.signature_key.as_bytes(),
+        ) != CredentialStatus::Certified
+        {
+            return Err(invalid("initial owner was not certified in epoch zero"));
         }
         LeafRemovals::default()
     } else {

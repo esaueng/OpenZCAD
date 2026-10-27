@@ -2097,7 +2097,14 @@ mod checkpoint_tests {
             let error = f.joiner.join(&f.welcome, &f.checkpoint, &f.records[3..]).err().unwrap();
             assert_eq!(reason(&error), "checkpoint-invalid");
             assert_eq!(f.joiner.export().unwrap(), before);
-            // Full replay does not depend on the checkpoint's signer.
+            // Full replay can use a historically certified, now revoked key.
+            // A missing certification is no longer historical authorization:
+            // refuse it until the verified certificate is supplied again.
+            if !uncertified.is_empty() {
+                assert!(f.joiner.join(&f.welcome, &f.initial, &f.records).is_err());
+                assert_eq!(f.joiner.export().unwrap(), before);
+                f.joiner.policy.directory.set(directory(&f.everyone(), &[], &[]));
+            }
             f.joiner.join(&f.welcome, &f.initial, &f.records).unwrap();
             assert_eq!(f.joiner.policy.removals.lock().unwrap().clone(), f.owner_removals());
         }
