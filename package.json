@@ -9,6 +9,8 @@
   },
   "type": "module",
   "scripts": {
+    "brand:generate": "node scripts/generate-brand-assets.mjs",
+    "brand:check": "node scripts/generate-brand-assets.mjs --check",
     "dev": "turbo run dev --parallel",
     "dev:web": "pnpm --filter @openzcad/web dev",
     "dev:desktop": "pnpm --filter @openzcad/desktop dev",
