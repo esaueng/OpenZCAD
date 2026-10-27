@@ -59,6 +59,7 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
+  LEGACY_PROJECT_FRAME_CONTENT_TYPE,
   toProjectId,
   type E2eeListProjectsExtension,
   type ProjectSummary
@@ -170,10 +171,30 @@ function openableAccountDocument(
   }
 }
 
+function cloudStatus(status: number): string {
+  return status === 401
+    ? 'unauthorized'
+    : status === 403
+      ? 'forbidden'
+      : status === 409
+        ? 'conflict'
+        : status === 413
+          ? 'too_large'
+          : status === 429
+            ? 'rate_limited'
+            : status >= 500
+              ? 'server'
+              : 'other';
+}
+
 async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit,
-  observations: { documentDownload?: boolean; expectedMissing?: boolean } = {}
+  observations: {
+    documentDownload?: boolean;
+    expectedMissing?: boolean;
+    projectId?: string;
+  } = {}
 ): Promise<T> {
   const collect = isAnalyticsEnabled();
   const started = performance.now();
@@ -186,7 +207,13 @@ async function requestJson<T>(
     response = await desktopFetch(input, {
       ...init,
       credentials: 'same-origin',
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
+      headers: {
+        'content-type': 'application/json',
+        ...(observations.documentDownload
+          ? { accept: LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+          : {}),
+        ...(init?.headers ?? {})
+      }
     });
   } catch (error) {
     if (collect && projectCall) {
@@ -200,22 +227,7 @@ async function requestJson<T>(
       // Revision retention's documented null result is not a load failure.
       if (!(observations.expectedMissing && response.status === 404)) {
         trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
-        trackDetail(
-          'cloud_status',
-          response.status === 401
-            ? 'unauthorized'
-            : response.status === 403
-              ? 'forbidden'
-              : response.status === 409
-                ? 'conflict'
-                : response.status === 413
-                  ? 'too_large'
-                  : response.status === 429
-                    ? 'rate_limited'
-                    : response.status >= 500
-                      ? 'server'
-                      : 'other'
-        );
+        trackDetail('cloud_status', cloudStatus(response.status));
       }
     } else if (writing && typeof init?.body === 'string') {
       trackSize('transfer_upload', new Blob([init.body]).size);
@@ -249,6 +261,49 @@ async function requestJson<T>(
     );
   }
 
+  if (
+    observations.projectId &&
+    response.headers.get('content-type')?.split(';')[0] ===
+      LEGACY_PROJECT_FRAME_CONTENT_TYPE
+  ) {
+    const { readLegacyProjectFrame, LegacyProjectTransportError } =
+      await import('./legacyProjectReader');
+    try {
+      return (await readLegacyProjectFrame(
+        response,
+        observations.projectId,
+        desktopFetch,
+        collect ? (bytes) => trackSize('transfer_download', bytes) : undefined
+      )) as T;
+    } catch (error) {
+      if (collect && projectCall) {
+        trackDetail('error_cloud_load');
+        trackDetail(
+          'cloud_status',
+          error instanceof LegacyProjectTransportError
+            ? error.status
+              ? cloudStatus(error.status)
+              : 'network'
+            : 'server'
+        );
+      }
+      if (error instanceof LegacyProjectTransportError) {
+        if (error.status)
+          throw new ApiError(
+            error.status,
+            error.cause instanceof Error ? error.cause.message : error.message,
+            error.code,
+            error.details
+          );
+        throw error.cause;
+      }
+      throw new ApiError(
+        503,
+        `The account copy of this project cannot be opened here: ${error instanceof Error ? error.message : String(error)}`,
+        PROJECT_DOCUMENT_UNAVAILABLE_CODE
+      );
+    }
+  }
   if (collect && observations.documentDownload && !writing) {
     // Read once and measure the successfully parsed UTF-8 JSON body. Content-
     // Length may describe compressed bytes or be absent; names/IDs stay local.
@@ -454,7 +509,7 @@ async function loadPlaintextRevision(
     document = await requestJson<ProjectDocument>(
       `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
       undefined,
-      { documentDownload: true, expectedMissing: true }
+      { documentDownload: true, expectedMissing: true, projectId }
     );
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
@@ -697,7 +752,7 @@ export const api = {
           await requestJson<ProjectDocument>(
             `/api/projects/${encodeURIComponent(projectId)}`,
             undefined,
-            { documentDownload: true }
+            { documentDownload: true, projectId }
           ),
           projectId
         ),

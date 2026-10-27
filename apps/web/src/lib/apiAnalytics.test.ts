@@ -2,8 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from './api';
 import { isAnalyticsEnabled, trackDetail, trackSize } from './analytics';
 import { desktopFetch } from './desktopBridge';
-import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import { prepareProjectStorageSnapshot } from '@openzcad/persistence';
+import { createMigrationPlaintextSource } from './e2ee/migrationPlaintextSource';
+import { encryptedProjectStore } from './e2ee/encryptedProjects';
+import {
+  toUserId,
+  LEGACY_PROJECT_FRAME_CONTENT_TYPE,
+  encodeE2eeFrame
+} from '@openzcad/shared';
 
 // A real document: loads now refuse one this browser cannot open
 // (ADR-024 Phase 1). Its name carries multi-byte UTF-8 for the size check.
@@ -19,6 +26,7 @@ vi.mock('./analytics', () => ({
   durationBucket: vi.fn(() => 'lt_100ms')
 }));
 vi.mock('./desktopBridge', () => ({ desktopFetch: vi.fn() }));
+vi.mock('./e2ee/encryptedProjects', () => ({ encryptedProjectStore: vi.fn() }));
 
 beforeEach(() => {
   vi.mocked(isAnalyticsEnabled).mockReturnValue(true);
@@ -26,19 +34,210 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe('project download size observations', () => {
+  it('falls back to encrypted reads when migration finalizes between frame and asset', async () => {
+    const imported = importStepBody(
+      createProjectDocument('Migrating', toUserId('owner')),
+      {
+        name: 'Part',
+        artifactId: 'artifact_local_migrating',
+        sourceName: 'part.step',
+        stepText: 'ISO-10303-21;\nEND-ISO-10303-21;'
+      }
+    ).document;
+    const prepared = await prepareProjectStorageSnapshot(imported);
+    const frame = encodeE2eeFrame(
+      {
+        version: 1,
+        projectId: imported.projectId,
+        kind: 'snapshot',
+        aliases: [],
+        storedBytes: prepared.storedBody.length,
+        logicalBytes: prepared.logicalBytes,
+        checksumSha256: prepared.checksumSha256
+      },
+      prepared.storedBody
+    );
+    const loadProject = vi.fn().mockResolvedValue(imported);
+    vi.mocked(encryptedProjectStore).mockResolvedValue({
+      loadProject
+    } as unknown as Awaited<ReturnType<typeof encryptedProjectStore>>);
+    for (const reader of [createMigrationPlaintextSource(), api]) {
+      vi.mocked(desktopFetch)
+        .mockResolvedValueOnce(
+          new Response(frame, {
+            headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+          })
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: 'Project is now encrypted.',
+              code: 'PROJECT_FORMAT_UNSUPPORTED'
+            }),
+            { status: 409 }
+          )
+        );
+      if (reader === api)
+        expect(await reader.loadProject(imported.projectId)).toEqual(imported);
+      else
+        await expect(
+          reader.loadProject(imported.projectId)
+        ).rejects.toMatchObject({
+          status: 409,
+          code: 'PROJECT_FORMAT_UNSUPPORTED'
+        });
+    }
+    expect(loadProject).toHaveBeenCalledExactlyOnceWith(imported.projectId);
+  });
+
+  it('preserves an asset network failure after receiving the project frame', async () => {
+    const imported = importStepBody(document, {
+      name: 'Part',
+      artifactId: 'artifact_local_part',
+      sourceName: 'part.step',
+      stepText: 'ISO-10303-21;\nEND-ISO-10303-21;'
+    }).document;
+    const prepared = await prepareProjectStorageSnapshot(imported);
+    const frame = encodeE2eeFrame(
+      {
+        version: 1,
+        projectId,
+        kind: 'snapshot',
+        aliases: [],
+        storedBytes: prepared.storedBody.length,
+        logicalBytes: prepared.logicalBytes,
+        checksumSha256: prepared.checksumSha256
+      },
+      prepared.storedBody
+    );
+    const offline = new TypeError('offline');
+    for (const reader of [api, createMigrationPlaintextSource()]) {
+      vi.mocked(desktopFetch)
+        .mockResolvedValueOnce(
+          new Response(frame, {
+            headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+          })
+        )
+        .mockRejectedValueOnce(offline);
+      await expect(reader.loadProject(projectId)).rejects.toBe(offline);
+    }
+    expect(trackSize).not.toHaveBeenCalled();
+    expect(trackDetail).toHaveBeenCalledTimes(2);
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'network');
+  });
+
+  it('preserves a response stream interruption as the original network error', async () => {
+    const interrupted = new TypeError('connection interrupted');
+    vi.mocked(desktopFetch).mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(interrupted);
+          }
+        }),
+        { headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE } }
+      )
+    );
+    await expect(api.loadProject(projectId)).rejects.toBe(interrupted);
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'network');
+  });
+
+  it('keeps asset HTTP failures distinct from invalid project bytes', async () => {
+    const imported = importStepBody(document, {
+      name: 'Part',
+      artifactId: 'artifact_local_part',
+      sourceName: 'part.step',
+      stepText: 'ISO-10303-21;\nEND-ISO-10303-21;'
+    }).document;
+    const prepared = await prepareProjectStorageSnapshot(imported);
+    const metadata = {
+      version: 1,
+      projectId,
+      kind: 'snapshot',
+      aliases: [],
+      storedBytes: prepared.storedBody.length,
+      logicalBytes: prepared.logicalBytes,
+      checksumSha256: prepared.checksumSha256
+    };
+    vi.mocked(desktopFetch)
+      .mockResolvedValueOnce(
+        new Response(encodeE2eeFrame(metadata, prepared.storedBody), {
+          headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response('temporarily unavailable', { status: 503 })
+      );
+    await expect(api.loadProject(projectId)).rejects.toMatchObject({
+      status: 503,
+      code: undefined
+    });
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'server');
+    vi.mocked(trackDetail).mockClear();
+    vi.mocked(desktopFetch).mockResolvedValueOnce(
+      new Response(
+        encodeE2eeFrame(
+          { ...metadata, checksumSha256: '0'.repeat(64) },
+          prepared.storedBody
+        ),
+        { headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE } }
+      )
+    );
+    await expect(api.loadProject(projectId)).rejects.toMatchObject({
+      status: 503,
+      code: 'PROJECT_DOCUMENT_UNAVAILABLE'
+    });
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    // Unavailable storage remains the existing fixed server bucket.
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'server');
+  });
+
+  it('opens a raw legacy frame in the browser and measures its consumed bytes', async () => {
+    const payload = new TextEncoder().encode(documentText);
+    const frame = encodeE2eeFrame(
+      {
+        version: 1,
+        projectId,
+        kind: 'inline',
+        storedBytes: payload.length,
+        logicalBytes: payload.length,
+        checksumSha256: null,
+        aliases: []
+      },
+      payload
+    );
+    vi.mocked(desktopFetch).mockResolvedValue(
+      new Response(frame, {
+        headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+      })
+    );
+    expect(await api.loadProject(projectId)).toMatchObject({ name: '測試⚙' });
+    expect(vi.mocked(desktopFetch).mock.calls[0]![0]).toBe(
+      `/api/projects/${projectId}`
+    );
+    expect(trackSize).toHaveBeenCalledExactlyOnceWith(
+      'transfer_download',
+      frame.length
+    );
+  });
   it.each(['project', 'revision'] as const)(
     'measures the consumed UTF-8 JSON for a successful %s download',
     async (kind) => {
       const text = documentText;
       const response = new Response(text);
       vi.mocked(desktopFetch).mockResolvedValue(response);
-      const loaded = kind === 'project'
-        ? await api.loadProject(projectId)
-        : await api.loadRevision(projectId, 'revision');
+      const loaded =
+        kind === 'project'
+          ? await api.loadProject(projectId)
+          : await api.loadRevision(projectId, 'revision');
       expect(loaded).toMatchObject({ name: '測試⚙' });
       expect(response.bodyUsed).toBe(true);
       expect(trackSize).toHaveBeenCalledExactlyOnceWith(
-        'transfer_download', new TextEncoder().encode(text).byteLength
+        'transfer_download',
+        new TextEncoder().encode(text).byteLength
       );
     }
   );
@@ -53,20 +252,26 @@ describe('project download size observations', () => {
   });
 
   it('treats a pruned revision as an ordinary null result without failure metrics', async () => {
-    vi.mocked(desktopFetch).mockResolvedValue(new Response('{"error":"pruned"}', { status: 404 }));
+    vi.mocked(desktopFetch).mockResolvedValue(
+      new Response('{"error":"pruned"}', { status: 404 })
+    );
     expect(await api.loadRevision(projectId, 'revision')).toBeNull();
     expect(trackDetail).not.toHaveBeenCalled();
     expect(trackSize).not.toHaveBeenCalled();
-    vi.mocked(desktopFetch).mockResolvedValue(new Response('{"error":"missing"}', { status: 404 }));
+    vi.mocked(desktopFetch).mockResolvedValue(
+      new Response('{"error":"missing"}', { status: 404 })
+    );
     await expect(api.loadProject(projectId)).rejects.toBeInstanceOf(ApiError);
     expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
     expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'other');
   });
 
   it('does not record unsuccessful or malformed downloads', async () => {
-    vi.mocked(desktopFetch).mockResolvedValueOnce(
-      new Response('{"error":"unavailable"}', { status: 503 })
-    ).mockResolvedValueOnce(new Response('invalid JSON'));
+    vi.mocked(desktopFetch)
+      .mockResolvedValueOnce(
+        new Response('{"error":"unavailable"}', { status: 503 })
+      )
+      .mockResolvedValueOnce(new Response('invalid JSON'));
     await expect(api.loadProject(projectId)).rejects.toBeInstanceOf(ApiError);
     await expect(api.loadRevision(projectId, 'revision')).rejects.toThrow();
     expect(trackSize).not.toHaveBeenCalled();
@@ -76,9 +281,10 @@ describe('project download size observations', () => {
     'excludes %s metadata listings from document download observations',
     async (kind) => {
       vi.mocked(desktopFetch).mockResolvedValue(new Response('{}'));
-      const loaded = kind === 'projects'
-        ? await api.listProjects()
-        : await api.listRevisions('project');
+      const loaded =
+        kind === 'projects'
+          ? await api.listProjects()
+          : await api.listRevisions('project');
       expect(loaded).toEqual({});
       expect(trackSize).not.toHaveBeenCalled();
     }

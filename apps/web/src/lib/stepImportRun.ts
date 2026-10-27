@@ -1,4 +1,4 @@
-import { boundedName } from '@openzcad/shared';
+import { boundedName, MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
 /**
  * One STEP import, from the file the user chose to the fate of its source bytes.
  *
@@ -80,7 +80,7 @@ export const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
  * Reference-form ceiling. It matches the exact kernel's hostile-input byte
  * budget so shared or restored sources cannot opt into a larger parse budget.
  */
-export const MAX_SOURCE_IMPORT_BYTES = 128 * 1024 * 1024;
+export { MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
 
 function megabytes(bytes: number): number {
   return Math.round(bytes / (1024 * 1024));

@@ -15,6 +15,7 @@ import type {
 } from '@openzcad/shared';
 import { ApiError } from '../api';
 import { desktopFetch } from '../desktopBridge';
+import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from '../measurementRecord';
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -65,8 +66,11 @@ async function refusal(response: Response): Promise<ApiError> {
 export function createMigrationPlaintextSource(
   fetcher: Fetch = desktopFetch
 ): MigrationPlaintextSource {
-  const get = async (path: string): Promise<Response> => {
-    const response = await fetcher(path, { credentials: 'same-origin' });
+  const get = async (path: string, init?: RequestInit): Promise<Response> => {
+    const response = await fetcher(path, {
+      ...init,
+      credentials: 'same-origin'
+    });
     if (!response.ok) throw await refusal(response);
     return response;
   };
@@ -80,15 +84,49 @@ export function createMigrationPlaintextSource(
   };
   const project = (projectId: string) =>
     `/api/projects/${encodeURIComponent(projectId)}`;
+  const document = async (
+    path: string,
+    projectId: string
+  ): Promise<ProjectDocument> => {
+    const response = await get(path, {
+      headers: { accept: LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+    });
+    if (
+      response.headers.get('content-type')?.split(';')[0] ===
+      LEGACY_PROJECT_FRAME_CONTENT_TYPE
+    ) {
+      const { readLegacyProjectFrame, LegacyProjectTransportError } =
+        await import('../legacyProjectReader');
+      try {
+        return await readLegacyProjectFrame(response, projectId, fetcher);
+      } catch (error) {
+        if (error instanceof LegacyProjectTransportError) {
+          if (error.status)
+            throw new ApiError(
+              error.status,
+              error.cause instanceof Error
+                ? error.cause.message
+                : error.message,
+              error.code,
+              error.details
+            );
+          throw error.cause;
+        }
+        throw error;
+      }
+    }
+    return response.json() as Promise<ProjectDocument>;
+  };
   return {
     listProjects: async () =>
       (await json<ListProjectsResponse>('/api/projects')).projects,
-    loadProject: (projectId) => json(project(projectId)),
+    loadProject: (projectId) => document(project(projectId), projectId),
     listRevisions: (projectId) => json(`${project(projectId)}/revisions`),
     async loadRevision(projectId, revisionId) {
       try {
-        return await json<ProjectDocument>(
-          `${project(projectId)}/revisions/${encodeURIComponent(revisionId)}`
+        return await document(
+          `${project(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
+          projectId
         );
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) return null;
