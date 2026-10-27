@@ -105,10 +105,12 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     act(() =>
       client.fireRemoval({
         cursor: '12',
-        links: [{ shareId: 'shr_a', mode: 'view' }]
+        links: [{ shareId: 'shr_a', mode: 'view' }],
+        problem: 'Browser storage is unavailable.'
       })
     );
     expect(screen.getByText(/Someone lost access/)).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('Browser storage is unavailable.');
     await userEvent.click(
       screen.getByRole('button', { name: 'Reissue links' })
     );

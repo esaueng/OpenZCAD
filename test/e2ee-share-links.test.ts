@@ -2011,6 +2011,53 @@ describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
 
 describe('durable browser share work', { timeout: 120_000 }, () => {
   it.each(['member', 'device'] as const)(
+    'keeps a transient %s-removal prompt and refreshes authority when journal storage fails',
+    async (kind) => {
+      const { laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      const memory = memoryShareWorkStore();
+      const ctx = {
+        ...laptop.shareLinks,
+        work: {
+          ...memory,
+          update: async () => {
+            throw new Error('Quota');
+          }
+        }
+      };
+      const notified = vi.fn();
+      const outcome =
+        kind === 'member'
+          ? await shareLinksAfterRemoval(
+              ctx,
+              { projectId, keyEpoch: 12, userIds: [OTHER] },
+              notified
+            )
+          : await shareLinksAfterDeviceRemoval(
+              ctx,
+              {
+                projectId,
+                keyEpoch: 12,
+                devices: [{ userId: OTHER, deviceId: 'other_desktop' }]
+              },
+              notified
+            );
+      expect(notified).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cursor: '12',
+          links: [{ shareId: created.shareId, mode: 'view' }]
+        })
+      );
+      expect(outcome?.failed).toEqual([]);
+    }
+  );
+
+  it.each(['member', 'device'] as const)(
     'notifies an open dialog after journaling a %s removal before stalled remote upkeep',
     async (kind) => {
       const { laptop, projectId } = await linkedProject();

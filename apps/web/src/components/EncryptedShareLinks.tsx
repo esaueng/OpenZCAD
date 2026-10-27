@@ -271,6 +271,7 @@ export function EncryptedShareLinks({
   useEffect(
     () =>
       client.subscribeRemovals(projectId, (notice) => {
+        if (notice?.problem) setError(notice.problem);
         if (notice)
           setState((current) =>
             current

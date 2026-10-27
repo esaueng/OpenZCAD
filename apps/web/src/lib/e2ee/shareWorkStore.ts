@@ -9,6 +9,7 @@ export interface ShareWorkLink {
 export interface ShareRemovalNotice {
   readonly cursor: string | null;
   readonly links: readonly ShareWorkLink[];
+  readonly problem?: string;
 }
 
 export interface PendingShareCreation extends ShareWorkLink {
