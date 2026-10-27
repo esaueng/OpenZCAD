@@ -196,6 +196,7 @@ describe('encryption status reports from the encrypted store', () => {
   const record = {} as E2eeStoredVersion;
 
   function fakeStore(fail: Error | null = null) {
+    retainEncryptionStatus('proj_a');
     const outcome = <T>(value: T) =>
       vi.fn(async () => {
         if (fail) throw fail;
@@ -343,6 +344,7 @@ describe('encryption status reports from the encrypted store', () => {
     const reporting = reportingEncryptedProjectStore(store, () => true);
     await expect(reporting.loadProject('proj_a')).rejects.toBe(error);
     expect(encryptionStatusOf('proj_a').state).toBe('problem');
+    retainEncryptionStatus('proj_b');
     await expect(
       reporting.roomAccess().openHead('proj_b', record, null)
     ).rejects.toBe(error);
@@ -350,6 +352,7 @@ describe('encryption status reports from the encrypted store', () => {
     await expect(reporting.loadRevision('proj_c', 'rev_1')).rejects.toBe(error);
     expect(encryptionStatusOf('proj_c').state).toBe('problem');
     // The room's blob repair (slice 5-6) goes through the same report.
+    retainEncryptionStatus('proj_d');
     await expect(
       reporting.roomAccess().restoreBlobs('proj_d', ['blob_1'])
     ).rejects.toBe(error);
@@ -409,5 +412,20 @@ describe('encryption status reports from the encrypted store', () => {
   it('classifies a locked key session as locked', () => {
     reportEncryptedFailure(null, lockedError());
     expect(encryptionStatusOf('proj_a').state).toBe('locked');
+  });
+
+  it('ignores room operations that only start after their project closed', async () => {
+    const { store } = fakeStore();
+    store.stateCode = () => '01234 56789 01234 56789 01234 56789 01234 56789';
+    const reporting = reportingEncryptedProjectStore(store, () => true);
+    retainEncryptionStatus('proj_b');
+    await reporting.roomAccess().openHead('proj_a', record, null);
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+    retainEncryptionStatus(null);
+    await reporting.roomAccess().openHead('proj_a', record, null);
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+    retainEncryptionStatus('proj_a');
+    await reporting.roomAccess().openHead('proj_a', record, null);
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeDefined();
   });
 });

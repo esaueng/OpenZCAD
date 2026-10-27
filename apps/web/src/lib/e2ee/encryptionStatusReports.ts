@@ -27,9 +27,10 @@ export function reportingEncryptedProjectStore(
   const verifiedHead = async <R>(
     run: () => Promise<R>,
     projectIdOf: (result: R) => string,
-    projectId: string | null
+    projectId: string | null,
+    retainedOnly = false
   ): Promise<R> => {
-    const report = beginEncryptionStatusReport(projectId);
+    const report = beginEncryptionStatusReport(projectId, retainedOnly);
     try {
       const result = await run();
       if (report() && current()) {
@@ -45,9 +46,10 @@ export function reportingEncryptedProjectStore(
   /** A read that checks a project without opening or writing its head. */
   const checked = async <R>(
     run: () => Promise<R>,
-    projectId: string
+    projectId: string,
+    retainedOnly = false
   ): Promise<R> => {
-    const report = beginEncryptionStatusReport(projectId);
+    const report = beginEncryptionStatusReport(projectId, retainedOnly);
     try {
       const result = await run();
       report();
@@ -65,23 +67,25 @@ export function reportingEncryptedProjectStore(
     room = {
       currentHead: (projectId) => access.currentHead(projectId),
       seal: (projectId, document, base) =>
-        checked(() => access.seal(projectId, document, base), projectId),
+        checked(() => access.seal(projectId, document, base), projectId, true),
       openHead: (projectId, record, envelope) =>
         verifiedHead(
           () => access.openHead(projectId, record, envelope),
           () => projectId,
-          projectId
+          projectId,
+          true
         ),
       accepted: (projectId, sealed, base, record) =>
         verifiedHead(
           () => access.accepted(projectId, sealed, base, record),
           () => projectId,
-          projectId
+          projectId,
+          true
         ),
       catchUp: (projectId) =>
-        checked(() => access.catchUp(projectId), projectId),
+        checked(() => access.catchUp(projectId), projectId, true),
       restoreBlobs: (projectId, blobIds) =>
-        checked(() => access.restoreBlobs(projectId, blobIds), projectId)
+        checked(() => access.restoreBlobs(projectId, blobIds), projectId, true)
     };
     return room;
   };

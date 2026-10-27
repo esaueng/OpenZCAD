@@ -413,10 +413,10 @@ export function useCollaboration({
       // owner and version, rather than depending on the clone's object identity.
       const ownsFlush = Boolean(
         checkpoint &&
-          submitted &&
-          checkpoint.submitted.ownerUserId === submitted.ownerUserId &&
-          checkpoint.submitted.version === submitted.version &&
-          projectsHaveSameCanonicalContent(checkpoint.submitted, submitted)
+        submitted &&
+        checkpoint.submitted.ownerUserId === submitted.ownerUserId &&
+        checkpoint.submitted.version === submitted.version &&
+        projectsHaveSameCanonicalContent(checkpoint.submitted, submitted)
       );
       const checkpointCurrent =
         checkpoint && ownsFlush && message.document
@@ -816,7 +816,10 @@ export function useCollaboration({
           // Opening a version takes a moment; frames still apply in order.
           inbound = inbound
             .then(async () => {
-              const { message } = await (await codecLoad).decode(raw);
+              if (!isCurrentRoom() || socketRef.current !== socket) return;
+              const codec = await codecLoad;
+              if (!isCurrentRoom() || socketRef.current !== socket) return;
+              const { message } = await codec.decode(raw);
               if (isCurrentRoom() && socketRef.current === socket && message)
                 handleMessage(message);
             })

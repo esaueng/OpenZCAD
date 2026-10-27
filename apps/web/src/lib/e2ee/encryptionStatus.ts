@@ -59,13 +59,23 @@ const derived = new Map<string, EncryptionStatus>();
 const listeners = new Set<() => void>();
 let keysLocked = false;
 const pendingReports = new Set<{ projectId: string | null; valid: boolean }>();
+let retainedProject: string | null | undefined;
 
 /** Single-use guard for an operation; navigation and teardown invalidate it. */
 export function beginEncryptionStatusReport(
-  projectId: string | null
+  projectId: string | null,
+  retainedOnly = false
 ): () => boolean {
-  const pending = { projectId, valid: true };
-  pendingReports.add(pending);
+  // Explicit loads can prepare the next project; room callbacks must already
+  // belong to the retained one. Undefined is a store with no UI owner yet.
+  const pending = {
+    projectId,
+    valid:
+      !retainedOnly ||
+      retainedProject === undefined ||
+      retainedProject === projectId
+  };
+  if (pending.valid) pendingReports.add(pending);
   let consumed = false;
   return () => {
     if (consumed) return false;
@@ -204,8 +214,13 @@ export function reportKeysUnlocked(): void {
  * project opened again is shown from what this page reads of it then.
  */
 export function retainEncryptionStatus(projectId: string | null): void {
-  for (const pending of pendingReports)
-    if (pending.projectId !== projectId) pending.valid = false;
+  retainedProject = projectId;
+  for (const pending of pendingReports) {
+    if (pending.projectId !== projectId) {
+      pending.valid = false;
+      pendingReports.delete(pending);
+    }
+  }
   let removed = false;
   for (const id of [...records.keys()]) {
     if (id !== projectId) {

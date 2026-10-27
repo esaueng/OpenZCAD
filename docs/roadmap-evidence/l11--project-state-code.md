@@ -14,6 +14,10 @@ completion cannot restore it after teardown. Plaintext projects show none.
 Navigation invalidates pending reports for the project that closed, including
 late integrity errors. Reopening offline cannot expose a code resurrected by
 an older request; a fresh successful verification restores it normally.
+Room reports also require the retained project when they start. Disposed
+rooms skip queued decoding before and after codec loading, covering frames
+whose callbacks only begin after navigation and a codec download that ends
+after navigation. Explicit account loads may still prepare the next project.
 Comparison digests complete before advancing accepted-head pins. Local head
 publication is monotonic, so a delayed older room read or an earlier successful
 account save cannot replace a newer accepted document/code. Deterministic
