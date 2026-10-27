@@ -97,6 +97,7 @@ import {
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
+import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -1462,6 +1463,7 @@ export function applyDirectEdit(
     const moved =
       analytic === null
         ? (tryExactChamferedCylinderCapOffset(kernel, solid, face, offset) ??
+          tryExactLocalChamferCapOffset(kernel, solid, face, offset) ??
           journaledMove(
             kernel,
             solid,
