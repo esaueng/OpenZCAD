@@ -3038,6 +3038,7 @@ export function App() {
     snapshot: projectViewSnapshot,
     onCameraChange: updateCameraPose,
     onCameraSettled: persistCameraPose,
+    persistSection: persistSectionView,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
   // Read at callback time: the section slider's release handler runs after
@@ -10387,6 +10388,7 @@ export function App() {
             };
           });
           requestView({ pose: view.camera, projection: view.projection });
+          persistSectionView(view.sectionView);
           if (view.sectionView) void requestExactSection(view.sectionView);
           setStatus(`${view.name}.`);
         },
@@ -10589,6 +10591,7 @@ export function App() {
     pendingSectionRestoreRef.current = null;
     if (viewerSettings.sectionView) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
+      persistSectionView(undefined);
       clearSectionOutline();
       setStatus('Section view off.');
       return;
@@ -10596,6 +10599,7 @@ export function App() {
     const remembered = rememberedSection.current;
     if (remembered) {
       setViewerSettings((current) => ({ ...current, sectionView: remembered }));
+      persistSectionView(remembered);
       void requestExactSection(remembered);
     } else {
       setSectionPlane('XY');
@@ -10607,16 +10611,18 @@ export function App() {
     pendingSectionRestoreRef.current = null;
     const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
+    const section = { plane, offset };
     // The previous plane's exact section describes a cut that is gone.
     clearSectionOutline();
     setViewerSettings((current) => ({
       ...current,
-      sectionView: { plane, offset }
+      sectionView: section
     }));
+    persistSectionView(section);
     // The panel beside the rail carries the slider and the tooltip says the
     // cut is display-only; the lane line only names the plane.
     setStatus(`Section view: ${plane} plane · the model is untouched.`);
-    void requestExactSection({ plane, offset });
+    void requestExactSection(section);
   }
 
   function setSectionOffset(offset: number) {
@@ -10635,10 +10641,12 @@ export function App() {
     const section = viewerSettingsRef.current.sectionView;
     if (!section) return;
     // The plane itself has not moved, so its exact curves remain valid.
+    const next = { ...section, flipped: !section.flipped };
     setViewerSettings((current) => ({
       ...current,
-      sectionView: { ...section, flipped: !section.flipped }
+      sectionView: next
     }));
+    persistSectionView(next);
   }
 
   /** Write the exact section — never the display caps — as a DXF drawing. */
@@ -28744,9 +28752,10 @@ export function App() {
             onSectionFlip={flipSectionDirection}
             onSectionCommit={(offset) => {
               const section = viewerSettingsRef.current.sectionView;
-              void requestExactSection(
-                section && offset !== undefined ? { ...section, offset } : section
-              );
+              const next =
+                section && offset !== undefined ? { ...section, offset } : section;
+              persistSectionView(next);
+              void requestExactSection(next);
             }}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}

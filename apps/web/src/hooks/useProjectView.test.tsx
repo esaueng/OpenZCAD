@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ViewportCameraState } from '@openzcad/viewport';
-import { loadProjectView } from '../lib/workspaceSession';
+import * as workspaceSession from '../lib/workspaceSession';
 import { useProjectView } from './useProjectView';
 
 const transientPose: ViewportCameraState = {
@@ -34,7 +34,7 @@ describe('project camera pose persistence', () => {
 
     act(() => result.current.onCameraChange('project-1', transientPose));
     expect(writes).not.toHaveBeenCalled();
-    expect(loadProjectView('project-1')).toBeNull();
+    expect(workspaceSession.loadProjectView('project-1')).toBeNull();
 
     // A surrounding setting can synchronously consume the latest in-memory
     // pose without waiting for the camera's durable settle callback.
@@ -45,7 +45,9 @@ describe('project camera pose persistence', () => {
       }))
     );
     await waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
-    expect(loadProjectView('project-1')?.camera).toEqual(transientPose);
+    expect(workspaceSession.loadProjectView('project-1')?.camera).toEqual(
+      transientPose
+    );
 
     writes.mockClear();
     act(() => result.current.onCameraChange('project-1', settledPose));
@@ -53,7 +55,9 @@ describe('project camera pose persistence', () => {
 
     act(() => result.current.onCameraSettled('project-1', settledPose));
     expect(writes).toHaveBeenCalledTimes(1);
-    expect(loadProjectView('project-1')?.camera).toEqual(settledPose);
+    expect(workspaceSession.loadProjectView('project-1')?.camera).toEqual(
+      settledPose
+    );
   });
 });
 
@@ -68,11 +72,22 @@ describe('sketch visibility on this device', () => {
     pointerNavigation: 'auto' as const
   };
 
-  it('persists the plane, exact offset and flipped side without a camera gesture', async () => {
+  it('persists only the settled cut, then restores its plane, offset and direction', async () => {
+    const writes = vi.spyOn(workspaceSession, 'saveProjectView');
     const first = renderHook(() => useProjectView('project-section'));
     act(() =>
       first.result.current.onCameraSettled('project-section', settledPose)
     );
+    writes.mockClear();
+    for (let offset = 0; offset < 6; offset++) {
+      act(() =>
+        first.result.current.setSettings((current) => ({
+          ...current,
+          sectionView: { plane: 'YZ', offset }
+        }))
+      );
+    }
+    expect(writes).not.toHaveBeenCalled();
     const sectionView = { plane: 'YZ' as const, offset: -3.125, flipped: true };
     act(() =>
       first.result.current.setSettings((current) => ({
@@ -80,10 +95,14 @@ describe('sketch visibility on this device', () => {
         sectionView
       }))
     );
+    expect(writes).not.toHaveBeenCalled();
+    act(() => first.result.current.persistSection(sectionView));
+    expect(writes).toHaveBeenCalledTimes(1);
     await waitFor(() =>
-      expect(loadProjectView('project-section')?.settings.sectionView).toEqual(
-        sectionView
-      )
+      expect(
+        workspaceSession.loadProjectView('project-section')?.settings
+          .sectionView
+      ).toEqual(sectionView)
     );
     first.unmount();
     const next = renderHook(() => useProjectView('project-section'));
@@ -96,7 +115,9 @@ describe('sketch visibility on this device', () => {
     act(() => first.result.current.onCameraSettled('project-1', settledPose));
     act(() => first.result.current.setSketchVisibility({ 'sketch-a': false }));
     await waitFor(() =>
-      expect(loadProjectView('project-1')?.sketchVisibility).toEqual({
+      expect(
+        workspaceSession.loadProjectView('project-1')?.sketchVisibility
+      ).toEqual({
         'sketch-a': false
       })
     );
@@ -121,7 +142,9 @@ describe('sketch visibility on this device', () => {
     expect(second.result.current.sketchVisibility).toEqual({
       'sketch-a': false
     });
-    expect(loadProjectView('project-1')?.sketchVisibility).toEqual({
+    expect(
+      workspaceSession.loadProjectView('project-1')?.sketchVisibility
+    ).toEqual({
       'sketch-a': false
     });
 
