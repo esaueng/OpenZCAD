@@ -171,6 +171,22 @@ function openableAccountDocument(
   }
 }
 
+function cloudStatus(status: number): string {
+  return status === 401
+    ? 'unauthorized'
+    : status === 403
+      ? 'forbidden'
+      : status === 409
+        ? 'conflict'
+        : status === 413
+          ? 'too_large'
+          : status === 429
+            ? 'rate_limited'
+            : status >= 500
+              ? 'server'
+              : 'other';
+}
+
 async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit,
@@ -211,22 +227,7 @@ async function requestJson<T>(
       // Revision retention's documented null result is not a load failure.
       if (!(observations.expectedMissing && response.status === 404)) {
         trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
-        trackDetail(
-          'cloud_status',
-          response.status === 401
-            ? 'unauthorized'
-            : response.status === 403
-              ? 'forbidden'
-              : response.status === 409
-                ? 'conflict'
-                : response.status === 413
-                  ? 'too_large'
-                  : response.status === 429
-                    ? 'rate_limited'
-                    : response.status >= 500
-                      ? 'server'
-                      : 'other'
-        );
+        trackDetail('cloud_status', cloudStatus(response.status));
       }
     } else if (writing && typeof init?.body === 'string') {
       trackSize('transfer_upload', new Blob([init.body]).size);
@@ -275,6 +276,17 @@ async function requestJson<T>(
         collect ? (bytes) => trackSize('transfer_download', bytes) : undefined
       )) as T;
     } catch (error) {
+      if (collect && projectCall) {
+        trackDetail('error_cloud_load');
+        trackDetail(
+          'cloud_status',
+          error instanceof LegacyProjectTransportError
+            ? error.status
+              ? cloudStatus(error.status)
+              : 'network'
+            : 'server'
+        );
+      }
       if (error instanceof LegacyProjectTransportError) {
         if (error.status)
           throw new ApiError(

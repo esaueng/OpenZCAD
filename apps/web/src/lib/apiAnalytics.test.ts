@@ -122,6 +122,9 @@ describe('project download size observations', () => {
       await expect(reader.loadProject(projectId)).rejects.toBe(offline);
     }
     expect(trackSize).not.toHaveBeenCalled();
+    expect(trackDetail).toHaveBeenCalledTimes(2);
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'network');
   });
 
   it('preserves a response stream interruption as the original network error', async () => {
@@ -137,6 +140,8 @@ describe('project download size observations', () => {
       )
     );
     await expect(api.loadProject(projectId)).rejects.toBe(interrupted);
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'network');
   });
 
   it('keeps asset HTTP failures distinct from invalid project bytes', async () => {
@@ -169,6 +174,9 @@ describe('project download size observations', () => {
       status: 503,
       code: undefined
     });
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'server');
+    vi.mocked(trackDetail).mockClear();
     vi.mocked(desktopFetch).mockResolvedValueOnce(
       new Response(
         encodeE2eeFrame(
@@ -182,6 +190,9 @@ describe('project download size observations', () => {
       status: 503,
       code: 'PROJECT_DOCUMENT_UNAVAILABLE'
     });
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    // Unavailable storage remains the existing fixed server bucket.
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'server');
   });
 
   it('opens a raw legacy frame in the browser and measures its consumed bytes', async () => {
