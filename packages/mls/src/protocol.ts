@@ -33,6 +33,7 @@ const METHODS = new Set<string>([
   'buildInfo',
   'leafCertificationPayload',
   'decodeEpochRecord',
+  'verifyEpochAuthority',
   'generate',
   'open',
   'seal',

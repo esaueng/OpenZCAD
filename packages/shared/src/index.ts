@@ -27,6 +27,7 @@ export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
 export * from './e2ee-project-groups';
+export * from './e2ee-project-authority';
 export * from './e2ee-project-documents';
 export * from './e2ee-content-blobs';
 export * from './e2ee-collaboration';

@@ -37,6 +37,9 @@ class Reader {
   get done(): boolean {
     return this.offset === this.bytes.length;
   }
+  get position(): number {
+    return this.offset;
+  }
 
   private take(length: number): Uint8Array {
     if (this.offset + length > this.bytes.length)
@@ -135,6 +138,16 @@ export function parseGroupInfoContext(groupInfo: Uint8Array): EpochContext {
   if (reader.uint(2) !== 1) fail('Not an MLS 1.0 message.');
   if (reader.uint(2) !== WIRE_FORMAT_GROUP_INFO) fail('Not a GroupInfo.');
   return readGroupContext(reader);
+}
+
+/** Unverified framing helper; authority comes from the provenance of input. */
+export function groupInfoContextBytes(groupInfo: Uint8Array): Uint8Array {
+  const reader = new Reader(groupInfo);
+  if (reader.uint(2) !== 1 || reader.uint(2) !== WIRE_FORMAT_GROUP_INFO)
+    fail('Not an MLS GroupInfo.');
+  const start = reader.position;
+  readGroupContext(reader);
+  return groupInfo.slice(start, reader.position);
 }
 
 function readGroupContext(reader: Reader): EpochContext {

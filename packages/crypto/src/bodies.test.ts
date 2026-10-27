@@ -38,6 +38,7 @@ import {
   signShareLinkTombstone,
   type ShareLinkSet
 } from './share-links';
+import { signMlsAuthorityManifest } from './mls-authority';
 
 function throwsWith(run: () => unknown, code: E2eeErrorCode): void {
   expect(run).toThrow(
@@ -701,6 +702,44 @@ describe('key archive bodies', () => {
     epochRecord: patternBytes(300, 0x60),
     epochAuthenticator: patternBytes(32, 0x80)
   };
+
+  it('carries signed generation roots in version 2 while preserving legacy archives', async () => {
+    const signer = await generateSigningKeyPair();
+    const authorityManifest = await signMlsAuthorityManifest(
+      signer.privateKey,
+      {
+        projectId: 'project_test',
+        ownerUserId: 'owner',
+        ownerIdentityKeyHash: '1'.repeat(64),
+        roots: [{ generation: 0, keyEpochBase: 0, groupInfo: 'AA' }],
+        checkpoint: { generation: 0, keyEpoch: 3, groupInfo: 'AQ' },
+        signerDeviceId: 'owner_laptop'
+      }
+    );
+    const encoded = encodeKeyArchiveBody(
+      { ...archive, authorityManifest },
+      header('key-archive')
+    );
+    expect(decodeKeyArchiveBody(encoded, header('key-archive'))).toEqual({
+      ...archive,
+      authorityManifest
+    });
+    const json = JSON.parse(text(encoded)) as Record<string, unknown>;
+    expect(json.version).toBe(2);
+    const { authorityManifest: _, ...missing } = json;
+    for (const value of [
+      missing,
+      { ...json, version: 1 },
+      { ...json, version: 3 },
+      { ...json, authorityManifest: null }
+    ])
+      expect(() =>
+        decodeKeyArchiveBody(
+          bytesOf(JSON.stringify(value)),
+          header('key-archive')
+        )
+      ).toThrow();
+  });
 
   it('round-trips with base64url bytes', () => {
     const encoded = encodeKeyArchiveBody(archive, header('key-archive'));

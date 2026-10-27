@@ -47,6 +47,10 @@ import {
 } from '../../apps/web/src/lib/e2ee/mls/sessionStore';
 import type { CertifyingDevice } from '../../apps/web/src/lib/e2ee/mls/certify';
 import {
+  memoryProjectAuthorityStore,
+  type ProjectAuthorityStore
+} from '../../apps/web/src/lib/e2ee/projectAuthorityStore';
+import {
   createEncryptedDocumentsApi,
   type EncryptedDocumentsApi
 } from '../../apps/web/src/lib/e2ee/encryptedDocumentsApi';
@@ -400,7 +404,10 @@ export function newServer(
 }
 
 /** Every tracked migration before `number`, as `pnpm deploy:beta` may leave D1. */
-export function databaseBefore(number: number): DatabaseSync {
+export function databaseBefore(
+  number: number,
+  options: { authority?: boolean } = {}
+): DatabaseSync {
   const dir = new URL('../../apps/web/migrations/', import.meta.url);
   const db = new DatabaseSync(':memory:');
   for (const file of readdirSync(dir)
@@ -411,6 +418,13 @@ export function databaseBefore(number: number): DatabaseSync {
     .sort()) {
     db.exec(readFileSync(new URL(file, dir), 'utf8'));
   }
+  // Exercise an older optional feature schema with the current MLS trust
+  // format's independent storage dependency present. Opt-in is explicit at
+  // each fixture; missing-authority migration tests keep the exact old schema.
+  if (options.authority && number > 32 && number <= 44)
+    db.exec(
+      readFileSync(new URL('0044_e2ee_project_authority.sql', dir), 'utf8')
+    );
   return db;
 }
 
@@ -454,6 +468,8 @@ export interface Device {
 }
 
 export interface DeviceOptions {
+  revocations?: ProjectGroupContext['revocations'];
+  authority?: ProjectAuthorityStore;
   mls?: MlsSessionStore;
   pins?: VersionPinStore;
   cutoffs?: Map<string, VersionCutoff>;
@@ -524,6 +540,8 @@ export function device(
   const fetcher = (path: string, init?: RequestInit) =>
     result.fetcher(path, init);
   result.groups = {
+    revocations: options.revocations,
+    authorityStore: options.authority ?? memoryProjectAuthorityStore(),
     api: createProjectGroupsApi(fetcher),
     sessions,
     account: {
@@ -623,6 +641,7 @@ export const reload = (srv: Server, old: Device, options: DeviceOptions = {}) =>
   device(srv, old.account, old.deviceId, {
     mls: old.mls,
     pins: old.pins,
+    authority: old.groups.authorityStore,
     ...options
   });
 

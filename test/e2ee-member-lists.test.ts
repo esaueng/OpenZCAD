@@ -24,6 +24,7 @@ import {
   postOwnEpochKeys
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import { rememberExpectedProjectOwner } from '../apps/web/src/lib/e2ee/projectAuthority';
 import {
   OTHER,
   OWNER,
@@ -67,6 +68,7 @@ async function sharedWithEdit() {
   });
   // The Welcome's stand-in (slice 5-3): epoch 1's keys, handed over.
   const member = device(srv, other, 'other_laptop', { members: [owner] });
+  await rememberExpectedProjectOwner(member.groups, projectId, owner.list);
   await postOwnEpochKeys(
     member.groups,
     projectId,
@@ -194,7 +196,8 @@ describe('co-members’ device lists from contacts (5-1 into 5-2)', () => {
     await expect(d.store.loadProject(projectId)).rejects.toSatisfy(
       (error: unknown) =>
         error instanceof EncryptedProjectIntegrityError &&
-        /not signed by a member/.test(error.message)
+        error.reason === 'authority' &&
+        /signed by a device no member’s list ever certified/.test(error.message)
     );
     expect(inspected.at(-1)).toEqual([]);
   });

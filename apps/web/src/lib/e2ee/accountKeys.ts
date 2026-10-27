@@ -2039,6 +2039,8 @@ export async function forgetThisDevice(ctx: E2eeContext): Promise<void> {
     requireActiveKeyContext(ctx);
     await (await import('./shareWorkStore')).shareWorkStore().deleteAccount(ctx.userId);
     requireActiveKeyContext(ctx);
+    await (await import('./projectAuthorityStore')).projectAuthorityStore().deleteAccount(ctx.userId);
+    requireActiveKeyContext(ctx);
     await ctx.store.deleteDevice(ctx.userId);
   });
 }

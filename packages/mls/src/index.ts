@@ -1,8 +1,8 @@
 /**
  * ADR-024's MLS group-key layer (roadmap L11): mls-rs 0.56 with the
  * RustCrypto provider, cipher suite 0x0002, compiled to WASM and run in a
- * lazily started module Worker. Nothing in the application imports this
- * package yet; Phases 3 and 5 wire it in.
+ * lazily started module Worker. The browser's e2ee/mls integration uses it
+ * for live sessions, joins and stateless historical authorization.
  *
  * The test hook `insecureSkipSendChecksForTests` and the in-process engine
  * are deliberately not exported here.

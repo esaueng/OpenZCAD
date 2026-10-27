@@ -10,6 +10,8 @@ import type {
   DeviceDirectory,
   EpochChange,
   EpochRecord,
+  EpochAuthority,
+  EpochAuthorityRequest,
   GroupInfoSummary,
   LeafInit,
   JoinArchive,
@@ -55,6 +57,12 @@ export class Mls {
 
   decodeEpochRecord(record: Uint8Array): Promise<EpochRecord> {
     return this.api.decodeEpochRecord(record);
+  }
+
+  verifyEpochAuthority(
+    request: EpochAuthorityRequest
+  ): Promise<EpochAuthority> {
+    return this.api.verifyEpochAuthority(request);
   }
 
   /**

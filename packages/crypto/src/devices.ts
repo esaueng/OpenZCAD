@@ -528,7 +528,9 @@ export type StatementKind =
   | 'share key wrap'
   | 'share link forget'
   | 'share link registration'
-  | 'project invitation';
+  | 'project invitation'
+  | 'MLS authority manifest'
+  | 'MLS authority trust';
 
 /** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
 export async function signStatement(
@@ -1772,6 +1774,7 @@ export async function verifyRevocationCutoffs(
 // --- Solo group resets (decision D9) ---------------------------------------
 
 export const GROUP_RESET_VERSION_1 = 1;
+export const GROUP_RESET_VERSION_2 = 2;
 
 /**
  * What the identity key signs to replace a solo project's MLS group when
@@ -1783,6 +1786,8 @@ export const GROUP_RESET_VERSION_1 = 1;
  * A collaborator's browser that sees one excluding them reports the fork.
  */
 export interface GroupReset {
+  /** Version 2 binds the independently approved old MLS roots and state. */
+  readonly authorityHash?: Uint8Array;
   readonly userId: string;
   /** The identity generation of the signing identity; 1 for the first. */
   readonly generation: number;
@@ -1811,6 +1816,8 @@ function checkGroupReset(value: GroupReset, code: E2eeErrorCode): void {
     fail('entrySequence must be a u32');
   }
   if (!isHash(value.entryHash)) fail('entryHash must be 32 bytes');
+  if (value.authorityHash !== undefined && !isHash(value.authorityHash))
+    fail('authorityHash must be 32 bytes');
   if (!isEnvelopeId(value.projectId)) fail('Reset projectId is not an id');
   // The new group's generation is one more, so the old one is below u32 max.
   if (!isUint(value.priorGroupGeneration, MAX_U32 - 1)) {
@@ -1832,15 +1839,18 @@ function checkGroupReset(value: GroupReset, code: E2eeErrorCode): void {
  */
 export function encodeGroupReset(value: GroupReset): Bytes {
   checkGroupReset(value, 'invalid-argument');
-  const writer = new ByteWriter().bytes(RESET_MAGIC).u8(GROUP_RESET_VERSION_1);
+  const writer = new ByteWriter()
+    .bytes(RESET_MAGIC)
+    .u8(value.authorityHash ? GROUP_RESET_VERSION_2 : GROUP_RESET_VERSION_1);
   writeId(writer, value.userId);
   writer.u32(value.generation).u32(value.entrySequence).bytes(value.entryHash);
   writeId(writer, value.projectId);
-  return writer
+  writer
     .u32(value.priorGroupGeneration)
     .u64(value.priorKeyEpoch)
-    .u64(value.issuedAt)
-    .finish();
+    .u64(value.issuedAt);
+  if (value.authorityHash) writer.bytes(value.authorityHash);
+  return writer.finish();
 }
 
 /** Decodes canonical reset bytes; anything else is `malformed`. */
@@ -1853,7 +1863,7 @@ export function decodeGroupReset(bytes: Uint8Array): GroupReset {
     throw new E2eeError('malformed', 'Not a group reset statement');
   }
   const version = reader.u8();
-  if (version !== GROUP_RESET_VERSION_1) {
+  if (version !== GROUP_RESET_VERSION_1 && version !== GROUP_RESET_VERSION_2) {
     throw new E2eeError(
       'unsupported-version',
       `Group reset version ${version} is not supported`
@@ -1872,7 +1882,10 @@ export function decodeGroupReset(bytes: Uint8Array): GroupReset {
     projectId,
     priorGroupGeneration: reader.u32(),
     priorKeyEpoch: reader.u64(),
-    issuedAt: reader.u64()
+    issuedAt: reader.u64(),
+    ...(version === GROUP_RESET_VERSION_2
+      ? { authorityHash: copyBytes(reader.bytes(HASH_BYTES)) }
+      : {})
   };
   reader.end();
   checkGroupReset(value, 'malformed');

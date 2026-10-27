@@ -14,6 +14,8 @@ import type {
   DeviceDirectory,
   EpochChange,
   EpochRecord,
+  EpochAuthority,
+  EpochAuthorityRequest,
   GroupInfoSummary,
   LeafInfo,
   LeafInit,
@@ -43,6 +45,7 @@ export interface EngineApi {
     certifiedEpoch: number
   ): Uint8Array;
   decodeEpochRecord(record: Uint8Array): EpochRecord;
+  verifyEpochAuthority(request: EpochAuthorityRequest): EpochAuthority;
   generate(init: LeafInit): number;
   open(sealed: Uint8Array, key: CryptoKey, projectId: string): Promise<number>;
   seal(id: number, key: CryptoKey): Promise<Uint8Array>;
@@ -259,6 +262,7 @@ export class MlsEngine implements EngineApi {
       ratchetTree: string;
       commit: string;
       proposals: string[];
+      members: LeafJson[];
     }>(this.run(() => this.wasm.decodeEpochRecord(record)));
     return {
       version: json.version,
@@ -266,7 +270,37 @@ export class MlsEngine implements EngineApi {
       groupContext: fromHex(json.groupContext),
       ratchetTree: fromHex(json.ratchetTree),
       commit: fromHex(json.commit),
-      proposals: json.proposals.map(fromHex)
+      proposals: json.proposals.map(fromHex),
+      members: json.members.map(leaf)
+    };
+  }
+
+  verifyEpochAuthority(request: EpochAuthorityRequest): EpochAuthority {
+    const result = parse<{
+      epoch: number;
+      roles: RolesJson;
+      members: LeafJson[];
+      groupContext: string;
+      ratchetTree: string;
+    }>(
+      this.run(() =>
+        this.wasm.verifyEpochAuthority(
+          request.projectId,
+          request.anchor,
+          JSON.stringify(request.records.map(toHex)),
+          request.targetRecord,
+          request.ownerUserId,
+          directoryJson(request.directory),
+          request.authenticatedGroupInfo ?? new Uint8Array()
+        )
+      )
+    );
+    return {
+      epoch: result.epoch,
+      roles: roles(result.roles)!,
+      members: result.members.map(leaf),
+      groupContext: fromHex(result.groupContext),
+      ratchetTree: fromHex(result.ratchetTree)
     };
   }
 

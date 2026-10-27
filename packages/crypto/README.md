@@ -1,9 +1,8 @@
 # @openzcad/crypto
 
-End-to-end encryption primitives for ADR-024, end-to-end encrypted projects
-(roadmap L11, Phase 2). The ADR and its L11 roadmap row are proposed in
-[esaueng/OpenZCAD#743](https://github.com/esaueng/OpenZCAD/pull/743); this
-reference becomes a link to `docs/adrs/` once that lands. WebCrypto and web streams only, with no
+End-to-end encryption primitives for
+[ADR-024](../../docs/adrs/ADR-024-end-to-end-encrypted-projects.md),
+end-to-end encrypted projects (roadmap L11). WebCrypto and web streams only, with no
 dependencies, so the same code runs in browsers, Web Workers, the Tauri
 WKWebView and Node 20+. Phase 3's account keys (device lists, unlock targets,
 device approval) are its first application use; Phase 4 adds the project
@@ -453,6 +452,11 @@ revokes a device. Phase 4 stores and enforces them. A solo group reset
 signature`; decision D9) is signed by the identity key and names the
 replaced group's generation and newest key epoch, so the new group's key
 epochs continue after it (decision D10).
+Version 2 appends a 32-byte `authorityHash`, binding the prior immutable
+MLS roots and exact terminal state approved by that identity. Omitting it
+preserves version-1 bytes. Reset roots carry that signed proof and the
+previous GroupInfo; ordinary historical reads do not trust a retired
+device's unpinned record without the identity's explicit approval.
 
 ## Contacts lists
 

@@ -1005,7 +1005,7 @@ describe('the plaintext route’s recipient rules', () => {
 
 describe('without migration 0038', () => {
   it('keeps ordinary invitations and Commits working, and refuses the encrypted routes', async () => {
-    const { srv, mailbox } = server(databaseBefore(38));
+    const { srv, mailbox } = server(databaseBefore(38, { authority: true }));
     expect(
       rows(
         srv,

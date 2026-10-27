@@ -195,9 +195,7 @@ function everythingStored(srv: Server): string {
 }
 
 /** An owner's encrypted project and the laptop that created it. */
-async function encryptedProject(
-  options: Parameters<typeof device>[3] = {}
-) {
+async function encryptedProject(options: Parameters<typeof device>[3] = {}) {
   const srv = server();
   const laptop = device(srv, owner, 'owner_laptop', options);
   const { document } = await createEncrypted(laptop);
@@ -207,18 +205,27 @@ async function encryptedProject(
 // --- Archive, write and read ------------------------------------------------
 
 describe('content blobs', () => {
-  it.each([4099, 100_000])('keeps encrypted upload transport and version writes available under the plaintext freeze (part bytes %i)', async (partBytes) => {
-    const { srv, laptop, projectId, document } = await encryptedProject({ partBytes, chunkSize: 1000 });
-    srv.env.E2EE_PLAINTEXT_FROZEN = 'true';
-    const picture = noise(20_000, 17);
-    const blobId = await laptop.blobs.archive(projectId, pictureInput(picture));
-    const step = stepBytes('encrypted-after-freeze');
-    const source = await laptop.blobs.archive(projectId, stepInput(step));
-    await save(laptop, withImport(document, source, step), document.version);
-    expect(await laptop.blobs.read(projectId, blobId)).toEqual(picture);
-    expect(await laptop.blobs.read(projectId, source)).toEqual(step);
-    expect(rows(srv, 'SELECT * FROM artifacts')).toEqual([]);
-  });
+  it.each([4099, 100_000])(
+    'keeps encrypted upload transport and version writes available under the plaintext freeze (part bytes %i)',
+    async (partBytes) => {
+      const { srv, laptop, projectId, document } = await encryptedProject({
+        partBytes,
+        chunkSize: 1000
+      });
+      srv.env.E2EE_PLAINTEXT_FROZEN = 'true';
+      const picture = noise(20_000, 17);
+      const blobId = await laptop.blobs.archive(
+        projectId,
+        pictureInput(picture)
+      );
+      const step = stepBytes('encrypted-after-freeze');
+      const source = await laptop.blobs.archive(projectId, stepInput(step));
+      await save(laptop, withImport(document, source, step), document.version);
+      expect(await laptop.blobs.read(projectId, blobId)).toEqual(picture);
+      expect(await laptop.blobs.read(projectId, source)).toEqual(step);
+      expect(rows(srv, 'SELECT * FROM artifacts')).toEqual([]);
+    }
+  );
 
   it('stores an imported STEP file encrypted and opens it on another device', async () => {
     const { srv, laptop, projectId, document } = await encryptedProject();
@@ -985,7 +992,10 @@ describe('without migration 0034', () => {
   }
 
   it('keeps ordinary uploads, imports, downloads, purge and erasure working', async () => {
-    const srv = newServer([owner, other], databaseBefore(34));
+    const srv = newServer(
+      [owner, other],
+      databaseBefore(34, { authority: true })
+    );
     const created = await srv.call('POST', '/api/projects', {
       body: { name: 'Plain', initialDocument: initialDocument('Plain') }
     });
@@ -1034,7 +1044,10 @@ describe('without migration 0034', () => {
   });
 
   it('answers 503 on the blob routes and keeps refusing blobs in versions', async () => {
-    const srv = newServer([owner, other], databaseBefore(34));
+    const srv = newServer(
+      [owner, other],
+      databaseBefore(34, { authority: true })
+    );
     const laptop = device(srv, owner, 'owner_laptop');
     const { document } = await createEncrypted(laptop);
     const projectId = document.projectId;
@@ -1085,7 +1098,7 @@ describe('without migration 0034', () => {
   });
 
   it('notices the migration once it lands, without a redeploy', async () => {
-    const db = databaseBefore(34);
+    const db = databaseBefore(34, { authority: true });
     const srv = newServer([owner, other], db);
     const laptop = device(srv, owner, 'owner_laptop');
     const { document } = await createEncrypted(laptop);

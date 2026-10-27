@@ -1,0 +1,319 @@
+import { beforeAll, expect, it, vi } from 'vitest';
+import {
+  decodeMlsAuthorityTrust,
+  fromBase64Url,
+  signMlsAuthorityTrust,
+  signMlsAuthorityManifest,
+  signRevocationCutoffs,
+  verifyRevocationCutoffs,
+  toBase64Url,
+  type MlsAuthorityTrust,
+  type RevocationCutoffs
+} from '@openzcad/crypto';
+import type { E2eeProjectAuthorityRecord } from '@openzcad/shared';
+import { loadProjectAuthority } from '../apps/web/src/lib/e2ee/projectAuthority';
+import { E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
+import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
+import {
+  commitProjectGroup,
+  epochAuthority
+} from '../apps/web/src/lib/e2ee/projectGroups';
+import { confirmKeySessionEnded } from '../apps/web/src/lib/e2ee/keySession';
+import {
+  createEncrypted,
+  device,
+  makeAccount,
+  newServer,
+  OWNER,
+  type Account,
+  type DeviceOptions
+} from './support/e2ee-documents';
+
+let account: Account;
+beforeAll(async () => {
+  account = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+});
+
+async function setup(owner = account, options: DeviceOptions = {}) {
+  const srv = newServer([owner]);
+  const laptop = device(srv, owner, 'owner_laptop', options);
+  const { document } = await createEncrypted(laptop);
+  const projectId = document.projectId;
+  const record = (await laptop.groups.api.authority!(projectId)).authority!;
+  return { srv, laptop, projectId, record };
+}
+
+async function reseal(
+  record: E2eeProjectAuthorityRecord,
+  changes: Partial<MlsAuthorityTrust>,
+  owner = account
+): Promise<E2eeProjectAuthorityRecord> {
+  const value = {
+    ...decodeMlsAuthorityTrust(fromBase64Url(record.record)),
+    ...changes
+  };
+  const sealed = await signMlsAuthorityTrust(
+    owner.accountKey,
+    owner.devices.get(value.signerDeviceId)!.signing.privateKey,
+    value
+  );
+  return {
+    sequence: value.sequence,
+    accountKeyGeneration: value.accountKeyGeneration,
+    accountKeySequence: value.accountKeySequence,
+    signerDeviceId: value.signerDeviceId,
+    record: toBase64Url(sealed.record),
+    recordMac: toBase64Url(sealed.recordMac),
+    signature: toBase64Url(sealed.signature)
+  };
+}
+
+it('transfers independent roots to a cold D4 reader without creating a leaf or session', async () => {
+  const { srv, projectId } = await setup();
+  const reader = device(srv, account, null);
+  expect(
+    (await reader.groups.authorityStore!.read(OWNER, projectId)).owner
+  ).toBeNull();
+  const authority = await epochAuthority(reader.groups, projectId, 0);
+  expect(authority.members.map((member) => member.deviceId)).toEqual([
+    'owner_laptop'
+  ]);
+  expect(authority.roles.users).toEqual([
+    { userId: OWNER, role: 'owner', since: 0 }
+  ]);
+  expect(
+    (await reader.groups.authorityStore!.read(OWNER, projectId)).owner?.userId
+  ).toBe(OWNER);
+  expect(reader.sessions.cachedSessions).toBe(0);
+});
+
+it('refuses withdrawal and same-sequence forks even with a valid account MAC and certified sibling signature', async () => {
+  const { srv, projectId, record } = await setup();
+  const reader = device(srv, account, null);
+  await loadProjectAuthority(reader.groups, projectId);
+  let next: E2eeProjectAuthorityRecord | null = null;
+  reader.answer = async (path, _init, response) =>
+    path.endsWith('/authority') ? Response.json({ authority: next }) : response;
+  await expect(loadProjectAuthority(reader.groups, projectId)).rejects.toThrow(
+    /withdrew/
+  );
+  next = await reseal(record, { signerDeviceId: 'owner_desktop' });
+  await expect(loadProjectAuthority(reader.groups, projectId)).rejects.toThrow(
+    /rollback or fork/
+  );
+  expect(
+    (await reader.groups.authorityStore!.read(OWNER, projectId)).accepted
+      ?.authority.record
+  ).toBe(record.record);
+});
+
+it('persists the sequence pin across clients and refuses a server rollback', async () => {
+  const { srv, laptop, projectId, record } = await setup();
+  const reader = device(srv, account, null);
+  const advanced = await reseal(record, {
+    sequence: 2,
+    signerDeviceId: 'owner_desktop'
+  });
+  await laptop.groups.api.saveAuthority!(projectId, {
+    ...advanced,
+    expectedSequence: 1
+  });
+  await loadProjectAuthority(reader.groups, projectId);
+  const reloaded = device(srv, account, null, {
+    authority: reader.groups.authorityStore
+  });
+  reloaded.answer = async (path, _init, response) =>
+    path.endsWith('/authority')
+      ? Response.json({ authority: record })
+      : response;
+  await expect(
+    loadProjectAuthority(reloaded.groups, projectId)
+  ).rejects.toThrow(/rollback or fork/);
+  expect(
+    (await reloaded.groups.authorityStore!.read(OWNER, projectId)).accepted
+      ?.authority.sequence
+  ).toBe(2);
+});
+
+it('does not bootstrap owner intent from an absent record, a forged MAC, or an unverified manifest alone', async () => {
+  const { srv, projectId, record } = await setup();
+  for (const replacement of [null, { ...record, recordMac: 'A'.repeat(43) }]) {
+    const reader = device(srv, account, null);
+    reader.answer = async (path, _init, response) =>
+      path.endsWith('/authority')
+        ? Response.json({ authority: replacement })
+        : response;
+    await expect(
+      epochAuthority(reader.groups, projectId, 0)
+    ).rejects.toMatchObject({ code: 'archive-invalid' });
+    expect(
+      (await reader.groups.authorityStore!.read(OWNER, projectId)).owner
+    ).toBeNull();
+    expect(reader.sessions.cachedSessions).toBe(0);
+  }
+});
+
+it('reconciles a lost authority acknowledgement after a confirmed MLS Commit', async () => {
+  const { laptop, projectId } = await setup();
+  let lost = 0;
+  laptop.answer = async (path, init, response) => {
+    if (path.endsWith('/authority') && init.method === 'POST' && lost++ === 0)
+      throw new TypeError('lost acknowledgement');
+    return response;
+  };
+  expect(await commitProjectGroup(laptop.groups, projectId)).toEqual({
+    epoch: 1,
+    keyEpoch: 1
+  });
+  const accepted = await loadProjectAuthority(laptop.groups, projectId);
+  expect(accepted?.value.latestKeyEpoch).toBe(1);
+  expect(accepted?.value.sequence).toBe(2);
+  expect(lost).toBe(1);
+});
+
+it('lets a live writer repair a retired sibling record using existing independent roots', async () => {
+  const owner = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+  const cutoffs: RevocationCutoffs[] = [];
+  const { srv, laptop, projectId, record } = await setup(owner, {
+    revocations: { verified: async () => cutoffs }
+  });
+  const sibling = await reseal(
+    record,
+    { sequence: 2, signerDeviceId: 'owner_desktop' },
+    owner
+  );
+  await laptop.groups.api.saveAuthority!(projectId, {
+    ...sibling,
+    expectedSequence: 1
+  });
+  await owner.revoke(srv.db, 'owner_desktop');
+  const entry = owner.list.entries.at(-1)!;
+  cutoffs.push(
+    await verifyRevocationCutoffs(
+      await signRevocationCutoffs(owner.identityPrivateKey, {
+        userId: OWNER,
+        generation: 1,
+        entrySequence: entry.entry.sequence,
+        entryHash: entry.hash,
+        issuedAt: Date.now(),
+        cutoffs: [{ projectId, cutoffEpoch: 1 }]
+      }),
+      owner.list,
+      { generation: 1 }
+    )
+  );
+  const cold = device(srv, owner, null);
+  await expect(loadProjectAuthority(cold.groups, projectId)).rejects.toThrow(
+    /currently certified/
+  );
+  expect(
+    (await cold.groups.authorityStore!.read(OWNER, projectId)).owner
+  ).toBeNull();
+  await commitProjectGroup(laptop.groups, projectId);
+  const restored = await loadProjectAuthority(cold.groups, projectId);
+  expect(restored?.record.signerDeviceId).toBe('owner_laptop');
+  expect(restored?.value.latestKeyEpoch).toBe(1);
+  expect(
+    (await epochAuthority(cold.groups, projectId, 1)).members.map(
+      (member) => member.deviceId
+    )
+  ).toEqual(['owner_laptop']);
+});
+
+it('refuses a signed new generation that reassigns an already accepted key epoch', async () => {
+  const { laptop, projectId } = await setup();
+  await commitProjectGroup(laptop.groups, projectId);
+  await commitProjectGroup(laptop.groups, projectId);
+  const current = (await laptop.groups.api.authority!(projectId)).authority!;
+  const value = decodeMlsAuthorityTrust(fromBase64Url(current.record));
+  const trusted = (await loadProjectAuthority(laptop.groups, projectId))!
+    .manifest;
+  const signed = await signMlsAuthorityManifest(
+    account.devices.get('owner_laptop')!.signing.privateKey,
+    {
+      ...trusted,
+      roots: [
+        ...trusted.roots,
+        {
+          ...trusted.roots[0]!,
+          generation: 1,
+          keyEpochBase: 1,
+          previousGroupInfo: value.latestGroupInfo,
+          resetAuthority: { statement: 'AA', signature: 'AA' }
+        }
+      ],
+      checkpoint: null
+    }
+  );
+  const replacement = await reseal(current, {
+    sequence: current.sequence + 1,
+    latestKeyEpoch: 3,
+    manifest: {
+      statement: toBase64Url(signed.statement),
+      signature: toBase64Url(signed.signature)
+    }
+  });
+  laptop.answer = async (path, _init, response) =>
+    path.endsWith('/authority')
+      ? Response.json({ authority: replacement })
+      : response;
+  await expect(loadProjectAuthority(laptop.groups, projectId)).rejects.toThrow(
+    /already authenticated/
+  );
+  expect(value.latestKeyEpoch).toBe(2);
+});
+
+it.each(['authority', 'archives'] as const)(
+  'keeps a transient %s read retryable instead of reporting a missing author leaf',
+  async (method) => {
+    const { srv, projectId } = await setup();
+    const reader = device(srv, account, null);
+    const outage = new E2eeApiError(
+      503,
+      'Temporary authority outage',
+      'E2EE_UNAVAILABLE'
+    );
+    const call = vi
+      .spyOn(reader.groups.api, method)
+      .mockRejectedValueOnce(outage);
+    const refused = await reader.store
+      .loadProject(projectId)
+      .catch((error: unknown) => error);
+    expect(call).toHaveBeenCalled();
+    expect(refused).not.toBeInstanceOf(EncryptedProjectIntegrityError);
+    expect(refused).toMatchObject({
+      status: 503,
+      code: 'E2EE_UNAVAILABLE',
+      message: outage.message
+    });
+    call.mockRestore();
+    expect((await reader.store.loadProject(projectId)).projectId).toBe(
+      projectId
+    );
+  }
+);
+
+it.each([
+  new TypeError('Failed to fetch'),
+  new DOMException('The session ended', 'AbortError')
+])('preserves a transport/session refusal: %s', async (outage) => {
+  const { srv, projectId } = await setup();
+  const reader = device(srv, account, null);
+  vi.spyOn(reader.groups.api, 'authority').mockRejectedValueOnce(outage);
+  await expect(reader.store.loadProject(projectId)).rejects.toBe(outage);
+});
+
+it('does not persist authority returned after key-session teardown', async () => {
+  const { srv, projectId } = await setup();
+  const reader = device(srv, account, null);
+  reader.answer = async (path, _init, response) => {
+    if (path.endsWith('/authority')) confirmKeySessionEnded();
+    return response;
+  };
+  await expect(
+    loadProjectAuthority(reader.groups, projectId)
+  ).rejects.toMatchObject({ name: 'AbortError' });
+  expect(
+    (await reader.groups.authorityStore!.read(OWNER, projectId)).accepted
+  ).toBeNull();
+});

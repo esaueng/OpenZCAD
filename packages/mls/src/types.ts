@@ -215,4 +215,28 @@ export interface EpochRecord {
   commit: Uint8Array;
   /** MLSMessage proposals the Commit applied by reference. */
   proposals: Uint8Array[];
+  /** Unverified hints for checking embedded certifications before replay. */
+  members: LeafInfo[];
+}
+
+export interface EpochAuthorityRequest {
+  projectId: string;
+  /** Authenticated independently by the application, including its owner. */
+  anchor: Uint8Array;
+  records: Uint8Array[];
+  targetRecord: Uint8Array;
+  ownerUserId: string;
+  directory: DeviceDirectory;
+  /** Independently MAC/signature-authenticated account state, never an archive hint.
+   * Records must extend through it as well as the requested epoch. Unknown-time
+   * revocations are historical only within this exact verified prefix. */
+  authenticatedGroupInfo?: Uint8Array;
+}
+
+export interface EpochAuthority {
+  epoch: number;
+  roles: ProjectRoles;
+  members: LeafInfo[];
+  groupContext: Uint8Array;
+  ratchetTree: Uint8Array;
 }

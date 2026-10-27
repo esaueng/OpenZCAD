@@ -63,6 +63,7 @@ import {
   type ProjectGroupState
 } from './projectGroups';
 import type { InvitationStore } from './invitationStore';
+import { rememberExpectedProjectOwner } from './projectAuthority';
 
 // --- Context ----------------------------------------------------------------
 
@@ -685,6 +686,23 @@ export async function publishInvitationKeyPackages(
   const userId = ctx.groups.account.userId;
   const published: string[] = [];
   for (const { record } of ready) {
+    // Callers may supply a cached listing. Recheck its signed, recipient-bound
+    // intent and current contact pin before persisting the independent owner.
+    const owner = await ctx.people.inspect(record.inviterUserId);
+    if (owner?.status !== 'verified' || !owner.list || !ctx.email) {
+      throw new InvitationError(
+        'not-verified',
+        'Verify the project owner and invitation recipient before joining.'
+      );
+    }
+    await verifiedStatement(record, owner.list, now(ctx), {
+      inviteeEmail: ctx.email
+    });
+    await rememberExpectedProjectOwner(
+      ctx.groups,
+      record.projectId,
+      owner.list
+    );
     const ref = {
       userId,
       deviceId: device.deviceId,

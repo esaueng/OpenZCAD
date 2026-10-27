@@ -1073,11 +1073,9 @@ library's P-256 path is weaker.
 ### Decision
 
 Decided 2026-10-19, on the evidence of the library spike
-([PR #748](https://github.com/esaueng/OpenZCAD/pull/748)). The report and its
-re-runnable harness are not on main yet; they land with that PR as
-`docs/plans/mls-spike-2026-10.md` and `spikes/mls/`. Until then, the evidence
-this decision rests on is
-[the report at commit 1e65de4a](https://github.com/esaueng/OpenZCAD/blob/1e65de4a4b9646bcfd83d2a8a34f3c8ef116d74b/docs/plans/mls-spike-2026-10.md).
+([PR #748](https://github.com/esaueng/OpenZCAD/pull/748)). The merged
+[report](../plans/mls-spike-2026-10.md) and re-runnable harness in
+`spikes/mls/` preserve the evidence for that decision.
 
 - **Library.** `mls-rs` 0.56 with its RustCrypto provider
   (`mls-rs-crypto-rustcrypto`), built to WASM and run in a lazily loaded
@@ -1128,8 +1126,39 @@ this decision rests on is
   Callers supply either the initial GroupInfo and the complete archive,
   or an owner checkpoint (a GroupInfo of epoch K signed by a leaf its own
   roles list as owner and that a currently certified device certifies)
-  and exactly the records after K; the app does not produce checkpoints
-  yet (slice 8-C5b).
+  and exactly the records after K. The app produces an owner checkpoint
+  after at most 256 epochs when the owner next commits, and refreshes it
+  after an owner-device revocation (slice 8-C5b). Editor Commits carry the
+  owner's manifest unchanged; a history beyond the verifier's bounds needs
+  a newer owner checkpoint.
+
+  Historical document authority uses the same policy replay without a live
+  leaf, including read-only approved devices. It verifies the exact target
+  roster, roles and tree; device certification or a registry entry alone
+  cannot authorize a document, retained revision, or intermediate log entry.
+  Replay is bounded to 8,192 records and 64 MiB. A missing signed cutoff
+  never permits live admission of the revoked credential. Its unknown-time
+  PSK fence remains enforced on live joins. Historical replay may count
+  that credential only within the exact independently authenticated
+  prefix, which must reach its accepted context and tree before returning
+  any authority. Known signed cutoffs still apply within that prefix.
+
+  An owner-signed manifest binds the project, owner identity fingerprint,
+  generation roots and key-epoch bases, which MLS GroupInfo alone does not
+  bind. New project creation and verified recipient-bound invitations
+  establish owner intent independently. Each account transfers its accepted
+  roots and latest state in an account-key-MACed, certified-device-signed
+  record; local durable pins reject withdrawal, rollback, sequence forks,
+  and reuse of an already accepted key epoch by a new generation. Replay
+  must reach the exact independently authenticated terminal GroupContext;
+  a valid competing transcript with different roles is refused. Historical
+  reads retain the exact requested epoch while verifying through that
+  terminal state. Reset archives retain earlier roots and their terminal
+  GroupInfo. An identity-signed version-2 reset binds a hash of those roots
+  and the exact prior state, permitting solo recovery when the last writer
+  is revoked without trusting that writer's server record on ordinary reads.
+  A live writer with independent roots can also replace a retired writer's
+  record using its authenticated MLS state.
 
   Encrypted archives use provisional admission: a Welcome join can export
   only the key needed to decrypt its archive until verification completes.
@@ -1143,7 +1172,8 @@ this decision rests on is
   Session contents use version 2 and reject version 1, which could retain
   previously unverified cutoffs. The outer sealed envelope is unchanged.
   Rust also rejects a revoked directory device without its cutoff, matching
-  TypeScript. Application integration and checkpoint replay remain later work.
+  TypeScript. Application checkpoint production and historical authorization
+  use these same verified roots and replay rules.
 
   This check authenticates the public transcript and removals. It does not
   re-evaluate historical device-list authorization from today's revocations,

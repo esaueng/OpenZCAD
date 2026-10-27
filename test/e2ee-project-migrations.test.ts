@@ -1217,12 +1217,12 @@ describe('staging beside the plaintext', () => {
     ) => ResumedUpload;
     const prepare = srv.db.prepare.bind(srv.db);
     let failLeaseCheck = false;
-    srv.db.prepare = ((sql: string) => {
+    srv.db.prepare = (sql: string) => {
       if (failLeaseCheck && /m\.lease_expires_at > \?/.test(sql)) {
         throw new Error('D1 is briefly unavailable');
       }
       return prepare(sql);
-    });
+    };
     srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
       const upload = resume(key, id);
       return {
@@ -2314,7 +2314,11 @@ describe('with the flag off or migration 0042 missing', () => {
   });
 
   it('keeps ordinary traffic working with migrations only through 0041', async () => {
-    const srv = newServer([owner, other], databaseBefore(42), MIGRATION_ON);
+    const srv = newServer(
+      [owner, other],
+      databaseBefore(42, { authority: true }),
+      MIGRATION_ON
+    );
     const plain = await namedSave(srv, await plaintextProject(srv), 'Named');
     expect((await autosave(srv, plain)).status).toBe(200);
     await plaintextUpload(srv, plain.projectId, 'bytes');

@@ -2,8 +2,9 @@
 
 The MLS group-key layer of [ADR-024](../../docs/adrs/ADR-024-end-to-end-encrypted-projects.md)
 ("MLS assessment", roadmap L11). Each encrypted project is one MLS group;
-each device of each member is one leaf. Nothing in `apps/` imports this
-package yet: Phases 3 and 5 wire it in.
+each device of each member is one leaf. The browser integrates it through
+`apps/web/src/lib/e2ee/mls/` for live sessions, joins and stateless historical
+authorization.
 
 - **Library:** `mls-rs` 0.56.0 with `mls-rs-crypto-rustcrypto` 0.22.1, cipher
   suite 0x0002 (P-256, AES-128-GCM, SHA-256) and no other. Every MLS crate is

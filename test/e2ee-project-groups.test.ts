@@ -849,8 +849,8 @@ describe('solo MLS groups', () => {
     const refused = await joinProjectGroup(joiner.ctx, late).catch(
       (error: unknown) => error as Error
     );
-    expect(refused).toMatchObject({ name: 'MlsError' });
-    expect((refused as Error).message).toContain('joining epoch');
+    expect(refused).toMatchObject({ name: 'ProjectGroupError', code: 'archive-invalid' });
+    expect((refused as Error).message).toContain('GroupInfo differs');
     expect(
       await joiner.sessions.leaf(ref(owner, 'owner_desktop', late))
     ).toBeNull();

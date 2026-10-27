@@ -157,6 +157,7 @@ import {
   createProjectGroup,
   epochAuthenticatorForEpoch,
   epochRoles,
+  epochAuthority,
   forgetEpochRoles,
   groupBaseForKeyEpoch,
   joinProjectGroup,
@@ -171,6 +172,7 @@ import {
 } from './projectGroups';
 import { verifyHeadShareLinks } from './shareLinkSet';
 import { forgetProjectKeys } from './unlockedProjectKeys';
+import { projectAuthorityStore } from './projectAuthorityStore';
 import {
   versionPins,
   type ProjectVersionPin,
@@ -542,6 +544,11 @@ async function groupCutoffs(
 
 /** Group and key-store refusals become ApiErrors the sync paths understand. */
 function asApiError(error: unknown): unknown {
+  if (error instanceof ProjectGroupError && error.code === 'archive-invalid')
+    return new EncryptedProjectIntegrityError(
+      'authority',
+      `This project’s history did not pass membership verification (${error.message}).`
+    );
   if (error instanceof ApiError || !(error instanceof E2eeApiError)) {
     return error;
   }
@@ -739,49 +746,55 @@ export function createEncryptedProjectStore(
         `Device ${author.deviceId} held no editing leaf in this project when it signed version ${author.header.documentVersion}.`
       );
     };
-    const authorList = (await projectDeviceLists(groups, projectId)).find(
-      (candidate) => candidate.userId === author.userId
-    );
-    if (!authorList) refuse();
-    // Before a group reset (decision D9) the version names an epoch of an
-    // earlier group generation.
-    const { keyEpochBase } = await groupBaseForKeyEpoch(
-      groups,
-      projectId,
-      author.header.keyEpoch
-    );
-    const epoch = author.header.keyEpoch - keyEpochBase;
-    if (epoch < 0) refuse();
-    const signingKey = signingKeyOf(authorList!, author.deviceId);
-    if (!signingKey) refuse();
     if (
-      !(await heldEditingRole(
+      !(await heldEditingLeaf(
         projectId,
         author.userId,
-        author.header.keyEpoch,
-        epoch
+        author.deviceId,
+        author.header.keyEpoch
       ))
-    ) {
+    )
       refuse();
-    }
-    const { leaves } = await groups.api.leaves(projectId);
-    for (const leaf of leaves) {
-      if (leaf.userId !== author.userId || leaf.deviceId !== author.deviceId) {
-        continue;
+  }
+
+  async function heldEditingLeaf(
+    projectId: string,
+    authorId: string,
+    deviceId: string,
+    keyEpoch: number,
+    readOnly = false
+  ): Promise<boolean> {
+    const authority = await epochAuthority(groups, projectId, keyEpoch).catch(
+      (error: unknown) => {
+        if (
+          error instanceof ProjectGroupError &&
+          error.code === 'archive-invalid'
+        )
+          return null;
+        throw error;
       }
-      const verified = await groups.sessions.verifyLeafCertification(
-        {
-          projectId,
-          userId: leaf.userId,
-          deviceId: leaf.deviceId,
-          leafKey: bytes(leaf.leafKey),
-          certification: bytes(leaf.certification)
-        },
-        signingKey!
-      );
-      if (verified && verified.certifiedEpoch <= epoch) return;
-    }
-    refuse();
+    );
+    return editingMember(authority, authorId, deviceId, readOnly);
+  }
+
+  function editingMember(
+    authority: Awaited<ReturnType<typeof epochAuthority>> | null,
+    authorId: string,
+    deviceId: string,
+    readOnly = false
+  ): boolean {
+    const role = authority?.roles.users.find(
+      (entry) => entry.userId === authorId
+    );
+    return (
+      !!authority &&
+      !!role &&
+      (readOnly || role.role === 'owner' || role.role === 'editor') &&
+      role.since <= authority.epoch &&
+      authority.members.some(
+        (member) => member.userId === authorId && member.deviceId === deviceId
+      )
+    );
   }
 
   /**
@@ -799,9 +812,12 @@ export function createEncryptedProjectStore(
   ): Promise<boolean> {
     const roles = await epochRoles(groups, projectId, keyEpoch).catch(
       (error: unknown) => {
-        if (error instanceof ProjectGroupError && error.code === 'key-missing')
-          throw error;
-        return null;
+        if (
+          error instanceof ProjectGroupError &&
+          error.code === 'archive-invalid'
+        )
+          return null;
+        throw error;
       }
     );
     const role = roles?.users.find((r) => r.userId === authorId);
@@ -890,6 +906,15 @@ export function createEncryptedProjectStore(
   ): Promise<void> {
     const cutoffs = await cutoffsFor(projectId);
     const lists = await projectDeviceLists(groups, projectId);
+    const verifiedEpochs = new Map<number, ReturnType<typeof epochAuthority>>();
+    const authorityFor = (epoch: number) => {
+      let proof = verifiedEpochs.get(epoch);
+      if (!proof) {
+        proof = epochAuthority(groups, projectId, epoch);
+        verifiedEpochs.set(epoch, proof);
+      }
+      return proof;
+    };
     let pinned = pinHash;
     let unauthorized: number | null = null;
     let missingKey: ProjectGroupError | null = null;
@@ -941,35 +966,19 @@ export function createEncryptedProjectStore(
               }
               // Every logged version's author held an editing role in its
               // own epoch (slice 5-2).
-              const { keyEpochBase } = await groupBaseForKeyEpoch(
-                groups,
-                projectId,
-                header.keyEpoch
-              );
-              if (
-                !(await heldEditingRole(
-                  projectId,
-                  author.userId,
-                  header.keyEpoch,
-                  header.keyEpoch - keyEpochBase
-                ))
-              ) {
+              const authority = await authorityFor(header.keyEpoch);
+              if (!editingMember(authority, author.userId, author.deviceId)) {
                 unauthorized = entry.documentVersion;
                 return null;
               }
               const authorList = lists.find((l) => l.userId === author.userId);
-              const roles = await epochRoles(
-                groups,
-                projectId,
-                header.keyEpoch
-              );
               shareHistory.set(entry.versionHash, {
                 header,
-                owner: roles.users.some(
+                owner: authority.roles.users.some(
                   (role) =>
                     role.userId === author.userId &&
                     role.role === 'owner' &&
-                    role.since <= header.keyEpoch - keyEpochBase
+                    role.since <= authority.epoch
                 )
               });
               return authorList
@@ -977,7 +986,8 @@ export function createEncryptedProjectStore(
                 : null;
             } catch (error) {
               if (error instanceof AuthorshipError) authorship = error;
-              if (error instanceof ProjectGroupError) missingKey = error;
+              else if (error instanceof ProjectGroupError) missingKey = error;
+              else throw error;
               return null;
             }
           }
@@ -1853,18 +1863,14 @@ export function createEncryptedProjectStore(
         refusal = 'This envelope’s signature does not verify.';
         continue;
       }
-      if (candidate.userId !== userId) {
-        const { keyEpochBase } = await groupBaseForKeyEpoch(
-          groups,
-          record.projectId,
-          record.keyEpoch
-        );
+      {
         if (
-          !(await heldEditingRole(
+          !(await heldEditingLeaf(
             record.projectId,
             candidate.userId,
+            record.signerDeviceId,
             record.keyEpoch,
-            record.keyEpoch - keyEpochBase
+            kind === 'view-state'
           ))
         ) {
           throw integrity(
@@ -2762,6 +2768,10 @@ export function createEncryptedProjectStore(
       forgetEpochRoles(userId, projectId);
       forgetProjectKeys(userId, projectId);
       await pins.forget?.(userId, projectId);
+      await (groups.authorityStore ?? projectAuthorityStore()).forgetProject(
+        userId,
+        projectId
+      );
     },
 
     revisionMap: guarded(async (projectId) => {

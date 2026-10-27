@@ -24,6 +24,8 @@ import type {
   DeviceDirectory,
   EpochChange,
   EpochRecord,
+  EpochAuthority,
+  EpochAuthorityRequest,
   GroupInfoSummary,
   JoinArchive,
   Mls,
@@ -683,6 +685,24 @@ export class MlsProjectSessions {
    */
   async decodeEpochRecord(record: Uint8Array): Promise<EpochRecord> {
     return (await this.loader.get()).decodeEpochRecord(record);
+  }
+
+  async verifyEpochAuthority(
+    request: Omit<EpochAuthorityRequest, 'directory'> & {
+      readonly directory: DirectoryInput;
+    }
+  ): Promise<EpochAuthority> {
+    const guard = this.sessionGuard();
+    const mls = await this.loader.get();
+    const directory = await buildDeviceDirectory(
+      mls,
+      request.projectId,
+      request.directory
+    );
+    guard.guard();
+    const result = await mls.verifyEpochAuthority({ ...request, directory });
+    guard.guard();
+    return result;
   }
 
   /** Sessions held in this page's memory (tests and diagnostics). */

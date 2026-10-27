@@ -72,7 +72,7 @@ pub struct LeafInfo {
     pub certification: String,
 }
 
-fn leaf_info(index: u32, identity: &SigningIdentity) -> Option<LeafInfo> {
+pub(crate) fn leaf_info(index: u32, identity: &SigningIdentity) -> Option<LeafInfo> {
     let credential = DeviceCredential::from_identity(identity).ok()?;
     Some(LeafInfo {
         index,
@@ -98,7 +98,7 @@ pub struct RolesInfo {
     pub users: Vec<RoleInfo>,
 }
 
-fn roles_info(roles: &ProjectRoles) -> RolesInfo {
+pub(crate) fn roles_info(roles: &ProjectRoles) -> RolesInfo {
     RolesInfo {
         rejoin_window: roles.rejoin_window,
         users: roles
@@ -578,7 +578,7 @@ impl Session {
                 group.context(),
                 &group.export_tree().to_bytes()?,
                 &pending.extensions,
-                directory.as_ref(),
+                directory,
             )?;
             self.policy.removals.lock().unwrap().merge(&verified);
             self.join_pending = None;
@@ -949,7 +949,7 @@ impl Session {
                     info.group_context(),
                     &tree.tree_data.to_bytes()?,
                     info.extensions(),
-                    self.policy.directory.get().as_ref(),
+                    self.policy.directory.get(),
                 )?;
             }
             self.rejoin_provisional(group_info, psk_epoch, psk, remove)
@@ -985,7 +985,6 @@ impl Session {
             .rejoin_backup
             .clone()
             .ok_or_else(|| Error::state("no rejoin is pending"))?;
-        let group = self.group()?;
         // The anchor (initial GroupInfo or checkpoint) must precede the
         // rejoin's own epoch: the request is rechecked against the history
         // before it.
@@ -994,41 +993,49 @@ impl Session {
                 "removal archive: the records must include the rejoin's own epoch",
             ));
         };
+        // Authenticate the pre-Commit history before attributing a policy
+        // refusal to this request. A bad archive remains retryable, while a
+        // stale rejoin itself must restore the original state even when the
+        // stronger full replay would reject its last Commit first.
+        let info = MlsMessage::from_bytes(&request.group_info)?
+            .into_group_info()
+            .ok_or_else(|| Error::input("not a GroupInfo message"))?;
+        let tree = info
+            .extensions()
+            .get_as::<RatchetTreeExt>()
+            .map_err(|_| Error::input("malformed ratchet tree"))?
+            .ok_or_else(|| Error::input("missing ratchet tree"))?;
+        crate::archive::verify(
+            initial_group_info,
+            before_rejoin,
+            info.group_context(),
+            &tree.tree_data.to_bytes()?,
+            info.extensions(),
+            self.policy.directory.get(),
+        )?;
+        let mut validation = Session::import(&backup, &self.project_id)?;
+        validation.policy.directory.set(self.policy.directory.get());
+        if let Err(error) =
+            validation.rejoin_provisional(&request.group_info, request.psk_epoch, &request.psk, request.remove)
+        {
+            if error.kind == "policy" {
+                self.restore_from(&backup)?;
+            }
+            return Err(error);
+        }
         // An accepted Commit cannot be resubmitted after a bad download. Keep
-        // its provisional state retryable even after the original PSK expires.
+        // its provisional state retryable until the complete proof verifies.
+        let group = self.group()?;
         let verified = crate::archive::replay(
             initial_group_info,
             records,
             group.context(),
             &group.export_tree().to_bytes()?,
-            self.policy.directory.get().as_ref(),
+            self.policy.directory.get(),
         )?;
-        let result: Res<()> = (|| {
-            let mut validation = Session::import(&backup, &self.project_id)?;
-            validation.policy.directory.set(self.policy.directory.get());
-            validation.rejoin(
-                &request.group_info,
-                request.psk_epoch,
-                &request.psk,
-                request.remove,
-                initial_group_info,
-                before_rejoin,
-            )?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                *self.policy.removals.lock().unwrap() = verified;
-                self.rejoin_archive = None;
-                self.write()
-            }
-            Err(error) => {
-                if error.kind == "policy" {
-                    self.restore_from(&backup)?;
-                }
-                Err(error)
-            }
-        }
+        *self.policy.removals.lock().unwrap() = verified;
+        self.rejoin_archive = None;
+        self.write()
     }
 
     pub fn confirm_rejoin(&mut self) -> Res<()> {
@@ -1518,7 +1525,7 @@ mod archive_tests {
             .map(|s| {
                 serde_json::json!({
                     "deviceId": display_id(&s.device_id), "status": "active",
-                    "leafKeys": [{"key": h(&s.signature_key()), "certifiedEpoch": 2}]
+                    "leafKeys": [{"key": h(&s.signature_key()), "certifiedEpoch": if s.device_id == b"joiner" { 2 } else { 0 }}]
                 })
             })
             .collect();
@@ -1767,7 +1774,7 @@ mod checkpoint_tests {
             let keys = if uncertified.contains(&s.device_id.as_slice()) {
                 serde_json::json!([])
             } else {
-                serde_json::json!([{"key": h(&s.signature_key()), "certifiedEpoch": 5}])
+                serde_json::json!([{"key": h(&s.signature_key()), "certifiedEpoch": if [b"joiner".as_slice(), b"rejoiner".as_slice()].contains(&s.device_id.as_slice()) { 5 } else { 0 }}])
             };
             let mut entry = serde_json::json!({
                 "deviceId": display_id(&s.device_id), "status": "active", "leafKeys": keys
@@ -1921,6 +1928,187 @@ mod checkpoint_tests {
     }
 
     #[test]
+    fn stateless_authority_returns_the_exact_historical_roster() {
+        let f = fixture();
+        let authority = crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            f.owner.policy.directory.get(),
+        )
+        .unwrap();
+        assert_eq!(authority.epoch, 3);
+        assert!(authority.members.iter().any(|m| m.device_id == "second"));
+        assert!(!authority
+            .members
+            .iter()
+            .any(|m| m.device_id == "removed" || m.device_id == "joiner"));
+        assert!(authority
+            .roles
+            .users
+            .iter()
+            .any(|r| r.user_id == "B" && r.role == "editor"));
+        let from_checkpoint = crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.checkpoint,
+            &[],
+            &f.records[2],
+            b"A",
+            f.owner.policy.directory.get(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(authority).unwrap(),
+            serde_json::to_value(from_checkpoint).unwrap()
+        );
+        assert!(crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"B",
+            f.owner.policy.directory.get(),
+        )
+        .is_err());
+        assert!(crate::archive::verify_epoch_authority(
+            b"another-project",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            f.owner.policy.directory.get(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn stateless_authority_checks_policy_even_for_validly_signed_commits() {
+        let mut f = fixture();
+        let editor_backup = f.others[2].export().unwrap();
+        for spec in [
+            serde_json::json!({"setRoles": [{"userId": "C", "role": "editor"}]}),
+            serde_json::json!({"setRoles": [{"userId": "A", "role": "editor"}, {"userId": "B", "role": "owner"}]}),
+            serde_json::json!({"remove": [0]}),
+        ] {
+            let mut editor = Session::import(&editor_backup, b"checkpoint-test").unwrap();
+            editor.policy.directory.set(f.owner.policy.directory.get());
+            editor.set_skip_send_checks(true);
+            editor
+                .commit(serde_json::from_value(spec.clone()).unwrap(), vec![])
+                .unwrap();
+            let target = record(editor.confirm_commit().unwrap());
+            let mut records = f.records.clone();
+            records.push(target.clone());
+            assert!(
+                crate::archive::verify_epoch_authority(
+                    b"checkpoint-test",
+                    &f.initial,
+                    &records,
+                    &target,
+                    b"A",
+                    f.owner.policy.directory.get(),
+                )
+                .is_err(),
+                "unauthorized signed history: {spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn historical_authority_applies_each_revocation_at_its_cutoff() {
+        let f = fixture();
+        let revoked = directory(&f.everyone(), &[b"owner"], &[]);
+        // Epoch 3 precedes this device's signed cutoff at epoch 4.
+        crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            revoked.clone(),
+        )
+        .unwrap();
+        // The same key signed the epoch-4/5 Commits; those are now forbidden.
+        assert!(crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records,
+            &f.records[4],
+            b"A",
+            revoked,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn unknown_revocations_need_an_exact_independently_authenticated_prefix() {
+        let f = fixture();
+        let mut revoked = (*directory(&f.everyone(), &[b"owner"], &[])).clone();
+        revoked
+            .users
+            .get_mut(b"A".as_slice())
+            .unwrap()
+            .devices
+            .get_mut(b"owner".as_slice())
+            .unwrap()
+            .revocation_cutoff = Some(9_007_199_254_740_991);
+        assert!(crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            Arc::new(revoked.clone()),
+        )
+        .is_err());
+        let bound = crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[0],
+            b"A",
+            revoked.clone(),
+            &f.checkpoint,
+        )
+        .unwrap();
+        assert_eq!(bound.epoch, 1); // The verified prefix reaches epoch 3.
+        assert!(crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records,
+            &f.records[4],
+            b"A",
+            revoked.clone(),
+            &f.checkpoint,
+        )
+        .is_err()); // Revoked owner cannot authorize epoch 4 beyond the prefix.
+        assert!(crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            revoked.clone(),
+            &f.initial,
+        )
+        .is_err()); // An epoch-zero pin does not bless later old-key Commits.
+        let mut altered = f.records[..3].to_vec();
+        altered[1][0] ^= 1;
+        assert!(crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &altered,
+            &f.records[0],
+            b"A",
+            revoked,
+            &f.checkpoint,
+        )
+        .is_err()); // A damaged suffix cannot leak even an earlier result.
+    }
+
+    #[test]
     fn welcome_joins_from_an_owner_checkpoint_with_its_removals() {
         let mut f = fixture();
         let after = f.records[3..].to_vec();
@@ -1982,7 +2170,14 @@ mod checkpoint_tests {
             let error = f.joiner.join(&f.welcome, &f.checkpoint, &f.records[3..]).err().unwrap();
             assert_eq!(reason(&error), "checkpoint-invalid");
             assert_eq!(f.joiner.export().unwrap(), before);
-            // Full replay does not depend on the checkpoint's signer.
+            // Full replay can use a historically certified, now revoked key.
+            // A missing certification is no longer historical authorization:
+            // refuse it until the verified certificate is supplied again.
+            if !uncertified.is_empty() {
+                assert!(f.joiner.join(&f.welcome, &f.initial, &f.records).is_err());
+                assert_eq!(f.joiner.export().unwrap(), before);
+                f.joiner.policy.directory.set(directory(&f.everyone(), &[], &[]));
+            }
             f.joiner.join(&f.welcome, &f.initial, &f.records).unwrap();
             assert_eq!(f.joiner.policy.removals.lock().unwrap().clone(), f.owner_removals());
         }

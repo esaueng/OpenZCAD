@@ -37,6 +37,10 @@ import {
   type ShareLinkSet
 } from './share-links';
 import type { SignedStatement } from './devices';
+import {
+  decodeMlsAuthorityManifest,
+  MAX_MLS_AUTHORITY_BYTES
+} from './mls-authority';
 
 /**
  * The encrypted bodies of project envelopes: UTF-8 JSON, written by the
@@ -50,9 +54,8 @@ import type { SignedStatement } from './devices';
  */
 export const BODY_VERSION_1 = 1;
 /**
- * Document bodies only: version 1 plus `shareLinks`, the project's active
- * link set. A document body without a link set is still written as
- * version 1, byte for byte.
+ * Document bodies add `shareLinks`; key archives add the signed application
+ * authority manifest. Bodies without these fields retain version-1 bytes.
  */
 export const BODY_VERSION_2 = 2;
 
@@ -890,6 +893,8 @@ export interface KeyArchiveBody {
   readonly dedupeSecret: Uint8Array;
   readonly epochRecord: Uint8Array;
   readonly epochAuthenticator: Uint8Array;
+  /** Owner-authenticated generation roots and optional replay checkpoint. */
+  readonly authorityManifest?: SignedStatement;
 }
 
 const KEY_ARCHIVE_CEILING = PLAINTEXT_CEILINGS['key-archive'];
@@ -930,8 +935,10 @@ function keyArchiveJson(body: KeyArchiveBody, header: BodyEnvelopeHeader) {
   }));
   checkArchivedEpochs(body.previousKeys, header, 'invalid-argument');
   checkBlobReferences({ blobIds: header.blobIds ?? [] }, []);
+  const authority = body.authorityManifest;
+  if (authority) decodeMlsAuthorityManifest(authority.statement);
   return {
-    version: BODY_VERSION_1,
+    version: authority ? BODY_VERSION_2 : BODY_VERSION_1,
     previousKeys,
     dedupeSecret: toBase64Url(
       checkBytes(body.dedupeSecret, 'dedupeSecret', KEY_BYTES, KEY_BYTES)
@@ -946,7 +953,29 @@ function keyArchiveJson(body: KeyArchiveBody, header: BodyEnvelopeHeader) {
         MIN_EPOCH_AUTHENTICATOR_BYTES,
         MAX_EPOCH_AUTHENTICATOR_BYTES
       )
-    )
+    ),
+    ...(authority
+      ? {
+          authorityManifest: {
+            statement: toBase64Url(
+              checkBytes(
+                authority.statement,
+                'authority manifest',
+                1,
+                MAX_MLS_AUTHORITY_BYTES
+              )
+            ),
+            signature: toBase64Url(
+              checkBytes(
+                authority.signature,
+                'authority manifest signature',
+                65,
+                65
+              )
+            )
+          }
+        }
+      : {})
   };
 }
 
@@ -981,11 +1010,44 @@ export function decodeKeyArchiveBody(
       'epochRecord',
       'epochAuthenticator'
     ],
-    [],
+    ['authorityManifest'],
     'Key archive body',
     'malformed'
   );
-  checkBodyVersion(record.version);
+  checkBodyVersion(record.version, [BODY_VERSION_1, BODY_VERSION_2]);
+  if (
+    (record.version === BODY_VERSION_2) !==
+    (record.authorityManifest !== undefined)
+  )
+    fail(
+      'malformed',
+      'A version-2 key archive requires its authority manifest'
+    );
+  let authorityManifest: SignedStatement | undefined;
+  if (record.authorityManifest !== undefined) {
+    const authority = exactKeys(
+      record.authorityManifest,
+      ['statement', 'signature'],
+      [],
+      'Authority manifest',
+      'malformed'
+    );
+    authorityManifest = {
+      statement: readBase64(
+        authority.statement,
+        'authority manifest',
+        1,
+        MAX_MLS_AUTHORITY_BYTES
+      ),
+      signature: readBase64(
+        authority.signature,
+        'authority manifest signature',
+        65,
+        65
+      )
+    };
+    decodeMlsAuthorityManifest(authorityManifest.statement);
+  }
   if (
     !Array.isArray(record.previousKeys) ||
     record.previousKeys.length > MAX_ARCHIVED_KEYS
@@ -1008,6 +1070,7 @@ export function decodeKeyArchiveBody(
   checkArchivedEpochs(previousKeys, header, 'malformed');
   checkBlobReferences({ blobIds: header.blobIds ?? [] }, []);
   const body: KeyArchiveBody = {
+    ...(authorityManifest ? { authorityManifest } : {}),
     previousKeys,
     dedupeSecret: readBase64(
       record.dedupeSecret,

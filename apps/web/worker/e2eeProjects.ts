@@ -49,6 +49,7 @@ import type {
 } from '@openzcad/shared';
 import {
   isE2eeProjectGroupStorageReady,
+  isE2eeProjectAuthorityStorageReady,
   isProjectStorageFormatReady,
   stagedForEncryptionSql
 } from '@openzcad/cloudflare-adapters';
@@ -64,7 +65,7 @@ import { E2EE_MIGRATION_CODES } from '@openzcad/shared';
 import { checkStagingLease, type StagingLease } from './e2eeMigrationLease';
 
 export const E2EE_PROJECT_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|mls\/proposals|keys|keys\/archives)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|mls\/proposals|keys|keys\/archives|authority)$/;
 
 /** True for any path under the encrypted-project prefix, known or not. */
 export function isE2eeProjectPath(pathname: string): boolean {
@@ -1479,12 +1480,17 @@ export async function handleE2eeProjectRequest(
           'mls/leaves',
           'mls/proposals',
           'keys',
-          'keys/archives'
+          'keys/archives',
+          'authority'
         ].includes(route)) ||
       (method === 'POST' &&
-        ['mls/commits', 'mls/group-info', 'mls/proposals', 'keys'].includes(
-          route
-        ));
+        [
+          'mls/commits',
+          'mls/group-info',
+          'mls/proposals',
+          'keys',
+          'authority'
+        ].includes(route));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
     if (method === 'POST' && route === 'mls/group-info') {
       // The group is made with the project, by its owner; or (slice 7-1)
@@ -1516,6 +1522,17 @@ export async function handleE2eeProjectRequest(
       method === 'GET' ? 'read' : 'commit',
       { allowDeleted: method === 'GET', migrationLease }
     );
+    if (route === 'authority') {
+      const { projectAuthority } = await import('./e2eeProjectAuthority');
+      return await projectAuthority(
+        db,
+        userId,
+        projectId,
+        authorization,
+        access,
+        method === 'POST' ? await readBody(request) : undefined
+      );
+    }
     if (method === 'POST') {
       const body = await readBody(request);
       if (route === 'mls/proposals') {
@@ -1591,6 +1608,13 @@ export async function projectGroupErasureStatements(
 ): Promise<D1PreparedStatement[]> {
   if (!(await isE2eeProjectGroupStorageReady(db))) return [];
   return [
+    ...((await isE2eeProjectAuthorityStorageReady(db))
+      ? [
+          db
+            .prepare('DELETE FROM e2ee_project_authority WHERE user_id = ?')
+            .bind(userId)
+        ]
+      : []),
     db.prepare('DELETE FROM e2ee_project_keys WHERE user_id = ?').bind(userId),
     db
       .prepare('DELETE FROM e2ee_project_leaves WHERE user_id = ?')

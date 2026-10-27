@@ -40,6 +40,7 @@ export const mlssession_setDirectory: (a: number, b: number, c: number, d: numbe
 export const mlssession_signatureKey: (a: number, b: number) => void;
 export const mlssession_status: (a: number, b: number) => void;
 export const rejoinPskId: (a: number, b: bigint) => void;
+export const verifyEpochAuthority: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => void;
 export const __wbindgen_export: (a: number) => void;
 export const __wbindgen_add_to_stack_pointer: (a: number) => number;
 export const __wbindgen_export2: (a: number, b: number, c: number) => void;

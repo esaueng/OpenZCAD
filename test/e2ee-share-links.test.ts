@@ -2524,7 +2524,7 @@ describe('durable browser share work', { timeout: 120_000 }, () => {
       await delegate(laptop);
       await createShareLink(ctx, projectId, 'view');
       const listed = await ctx.api.list(projectId);
-      let release!: (value: typeof listed) => void;
+      let release: ((value: typeof listed) => void) | undefined;
       const stalled = {
         ...ctx,
         api: {
@@ -2558,10 +2558,11 @@ describe('durable browser share work', { timeout: 120_000 }, () => {
       });
       try {
         await vi.waitFor(() => expect(notified).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(release).toBeTypeOf('function'));
         expect((await work.read(OWNER, projectId)).notice).toBe('12');
         expect(finished).toBe(false);
       } finally {
-        release(listed);
+        release?.(listed);
         await task;
       }
     }

@@ -1207,7 +1207,19 @@ async function createStoredShareLink(
     published: [],
     failed: [{ shareId, reason: describe(error) }]
   }));
-  if (!shown.published.includes(shareId)) pending.push('snapshot');
+  if (!shown.published.includes(shareId)) {
+    // The save hook may publish this very version before this explicit
+    // attempt. The publisher then correctly skips it as already current.
+    const stored = (
+      await ctx.api.list(projectId).catch(() => null)
+    )?.links.find((link) => link.shareId === shareId)?.snapshot;
+    if (
+      !stored ||
+      stored.documentVersion < head.version ||
+      stored.keyEpoch < head.keyEpoch
+    )
+      pending.push('snapshot');
+  }
   const fragment: ShareFragmentParts = {
     token,
     shareKey,

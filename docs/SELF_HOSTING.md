@@ -294,10 +294,11 @@ request reaches the AI provider you configured.
 
 ### Requirements
 
-- **Migrations 0029 through 0043.** Apply every tracked D1 migration before
+- **Migrations 0029 through 0044.** Apply every tracked D1 migration before
   turning a flag on; `pnpm deploy:selfhost` applies them before it publishes
   code. The encryption migrations are `0029_e2ee_account_keys.sql` through
-  `0043_e2ee_reverse_staging.sql`. There is no `0035`: that number is an
+  `0044_e2ee_project_authority.sql`. This includes account-authenticated MLS
+  roots for devices without a live MLS leaf. There is no `0035`: that number is an
   intentional gap, not a missing file. While a migration a flag needs is
   missing, its routes answer 503 and `/api/e2ee/config` reports the feature as
   off.
@@ -320,6 +321,35 @@ request reaches the AI provider you configured.
   not add a stricter policy on top.
 
 ### Flags
+
+**Upgrading an experimental E2EE installation across migration 0044:** old
+version-1 key archives have no independently authenticated MLS roots. Migration
+0044 deliberately aborts with `E2EE_AUTHORITY_CUTOVER_REQUIRED` while any MLS
+group or unfinished encryption staging remains. The supported deploy commands
+apply migrations before publishing code, so retain the prior release and its
+0043 schema if this guard fires. Do not bypass the guard, fabricate authority
+records, delete groups, or publish the new bundle against the old schema.
+
+Before upgrading such an installation, arrange an owner-approved maintenance
+transition on the prior release. Keep default-on and plaintext freeze off;
+clear each account's encryption opt-in while the project flag is still on.
+Owners must complete or abandon pending migrations. The prior release's
+**Stop project encryption** flow can carry a solo project's head, source files
+and retained revisions through its verified reverse migration and purge. For
+a shared project, first have the owner explicitly authorize and remove its
+other members, invitations and share links; that flow refuses a project that
+still shares access. This transition temporarily restores server-readable
+content, so it requires the owners' explicit consent and a private recovery
+backup. If that is unacceptable, remain on the prior release until a separately
+reviewed encrypted-to-encrypted upgrader is available.
+
+Confirm that `SELECT COUNT(*) FROM e2ee_project_groups` is zero before retrying
+0044. Then deploy the new release, re-encrypt through the normal verified
+migration flow, and restore sharing with new verified invitations and links.
+Check head content, source files and retained revisions in the owner browser
+before considering the transition complete. This is a gated format change;
+0044 does not silently convert old projects. Production activation still
+requires written outside-review clearance.
 
 Set each flag in `vars` as the string `"true"` or `"false"`, and turn them on
 one deployment at a time in this order. A flag opens nothing unless the one
@@ -435,7 +465,7 @@ rows directly.
 ### Rollout on an instance with plaintext projects
 
 1. Back up D1 and R2 as described above, update, and confirm that the
-   deployment applied migrations 0029 through 0043.
+   deployment applied migrations 0029 through 0044.
 2. Set `E2EE_KEYS_ENABLED` to `"true"`, run `pnpm selfhost:check`, deploy, and
    check `/api/e2ee/config`. With a test account, set up encryption, save the
    recovery key, and add a passkey and a second device.

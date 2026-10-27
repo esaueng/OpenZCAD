@@ -25,7 +25,7 @@ describe what is built; please report any difference you find.
 | Repository     | `esaueng/OpenZCAD`                                    |
 | Review tag     | **TBD**: set when the review is scheduled             |
 | Review commit  | **TBD**: the full 40-character SHA of that tag        |
-| Packet written | 2026-10-26, against `main` at `350beda9` (not frozen) |
+| Packet refreshed | 2026-10-27: `main` at `88a33b21` plus historical MLS candidate [#959](https://github.com/esaueng/OpenZCAD/pull/959), not frozen |
 
 Review the frozen commit, not `main`. Phase 8 slices land behind
 off-by-default flags while the review runs; findings against later commits
@@ -88,7 +88,7 @@ are welcome but should name the commit.
 | `wasm-bindgen`             | `=0.2.126` (crate and CLI must match)                                                                                                                       | `Cargo.toml`, `build.sh`, `pkg/BUILD.json`                                                  |
 | Rust toolchain             | `1.96.0`, target `wasm32-unknown-unknown`, profile `minimal` (crate MSRV `rust-version = "1.88"`)                                                           | `packages/mls/crate/rust-toolchain.toml`                                                    |
 | Cipher suite               | `MLS_128_DHKEMP256_AES128GCM_SHA256_P256` (0x0002) and no other                                                                                             | `SUITE` in `packages/mls/crate/src/model.rs`; reported by `buildInfo` in `crate/src/lib.rs` |
-| Committed WASM             | `pkg/openzcad_mls_bg.wasm`, SHA-256 `3d32d44c…89257b` (1,107,829 bytes)                                                                                     | `packages/mls/pkg/BUILD.json`                                                               |
+| Committed WASM             | `pkg/openzcad_mls_bg.wasm`, SHA-256 `48654a54302f5c667372ee85659bb19c4462deea27c91ae16f3552d0773955a6` (1,115,323 bytes)                                      | `packages/mls/pkg/BUILD.json`                                                               |
 
 `pkg/BUILD.json` also records the SHA-256 of every crate source,
 `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`. When this packet was
@@ -578,6 +578,30 @@ leaf with a per-project leaf key, certified by the device signing key.
   `removeMember`, `leaveProject` (SelfRemove), `commitPendingDepartures`,
   `postOwnEpochKeys`, `epochRoles`, `recoverProjectGroup`,
   `resetProjectGroup`.
+- Historical authority: `epochAuthority` invokes the stateless Rust policy
+  verifier, verifies embedded leaf certifications from bounded untrusted
+  roster hints, and returns the exact authenticated roster and roles. Head,
+  retained-revision, replaced-envelope and version-log checks require the
+  author's device in that roster. Read-only approved devices use the same
+  path without creating a session or leaf.
+- Independent trust: `projectAuthority.ts`, `projectAuthorityStore.ts`,
+  `packages/crypto/src/mls-authority.ts`, and key-archive body version 2.
+  Inspect owner intent from creation and verified recipient-bound
+  invitations, immutable generation roots/bases, periodic owner checkpoints,
+  account-key MAC plus certified-device signature, sequence/context pins,
+  CAS and lost-response recovery, revoked-device refusal and repair,
+  reset-root retention, and key-session cleanup. Replay must reach the
+  independently accepted terminal GroupContext, including when checking
+  an older epoch; a competing policy-valid chain is insufficient. A reset
+  root carries its predecessor's terminal GroupInfo and an identity-signed
+  version-2 reset whose hash binds the prior immutable roots and exact
+  state. That explicit approval permits solo cold recovery from a retired
+  last writer; ordinary reads still refuse an unpinned retired signer.
+  A cold shared replacement with independent expected-owner intent may
+  instead verify the archive's owner-signed roots and full transcript,
+  join, and CAS-publish its own account record without adopting any part
+  of the retired record.
+  The separate IndexedDB database is `openzcad-e2ee-project-authority`.
 
 ### 4.8 The Worker as Delivery Service
 
@@ -591,6 +615,10 @@ leaf with a per-project leaf key, certified by the device signing key.
   list. Membership mirror and proposals: `prepareMembershipCommit`
   (`e2eeMembership.ts`), `postProposal`, `prepareProposalSettlement`
   (`e2eeProposals.ts`). It never sees a project key, PSK or MLS secret.
+- `/api/e2ee/projects/:id/authority` (`e2eeProjectAuthority.ts`, migration
+  0044) stores only the caller's signed opaque trust record with CAS,
+  membership/session/device-list fences and erasure cleanup. The browser
+  verifies its account MAC; the Worker can verify only the public signature.
 
 ### 4.9 The encrypted room
 
@@ -638,7 +666,9 @@ and on the scenario and archive tests.
 ## 6. Known limitations and deferrals
 
 - **Fork consistency only.** A server can keep members on separate
-  branches forever, and a fresh browser accepts any validly signed chain.
+  branches forever. An independently accepted account state now rejects a
+  competing MLS transcript, including on a fresh browser, but a participant
+  with no previous independent state can still receive a consistent fork.
   The manual anchor is the project state code (`projectStateCode`);
   `EncryptionIndicator.tsx` has a slot for it, but showing it in the
   indicator and sharing dialog is still being built (slice 8-C5a). No
@@ -653,30 +683,28 @@ and on the scenario and archive tests.
   `mls-rs-crypto-webcrypto` provider failed every Commit in Safari and
   WKWebView (`KeyDerivationError`). Everything outside MLS stays on
   WebCrypto. The provider can be adopted once it passes the WebKit run.
-- **Checkpoint replay.** **Status: in progress** in parallel slice 8-C5b
-  (owner-signed MLS checkpoints in `packages/mls/crate/src/archive.rs`, a
-  TS verifier and a WASM rebuild). Until it lands, a join replays the whole
-  archive from epoch zero, and historical version authorization rests on
-  the archived epoch records alone.
-  <!-- TODO(8-C5b): coordinator updates this item (status, PR, commit, verifier entry points) when 8-C5b lands. -->
-- **Contacts head on a fresh device: ADR measures not found.** The ADR
-  (Version integrity, "Pins must not roll back") says a device approved by
-  another device receives the newest contacts head inside the
-  authenticated approval exchange, and a device enrolled with only a
-  passkey or the recovery key treats every pin as seen until another
-  device confirms the head. At the packet's base commit the approval grant
-  (`DeviceApprovalGrant` in `packages/crypto/src/devices.ts`) carries no
-  contacts head, and `acceptList` in `apps/web/src/lib/e2ee/contacts.ts`
-  accepts, on a browser with no contacts pin, the newest identity-signed
-  list the server serves and treats its verified entries as verified. A
-  server can therefore show a fresh device an older, validly signed list
-  (for example one from before a contact's key change was recorded). This
-  is within the stated fork-consistency limit but weaker than the ADR's
-  narrowing; please assess it (question 3).
+- **Checkpoint and historical authority bounds.** The candidate in #959
+  produces owner checkpoints, verifies old author membership with the
+  native policy, and binds replay to independent owner intent and accepted
+  terminal state (section 4.7). It permits at most 8,192 records and 64 MiB
+  per replay; a longer history needs a newer certified owner checkpoint.
+  Revoking the checkpoint signer requires full replay or a fresh checkpoint.
+- **Contacts on a fresh device.** Version-2 device approval grants carry
+  the approver's contacts head and confirmation state. Durable main and
+  pending pins reject older prefixes and conflicts transactionally. An
+  account-key-only enrollment or a version-1 grant leaves contacts seen
+  until this device compares them or receives authenticated confirmation.
+  Empty approval heads transfer no trust. See
+  [the implementation evidence](../roadmap-evidence/l11--approval-contacts-head.md).
 - **Archive verification limits** (ADR #817 resolution): it authenticates
   the public transcript and removals, not historical device-list
   authorization from today's revocations, historical PSK possession or the
-  secret schedule.
+  secret schedule. Unknown-time revocations count as historical credentials
+  only within an independently accepted prefix whose exact GroupContext
+  and tree the native verifier reaches before returning any authority.
+  Signed cutoffs remain enforced there; live joins retain the conservative
+  unknown-time fence. Document-author cutoff checks are separate and do not
+  accept that prefix as a replacement for a signed cutoff.
 - **Passkey qualification.** Chromium virtual-authenticator tests only;
   real authenticators, Safari, platform passkey providers and desktop are
   not qualified. The desktop WebView has no WebAuthn.
@@ -684,50 +712,39 @@ and on the scenario and archive tests.
   days without a visit unless installed to the Home Screen, deleting device
   keys, pins and MLS state. The user unlocks again with a passkey or the
   recovery key, the device rejoins its groups by External Commit, and its
-  version, device-list and contacts pins start again from what the server
-  shows (see the contacts-head item above).
+  version and device-list pins start again from what the server shows.
+  Contacts remain unconfirmed until independently confirmed as above.
 - **D1 Time Travel and the room's point-in-time recovery** keep migrated
   plaintext for up to 30 days after the purge.
 - **Unrecoverable accounts** are accepted: no escrow.
-- **Not built yet at the packet's base commit:** the default-on gate and
-  plaintext freeze (8-1, 8-4), the browser auto-migration (8-2), the legacy
-  read path (8-3a, 8-3b), and the held deletion of the server pipeline
-  (8-5).
-- **Open deferred review findings** (from earlier internal reviews; each is
-  assigned to a Phase 8 slice):
-  - Share-link server (8-C1, #912, #923): R2 snapshot objects are keyed by
-    envelope hash rather than by link; an equal-version snapshot
-    replacement orphans the losing object; a failed R2 delete during
-    revocation drops the only reference; snapshot writes lack the signer
-    device-list fence; delegation writes lack a device-list fence; link
-    registration needs signed proof from a certified owner device plus a
-    device-list fence; the anonymous blob rate limit counts each blob
-    instead of a whole link load.
-  - Share-link and reissue state in the browser (8-C2, #912, #923, #926): a
-    co-member's device removal raises no reissue notice; a removal handled
-    while the dialog is closed is forgotten; reissue passes rows pending
-    revocation and can recreate a revoked link; a link whose registration
-    failed after its grant committed stays unpublished; an identity change
-    whose server delete fails loses the retired list; an identity change
-    retires every link, not only those naming the previous identity; bulk
-    reissue is not persisted or resumable; an owner device removal does
-    not reissue the statements that device signed; a fresh owner browser
-    trusts an editor head's link set without verifying the intervening
-    parent sets; the copy dialog stays stuck when the account check fails
-    closed; revoked lists offered for reissue are lost on reload; a partial
-    reissue failure loses the links already created.
-  - Desktop (8-C3, #923): a desktop blob over 50 MiB exceeds the native
-    bridge's response cap.
-  - Migration (8-C4, #914, #918, #925): the sweep never pages past stagings
-    whose owners are still eligible; the last multipart transitions lack
-    the staging-lease fence; the part-reservation upsert lacks the
-    decrypt-lease fence.
-- **Documentation drift noticed while writing this packet:** the
-  `packages/mls/README.md` and `packages/mls/src/index.ts` comments say
-  nothing in `apps/` imports the package yet (the app does, through
-  `apps/web/src/lib/e2ee/mls/`); the ADR's MLS Decision still says the
-  spike report is not on `main` (it is); `packages/crypto/README.md`
-  still calls the ADR "proposed".
+- **Activation and deletion held for outside review.** Default-on gates,
+  plaintext freeze, sign-in auto-migration and browser legacy reads are
+  implemented behind off-by-default flags. Production activation and the
+  plaintext-pipeline deletion (8-5) remain held until written outside-review
+  clearance; the review is not completed. The review tag and SHA above
+  must be frozen before that review begins.
+- **Experimental archive-format cutover.** Migration 0044 refuses an
+  installation containing any earlier MLS groups, before supported deploy
+  commands publish code. V1 archives cannot supply the independent roots
+  this verifier requires, and the server must not invent them. Such
+  installations retain the prior release until owners authorize the
+  documented client-side transition in
+  [Self-hosting](../SELF_HOSTING.md#flags). There is no automatic
+  encrypted-to-encrypted legacy upgrader; owners who cannot consent to
+  the temporary plaintext reverse path must retain the prior release.
+- **Earlier deferred findings now implemented:** share-server storage,
+  write fences, signed registration and anonymous repetition budgets
+  ([8-C1 evidence](../roadmap-evidence/l11--share-links-hardening.md));
+  durable browser reissue work and owner-removal refresh
+  ([journal](../roadmap-evidence/l11--share-work-journal.md),
+  [refresh](../roadmap-evidence/l11--owner-removal-share-refresh.md));
+  authenticated link-set ancestry (#957,
+  [evidence](../roadmap-evidence/l11--share-set-ancestry.md)); native bounded
+  blob streaming and renderer-reload expiry (#938/#940,
+  [streaming](../roadmap-evidence/l11--desktop-blob-streaming.md),
+  [expiry](../roadmap-evidence/l11--native-blob-expiry.md)); and migration
+  sweep and lease fences (8-C4). Linux native verification covers those
+  desktop fixes; macOS qualification remains explicitly deferred.
 
 ## 7. Questions for the reviewer
 
@@ -743,8 +760,8 @@ and on the scenario and archive tests.
    certifications in TypeScript and handing the policy a snapshot
    (`buildDeviceDirectory`) free of time-of-check gaps, including
    `UNSIGNED_SHARED_CUTOFF` and the `activeAt` history exception? How much
-   does the missing contacts-head handover on a fresh device (section 6)
-   weaken verified pins, and what should close it before default-on?
+   do the authenticated contacts-head handover and transactional main and
+   pending pins preserve trust during approval and concurrent list loads?
 4. **Archive replay.** Does `archive.rs` bind the final state to the
    joining GroupInfo strongly enough, and does provisional admission ever
    let unverified keys reach document use?
@@ -766,7 +783,7 @@ and on the scenario and archive tests.
    one `EnvelopeKey`, or reuse a random-IV GCM key near its limits?
 10. **Share links.** Do the delegation and statement bounds (30 and 7
     days, 10-minute skew) hold for a stolen owner device or a former
-    editor, given the deferred 8-C1 and 8-C2 findings?
+    editor, including the 8-C1 server guards and durable 8-C2 reissue work?
 11. **Sealed MLS state.** Is sealing with an account-scoped non-extractable
     key, the project id in the AAD and a revision CAS enough against tab
     races and rollback of local state?

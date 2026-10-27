@@ -11,6 +11,11 @@ use serde::Deserialize;
 
 use crate::error::{Error, Res};
 
+// The browser uses this reserved value to fence PSK rejoins when a shared
+// project's device revocation has no signed cutoff. It is not a historical
+// cutoff and must never reactivate that device during archive verification.
+const UNSIGNED_REVOCATION_CUTOFF: u64 = 9_007_199_254_740_991;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialStatus {
     /// Certified by an unrevoked device in the user's newest verified list.
@@ -36,6 +41,9 @@ pub trait DeviceListVerifier: Send + Sync {
     /// Every revoked device whose revocation named this device as its
     /// replacement.
     fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Vec<Vec<u8>>;
+    /// Independently apply each device's signed cutoff, retaining earlier
+    /// revocations even when another device has a later cutoff.
+    fn at_epoch(&self, epoch: u64) -> Arc<dyn DeviceListVerifier>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -57,9 +65,42 @@ pub struct UserDevices {
 #[derive(Clone, Debug, Default)]
 pub struct DeviceDirectory {
     pub users: BTreeMap<Vec<u8>, UserDevices>,
+    /// Only stateless replay may set this after receiving an independently
+    /// authenticated terminal GroupInfo. It is never accepted from JSON.
+    authenticated_through: Option<u64>,
 }
 
 impl DeviceListVerifier for DeviceDirectory {
+    fn at_epoch(&self, epoch: u64) -> Arc<dyn DeviceListVerifier> {
+        let mut historical = self.clone();
+        for user in historical.users.values_mut() {
+            for device in user.devices.values_mut() {
+                device.leaf_keys.retain(|(_, at)| at.is_some_and(|at| at <= epoch));
+                if device.revocation_cutoff == Some(UNSIGNED_REVOCATION_CUTOFF) {
+                    if self.authenticated_through.is_some_and(|through| epoch <= through) {
+                        // The caller must verify this whole prefix reaches
+                        // the independently accepted context before returning
+                        // any authority. This is not live device admission.
+                        device.revoked = false;
+                    }
+                    // Unknown time cannot fence a past sibling's PSK. Keep
+                    // the revoked credential refused. The application binds
+                    // replay to independently authenticated membership state.
+                    // The live directory retains its conservative PSK fence.
+                    device.revocation_cutoff = None;
+                    continue;
+                }
+                if device.revoked
+                    && device
+                        .revocation_cutoff
+                        .is_some_and(|at| at != UNSIGNED_REVOCATION_CUTOFF && epoch < at)
+                {
+                    device.revoked = false;
+                }
+            }
+        }
+        Arc::new(historical)
+    }
     fn credential_status(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> CredentialStatus {
         let Some(device) = self.users.get(user_id).and_then(|u| u.devices.get(device_id)) else {
             return CredentialStatus::Unknown;
@@ -102,6 +143,37 @@ impl DeviceListVerifier for DeviceDirectory {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsigned_cutoff_never_reactivates_a_revoked_credential_or_relaxes_the_psk_fence() {
+        let directory = DeviceDirectory::from_json(r#"{"users":[{"userId":"alice","devices":[
+            {"deviceId":"known","status":"revoked","revocationCutoffEpoch":5,"leafKeys":[{"key":"01","certifiedEpoch":0}]},
+            {"deviceId":"unknown","status":"revoked","revocationCutoffEpoch":9007199254740991,"leafKeys":[{"key":"02","certifiedEpoch":0}]}
+        ]}]}"#).unwrap();
+        let before = directory.at_epoch(4);
+        assert_eq!(
+            before.credential_status(b"alice", b"known", &[1]),
+            CredentialStatus::Certified
+        );
+        assert_eq!(
+            before.credential_status(b"alice", b"unknown", &[2]),
+            CredentialStatus::Revoked
+        );
+        assert_eq!(before.revocation_cutoff(b"alice", &[]), None);
+        assert_eq!(
+            directory.revocation_cutoff(b"alice", &[]),
+            Some(UNSIGNED_REVOCATION_CUTOFF)
+        );
+        assert_eq!(
+            directory.at_epoch(5).credential_status(b"alice", b"known", &[1]),
+            CredentialStatus::Revoked
+        );
     }
 }
 
@@ -164,6 +236,11 @@ struct LeafKeyJson {
 }
 
 impl DeviceDirectory {
+    pub fn with_authenticated_prefix(mut self, through: u64) -> Self {
+        self.authenticated_through = Some(through);
+        self
+    }
+
     pub fn from_json(json: &str) -> Res<DeviceDirectory> {
         let parsed: DirectoryJson =
             serde_json::from_str(json).map_err(|e| Error::input(format!("device directory: {e}")))?;

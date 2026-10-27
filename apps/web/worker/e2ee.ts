@@ -111,6 +111,7 @@ import {
 import { PROJECT_MIGRATING_CODE } from '@openzcad/shared';
 import {
   isE2eeProjectGroupStorageReady,
+  isE2eeProjectAuthorityStorageReady,
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
   isE2eeReverseStorageReady
@@ -2069,6 +2070,7 @@ export async function handleE2eeRequest(
         // Encrypted projects need their MLS group tables (migration 0032)
         // and their version tables (migration 0033).
         (await isE2eeProjectGroupStorageReady(env.DB)) &&
+        (await isE2eeProjectAuthorityStorageReady(env.DB)) &&
         (await isE2eeProjectVersionStorageReady(env.DB));
       // Reported only once open, so a closed deployment answers as before.
       const migrationReady =

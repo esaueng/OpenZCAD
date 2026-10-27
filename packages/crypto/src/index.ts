@@ -184,6 +184,7 @@ export {
   REVOCATION_CUTOFFS_VERSION_1,
   REVOCATION_CUTOFFS_VERSION_2,
   GROUP_RESET_VERSION_1,
+  GROUP_RESET_VERSION_2,
   UNLOCK_TARGET_KINDS,
   accountKeyCommitment,
   accountKeySequence,
@@ -415,3 +416,4 @@ export {
   type InvitationRole,
   type ProjectInvitation
 } from './invitations';
+export * from './mls-authority';
