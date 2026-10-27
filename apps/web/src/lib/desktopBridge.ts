@@ -1,4 +1,5 @@
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
 
 export type DesktopMenuCommand =
@@ -376,7 +377,18 @@ export async function desktopFetch(
   }
   const headers = new Headers(init.headers);
   const { invoke } = await tauriCore();
-  const path = apiPath(input);
+  let path = apiPath(input);
+  // Older native hosts forward content-type only. Query negotiation keeps
+  // browser-side legacy decoding available without a native protocol upgrade.
+  if (
+    (init.method ?? 'GET').toUpperCase() === 'GET' &&
+    headers.get('accept') === LEGACY_PROJECT_FRAME_CONTENT_TYPE &&
+    /^\/api\/projects\/[^/?]+(?:\/revisions\/[^/?]+)?(?:\?|$)/.test(path)
+  ) {
+    const raw = new URL(path, CLOUD_API_ORIGIN);
+    raw.searchParams.set('storage', 'raw');
+    path = raw.pathname + raw.search;
+  }
   if (
     (init.method ?? 'GET').toUpperCase() === 'GET' &&
     (init.body === undefined || init.body === null) &&

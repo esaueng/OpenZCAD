@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { foldEvidence, readFragments } from '../scripts/roadmap-evidence.mjs';
 import { UPLOAD_CLEANUP_CRON } from '../scripts/validate-deployment-config.mjs';
 import { FLEET_CI_PATH } from './fleet-workflow';
+import { MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
 
 interface PackageJson {
   scripts?: Record<string, string>;
@@ -276,11 +277,7 @@ describe('documented facts match the code', () => {
   });
 
   it('states the import ceiling the code enforces', () => {
-    const bytes = /MAX_SOURCE_IMPORT_BYTES = (\d+) \* 1024 \* 1024/.exec(
-      read('apps/web/src/lib/stepImportRun.ts')
-    )?.[1];
-    expect(bytes).toBeDefined();
-    const megabytes = `${bytes} MB`;
+    const megabytes = `${MAX_SOURCE_IMPORT_BYTES / (1024 * 1024)} MB`;
     // The refusal message used to say 250 MB against a 128 MB cap, so a file
     // was rejected by a sentence saying it was allowed.
     for (const path of ['README.md', 'architecture.md']) {

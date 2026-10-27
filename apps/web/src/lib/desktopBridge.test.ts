@@ -21,6 +21,7 @@ import {
 import { readSharedSourceBytes } from './sharedSourceDownload';
 import { sharedBlobUrl } from './e2ee/sharedSnapshotLoader';
 import { createContentBlobsApi } from './e2ee/encryptedContentBlobs';
+import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }));
@@ -336,6 +337,39 @@ describe('desktop bridge', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it.each([
+    '/api/projects/proj_legacy',
+    '/api/projects/proj_legacy/revisions/rev_legacy?existing=kept'
+  ])(
+    'negotiates raw legacy storage through older native hosts: %s',
+    async (path) => {
+      markDesktopRuntime();
+      vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
+      await desktopFetch(path, {
+        headers: { accept: LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+      });
+      const expected = new URL(path, 'https://zcad.app');
+      expected.searchParams.set('storage', 'raw');
+      expect(invoke).toHaveBeenLastCalledWith('desktop_api_request', {
+        request: {
+          method: 'GET',
+          path: expected.pathname + expected.search,
+          contentType: undefined,
+          body: undefined
+        }
+      });
+      await desktopFetch(path);
+      expect(invoke).toHaveBeenLastCalledWith('desktop_api_request', {
+        request: {
+          method: 'GET',
+          path,
+          contentType: undefined,
+          body: undefined
+        }
+      });
+    }
+  );
 
   it('accepts only a ticketed fixed-origin collaboration URL from Rust', async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =

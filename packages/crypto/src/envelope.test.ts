@@ -826,10 +826,7 @@ describe('decompression limits', () => {
         .split('*')
         .reduce((product, factor) => product * Number(factor), 1);
     };
-    const sourceLimit = appConstant(
-      'src/lib/stepImportRun.ts',
-      'MAX_SOURCE_IMPORT_BYTES'
-    );
+    const sourceLimit = shared.MAX_SOURCE_IMPORT_BYTES;
     expect(sourceLimit).toBe(128 * 1024 * 1024);
     expect(
       appConstant(

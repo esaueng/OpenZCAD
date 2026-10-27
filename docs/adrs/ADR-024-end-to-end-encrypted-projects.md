@@ -1188,6 +1188,17 @@ wrapping, decompression, dedupe and fingerprint work.
 
 ## Delivery phases
 
+The Phase 8 legacy reader negotiates
+`application/vnd.openzcad.legacy-project-frame` with `Accept` on existing
+project and revision GET routes. The frame is `u32 metadata length | JSON
+metadata | raw storage bytes`: inline text or the original gzip snapshot.
+The Worker supplies storage lengths/checksum and copied-source aliases;
+authenticated project-scoped asset reads relay gzip bytes. CAD parsing,
+history migration, hydration and alias reconciliation run in the browser,
+with bounded downloads/decompression and checksum/size checks. Older Workers
+may answer normal JSON. The old server reader remains during qualification;
+outside review still gates its deletion and production activation.
+
 Phase 1 moves the server logic into the browser while data is still plaintext,
 so the existing Vitest, parity and Playwright suites prove the behavior before
 any encryption lands. After that, encryption is a storage-format change.

@@ -22,6 +22,10 @@ import {
   assertProjectRouteFormat
 } from './projectFormatGate';
 import { assertPlaintextRouteWritable } from './plaintextFreeze';
+import {
+  readLegacyProjectStorage,
+  readLegacyProjectAsset
+} from './legacyProjectReads';
 import { sweepProjectMigrations } from './e2eeProjectMigrations';
 import {
   decryptStagingFor,
@@ -193,6 +197,7 @@ import {
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_WRITE_BYTES,
+  LEGACY_PROJECT_FRAME_CONTENT_TYPE,
   toUserId
 } from '@openzcad/shared';
 
@@ -1627,7 +1632,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   await assertPlaintextRouteWritable(
-    env, persistence, userId, request.method, pathname
+    env,
+    persistence,
+    userId,
+    request.method,
+    pathname
   );
 
   if (request.method === 'GET' && pathname === '/api/settings') {
@@ -2183,6 +2192,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'GET' && projectMatch) {
+    if (
+      url.searchParams.get('storage') === 'raw' ||
+      request.headers.get('accept') === LEGACY_PROJECT_FRAME_CONTENT_TYPE
+    ) {
+      const raw = await readLegacyProjectStorage(
+        env,
+        persistence,
+        userId,
+        projectMatch[1]!
+      );
+      if (raw) return raw;
+    }
     const project = await persistence.loadProject(userId, projectMatch[1]!);
     return project ? json(project) : json({ error: 'Project not found.' }, 404);
   }
@@ -2203,6 +2224,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const revisionsMatch = PROJECT_REVISIONS_ROUTE.exec(pathname);
+  const storageAssetMatch = /^\/api\/projects\/([^/]+)\/storage-assets$/.exec(
+    pathname
+  );
+  if (request.method === 'GET' && storageAssetMatch) {
+    return readLegacyProjectAsset(
+      env,
+      persistence,
+      userId,
+      storageAssetMatch[1]!,
+      url.searchParams.get('key') ?? ''
+    );
+  }
   if (request.method === 'POST' && revisionsMatch) {
     const opened = await openProjectStorageRequest(
       await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES, true),
@@ -2234,6 +2267,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const revisionMatch = PROJECT_REVISION_ROUTE.exec(pathname);
   if (request.method === 'GET' && revisionMatch) {
+    if (
+      url.searchParams.get('storage') === 'raw' ||
+      request.headers.get('accept') === LEGACY_PROJECT_FRAME_CONTENT_TYPE
+    ) {
+      const raw = await readLegacyProjectStorage(
+        env,
+        persistence,
+        userId,
+        revisionMatch[1]!,
+        revisionMatch[2]
+      );
+      if (raw) return raw;
+    }
     const document = await persistence.loadRevision(
       userId,
       revisionMatch[1]!,
@@ -2521,7 +2567,7 @@ export default {
           : isE2eeMigrationEnabled(env, email),
       Date.now(),
       isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON') ||
-      isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN')
+        isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN')
         ? (email) =>
             isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN') ||
             isE2eeDefaultOn(env, email)
