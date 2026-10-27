@@ -102,6 +102,7 @@ import {
   createE2eeShareLinksApi
 } from '@openzcad/shared';
 import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
+import type { ShareRemovalNotice } from './shareWorkStore';
 import { contactInvitationPeople, type InvitationContext } from './invitations';
 import { invitationStore } from './invitationStore';
 
@@ -133,7 +134,10 @@ export interface PageShareLinks {
 let opened: Opened | null = null;
 let decoder: E2eeDecoder | null = null;
 const warningListeners = new Set<(warning: EncryptedProjectWarning) => void>();
-const removalListeners = new Set<(removal: MembersRemoved) => void>();
+type SharingRemoval = MembersRemoved & {
+  readonly shareNotice?: ShareRemovalNotice;
+};
+const removalListeners = new Set<(removal: SharingRemoval) => void>();
 
 /**
  * Members who lost access to a project in a Commit this page sent or
@@ -143,7 +147,7 @@ const removalListeners = new Set<(removal: MembersRemoved) => void>();
  * links made before the removal.
  */
 export function subscribeMemberRemovals(
-  listener: (removal: MembersRemoved) => void
+  listener: (removal: SharingRemoval) => void
 ): () => void {
   removalListeners.add(listener);
   return () => removalListeners.delete(listener);
@@ -164,6 +168,24 @@ export function subscribeEncryptedProjectWarnings(
 ): () => void {
   warningListeners.add(listener);
   return () => warningListeners.delete(listener);
+}
+
+/** Journal completion wakes the dialog independently of remote upkeep. */
+function removalNotifier(
+  removal: MembersRemoved
+): (notice?: ShareRemovalNotice) => void {
+  let notified = false;
+  return (notice) => {
+    if (notified) return;
+    notified = true;
+    for (const listener of removalListeners) {
+      try {
+        listener({ ...removal, ...(notice ? { shareNotice: notice } : {}) });
+      } catch {
+        /* Every listener still hears it. */
+      }
+    }
+  };
 }
 
 async function pageSession(): Promise<{
@@ -261,27 +283,31 @@ async function openStore(
     // The share-link reissue hook (slice 5-5, for slice 5-10): the owner's
     // page issues new statements at once, and the dialog offers reissue.
     onMembersRemoved: (removal: MembersRemoved) => {
+      const notify = removalNotifier(removal);
       void import('./shareLinks')
-        .then(({ shareLinksAfterRemoval }) =>
-          shareCtx ? shareLinksAfterRemoval(shareCtx, removal) : null
-        )
-        .catch(() => undefined);
-      for (const listener of removalListeners) {
-        try {
-          listener(removal);
-        } catch {
-          // Every listener still hears it.
-        }
-      }
+        .then(({ shareLinksAfterRemoval }) => {
+          if (shareCtx) return shareLinksAfterRemoval(shareCtx, removal, notify);
+          notify();
+          return null;
+        })
+        .catch(() => notify());
     },
     // A co-member's device removal rotated a project (slice 5-7): the
     // owner's page states its share links again without that device.
     onMemberDevicesRemoved: (removal: MemberDevicesRemoved) => {
+      const notice: MembersRemoved = {
+        projectId: removal.projectId,
+        keyEpoch: removal.keyEpoch,
+        userIds: [...new Set(removal.devices.map((device) => device.userId))]
+      };
+      const notify = removalNotifier(notice);
       void import('./shareLinks')
-        .then(({ shareLinksAfterDeviceRemoval }) =>
-          shareCtx ? shareLinksAfterDeviceRemoval(shareCtx, removal) : null
-        )
-        .catch(() => undefined);
+        .then(({ shareLinksAfterDeviceRemoval }) => {
+          if (shareCtx) return shareLinksAfterDeviceRemoval(shareCtx, removal, notify);
+          notify();
+          return null;
+        })
+        .catch(() => notify());
     },
     // A Commit refused because this account's devices changed elsewhere
     // (#908 review): `account` is stale, so the next operation opens the

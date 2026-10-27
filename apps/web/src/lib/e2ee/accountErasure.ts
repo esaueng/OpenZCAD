@@ -3,6 +3,7 @@ import { deviceKeyStore } from './keychainDeviceKeys';
 import * as mlsStores from './mls/sessionStore';
 import { lockAccount } from './unlockedKeys';
 import { confirmKeySessionEnded } from './keySession';
+import { shareWorkStore } from './shareWorkStore';
 
 /** Only the successful, explicitly requested erasure may reset local trust. */
 export async function eraseAccountWithKeyCleanup<
@@ -38,6 +39,7 @@ export async function eraseAccountWithKeyCleanup<
         cleanup = await Promise.allSettled([
           store.forgetErasedIdentity(userId, pin),
           mlsStores.indexedDbMlsSessionStore().deleteAccount(userId),
+          shareWorkStore().deleteAccount(userId),
           // The erased account's device keys open nothing any more. On
           // desktop the Keychain keys go before the record, so a refused
           // native removal keeps the record and its key id. User ids are

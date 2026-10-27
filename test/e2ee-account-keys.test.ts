@@ -3627,6 +3627,8 @@ describe('profile deletion', () => {
   it('still forgets the MLS state when device-key cleanup fails after erasure', async () => {
     const srv = server();
     const { laptop } = await setUp(srv);
+    const journal = (await import('../apps/web/src/lib/e2ee/shareWorkStore')).shareWorkStore();
+    await journal.update(USER, 'project', (current) => ({ ...current, notice: 'saved' }));
     const mls = mlsStores.memoryMlsSessionStore();
     await mls.getOrCreateStateKey(
       USER,
@@ -3653,6 +3655,7 @@ describe('profile deletion', () => {
     ).rejects.toThrow('Device database unavailable');
     // The separate MLS database was still cleared.
     expect(await mls.loadStateKey(USER)).toBeNull();
+    expect((await journal.read(USER, 'project')).notice).toBeNull();
     forget.mockRestore();
   });
 
