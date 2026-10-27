@@ -11,6 +11,11 @@ use serde::Deserialize;
 
 use crate::error::{Error, Res};
 
+// The browser uses this reserved value to fence PSK rejoins when a shared
+// project's device revocation has no signed cutoff. It is not a historical
+// cutoff and must never reactivate that device during archive verification.
+const UNSIGNED_REVOCATION_CUTOFF: u64 = 9_007_199_254_740_991;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialStatus {
     /// Certified by an unrevoked device in the user's newest verified list.
@@ -68,7 +73,11 @@ impl DeviceListVerifier for DeviceDirectory {
         for user in historical.users.values_mut() {
             for device in user.devices.values_mut() {
                 device.leaf_keys.retain(|(_, at)| at.is_some_and(|at| at <= epoch));
-                if device.revoked && device.revocation_cutoff.is_some_and(|at| epoch < at) {
+                if device.revoked
+                    && device
+                        .revocation_cutoff
+                        .is_some_and(|at| at != UNSIGNED_REVOCATION_CUTOFF && epoch < at)
+                {
                     device.revoked = false;
                 }
             }
@@ -117,6 +126,36 @@ impl DeviceListVerifier for DeviceDirectory {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsigned_cutoff_never_reactivates_a_revoked_credential_or_relaxes_the_psk_fence() {
+        let directory = DeviceDirectory::from_json(r#"{"users":[{"userId":"alice","devices":[
+            {"deviceId":"known","status":"revoked","revocationCutoffEpoch":5,"leafKeys":[{"key":"01","certifiedEpoch":0}]},
+            {"deviceId":"unknown","status":"revoked","revocationCutoffEpoch":9007199254740991,"leafKeys":[{"key":"02","certifiedEpoch":0}]}
+        ]}]}"#).unwrap();
+        let before = directory.at_epoch(4);
+        assert_eq!(
+            before.credential_status(b"alice", b"known", &[1]),
+            CredentialStatus::Certified
+        );
+        assert_eq!(
+            before.credential_status(b"alice", b"unknown", &[2]),
+            CredentialStatus::Revoked
+        );
+        assert_eq!(
+            before.revocation_cutoff(b"alice", &[]),
+            Some(UNSIGNED_REVOCATION_CUTOFF)
+        );
+        assert_eq!(
+            directory.at_epoch(5).credential_status(b"alice", b"known", &[1]),
+            CredentialStatus::Revoked
+        );
     }
 }
 
