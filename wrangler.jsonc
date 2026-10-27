@@ -69,6 +69,7 @@
     // It needs the outside review confirmed done, and E2EE_KEYS_ENABLED,
     // E2EE_PROJECTS_ENABLED and E2EE_MIGRATION_ENABLED on, before it is set.
     "E2EE_DEFAULT_ON": "false",
+    "E2EE_PLAINTEXT_FROZEN": "false",
     // Assistant rollout flags live here, not in the dashboard: a deploy
     // replaces dashboard variables with this block. Each one exposes its
     // operation in the model's output schema, and every one compiles to a

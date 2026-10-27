@@ -340,12 +340,14 @@ unquoted JSON `true` reaches the Worker as a boolean, which it reads as off.
    eligible account, refuses opting out and new plaintext sharing, and closes
    reverse migration. It requires step 3. Keep it off until the browser's
    default-on migration flow and the outside review are complete.
-5. `E2EE_PLAINTEXT_FROZEN` (planned, not in this release): plaintext writes
-   refused.
+5. `E2EE_PLAINTEXT_FROZEN`: deployment-wide plaintext content and upload writes
+   refused, including old REST clients and existing room sockets. Legacy reads,
+   erasure and encrypted migration stay available. This requires global keys
+   and step 4 in preflight; it cannot be scoped to canary accounts. Keep it off
+   until the legacy reader and the reviewed migration rollout are qualified.
 
-This version does not read `E2EE_PLAINTEXT_FROZEN`, so the preflight accepts it
-only as `"false"`. The default-on Worker gate is implemented behind its flag;
-that is not completion of the browser rollout or the outside review of the
+The default-on and freeze Worker gates are implemented behind their flags;
+that is not completion of the rollout or the outside review of the
 cryptography, key flows and pinned MLS version. Preflight checks configuration
 consistency; it cannot certify that the outside review is complete.
 
@@ -364,13 +366,17 @@ try encryption on a separate test instance instead.
 After each deployment, sign in and open `/api/e2ee/config`. It reports
 `enabled` (the key routes) and `projectsEnabled`, and adds `migrationEnabled`,
 `reverseEnabled` and `defaultOn` once each is on and its required migrations
-are installed.
+are installed. `plaintextFrozen: true` reports the global freeze even if an
+account's key routes are closed. A configuration error therefore cannot
+silently reopen plaintext writes.
 
 Turning flags off deletes nothing, but clear account opt-ins before closing
 the project routes:
 
 1. If `E2EE_DEFAULT_ON` is on, set it to `"false"` and deploy with
-   `E2EE_KEYS_ENABLED` and `E2EE_PROJECTS_ENABLED` still on. Check that
+   `E2EE_KEYS_ENABLED` and `E2EE_PROJECTS_ENABLED` still on. Turn off
+   `E2EE_PLAINTEXT_FROZEN` in the same deployment, before attempting any
+   plaintext recovery write. Check that
    `/api/e2ee/config` no longer reports `defaultOn: true`; the default-on gate
    otherwise refuses the account opt-out required next.
 

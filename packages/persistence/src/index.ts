@@ -284,6 +284,7 @@ export {
   assertShareableProject,
   EncryptedProjectSharingError,
   EncryptedProjectsRequiredError,
+  PlaintextProjectFrozenError,
   isPlaintextStorageFormat,
   ProjectFormatUnsupportedError,
   ProjectMigratingError

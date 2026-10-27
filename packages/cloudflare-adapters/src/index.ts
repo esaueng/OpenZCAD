@@ -41,6 +41,7 @@ import {
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
   PROJECT_MEMBER_CAP,
   EncryptedProjectsRequiredError,
+  PlaintextProjectFrozenError,
   ProjectMigratingError,
   ProjectNotFoundError,
   ProjectSharingError,
@@ -263,6 +264,8 @@ export interface CloudflareEnv {
    * (E2EE_MIGRATION_ENABLED). Held until the outside review is done.
    */
   E2EE_DEFAULT_ON?: string;
+  /** Deployment-wide legacy plaintext write freeze; off until reviewed rollout. */
+  E2EE_PLAINTEXT_FROZEN?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_GROWING_HOLDER_ENABLED?: string;
   AI_PATCH_HOLE_CONTROL_ENABLED?: string;
@@ -353,6 +356,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'E2EE_MIGRATION_ENABLED',
   'E2EE_REVERSE_ENABLED',
   'E2EE_DEFAULT_ON',
+  'E2EE_PLAINTEXT_FROZEN',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_GROWING_HOLDER_ENABLED',
   'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -497,7 +501,8 @@ export function isE2eeReverseEnabled(
   return (
     isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED') &&
     isE2eeMigrationEnabled(env, email) &&
-    !isE2eeDefaultOn(env, email)
+    !isE2eeDefaultOn(env, email) &&
+    !isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN')
   );
 }
 
@@ -513,6 +518,12 @@ export function isE2eeDefaultOn(env: CloudflareEnv, email?: string): boolean {
     isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON') &&
     isE2eeMigrationEnabled(env, email)
   );
+}
+
+/** Global and fail closed even if another rollout flag is misconfigured. */
+export function assertPlaintextWritesAllowed(env: CloudflareEnv): void {
+  if (isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN'))
+    throw new PlaintextProjectFrozenError();
 }
 
 /**
@@ -1190,6 +1201,7 @@ export class D1R2PersistenceService implements PersistenceService {
     projectId: string,
     input: CreateProjectInvitationInput
   ): Promise<ProjectInvitationSummary> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().createProjectInvitation(
         ownerUserId,
@@ -1352,6 +1364,7 @@ export class D1R2PersistenceService implements PersistenceService {
     role: ProjectMemberRole,
     updatedAt: number
   ): Promise<void> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().updateProjectMemberRole(
         ownerUserId,
@@ -1447,6 +1460,7 @@ export class D1R2PersistenceService implements PersistenceService {
     tokenHash: string,
     acceptedAt: number
   ): Promise<{ projectId: string; role: ProjectMemberRole }> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().acceptProjectInvitation(
         userId,
@@ -1585,6 +1599,7 @@ export class D1R2PersistenceService implements PersistenceService {
     projectId: string,
     input: CreateProjectShareLinkInput
   ): Promise<ProjectShareLinkSummary> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().createProjectShareLink(
         ownerUserId,
@@ -1989,6 +2004,7 @@ export class D1R2PersistenceService implements PersistenceService {
     request: CreateProjectRequest,
     options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().createProject(userId, request);
     }
@@ -2158,6 +2174,7 @@ export class D1R2PersistenceService implements PersistenceService {
     request: DuplicateProjectRequest,
     options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().duplicateProject(userId, request);
     }
@@ -2610,6 +2627,7 @@ export class D1R2PersistenceService implements PersistenceService {
       expectedHeadIdentity: ProjectCopyCleanupIdentity;
     }
   ): Promise<CreateProjectResponse> {
+    assertPlaintextWritesAllowed(this.env);
     if (this.env.PROJECT_ROOM) {
       const response = await this.env.PROJECT_ROOM.getByName(
         request.projectId
@@ -2945,6 +2963,7 @@ export class D1R2PersistenceService implements PersistenceService {
     request: SaveRevisionRequest,
     options?: ProjectWriteOptions
   ): Promise<ProjectDocument> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
@@ -3197,6 +3216,7 @@ export class D1R2PersistenceService implements PersistenceService {
     beforeCommit: () => Promise<void>,
     publish: () => Promise<boolean>
   ): Promise<boolean> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       throw new ProjectObjectStorageError(
         'Durable checkpoint storage is unavailable.'
@@ -3643,6 +3663,7 @@ export class D1R2PersistenceService implements PersistenceService {
     version: number;
     staged: boolean;
   }> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB || !this.projectStorageBucket()) {
       throw new ProjectObjectStorageError(
         'Project object storage is not configured.'
@@ -3905,6 +3926,7 @@ export class D1R2PersistenceService implements PersistenceService {
     request: SaveProjectDocumentRequest,
     options?: ProjectWriteOptions & { expectedHead?: ProjectCopyStoredHead }
   ): Promise<SaveProjectDocumentResponse> {
+    assertPlaintextWritesAllowed(this.env);
     const expectedHead = options?.expectedHead;
     if (!this.env.DB) {
       return getInMemoryPersistence().saveDocument(userId, request);
@@ -4129,6 +4151,7 @@ export class D1R2PersistenceService implements PersistenceService {
       decryptStaging?: DecryptStagingFence & { readonly leaseId: string };
     }
   ): Promise<CreateUploadSessionResponse> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
@@ -4226,6 +4249,7 @@ export class D1R2PersistenceService implements PersistenceService {
     uploadSessionId: string,
     body: ArrayBuffer
   ): Promise<void> {
+    if (!this.env.DB) assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().putUpload(userId, uploadSessionId, body);
     }
@@ -4447,6 +4471,7 @@ export class D1R2PersistenceService implements PersistenceService {
     uploadSessionId: string
   ): Promise<CheckedUploadSession> {
     const upload = await this.loadUploadSession(uploadSessionId);
+    if (!upload?.e2eeBlobKind) assertPlaintextWritesAllowed(this.env);
     const expiresAt = upload ? Date.parse(upload.expiresAt) : Number.NaN;
     if (!upload || !Number.isFinite(expiresAt) || expiresAt < Date.now()) {
       throw new ArtifactStorageError(
@@ -4884,6 +4909,7 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     uploadSessionId: string
   ): Promise<CreateMultipartUploadResponse> {
+    if (!this.env.DB) assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().createMultipartUpload(
         userId,
@@ -4968,6 +4994,7 @@ export class D1R2PersistenceService implements PersistenceService {
     partNumber: number,
     body: ArrayBuffer
   ): Promise<UploadedArtifactPart> {
+    if (!this.env.DB) assertPlaintextWritesAllowed(this.env);
     return this.putUploadPartInternal(
       userId,
       uploadSessionId,
@@ -5107,6 +5134,7 @@ export class D1R2PersistenceService implements PersistenceService {
     uploadSessionId: string,
     request: CompleteMultipartUploadRequest
   ): Promise<void> {
+    if (!this.env.DB) assertPlaintextWritesAllowed(this.env);
     return this.completeMultipartUploadInternal(
       userId,
       uploadSessionId,
@@ -5828,6 +5856,7 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB) {
       return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
@@ -6081,6 +6110,7 @@ export class D1R2PersistenceService implements PersistenceService {
     artifactId: string,
     originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
+    assertPlaintextWritesAllowed(this.env);
     if (!this.env.DB)
       return getInMemoryPersistence().discardMeshPayload(
         userId,
@@ -9685,6 +9715,17 @@ export class ProjectCollaborationRoom extends DurableObject {
     leaseId: string | undefined,
     socket: WebSocket
   ): Promise<boolean> {
+    if (
+      this.roomFormat !== 2 &&
+      isCloudflareFeatureEnabled(this.roomEnv, 'E2EE_PLAINTEXT_FROZEN')
+    ) {
+      this.send(socket, {
+        type: 'error',
+        code: 'permission-denied',
+        message: new PlaintextProjectFrozenError().message
+      });
+      return false;
+    }
     if (!(await this.membershipStillAllowsAuthoring(connection))) {
       this.send(socket, {
         type: 'error',
@@ -9806,6 +9847,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     document: ProjectDocument,
     dirtyHistoryVersions: ReadonlySet<number> = new Set()
   ): Promise<boolean> {
+    if (isCloudflareFeatureEnabled(this.roomEnv, 'E2EE_PLAINTEXT_FROZEN'))
+      return false;
     if (this.roomEnv.DB) {
       const guard = meshDiscardCommitGuard(document);
       const allowed = await this.roomEnv.DB.prepare(

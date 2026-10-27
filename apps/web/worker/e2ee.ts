@@ -2052,7 +2052,8 @@ export async function handleE2eeRequest(
    * reported once migration is, and the "Encrypt new projects" opt-out is
    * refused.
    */
-  defaultOn = false
+  defaultOn = false,
+  plaintextFrozen = false
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -2083,7 +2084,8 @@ export async function handleE2eeRequest(
         projectsEnabled: projectsReady,
         ...(migrationReady ? { migrationEnabled: true } : {}),
         ...(reverseReady ? { reverseEnabled: true } : {}),
-        ...(migrationReady && defaultOn ? { defaultOn: true } : {})
+        ...(migrationReady && defaultOn ? { defaultOn: true } : {}),
+        ...(plaintextFrozen ? { plaintextFrozen: true } : {})
       });
     }
     if (!enabled) {
