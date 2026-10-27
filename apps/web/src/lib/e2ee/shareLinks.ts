@@ -1090,33 +1090,34 @@ async function createStoredShareLink(
     });
   };
   try {
-    await register(head.keyEpoch);
-  } catch (error) {
-    // The group moved on after the version: wrap under the new epoch.
-    if ((error as { code?: string }).code === 'E2EE_EPOCH_STALE') {
+    try {
+      await register(head.keyEpoch);
+    } catch (error) {
+      // The group moved on after the version: wrap under the new epoch.
+      if ((error as { code?: string }).code !== 'E2EE_EPOCH_STALE') throw error;
       await register((await joinProjectGroup(ctx.groups, projectId)).keyEpoch);
-    } else {
-      // Registration may have committed while its response was lost. Recover
-      // the same id/key rather than creating another grant on retry.
-      const recorded = (await ctx.api.list(projectId)).links.find(
-        (link) => link.shareId === shareId
-      );
-      if (
-        !recorded ||
-        recorded.mode !== mode ||
-        recorded.ownerIdentityHash !== identity ||
-        recorded.shareKeyHash !== b64(keyHash)
-      )
-        throw error;
-      await shareKeyFor(
-        ctx,
-        projectId,
-        shareId,
-        keyHash,
-        recorded,
-        Math.max(...recorded.keys.map((key) => key.keyEpoch))
-      );
     }
+  } catch (error) {
+    // Registration may have committed while its response was lost. Recover
+    // the same id/key rather than creating another grant on retry.
+    const recorded = (await ctx.api.list(projectId)).links.find(
+      (link) => link.shareId === shareId
+    );
+    if (
+      !recorded ||
+      recorded.mode !== mode ||
+      recorded.ownerIdentityHash !== identity ||
+      recorded.shareKeyHash !== b64(keyHash)
+    )
+      throw error;
+    await shareKeyFor(
+      ctx,
+      projectId,
+      shareId,
+      keyHash,
+      recorded,
+      Math.max(...recorded.keys.map((key) => key.keyEpoch))
+    );
   }
   active();
   const origin = saved?.sourceId ?? sourceId;

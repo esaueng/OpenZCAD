@@ -2010,6 +2010,40 @@ describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('durable browser share work', { timeout: 120_000 }, () => {
+  it('reconciles a lost response after the stale-epoch registration retry commits', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const work = memoryShareWorkStore();
+    let attempts = 0;
+    const ctx = {
+      ...laptop.shareLinks,
+      work,
+      api: {
+        ...laptop.shareLinks.api,
+        create: async (
+          ...args: Parameters<typeof laptop.shareLinks.api.create>
+        ) => {
+          if (++attempts === 1)
+            throw new E2eeShareLinkApiError(
+              409,
+              'Epoch moved',
+              'E2EE_EPOCH_STALE'
+            );
+          await laptop.shareLinks.api.create(...args);
+          throw new Error('Retry response lost');
+        }
+      }
+    };
+    const created = await createShareLink(ctx, projectId, 'view');
+    expect(attempts).toBe(2);
+    expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+    const view = await listShareLinks(laptop.shareLinks, projectId);
+    expect(view.links.map((link) => link.shareId)).toEqual([created.shareId]);
+    expect((await visit(srv, created.url)).verified.shareId).toBe(
+      created.shareId
+    );
+  });
+
   it.each(['member', 'device'] as const)(
     'keeps a transient %s-removal prompt and refreshes authority when journal storage fails',
     async (kind) => {
