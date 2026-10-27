@@ -945,11 +945,12 @@ export function rejoinPskId(epoch) {
  * @param {Uint8Array} target_record
  * @param {string} owner_user_id
  * @param {string} directory_json
+ * @param {Uint8Array} authenticated_group_info
  * @returns {string}
  */
-export function verifyEpochAuthority(project_id, anchor, records_json, target_record, owner_user_id, directory_json) {
-    let deferred8_0;
-    let deferred8_1;
+export function verifyEpochAuthority(project_id, anchor, records_json, target_record, owner_user_id, directory_json, authenticated_group_info) {
+    let deferred9_0;
+    let deferred9_1;
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         const ptr0 = passStringToWasm0(project_id, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
@@ -964,23 +965,25 @@ export function verifyEpochAuthority(project_id, anchor, records_json, target_re
         const len4 = WASM_VECTOR_LEN;
         const ptr5 = passStringToWasm0(directory_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
         const len5 = WASM_VECTOR_LEN;
-        wasm.verifyEpochAuthority(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
+        const ptr6 = passArray8ToWasm0(authenticated_group_info, wasm.__wbindgen_export3);
+        const len6 = WASM_VECTOR_LEN;
+        wasm.verifyEpochAuthority(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
         var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-        var ptr7 = r0;
-        var len7 = r1;
+        var ptr8 = r0;
+        var len8 = r1;
         if (r3) {
-            ptr7 = 0; len7 = 0;
+            ptr8 = 0; len8 = 0;
             throw takeObject(r2);
         }
-        deferred8_0 = ptr7;
-        deferred8_1 = len7;
-        return getStringFromWasm0(ptr7, len7);
+        deferred9_0 = ptr8;
+        deferred9_1 = len8;
+        return getStringFromWasm0(ptr8, len8);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export2(deferred8_0, deferred8_1, 1);
+        wasm.__wbindgen_export2(deferred9_0, deferred9_1, 1);
     }
 }
 function __wbg_get_imports() {
