@@ -555,6 +555,11 @@ const integrity = (reason: EncryptedIntegrityReason, message: string) =>
 /** A concurrent owner refresh may prune a cursor between log pages. */
 class VersionHistoryPageChanged extends Error {}
 
+const retryableHistory = (error: unknown): error is Error =>
+  error instanceof VersionHistoryPageChanged ||
+  (error instanceof EncryptedProjectIntegrityError &&
+    (error.reason === 'fork' || error.reason === 'share-links'));
+
 function logFailure(error: VersionLogError): EncryptedProjectIntegrityError {
   switch (error.reason) {
     case 'pinned-missing':
@@ -1230,12 +1235,14 @@ export function createEncryptedProjectStore(
           metadata.more,
           head
         );
+        await verifyLog(projectId, pinHash, entries);
       } catch (error) {
-        if (!(error instanceof VersionHistoryPageChanged)) throw error;
+        if (!retryableHistory(error)) throw error;
         if (attempt < 2) continue;
-        throw integrity('fork', error.message);
+        throw error instanceof VersionHistoryPageChanged
+          ? integrity('fork', error.message)
+          : error;
       }
-      await verifyLog(projectId, pinHash, entries);
       const author = await authorOf(projectId, envelope, bytes(head.signature));
       const header = author.header;
       const hash = toHex(author.versionHash);
@@ -2074,13 +2081,13 @@ export function createEncryptedProjectStore(
           pin && pinHash ? pin.documentVersion : undefined,
           record
         );
+        await verifyLog(projectId, pinHash, entries);
       } catch (error) {
-        if (!(error instanceof VersionHistoryPageChanged)) throw error;
+        if (!retryableHistory(error)) throw error;
         // The old relayed head lost its proof. Read the current account head
         // from the original durable pin; never accept the incomplete chain.
         return readHead(projectId);
       }
-      await verifyLog(projectId, pinHash, entries);
       const author = await authorOf(
         projectId,
         envelope,

@@ -16,6 +16,7 @@ import {
   describe,
   expect,
   it,
+  vi,
   type Mock
 } from 'vitest';
 import worker from '../apps/web/worker/index';
@@ -698,7 +699,7 @@ describe('registering a link (slice 8-C1)', { timeout: 120_000 }, () => {
 });
 
 describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
-  it.each(['account', 'room'] as const)(
+  it.each(['account', 'room', 'before-first-page'] as const)(
     'restarts a %s read when an owner refresh prunes its page cursor',
     async (mode) => {
       const { srv, laptop, member, projectId, document } =
@@ -745,7 +746,34 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
       });
       let pages = 0;
       let refreshed = false;
+      if (mode === 'before-first-page') {
+        const load = fresh.documents.loadDocument;
+        vi.spyOn(fresh.documents, 'loadDocument').mockImplementationOnce(
+          async (...args) => {
+            const captured = await load(...args);
+            await writeWithLinks(srv, laptop, projectId, document, {
+              grants: [],
+              tombstones: []
+            });
+            refreshed = true;
+            // Keep the captured, valid editor head as the first surviving
+            // record; the missing owner baseline must trigger a fresh read.
+            srv.db
+              .prepare(
+                'DELETE FROM e2ee_project_versions WHERE project_id = ? AND document_version < ?'
+              )
+              .run(projectId, captured.metadata.head.documentVersion);
+            const page = await fresh.documents.versions(
+              projectId,
+              undefined,
+              captured.metadata.head.documentVersion
+            );
+            return { ...captured, metadata: { ...captured.metadata, ...page } };
+          }
+        );
+      }
       fresh.before = async (path) => {
+        if (mode === 'before-first-page') return;
         if (!path.includes('/versions?')) return;
         pages++;
         if (refreshed || pages !== (mode === 'account' ? 1 : 2)) return;
@@ -756,7 +784,7 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
         });
       };
       const opened =
-        mode === 'account'
+        mode !== 'room'
           ? await fresh.store.loadProject(projectId)
           : await fresh.store
               .roomAccess()
