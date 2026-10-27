@@ -170,5 +170,24 @@ for (const size of [
     await waitForStillViewport(page);
     const typed = await projected(canvas, centroid);
     expect(Math.abs(typed.x - after.x)).toBeLessThan(1);
+
+    // Ending the command keeps that cleared view, including when revealing
+    // the dock caused the glide. Exercise both exits without changing layout.
+    const layout = await page.evaluate(() =>
+      localStorage.getItem('openzcad-panel-layout:v1')
+    );
+    const bar = page.getByRole('group', { name: 'Extrude command' });
+    const action = size.width === 1280 ? 'Cancel' : 'Done';
+    await bar.getByRole('button', { name: action, exact: true }).click();
+    await expect(bar).toHaveCount(0);
+    await waitForStillViewport(page);
+    const finished = await projected(canvas, centroid);
+    expect(Math.abs(finished.x - typed.x)).toBeLessThan(1);
+    expect(Math.abs(finished.y - typed.y)).toBeLessThan(1);
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem('openzcad-panel-layout:v1')
+      )
+    ).toBe(layout);
   });
 }
