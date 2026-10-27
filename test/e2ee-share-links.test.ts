@@ -81,6 +81,7 @@ import {
   publishShareSnapshots,
   reissueShareLinks,
   renewShareDelegation,
+  refreshOwnerShareAuthorities,
   revokeShareLink,
   ShareLinksError,
   shareDelegationState,
@@ -1607,6 +1608,59 @@ describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('an owner device removal (slice 5-10)', { timeout: 120_000 }, () => {
+  it('replaces statements signed by the removed owner device without another save or dialog open', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const recorded = (await laptop.shareLinks.api.list(projectId)).links[0]!
+      .authority!;
+    const value = decodeShareAuthority(fromBase64Url(recorded.statement));
+    const removed = owner.list.devices.find(
+      (device) => device.deviceId === 'owner_desktop'
+    )!;
+    const signed = await signShareAuthority(
+      owner.devices.get('owner_desktop')!.signing.privateKey,
+      {
+        ...value,
+        sequence: value.sequence + 1,
+        signerKeyHash: removed.signingKeyHash
+      }
+    );
+    await laptop.shareLinks.api.putAuthority(projectId, created.shareId, {
+      statement: toBase64Url(signed.statement),
+      signature: toBase64Url(signed.signature)
+    });
+    await owner.revoke(srv.db, 'owner_desktop');
+    try {
+      await delegate(laptop);
+      await expect(visit(srv, created.url)).rejects.toBeInstanceOf(
+        ShareLinkError
+      );
+      // One inaccessible project must not leave the remaining statements stale.
+      const failed = await refreshOwnerShareAuthorities(laptop.shareLinks, [
+        'proj_missing',
+        projectId,
+        projectId
+      ]);
+      expect(failed.map((entry) => entry.projectId)).toEqual(['proj_missing']);
+      const next = decodeShareAuthority(
+        fromBase64Url(
+          (await laptop.shareLinks.api.list(projectId)).links[0]!.authority!
+            .statement
+        )
+      );
+      expect(toBase64Url(next.signerKeyHash)).not.toBe(
+        toBase64Url(removed.signingKeyHash)
+      );
+      expect(next.sequence).toBe(value.sequence + 2);
+      expect((await visit(srv, created.url)).verified.shareId).toBe(
+        created.shareId
+      );
+    } finally {
+      owner = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+    }
+  });
+
   it('renews the delegation without the removed device, and statements follow', async () => {
     const { srv, laptop, projectId } = await linkedProject();
     await delegate(laptop);
