@@ -89,6 +89,11 @@ export function leafCertificationPayload(project_id: string, user_id: string, de
 
 export function rejoinPskId(epoch: bigint): Uint8Array;
 
+/**
+ * Public historical authorization from an independently trusted anchor.
+ */
+export function verifyEpochAuthority(project_id: string, anchor: Uint8Array, records_json: string, target_record: Uint8Array, owner_user_id: string, directory_json: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -132,6 +137,7 @@ export interface InitOutput {
     readonly mlssession_signatureKey: (a: number, b: number) => void;
     readonly mlssession_status: (a: number, b: number) => void;
     readonly rejoinPskId: (a: number, b: bigint) => void;
+    readonly verifyEpochAuthority: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => void;
     readonly __wbindgen_export: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number) => void;
