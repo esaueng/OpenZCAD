@@ -86,6 +86,7 @@ import {
   shareDelegationState,
   shareLinksAfterDeviceRemoval,
   shareLinksAfterRemoval,
+  acknowledgeShareRemoval,
   type CreatedShareLink
 } from '../apps/web/src/lib/e2ee/shareLinks';
 import { sqliteD1 } from './support/sqlite-d1';
@@ -2008,6 +2009,49 @@ describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('durable browser share work', { timeout: 120_000 }, () => {
+  it('keeps a closed-dialog removal notice when authority refresh fails and acknowledges only the seen epoch', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    await createShareLink(ctx, projectId, 'view');
+    const down = {
+      ...ctx,
+      api: {
+        ...ctx.api,
+        list: async () => {
+          throw new Error('Offline');
+        }
+      }
+    };
+    await expect(
+      shareLinksAfterRemoval(down, {
+        projectId,
+        keyEpoch: 12,
+        userIds: [OTHER]
+      })
+    ).rejects.toThrow(/Offline/);
+    expect((await work.read(OWNER, projectId)).notice).toBe('12');
+    await expect(
+      shareLinksAfterDeviceRemoval(down, {
+        projectId,
+        keyEpoch: 13,
+        devices: [{ userId: OTHER, deviceId: 'other_desktop' }]
+      })
+    ).rejects.toThrow(/Offline/);
+    const reloaded = { ...laptop.shareLinks, work };
+    await acknowledgeShareRemoval(reloaded, projectId, '12');
+    expect((await work.read(OWNER, projectId)).notice).toBe('13');
+    await acknowledgeShareRemoval(reloaded, projectId, '13');
+    expect((await work.read(OWNER, projectId)).notice).toBeNull();
+    await shareLinksAfterRemoval(reloaded, {
+      projectId,
+      keyEpoch: 12,
+      userIds: [OTHER]
+    });
+    expect((await work.read(OWNER, projectId)).notice).toBeNull();
+  });
+
   it.each(['before-acceptance', 'after-acceptance'] as const)(
     'recovers registration %s with the same grant, id and wrapped key',
     async (failure) => {
