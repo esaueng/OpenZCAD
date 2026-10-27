@@ -879,6 +879,9 @@ export function createEncryptedProjectStore(
     let pinned = pinHash;
     let unauthorized: number | null = null;
     let missingKey: ProjectGroupError | null = null;
+    const shareHistory = new Map<string, {
+      header: ProjectEnvelopeHeader; owner: boolean;
+    }>();
     for (let start = 0; ; start += LOG_WINDOW - 1) {
       const window = entries.slice(start, start + LOG_WINDOW);
       let authorship: AuthorshipError | null = null;
@@ -926,6 +929,13 @@ export function createEncryptedProjectStore(
                 return null;
               }
               const authorList = lists.find((l) => l.userId === author.userId);
+              const roles = await epochRoles(groups, projectId, header.keyEpoch);
+              shareHistory.set(entry.versionHash, {
+                header,
+                owner: roles.users.some((role) =>
+                  role.userId === author.userId && role.role === 'owner' &&
+                  role.since <= header.keyEpoch - keyEpochBase)
+              });
               return authorList
                 ? signingKeyOf(authorList, author.deviceId)
                 : null;
@@ -959,7 +969,30 @@ export function createEncryptedProjectStore(
         if (error instanceof VersionLogError) throw logFailure(error);
         throw error;
       }
-      if (start + LOG_WINDOW >= entries.length) return;
+      if (start + LOG_WINDOW >= entries.length) break;
+    }
+    // The signed prefix makes the entire link set visible in the retained
+    // log, including overwritten autosaves. A fresh reader needs an owner
+    // baseline; a trusted version pin can resume an already checked chain.
+    let commitment: Uint8Array | undefined;
+    for (const [index, entry] of entries.entries()) {
+      const verified = shareHistory.get(entry.versionHash)!;
+      const next = verified.header.shareLinkSetHash;
+      if (!next) {
+        if (commitment) throw integrity('share-links', 'The document link-set history was downgraded.');
+        if (index === entries.length - 1 && !verified.owner) {
+          throw integrity('share-links', 'This legacy editor head needs an owner-authenticated link-set baseline.');
+        }
+        continue;
+      }
+      if (!commitment) {
+        if (!verified.owner && !(index === 0 && entry.versionHash === pinHash)) {
+          throw integrity('share-links', 'This project has no owner-authenticated link-set baseline.');
+        }
+      } else if (!sameBytes(commitment, next) && !verified.owner) {
+        throw integrity('share-links', 'Only the owner may change the active link set.');
+      }
+      commitment = next;
     }
   }
 
@@ -1922,7 +1955,7 @@ export function createEncryptedProjectStore(
    */
   async function roomLog(
     projectId: string,
-    since: number,
+    since: number | undefined,
     head: E2eeVersionLogEntry
   ): Promise<E2eeVersionLogEntry[]> {
     const entries: E2eeVersionLogEntry[] = [];
@@ -1987,7 +2020,7 @@ export function createEncryptedProjectStore(
       }
       const entries = await roomLog(
         projectId,
-        pin && pinHash ? pin.documentVersion : record.documentVersion,
+        pin && pinHash ? pin.documentVersion : undefined,
         record
       );
       await verifyLog(projectId, pinHash, entries);

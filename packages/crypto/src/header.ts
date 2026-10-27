@@ -7,6 +7,8 @@ export const ENVELOPE_MAGIC: readonly number[] = Object.freeze([
 ]);
 /** AES-256-GCM STREAM chunks under a single-use 256-bit key. */
 export const ENVELOPE_VERSION_1 = 1;
+/** Document prefixes also commit to the complete owner-authorized link set. */
+export const ENVELOPE_VERSION_2 = 2;
 /** Magic, version byte and the u32 header length. */
 export const ENVELOPE_FIXED_PREFIX_BYTES = 8;
 export const HASH_BYTES = 32;
@@ -131,6 +133,8 @@ export interface ProjectEnvelopeHeader extends EnvelopeFormat {
   readonly keyEpoch: number;
   /** Ids of the content blobs this version references. */
   readonly blobIds: readonly string[];
+  /** V2 document-only commitment, including signed grants and tombstones. */
+  readonly shareLinkSetHash?: Bytes;
 }
 
 export interface ContentBlobHeader extends EnvelopeFormat {
@@ -231,6 +235,10 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
   if (!isHash(header.epochBindingHash)) {
     fail(code, 'epochBindingHash must be 32 bytes');
   }
+  if (header.shareLinkSetHash !== undefined &&
+      (header.kind !== 'document' || !isHash(header.shareLinkSetHash))) {
+    fail(code, 'shareLinkSetHash requires a document and 32 bytes');
+  }
   if (!isUint(header.schemaVersion, MAX_U32)) {
     fail(code, 'schemaVersion must be a u32');
   }
@@ -268,6 +276,9 @@ export function normalizeProjectHeader(
       : init.epochBindingHash,
     schemaVersion: init.schemaVersion,
     keyEpoch: init.keyEpoch,
+    ...(init.shareLinkSetHash !== undefined
+      ? { shareLinkSetHash: copyBytes(init.shareLinkSetHash) }
+      : {}),
     blobIds: Array.isArray(init.blobIds)
       ? Array.from<string>(init.blobIds)
       : (init.blobIds ?? []),
@@ -317,6 +328,7 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
     writeId(body, header.projectId);
     body.u16(header.blobIds.length);
     for (const id of header.blobIds) writeId(body, id);
+    if (header.shareLinkSetHash) body.bytes(header.shareLinkSetHash);
   }
   const headerBytes = body.finish();
   if (headerBytes.byteLength > MAX_HEADER_BYTES) {
@@ -328,7 +340,8 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
   );
   return new ByteWriter()
     .bytes(Uint8Array.from(ENVELOPE_MAGIC))
-    .u8(ENVELOPE_VERSION_1)
+    .u8(header.class === 'project' && header.shareLinkSetHash
+      ? ENVELOPE_VERSION_2 : ENVELOPE_VERSION_1)
     .u32(headerBytes.byteLength)
     .bytes(headerBytes)
     .finish();
@@ -356,7 +369,7 @@ export function envelopePrefixLength(bytes: Uint8Array): number | null {
   }
   if (bytes.byteLength > ENVELOPE_MAGIC.length) {
     const version = bytes[ENVELOPE_MAGIC.length]!;
-    if (version !== ENVELOPE_VERSION_1) {
+    if (version !== ENVELOPE_VERSION_1 && version !== ENVELOPE_VERSION_2) {
       fail(
         'unsupported-version',
         `Envelope version ${version} is not supported`
@@ -375,7 +388,7 @@ export function envelopePrefixLength(bytes: Uint8Array): number | null {
 }
 
 export interface EnvelopePrefix {
-  readonly version: typeof ENVELOPE_VERSION_1;
+  readonly version: typeof ENVELOPE_VERSION_1 | typeof ENVELOPE_VERSION_2;
   readonly header: EnvelopeHeader;
   /** The exact prefix bytes, which open every chunk's AAD. */
   readonly prefix: Bytes;
@@ -391,6 +404,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
     prefix.subarray(ENVELOPE_FIXED_PREFIX_BYTES, length),
     'Envelope header'
   );
+  const version = prefix[3]! as EnvelopePrefix['version'];
   const classCode = reader.u8();
   const kindCode = reader.u8();
   const compression = COMPRESSIONS[reader.u8()];
@@ -399,6 +413,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
   const plaintextLength = reader.u64();
   let header: EnvelopeHeader;
   if (classCode === CLASS_CODES.content) {
+    if (version === ENVELOPE_VERSION_2) fail('malformed', 'V2 requires a document');
     const kind = CONTENT_BLOB_KINDS[kindCode - 1];
     if (kind === undefined) fail('malformed', 'Unknown content blob kind');
     header = {
@@ -424,6 +439,11 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
     for (let count = reader.u16(); count > 0; count -= 1) {
       blobIds.push(readId(reader));
     }
+    if (version === ENVELOPE_VERSION_2 && kind !== 'document') {
+      fail('malformed', 'V2 requires a document');
+    }
+    const shareLinkSetHash = version === ENVELOPE_VERSION_2
+      ? copyBytes(reader.bytes(HASH_BYTES)) : undefined;
     header = {
       class: 'project',
       kind,
@@ -434,6 +454,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
       epochBindingHash,
       schemaVersion,
       keyEpoch,
+      ...(shareLinkSetHash ? { shareLinkSetHash } : {}),
       blobIds: Object.freeze(blobIds),
       compression,
       chunkSize
@@ -450,6 +471,10 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
         get: () => copyBytes(epochBindingHash)
       }
     });
+    if (shareLinkSetHash) Object.defineProperty(header, 'shareLinkSetHash', {
+      enumerable: true,
+      get: () => copyBytes(shareLinkSetHash)
+    });
   } else {
     fail('malformed', 'Unknown envelope class');
   }
@@ -457,7 +482,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
   checkHeader(header, 'malformed');
   checkPrefixFitsChunks(length, header.chunkSize);
   return {
-    version: ENVELOPE_VERSION_1,
+    version,
     // Frozen: readers keep slicing records by this header after exposing
     // it, so a consumer must not be able to change its chunk size; its
     // hashes are copying getters (above) for the same reason.

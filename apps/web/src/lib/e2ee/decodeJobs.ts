@@ -27,6 +27,7 @@ import {
   encodeEncryptedDocumentBody,
   encryptProjectEnvelope,
   versionHash,
+  shareLinkSetCommitment,
   PLAINTEXT_CEILINGS,
   PROJECT_ENVELOPE_KINDS,
   decryptContentBlobStream,
@@ -87,7 +88,7 @@ export interface ContentBlobDecodeJob {
 export interface SealDocumentJob {
   readonly type: 'seal-document';
   /** The header; its `blobIds` are always derived from `blobs`. */
-  readonly header: Omit<ProjectEnvelopeHeaderInit, 'blobIds'>;
+  readonly header: Omit<ProjectEnvelopeHeaderInit, 'blobIds' | 'shareLinkSetHash'>;
   readonly document: Readonly<Record<string, unknown>>;
   /** The content blobs the document names (ADR-024 content blobs). */
   readonly blobs?: readonly ContentBlobReference[];
@@ -271,10 +272,19 @@ export async function decodeProjectEnvelopeJob(
       maxPlaintextBytes: decodeCeiling(job.kind)
     }
   );
+  const value = decodeProjectBody(job.kind, header, plaintext);
+  if (header.shareLinkSetHash) {
+    const actual = await shareLinkSetCommitment(
+      (value as EncryptedDocumentBody).shareLinks
+    );
+    if (!actual.every((byte, index) => byte === header.shareLinkSetHash![index])) {
+      throw new E2eeError('malformed', 'Document link set differs from its signed commitment');
+    }
+  }
   return {
     type: 'project-envelope',
     header,
-    value: decodeProjectBody(job.kind, header, plaintext)
+    value
   };
 }
 
@@ -398,7 +408,14 @@ export async function sealDocumentJob(
     header
   );
   const key = EnvelopeKey.generate();
-  const envelope = await encryptProjectEnvelope(key, header, plaintext);
+  const envelope = await encryptProjectEnvelope(key, {
+    ...header,
+    // Hash the encoded snapshot, so mutations during the digest await cannot
+    // separate the signed commitment from the bytes encrypted below.
+    shareLinkSetHash: await shareLinkSetCommitment(
+      decodeEncryptedDocumentBody(plaintext, header).shareLinks
+    )
+  }, plaintext);
   return {
     type: 'seal-document',
     envelope,

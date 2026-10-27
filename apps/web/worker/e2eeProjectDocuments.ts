@@ -913,6 +913,11 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
                  ORDER BY document_version DESC LIMIT ?
                )
              )
+             AND document_version < COALESCE((
+               SELECT MAX(v.document_version) FROM e2ee_project_versions v
+               JOIN projects p ON p.id = v.project_id
+               WHERE v.project_id = ? AND v.signer_user_id = p.user_id
+             ), 0)
              AND envelope_key IS NULL AND envelope_inline IS NULL
              AND NOT EXISTS (
                SELECT 1 FROM e2ee_project_revisions r
@@ -925,7 +930,8 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
           head.document_version,
           projectId,
           projectId,
-          E2EE_VERSION_LOG_RETAINED_HEADS
+          E2EE_VERSION_LOG_RETAINED_HEADS,
+          projectId
         )
     ]);
     if (ctx.bucket) {
@@ -2030,6 +2036,16 @@ async function logPage(
   };
 }
 
+/** Selection hint only: clients authenticate the baseline's signer and role. */
+async function ownerLogBaseline(db: D1Database, projectId: string): Promise<number> {
+  const row = await db.prepare(
+    `SELECT MAX(v.document_version) AS version FROM e2ee_project_versions v
+     JOIN projects p ON p.id = v.project_id
+     WHERE v.project_id = ? AND v.signer_user_id = p.user_id`
+  ).bind(projectId).first<{ version: number | null }>();
+  return row?.version ?? 1;
+}
+
 async function loadDocument(
   ctx: Context,
   projectId: string,
@@ -2059,10 +2075,8 @@ async function loadDocument(
     );
   }
   const envelope = await versionBody(ctx, head);
-  const page =
-    since === null
-      ? { log: [logEntry(head)], more: false }
-      : await logPage(ctx.db, projectId, since, head.document_version);
+  const page = await logPage(ctx.db, projectId,
+    since ?? await ownerLogBaseline(ctx.db, projectId), head.document_version);
   return frameResponse(
     {
       project: state,
@@ -2109,7 +2123,7 @@ async function loadVersions(
   projectId: string,
   url: URL
 ): Promise<Response> {
-  const since = queryUint(url, 'since') ?? 1;
+  const since = queryUint(url, 'since') ?? await ownerLogBaseline(ctx.db, projectId);
   const head = await headRow(ctx.db, projectId);
   return json(
     head

@@ -37,6 +37,7 @@ import {
   encodeShareLinkTombstone,
   openShareKey,
   sameShareLinkSet,
+  shareLinkSetCommitment,
   shareKeyHash,
   signShareAuthority,
   signShareDelegation,
@@ -674,6 +675,21 @@ describe('link grants and tombstones', () => {
       )
     };
   }
+
+  it('commits to every signed entry, canonically ordered and separated by entry kind', async () => {
+    const w = await world();
+    const set = await linkSet(w, [grant(w), grant(w, { shareId: 'share_2' })], [tombstone(w)]);
+    const hash = await shareLinkSetCommitment(set);
+    expect(await shareLinkSetCommitment({ ...set, grants: [...set.grants].reverse() })).toEqual(hash);
+    expect(await shareLinkSetCommitment({ ...set, grants: set.grants.slice(1) })).not.toEqual(hash);
+    expect(await shareLinkSetCommitment({ ...set, tombstones: [] })).not.toEqual(hash);
+    const signature = set.grants[0]!.signature.slice();
+    signature[signature.length - 1]! ^= 1;
+    expect(await shareLinkSetCommitment({ ...set, grants: [
+      { ...set.grants[0]!, signature }, set.grants[1]!
+    ] })).not.toEqual(hash);
+    expect(await shareLinkSetCommitment()).toEqual(await shareLinkSetCommitment({ grants: [], tombstones: [] }));
+  });
 
   const owner = (w: World) => ({
     projectId: 'proj_1',

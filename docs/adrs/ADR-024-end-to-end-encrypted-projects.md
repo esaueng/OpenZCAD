@@ -627,6 +627,29 @@ comparison, which is safe only because of its commitment step.
   downloaded, and the last snapshot published before the revocation, stays
   readable to anyone holding the link, even if the server keeps serving it.
   The server is still asked to delete it.
+  New document envelopes use prefix version 2, which appends a 32-byte
+  SHA-256 commitment to the canonical complete set of signed grants and
+  tombstones. The domain is `OpenZCAD E2EE share link set v1`; each list has
+  a u32 count and each statement and signature has a u32 byte length, all
+  big-endian, sorted by link id. Missing sets commit to the empty set.
+  Readers verify every signed log transition from their accepted version
+  pin, or from an owner-authenticated baseline on a fresh browser. Only a
+  verified owner author may change the commitment; an editor must preserve
+  it, including across skipped autosaves. Decryption checks the body's set
+  against the signed commitment before accepting or publishing it. The
+  Worker retains the complete log from the latest owner version even when
+  that extends beyond the usual 2,000-head window; autosave bodies may still
+  be discarded. Its signer metadata only selects a candidate baseline:
+  the browser independently verifies signatures and MLS authorization.
+  Missing ancestry fails closed. Very long histories still hit the bounded
+  client log limit and need an owner refresh. Existing tombstone pins and
+  direct-parent checks remain necessary; this commitment does not prove an
+  unseen owner's tombstone history or eliminate permanent forks.
+  V1 bytes and historical reads remain supported, but a V1 editor head
+  without an authenticated set baseline needs owner recovery. A V2 chain
+  cannot downgrade to V1. Older builds that do not understand V2 require an
+  update to open new documents. Production flags remain off until outside
+  review clears activation.
 - **Live editing** keeps leases, presence and roles. The room relays encrypted
   documents and orders versions. On a conflict it returns the base and the
   latest ciphertext; the browser merges with `mergeCollaborationDocuments`,

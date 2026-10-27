@@ -16,6 +16,7 @@ import {
   fromHex,
   parseEnvelope,
   signProjectEnvelope,
+  shareLinkSetCommitment,
   toBase64Url,
   toHex,
   versionHash,
@@ -229,6 +230,8 @@ async function handVersion(
       authenticator
     ),
     schemaVersion: 1,
+    ...(!init.kind || init.kind === 'document'
+      ? { shareLinkSetHash: await shareLinkSetCommitment() } : {}),
     ...init
   };
   const plaintext =

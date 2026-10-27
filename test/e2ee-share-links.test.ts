@@ -58,6 +58,7 @@ import type {
 import { renewShareDelegationAfterRemoval } from '../apps/web/src/lib/e2ee/pageDeviceRemoval';
 import { sealDocumentJob } from '../apps/web/src/lib/e2ee/decodeJobs';
 import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
+import { memoryVersionPins } from '../apps/web/src/lib/e2ee/versionPins';
 import {
   catchUpProjectGroup,
   ensureProjectRotated,
@@ -731,6 +732,87 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
       tombstones: []
     });
     await integrity(laptop.store.loadProject(projectId), 'share-links');
+  });
+
+  it.each(['fresh', 'reload', 'skipped', 'room'] as const)(
+    'checks owner link-set ancestry on a %s read, including an intermediate drop then restore',
+    async (mode) => {
+      const { srv, laptop, member, projectId } = await linkedProject();
+      await delegate(laptop);
+      // The skipped reader pins the state before the owner adds the link.
+      const reader = reload(srv, laptop, {
+        members: othersOf(owner),
+        ...(mode === 'fresh' || mode === 'room' ? { pins: memoryVersionPins() } : {})
+      });
+      await createShareLink(laptop.shareLinks, projectId, 'view');
+      const granted = await laptop.store.shareHead(projectId);
+      if (mode === 'reload') await reader.store.loadProject(projectId);
+      await writeWithLinks(srv, member, projectId, granted.document, {
+        grants: [], tombstones: []
+      });
+      // Restoring the set at the tip must not hide the unauthorized drop.
+      await writeWithLinks(srv, member, projectId, granted.document, granted.shareLinks!.set);
+      const before = await reader.pins.read(OWNER, projectId);
+      const pageReader = reload(srv, reader, { members: othersOf(owner) });
+      if (mode === 'room') {
+        const loaded = await member.documents.loadDocument(projectId);
+        await integrity(pageReader.store.roomAccess().openHead(
+          projectId, loaded.metadata.head, loaded.envelope
+        ), 'share-links');
+      } else {
+        await integrity(pageReader.store.loadProject(projectId), 'share-links');
+      }
+      expect(await reader.pins.read(OWNER, projectId)).toEqual(before);
+    }
+  );
+
+  it('a fresh reader accepts owner changes followed by unchanged editor saves', async () => {
+    const { srv, laptop, member, projectId } = await linkedProject();
+    await delegate(laptop);
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const granted = await member.store.shareHead(projectId);
+    await writeWithLinks(srv, member, projectId, granted.document, granted.shareLinks!.set);
+    const fresh = reload(srv, laptop, { members: othersOf(owner), pins: memoryVersionPins() });
+    expect((await fresh.store.shareHead(projectId)).shareLinks?.links.map((link) => link.shareId))
+      .toEqual([created.shareId]);
+  });
+
+  it('refuses a missing owner baseline even when the remaining editor head is validly signed', async () => {
+    const { srv, laptop, member, projectId } = await linkedProject();
+    const granted = await member.store.shareHead(projectId);
+    await writeWithLinks(srv, member, projectId, granted.document,
+      granted.shareLinks?.set ?? { grants: [], tombstones: [] });
+    srv.db.prepare('DELETE FROM e2ee_project_versions WHERE project_id = ? AND document_version < ?')
+      .run(projectId, head(srv, projectId).document_version);
+    const fresh = reload(srv, laptop, { members: othersOf(owner), pins: memoryVersionPins() });
+    await integrity(fresh.store.loadProject(projectId), 'share-links');
+    expect(await fresh.pins.read(OWNER, projectId)).toBeNull();
+  });
+
+  it('retains ancestry past 2,000 editor autosaves until a newer owner baseline exists', async () => {
+    const { srv, laptop, member, projectId, document } = await linkedProject();
+    const baseline = head(srv, projectId).document_version;
+    const columns = (srv.db.prepare("PRAGMA table_info('e2ee_project_versions')").all() as { name: string }[])
+      .map((column) => column.name);
+    // Synthetic log-only rows isolate retention from signature verification,
+    // whose real signed paths are exercised by the ancestry tests above.
+    const selected = columns.map((name) => name === 'document_version' ? '?'
+      : name === 'version_hash' ? '?'
+      : name === 'signer_user_id' ? '?'
+      : name === 'envelope_inline' || name === 'envelope_key' ? 'NULL' : name).join(', ');
+    const insert = srv.db.prepare(`INSERT INTO e2ee_project_versions (${columns.join(', ')})
+      SELECT ${selected} FROM e2ee_project_versions WHERE project_id = ? AND document_version = ?`);
+    for (let index = 1; index <= 2001; index++) {
+      insert.run(baseline + index, index.toString(16).padStart(64, '0'), OTHER, projectId, baseline);
+    }
+    srv.db.prepare('UPDATE projects SET document_version = ? WHERE id = ?').run(baseline + 2001, projectId);
+    await writeWithLinks(srv, member, projectId, document, { grants: [], tombstones: [] });
+    expect(rows<{ document_version: number }>(srv,
+      'SELECT document_version FROM e2ee_project_versions WHERE project_id = ? ORDER BY document_version', projectId)[0]!.document_version)
+      .toBe(baseline);
+    await writeWithLinks(srv, laptop, projectId, document, { grants: [], tombstones: [] });
+    expect(rows<{ n: number }>(srv,
+      'SELECT COUNT(*) AS n FROM e2ee_project_versions WHERE project_id = ?', projectId)[0]!.n).toBe(2000);
   });
 
   it('asks the server again when its forget fails after the tombstone, and a second revoke does not throw', async () => {
