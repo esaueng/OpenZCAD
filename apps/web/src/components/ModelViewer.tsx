@@ -13062,6 +13062,9 @@ export function ModelViewer({
     : null;
   useEffect(() => {
     const context = contextRef.current;
+    // At phone widths the panel lives in stage-right, outside the observed
+    // dock layer. Every command's chips must reflow when it is revealed.
+    context?.requestRender();
     if (!context || !regionClearanceKey) {
       return;
     }

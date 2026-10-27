@@ -133,8 +133,8 @@ async function framing(page: Page) {
                 [0, 30, 0],
                 [0, 0, 20]
               ],
-          // Floating-point drift can outlast OrbitControls settling.
-          // Compare projections to a millionth of a screen pixel.
+              // Floating-point drift can outlast OrbitControls settling.
+              // Compare projections to a millionth of a screen pixel.
               resolve: (state: { points: { x: number; y: number }[] }) =>
                 resolve(
                   state.points.map(({ x, y }) => ({
@@ -341,6 +341,42 @@ test('Move leaves the saved panels and tool fold visible', async ({ page }) => {
   ).toHaveAttribute('aria-expanded', 'true');
   await page.keyboard.press('Escape');
   expect(await preferences(page)).toEqual(saved);
+});
+
+test('a phone panel request repaints non-Extrude command chips and leaves them tappable', async ({
+  page
+}) => {
+  await openWorkspace(page);
+  await page.setViewportSize({ width: 720, height: 800 });
+  await expect(page.locator('.panel-lane-float')).toBeVisible();
+  await page.keyboard.press('b');
+  await expectSuspended(page);
+  await waitForStillViewport(page);
+  const canvas = page.locator('.viewer-host canvas');
+  const frames = Number(await canvas.getAttribute('data-e2e-frames'));
+  await revealModelPanel(page, 'History');
+  await expect(page.locator('.panel-lane-float')).toBeVisible();
+  // A settled command must draw again against the phone lane's obstacles,
+  // without a value edit or a pointer move to provoke an unrelated frame.
+  await expect
+    .poll(async () => Number(await canvas.getAttribute('data-e2e-frames')))
+    .toBeGreaterThan(frames);
+  const chip = page.getByTestId('command-handle-height');
+  await expect
+    .poll(() =>
+      chip.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return (
+          document
+            .elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+            ?.closest('[data-testid="command-handle-height"]') === element
+        );
+      })
+    )
+    .toBe(true);
+  await enterCommandValue(page, 'height', '12');
+  await expect(chip).toHaveText('Height 12 mm');
+  await expect(modelPanel(page, 'History')).toBeVisible();
 });
 
 test('an asynchronously loaded Image starts a suspended creation session and Cancel restores it', async ({
