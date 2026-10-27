@@ -5602,7 +5602,8 @@ export class D1R2PersistenceService implements PersistenceService {
                  SELECT 1 FROM project_members m
                  WHERE m.project_id = projects.id AND m.user_id = ?
                    AND m.role = 'editor'))
-           )`
+           )
+         RETURNING id`
         )
         .bind(
           uploadSessionId,
@@ -5624,8 +5625,10 @@ export class D1R2PersistenceService implements PersistenceService {
           userId,
           userId
         )
-        .run();
-      if (inserted.meta?.changes !== 1) {
+        .first<{ id: string }>();
+      // D1's change count includes the upload-accounting trigger. Only the
+      // row returned by this fenced insert proves this request created it.
+      if (inserted?.id !== uploadSessionId) {
         throw new EncryptedBlobError(
           401,
           'E2EE_SESSION_REQUIRED',
