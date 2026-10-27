@@ -32,15 +32,17 @@ import { contactsContext } from './contacts';
 import { contactMemberLists } from './memberLists';
 import { createE2eeShareLinksApi } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
+import { getKeySessionRevision, isCurrentKeySession } from './keySession';
 
 export { GROUP_RESET_CONFIRMATION };
 
 function pageGroups(
   e2ee: E2eeContext,
-  account: AccountView
+  account: AccountView,
+  fetcher = desktopFetch
 ): ProjectGroupContext {
-  const cutoffs = createRevocationCutoffsApi();
-  const api = createProjectGroupsApi();
+  const cutoffs = createRevocationCutoffsApi(fetcher);
+  const api = createProjectGroupsApi(fetcher);
   return {
     api,
     sessions: mlsProjectSessions(),
@@ -100,9 +102,15 @@ export function pageRemovalParticipant(
       }
       const outcome = await participant.complete(step);
       if (step.kind === 'device') {
-        await renewShareDelegationAfterRemoval(e2ee, step).catch(
-          () => undefined
-        );
+        await renewShareDelegationAfterRemoval(e2ee, {
+          ...step,
+          projectIds: [
+            ...outcome.rotated,
+            ...outcome.left
+              .map((project) => project.projectId)
+              .filter((id) => id !== '*')
+          ]
+        }).catch(() => undefined);
       }
       return outcome;
     }
@@ -120,17 +128,73 @@ export async function renewShareDelegationAfterRemoval(
   step: {
     readonly identityPrivateKey: CryptoKey;
     readonly account: AccountView;
+    readonly projectIds?: readonly string[];
   },
   api = createE2eeShareLinksApi(desktopFetch)
 ): Promise<boolean> {
+  const revision = getKeySessionRevision();
   const { delegation } = await api.delegation();
   if (!delegation) return false;
-  const { renewShareDelegation, signWithIdentityKey } =
-    await import('./shareLinks');
+  const {
+    renewShareDelegation,
+    signWithIdentityKey,
+    refreshOwnerShareAuthorities
+  } = await import('./shareLinks');
   await renewShareDelegation(
     { groups: pageGroups(e2ee, step.account), api },
     signWithIdentityKey(step.identityPrivateKey)
   );
+  if (step.projectIds?.length) {
+    const current = () =>
+      isCurrentKeySession(revision) && e2ee.isCurrent?.() !== false;
+    const guard = () => {
+      if (!current())
+        throw new DOMException('The encryption session ended.', 'AbortError');
+    };
+    guard();
+    // Fresh clients use the account view and key after the removal, rather
+    // than this page's store cached before its account key rotated.
+    const [
+      { createEncryptedProjectStore },
+      { createEncryptedDocumentsApi },
+      { createBlobReferenceRegistry }
+    ] = await Promise.all([
+      import('./encryptedProjectStore'),
+      import('./encryptedDocumentsApi'),
+      import('./blobReferences')
+    ]);
+    const fetcher: typeof desktopFetch = async (path, init) => {
+      guard();
+      const response = await desktopFetch(path, init);
+      guard();
+      return response;
+    };
+    guard();
+    const groups = pageGroups(
+      { ...e2ee, isCurrent: current },
+      step.account,
+      fetcher
+    );
+    const references = createBlobReferenceRegistry();
+    try {
+      await refreshOwnerShareAuthorities(
+        {
+          groups,
+          api: createE2eeShareLinksApi(fetcher),
+          blobReferences: references,
+          store: createEncryptedProjectStore({
+            groups,
+            pins: versionPins(),
+            blobReferences: references,
+            api: createEncryptedDocumentsApi(fetcher)
+          })
+        },
+        step.projectIds
+      );
+    } finally {
+      references.clear();
+    }
+  }
   return true;
 }
 

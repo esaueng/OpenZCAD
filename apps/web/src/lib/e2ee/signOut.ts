@@ -4,6 +4,7 @@ import { deviceKeyStore } from './keychainDeviceKeys';
 import * as mlsStores from './mls/sessionStore';
 import { createE2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
+import { shareWorkStore } from './shareWorkStore';
 import {
   beginKeySessionTeardown,
   finishKeySessionTeardown
@@ -53,9 +54,10 @@ async function clearDeviceUnderLock(
       );
     }
     requireCurrentSession();
-    // The MLS state first: if it cannot be removed, the device record stays
-    // and signing out can be retried, rather than leaving sessions that a
-    // later sign-in could reopen without unlocking.
+    // Remove journals and MLS state before the device keys. A failed cleanup
+    // keeps the device record so signing out can be retried.
+    await shareWorkStore().deleteAccount(userId);
+    requireCurrentSession();
     await mlsStores.indexedDbMlsSessionStore().deleteAccount(userId);
     requireCurrentSession();
     await store.deleteDevice(userId);

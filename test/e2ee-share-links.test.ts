@@ -16,6 +16,7 @@ import {
   describe,
   expect,
   it,
+  vi,
   type Mock
 } from 'vitest';
 import worker from '../apps/web/worker/index';
@@ -81,14 +82,17 @@ import {
   publishShareSnapshots,
   reissueShareLinks,
   renewShareDelegation,
+  refreshOwnerShareAuthorities,
   revokeShareLink,
   ShareLinksError,
   shareDelegationState,
   shareLinksAfterDeviceRemoval,
   shareLinksAfterRemoval,
+  acknowledgeShareRemoval,
   type CreatedShareLink
 } from '../apps/web/src/lib/e2ee/shareLinks';
 import { sqliteD1 } from './support/sqlite-d1';
+import { memoryShareWorkStore } from '../apps/web/src/lib/e2ee/shareWorkStore';
 import {
   OTHER,
   OWNER,
@@ -1607,6 +1611,100 @@ describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('an owner device removal (slice 5-10)', { timeout: 120_000 }, () => {
+  it.each([false, true])(
+    'replaces a removed owner device’s statements and snapshots, with failed publication %s',
+    async (publicationFails) => {
+      const { srv, laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      const desktop = device(srv, owner, 'owner_desktop', {
+        members: othersOf(owner)
+      });
+      await publishShareSnapshots(
+        desktop.shareLinks,
+        projectId,
+        await desktop.store.shareHead(projectId)
+      );
+      // Removal preparation catches up before revoking the device's credential.
+      await catchUpProjectGroup(laptop.groups, projectId);
+      const recorded = (await laptop.shareLinks.api.list(projectId)).links[0]!
+        .authority!;
+      const value = decodeShareAuthority(fromBase64Url(recorded.statement));
+      const removed = owner.list.devices.find(
+        (device) => device.deviceId === 'owner_desktop'
+      )!;
+      const signed = await signShareAuthority(
+        owner.devices.get('owner_desktop')!.signing.privateKey,
+        {
+          ...value,
+          sequence: value.sequence + 1,
+          signerKeyHash: removed.signingKeyHash
+        }
+      );
+      await laptop.shareLinks.api.putAuthority(projectId, created.shareId, {
+        statement: toBase64Url(signed.statement),
+        signature: toBase64Url(signed.signature)
+      });
+      await owner.revoke(srv.db, 'owner_desktop');
+      try {
+        await delegate(laptop);
+        await expect(visit(srv, created.url)).rejects.toBeInstanceOf(
+          ShareLinkError
+        );
+        // One inaccessible project must not leave the remaining statements stale.
+        const publishing = publicationFails
+          ? {
+              ...laptop.shareLinks,
+              api: {
+                ...laptop.shareLinks.api,
+                putSnapshot: async () => {
+                  throw new Error('Snapshot unavailable');
+                }
+              }
+            }
+          : laptop.shareLinks;
+        const failed = await refreshOwnerShareAuthorities(publishing, [
+          'proj_missing',
+          projectId,
+          projectId
+        ]);
+        expect(failed.map((entry) => entry.projectId)).toEqual(
+          publicationFails ? ['proj_missing', projectId] : ['proj_missing']
+        );
+        const next = decodeShareAuthority(
+          fromBase64Url(
+            (await laptop.shareLinks.api.list(projectId)).links[0]!.authority!
+              .statement
+          )
+        );
+        expect(toBase64Url(next.signerKeyHash)).not.toBe(
+          toBase64Url(removed.signingKeyHash)
+        );
+        expect(next.sequence).toBe(value.sequence + 2);
+        if (publicationFails) {
+          // Authority still excludes the removed device when its old snapshot
+          // could not be replaced. A retry restores availability safely.
+          await expect(visit(srv, created.url)).rejects.toSatisfy(
+            (error: unknown) =>
+              error instanceof ShareLinkError &&
+              error.reason === 'author-not-named'
+          );
+          const upkeep = await maintainShareLinks(laptop.shareLinks, projectId);
+          expect(upkeep.authorities.failed).toEqual([]);
+        }
+        expect((await visit(srv, created.url)).verified.shareId).toBe(
+          created.shareId
+        );
+      } finally {
+        owner = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+      }
+    }
+  );
+
   it('renews the delegation without the removed device, and statements follow', async () => {
     const { srv, laptop, projectId } = await linkedProject();
     await delegate(laptop);
@@ -1935,6 +2033,43 @@ describe('what a visitor refuses (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
+  it('keeps current-identity links and retired work across a failed delete and reload', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    const old = await createShareLink(ctx, projectId, 'view');
+    const current = await createShareLink(ctx, projectId, 'tweak');
+    srv.db.exec('DROP TRIGGER e2ee_share_link_immutable');
+    srv.db
+      .prepare(
+        'UPDATE e2ee_share_links SET owner_identity_hash = ? WHERE share_id = ?'
+      )
+      .run(toBase64Url(other.list.identityKeyHash), old.shareId);
+    const down = failingForget(ctx, Infinity);
+    const first = await maintainShareLinks(down.ctx, projectId);
+    expect(first.retired).toEqual([{ shareId: old.shareId, mode: 'view' }]);
+    expect(
+      first.revocations.failed.some((item) => item.shareId === old.shareId)
+    ).toBe(true);
+    const reloaded = { ...laptop.shareLinks, work };
+    const again = await maintainShareLinks(reloaded, projectId);
+    expect(again.retired).toEqual(first.retired);
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links.map(
+        (link) => link.shareId
+      )
+    ).toEqual([current.shareId]);
+    const replaced = await reissueShareLinks(
+      reloaded,
+      projectId,
+      again.retired
+    );
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0]!.mode).toBe('view');
+    expect((await work.read(OWNER, projectId)).retired).toEqual([]);
+  });
+
   it('tombstones every link that names an earlier identity and offers reissue', async () => {
     const { srv, laptop, projectId } = await linkedProject();
     await delegate(laptop);
@@ -1966,6 +2101,373 @@ describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
     );
     expect(reissued).toHaveLength(1);
     expect((await visit(srv, reissued[0]!.url)).verified.mode).toBe('tweak');
+  });
+});
+
+describe('durable browser share work', { timeout: 120_000 }, () => {
+  it('reconciles a lost response after the stale-epoch registration retry commits', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const work = memoryShareWorkStore();
+    let attempts = 0;
+    const ctx = {
+      ...laptop.shareLinks,
+      work,
+      api: {
+        ...laptop.shareLinks.api,
+        create: async (
+          ...args: Parameters<typeof laptop.shareLinks.api.create>
+        ) => {
+          if (++attempts === 1)
+            throw new E2eeShareLinkApiError(
+              409,
+              'Epoch moved',
+              'E2EE_EPOCH_STALE'
+            );
+          await laptop.shareLinks.api.create(...args);
+          throw new Error('Retry response lost');
+        }
+      }
+    };
+    const created = await createShareLink(ctx, projectId, 'view');
+    expect(attempts).toBe(2);
+    expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+    const view = await listShareLinks(laptop.shareLinks, projectId);
+    expect(view.links.map((link) => link.shareId)).toEqual([created.shareId]);
+    expect((await visit(srv, created.url)).verified.shareId).toBe(
+      created.shareId
+    );
+  });
+
+  it.each(['member', 'device'] as const)(
+    'keeps a transient %s-removal prompt and refreshes authority when journal storage fails',
+    async (kind) => {
+      const { laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      const memory = memoryShareWorkStore();
+      const ctx = {
+        ...laptop.shareLinks,
+        work: {
+          ...memory,
+          update: async () => {
+            throw new Error('Quota');
+          }
+        }
+      };
+      const notified = vi.fn();
+      const outcome =
+        kind === 'member'
+          ? await shareLinksAfterRemoval(
+              ctx,
+              { projectId, keyEpoch: 12, userIds: [OTHER] },
+              notified
+            )
+          : await shareLinksAfterDeviceRemoval(
+              ctx,
+              {
+                projectId,
+                keyEpoch: 12,
+                devices: [{ userId: OTHER, deviceId: 'other_desktop' }]
+              },
+              notified
+            );
+      expect(notified).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cursor: '12',
+          links: [{ shareId: created.shareId, mode: 'view' }]
+        })
+      );
+      expect(outcome?.failed).toEqual([]);
+    }
+  );
+
+  it.each(['member', 'device'] as const)(
+    'notifies an open dialog after journaling a %s removal before stalled remote upkeep',
+    async (kind) => {
+      const { laptop, projectId } = await linkedProject();
+      const work = memoryShareWorkStore();
+      const ctx = { ...laptop.shareLinks, work };
+      await delegate(laptop);
+      await createShareLink(ctx, projectId, 'view');
+      const listed = await ctx.api.list(projectId);
+      let release!: (value: typeof listed) => void;
+      const stalled = {
+        ...ctx,
+        api: {
+          ...ctx.api,
+          list: () =>
+            new Promise<typeof listed>((resolve) => {
+              release = resolve;
+            })
+        }
+      };
+      const notified = vi.fn();
+      let finished = false;
+      const task = (
+        kind === 'member'
+          ? shareLinksAfterRemoval(
+              stalled,
+              { projectId, keyEpoch: 12, userIds: [OTHER] },
+              notified
+            )
+          : shareLinksAfterDeviceRemoval(
+              stalled,
+              {
+                projectId,
+                keyEpoch: 12,
+                devices: [{ userId: OTHER, deviceId: 'other_desktop' }]
+              },
+              notified
+            )
+      ).then(() => {
+        finished = true;
+      });
+      try {
+        await vi.waitFor(() => expect(notified).toHaveBeenCalledOnce());
+        expect((await work.read(OWNER, projectId)).notice).toBe('12');
+        expect(finished).toBe(false);
+      } finally {
+        release(listed);
+        await task;
+      }
+    }
+  );
+
+  it('journals only the removal-time links and never a later link or an empty set', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    await shareLinksAfterRemoval(ctx, {
+      projectId,
+      keyEpoch: 2,
+      userIds: [OTHER]
+    });
+    expect((await work.read(OWNER, projectId)).notice).toBeNull();
+    const before = await createShareLink(ctx, projectId, 'view');
+    await shareLinksAfterRemoval(ctx, {
+      projectId,
+      keyEpoch: 12,
+      userIds: [OTHER]
+    });
+    const after = await createShareLink(ctx, projectId, 'tweak');
+    const saved = await work.read(OWNER, projectId);
+    expect(saved.removalLinks).toEqual([
+      { shareId: before.shareId, mode: 'view' }
+    ]);
+    const [replacement] = await reissueShareLinks(
+      ctx,
+      projectId,
+      saved.removalLinks
+    );
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links
+        .map((link) => link.shareId)
+        .sort()
+    ).toEqual([after.shareId, replacement!.shareId].sort());
+  });
+
+  it('keeps a closed-dialog removal notice when authority refresh fails and acknowledges only the seen epoch', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    await createShareLink(ctx, projectId, 'view');
+    const down = {
+      ...ctx,
+      api: {
+        ...ctx.api,
+        list: async () => {
+          throw new Error('Offline');
+        }
+      }
+    };
+    await expect(
+      shareLinksAfterRemoval(down, {
+        projectId,
+        keyEpoch: 12,
+        userIds: [OTHER]
+      })
+    ).rejects.toThrow(/Offline/);
+    expect((await work.read(OWNER, projectId)).notice).toBe('12');
+    await expect(
+      shareLinksAfterDeviceRemoval(down, {
+        projectId,
+        keyEpoch: 13,
+        devices: [{ userId: OTHER, deviceId: 'other_desktop' }]
+      })
+    ).rejects.toThrow(/Offline/);
+    const reloaded = { ...laptop.shareLinks, work };
+    await acknowledgeShareRemoval(reloaded, projectId, '12');
+    expect((await work.read(OWNER, projectId)).notice).toBe('13');
+    await acknowledgeShareRemoval(reloaded, projectId, '13');
+    expect((await work.read(OWNER, projectId)).notice).toBeNull();
+    await shareLinksAfterRemoval(reloaded, {
+      projectId,
+      keyEpoch: 12,
+      userIds: [OTHER]
+    });
+    expect((await work.read(OWNER, projectId)).notice).toBeNull();
+  });
+
+  it.each(['before-acceptance', 'after-acceptance'] as const)(
+    'recovers registration %s with the same grant, id and wrapped key',
+    async (failure) => {
+      const { srv, laptop, projectId } = await linkedProject();
+      const work = memoryShareWorkStore();
+      await delegate(laptop);
+      let first = true;
+      const ctx = {
+        ...laptop.shareLinks,
+        work,
+        api: {
+          ...laptop.shareLinks.api,
+          create: async (
+            ...args: Parameters<typeof laptop.shareLinks.api.create>
+          ) => {
+            if (!first) return laptop.shareLinks.api.create(...args);
+            first = false;
+            if (failure === 'after-acceptance')
+              await laptop.shareLinks.api.create(...args);
+            throw new Error('Registration response unavailable');
+          }
+        }
+      };
+      let completed: CreatedShareLink | undefined;
+      if (failure === 'before-acceptance')
+        await expect(createShareLink(ctx, projectId, 'view')).rejects.toThrow(
+          /unavailable/
+        );
+      else completed = await createShareLink(ctx, projectId, 'view');
+      const saved = await work.read(OWNER, projectId);
+      expect(saved.pending).toHaveLength(
+        failure === 'before-acceptance' ? 1 : 0
+      );
+      const before = await laptop.store.shareHead(projectId);
+      expect(before.shareLinks?.links).toHaveLength(1);
+      await maintainShareLinks({ ...laptop.shareLinks, work }, projectId);
+      const view = await listShareLinks(laptop.shareLinks, projectId);
+      expect(view.links).toHaveLength(1);
+      expect(view.links[0]!.shareId).toBe(before.shareLinks!.links[0]!.shareId);
+      expect((await laptop.store.shareHead(projectId)).version).toBe(
+        before.version
+      );
+      expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+      const url = completed?.url ?? view.links[0]!.url!;
+      expect((await visit(srv, url)).verified.mode).toBe('view');
+      const fragment = parseShareFragment(url.slice(url.indexOf('#')))!;
+      expect(JSON.stringify(saved)).not.toContain(
+        toBase64Url(fragment.shareKey)
+      );
+      expect(JSON.stringify(saved)).not.toContain(fragment.token);
+    }
+  );
+
+  it('does not turn an ordinary revoked row into a replacement and derives modes from verified sources', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const ctx = { ...laptop.shareLinks, work: memoryShareWorkStore() };
+    await delegate(laptop);
+    const revoked = await createShareLink(ctx, projectId, 'view');
+    const active = await createShareLink(ctx, projectId, 'view');
+    await expect(
+      revokeShareLink(
+        failingForget(ctx, Infinity).ctx,
+        projectId,
+        revoked.shareId
+      )
+    ).rejects.toBeInstanceOf(ShareLinksError);
+    const created = await reissueShareLinks(ctx, projectId, [
+      { shareId: revoked.shareId, mode: 'tweak' },
+      { shareId: active.shareId, mode: 'tweak' }
+    ]);
+    expect(created).toHaveLength(1);
+    expect(created[0]!.mode).toBe('view');
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links.map(
+        (link) => link.shareId
+      )
+    ).toEqual([created[0]!.shareId]);
+  });
+
+  it('resumes a partial batch after reload without another replacement of a completed source', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    const first = await createShareLink(ctx, projectId, 'view');
+    const second = await createShareLink(ctx, projectId, 'tweak');
+    let calls = 0;
+    const down = {
+      ...ctx,
+      api: {
+        ...ctx.api,
+        create: async (...args: Parameters<typeof ctx.api.create>) => {
+          if (++calls === 2) throw new Error('Second registration unavailable');
+          return ctx.api.create(...args);
+        }
+      }
+    };
+    await expect(
+      reissueShareLinks(down, projectId, [first, second])
+    ).rejects.toThrow(/unavailable/);
+    const stopped = await work.read(OWNER, projectId);
+    expect(stopped.replacements).toHaveLength(1);
+    expect(stopped.pending).toHaveLength(1);
+    expect(stopped.retired).toEqual([
+      { shareId: second.shareId, mode: 'tweak' }
+    ]);
+    const result = await reissueShareLinks(
+      { ...laptop.shareLinks, work },
+      projectId,
+      [first, second]
+    );
+    expect(result).toHaveLength(2);
+    expect(new Set(result.map((link) => link.shareId)).size).toBe(2);
+    expect(
+      result.some((link) => link.shareId === stopped.replacements[0]!.shareId)
+    ).toBe(true);
+    expect(
+      result.some((link) => link.shareId === stopped.pending[0]!.shareId)
+    ).toBe(true);
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links
+    ).toHaveLength(2);
+    expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+    for (const link of result)
+      expect((await visit(srv, link.url)).verified.mode).toBe(link.mode);
+  });
+
+  it('cancels pending registration when its grant is explicitly revoked', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    await delegate(laptop);
+    const down = {
+      ...laptop.shareLinks,
+      work,
+      api: {
+        ...laptop.shareLinks.api,
+        create: async () => {
+          throw new Error('Offline');
+        }
+      }
+    };
+    await expect(createShareLink(down, projectId, 'view')).rejects.toThrow(
+      /Offline/
+    );
+    const job = (await work.read(OWNER, projectId)).pending[0]!;
+    const recovered = { ...laptop.shareLinks, work };
+    await revokeShareLink(recovered, projectId, job.shareId);
+    expect((await work.read(OWNER, projectId)).pending).toEqual([]);
+    await maintainShareLinks(recovered, projectId);
+    expect((await laptop.store.shareHead(projectId)).shareLinks?.links).toEqual(
+      []
+    );
+    expect(await reissueShareLinks(recovered, projectId, [job])).toEqual([]);
   });
 });
 
@@ -2367,7 +2869,10 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
       [aKey, envelopeKey(srv, projectId, b.shareId)!].sort()
     );
     // ...and so does forgetting b.
-    await revokeShareLink(laptop.shareLinks, projectId, b.shareId);
+    // Isolate object deletion from the normal background publisher, which
+    // may legitimately replace a's large snapshot with a new inline one.
+    const quiet = reload(srv, laptop, { members: othersOf(owner) });
+    await revokeShareLink(quiet.shareLinks, projectId, b.shareId);
     expect((await served(srv, b.fragment.token)).status).toBe(404);
     expect((await served(srv, a.fragment.token)).status).toBe(200);
     expect(snapshotObjects(srv, projectId)).toEqual([aKey]);
