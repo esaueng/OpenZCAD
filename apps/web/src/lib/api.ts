@@ -59,6 +59,7 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
+  LEGACY_PROJECT_FRAME_CONTENT_TYPE,
   toProjectId,
   type E2eeListProjectsExtension,
   type ProjectSummary
@@ -173,7 +174,11 @@ function openableAccountDocument(
 async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit,
-  observations: { documentDownload?: boolean; expectedMissing?: boolean } = {}
+  observations: {
+    documentDownload?: boolean;
+    expectedMissing?: boolean;
+    projectId?: string;
+  } = {}
 ): Promise<T> {
   const collect = isAnalyticsEnabled();
   const started = performance.now();
@@ -186,7 +191,13 @@ async function requestJson<T>(
     response = await desktopFetch(input, {
       ...init,
       credentials: 'same-origin',
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
+      headers: {
+        'content-type': 'application/json',
+        ...(observations.documentDownload
+          ? { accept: LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+          : {}),
+        ...(init?.headers ?? {})
+      }
     });
   } catch (error) {
     if (collect && projectCall) {
@@ -249,6 +260,27 @@ async function requestJson<T>(
     );
   }
 
+  if (
+    observations.projectId &&
+    response.headers.get('content-type')?.split(';')[0] ===
+      LEGACY_PROJECT_FRAME_CONTENT_TYPE
+  ) {
+    try {
+      const { readLegacyProjectFrame } = await import('./legacyProjectReader');
+      return (await readLegacyProjectFrame(
+        response,
+        observations.projectId,
+        desktopFetch,
+        collect ? (bytes) => trackSize('transfer_download', bytes) : undefined
+      )) as T;
+    } catch (error) {
+      throw new ApiError(
+        503,
+        `The account copy of this project cannot be opened here: ${error instanceof Error ? error.message : String(error)}`,
+        PROJECT_DOCUMENT_UNAVAILABLE_CODE
+      );
+    }
+  }
   if (collect && observations.documentDownload && !writing) {
     // Read once and measure the successfully parsed UTF-8 JSON body. Content-
     // Length may describe compressed bytes or be absent; names/IDs stay local.
@@ -454,7 +486,7 @@ async function loadPlaintextRevision(
     document = await requestJson<ProjectDocument>(
       `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
       undefined,
-      { documentDownload: true, expectedMissing: true }
+      { documentDownload: true, expectedMissing: true, projectId }
     );
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
@@ -697,7 +729,7 @@ export const api = {
           await requestJson<ProjectDocument>(
             `/api/projects/${encodeURIComponent(projectId)}`,
             undefined,
-            { documentDownload: true }
+            { documentDownload: true, projectId }
           ),
           projectId
         ),

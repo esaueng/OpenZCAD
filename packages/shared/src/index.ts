@@ -4886,3 +4886,4 @@ export function sanitizeFileName(fileName: string): string {
     .slice(0, FILE_NAME_MAX_LENGTH);
   return cleaned.length > 0 ? cleaned : 'upload';
 }
+export * from './legacy-project-storage';
