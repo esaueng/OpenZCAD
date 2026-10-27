@@ -2009,6 +2009,40 @@ describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('durable browser share work', { timeout: 120_000 }, () => {
+  it('journals only the removal-time links and never a later link or an empty set', async () => {
+    const { laptop, projectId } = await linkedProject();
+    const work = memoryShareWorkStore();
+    const ctx = { ...laptop.shareLinks, work };
+    await delegate(laptop);
+    await shareLinksAfterRemoval(ctx, {
+      projectId,
+      keyEpoch: 2,
+      userIds: [OTHER]
+    });
+    expect((await work.read(OWNER, projectId)).notice).toBeNull();
+    const before = await createShareLink(ctx, projectId, 'view');
+    await shareLinksAfterRemoval(ctx, {
+      projectId,
+      keyEpoch: 12,
+      userIds: [OTHER]
+    });
+    const after = await createShareLink(ctx, projectId, 'tweak');
+    const saved = await work.read(OWNER, projectId);
+    expect(saved.removalLinks).toEqual([
+      { shareId: before.shareId, mode: 'view' }
+    ]);
+    const [replacement] = await reissueShareLinks(
+      ctx,
+      projectId,
+      saved.removalLinks
+    );
+    expect(
+      (await laptop.store.shareHead(projectId)).shareLinks?.links
+        .map((link) => link.shareId)
+        .sort()
+    ).toEqual([after.shareId, replacement!.shareId].sort());
+  });
+
   it('keeps a closed-dialog removal notice when authority refresh fails and acknowledges only the seen epoch', async () => {
     const { laptop, projectId } = await linkedProject();
     const work = memoryShareWorkStore();

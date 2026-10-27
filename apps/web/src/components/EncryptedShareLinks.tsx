@@ -32,6 +32,10 @@ export interface EncryptedShareLinkRow {
 
 export interface EncryptedShareLinksState {
   readonly removalNotice?: string | null;
+  readonly removalLinks?: readonly {
+    shareId: string;
+    mode: EncryptedShareLinkMode;
+  }[];
   readonly links: readonly EncryptedShareLinkRow[];
   /** The owner's confirmation (share delegation) needs the identity key. */
   readonly needsConfirmation: boolean;
@@ -106,6 +110,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
       retired: work.retired,
       removalNotice: work.notice,
+      removalLinks: work.removalLinks,
       problem:
         upkeepError ??
         (upkeep?.revocations.failed.length
@@ -245,7 +250,6 @@ export function EncryptedShareLinks({
   const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
-  const [removalSeen, setRemovalSeen] = useState(false);
 
   const load = useCallback(async () => {
     const next = await client.list(projectId);
@@ -260,7 +264,6 @@ export function EncryptedShareLinks({
   useEffect(
     () =>
       client.subscribeRemovals(projectId, () => {
-        setRemovalSeen(true);
         void load().catch((caught: unknown) => setError(message(caught)));
       }),
     [client, projectId, load]
@@ -295,6 +298,13 @@ export function EncryptedShareLinks({
   };
 
   const links = state?.links ?? [];
+  const removalLinks = (state?.removalLinks ?? []).filter((affected) =>
+    links.some(
+      (link) =>
+        link.shareId === affected.shareId &&
+        link.status !== 'revocation-pending'
+    )
+  );
   const disabled = busy !== null || state === null;
 
   return (
@@ -434,7 +444,7 @@ export function EncryptedShareLinks({
         </div>
       ) : null}
 
-      {(removalSeen || state?.removalNotice) && links.length > 0 ? (
+      {state?.removalNotice && removalLinks.length > 0 ? (
         <div className="sharing-share-notice" role="status">
           <span className="sharing-tag">
             Someone lost access to this project. They can still open later
@@ -447,10 +457,9 @@ export function EncryptedShareLinks({
             disabled={disabled}
             onClick={() =>
               void run('reissue', async () => {
-                await client.reissue(projectId, links);
+                await client.reissue(projectId, removalLinks);
                 if (state?.removalNotice)
                   await client.dismissRemoval?.(projectId, state.removalNotice);
-                setRemovalSeen(false);
               })
             }
           >
@@ -464,7 +473,6 @@ export function EncryptedShareLinks({
               void run('dismiss', async () => {
                 if (state?.removalNotice)
                   await client.dismissRemoval?.(projectId, state.removalNotice);
-                setRemovalSeen(false);
               })
             }
           >

@@ -18,6 +18,7 @@ export interface PendingShareCreation extends ShareWorkLink {
 export interface ShareWork {
   readonly notice: string | null;
   readonly removalEpoch: number;
+  readonly removalLinks: readonly ShareWorkLink[];
   readonly retired: readonly ShareWorkLink[];
   readonly pending: readonly PendingShareCreation[];
   readonly replacements: readonly { sourceId: string; shareId: string }[];
@@ -35,6 +36,7 @@ export interface ShareWorkStore {
 const empty = (): ShareWork => ({
   notice: null,
   removalEpoch: -1,
+  removalLinks: [],
   retired: [],
   pending: [],
   replacements: []
@@ -80,6 +82,10 @@ function readWork(value: unknown): ShareWork {
     !Number.isSafeInteger(work.removalEpoch) ||
     work.removalEpoch < -1 ||
     (work.notice !== null && !text(work.notice)) ||
+    (work.removalLinks !== undefined &&
+      (!Array.isArray(work.removalLinks) ||
+        work.removalLinks.length > 256 ||
+        !work.removalLinks.every(link))) ||
     !Array.isArray(work.retired) ||
     work.retired.length > 256 ||
     !work.retired.every(link) ||
@@ -92,7 +98,10 @@ function readWork(value: unknown): ShareWork {
   ) {
     throw new Error('Saved share-link work is invalid. Nothing was discarded.');
   }
-  return structuredClone(work as ShareWork);
+  return structuredClone({
+    ...work,
+    removalLinks: work.removalLinks ?? []
+  } as ShareWork);
 }
 
 export function memoryShareWorkStore(): ShareWorkStore {

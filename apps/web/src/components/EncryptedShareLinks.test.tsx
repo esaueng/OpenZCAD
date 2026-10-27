@@ -52,8 +52,16 @@ const active: EncryptedShareLinksState = {
 
 describe('EncryptedShareLinks (slice 5-10)', () => {
   it('loads a saved removal warning after the dialog was closed and acknowledges its exact cursor', async () => {
-    const saved = { ...active, removalNotice: 'epoch-12' };
-    const newer = { ...active, removalNotice: 'epoch-13' };
+    const saved = {
+      ...active,
+      removalNotice: 'epoch-12',
+      removalLinks: [active.links[0]!]
+    };
+    const newer = {
+      ...active,
+      removalNotice: 'epoch-13',
+      removalLinks: [active.links[0]!]
+    };
     const client = fakeClient([saved, newer]);
     client.dismissRemoval = vi.fn(async () => undefined);
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
@@ -132,7 +140,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
         retired: [{ shareId: 'shr_old', mode: 'tweak' }]
       },
       active,
-      active
+      { ...active, removalNotice: '12', removalLinks: [active.links[0]!] }
     ]);
     const user = userEvent.setup();
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
@@ -150,10 +158,12 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     );
     act(() => client.fireRemoval());
     expect(
-      screen.getByText(/Someone lost access to this project/)
+      await screen.findByText(/Someone lost access to this project/)
     ).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Reissue links' }));
-    expect(client.reissue).toHaveBeenLastCalledWith('proj_x', active.links);
+    expect(client.reissue).toHaveBeenLastCalledWith('proj_x', [
+      active.links[0]!
+    ]);
   });
 
   it('keeps a revoked link the server still serves listed as revocation pending until revoking again succeeds', async () => {

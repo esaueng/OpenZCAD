@@ -265,35 +265,39 @@ async function openStore(
         .then(({ shareLinksAfterRemoval }) =>
           shareCtx ? shareLinksAfterRemoval(shareCtx, removal) : null
         )
-        .catch(() => undefined);
-      for (const listener of removalListeners) {
-        try {
-          listener(removal);
-        } catch {
-          // Every listener still hears it.
-        }
-      }
+        .catch(() => undefined)
+        .then(() => {
+          for (const listener of removalListeners) {
+            try {
+              listener(removal);
+            } catch {
+              // Every listener still hears it.
+            }
+          }
+        });
     },
     // A co-member's device removal rotated a project (slice 5-7): the
     // owner's page states its share links again without that device.
     onMemberDevicesRemoved: (removal: MemberDevicesRemoved) => {
-      void import('./shareLinks')
-        .then(({ shareLinksAfterDeviceRemoval }) =>
-          shareCtx ? shareLinksAfterDeviceRemoval(shareCtx, removal) : null
-        )
-        .catch(() => undefined);
       const notice: MembersRemoved = {
         projectId: removal.projectId,
         keyEpoch: removal.keyEpoch,
         userIds: [...new Set(removal.devices.map((device) => device.userId))]
       };
-      for (const listener of removalListeners) {
-        try {
-          listener(notice);
-        } catch {
-          /* Other listeners still hear it. */
-        }
-      }
+      void import('./shareLinks')
+        .then(({ shareLinksAfterDeviceRemoval }) =>
+          shareCtx ? shareLinksAfterDeviceRemoval(shareCtx, removal) : null
+        )
+        .catch(() => undefined)
+        .then(() => {
+          for (const listener of removalListeners) {
+            try {
+              listener(notice);
+            } catch {
+              /* Other listeners still hear it. */
+            }
+          }
+        });
     },
     // A Commit refused because this account's devices changed elsewhere
     // (#908 review): `account` is stale, so the next operation opens the

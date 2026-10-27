@@ -210,15 +210,21 @@ export async function acknowledgeShareRemoval(
     projectId,
     (current) => ({
       ...current,
-      notice: current.notice === notice ? null : current.notice
+      notice: current.notice === notice ? null : current.notice,
+      removalLinks: current.notice === notice ? [] : current.removalLinks
     })
   );
 }
 
 async function rememberShareRemoval(
   ctx: ShareLinksContext,
-  removal: MembersRemoved | MemberDevicesRemoved
+  removal: MembersRemoved | MemberDevicesRemoved,
+  head: EncryptedShareHead
 ): Promise<void> {
+  const active = head.shareLinks?.links ?? [];
+  const affected = active.filter(
+    (link) => link.grant.keyEpoch < removal.keyEpoch
+  );
   await shareWorkFor(ctx).update(
     ctx.groups.account.userId,
     removal.projectId,
@@ -228,7 +234,23 @@ async function rememberShareRemoval(
         : {
             ...current,
             removalEpoch: removal.keyEpoch,
-            notice: String(removal.keyEpoch)
+            removalLinks: [
+              ...new Map(
+                [
+                  ...current.removalLinks.filter((link) =>
+                    active.some((item) => item.shareId === link.shareId)
+                  ),
+                  ...affected.map(({ shareId, mode }) => ({ shareId, mode }))
+                ].map((link) => [link.shareId, link])
+              ).values()
+            ],
+            notice:
+              affected.length ||
+              current.removalLinks.some((link) =>
+                active.some((item) => item.shareId === link.shareId)
+              )
+                ? String(removal.keyEpoch)
+                : null
           }
   );
 }
@@ -1678,9 +1700,9 @@ export async function shareLinksAfterRemoval(
   ctx: ShareLinksContext,
   removal: MembersRemoved
 ): Promise<AuthorityOutcome | null> {
-  await rememberShareRemoval(ctx, removal);
-  if (!ctx.groups.device) return null;
   const head = await ctx.store.shareHead(removal.projectId);
+  await rememberShareRemoval(ctx, removal, head);
+  if (!ctx.groups.device) return null;
   // No request unless the head tombstones links; never fails the hook.
   await forgetRevokedShareLinks(ctx, removal.projectId, { head }).catch(
     () => undefined
@@ -1708,9 +1730,9 @@ export async function shareLinksAfterDeviceRemoval(
   ctx: ShareLinksContext,
   removal: MemberDevicesRemoved
 ): Promise<AuthorityOutcome | null> {
-  await rememberShareRemoval(ctx, removal);
-  if (!ctx.groups.device) return null;
   const head = await ctx.store.shareHead(removal.projectId);
+  await rememberShareRemoval(ctx, removal, head);
+  if (!ctx.groups.device) return null;
   // No request unless the head tombstones links; never fails the hook.
   await forgetRevokedShareLinks(ctx, removal.projectId, { head }).catch(
     () => undefined
