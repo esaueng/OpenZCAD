@@ -27712,6 +27712,7 @@ export function App() {
             encryptedProjectOpen
               ? {
                   status: encryptionStatus,
+                  projectStateCode: encryptionStatus.projectStateCode,
                   needsRepair: presentedSaveState === 'repair',
                   onOpenEncryptionSettings: () => openSettingsAt('encryption')
                 }

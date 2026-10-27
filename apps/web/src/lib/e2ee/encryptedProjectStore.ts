@@ -79,6 +79,7 @@ import {
   verifyProjectEnvelopeSignature,
   verifyVersionLog,
   versionHash,
+  projectStateCode as computeProjectStateCode,
   wrapKey,
   type BodyEnvelopeHeader,
   type EncryptedDocumentBody,
@@ -320,6 +321,7 @@ export const E2EE_CONTENT_UNAVAILABLE_MESSAGE =
 
 /** What this page remembers of a project's accepted head. */
 interface HeadState {
+  readonly stateCode: string | null;
   readonly version: number;
   readonly hash: string;
   readonly keyEpoch: number;
@@ -360,6 +362,8 @@ export interface EncryptedCopyRequest {
 }
 
 export interface EncryptedProjectStore {
+  /** Full comparison code of this page's verified current head, if available. */
+  stateCode?(projectId: string): string | null;
   createProject(request: CreateProjectRequest): Promise<CreateProjectResponse>;
   /** Stores a copy or branch of an encrypted project (slice 4-8). */
   copyProject(request: EncryptedCopyRequest): Promise<CreateProjectResponse>;
@@ -832,12 +836,23 @@ export function createEncryptedProjectStore(
     projectId: string,
     envelope: Uint8Array,
     signature: Uint8Array
-  ): Promise<VerifiedAuthor> {
+  ): Promise<VerifiedAuthor & { readonly identityKeyHash: Uint8Array }> {
     try {
-      return await verifyAuthoredEnvelope(envelope, signature, {
-        deviceLists: await projectDeviceLists(groups, projectId),
+      const deviceLists = await projectDeviceLists(groups, projectId);
+      const identities = new Map(
+        deviceLists.map((list) => [
+          list.userId,
+          new Uint8Array(list.identityKeyHash)
+        ])
+      );
+      const author = await verifyAuthoredEnvelope(envelope, signature, {
+        deviceLists,
         cutoffs: await cutoffsFor(projectId)
       });
+      return {
+        ...author,
+        identityKeyHash: identities.get(author.userId)!
+      };
     } catch (error) {
       if (error instanceof AuthorshipError) {
         throw integrity(
@@ -1343,6 +1358,13 @@ export function createEncryptedProjectStore(
         hash
       });
       const state: HeadState = {
+        stateCode: (
+          await computeProjectStateCode({
+            versionHash: author.versionHash,
+            documentVersion: header.documentVersion,
+            signerKeyHash: author.identityKeyHash
+          })
+        ).code,
         version: header.documentVersion,
         hash,
         keyEpoch: header.keyEpoch,
@@ -1792,6 +1814,13 @@ export function createEncryptedProjectStore(
         linkOnly.delete(projectId);
       }
       const state: HeadState = {
+        stateCode: (
+          await computeProjectStateCode({
+            versionHash: fromHex(sealed.hash),
+            documentVersion: response.version,
+            signerKeyHash: list().identityKeyHash
+          })
+        ).code,
         version: response.version,
         hash: sealed.hash,
         keyEpoch: sealed.keyEpoch,
@@ -2171,6 +2200,13 @@ export function createEncryptedProjectStore(
         if (current?.headHash !== hash) continue;
       }
       const state: HeadState = {
+        stateCode: (
+          await computeProjectStateCode({
+            versionHash: author.versionHash,
+            documentVersion: header.documentVersion,
+            signerKeyHash: author.identityKeyHash
+          })
+        ).code,
         version: header.documentVersion,
         hash,
         keyEpoch: header.keyEpoch,
@@ -2258,6 +2294,15 @@ export function createEncryptedProjectStore(
       }
       const previous = heads.get(projectId);
       const state: HeadState = {
+        stateCode: roomSealed.has(sealed)
+          ? (
+              await computeProjectStateCode({
+                versionHash: fromHex(sealed.hash),
+                documentVersion: sealed.version,
+                signerKeyHash: list().identityKeyHash
+              })
+            ).code
+          : null,
         version: sealed.version,
         hash: sealed.hash,
         keyEpoch: sealed.keyEpoch,
@@ -2483,6 +2528,13 @@ export function createEncryptedProjectStore(
     });
     await pins.advanceInfo(userId, projectId, 1, infoHash);
     heads.set(projectId, {
+      stateCode: (
+        await computeProjectStateCode({
+          versionHash: fromHex(sealed.hash),
+          documentVersion: sealed.document.version,
+          signerKeyHash: list().identityKeyHash
+        })
+      ).code,
       version: sealed.document.version,
       hash: sealed.hash,
       keyEpoch: 0,
@@ -2537,6 +2589,7 @@ export function createEncryptedProjectStore(
   }
 
   return {
+    stateCode: (projectId) => heads.get(projectId)?.stateCode ?? null,
     createProject: guarded(async (request) => {
       writableDevice();
       const ownerUserId = userId as UserId;

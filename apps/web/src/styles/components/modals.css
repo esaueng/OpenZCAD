@@ -1317,6 +1317,14 @@
   font-size: var(--fs-xs);
 }
 
+.sharing-state-code {
+  display: block;
+  margin-block: 8px;
+  overflow-wrap: anywhere;
+  user-select: all;
+  font-family: monospace;
+}
+
 .sharing-local {
   padding: 0 var(--sp-3);
 }

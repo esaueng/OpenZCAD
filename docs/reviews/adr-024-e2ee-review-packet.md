@@ -665,10 +665,12 @@ and on the scenario and archive tests.
   branches forever. An independently accepted account state now rejects a
   competing MLS transcript, including on a fresh browser, but a participant
   with no previous independent state can still receive a consistent fork.
-  The manual anchor is the project state code (`projectStateCode`);
-  `EncryptionIndicator.tsx` has a slot for it, but showing it in the
-  indicator and sharing dialog is still being built (slice 8-C5a). No
-  transparency log or gossip.
+  The manual anchor is the full 40-digit project state code
+  (`projectStateCode`), shown in the top-bar project information and sharing
+  dialog from this page's verified saved head (slice 8-C5a). It binds that
+  version's hash, version number and signing member's identity fingerprint.
+  Locked keys, failed verification and teardown hide it. No transparency
+  log or automatic gossip.
 - **Web code delivery.** The server ships the JavaScript; publishing bundle
   hashes next to `/build-meta.json` narrows but does not close this. The
   signed desktop app is the stronger client.

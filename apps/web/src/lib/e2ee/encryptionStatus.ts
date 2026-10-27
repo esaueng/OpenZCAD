@@ -35,6 +35,8 @@ export interface EncryptionStatusWarning {
 
 export interface EncryptionStatus {
   readonly state: EncryptionStatusState;
+  /** Full code of the last verified head; absent while locked or refused. */
+  readonly projectStateCode?: string;
   readonly warning?: EncryptionStatusWarning;
   /** The failed verification's own words, for `problem`. */
   readonly problem?: string;
@@ -43,6 +45,7 @@ export interface EncryptionStatus {
 /** A project-scoped verification outcome; the lock is device-wide. */
 interface ProjectRecord {
   readonly verified: boolean;
+  readonly projectStateCode?: string;
   readonly warning?: EncryptionStatusWarning;
   readonly problem?: string;
 }
@@ -73,6 +76,7 @@ function store(projectId: string, next: ProjectRecord): boolean {
   if (
     previous &&
     previous.verified === next.verified &&
+    previous.projectStateCode === next.projectStateCode &&
     previous.warning === next.warning &&
     previous.problem === next.problem
   ) {
@@ -83,13 +87,17 @@ function store(projectId: string, next: ProjectRecord): boolean {
 }
 
 /** The last head this page opened or wrote for the project verified. */
-export function reportHeadVerified(projectId: string): void {
+export function reportHeadVerified(
+  projectId: string,
+  code?: string | null
+): void {
   const previous = records.get(projectId);
   // A head that verified shows the keys are open on this page.
   const wasLocked = keysLocked;
   keysLocked = false;
   const stored = store(projectId, {
     verified: true,
+    ...(code ? { projectStateCode: code } : {}),
     ...(previous?.warning ? { warning: previous.warning } : {})
   });
   if (stored || wasLocked) changed();
@@ -107,6 +115,9 @@ export function reportVerificationWarning(
   const previous = records.get(projectId);
   const stored = store(projectId, {
     verified: previous?.verified ?? false,
+    ...(previous?.projectStateCode
+      ? { projectStateCode: previous.projectStateCode }
+      : {}),
     warning,
     ...(previous?.problem ? { problem: previous.problem } : {})
   });
@@ -210,9 +221,20 @@ export function encryptionStatusOf(projectId: string): EncryptionStatus {
   } else if (keysLocked) {
     status = { state: 'locked' };
   } else if (record?.warning) {
-    status = { state: 'warning', warning: record.warning };
+    status = {
+      state: 'warning',
+      warning: record.warning,
+      ...(record.projectStateCode
+        ? { projectStateCode: record.projectStateCode }
+        : {})
+    };
   } else if (record?.verified) {
-    status = { state: 'verified' };
+    status = {
+      state: 'verified',
+      ...(record.projectStateCode
+        ? { projectStateCode: record.projectStateCode }
+        : {})
+    };
   } else {
     status = UNVERIFIED;
   }

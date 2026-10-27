@@ -27,7 +27,10 @@ export function reportingEncryptedProjectStore(
   ): Promise<R> =>
     run().then(
       (result) => {
-        if (current()) reportHeadVerified(projectIdOf(result));
+        if (current()) {
+          const projectId = projectIdOf(result);
+          reportHeadVerified(projectId, store.stateCode?.(projectId));
+        }
         return result;
       },
       (error: unknown) => {
@@ -71,6 +74,7 @@ export function reportingEncryptedProjectStore(
   };
 
   return {
+    stateCode: store.stateCode?.bind(store),
     createProject: (request) =>
       verifiedHead(
         () => store.createProject(request),

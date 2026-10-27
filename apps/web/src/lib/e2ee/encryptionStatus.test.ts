@@ -52,6 +52,25 @@ const lockedError = () =>
 beforeEach(() => resetEncryptionStatus());
 
 describe('encryption status store', () => {
+  it('keeps full codes with verified heads and hides them while locked, refused or forgotten', () => {
+    const code = '01234 56789 01234 56789 01234 56789 01234 56789';
+    reportHeadVerified('proj_a', code);
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    reportVerificationWarning('proj_a', STALE);
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    reportKeysLocked();
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    reportKeysUnlocked();
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    reportEncryptedFailure('proj_a', integrityError());
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    reportHeadVerified('proj_a', code);
+    reportHeadVerified('proj_a');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    reportHeadVerified('proj_a', code);
+    beginKeySessionTeardown();
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+  });
   it('starts unverified and shows a verified head', () => {
     expect(encryptionStatusOf('proj_a').state).toBe('unverified');
     reportHeadVerified('proj_a');
@@ -257,6 +276,21 @@ describe('encryption status reports from the encrypted store', () => {
     await reporting.loadRevision('proj_a', 'rev_1');
     await reporting.listRevisions('proj_a');
     expect(encryptionStatusOf('proj_a').state).toBe('unverified');
+  });
+
+  it('transfers only the store’s verified code and ignores completion after teardown', async () => {
+    const { store } = fakeStore();
+    const code = '01234 56789 01234 56789 01234 56789 01234 56789';
+    store.stateCode = vi.fn(() => code);
+    let current = true;
+    const reporting = reportingEncryptedProjectStore(store, () => current);
+    await reporting.loadProject('proj_a');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    resetEncryptionStatus();
+    const pending = reporting.loadProject('proj_a');
+    current = false;
+    await pending;
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
   });
 
   it('reports an integrity failure from any path and rethrows it', async () => {
