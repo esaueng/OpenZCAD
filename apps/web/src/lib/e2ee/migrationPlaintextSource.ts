@@ -95,8 +95,17 @@ export function createMigrationPlaintextSource(
       response.headers.get('content-type')?.split(';')[0] ===
       LEGACY_PROJECT_FRAME_CONTENT_TYPE
     ) {
-      const { readLegacyProjectFrame } = await import('../legacyProjectReader');
-      return readLegacyProjectFrame(response, projectId, fetcher);
+      const { readLegacyProjectFrame, LegacyProjectTransportError } =
+        await import('../legacyProjectReader');
+      try {
+        return await readLegacyProjectFrame(response, projectId, fetcher);
+      } catch (error) {
+        if (error instanceof LegacyProjectTransportError) {
+          if (error.status) throw new ApiError(error.status, error.message);
+          throw error.cause;
+        }
+        throw error;
+      }
     }
     return response.json() as Promise<ProjectDocument>;
   };

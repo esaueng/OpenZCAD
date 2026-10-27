@@ -265,8 +265,9 @@ async function requestJson<T>(
     response.headers.get('content-type')?.split(';')[0] ===
       LEGACY_PROJECT_FRAME_CONTENT_TYPE
   ) {
+    const { readLegacyProjectFrame, LegacyProjectTransportError } =
+      await import('./legacyProjectReader');
     try {
-      const { readLegacyProjectFrame } = await import('./legacyProjectReader');
       return (await readLegacyProjectFrame(
         response,
         observations.projectId,
@@ -274,6 +275,10 @@ async function requestJson<T>(
         collect ? (bytes) => trackSize('transfer_download', bytes) : undefined
       )) as T;
     } catch (error) {
+      if (error instanceof LegacyProjectTransportError) {
+        if (error.status) throw new ApiError(error.status, error.message);
+        throw error.cause;
+      }
       throw new ApiError(
         503,
         `The account copy of this project cannot be opened here: ${error instanceof Error ? error.message : String(error)}`,

@@ -19,3 +19,10 @@ forms and reconstruct an imported mesh. Types, focused lint and the complete
 production build with bundle budgets pass. Server pipeline retirement and
 production activation remain held for outside-review clearance; this slice
 does not complete the remaining historical MLS authorization work.
+
+Review regressions preserve raw-storage negotiation on older native hosts
+through the existing query protocol, without a Rust protocol change. Asset
+fetch and response-stream failures retain their original transport errors;
+HTTP asset failures preserve their status, while invalid/checksum-mismatched
+content retains the account-copy-unavailable classification. Migration reads
+use the same distinction. macOS verification remains deferred.

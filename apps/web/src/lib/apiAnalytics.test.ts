@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from './api';
 import { isAnalyticsEnabled, trackDetail, trackSize } from './analytics';
 import { desktopFetch } from './desktopBridge';
-import { createProjectDocument } from '@openzcad/document-core';
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import { prepareProjectStorageSnapshot } from '@openzcad/persistence';
+import { createMigrationPlaintextSource } from './e2ee/migrationPlaintextSource';
 import {
   toUserId,
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
@@ -30,6 +32,100 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe('project download size observations', () => {
+  it('preserves an asset network failure after receiving the project frame', async () => {
+    const imported = importStepBody(document, {
+      name: 'Part',
+      artifactId: 'artifact_local_part',
+      sourceName: 'part.step',
+      stepText: 'ISO-10303-21;\nEND-ISO-10303-21;'
+    }).document;
+    const prepared = await prepareProjectStorageSnapshot(imported);
+    const frame = encodeE2eeFrame(
+      {
+        version: 1,
+        projectId,
+        kind: 'snapshot',
+        aliases: [],
+        storedBytes: prepared.storedBody.length,
+        logicalBytes: prepared.logicalBytes,
+        checksumSha256: prepared.checksumSha256
+      },
+      prepared.storedBody
+    );
+    const offline = new TypeError('offline');
+    for (const reader of [api, createMigrationPlaintextSource()]) {
+      vi.mocked(desktopFetch)
+        .mockResolvedValueOnce(
+          new Response(frame, {
+            headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+          })
+        )
+        .mockRejectedValueOnce(offline);
+      await expect(reader.loadProject(projectId)).rejects.toBe(offline);
+    }
+    expect(trackSize).not.toHaveBeenCalled();
+  });
+
+  it('preserves a response stream interruption as the original network error', async () => {
+    const interrupted = new TypeError('connection interrupted');
+    vi.mocked(desktopFetch).mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(interrupted);
+          }
+        }),
+        { headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE } }
+      )
+    );
+    await expect(api.loadProject(projectId)).rejects.toBe(interrupted);
+  });
+
+  it('keeps asset HTTP failures distinct from invalid project bytes', async () => {
+    const imported = importStepBody(document, {
+      name: 'Part',
+      artifactId: 'artifact_local_part',
+      sourceName: 'part.step',
+      stepText: 'ISO-10303-21;\nEND-ISO-10303-21;'
+    }).document;
+    const prepared = await prepareProjectStorageSnapshot(imported);
+    const metadata = {
+      version: 1,
+      projectId,
+      kind: 'snapshot',
+      aliases: [],
+      storedBytes: prepared.storedBody.length,
+      logicalBytes: prepared.logicalBytes,
+      checksumSha256: prepared.checksumSha256
+    };
+    vi.mocked(desktopFetch)
+      .mockResolvedValueOnce(
+        new Response(encodeE2eeFrame(metadata, prepared.storedBody), {
+          headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response('temporarily unavailable', { status: 503 })
+      );
+    await expect(api.loadProject(projectId)).rejects.toMatchObject({
+      status: 503,
+      code: undefined
+    });
+    vi.mocked(desktopFetch).mockResolvedValueOnce(
+      new Response(
+        encodeE2eeFrame(
+          { ...metadata, checksumSha256: '0'.repeat(64) },
+          prepared.storedBody
+        ),
+        { headers: { 'content-type': LEGACY_PROJECT_FRAME_CONTENT_TYPE } }
+      )
+    );
+    await expect(api.loadProject(projectId)).rejects.toMatchObject({
+      status: 503,
+      code: 'PROJECT_DOCUMENT_UNAVAILABLE'
+    });
+  });
+
   it('opens a raw legacy frame in the browser and measures its consumed bytes', async () => {
     const payload = new TextEncoder().encode(documentText);
     const frame = encodeE2eeFrame(

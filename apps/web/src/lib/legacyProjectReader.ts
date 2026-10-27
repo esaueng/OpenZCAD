@@ -22,6 +22,15 @@ import {
 import { normalizeDocument } from '@openzcad/document-core';
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+/** A failed transport must remain retryable rather than imply damaged CAD. */
+export class LegacyProjectTransportError extends Error {
+  constructor(
+    cause: unknown,
+    readonly status?: number
+  ) {
+    super('The project download did not complete.', { cause });
+  }
+}
 function fail(): never {
   throw new Error(
     'The stored project payload is invalid or exceeds its limit.'
@@ -51,7 +60,9 @@ async function boundedBody(
   let total = 0;
   try {
     for (;;) {
-      const next = await reader.read();
+      const next = await reader.read().catch((cause: unknown) => {
+        throw new LegacyProjectTransportError(cause);
+      });
       if (next.done) break;
       total += next.value.length;
       if (total > limit) {
@@ -165,9 +176,16 @@ export async function readLegacyProjectFrame(
           const asset = await fetcher(
             `/api/projects/${encodeURIComponent(projectId)}/storage-assets?key=${encodeURIComponent(ref.objectKey)}`,
             { credentials: 'same-origin' }
-          );
-          if (!asset.ok)
-            throw new Error('A stored project asset is unavailable.');
+          ).catch((cause: unknown) => {
+            throw new LegacyProjectTransportError(cause);
+          });
+          if (!asset.ok) {
+            const unavailable = new Error(
+              'A stored project asset is unavailable.'
+            );
+            if (asset.status === 404) throw unavailable;
+            throw new LegacyProjectTransportError(unavailable, asset.status);
+          }
           const stored = await boundedBody(
             asset,
             MAX_CLOUD_PROJECT_WRITE_BYTES
