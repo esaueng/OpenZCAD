@@ -37,6 +37,8 @@ export interface ShareWorkStore {
     projectId: string,
     change: (current: ShareWork) => ShareWork
   ): Promise<ShareWork>;
+  /** Erase jobs whose device/epoch keys are being discarded. */
+  deleteAccount(userId: string): Promise<void>;
 }
 
 const empty = (): ShareWork => ({
@@ -122,6 +124,11 @@ export function memoryShareWorkStore(): ShareWorkStore {
       const next = readWork(change(readWork(records.get(key))));
       records.set(key, next);
       return readWork(next);
+    },
+    deleteAccount: async (userId) => {
+      for (const key of records.keys()) {
+        if ((JSON.parse(key) as [string, string])[0] === userId) records.delete(key);
+      }
     }
   };
 }
@@ -183,7 +190,24 @@ export function indexedDbShareWorkStore(): ShareWorkStore {
   }
   return {
     read: (user, project) => run(user, project),
-    update: (user, project, change) => run(user, project, change)
+    update: (user, project, change) => run(user, project, change),
+    deleteAccount: async (userId) => {
+      const db = await database();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction('work', 'readwrite');
+        const request = tx.objectStore('work').openKeyCursor(
+          IDBKeyRange.bound([userId], [userId, []])
+        );
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          tx.objectStore('work').delete(cursor.primaryKey);
+          cursor.continue();
+        };
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () => reject(tx.error ?? new Error('Share-link work could not be erased.'));
+      });
+    }
   };
 }
 

@@ -254,6 +254,10 @@ export function EncryptedShareLinks({
   const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
+  const [transientRemoval, setTransientRemoval] = useState<{
+    projectId: string;
+    notice: ShareRemovalNotice;
+  } | null>(null);
   const loadRevision = useRef(0);
 
   const load = useCallback(async () => {
@@ -272,16 +276,7 @@ export function EncryptedShareLinks({
     () =>
       client.subscribeRemovals(projectId, (notice) => {
         if (notice?.problem) setError(notice.problem);
-        if (notice)
-          setState((current) =>
-            current
-              ? {
-                  ...current,
-                  removalNotice: notice.cursor,
-                  removalLinks: notice.links
-                }
-              : current
-          );
+        if (notice) setTransientRemoval({ projectId, notice });
         void load().catch((caught: unknown) => setError(message(caught)));
       }),
     [client, projectId, load]
@@ -313,13 +308,17 @@ export function EncryptedShareLinks({
   };
 
   const links = state?.links ?? [];
-  const removalLinks = (state?.removalLinks ?? []).filter((affected) =>
-    links.some(
-      (link) =>
-        link.shareId === affected.shareId &&
-        link.status !== 'revocation-pending'
-    )
-  );
+  const transient = transientRemoval?.projectId === projectId ? transientRemoval : null;
+  const removalCursor = transient?.notice.cursor ?? state?.removalNotice;
+  const removalLinks = (transient?.notice.links ?? state?.removalLinks ?? [])
+    .filter((affected) => transient
+      ? !links.some((link) => link.shareId === affected.shareId && link.status === 'revocation-pending')
+      : links.some((link) => link.shareId === affected.shareId && link.status !== 'revocation-pending'));
+  const acknowledgeRemoval = async () => {
+    if (removalCursor && !transient?.notice.problem)
+      await client.dismissRemoval?.(projectId, removalCursor);
+    setTransientRemoval((current) => current === transient ? null : current);
+  };
   const disabled = busy !== null || state === null;
 
   return (
@@ -459,7 +458,7 @@ export function EncryptedShareLinks({
         </div>
       ) : null}
 
-      {state?.removalNotice && removalLinks.length > 0 ? (
+      {(transient || state?.removalNotice) && removalLinks.length > 0 ? (
         <div className="sharing-share-notice" role="status">
           <span className="sharing-tag">
             Someone lost access to this project. They can still open later
@@ -473,8 +472,7 @@ export function EncryptedShareLinks({
             onClick={() =>
               void run('reissue', async () => {
                 await client.reissue(projectId, removalLinks);
-                if (state?.removalNotice)
-                  await client.dismissRemoval?.(projectId, state.removalNotice);
+                await acknowledgeRemoval();
               })
             }
           >
@@ -486,8 +484,7 @@ export function EncryptedShareLinks({
             disabled={disabled}
             onClick={() =>
               void run('dismiss', async () => {
-                if (state?.removalNotice)
-                  await client.dismissRemoval?.(projectId, state.removalNotice);
+                await acknowledgeRemoval();
               })
             }
           >

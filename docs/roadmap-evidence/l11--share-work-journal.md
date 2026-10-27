@@ -14,6 +14,10 @@ regressions cover these failure paths. Notifications deliver their affected
 IDs after journal completion without
 waiting for remote upkeep; an unavailable journal retains a transient prompt
 and warning in an open dialog. Older background responses cannot erase a newer
-notice. Owner-device statement refresh and fresh-browser share-set ancestry
+notice, including while the initial list is pending or a later list has no
+persisted notice. Discarding device keys and confirmed account erasure clear
+all of that account's journal records; keeping the device preserves them.
+Cleanup failure keeps the device record for retry. Owner-device statement
+refresh and fresh-browser share-set ancestry
 remain separate work; this slice does not complete L11 or activate production
 encryption.

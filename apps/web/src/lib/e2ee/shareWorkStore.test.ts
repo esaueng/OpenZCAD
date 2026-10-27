@@ -61,3 +61,16 @@ it('keeps invalid updates from replacing saved evidence', async () => {
     expect((await store.read('alice', 'project')).notice).toBe('kept');
   }
 });
+
+it('deletes every project of one account and preserves other accounts in both stores', async () => {
+  const module = await import('./shareWorkStore');
+  for (const store of [module.memoryShareWorkStore(), module.indexedDbShareWorkStore()]) {
+    for (const [user, project] of [['alice', 'one'], ['alice', 'two'], ['bob', 'one']] as const)
+      await store.update(user, project, (current) => ({ ...current, notice: 'saved' }));
+    await store.deleteAccount('alice');
+    expect((await store.read('alice', 'one')).notice).toBeNull();
+    expect((await store.read('alice', 'two')).notice).toBeNull();
+    expect((await store.read('bob', 'one')).notice).toBe('saved');
+    await store.deleteAccount('alice');
+  }
+});
