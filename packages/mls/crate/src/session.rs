@@ -985,7 +985,6 @@ impl Session {
             .rejoin_backup
             .clone()
             .ok_or_else(|| Error::state("no rejoin is pending"))?;
-        let group = self.group()?;
         // The anchor (initial GroupInfo or checkpoint) must precede the
         // rejoin's own epoch: the request is rechecked against the history
         // before it.
@@ -994,8 +993,39 @@ impl Session {
                 "removal archive: the records must include the rejoin's own epoch",
             ));
         };
+        // Authenticate the pre-Commit history before attributing a policy
+        // refusal to this request. A bad archive remains retryable, while a
+        // stale rejoin itself must restore the original state even when the
+        // stronger full replay would reject its last Commit first.
+        let info = MlsMessage::from_bytes(&request.group_info)?
+            .into_group_info()
+            .ok_or_else(|| Error::input("not a GroupInfo message"))?;
+        let tree = info
+            .extensions()
+            .get_as::<RatchetTreeExt>()
+            .map_err(|_| Error::input("malformed ratchet tree"))?
+            .ok_or_else(|| Error::input("missing ratchet tree"))?;
+        crate::archive::verify(
+            initial_group_info,
+            before_rejoin,
+            info.group_context(),
+            &tree.tree_data.to_bytes()?,
+            info.extensions(),
+            self.policy.directory.get(),
+        )?;
+        let mut validation = Session::import(&backup, &self.project_id)?;
+        validation.policy.directory.set(self.policy.directory.get());
+        if let Err(error) =
+            validation.rejoin_provisional(&request.group_info, request.psk_epoch, &request.psk, request.remove)
+        {
+            if error.kind == "policy" {
+                self.restore_from(&backup)?;
+            }
+            return Err(error);
+        }
         // An accepted Commit cannot be resubmitted after a bad download. Keep
-        // its provisional state retryable even after the original PSK expires.
+        // its provisional state retryable until the complete proof verifies.
+        let group = self.group()?;
         let verified = crate::archive::replay(
             initial_group_info,
             records,
@@ -1003,32 +1033,9 @@ impl Session {
             &group.export_tree().to_bytes()?,
             self.policy.directory.get(),
         )?;
-        let result: Res<()> = (|| {
-            let mut validation = Session::import(&backup, &self.project_id)?;
-            validation.policy.directory.set(self.policy.directory.get());
-            validation.rejoin(
-                &request.group_info,
-                request.psk_epoch,
-                &request.psk,
-                request.remove,
-                initial_group_info,
-                before_rejoin,
-            )?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                *self.policy.removals.lock().unwrap() = verified;
-                self.rejoin_archive = None;
-                self.write()
-            }
-            Err(error) => {
-                if error.kind == "policy" {
-                    self.restore_from(&backup)?;
-                }
-                Err(error)
-            }
-        }
+        *self.policy.removals.lock().unwrap() = verified;
+        self.rejoin_archive = None;
+        self.write()
     }
 
     pub fn confirm_rejoin(&mut self) -> Res<()> {
