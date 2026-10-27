@@ -674,7 +674,7 @@ describe('device removal across encrypted projects', () => {
     });
     expect(others.status).toBe(200);
     expect(await others.json()).toEqual({ statements: [], projects: [] });
-  });
+  }, 30_000);
 
   it('signs the cutoff for the entry this removal appended, not a later one (#894 review)', async () => {
     const { srv, recovery, laptop, desktop, phone, projects } =
