@@ -352,6 +352,10 @@ import {
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
 import {
+  automaticProjectMigration,
+  AUTOMATIC_MIGRATION_LOAD_ERROR
+} from './lib/e2ee/automaticMigration';
+import {
   allowKeySession,
   announceKeySessionChange,
   blockKeySession,
@@ -3259,29 +3263,21 @@ export function App() {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
     let stopped = false;
-    let migration: { dispose(): void } | undefined;
-    void import('./lib/e2ee/automaticMigration')
-      .then(({ automaticProjectMigration }) => {
-        if (stopped) return;
-        const current = automaticProjectMigration(sessionUserId, (message) => {
-          if (stopped || sessionRef.current?.userId !== sessionUserId) return;
-          setSettingsMessage(message);
-          updateSettingsViewState({ open: true, activeSection: 'encryption' });
-          setSettingsOpen(true);
-        });
-        migration = current;
-        void current.check();
-      })
-      .catch(() => {
-        if (stopped || sessionRef.current?.userId !== sessionUserId) return;
-        setAutomaticMigrationLoadError(
-          'Automatic encryption could not load. Reload to try again.'
-        );
-        setSettingsOpen(true);
-      });
+    // The small availability controller loads no crypto or migration engine
+    // until the server confirms all four rollout gates.
+    const migration = automaticProjectMigration(sessionUserId, (message) => {
+      if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+      setAutomaticMigrationLoadError(
+        message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
+      );
+      setSettingsMessage(message);
+      updateSettingsViewState({ open: true, activeSection: 'encryption' });
+      setSettingsOpen(true);
+    });
+    void migration.check();
     return () => {
       stopped = true;
-      migration?.dispose();
+      migration.dispose();
     };
   }, [sessionUserId, cloudFunctionsEnabled]);
   useEffect(() => {

@@ -35,6 +35,47 @@ function fixture() {
 }
 
 describe('default-on automatic migration', () => {
+  it('rechecks availability when connectivity returns after an initial failure', async () => {
+    const { automaticProjectMigration } = await import('./automaticMigration');
+    const f = fixture();
+    vi.mocked(f.deps.config).mockRejectedValueOnce(new Error('Offline'));
+    const migration = automaticProjectMigration('account', f.attention, f.deps);
+    await migration.check();
+    expect(f.deps.prepare).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(f.controller.run).toHaveBeenCalledOnce());
+    expect(f.attention).not.toHaveBeenCalledWith('Offline');
+    const reads = vi.mocked(f.deps.config).mock.calls.length;
+    migration.dispose();
+    window.dispatchEvent(new Event('online'));
+    expect(f.deps.config).toHaveBeenCalledTimes(reads);
+  });
+
+  it('disposes a reconnect check before its delayed response can load keys', async () => {
+    const { automaticProjectMigration } = await import('./automaticMigration');
+    const f = fixture();
+    let release!: (config: E2eeConfigResponse) => void;
+    vi.mocked(f.deps.config)
+      .mockRejectedValueOnce(new Error('Offline'))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          })
+      );
+    const migration = automaticProjectMigration('account', f.attention, f.deps);
+    await migration.check();
+    window.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(f.deps.config).toHaveBeenCalledTimes(2));
+    const signal = vi.mocked(f.deps.config).mock.calls[1]![0];
+    migration.dispose();
+    expect(signal.aborted).toBe(true);
+    release(ON);
+    await Promise.resolve();
+    expect(f.deps.prepare).not.toHaveBeenCalled();
+    expect(f.attention).not.toHaveBeenCalled();
+  });
+
   it('stays idle when an older or unavailable server cannot report default-on', async () => {
     const { automaticProjectMigration } = await import('./automaticMigration');
     const f = fixture();
