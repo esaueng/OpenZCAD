@@ -9276,6 +9276,10 @@ export function App() {
   /** Esc or the bar's Cancel: the extrude stays as it was, nothing selected. */
   function cancelExtrudeEdit() {
     endExtrudeEdit();
+    // clear() invalidates pending preview callbacks before replacing their
+    // last instruction: there is no Apply action after this bar closes.
+    edgeFormCandidate.current = null;
+    setStatus('Edit canceled; no change was applied.');
     setSelectedFeatureNode(null);
     setSelectedBodyIds([]);
     // The profiles its History row lit go too, as an in-place edit's do.

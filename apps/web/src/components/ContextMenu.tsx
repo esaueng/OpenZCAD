@@ -138,7 +138,7 @@ export function ContextMenu({
               <span className="context-menu-icon">{item.icon}</span>
             )}
             <span className="context-menu-label">
-              {item.label}
+              <span className="context-menu-action-label">{item.label}</span>
               {item.detail && (
                 <span className="context-menu-detail">{item.detail}</span>
               )}

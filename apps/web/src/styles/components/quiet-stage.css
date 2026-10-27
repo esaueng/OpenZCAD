@@ -1373,6 +1373,37 @@
 
 /* ── The verb rail (U04 slice 3, streamlined) ─────────── */
 
+/* Two rows preserve project navigation at the smallest supported widths;
+   the stage inherits the taller header clearance, including comfortable UI. */
+@media (max-width: 380px) {
+  .app-shell {
+    --topbar-h: calc(var(--topbar-island-h) * 2 + var(--sp-1));
+    --stage-top: calc(var(--topbar-h) + var(--island-gap) * 2);
+  }
+
+  .app-shell > .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: repeat(2, var(--topbar-island-h));
+  }
+
+  .topbar > .topbar-identity {
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    gap: var(--sp-2);
+  }
+
+  .topbar > .topbar-actions-island {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .topbar > .mode-switch.topbar-island {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
 /* In Build the column is the verb rail: one icon wide, the instrument
    rail's mirror. The column, the resizer and the lanes all read --column-w,
    so they follow; the readout under the rail is wider than the rail, so the
@@ -1814,8 +1845,8 @@ button.command-rail:disabled {
   align-items: center;
   gap: 7px;
   min-width: 0;
-  height: 26px;
-  padding: 0 7px;
+  min-height: 30px;
+  padding: 4px 7px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -1831,9 +1862,9 @@ button.command-rail:disabled {
 
 .command-tile > span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
 }
 
 .command-tile:hover:not(:disabled):not(.active) {
@@ -2335,6 +2366,24 @@ button.command-rail:disabled {
   min-height: min(180px, 100%);
   display: flex;
   pointer-events: none;
+}
+
+@media (max-width: 520px) {
+  .viewer-area .stage-right:has(> .panel-lane-float) {
+    left: calc(var(--column-w) + var(--island-gap) * 2);
+  }
+
+  .stage-right > .panel-lane-float {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: min(50dvh, 100%);
+  }
+
+  .panel-lane-float > .model-panel {
+    flex: 0 1 auto;
+    width: 100%;
+    max-height: 100%;
+  }
 }
 
 /* Every panel's frame. */
@@ -3390,6 +3439,16 @@ button.model-panel-grip[aria-expanded='true'] {
   bottom: calc(100% + 8px);
   min-width: 220px;
   max-width: 100%;
+  box-sizing: border-box;
+  max-height: max(
+    0px,
+    calc(
+      100dvh - var(--stage-top) - var(--island-gap) * 2 - var(--command-bar-h) -
+        var(--in-place-command-h, 64px) - 8px
+    )
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 10px;
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
@@ -3402,8 +3461,6 @@ button.model-panel-grip[aria-expanded='true'] {
    off the top of the stage. */
 .in-place-command-options-panel.move-options {
   width: min(340px, 100%);
-  max-height: min(60vh, 420px);
-  overflow-y: auto;
 }
 
 .move-command .in-place-command-hint {

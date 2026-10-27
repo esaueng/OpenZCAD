@@ -1641,7 +1641,7 @@ export async function setBarValues(
     await keypad.locator('input').press('Enter');
     await expect(keypad).toHaveCount(0);
     await expect(
-      bar.getByRole('button', { name: label, exact: true })
+      bar.getByRole('button', { name: label, exact: true, includeHidden: true })
     ).toContainText(value);
   }
   if ((await options.getAttribute('open')) !== null) {

@@ -54,12 +54,6 @@ export const UNSTYLED_ALLOWANCES = [
     classes: ['sketch-attachment'],
     reason:
       'Bare wrapper. Its kv-grid and muted children carry every rule that lays this block out.'
-  },
-  {
-    file: 'apps/web/src/components/SettingsPage.tsx',
-    classes: ['settings-turnstile-shell'],
-    reason:
-      'Bare wrapper around the sized .settings-turnstile widget slot and its status line.'
   }
 ];
 

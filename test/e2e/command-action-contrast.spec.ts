@@ -1,5 +1,11 @@
 import type { Locator } from '@playwright/test';
-import { expect, openMoveOptions, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  openMoveOptions,
+  revealModelPanel,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 /** Read the painted text, including opacity, against the actual button. */
 async function expectReadableActions(bar: Locator) {
@@ -132,6 +138,17 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expect(
         bar.getByRole('button', { name: 'Precise values…' })
       ).toBeVisible();
+      // Trigger fresh feedback rather than relying on Box's transient
+      // completion toast surviving a cold production renderer startup.
+      await revealModelPanel(page, 'Parameters');
+      const parameters = page.getByRole('region', {
+        name: 'Parameters',
+        exact: true
+      });
+      await parameters.getByRole('button', { name: 'Pin Parameters' }).click();
+      await parameters
+        .getByRole('button', { name: 'Close Parameters' })
+        .click();
       const toast = page.locator(
         '.workspace-toast:not(.hidden) .workspace-toast-body'
       );

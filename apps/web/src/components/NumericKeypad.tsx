@@ -266,6 +266,7 @@ export function NumericKeypad({
     // Position once at the first anchor push, then stay put: a keypad that
     // chases the live preview moves out from under the pointer mid-entry.
     let positioned = false;
+    let lastAnchor: { x: number; y: number } | null = null;
     const positionAt = (point: { x: number; y: number } | null) => {
       if (positioned || !point) {
         return;
@@ -274,6 +275,8 @@ export function NumericKeypad({
       if (!host) {
         return;
       }
+      lastAnchor = point;
+      root.style.maxHeight = `${Math.max(0, keypadFloor(host) - 16)}px`;
       const placement = keypadClampPosition(
         point,
         {
@@ -336,7 +339,23 @@ export function NumericKeypad({
         }
       }
     }
+    // Preserve a stable position during typing, but re-clamp when the host
+    // or keypad changes size (rotation, a dock opening, or a warning row).
+    const reposition = () => {
+      if (!lastAnchor) return;
+      positioned = false;
+      positionAt(lastAnchor);
+    };
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(reposition);
+    if (root.parentElement) observer?.observe(root.parentElement);
+    observer?.observe(root);
+    window.addEventListener('resize', reposition);
     return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', reposition);
       anchorRef.current = null;
     };
   }, [anchorRef, request.fixedClientAnchor, request.commandValueId]);

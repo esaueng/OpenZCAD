@@ -597,6 +597,9 @@
   flex-direction: column;
   gap: 7px;
   width: 232px;
+  box-sizing: border-box;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   padding: 10px;
   visibility: hidden; /* shown once the anchor sink positions it */
   background: var(--color-surface-2);

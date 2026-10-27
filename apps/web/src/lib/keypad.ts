@@ -112,7 +112,10 @@ export function keypadClampPosition(
   const above = anchor.y - ANCHOR_GAP - size.height;
   return {
     x,
-    y: Math.max(above, VIEWPORT_MARGIN),
+    y: Math.min(
+      Math.max(above, VIEWPORT_MARGIN),
+      Math.max(VIEWPORT_MARGIN, viewport.height - size.height - VIEWPORT_MARGIN)
+    ),
     side: 'above'
   };
 }
