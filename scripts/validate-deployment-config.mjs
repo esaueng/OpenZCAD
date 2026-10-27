@@ -42,19 +42,22 @@ export const E2EE_FLAGS = Object.freeze([
   'E2EE_PROJECTS_ENABLED',
   'E2EE_MIGRATION_ENABLED',
   'E2EE_REVERSE_ENABLED',
-  'E2EE_DEFAULT_ON'
+  'E2EE_DEFAULT_ON',
+  'E2EE_PLAINTEXT_FROZEN'
 ]);
 export const E2EE_FLAG_PREREQUISITES = Object.freeze([
   ['E2EE_PROJECTS_ENABLED', 'E2EE_KEYS_ENABLED'],
   ['E2EE_MIGRATION_ENABLED', 'E2EE_PROJECTS_ENABLED'],
   ['E2EE_REVERSE_ENABLED', 'E2EE_MIGRATION_ENABLED'],
-  ['E2EE_DEFAULT_ON', 'E2EE_MIGRATION_ENABLED']
+  ['E2EE_DEFAULT_ON', 'E2EE_MIGRATION_ENABLED'],
+  ['E2EE_PLAINTEXT_FROZEN', 'E2EE_DEFAULT_ON'],
+  ['E2EE_PLAINTEXT_FROZEN', 'E2EE_KEYS_ENABLED']
 ]);
 // Planned Phase 8 flags (ADR-024) this release does not read. They are accepted
 // only while off, so a config prepared ahead of the release that reads them
 // passes, and one that expects them to do something now fails. The slice that
 // implements a flag moves it into E2EE_FLAGS.
-export const E2EE_PLANNED_FLAGS = Object.freeze(['E2EE_PLAINTEXT_FROZEN']);
+export const E2EE_PLANNED_FLAGS = Object.freeze([]);
 // The Worker's ENABLED_BOOLEAN_ENV_VALUES; any other string reads as off.
 const ENABLED_FLAG_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const DISABLED_FLAG_VALUES = new Set(['0', 'false', 'no', 'off']);
@@ -139,7 +142,7 @@ function validateE2eeFlags(config, { canaryAllowed }) {
   }
   for (const [flag, prerequisite] of E2EE_FLAG_PREREQUISITES) {
     if (!flagEnabled(vars[flag]) || flagEnabled(vars[prerequisite])) continue;
-    if (canaryAllowed && prerequisite === 'E2EE_KEYS_ENABLED') continue;
+    if (canaryAllowed && prerequisite === 'E2EE_KEYS_ENABLED' && flag !== 'E2EE_PLAINTEXT_FROZEN') continue;
     errors.push(`vars.${flag} requires vars.${prerequisite} to be "true"`);
   }
   if (

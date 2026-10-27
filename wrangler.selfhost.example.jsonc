@@ -51,11 +51,12 @@
     // 3. Owners encrypt their existing plaintext projects from Settings.
     "E2EE_MIGRATION_ENABLED": "false",
     // Phase 8 server gate. Keep off until browser rollout and outside review finish.
-    "E2EE_DEFAULT_ON": "false"
+    "E2EE_DEFAULT_ON": "false",
+    // Deployment-wide legacy write freeze, after the reviewed default-on rollout.
+    "E2EE_PLAINTEXT_FROZEN": "false"
     // Optional and beta-only: "E2EE_REVERSE_ENABLED": "true" (needs step 3)
     // lets an owner turn an unshared encrypted project back into plaintext.
     // A later release removes it.
-    // Planned and not read yet: E2EE_PLAINTEXT_FROZEN (refuse plaintext writes).
   },
   "d1_databases": [
     {

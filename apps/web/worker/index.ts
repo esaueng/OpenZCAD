@@ -21,6 +21,7 @@ import {
   assertProjectNotMigrating,
   assertProjectRouteFormat
 } from './projectFormatGate';
+import { assertPlaintextRouteWritable } from './plaintextFreeze';
 import { sweepProjectMigrations } from './e2eeProjectMigrations';
 import {
   decryptStagingFor,
@@ -73,6 +74,7 @@ import {
   DocumentTooLargeError,
   EncryptedProjectSharingError,
   EncryptedProjectsRequiredError,
+  PlaintextProjectFrozenError,
   ProjectFormatUnsupportedError,
   ProjectMigratingError,
   ProjectAdoptionError,
@@ -1482,7 +1484,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         // Slice 7-3: as for plaintext writes, the global flags decide.
         isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED') &&
           isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED'),
-        isE2eeDefaultOn(env, session.email)
+        isE2eeDefaultOn(env, session.email),
+        isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN')
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);
@@ -1622,6 +1625,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
     );
   }
+
+  await assertPlaintextRouteWritable(
+    env, persistence, userId, request.method, pathname
+  );
 
   if (request.method === 'GET' && pathname === '/api/settings') {
     return json(await getAppSettings(userId, env, session.email));
@@ -2513,8 +2520,11 @@ export default {
           ? isE2eeReverseEnabled(env, email)
           : isE2eeMigrationEnabled(env, email),
       Date.now(),
-      isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON')
-        ? (email) => isE2eeDefaultOn(env, email)
+      isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON') ||
+      isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN')
+        ? (email) =>
+            isCloudflareFeatureEnabled(env, 'E2EE_PLAINTEXT_FROZEN') ||
+            isE2eeDefaultOn(env, email)
         : undefined
     );
     await publishCensus(env);
@@ -2613,6 +2623,7 @@ async function dispatchApiRequest(
       error instanceof ProjectFormatUnsupportedError ||
       error instanceof EncryptedProjectSharingError ||
       error instanceof EncryptedProjectsRequiredError ||
+      error instanceof PlaintextProjectFrozenError ||
       error instanceof ProjectMigratingError
     ) {
       return json({ error: error.message, code: error.code }, 409);

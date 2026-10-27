@@ -326,7 +326,13 @@ describe('deployment configuration preflight', () => {
       ).toContain('vars.E2EE_DEFAULT_ON must be the string "true" or "false"');
     });
 
-    it('accepts the remaining planned Phase 8 flag only while off', () => {
+    it('accepts the plaintext freeze only with global keys and default-on prerequisites', () => {
+      const official = officialConfig();
+      Object.assign(official.vars, {
+        E2EE_KEYS_ENABLED: 'false', E2EE_PROJECTS_ENABLED: 'true', E2EE_MIGRATION_ENABLED: 'true',
+        E2EE_DEFAULT_ON: 'true', E2EE_PLAINTEXT_FROZEN: 'true'
+      });
+      expect(validateDeploymentConfig(official, officialOptions)).toContain('vars.E2EE_PLAINTEXT_FROZEN requires vars.E2EE_KEYS_ENABLED to be "true"');
       expect(
         validateDeploymentConfig(
           withFlags({
@@ -341,8 +347,28 @@ describe('deployment configuration preflight', () => {
           target: 'selfhost'
         })
       ).toEqual([
-        'vars.E2EE_PLAINTEXT_FROZEN is planned and not read by this release; set it to "false" or remove it'
+        'vars.E2EE_PLAINTEXT_FROZEN must be the string "true" or "false"'
       ]);
+      expect(
+        validateDeploymentConfig(withFlags({ E2EE_PLAINTEXT_FROZEN: 'true' }), {
+          target: 'selfhost'
+        })
+      ).toEqual([
+        'vars.E2EE_PLAINTEXT_FROZEN requires vars.E2EE_DEFAULT_ON to be "true"',
+        'vars.E2EE_PLAINTEXT_FROZEN requires vars.E2EE_KEYS_ENABLED to be "true"'
+      ]);
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_KEYS_ENABLED: 'true',
+            E2EE_PROJECTS_ENABLED: 'true',
+            E2EE_MIGRATION_ENABLED: 'true',
+            E2EE_DEFAULT_ON: 'true',
+            E2EE_PLAINTEXT_FROZEN: 'true'
+          }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([]);
     });
 
     it('rejects canary accounts committed to vars', () => {
