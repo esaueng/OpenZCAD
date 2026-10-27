@@ -1,0 +1,18 @@
+{
+  "viewBox": "0 0 100 100",
+  "compactViewBox": "2 2 96 96",
+  "silhouette": "M2 22 26 6H98V30L53 60H98V78L74 94H2V70L47 40H2Z",
+  "colors": {
+    "front": "#3b82f6",
+    "top": "#93c5fd",
+    "side": "#2456c7",
+    "tile": "#111827"
+  },
+  "faces": [
+    { "name": "top", "tone": "top", "d": "M2 22 26 6H98L74 22Z" },
+    { "name": "upper-side", "tone": "side", "d": "M74 22 98 6V30L74 46Z" },
+    { "name": "lower-front", "tone": "side", "d": "M2 94 29 76H74V94Z" },
+    { "name": "lower-side", "tone": "side", "d": "M74 76 98 60V78L74 94Z" },
+    { "name": "lower-top", "tone": "top", "d": "M29 76 53 60H98L74 76Z" }
+  ]
+}
