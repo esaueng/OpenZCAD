@@ -8017,6 +8017,8 @@ export function App() {
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
     if (restoreView) {
+      clearSectionOutline();
+      restoredSectionRequestTokenRef.current = null;
       pendingSectionRestoreRef.current = normalized.projectId;
       restoreProjectView(normalized.projectId, {
         projection: appSettings.viewport.defaultProjection,
@@ -10527,6 +10529,7 @@ export function App() {
   const drawnInstead =
     viewportGeometry.document === doc ? null : viewportGeometry.document;
   useEffect(clearSectionOutline, [
+    doc?.projectId,
     doc?.version,
     drawnInstead,
     viewportGeometry.standIns,
