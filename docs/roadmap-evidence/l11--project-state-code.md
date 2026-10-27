@@ -14,6 +14,11 @@ completion cannot restore it after teardown. Plaintext projects show none.
 Navigation invalidates pending reports for the project that closed, including
 late integrity errors. Reopening offline cannot expose a code resurrected by
 an older request; a fresh successful verification restores it normally.
+Comparison digests complete before advancing accepted-head pins. Local head
+publication is monotonic, so a delayed older room read or an earlier successful
+account save cannot replace a newer accepted document/code. Deterministic
+real-Worker races pause the older digest until a newer room head is installed;
+both reproduce the prior rollback and retain the newer state after the fix.
 
 Real Worker/SQLite coverage compares the same head across owner, editor,
 incoming room and cold D4 reads, including an editor-signed head and a later
