@@ -42,5 +42,12 @@ release and an owner-consented verified client-side transition; there is no
 automatic encrypted-to-encrypted backfill. Authority, archive, network and
 session outages propagate as retryable/original errors through log and leaf
 verification; only actual verification refusals become integrity failures.
+Cold shared replacements with independently established owner intent can
+verify the archive's certified owner manifest and full policy replay even
+when their only account-authority signer was revoked. The retired record
+supplies no roots or terminal pin; after joining, the certified replacement
+CAS-publishes its own accepted state. A real shared-project regression
+refuses absent/wrong owner intent, reproduces the earlier dead end, then
+verifies rejoin, record replacement and a subsequent cold D4 read.
 Production activation remains off pending written outside-review clearance;
 macOS verification remains deferred.

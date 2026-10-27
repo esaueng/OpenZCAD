@@ -3601,11 +3601,17 @@ export async function epochAuthority(
       if (
         !(error instanceof ProjectAuthorityError) ||
         error.code !== 'signer-untrusted' ||
-        !(await cachedProjectAuthorityManifest(ctx, projectId))
+        !(
+          await (ctx.authorityStore ?? projectAuthorityStore()).read(
+            ctx.account.userId,
+            projectId
+          )
+        ).owner
       )
         throw error;
-      // Keep the independent roots; do not accept any part of the retired
-      // sibling's unpinned record. Full transcript verification follows.
+      // Independent owner intent permits checking the archive's owner-signed
+      // roots even on a cold replacement. Adopt nothing from the retired
+      // sibling's unpinned record; full manifest and policy replay follow.
     });
     const accountState = await cachedProjectAuthorityState(ctx, projectId);
     const pinned = await cachedProjectAuthorityManifest(ctx, projectId);

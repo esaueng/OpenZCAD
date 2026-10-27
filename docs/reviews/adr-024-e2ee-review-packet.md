@@ -597,6 +597,10 @@ leaf with a per-project leaf key, certified by the device signing key.
   version-2 reset whose hash binds the prior immutable roots and exact
   state. That explicit approval permits solo cold recovery from a retired
   last writer; ordinary reads still refuse an unpinned retired signer.
+  A cold shared replacement with independent expected-owner intent may
+  instead verify the archive's owner-signed roots and full transcript,
+  join, and CAS-publish its own account record without adopting any part
+  of the retired record.
   The separate IndexedDB database is `openzcad-e2ee-project-authority`.
 
 ### 4.8 The Worker as Delivery Service
