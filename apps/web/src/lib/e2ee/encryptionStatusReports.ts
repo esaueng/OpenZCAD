@@ -10,7 +10,11 @@ import type {
   EncryptedProjectStore,
   EncryptedRoomAccess
 } from './encryptedProjectStore';
-import { reportEncryptedFailure, reportHeadVerified } from './encryptionStatus';
+import {
+  beginEncryptionStatusReport,
+  reportEncryptedFailure,
+  reportHeadVerified
+} from './encryptionStatus';
 
 /**
  * `current` says whether the key session that opened the store is still
@@ -20,30 +24,39 @@ export function reportingEncryptedProjectStore(
   store: EncryptedProjectStore,
   current: () => boolean
 ): EncryptedProjectStore {
-  const verifiedHead = <R>(
+  const verifiedHead = async <R>(
     run: () => Promise<R>,
     projectIdOf: (result: R) => string,
     projectId: string | null
-  ): Promise<R> =>
-    run().then(
-      (result) => {
-        if (current()) {
-          const projectId = projectIdOf(result);
-          reportHeadVerified(projectId, store.stateCode?.(projectId));
-        }
-        return result;
-      },
-      (error: unknown) => {
-        if (current()) reportEncryptedFailure(projectId, error);
-        throw error;
+  ): Promise<R> => {
+    const report = beginEncryptionStatusReport(projectId);
+    try {
+      const result = await run();
+      if (report() && current()) {
+        const id = projectIdOf(result);
+        reportHeadVerified(id, store.stateCode?.(id));
       }
-    );
-  /** A read that checks a project without opening or writing its head. */
-  const checked = <R>(run: () => Promise<R>, projectId: string): Promise<R> =>
-    run().catch((error: unknown) => {
-      if (current()) reportEncryptedFailure(projectId, error);
+      return result;
+    } catch (error) {
+      if (report() && current()) reportEncryptedFailure(projectId, error);
       throw error;
-    });
+    }
+  };
+  /** A read that checks a project without opening or writing its head. */
+  const checked = async <R>(
+    run: () => Promise<R>,
+    projectId: string
+  ): Promise<R> => {
+    const report = beginEncryptionStatusReport(projectId);
+    try {
+      const result = await run();
+      report();
+      return result;
+    } catch (error) {
+      if (report() && current()) reportEncryptedFailure(projectId, error);
+      throw error;
+    }
+  };
 
   let room: EncryptedRoomAccess | null = null;
   const roomAccess = (): EncryptedRoomAccess => {

@@ -11,6 +11,9 @@ crypto-free status store transfers it to the top-bar project information
 and sharing dialog, with outside-channel comparison guidance; locked keys,
 integrity refusals and key-session teardown hide it. An older asynchronous
 completion cannot restore it after teardown. Plaintext projects show none.
+Navigation invalidates pending reports for the project that closed, including
+late integrity errors. Reopening offline cannot expose a code resurrected by
+an older request; a fresh successful verification restores it normally.
 
 Real Worker/SQLite coverage compares the same head across owner, editor,
 incoming room and cold D4 reads, including an editor-signed head and a later

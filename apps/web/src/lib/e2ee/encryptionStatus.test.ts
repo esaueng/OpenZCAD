@@ -293,6 +293,50 @@ describe('encryption status reports from the encrypted store', () => {
     expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
   });
 
+  it('does not recreate a closed project’s code or failure from a late operation', async () => {
+    const { store } = fakeStore();
+    const code = '01234 56789 01234 56789 01234 56789 01234 56789';
+    store.stateCode = () => code;
+    let finish!: (value: ProjectDocument) => void;
+    store.loadProject = vi.fn(
+      () =>
+        new Promise<ProjectDocument>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const reporting = reportingEncryptedProjectStore(store, () => true);
+    retainEncryptionStatus('proj_a');
+    const pending = reporting.loadProject('proj_a');
+    retainEncryptionStatus('proj_b');
+    finish(document);
+    await pending;
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+    retainEncryptionStatus('proj_a');
+    store.loadProject = vi.fn(async () => {
+      throw new TypeError('Offline');
+    });
+    await expect(reporting.loadProject('proj_a')).rejects.toThrow('Offline');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    store.loadProject = vi.fn(async () => document);
+    await reporting.loadProject('proj_a');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+
+    let fail!: (error: Error) => void;
+    store.loadRevision = vi.fn(
+      () =>
+        new Promise<ProjectDocument>((_resolve, reject) => {
+          fail = reject;
+        })
+    );
+    const oldRead = reporting.loadRevision('proj_a', 'rev_old');
+    retainEncryptionStatus('proj_b');
+    fail(integrityError());
+    await expect(oldRead).rejects.toBeInstanceOf(
+      EncryptedProjectIntegrityError
+    );
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+  });
+
   it('reports an integrity failure from any path and rethrows it', async () => {
     const error = integrityError();
     const { store } = fakeStore(error);

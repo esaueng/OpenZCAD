@@ -58,6 +58,22 @@ const records = new Map<string, ProjectRecord>();
 const derived = new Map<string, EncryptionStatus>();
 const listeners = new Set<() => void>();
 let keysLocked = false;
+const pendingReports = new Set<{ projectId: string | null; valid: boolean }>();
+
+/** Single-use guard for an operation; navigation and teardown invalidate it. */
+export function beginEncryptionStatusReport(
+  projectId: string | null
+): () => boolean {
+  const pending = { projectId, valid: true };
+  pendingReports.add(pending);
+  let consumed = false;
+  return () => {
+    if (consumed) return false;
+    consumed = true;
+    pendingReports.delete(pending);
+    return pending.valid;
+  };
+}
 
 function changed(): void {
   derived.clear();
@@ -188,6 +204,8 @@ export function reportKeysUnlocked(): void {
  * project opened again is shown from what this page reads of it then.
  */
 export function retainEncryptionStatus(projectId: string | null): void {
+  for (const pending of pendingReports)
+    if (pending.projectId !== projectId) pending.valid = false;
   let removed = false;
   for (const id of [...records.keys()]) {
     if (id !== projectId) {
@@ -200,6 +218,8 @@ export function retainEncryptionStatus(projectId: string | null): void {
 
 /** Forgets everything: the key session ended. */
 export function resetEncryptionStatus(): void {
+  for (const pending of pendingReports) pending.valid = false;
+  pendingReports.clear();
   if (records.size === 0 && !keysLocked) return;
   records.clear();
   keysLocked = false;
