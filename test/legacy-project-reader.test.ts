@@ -178,6 +178,44 @@ describe('browser legacy CAD reads (ADR-024 8-3)', () => {
     ).toBe(409);
   });
 
+  it('accepts archived source aliases up to 128 MiB without enlarging document limits', async () => {
+    const { projectId, expected, fetcher } = await setup(true);
+    const response = await fetcher(`/api/projects/${projectId}?storage=raw`);
+    const frame = decodeE2eeFrame(new Uint8Array(await response.arrayBuffer()));
+    const metadata = frame.metadata as LegacyProjectStorageMetadata;
+    // An alias describes an already archived artifact, not bytes carried in
+    // this document frame; unused aliases are still valid copied-source metadata.
+    const open = (logicalBytes: number) =>
+      readLegacyProjectFrame(
+        new Response(
+          encodeE2eeFrame(
+            {
+              ...metadata,
+              aliases: [
+                ...metadata.aliases,
+                {
+                  kind: 'step-import',
+                  projectId,
+                  artifactId: 'artifact_large_source',
+                  checksumSha256: 'f'.repeat(64),
+                  logicalBytes
+                }
+              ]
+            },
+            frame.payload
+          )
+        ),
+        projectId,
+        fetcher
+      );
+    for (const logicalBytes of [
+      MAX_CLOUD_PROJECT_WRITE_BYTES + 1,
+      128 * 1024 * 1024
+    ])
+      expect(await open(logicalBytes)).toEqual(expected);
+    await expect(open(128 * 1024 * 1024 + 1)).rejects.toThrow();
+  });
+
   it('refuses changed metadata, ciphertext corruption, missing assets and excessive output', async () => {
     const { srv, projectId, fetcher } = await setup();
     const response = await fetcher(`/api/projects/${projectId}?storage=raw`);

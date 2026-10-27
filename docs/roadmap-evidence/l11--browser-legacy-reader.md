@@ -40,3 +40,6 @@ that correction and passes afterward for both account and migration reads.
 The holder import/reload/export regression explicitly removes its account
 copy before reopening, checks the exact expected missing-copy response, and
 still proves the restored local copy exports without a cloud upload.
+Copied-source alias metadata shares the importer's 128 MiB source limit,
+independently of document/frame download limits. Boundary regressions accept
+sources above the document-write cap through 128 MiB and refuse larger ones.

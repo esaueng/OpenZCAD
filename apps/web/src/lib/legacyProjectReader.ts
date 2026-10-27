@@ -11,6 +11,7 @@ import {
   JsonComplexityGuard,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_CLOUD_PROJECT_WRITE_BYTES,
+  MAX_SOURCE_IMPORT_BYTES,
   MAX_E2EE_FRAME_METADATA_BYTES,
   decodeE2eeFrame,
   toArtifactId,
@@ -146,7 +147,7 @@ export async function readLegacyProjectFrame(
         (alias.kind !== 'step-import' && alias.kind !== 'mesh-payload') ||
         typeof alias.checksumSha256 !== 'string' ||
         !/^[a-f0-9]{64}$/.test(alias.checksumSha256) ||
-        !size(alias.logicalBytes) ||
+        !size(alias.logicalBytes, MAX_SOURCE_IMPORT_BYTES) ||
         typeof alias.artifactId !== 'string' ||
         !/^[!-~]{1,128}$/.test(alias.artifactId)
       )
