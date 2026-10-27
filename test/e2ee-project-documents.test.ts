@@ -487,6 +487,68 @@ it('bounds a fresh-read baseline to the captured head while an owner save races'
   );
 });
 
+it('opens a pinned history whose signed prefixes exceed one verifier byte window', async () => {
+  const srv = server();
+  const laptop = device(srv, owner, 'owner_laptop');
+  const { document } = await createEncrypted(laptop);
+  const projectId = document.projectId;
+  const blobIds = Array.from(
+    { length: 4096 },
+    (_, index) => `blob_${String(index).padStart(4, '0')}_${'x'.repeat(112)}`
+  );
+  let previous = headOf(srv, projectId).version_hash;
+  let prefixBytes = 0;
+  // These retained, authentically signed log records no longer need bodies.
+  // Only the final head is decrypted; its document has no imported assets.
+  for (let index = 1; index <= 141; index++) {
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: document.version + index,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(previous),
+        blobIds: index === 141 ? [] : blobIds
+      },
+      {
+        expectedVersion: document.version + index - 1,
+        document,
+        ...(index === 141 ? {} : { plaintext: new Uint8Array() })
+      }
+    );
+    const prefix = parseEnvelope(hand.envelope).prefix;
+    prefixBytes += prefix.length;
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_versions
+      (project_id, document_version, version_hash, key_epoch, prefix, signature,
+       signer_user_id, signer_device_id, envelope_inline, envelope_bytes,
+       wrapped_version_key, created_at)
+      VALUES (?, ?, ?, 0, ?, ?, ?, 'owner_laptop', ?, ?, ?, '2026-10-24T00:00:00.000Z')`
+      )
+      .run(
+        projectId,
+        document.version + index,
+        hand.hash,
+        toBase64Url(prefix),
+        hand.upload.signature,
+        OWNER,
+        index === 141 ? toBase64Url(hand.envelope) : null,
+        hand.envelope.length,
+        hand.upload.wrappedVersionKey
+      );
+    previous = hand.hash;
+  }
+  expect(prefixBytes).toBeGreaterThan(64 * 1024 * 1024);
+  srv.db
+    .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+    .run(document.version + 141, projectId);
+  const page = reload(srv, laptop);
+  const loaded = await page.store.loadProject(projectId);
+  expect(loaded.version).toBe(document.version + 141);
+  expect((await page.pins.read(OWNER, projectId))?.headHash).toBe(previous);
+}, 120_000);
+
 describe('version integrity', () => {
   it('refuses a rolled-back head and keeps its pin', async () => {
     const srv = server();

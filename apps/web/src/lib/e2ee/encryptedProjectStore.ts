@@ -60,6 +60,8 @@ import {
   authorCutoffKey,
   EnvelopeKey,
   VersionLogError,
+  MAX_VERSION_LOG_BYTES,
+  MAX_VERSION_LOG_RECORDS,
   checkBlobReferences,
   encodeProjectInfoBody,
   encryptProjectEnvelope,
@@ -261,7 +263,6 @@ export interface EncryptedProjectContext {
 /** How far a fresh browser lets a head's signature trail account activity. */
 export const STALE_HEAD_WARNING_MS = 10 * 60 * 1000;
 const SCHEMA_VERSION = 1;
-const LOG_WINDOW = 4096;
 /** The most log records one head read follows (judgment). */
 const MAX_LOG_RECORDS = 64 * 1024;
 
@@ -879,7 +880,8 @@ export function createEncryptedProjectStore(
 
   /**
    * `verifyVersionLog` from the pin, in overlapping windows of at most
-   * 4,096 records, each signature resolved through `verifyAuthoredLogRecord`.
+   * 4,096 records and 64 MiB of prefix/hash bytes, each signature resolved
+   * through `verifyAuthoredLogRecord`. The overlap authenticates each join.
    */
   async function verifyLog(
     projectId: string,
@@ -898,11 +900,22 @@ export function createEncryptedProjectStore(
         owner: boolean;
       }
     >();
-    for (let start = 0; ; start += LOG_WINDOW - 1) {
-      const window = entries.slice(start, start + LOG_WINDOW);
+    for (let start = 0; ;) {
+      let end = start;
+      let total = 0;
+      const records: VersionLogRecord[] = [];
+      while (end < entries.length && records.length < MAX_VERSION_LOG_RECORDS) {
+        const record = recordOf(entries[end]!);
+        const size = record.prefix.length + record.versionHash.length;
+        if (records.length > 0 && total + size > MAX_VERSION_LOG_BYTES) break;
+        records.push(record);
+        total += size;
+        end++;
+      }
+      const window = entries.slice(start, end);
       let authorship: AuthorshipError | null = null;
       try {
-        const verified = await verifyVersionLog(window.map(recordOf), {
+        const verified = await verifyVersionLog(records, {
           ...(pinned ? { pinnedVersionHash: fromHex(pinned) } : {}),
           projectId,
           resolveSigningKey: async ({ index, record, header }) => {
@@ -992,7 +1005,8 @@ export function createEncryptedProjectStore(
         if (error instanceof VersionLogError) throw logFailure(error);
         throw error;
       }
-      if (start + LOG_WINDOW >= entries.length) break;
+      if (end >= entries.length) break;
+      start = end - 1;
     }
     // The signed prefix makes the entire link set visible in the retained
     // log, including overwritten autosaves. A fresh reader needs an owner
