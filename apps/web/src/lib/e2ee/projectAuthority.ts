@@ -27,11 +27,18 @@ import {
 import {
   projectAuthorityStore,
   withProjectAuthorityLock,
+  type ProjectAuthorityLocalState,
   type ExpectedProjectOwner
 } from './projectAuthorityStore';
 
 export class ProjectAuthorityError extends Error {
   override readonly name = 'ProjectAuthorityError';
+  constructor(
+    message: string,
+    readonly code: 'invalid' | 'signer-untrusted' = 'invalid'
+  ) {
+    super(message);
+  }
 }
 function fail(message: string): never {
   throw new ProjectAuthorityError(message);
@@ -88,6 +95,22 @@ function extendsManifest(
     )
   )
     fail('The account replaced a trusted MLS owner or generation root.');
+}
+
+function checkNewGeneration(
+  current: ProjectAuthorityLocalState,
+  next: MlsAuthorityManifest
+): void {
+  if (!current.manifest || !current.accepted) return;
+  const prior = decodeMlsAuthorityManifest(signed(current.manifest).statement);
+  const firstNew = next.roots[prior.roots.length];
+  const latest = decodeMlsAuthorityTrust(
+    fromBase64Url(current.accepted.authority.record)
+  ).latestKeyEpoch;
+  if (firstNew && firstNew.keyEpochBase <= latest)
+    fail(
+      'A new MLS generation would replace a key epoch this device already authenticated.'
+    );
 }
 /** Keep independently pinned newer roots/checkpoints while an account write catches up. */
 function newestManifest(
@@ -203,8 +226,9 @@ export async function loadProjectAuthority(
     : undefined;
   const signer = live ?? retired;
   if (!signer)
-    fail(
-      'No currently certified device vouches for this project authority record.'
+    throw new ProjectAuthorityError(
+      'No currently certified device vouches for this project authority record.',
+      'signer-untrusted'
     );
   const account = await ctx.account.currentAccountKey();
   let key = account.key;
@@ -241,6 +265,7 @@ export async function loadProjectAuthority(
   await storeFor(ctx).update(ctx.account.userId, projectId, (current) => {
     guard();
     checkOwner(current.owner, manifest);
+    checkNewGeneration(current, manifest);
     if (current.accepted) {
       const before = decodeMlsAuthorityTrust(
         fromBase64Url(current.accepted.authority.record)
@@ -319,6 +344,7 @@ export async function acceptProjectAuthorityManifest(
   await storeFor(ctx).update(ctx.account.userId, projectId, (current) => {
     guard();
     checkOwner(current.owner, value);
+    checkNewGeneration(current, value);
     return {
       ...current,
       manifest: newestManifest(current.manifest, wire(candidate))
@@ -359,7 +385,37 @@ export async function publishProjectAuthority(
   await withProjectAuthorityLock(ctx.account.userId, projectId, async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       guard();
-      const current = await loadProjectAuthority(ctx, projectId);
+      let current: TrustedProjectAuthority | null;
+      let replacementSequence: number | undefined;
+      try {
+        current = await loadProjectAuthority(ctx, projectId);
+      } catch (error) {
+        // A retired sibling's unpinned record cannot bootstrap a reader. A
+        // caller with independently pinned roots and an authenticated live MLS
+        // state can replace it, using only the opaque server sequence for CAS.
+        if (
+          !(error instanceof ProjectAuthorityError) ||
+          error.code !== 'signer-untrusted'
+        )
+          throw error;
+        const local = await storeFor(ctx).read(ctx.account.userId, projectId);
+        if (!local.owner || !local.manifest) throw error;
+        checkOwner(local.owner, manifest);
+        extendsManifest(
+          decodeMlsAuthorityManifest(signed(local.manifest).statement),
+          manifest
+        );
+        const stale = (await ctx.api.authority!(projectId)).authority;
+        if (
+          !stale ||
+          !Number.isSafeInteger(stale.sequence) ||
+          stale.sequence < 1 ||
+          stale.sequence >= 0xffffffff
+        )
+          throw error;
+        replacementSequence = stale.sequence;
+        current = null;
+      }
       if (current) {
         extendsManifest(current.manifest, manifest);
         if (current.value.latestKeyEpoch > latestKeyEpoch) return;
@@ -387,7 +443,8 @@ export async function publishProjectAuthority(
             toBase64Url(manifestSigned.statement)
         )
           return;
-        const sequence = (current?.value.sequence ?? 0) + 1;
+        const sequence =
+          (replacementSequence ?? current?.value.sequence ?? 0) + 1;
         const sealed = await signMlsAuthorityTrust(
           account.key,
           device.signing.privateKey,

@@ -24,6 +24,7 @@ import {
   postOwnEpochKeys
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import { rememberExpectedProjectOwner } from '../apps/web/src/lib/e2ee/projectAuthority';
 import {
   OTHER,
   OWNER,
@@ -67,6 +68,7 @@ async function sharedWithEdit() {
   });
   // The Welcome's stand-in (slice 5-3): epoch 1's keys, handed over.
   const member = device(srv, other, 'other_laptop', { members: [owner] });
+  await rememberExpectedProjectOwner(member.groups, projectId, owner.list);
   await postOwnEpochKeys(
     member.groups,
     projectId,

@@ -294,10 +294,11 @@ request reaches the AI provider you configured.
 
 ### Requirements
 
-- **Migrations 0029 through 0043.** Apply every tracked D1 migration before
+- **Migrations 0029 through 0044.** Apply every tracked D1 migration before
   turning a flag on; `pnpm deploy:selfhost` applies them before it publishes
   code. The encryption migrations are `0029_e2ee_account_keys.sql` through
-  `0043_e2ee_reverse_staging.sql`. There is no `0035`: that number is an
+  `0044_e2ee_project_authority.sql`. This includes account-authenticated MLS
+  roots for devices without a live MLS leaf. There is no `0035`: that number is an
   intentional gap, not a missing file. While a migration a flag needs is
   missing, its routes answer 503 and `/api/e2ee/config` reports the feature as
   off.
@@ -435,7 +436,7 @@ rows directly.
 ### Rollout on an instance with plaintext projects
 
 1. Back up D1 and R2 as described above, update, and confirm that the
-   deployment applied migrations 0029 through 0043.
+   deployment applied migrations 0029 through 0044.
 2. Set `E2EE_KEYS_ENABLED` to `"true"`, run `pnpm selfhost:check`, deploy, and
    check `/api/e2ee/config`. With a test account, set up encryption, save the
    recovery key, and add a passkey and a second device.

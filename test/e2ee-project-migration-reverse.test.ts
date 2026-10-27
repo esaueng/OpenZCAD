@@ -163,12 +163,21 @@ function encryptedRoomState(projectId: string): Map<string, unknown> {
   return new Map<string, unknown>([
     [
       'room:meta',
-      { schema: 1, projectId, latestVersion: null, historyVersions: [], format: 2 }
+      {
+        schema: 1,
+        projectId,
+        latestVersion: null,
+        historyVersions: [],
+        format: 2
+      }
     ],
     ['room:e2ee:meta', { schema: 1, latest: hash, retained: [] }],
     [
       `room:e2ee:v:${hash}`,
-      { record: { versionHash: hash }, envelope: text('Secret room ciphertext') }
+      {
+        record: { versionHash: hash },
+        envelope: text('Secret room ciphertext')
+      }
     ]
   ]);
 }
@@ -207,7 +216,12 @@ function roomServer(
 async function upload(
   srv: Server,
   projectId: string,
-  file: { fileName: string; contentType: string; kind: string; bytes: Uint8Array }
+  file: {
+    fileName: string;
+    contentType: string;
+    kind: string;
+    bytes: Uint8Array;
+  }
 ): Promise<string> {
   const created = await srv.call('POST', '/api/uploads', {
     body: {
@@ -344,7 +358,11 @@ function workspaceSession(
     sequence: 1,
     documentVersion,
     state: parseWorkspaceResumeState({
-      camera: { position: [11, 22, 33], target: [0, 0, 0], orthographicZoom: 1 },
+      camera: {
+        position: [11, 22, 33],
+        target: [0, 0, 0],
+        orthographicZoom: 1
+      },
       projection: 'perspective',
       settings: { showGrid: true, displayMode: 'shaded' },
       hiddenBodyIds: [],
@@ -604,7 +622,10 @@ async function expectOpensAsPlaintext(srv: Server, encrypted: Encrypted) {
   );
   for (const revisionId of encrypted.revisionIds) {
     const revision = (await (
-      await srv.call('GET', `/api/projects/${projectId}/revisions/${revisionId}`)
+      await srv.call(
+        'GET',
+        `/api/projects/${projectId}/revisions/${revisionId}`
+      )
     ).json()) as ProjectDocument;
     expect(revision.revisions.at(-1)?.revisionId).toBe(revisionId);
   }
@@ -636,7 +657,9 @@ async function expectOpensAsPlaintext(srv: Server, encrypted: Encrypted) {
   const exported = artifacts.find((a) => a.kind === 'stl-export')!;
   expect(exported.name).toBe('secret-export.stl');
   expect(
-    await (await srv.call('GET', `/api/artifacts/${exported.artifactId}/download`)).text()
+    await (
+      await srv.call('GET', `/api/artifacts/${exported.artifactId}/download`)
+    ).text()
   ).toBe(EXPORT);
   // Measurements and the view state.
   const measured = (await (
@@ -818,7 +841,9 @@ describe('turning an encrypted project back into plaintext', () => {
           ).json()) as { document: ProjectDocument }
         ).document.projectId;
         srv.db
-          .prepare('UPDATE users SET project_storage_limit_bytes = 1 WHERE id = ?')
+          .prepare(
+            'UPDATE users SET project_storage_limit_bytes = 1 WHERE id = ?'
+          )
           .run(OWNER);
         const object = (id: string, project: string) =>
           srv.db
@@ -865,9 +890,9 @@ describe('turning an encrypted project back into plaintext', () => {
           { body: {} }
         );
         expect(info.status).toBe(409);
-        expect(
-          ((await info.json()) as { code: string }).code
-        ).toBe(PROJECT_MIGRATING_CODE);
+        expect(((await info.json()) as { code: string }).code).toBe(
+          PROJECT_MIGRATING_CODE
+        );
         const ticket = await srv.call(
           'POST',
           `/api/projects/${projectId}/collaboration/ticket`
@@ -892,10 +917,9 @@ describe('turning an encrypted project back into plaintext', () => {
             { body: {} }
           );
           expect(refused.status, path).toBe(409);
-          expect(
-            ((await refused.json()) as { code: string }).code,
-            path
-          ).toBe(PROJECT_MIGRATING_CODE);
+          expect(((await refused.json()) as { code: string }).code, path).toBe(
+            PROJECT_MIGRATING_CODE
+          );
         }
         // Without the lease, the plaintext routes still refuse it.
         expect(
@@ -1606,7 +1630,9 @@ function expectOnlyReferencedDocuments(
   expect(objects).toHaveLength(revisions + 1);
   const prefix = `project-storage/${projectId}/documents/`;
   expect(
-    [...srv.bucket.objects.keys()].filter((key) => key.startsWith(prefix)).sort()
+    [...srv.bucket.objects.keys()]
+      .filter((key) => key.startsWith(prefix))
+      .sort()
   ).toEqual(objects.map((o) => o.object_key).sort());
 }
 
@@ -1994,7 +2020,11 @@ describe('staged upload sessions', () => {
     });
     expect(spoofed.status).toBe(201);
     const { session } = (await spoofed.json()) as {
-      session: { uploadSessionId: string; uploadUrl: string; artifactId: string };
+      session: {
+        uploadSessionId: string;
+        uploadUrl: string;
+        artifactId: string;
+      };
     };
     expect(
       JSON.parse(
@@ -2338,7 +2368,11 @@ describe('with the reverse path closed', () => {
   });
 
   it('keeps the reverse path closed, and everything else working, without migration 0043', async () => {
-    const srv = roomServer([owner, other], REVERSE_ON, databaseBefore(43));
+    const srv = roomServer(
+      [owner, other],
+      REVERSE_ON,
+      databaseBefore(43, { authority: true })
+    );
     const laptop = device(srv, owner, 'owner_laptop');
     const created = await laptop.store.createProject({
       name: 'Encrypted',

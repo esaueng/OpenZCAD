@@ -766,6 +766,15 @@ export function createEncryptedProjectStore(
         return null;
       }
     );
+    return editingMember(authority, authorId, deviceId, readOnly);
+  }
+
+  function editingMember(
+    authority: Awaited<ReturnType<typeof epochAuthority>> | null,
+    authorId: string,
+    deviceId: string,
+    readOnly = false
+  ): boolean {
     const role = authority?.roles.users.find(
       (entry) => entry.userId === authorId
     );
@@ -886,6 +895,15 @@ export function createEncryptedProjectStore(
   ): Promise<void> {
     const cutoffs = await cutoffsFor(projectId);
     const lists = await projectDeviceLists(groups, projectId);
+    const verifiedEpochs = new Map<number, ReturnType<typeof epochAuthority>>();
+    const authorityFor = (epoch: number) => {
+      let proof = verifiedEpochs.get(epoch);
+      if (!proof) {
+        proof = epochAuthority(groups, projectId, epoch);
+        verifiedEpochs.set(epoch, proof);
+      }
+      return proof;
+    };
     let pinned = pinHash;
     let unauthorized: number | null = null;
     let missingKey: ProjectGroupError | null = null;
@@ -937,30 +955,19 @@ export function createEncryptedProjectStore(
               }
               // Every logged version's author held an editing role in its
               // own epoch (slice 5-2).
-              if (
-                !(await heldEditingLeaf(
-                  projectId,
-                  author.userId,
-                  author.deviceId,
-                  header.keyEpoch
-                ))
-              ) {
+              const authority = await authorityFor(header.keyEpoch);
+              if (!editingMember(authority, author.userId, author.deviceId)) {
                 unauthorized = entry.documentVersion;
                 return null;
               }
               const authorList = lists.find((l) => l.userId === author.userId);
-              const roles = await epochRoles(
-                groups,
-                projectId,
-                header.keyEpoch
-              );
               shareHistory.set(entry.versionHash, {
                 header,
-                owner: roles.users.some(
+                owner: authority.roles.users.some(
                   (role) =>
                     role.userId === author.userId &&
                     role.role === 'owner' &&
-                    role.since <= header.keyEpoch - keyEpochBase
+                    role.since <= authority.epoch
                 )
               });
               return authorList

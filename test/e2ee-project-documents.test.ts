@@ -560,33 +560,71 @@ it('opens a pinned history whose signed prefixes exceed one verifier byte window
 }, 120_000);
 
 describe('version integrity', () => {
-  it.each(['head', 'intermediate'] as const)('refuses a certified never-joined device in the %s despite its valid registry certification', async (position) => {
-    const srv = server();
-    const laptop = device(srv, owner, 'owner_laptop');
-    const { document } = await createEncrypted(laptop);
-    const projectId = document.projectId;
-    const outsider = device(srv, owner, 'owner_desktop');
-    const ref = { userId: OWNER, deviceId: 'owner_desktop', projectId };
-    await outsider.sessions.keyPackage(ref, owner.devices.get('owner_desktop')!, 0);
-    const leaf = (await outsider.sessions.leaf(ref))!;
-    srv.db.prepare(`INSERT INTO e2ee_project_leaves
-      (project_id,user_id,device_id,leaf_key,certification,created_at) VALUES (?,?,?,?,?,?)`)
-      .run(projectId, OWNER, 'owner_desktop', toBase64Url(leaf.signatureKey), toBase64Url(leaf.certification), new Date().toISOString());
-    const forged = await handVersion(outsider, projectId, {
-      documentVersion: 2, keyEpoch: 0, previousVersionHash: fromHex(headOf(srv, projectId).version_hash)
-    }, { expectedVersion: 1, document: edited(document, 'Never joined') });
-    expect((await putVersion(srv, projectId, forged)).status).toBe(200);
-    if (position === 'intermediate') {
-      const later = await handVersion(laptop, projectId, {
-        documentVersion: 3, keyEpoch: 0, previousVersionHash: fromHex(forged.hash)
-      }, { expectedVersion: 2, document: edited(document, 'Valid signer after invalid author') });
-      expect((await putVersion(srv, projectId, later)).status).toBe(200);
+  it.each(['head', 'intermediate'] as const)(
+    'refuses a certified never-joined device in the %s despite its valid registry certification',
+    async (position) => {
+      const srv = server();
+      const laptop = device(srv, owner, 'owner_laptop');
+      const { document } = await createEncrypted(laptop);
+      const projectId = document.projectId;
+      const coldReader = device(srv, owner, null);
+      await coldReader.store.loadProject(projectId);
+      const outsider = device(srv, owner, 'owner_desktop');
+      const ref = { userId: OWNER, deviceId: 'owner_desktop', projectId };
+      await outsider.sessions.keyPackage(
+        ref,
+        owner.devices.get('owner_desktop')!,
+        0
+      );
+      const leaf = (await outsider.sessions.leaf(ref))!;
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_leaves
+      (project_id,user_id,device_id,leaf_key,certification,created_at) VALUES (?,?,?,?,?,?)`
+        )
+        .run(
+          projectId,
+          OWNER,
+          'owner_desktop',
+          toBase64Url(leaf.signatureKey),
+          toBase64Url(leaf.certification),
+          new Date().toISOString()
+        );
+      const forged = await handVersion(
+        outsider,
+        projectId,
+        {
+          documentVersion: 2,
+          keyEpoch: 0,
+          previousVersionHash: fromHex(headOf(srv, projectId).version_hash)
+        },
+        { expectedVersion: 1, document: edited(document, 'Never joined') }
+      );
+      expect((await putVersion(srv, projectId, forged)).status).toBe(200);
+      if (position === 'intermediate') {
+        const later = await handVersion(
+          laptop,
+          projectId,
+          {
+            documentVersion: 3,
+            keyEpoch: 0,
+            previousVersionHash: fromHex(forged.hash)
+          },
+          {
+            expectedVersion: 2,
+            document: edited(document, 'Valid signer after invalid author')
+          }
+        );
+        expect((await putVersion(srv, projectId, later)).status).toBe(200);
+      }
+      expect(coldReader.sessions.cachedSessions).toBe(0);
+      await integrityRefusal(
+        coldReader.store.loadProject(projectId),
+        'authority'
+      );
+      expect(coldReader.sessions.cachedSessions).toBe(0);
     }
-    const coldReader = device(srv, owner, null);
-    expect(coldReader.sessions.cachedSessions).toBe(0);
-    await integrityRefusal(coldReader.store.loadProject(projectId), 'authority');
-    expect(coldReader.sessions.cachedSessions).toBe(0);
-  });
+  );
 
   it('refuses an active certified device after its MLS leaf was removed', async () => {
     const srv = server();
@@ -597,14 +635,32 @@ describe('version integrity', () => {
     await joinProjectGroup(desktop.groups, projectId);
     const ref = { userId: OWNER, deviceId: 'owner_laptop', projectId };
     await joinProjectGroup(laptop.groups, projectId);
-    const removed = (await laptop.sessions.status(ref)).members.find(member => member.deviceId === 'owner_desktop')!;
-    const state = await commitProjectGroup(laptop.groups, projectId, { remove: [removed.index] });
-    expect((await epochAuthority(laptop.groups, projectId, state.keyEpoch)).members.some(member => member.deviceId === 'owner_desktop')).toBe(false);
-    const forged = await handVersion(desktop, projectId, {
-      documentVersion: 2, keyEpoch: state.keyEpoch, previousVersionHash: fromHex(headOf(srv, projectId).version_hash)
-    }, { expectedVersion: 1, document: edited(document, 'Removed leaf') });
+    const removed = (await laptop.sessions.status(ref)).members.find(
+      (member) => member.deviceId === 'owner_desktop'
+    )!;
+    const state = await commitProjectGroup(laptop.groups, projectId, {
+      remove: [removed.index]
+    });
+    expect(
+      (
+        await epochAuthority(laptop.groups, projectId, state.keyEpoch)
+      ).members.some((member) => member.deviceId === 'owner_desktop')
+    ).toBe(false);
+    const forged = await handVersion(
+      desktop,
+      projectId,
+      {
+        documentVersion: 2,
+        keyEpoch: state.keyEpoch,
+        previousVersionHash: fromHex(headOf(srv, projectId).version_hash)
+      },
+      { expectedVersion: 1, document: edited(document, 'Removed leaf') }
+    );
     expect((await putVersion(srv, projectId, forged)).status).toBe(200);
-    await integrityRefusal(device(srv, owner, null).store.loadProject(projectId), 'authority');
+    await integrityRefusal(
+      device(srv, owner, null).store.loadProject(projectId),
+      'authority'
+    );
   });
 
   it('refuses a correctly encrypted and signed archive with a substituted MLS tree', async () => {
@@ -614,22 +670,56 @@ describe('version integrity', () => {
     const projectId = document.projectId;
     const shadow = device(srv, owner, 'owner_desktop');
     const ref = { userId: OWNER, deviceId: 'owner_desktop', projectId };
-    const fake = await shadow.sessions.createGroup(ref, owner.devices.get('owner_desktop')!, { lists: [owner.list], certifications: [] });
-    const archived = (await laptop.groups.api.archives(projectId, { keyEpoch: 0 })).archives[0]!;
+    const fake = await shadow.sessions.createGroup(
+      ref,
+      owner.devices.get('owner_desktop')!,
+      { lists: [owner.list], certifications: [] }
+    );
+    const archived = (
+      await laptop.groups.api.archives(projectId, { keyEpoch: 0 })
+    ).archives[0]!;
     const projectKey = await projectKeyForEpoch(laptop.groups, projectId, 0);
-    const context = { purpose: 'version-key' as const, projectId, keyEpoch: 0, kind: 'key-archive' as const, versionId: 'key-archive:0' };
-    const oldKey = await unwrapKey(projectKey, fromBase64Url(archived.wrappedVersionKey), context);
-    const opened = await decryptProjectEnvelope(oldKey, fromBase64Url(archived.envelope));
+    const context = {
+      purpose: 'version-key' as const,
+      projectId,
+      keyEpoch: 0,
+      kind: 'key-archive' as const,
+      versionId: 'key-archive:0'
+    };
+    const oldKey = await unwrapKey(
+      projectKey,
+      fromBase64Url(archived.wrappedVersionKey),
+      context
+    );
+    const opened = await decryptProjectEnvelope(
+      oldKey,
+      fromBase64Url(archived.envelope)
+    );
     const body = decodeKeyArchiveBody(opened.plaintext, opened.header);
     const header = { ...opened.header };
     const replacement = EnvelopeKey.generate();
-    const envelope = await encryptProjectEnvelope(replacement, header,
-      encodeKeyArchiveBody({ ...body, epochRecord: fake.epochRecord! }, header));
+    const envelope = await encryptProjectEnvelope(
+      replacement,
+      header,
+      encodeKeyArchiveBody({ ...body, epochRecord: fake.epochRecord! }, header)
+    );
     const signer = owner.devices.get('owner_desktop')!;
-    srv.db.prepare(`UPDATE e2ee_key_archives SET envelope=?,wrapped_version_key=?,signature=?,signer_device_id=? WHERE project_id=? AND key_epoch=0`)
-      .run(toBase64Url(envelope), toBase64Url(await wrapKey(projectKey, replacement.bytes, context)),
-        toBase64Url(await signProjectEnvelope(signer.signing.privateKey, envelope)), signer.deviceId, projectId);
-    await expect(epochAuthority(device(srv, owner, null).groups, projectId, 0)).rejects.toMatchObject({ code: 'archive-invalid' });
+    srv.db
+      .prepare(
+        `UPDATE e2ee_key_archives SET envelope=?,wrapped_version_key=?,signature=?,signer_device_id=? WHERE project_id=? AND key_epoch=0`
+      )
+      .run(
+        toBase64Url(envelope),
+        toBase64Url(await wrapKey(projectKey, replacement.bytes, context)),
+        toBase64Url(
+          await signProjectEnvelope(signer.signing.privateKey, envelope)
+        ),
+        signer.deviceId,
+        projectId
+      );
+    await expect(
+      epochAuthority(device(srv, owner, null).groups, projectId, 0)
+    ).rejects.toMatchObject({ code: 'archive-invalid' });
   });
 
   it('refuses a rolled-back head and keeps its pin', async () => {
@@ -845,11 +935,24 @@ describe('version integrity', () => {
 
     await account.revoke(srv.db, 'dev_b');
     const entry = account.list.entries.at(-1)!;
-    const revocation = await verifyRevocationCutoffs(await signRevocationCutoffs(account.identityPrivateKey, {
-      userId: account.userId, generation: 1, entrySequence: entry.entry.sequence,
-      entryHash: entry.hash, issuedAt: Date.now(),
-      cutoffs: [{ projectId, cutoffEpoch: 2, head: { documentVersion: v3.version, versionHash: fromHex(v3hash) } }]
-    }), account.list, { generation: 1 });
+    const revocation = await verifyRevocationCutoffs(
+      await signRevocationCutoffs(account.identityPrivateKey, {
+        userId: account.userId,
+        generation: 1,
+        entrySequence: entry.entry.sequence,
+        entryHash: entry.hash,
+        issuedAt: Date.now(),
+        cutoffs: [
+          {
+            projectId,
+            cutoffEpoch: 2,
+            head: { documentVersion: v3.version, versionHash: fromHex(v3hash) }
+          }
+        ]
+      }),
+      account.list,
+      { generation: 1 }
+    );
     const cutoffAt = (version: number, hash: string) =>
       new Map([
         [

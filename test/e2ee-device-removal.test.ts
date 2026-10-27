@@ -2546,7 +2546,7 @@ describe('solo group reset (decision D9)', () => {
 
 describe('before migration 0036', () => {
   it('refuses a removal it could not finish, and keeps everything else working', async () => {
-    const srv = newServer(databaseBefore(35));
+    const srv = newServer(databaseBefore(35, { authority: true }));
     const { recovery, laptop } = await setUp(srv);
     const phone = await enroll(srv, recovery.secret, 'Phone');
     await refresh(laptop);
@@ -2587,7 +2587,7 @@ describe('before migration 0036', () => {
   });
 
   it('removes a device from an account without encrypted projects', async () => {
-    const srv = newServer(databaseBefore(35));
+    const srv = newServer(databaseBefore(35, { authority: true }));
     const { recovery, laptop } = await setUp(srv);
     const phone = await enroll(srv, recovery.secret, 'Phone');
     await refresh(laptop);

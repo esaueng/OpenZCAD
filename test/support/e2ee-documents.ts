@@ -401,7 +401,10 @@ export function newServer(
 }
 
 /** Every tracked migration before `number`, as `pnpm deploy:beta` may leave D1. */
-export function databaseBefore(number: number): DatabaseSync {
+export function databaseBefore(
+  number: number,
+  options: { authority?: boolean } = {}
+): DatabaseSync {
   const dir = new URL('../../apps/web/migrations/', import.meta.url);
   const db = new DatabaseSync(':memory:');
   for (const file of readdirSync(dir)
@@ -412,6 +415,13 @@ export function databaseBefore(number: number): DatabaseSync {
     .sort()) {
     db.exec(readFileSync(new URL(file, dir), 'utf8'));
   }
+  // Exercise an older optional feature schema with the current MLS trust
+  // format's independent storage dependency present. Opt-in is explicit at
+  // each fixture; missing-authority migration tests keep the exact old schema.
+  if (options.authority && number > 32 && number <= 44)
+    db.exec(
+      readFileSync(new URL('0044_e2ee_project_authority.sql', dir), 'utf8')
+    );
   return db;
 }
 

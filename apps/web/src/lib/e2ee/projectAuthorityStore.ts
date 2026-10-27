@@ -38,7 +38,7 @@ const hash = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 function readState(value: unknown): ProjectAuthorityLocalState {
   if (value === undefined) return empty();
-  const state = value as Partial<ProjectAuthorityLocalState> | null;
+  const state = value as ProjectAuthorityLocalState | null;
   const record = state?.accepted?.authority;
   if (
     !state ||

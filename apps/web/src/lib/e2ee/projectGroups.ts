@@ -107,6 +107,7 @@ import type {
   CommitRequest,
   EpochChange,
   EpochAuthority,
+  LeafInfo,
   ProjectRoles,
   RejoinPsk,
   SessionStatus
@@ -165,9 +166,11 @@ import {
   cachedProjectAuthorityManifest,
   loadProjectAuthority,
   publishProjectAuthority,
-  rememberExpectedProjectOwner
+  rememberExpectedProjectOwner,
+  ProjectAuthorityError
 } from './projectAuthority';
 import { projectAuthorityStore } from './projectAuthorityStore';
+import { getKeySessionRevision } from './keySession';
 
 // --- API -------------------------------------------------------------------
 
@@ -1471,7 +1474,7 @@ async function authorityManifestForState(
   resetGeneration?: number
 ): Promise<SignedStatement> {
   const device = requireDevice(ctx);
-  const prior =
+  let prior =
     previous ?? (await cachedProjectAuthorityManifest(ctx, projectId));
   if (!prior && keyEpoch !== 0) {
     throw new ProjectGroupError(
@@ -1479,8 +1482,30 @@ async function authorityManifestForState(
       'The project has no independently authenticated MLS roots.'
     );
   }
+  if (prior) {
+    try {
+      await acceptProjectAuthorityManifest(ctx, projectId, prior);
+    } catch (error) {
+      const cached = await cachedProjectAuthorityManifest(ctx, projectId);
+      if (!cached) throw error;
+      const old = decodeMlsAuthorityManifest(prior.statement);
+      const trusted = decodeMlsAuthorityManifest(cached.statement);
+      if (
+        old.projectId !== trusted.projectId ||
+        old.ownerUserId !== trusted.ownerUserId ||
+        old.ownerIdentityKeyHash !== trusted.ownerIdentityKeyHash ||
+        old.roots.length > trusted.roots.length ||
+        old.roots.some(
+          (root, index) =>
+            JSON.stringify(root) !== JSON.stringify(trusted.roots[index])
+        )
+      )
+        throw error;
+      prior = cached;
+    }
+  }
   const value: MlsAuthorityManifest = prior
-    ? await acceptProjectAuthorityManifest(ctx, projectId, prior)
+    ? decodeMlsAuthorityManifest(prior.statement)
     : {
         projectId,
         ownerUserId: ctx.account.userId,
@@ -1519,17 +1544,22 @@ async function authorityManifestForState(
   // Bound replay with periodic owner checkpoints. After an owner device was
   // revoked, refresh on its next Commit so a retired leaf cannot remain the
   // checkpoint signer. Editor Commits carry the owner's statement unchanged.
-  const refresh = keyEpoch - (value.checkpoint?.keyEpoch ?? root.keyEpochBase) >= 256 ||
+  const refresh =
+    keyEpoch - (value.checkpoint?.keyEpoch ?? root.keyEpochBase) >= 256 ||
     revokedDevices(ctx.account.list).length > 0;
   return signMlsAuthorityManifest(device.signing.privateKey, {
     ...value,
     roots,
     checkpoint:
-      context.epoch === 0 ? null : refresh ? {
-            generation: root.generation,
-            keyEpoch,
-            groupInfo: b64(groupInfo)
-          } : value.checkpoint,
+      context.epoch === 0
+        ? null
+        : refresh
+          ? {
+              generation: root.generation,
+              keyEpoch,
+              groupInfo: b64(groupInfo)
+            }
+          : value.checkpoint,
     signerDeviceId: device.deviceId
   });
 }
@@ -1568,6 +1598,25 @@ async function publishSessionAuthority(
     keyEpoch,
     material.groupInfo
   );
+}
+
+async function publishConfirmedAuthority(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  base: number
+): Promise<void> {
+  try {
+    await publishSessionAuthority(ctx, projectId, base);
+  } catch (error) {
+    // The MLS Commit is already confirmed. A transient outage must not report
+    // its completed rotation as unfinished; the next catch-up retries the book.
+    if (
+      error instanceof TypeError ||
+      (error instanceof E2eeApiError && error.status >= 500)
+    )
+      return;
+    throw error;
+  }
 }
 
 // --- Create ----------------------------------------------------------------
@@ -2017,7 +2066,7 @@ export async function joinProjectGroup(
     );
     if (submitted.accepted) {
       await ctx.sessions.confirmRejoin(ref, directory);
-      await publishSessionAuthority(ctx, projectId, group.keyEpochBase);
+      await publishConfirmedAuthority(ctx, projectId, group.keyEpochBase);
       // The Worker counts only a member Commit as this account's rotation
       // (it cannot tell what an External Commit removed, #908 review). When
       // this rejoin itself removed a revoked leaf (the last-leaf case),
@@ -2664,7 +2713,7 @@ async function commitLoop(
     );
     if (submitted.accepted) {
       const change = await ctx.sessions.confirmCommit(ref, directory);
-      await publishSessionAuthority(
+      await publishConfirmedAuthority(
         ctx,
         projectId,
         submitted.group.keyEpochBase
@@ -3465,6 +3514,7 @@ const rolesId = (
  * staging reuses.
  */
 export function forgetEpochRoles(userId: string, projectId: string): void {
+  verifiedEpochs = new WeakMap();
   for (const id of [...knownRoles.keys()]) {
     const [user, project] = JSON.parse(id) as [string, string];
     if (user === userId && project === projectId) knownRoles.delete(id);
@@ -3488,6 +3538,16 @@ export async function epochRoles(
   return (await epochAuthority(ctx, projectId, keyEpoch)).roles;
 }
 
+type VerifiedEpochAuthority = EpochAuthority & {
+  readonly keyEpochBase: number;
+  readonly anchor: Uint8Array;
+  readonly records: Uint8Array[];
+};
+let verifiedEpochs = new WeakMap<
+  ProjectGroupContext,
+  Map<string, VerifiedEpochAuthority>
+>();
+
 /** A policy-verified transcript/tree, never roles merely parsed from an archive. */
 export async function epochAuthority(
   ctx: ProjectGroupContext,
@@ -3498,15 +3558,44 @@ export async function epochAuthority(
     readonly key: Uint8Array;
     readonly genesis?: boolean;
   }
-): Promise<
-  EpochAuthority & {
-    readonly keyEpochBase: number;
-    readonly anchor: Uint8Array;
-    readonly records: Uint8Array[];
-  }
-> {
+): Promise<VerifiedEpochAuthority> {
   try {
-    await loadProjectAuthority(ctx, projectId);
+    await loadProjectAuthority(ctx, projectId).catch(async (error: unknown) => {
+      if (
+        !(error instanceof ProjectAuthorityError) ||
+        error.code !== 'signer-untrusted' ||
+        !(await cachedProjectAuthorityManifest(ctx, projectId))
+      )
+        throw error;
+      // Keep the independent roots; do not accept any part of the retired
+      // sibling's unpinned record. Full transcript verification follows.
+    });
+    const pinned = await cachedProjectAuthorityManifest(ctx, projectId);
+    const pinnedRoot =
+      pinned &&
+      [...decodeMlsAuthorityManifest(pinned.statement).roots]
+        .reverse()
+        .find((root) => root.keyEpochBase <= keyEpoch);
+    const heads = await projectDeviceLists(ctx, projectId);
+    const cacheId = JSON.stringify([
+      getKeySessionRevision(),
+      projectId,
+      keyEpoch,
+      pinnedRoot,
+      heads.map((list) => [
+        list.userId,
+        toHex(list.identityKeyHash),
+        toHex(list.entries.at(-1)!.hash)
+      ])
+    ]);
+    const cache =
+      verifiedEpochs.get(ctx) ?? new Map<string, VerifiedEpochAuthority>();
+    verifiedEpochs.set(ctx, cache);
+    const known = cache.get(cacheId);
+    // A cached result is an immutable, previously authenticated historical
+    // fact. Current device cutoffs still govern each envelope signature.
+    // Join bootstraps always verify their supplied archive bytes afresh.
+    if (known && !opened) return structuredClone(known);
     const key =
       opened?.key ?? (await projectKeyForEpoch(ctx, projectId, keyEpoch));
     const body =
@@ -3626,7 +3715,7 @@ export async function epochAuthority(
     };
     // Bounded, unverified hints: certifications and replay authenticate the tree.
     const claims = new Map<string, LeafCertification>();
-    const collect = (members: readonly import('@openzcad/mls').LeafInfo[]) => {
+    const collect = (members: readonly LeafInfo[]) => {
       for (const member of members) {
         const claim = {
           userId: member.userId,
@@ -3658,12 +3747,16 @@ export async function epochAuthority(
       ...group,
       keyEpochBase: root.keyEpochBase
     });
-    for (const devices of cutoffs.values()) {
-      if ([...devices.values()].includes(UNSIGNED_SHARED_CUTOFF))
-        throw new Error(
-          'Historical MLS verification needs signed revocation cutoffs.'
-        );
+    for (const list of lists) {
+      const devices = cutoffs.get(list.userId) ?? new Map<string, number>();
+      for (const revoked of revokedDevices(list)) {
+        if (!devices.has(revoked.id))
+          devices.set(revoked.id, UNSIGNED_SHARED_CUTOFF);
+      }
+      cutoffs.set(list.userId, devices);
     }
+    // The engine preserves an unsigned shared cutoff solely as a PSK fence;
+    // it never reactivates that revoked credential at an earlier epoch.
     const authority = await ctx.sessions
       .verifyEpochAuthority({
         projectId,
@@ -3692,7 +3785,15 @@ export async function epochAuthority(
     if ('anchor' in authority) return authority;
     if (authority.epoch !== epoch)
       throw new Error('The verified MLS tree belongs to another epoch.');
-    return { ...authority, keyEpochBase: root.keyEpochBase, anchor, records };
+    const verified = {
+      ...authority,
+      keyEpochBase: root.keyEpochBase,
+      anchor,
+      records
+    };
+    if (cache.size >= 256) cache.delete(cache.keys().next().value!);
+    cache.set(cacheId, structuredClone(verified));
+    return verified;
   } catch (error) {
     if (error instanceof ProjectGroupError) throw error;
     throw new ProjectGroupError(
