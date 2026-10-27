@@ -1261,6 +1261,7 @@ export async function maintainShareLinks(
     head,
     ...(options.force ? { force: true } : {})
   });
+  await publishShareSnapshots(ctx, projectId, head);
   return { authorities, retired, revocations, head };
 }
 

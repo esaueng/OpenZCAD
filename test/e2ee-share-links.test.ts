@@ -1690,9 +1690,8 @@ describe('an owner device removal (slice 5-10)', { timeout: 120_000 }, () => {
               error instanceof ShareLinkError &&
               error.reason === 'author-not-named'
           );
-          expect(
-            await refreshOwnerShareAuthorities(laptop.shareLinks, [projectId])
-          ).toEqual([]);
+          const upkeep = await maintainShareLinks(laptop.shareLinks, projectId);
+          expect(upkeep.authorities.failed).toEqual([]);
         }
         expect((await visit(srv, created.url)).verified.shareId).toBe(
           created.shareId
