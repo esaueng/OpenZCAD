@@ -117,7 +117,10 @@ pub fn verify_epoch_authority(
     }
     let encoded: Vec<String> =
         serde_json::from_str(records_json).map_err(|e| to_js(Error::input(format!("epoch authority records: {e}"))))?;
-    if encoded.len() > 4096 {
+    // A key archive carries at most 8192 previous project keys. Historical
+    // D4 verification must be able to reach its authenticated terminal state
+    // across that entire supported history; the 64 MiB byte cap still holds.
+    if encoded.len() > 8192 {
         return Err(to_js(Error::input("epoch authority proof exceeds its record budget")));
     }
     let records: Vec<Vec<u8>> = encoded

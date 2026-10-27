@@ -73,6 +73,14 @@ impl DeviceListVerifier for DeviceDirectory {
         for user in historical.users.values_mut() {
             for device in user.devices.values_mut() {
                 device.leaf_keys.retain(|(_, at)| at.is_some_and(|at| at <= epoch));
+                if device.revocation_cutoff == Some(UNSIGNED_REVOCATION_CUTOFF) {
+                    // Unknown time cannot fence a past sibling's PSK. Keep
+                    // the revoked credential refused. The application binds
+                    // replay to independently authenticated membership state.
+                    // The live directory retains its conservative PSK fence.
+                    device.revocation_cutoff = None;
+                    continue;
+                }
                 if device.revoked
                     && device
                         .revocation_cutoff
@@ -148,8 +156,9 @@ mod tests {
             before.credential_status(b"alice", b"unknown", &[2]),
             CredentialStatus::Revoked
         );
+        assert_eq!(before.revocation_cutoff(b"alice", &[]), None);
         assert_eq!(
-            before.revocation_cutoff(b"alice", &[]),
+            directory.revocation_cutoff(b"alice", &[]),
             Some(UNSIGNED_REVOCATION_CUTOFF)
         );
         assert_eq!(
