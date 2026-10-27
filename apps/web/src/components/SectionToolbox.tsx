@@ -151,7 +151,7 @@ export function SectionToolbox({
             key={id}
             type="button"
             className="rail-section-plane"
-            aria-label={`${id} plane`}
+            aria-label={`${name} (${id} plane)`}
             aria-pressed={section.plane === id}
             onClick={() => {
               if (section.plane !== id) onPlane(id);

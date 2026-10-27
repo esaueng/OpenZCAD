@@ -2001,12 +2001,12 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   // The plane is chosen in the panel; the cut is display-only, so the
   // feature tree and the body list never change while switching planes.
   const planes = page.getByRole('group', { name: 'Section plane' });
-  await planes.getByRole('button', { name: 'XZ plane' }).click();
+  await planes.getByRole('button', { name: 'Front (XZ plane)' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: XZ plane/);
   await expect(
-    planes.getByRole('button', { name: 'XZ plane' })
+    planes.getByRole('button', { name: 'Front (XZ plane)' })
   ).toHaveAttribute('aria-pressed', 'true');
-  await planes.getByRole('button', { name: 'YZ plane' }).click();
+  await planes.getByRole('button', { name: 'Side (YZ plane)' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: YZ plane/);
 
   // Compact controls preserve the complete cut when their close button is used.
@@ -2024,7 +2024,7 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   await expect(position).toHaveValue('3.125');
   await expect(flip).toHaveAttribute('aria-pressed', 'true');
   await expect(
-    planes.getByRole('button', { name: 'YZ plane' })
+    planes.getByRole('button', { name: 'Side (YZ plane)' })
   ).toHaveAttribute('aria-pressed', 'true');
   // Escape belongs to the panel while one of its controls has focus.
   await flip.focus();

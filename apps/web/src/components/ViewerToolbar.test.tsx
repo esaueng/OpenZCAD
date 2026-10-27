@@ -348,10 +348,10 @@ describe('the section button and its panel', () => {
       ['FrontXZ', 'false'],
       ['SideYZ', 'false']
     ]);
-    fireEvent.click(screen.getByRole('button', { name: 'YZ plane' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Side (YZ plane)' }));
     expect(onSectionPlane).toHaveBeenCalledWith('YZ');
     // The plane already cutting is not re-requested (it would re-centre).
-    fireEvent.click(screen.getByRole('button', { name: 'XY plane' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Top (XY plane)' }));
     expect(onSectionPlane).toHaveBeenCalledOnce();
   });
 
@@ -360,7 +360,7 @@ describe('the section button and its panel', () => {
     renderSection({ plane: 'XY', offset: 3 }, { onToggleSection });
     // A press on the panel, with nothing focused after it (Safari does not
     // focus a clicked button), is enough for Escape to belong to the panel.
-    const plane = screen.getByRole('button', { name: 'XZ plane' });
+    const plane = screen.getByRole('button', { name: 'Front (XZ plane)' });
     fireEvent.pointerDown(plane);
     fireEvent.click(plane);
     expect(document.activeElement).toBe(document.body);
@@ -395,7 +395,7 @@ describe('the section button and its panel', () => {
       'aria-pressed',
       'true'
     );
-    expect(screen.getByLabelText('YZ plane')).toHaveAttribute(
+    expect(screen.getByLabelText('Side (YZ plane)')).toHaveAttribute(
       'aria-pressed',
       'true'
     );
@@ -405,7 +405,9 @@ describe('the section button and its panel', () => {
   it('leaves Escape to the workspace while the user is elsewhere', () => {
     renderSection({ plane: 'XY', offset: 3 });
     // Pressed on the panel, then moved on to a field: Escape is the field's.
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'XZ plane' }));
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'Front (XZ plane)' })
+    );
     const elsewhere = document.createElement('input');
     document.body.append(elsewhere);
     elsewhere.focus();
