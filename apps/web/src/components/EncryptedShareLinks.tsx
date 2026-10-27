@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link2 } from 'lucide-react';
 import { StableLabel } from './StableLabel';
+import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
 
 /**
  * Share links of an end-to-end encrypted project, in the sharing dialog's
@@ -31,6 +32,11 @@ export interface EncryptedShareLinkRow {
 }
 
 export interface EncryptedShareLinksState {
+  readonly removalNotice?: string | null;
+  readonly removalLinks?: readonly {
+    shareId: string;
+    mode: EncryptedShareLinkMode;
+  }[];
   readonly links: readonly EncryptedShareLinkRow[];
   /** The owner's confirmation (share delegation) needs the identity key. */
   readonly needsConfirmation: boolean;
@@ -66,7 +72,11 @@ export interface EncryptedShareLinkClient {
     links: readonly { shareId: string; mode: EncryptedShareLinkMode }[]
   ): Promise<void>;
   /** Removals in this project (slice 5-5's hook). */
-  subscribeRemovals(projectId: string, listener: () => void): () => void;
+  subscribeRemovals(
+    projectId: string,
+    listener: (notice?: ShareRemovalNotice) => void
+  ): () => void;
+  dismissRemoval?(projectId: string, notice: string): Promise<void>;
 }
 
 /** The page's client: crypto loads with the first encrypted dialog. */
@@ -77,9 +87,20 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const { ctx } = await encryptedShareLinks();
+    let upkeepError: string | null = null;
     const upkeep = await links
       .maintainShareLinks(ctx, projectId)
-      .catch(() => null);
+      .catch((error: unknown) => {
+        upkeepError = message(error);
+        return null;
+      });
+    const work = await links
+      .shareWorkFor(ctx)
+      .read(ctx.groups.account.userId, projectId)
+      .catch((error: unknown) => {
+        upkeepError ??= message(error);
+        return null;
+      });
     const view = await links.listShareLinks(
       ctx,
       projectId,
@@ -95,10 +116,14 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       })),
       needsConfirmation:
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
-      retired: upkeep?.retired ?? [],
-      problem: upkeep?.revocations.failed.length
-        ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
-        : null
+      retired: work?.retired ?? [],
+      removalNotice: work?.notice ?? null,
+      removalLinks: work?.removalLinks ?? [],
+      problem:
+        upkeepError ??
+        (upkeep?.revocations.failed.length
+          ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
+          : null)
     };
   },
   async create(projectId, mode) {
@@ -162,6 +187,18 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       links
     );
   },
+  async dismissRemoval(projectId, notice) {
+    const [{ encryptedShareLinks }, { acknowledgeShareRemoval }] =
+      await Promise.all([
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/shareLinks')
+      ]);
+    await acknowledgeShareRemoval(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      notice
+    );
+  },
   subscribeRemovals(projectId, listener) {
     let stop: (() => void) | null = null;
     let stopped = false;
@@ -169,7 +206,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       ({ subscribeMemberRemovals }) => {
         if (stopped) return;
         stop = subscribeMemberRemovals((removal) => {
-          if (removal.projectId === projectId) listener();
+          if (removal.projectId === projectId) listener(removal.shareNotice);
         });
       }
     );
@@ -221,10 +258,16 @@ export function EncryptedShareLinks({
   const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
-  const [removalSeen, setRemovalSeen] = useState(false);
+  const [transientRemoval, setTransientRemoval] = useState<{
+    projectId: string;
+    notice: ShareRemovalNotice;
+  } | null>(null);
+  const loadRevision = useRef(0);
 
   const load = useCallback(async () => {
+    const revision = ++loadRevision.current;
     const next = await client.list(projectId);
+    if (revision !== loadRevision.current) return;
     setState(next);
     if (next.problem) setError(next.problem);
   }, [client, projectId]);
@@ -234,8 +277,30 @@ export function EncryptedShareLinks({
   }, [load]);
 
   useEffect(
-    () => client.subscribeRemovals(projectId, () => setRemovalSeen(true)),
-    [client, projectId]
+    () =>
+      client.subscribeRemovals(projectId, (notice) => {
+        if (notice?.problem) setError(notice.problem);
+        if (notice)
+          setTransientRemoval((current) => {
+            if (current?.projectId !== projectId) return { projectId, notice };
+            if (Number(current.notice.cursor) > Number(notice.cursor))
+              return current;
+            if (Number(current.notice.cursor) < Number(notice.cursor))
+              return { projectId, notice };
+            const links = new Map(
+              [...current.notice.links, ...notice.links].map((link) => [
+                link.shareId,
+                link
+              ])
+            );
+            return {
+              projectId,
+              notice: { ...notice, links: [...links.values()] }
+            };
+          });
+        void load().catch((caught: unknown) => setError(message(caught)));
+      }),
+    [client, projectId, load]
   );
 
   const run = async (key: string, action: () => Promise<void>) => {
@@ -248,10 +313,7 @@ export function EncryptedShareLinks({
       setError(message(caught));
       // A revoke can fail after its tombstone was written: show the link
       // as revocation pending rather than active.
-      await client
-        .list(projectId)
-        .then(setState)
-        .catch(() => undefined);
+      await load().catch(() => undefined);
     } finally {
       setBusy(null);
     }
@@ -267,6 +329,31 @@ export function EncryptedShareLinks({
   };
 
   const links = state?.links ?? [];
+  const transient =
+    transientRemoval?.projectId === projectId ? transientRemoval : null;
+  const removalCursor = transient?.notice.cursor ?? state?.removalNotice;
+  const removalLinks = (
+    transient?.notice.links ??
+    state?.removalLinks ??
+    []
+  ).filter((affected) =>
+    transient
+      ? !links.some(
+          (link) =>
+            link.shareId === affected.shareId &&
+            link.status === 'revocation-pending'
+        )
+      : links.some(
+          (link) =>
+            link.shareId === affected.shareId &&
+            link.status !== 'revocation-pending'
+        )
+  );
+  const acknowledgeRemoval = async () => {
+    if (removalCursor && !transient?.notice.problem)
+      await client.dismissRemoval?.(projectId, removalCursor);
+    setTransientRemoval((current) => (current === transient ? null : current));
+  };
   const disabled = busy !== null || state === null;
 
   return (
@@ -406,7 +493,7 @@ export function EncryptedShareLinks({
         </div>
       ) : null}
 
-      {removalSeen && links.length > 0 ? (
+      {(transient || state?.removalNotice) && removalLinks.length > 0 ? (
         <div className="sharing-share-notice" role="status">
           <span className="sharing-tag">
             Someone lost access to this project. They can still open later
@@ -419,8 +506,8 @@ export function EncryptedShareLinks({
             disabled={disabled}
             onClick={() =>
               void run('reissue', async () => {
-                await client.reissue(projectId, links);
-                setRemovalSeen(false);
+                await client.reissue(projectId, removalLinks);
+                await acknowledgeRemoval();
               })
             }
           >
@@ -430,7 +517,11 @@ export function EncryptedShareLinks({
             type="button"
             className="sharing-row-action"
             disabled={disabled}
-            onClick={() => setRemovalSeen(false)}
+            onClick={() =>
+              void run('dismiss', async () => {
+                await acknowledgeRemoval();
+              })
+            }
           >
             Not now
           </button>

@@ -3321,6 +3321,7 @@ export const ENCRYPTED_PROJECTS_REQUIRED_CODE = 'ENCRYPTED_PROJECTS_REQUIRED';
  * "Encrypt new projects" off, is refused with 409 and this code.
  */
 export const E2EE_DEFAULT_ON_CODE = 'E2EE_DEFAULT_ON';
+export const E2EE_PLAINTEXT_FROZEN_CODE = 'E2EE_PLAINTEXT_FROZEN';
 /** The assistant is off on encrypted projects until per-project consent (D7). */
 export const ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE';
@@ -3839,6 +3840,8 @@ export interface E2eePreviousIdentityRecord {
 
 export interface E2eeConfigResponse {
   enabled: boolean;
+  /** Deployment-wide legacy write freeze, reported even when keys are closed. */
+  plaintextFrozen?: boolean;
   /**
    * Encrypted projects (E2EE_PROJECTS_ENABLED, ADR-024 Phase 4) are open to
    * this account and their storage is installed. Absent from older Workers.

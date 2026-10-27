@@ -122,6 +122,24 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('refuses plaintext writes from an existing socket after waking under the freeze', async () => {
+    const storage = createRoomContext();
+    const base = createProjectDocument('Legacy room', toUserId('user_room'));
+    const room = createTestRoom(storage.context, {});
+    const socket = await openSocket(room, base.projectId);
+    await socket.receive(hello(base));
+    const before = structuredClone([...storage.values]);
+    createTestRoom(storage.context, { E2EE_PLAINTEXT_FROZEN: 'true' });
+    const edited = addPrimitiveFeature(base, {
+      name: 'Blocked', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    await socket.receive(documentFrame(edited, base.version));
+    const frame = socket.lastFrame();
+    expect(frame).toMatchObject({ type: 'error', code: 'permission-denied' });
+    expect(frame && 'message' in frame ? frame.message : null).toContain('read-only');
+    expect([...storage.values]).toEqual(before);
+  });
+
   it('counts frames without client identity before JSON parsing and resets after one second', async () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {

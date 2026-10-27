@@ -207,6 +207,19 @@ async function encryptedProject(
 // --- Archive, write and read ------------------------------------------------
 
 describe('content blobs', () => {
+  it.each([4099, 100_000])('keeps encrypted upload transport and version writes available under the plaintext freeze (part bytes %i)', async (partBytes) => {
+    const { srv, laptop, projectId, document } = await encryptedProject({ partBytes, chunkSize: 1000 });
+    srv.env.E2EE_PLAINTEXT_FROZEN = 'true';
+    const picture = noise(20_000, 17);
+    const blobId = await laptop.blobs.archive(projectId, pictureInput(picture));
+    const step = stepBytes('encrypted-after-freeze');
+    const source = await laptop.blobs.archive(projectId, stepInput(step));
+    await save(laptop, withImport(document, source, step), document.version);
+    expect(await laptop.blobs.read(projectId, blobId)).toEqual(picture);
+    expect(await laptop.blobs.read(projectId, source)).toEqual(step);
+    expect(rows(srv, 'SELECT * FROM artifacts')).toEqual([]);
+  });
+
   it('stores an imported STEP file encrypted and opens it on another device', async () => {
     const { srv, laptop, projectId, document } = await encryptedProject();
     const step = stepBytes('bracket');

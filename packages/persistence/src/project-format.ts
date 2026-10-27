@@ -1,6 +1,7 @@
 import {
   ENCRYPTED_PROJECT_SHARING_UNAVAILABLE_CODE,
   ENCRYPTED_PROJECTS_REQUIRED_CODE,
+  E2EE_PLAINTEXT_FROZEN_CODE,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   PROJECT_MIGRATING_CODE,
@@ -42,6 +43,17 @@ export class EncryptedProjectsRequiredError extends Error {
   ) {
     super(message);
     this.name = 'EncryptedProjectsRequiredError';
+  }
+}
+
+/** Phase 8: legacy plaintext opens for reading or migration, never new writes. */
+export class PlaintextProjectFrozenError extends Error {
+  readonly code = E2EE_PLAINTEXT_FROZEN_CODE;
+  constructor() {
+    super(
+      'This legacy project is read-only. Encrypt it to save changes to your account, or save a copy on this device.'
+    );
+    this.name = 'PlaintextProjectFrozenError';
   }
 }
 
