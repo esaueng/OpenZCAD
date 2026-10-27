@@ -458,6 +458,15 @@ rows directly.
    `cutover` or `purging` for more than a few hours still has plaintext to
    delete; check the Worker logs for the scheduled run.
 
-6. Encrypting new projects by default and freezing plaintext writes are later
-   Phase 8 steps. They wait for an outside review and are not available in
-   this release.
+6. Keep `E2EE_DEFAULT_ON` and `E2EE_PLAINTEXT_FROZEN` off until the outside
+   reviewer has confirmed in writing that every P0 and P1 is resolved. Qualify
+   the automatic browser migration, legacy reader, interrupted-purge recovery
+   and export/restore flow on a separate instance first. After clearance and
+   rollout authorization, enable `E2EE_DEFAULT_ON` with keys, projects and
+   migration still on, and reverse migration off. Verify automatic migration
+   and resolve owners or members waiting for keys before enabling
+   `E2EE_PLAINTEXT_FROZEN` in a later deployment. Confirm legacy reads and
+   encrypted saves/uploads with the freeze on. Keep the migration sweep on
+   until every plaintext purge is complete. Code availability and a passing
+   preflight do not supply outside-review clearance or production activation
+   authorization; the official deployment keeps both flags off.
