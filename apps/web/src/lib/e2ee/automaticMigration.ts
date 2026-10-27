@@ -11,6 +11,9 @@ import {
 import { invalidateAccountKeyReads, unlockedAccount } from './unlockedKeys';
 import type { MigrationController } from './projectMigrations';
 
+export const AUTOMATIC_MIGRATION_LOAD_ERROR =
+  'Automatic encryption could not load. Reload to try again.';
+
 export interface AutomaticMigrationDeps {
   config(signal: AbortSignal): Promise<E2eeConfigResponse>;
   prepare(
@@ -39,7 +42,9 @@ function pageDependencies(userId: string): AutomaticMigrationDeps {
         import('./e2eeApi'),
         import('./projectPreferences'),
         import('./projectMigrations')
-      ]);
+      ]).catch(() => {
+        throw new Error(AUTOMATIC_MIGRATION_LOAD_ERROR);
+      });
       const revision = getKeySessionRevision();
       const current = () => !signal.aborted && isCurrentKeySession(revision);
       const fetcher = async (path: string, init?: RequestInit) => {
@@ -197,6 +202,10 @@ export function automaticProjectMigration(
       started = false;
     }
   });
+  const online = () => {
+    void check();
+  };
+  if (typeof window !== 'undefined') window.addEventListener('online', online);
   return {
     check,
     dispose() {
@@ -205,6 +214,8 @@ export function automaticProjectMigration(
       invalidateAccountKeyReads(userId, scope);
       unsubscribeState();
       unsubscribeSession();
+      if (typeof window !== 'undefined')
+        window.removeEventListener('online', online);
     }
   };
 }

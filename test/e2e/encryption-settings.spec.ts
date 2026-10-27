@@ -12,7 +12,17 @@ test('shows the reload instruction when automatic migration fails to download', 
 }) => {
   await stubApi(page);
   await installE2eeServer(context, createE2eeServer());
-  await page.route(/\/assets\/automaticMigration-[^/]+\.js$/, (route) =>
+  await page.route('**/api/e2ee/config', (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        projectsEnabled: true,
+        migrationEnabled: true,
+        defaultOn: true
+      }
+    })
+  );
+  await page.route(/\/assets\/projectMigrations-[^/]+\.js$/, (route) =>
     route.abort('failed')
   );
   const cloudSave = page.waitForResponse(
@@ -28,6 +38,84 @@ test('shows the reload instruction when automatic migration fails to download', 
   await expect(settings).toContainText(
     'Automatic encryption could not load. Reload to try again.'
   );
+});
+
+for (const available of [false, 'older-server'] as const) {
+  test(`does not load optional migration code or open Settings with closed gates: ${available}`, async ({
+    page,
+    context
+  }) => {
+    await stubApi(page);
+    await installE2eeServer(context, createE2eeServer());
+    let checks = 0;
+    await page.route('**/api/e2ee/config', (route) => {
+      checks++;
+      return available === 'older-server'
+        ? route.fulfill({ status: 404, json: { error: 'Not found' } })
+        : route.fulfill({
+            json: {
+              enabled: true,
+              projectsEnabled: true,
+              migrationEnabled: true,
+              defaultOn: false
+            }
+          });
+    });
+    let optionalRequests = 0;
+    await page.route(
+      /\/assets\/(?:automaticMigration|projectMigrations)-[^/]+\.js$/,
+      (route) => {
+        optionalRequests++;
+        return route.abort('failed');
+      }
+    );
+    await page.goto('/');
+    await expect(
+      page.getByRole('button', { name: 'Open settings' })
+    ).toBeVisible();
+    await expect.poll(() => checks).toBeGreaterThan(0);
+    await expect(
+      page.getByRole('dialog', { name: 'Settings', exact: true })
+    ).toHaveCount(0);
+    expect(optionalRequests).toBe(0);
+  });
+}
+
+test('rechecks default-on after reconnect and opens setup without reloading', async ({
+  page,
+  context
+}) => {
+  await stubApi(page);
+  await installE2eeServer(
+    context,
+    createE2eeServer({ projectsEnabled: true, migrationEnabled: true })
+  );
+  let online = false;
+  let checks = 0;
+  await page.route('**/api/e2ee/config', (route) => {
+    checks++;
+    return online
+      ? route.fulfill({
+          json: {
+            enabled: true,
+            projectsEnabled: true,
+            migrationEnabled: true,
+            defaultOn: true
+          }
+        })
+      : route.abort('failed');
+  });
+  await page.goto('/');
+  await expect.poll(() => checks).toBeGreaterThan(0);
+  await expect(
+    page.getByRole('dialog', { name: 'Settings', exact: true })
+  ).toHaveCount(0);
+  online = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(
+    settings.getByRole('button', { name: 'Set up encryption', exact: true })
+  ).toBeVisible();
 });
 
 test('default-on opens Encryption setup immediately when Settings was closed', async ({
