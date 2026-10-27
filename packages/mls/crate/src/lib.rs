@@ -111,6 +111,7 @@ pub fn verify_epoch_authority(
     target_record: &[u8],
     owner_user_id: &str,
     directory_json: &str,
+    authenticated_group_info: &[u8],
 ) -> Result<String, JsValue> {
     if records_json.len() > 128 * 1024 * 1024 {
         return Err(to_js(Error::input("epoch authority proof exceeds its byte budget")));
@@ -127,19 +128,23 @@ pub fn verify_epoch_authority(
         .iter()
         .map(|value| hex::decode(value).map_err(|_| to_js(Error::input("epoch authority record is not hex"))))
         .collect::<Result<_, _>>()?;
-    let total = records.iter().map(Vec::len).sum::<usize>() + anchor.len() + target_record.len();
+    let total = records.iter().map(Vec::len).sum::<usize>()
+        + anchor.len()
+        + target_record.len()
+        + authenticated_group_info.len();
     if total > 64 * 1024 * 1024 {
         return Err(to_js(Error::input("epoch authority proof exceeds its byte budget")));
     }
-    let directory = Arc::new(DeviceDirectory::from_json(directory_json).map_err(to_js)?);
+    let directory = DeviceDirectory::from_json(directory_json).map_err(to_js)?;
     json(
-        &archive::verify_epoch_authority(
+        &archive::verify_epoch_authority_bound(
             project_id.as_bytes(),
             anchor,
             &records,
             target_record,
             owner_user_id.as_bytes(),
             directory,
+            authenticated_group_info,
         )
         .map_err(to_js)?,
     )

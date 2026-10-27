@@ -65,6 +65,9 @@ pub struct UserDevices {
 #[derive(Clone, Debug, Default)]
 pub struct DeviceDirectory {
     pub users: BTreeMap<Vec<u8>, UserDevices>,
+    /// Only stateless replay may set this after receiving an independently
+    /// authenticated terminal GroupInfo. It is never accepted from JSON.
+    authenticated_through: Option<u64>,
 }
 
 impl DeviceListVerifier for DeviceDirectory {
@@ -74,6 +77,12 @@ impl DeviceListVerifier for DeviceDirectory {
             for device in user.devices.values_mut() {
                 device.leaf_keys.retain(|(_, at)| at.is_some_and(|at| at <= epoch));
                 if device.revocation_cutoff == Some(UNSIGNED_REVOCATION_CUTOFF) {
+                    if self.authenticated_through.is_some_and(|through| epoch <= through) {
+                        // The caller must verify this whole prefix reaches
+                        // the independently accepted context before returning
+                        // any authority. This is not live device admission.
+                        device.revoked = false;
+                    }
                     // Unknown time cannot fence a past sibling's PSK. Keep
                     // the revoked credential refused. The application binds
                     // replay to independently authenticated membership state.
@@ -227,6 +236,11 @@ struct LeafKeyJson {
 }
 
 impl DeviceDirectory {
+    pub fn with_authenticated_prefix(mut self, through: u64) -> Self {
+        self.authenticated_through = Some(through);
+        self
+    }
+
     pub fn from_json(json: &str) -> Res<DeviceDirectory> {
         let parsed: DirectoryJson =
             serde_json::from_str(json).map_err(|e| Error::input(format!("device directory: {e}")))?;

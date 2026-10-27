@@ -388,6 +388,73 @@ pub fn verify_epoch_authority(
     Ok(replay_authority(anchor, records, &target, &record.ratchet_tree, directory, owner)?.authority)
 }
 
+/// An independently accepted account state can vouch for its exact historical
+/// prefix when a later revocation has no signed time. The complete prefix must
+/// reach that context AND tree before any requested historical result escapes.
+/// Unknown-time credentials remain refused beyond it, and ordinary joins never
+/// call this path. Known signed cutoffs are enforced throughout.
+pub fn verify_epoch_authority_bound(
+    project_id: &[u8],
+    anchor: &[u8],
+    records: &[Vec<u8>],
+    target_record: &[u8],
+    owner: &[u8],
+    directory: crate::directory::DeviceDirectory,
+    authenticated_group_info: &[u8],
+) -> Res<EpochAuthority> {
+    if authenticated_group_info.is_empty() {
+        return verify_epoch_authority(project_id, anchor, records, target_record, owner, Arc::new(directory));
+    }
+    use mls_rs::extension::built_in::RatchetTreeExt;
+    let trusted = message(authenticated_group_info)?
+        .into_group_info()
+        .ok_or_else(|| invalid("authenticated endpoint is not a GroupInfo"))?;
+    let start = message(anchor)?
+        .into_group_info()
+        .ok_or_else(|| invalid("anchor is not a GroupInfo"))?;
+    let context = trusted.group_context();
+    if context.group_id != group_id(project_id) {
+        return Err(invalid("authenticated endpoint belongs to another project"));
+    }
+    let count = context
+        .epoch
+        .checked_sub(start.group_context().epoch)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n <= records.len())
+        .ok_or_else(|| invalid("authenticated endpoint is outside the archive"))?;
+    let tree = trusted
+        .extensions()
+        .get_as::<RatchetTreeExt>()
+        .map_err(|_| invalid("malformed authenticated endpoint tree"))?
+        .ok_or_else(|| invalid("missing authenticated endpoint tree"))?
+        .mls_encode_to_vec()
+        .map_err(Error::codec)?;
+    let directory = Arc::new(directory.with_authenticated_prefix(context.epoch));
+    // This replay also verifies an epoch-zero endpoint's signature and tree.
+    replay_authority(anchor, &records[..count], context, &tree, directory.clone(), owner)?;
+    let mut input = target_record;
+    let target = EpochRecordV1::mls_decode(&mut input).map_err(Error::codec)?;
+    let requested = target
+        .epoch
+        .checked_sub(start.group_context().epoch)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n <= records.len())
+        .ok_or_else(|| invalid("requested epoch is outside the archive"))?;
+    if records.len() != count.max(requested) {
+        return Err(invalid(
+            "unexpected records beyond the authenticated or requested epoch",
+        ));
+    }
+    verify_epoch_authority(
+        project_id,
+        anchor,
+        &records[..requested],
+        target_record,
+        owner,
+        directory,
+    )
+}
+
 pub fn verify(
     anchor: &[u8],
     records: &[Vec<u8>],

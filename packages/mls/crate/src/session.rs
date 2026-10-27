@@ -2043,6 +2043,72 @@ mod checkpoint_tests {
     }
 
     #[test]
+    fn unknown_revocations_need_an_exact_independently_authenticated_prefix() {
+        let f = fixture();
+        let mut revoked = (*directory(&f.everyone(), &[b"owner"], &[])).clone();
+        revoked
+            .users
+            .get_mut(b"A".as_slice())
+            .unwrap()
+            .devices
+            .get_mut(b"owner".as_slice())
+            .unwrap()
+            .revocation_cutoff = Some(9_007_199_254_740_991);
+        assert!(crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            Arc::new(revoked.clone()),
+        )
+        .is_err());
+        let bound = crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[0],
+            b"A",
+            revoked.clone(),
+            &f.checkpoint,
+        )
+        .unwrap();
+        assert_eq!(bound.epoch, 1); // The verified prefix reaches epoch 3.
+        assert!(crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records,
+            &f.records[4],
+            b"A",
+            revoked.clone(),
+            &f.checkpoint,
+        )
+        .is_err()); // Revoked owner cannot authorize epoch 4 beyond the prefix.
+        assert!(crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            revoked.clone(),
+            &f.initial,
+        )
+        .is_err()); // An epoch-zero pin does not bless later old-key Commits.
+        let mut altered = f.records[..3].to_vec();
+        altered[1][0] ^= 1;
+        assert!(crate::archive::verify_epoch_authority_bound(
+            b"checkpoint-test",
+            &f.initial,
+            &altered,
+            &f.records[0],
+            b"A",
+            revoked,
+            &f.checkpoint,
+        )
+        .is_err()); // A damaged suffix cannot leak even an earlier result.
+    }
+
+    #[test]
     fn welcome_joins_from_an_owner_checkpoint_with_its_removals() {
         let mut f = fixture();
         let after = f.records[3..].to_vec();
