@@ -114,6 +114,10 @@ for (const colorScheme of ['light', 'dark'] as const) {
             exact: true
           })
           .click();
+        await expect(page.locator('.settings-topbar')).toHaveCSS(
+          'height',
+          '40px'
+        );
         await page.getByRole('button', { name: 'Back to workspace' }).click();
         await reachable(page.getByRole('button', { name: /OpenZCAD/ }));
         await reachable(page.getByRole('button', { name: /Rename project/ }));

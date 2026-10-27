@@ -1377,11 +1377,13 @@
    the stage inherits the taller header clearance, including comfortable UI. */
 @media (max-width: 380px) {
   .app-shell {
-    --topbar-h: calc(var(--topbar-island-h) * 2 + var(--sp-1));
-    --stage-top: calc(var(--topbar-h) + var(--island-gap) * 2);
+    --stage-top: calc(
+      var(--topbar-island-h) * 2 + var(--sp-1) + var(--island-gap) * 2
+    );
   }
 
   .app-shell > .topbar {
+    height: calc(var(--topbar-island-h) * 2 + var(--sp-1));
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: repeat(2, var(--topbar-island-h));
   }

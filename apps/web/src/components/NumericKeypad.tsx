@@ -343,8 +343,11 @@ export function NumericKeypad({
     // or keypad changes size (rotation, a dock opening, or a warning row).
     const reposition = () => {
       if (!lastAnchor) return;
+      const wasPositioned = positioned;
       positioned = false;
       positionAt(lastAnchor);
+      // A centered fallback remains provisional until the rig's first push.
+      positioned = wasPositioned;
     };
     const observer =
       typeof ResizeObserver === 'undefined'

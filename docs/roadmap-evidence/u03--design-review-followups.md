@@ -19,3 +19,8 @@ attached to the Playwright run. The existing command-action contrast tests
 continue to cover the Done shortcut and mobile action fixes from #966; their
 toast case now triggers fresh feedback instead of depending on an expired
 completion message. U03 remains Partial.
+
+Review follow-ups preserve Settings' single-row header at phone widths and
+keep a provisional keypad placement available for the rig's first real
+anchor. The browser density case checks Settings' height; NumericKeypad's
+component regression delivers the initial resize callback before that anchor.
