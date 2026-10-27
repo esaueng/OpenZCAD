@@ -253,7 +253,7 @@ test('Extrude in place: the back arrow, Symmetric under Options, and Enter to fi
   await keypad.locator('input').press('Escape');
   await expect(keypad).toHaveCount(0);
   await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled();
-  await options.locator('summary').click();
+  await expect(options).not.toHaveAttribute('open');
 
   // The back arrow leaves the profile's middle the other way: drag it down.
   await expect
@@ -293,7 +293,9 @@ test('Extrude in place: the back arrow, Symmetric under Options, and Enter to fi
     timeout: 30_000
   });
   // Off the bar's own controls (Enter on Options would open them).
-  await page.locator(':focus').blur();
+  await page.evaluate(() =>
+    (window.document.activeElement as HTMLElement)?.blur()
+  );
   await page.keyboard.press('Enter');
   await expect(bar).toHaveCount(0, { timeout: 30_000 });
   await revealModelPanel(page, 'History');
@@ -352,7 +354,11 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   );
   const options = bar.locator('details.in-place-command-options');
   await options.locator('summary').click();
-  const distance = bar.getByRole('button', { name: 'Distance', exact: true });
+  const distance = bar.getByRole('button', {
+    name: 'Distance',
+    exact: true,
+    includeHidden: true
+  });
   await expect(distance).toHaveText('12 mm');
 
   // A keypad belongs to its value as it left it: once anything else changes
@@ -366,12 +372,16 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   // Reverse flips the distance under an open Distance entry.
   await distance.click();
   await keypad.getByRole('textbox').fill('30');
+  // Exact entry closes Options; deliberately reopen it to change the
+  // command while that entry is live and exercise stale-entry invalidation.
+  await options.locator('summary').click();
   await bar.getByRole('button', { name: 'Reverse direction' }).click();
   await expect(keypad).toHaveCount(0);
   await expect(distance).toHaveText('-30 mm');
   // Symmetric stops offering Back distance under an open Back entry.
   await back.click();
   await keypad.getByRole('textbox').fill('3');
+  await options.locator('summary').click();
   await radio('Sides', 'Symmetric').click();
   await expect(keypad).toHaveCount(0);
   await expect(radio('Sides', 'Symmetric')).toHaveAttribute(
@@ -381,6 +391,7 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   // Through all stops offering Distance: its extent stays Through all.
   await distance.click();
   await keypad.getByRole('textbox').fill('12');
+  await options.locator('summary').click();
   await radio('Operation', 'Cut').click();
   await radio('Extent', 'Through all').click();
   await expect(keypad).toHaveCount(0);
