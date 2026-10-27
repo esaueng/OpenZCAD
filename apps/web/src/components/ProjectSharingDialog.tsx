@@ -626,7 +626,7 @@ export function ProjectSharingDialog({
         <div className="sharing-body">
           {encrypted && !localProject ? (
             <section
-              className="sharing-section"
+              className="sharing-section sharing-state-comparison"
               aria-label="Project state code"
             >
               <h3>Project state code</h3>
