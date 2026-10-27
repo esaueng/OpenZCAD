@@ -6,25 +6,30 @@ import {
   type EncryptedShareLinkClient,
   type EncryptedShareLinksState
 } from './EncryptedShareLinks';
+import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
 
 const URL_A = 'https://app.example/#share=a.b.c';
 
 function fakeClient(states: EncryptedShareLinksState[]) {
   let index = 0;
-  let removal: (() => void) | null = null;
-  const client: EncryptedShareLinkClient & { fireRemoval(): void } = {
+  let removal: ((notice?: ShareRemovalNotice) => void) | null = null;
+  const client: EncryptedShareLinkClient & {
+    fireRemoval(notice?: ShareRemovalNotice): void;
+  } = {
     list: vi.fn(async () => states[Math.min(index++, states.length - 1)]!),
     create: vi.fn(async () => ({ url: URL_A })),
     revoke: vi.fn(async () => undefined),
     confirm: vi.fn(async () => undefined),
     reissue: vi.fn(async () => undefined),
-    subscribeRemovals: vi.fn((_projectId: string, listener: () => void) => {
-      removal = listener;
-      return () => {
-        removal = null;
-      };
-    }),
-    fireRemoval: () => removal?.()
+    subscribeRemovals: vi.fn(
+      (_projectId: string, listener: (notice?: ShareRemovalNotice) => void) => {
+        removal = listener;
+        return () => {
+          removal = null;
+        };
+      }
+    ),
+    fireRemoval: (notice) => removal?.(notice)
   };
   return client;
 }
@@ -51,6 +56,67 @@ const active: EncryptedShareLinksState = {
 };
 
 describe('EncryptedShareLinks (slice 5-10)', () => {
+  it('does not let an older reload erase a newer journaled notice', async () => {
+    const client = fakeClient([active]);
+    let release!: (state: EncryptedShareLinksState) => void;
+    vi.mocked(client.list)
+      .mockResolvedValueOnce(active)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          })
+      )
+      .mockImplementationOnce(() => new Promise(() => {}));
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText(/^Active until /);
+    act(() =>
+      client.fireRemoval({
+        cursor: '12',
+        links: [{ shareId: 'shr_a', mode: 'view' }]
+      })
+    );
+    act(() =>
+      client.fireRemoval({
+        cursor: '13',
+        links: [{ shareId: 'shr_b', mode: 'tweak' }]
+      })
+    );
+    await act(async () => {
+      release(active);
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/Someone lost access/)).toBeVisible();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Reissue links' })
+    );
+    expect(client.reissue).toHaveBeenCalledWith('proj_x', [
+      { shareId: 'shr_b', mode: 'tweak' }
+    ]);
+  });
+
+  it('shows the journaled affected links immediately while the background reload is stalled', async () => {
+    const client = fakeClient([active]);
+    vi.mocked(client.list)
+      .mockResolvedValueOnce(active)
+      .mockImplementation(() => new Promise(() => {}));
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText(/^Active until /);
+    act(() =>
+      client.fireRemoval({
+        cursor: '12',
+        links: [{ shareId: 'shr_a', mode: 'view' }]
+      })
+    );
+    expect(screen.getByText(/Someone lost access/)).toBeVisible();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Reissue links' })
+    );
+    expect(client.reissue).toHaveBeenCalledWith('proj_x', [
+      { shareId: 'shr_a', mode: 'view' }
+    ]);
+  });
+
   it('loads a saved removal warning after the dialog was closed and acknowledges its exact cursor', async () => {
     const saved = {
       ...active,

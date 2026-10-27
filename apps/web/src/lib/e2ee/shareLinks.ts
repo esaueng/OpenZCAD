@@ -108,7 +108,9 @@ import {
   withShareWorkLock,
   type PendingShareCreation,
   type ShareWorkStore,
-  type ShareWorkLink
+  type ShareWorkLink,
+  type ShareWork,
+  type ShareRemovalNotice
 } from './shareWorkStore';
 import { getKeySessionRevision } from './keySession';
 import {
@@ -220,12 +222,12 @@ async function rememberShareRemoval(
   ctx: ShareLinksContext,
   removal: MembersRemoved | MemberDevicesRemoved,
   head: EncryptedShareHead
-): Promise<void> {
+): Promise<ShareWork> {
   const active = head.shareLinks?.links ?? [];
   const affected = active.filter(
     (link) => link.grant.keyEpoch < removal.keyEpoch
   );
-  await shareWorkFor(ctx).update(
+  return shareWorkFor(ctx).update(
     ctx.groups.account.userId,
     removal.projectId,
     (current) =>
@@ -1698,10 +1700,12 @@ export async function reissueShareLinks(
  */
 export async function shareLinksAfterRemoval(
   ctx: ShareLinksContext,
-  removal: MembersRemoved
+  removal: MembersRemoved,
+  onJournaled: (notice: ShareRemovalNotice) => void = () => {}
 ): Promise<AuthorityOutcome | null> {
   const head = await ctx.store.shareHead(removal.projectId);
-  await rememberShareRemoval(ctx, removal, head);
+  const saved = await rememberShareRemoval(ctx, removal, head);
+  onJournaled({ cursor: saved.notice, links: saved.removalLinks });
   if (!ctx.groups.device) return null;
   // No request unless the head tombstones links; never fails the hook.
   await forgetRevokedShareLinks(ctx, removal.projectId, { head }).catch(
@@ -1728,10 +1732,12 @@ export async function shareLinksAfterRemoval(
  */
 export async function shareLinksAfterDeviceRemoval(
   ctx: ShareLinksContext,
-  removal: MemberDevicesRemoved
+  removal: MemberDevicesRemoved,
+  onJournaled: (notice: ShareRemovalNotice) => void = () => {}
 ): Promise<AuthorityOutcome | null> {
   const head = await ctx.store.shareHead(removal.projectId);
-  await rememberShareRemoval(ctx, removal, head);
+  const saved = await rememberShareRemoval(ctx, removal, head);
+  onJournaled({ cursor: saved.notice, links: saved.removalLinks });
   if (!ctx.groups.device) return null;
   // No request unless the head tombstones links; never fails the hook.
   await forgetRevokedShareLinks(ctx, removal.projectId, { head }).catch(

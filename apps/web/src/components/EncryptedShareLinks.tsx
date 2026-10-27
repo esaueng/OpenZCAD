@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link2 } from 'lucide-react';
 import { StableLabel } from './StableLabel';
+import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
 
 /**
  * Share links of an end-to-end encrypted project, in the sharing dialog's
@@ -71,7 +72,10 @@ export interface EncryptedShareLinkClient {
     links: readonly { shareId: string; mode: EncryptedShareLinkMode }[]
   ): Promise<void>;
   /** Removals in this project (slice 5-5's hook). */
-  subscribeRemovals(projectId: string, listener: () => void): () => void;
+  subscribeRemovals(
+    projectId: string,
+    listener: (notice?: ShareRemovalNotice) => void
+  ): () => void;
   dismissRemoval?(projectId: string, notice: string): Promise<void>;
 }
 
@@ -198,7 +202,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       ({ subscribeMemberRemovals }) => {
         if (stopped) return;
         stop = subscribeMemberRemovals((removal) => {
-          if (removal.projectId === projectId) listener();
+          if (removal.projectId === projectId) listener(removal.shareNotice);
         });
       }
     );
@@ -250,20 +254,36 @@ export function EncryptedShareLinks({
   const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
+  const loadRevision = useRef(0);
 
   const load = useCallback(async () => {
+    const revision = ++loadRevision.current;
     const next = await client.list(projectId);
+    if (revision !== loadRevision.current) return;
     setState(next);
     if (next.problem) setError(next.problem);
   }, [client, projectId]);
 
   useEffect(() => {
     void load().catch((caught: unknown) => setError(message(caught)));
+    return () => {
+      loadRevision.current++;
+    };
   }, [load]);
 
   useEffect(
     () =>
-      client.subscribeRemovals(projectId, () => {
+      client.subscribeRemovals(projectId, (notice) => {
+        if (notice)
+          setState((current) =>
+            current
+              ? {
+                  ...current,
+                  removalNotice: notice.cursor,
+                  removalLinks: notice.links
+                }
+              : current
+          );
         void load().catch((caught: unknown) => setError(message(caught)));
       }),
     [client, projectId, load]
@@ -279,10 +299,7 @@ export function EncryptedShareLinks({
       setError(message(caught));
       // A revoke can fail after its tombstone was written: show the link
       // as revocation pending rather than active.
-      await client
-        .list(projectId)
-        .then(setState)
-        .catch(() => undefined);
+      await load().catch(() => undefined);
     } finally {
       setBusy(null);
     }

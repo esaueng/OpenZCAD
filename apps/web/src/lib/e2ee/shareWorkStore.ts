@@ -6,6 +6,11 @@ export interface ShareWorkLink {
   readonly mode: ShareLinkMode;
 }
 
+export interface ShareRemovalNotice {
+  readonly cursor: string | null;
+  readonly links: readonly ShareWorkLink[];
+}
+
 export interface PendingShareCreation extends ShareWorkLink {
   readonly ownerIdentityHash: string;
   readonly shareKeyHash: string;

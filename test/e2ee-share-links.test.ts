@@ -16,6 +16,7 @@ import {
   describe,
   expect,
   it,
+  vi,
   type Mock
 } from 'vitest';
 import worker from '../apps/web/worker/index';
@@ -2009,6 +2010,58 @@ describe('an owner identity change (slice 5-10)', { timeout: 120_000 }, () => {
 });
 
 describe('durable browser share work', { timeout: 120_000 }, () => {
+  it.each(['member', 'device'] as const)(
+    'notifies an open dialog after journaling a %s removal before stalled remote upkeep',
+    async (kind) => {
+      const { laptop, projectId } = await linkedProject();
+      const work = memoryShareWorkStore();
+      const ctx = { ...laptop.shareLinks, work };
+      await delegate(laptop);
+      await createShareLink(ctx, projectId, 'view');
+      const listed = await ctx.api.list(projectId);
+      let release!: (value: typeof listed) => void;
+      const stalled = {
+        ...ctx,
+        api: {
+          ...ctx.api,
+          list: () =>
+            new Promise<typeof listed>((resolve) => {
+              release = resolve;
+            })
+        }
+      };
+      const notified = vi.fn();
+      let finished = false;
+      const task = (
+        kind === 'member'
+          ? shareLinksAfterRemoval(
+              stalled,
+              { projectId, keyEpoch: 12, userIds: [OTHER] },
+              notified
+            )
+          : shareLinksAfterDeviceRemoval(
+              stalled,
+              {
+                projectId,
+                keyEpoch: 12,
+                devices: [{ userId: OTHER, deviceId: 'other_desktop' }]
+              },
+              notified
+            )
+      ).then(() => {
+        finished = true;
+      });
+      try {
+        await vi.waitFor(() => expect(notified).toHaveBeenCalledOnce());
+        expect((await work.read(OWNER, projectId)).notice).toBe('12');
+        expect(finished).toBe(false);
+      } finally {
+        release(listed);
+        await task;
+      }
+    }
+  );
+
   it('journals only the removal-time links and never a later link or an empty set', async () => {
     const { laptop, projectId } = await linkedProject();
     const work = memoryShareWorkStore();
