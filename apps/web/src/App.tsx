@@ -4220,6 +4220,9 @@ export function App() {
   } | null>(null);
   const extrudeEditRef = useRef(extrudeEdit);
   extrudeEditRef.current = extrudeEdit;
+  // Panel releases belong to one explicit Extrude launch, including another
+  // launch on the same sketch; draft/profile updates keep that identity.
+  const [extrudeCreateGeneration, setExtrudeCreateGeneration] = useState(0);
   /**
    * The in-place Extrude session running now: a new extrude (by its sketch)
    * or an edit (by its feature and arming), whichever bar is up.
@@ -8639,6 +8642,9 @@ export function App() {
       (best, candidate) => (candidate.area > best.area ? candidate : best),
       chosen[0]!
     );
+    // Explicitly launching Extrude again is a new command, even on the
+    // same sketch. Picking more profiles within it keeps the generation.
+    setExtrudeCreateGeneration((current) => current + 1);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
@@ -20487,9 +20493,9 @@ export function App() {
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
-  // Only an editor takes the stage. Pinned imported/direct-edit details are
-  // read-only, so inspecting them must leave History and other panels open.
-  // Read the active command here rather than inferring it from feature kind.
+  // Editors and creation commands take the stage. Pinned imported/direct-edit
+  // details are read-only, so inspecting them leaves the panels open. Read
+  // the active command rather than inferring it from the selected feature.
   const panelFeature = selectedFeatureNode
     ? doc?.nodes[selectedFeatureNode.id]
     : null;
@@ -20500,7 +20506,9 @@ export function App() {
     sketching: sketchPanelSession,
     editing:
       movePreview === null &&
-      ((tool !== null && tool !== 'transform') ||
+      (inPlace.active ||
+        extrudeSessionKey !== null ||
+        (tool !== null && tool !== 'transform') ||
         (featureSelectionSource === 'pinned' &&
           panelFeature?.kind === 'feature' &&
           (panelFeature.data.featureKind === 'primitive' ||
@@ -20510,7 +20518,13 @@ export function App() {
       sketchPanelSession
         // Acquiring a canonical sketch ID is still the same editing session.
         ? 'active'
-        : `${tool ?? 'edit'}:${featureSelectionSource === 'pinned' ? selectedFeatureNode?.id ?? '' : ''}`
+        : inPlace.sessionId !== null
+          // Picks, options and preview updates keep the same release; even
+          // restarting the same command gets a fresh suspension.
+          ? `command:${inPlace.sessionId}`
+          : extrudeSessionKey !== null
+            ? `extrude:${extrudeSessionKey}:${extrudeCreateGeneration}`
+            : `${tool ?? 'edit'}:${featureSelectionSource === 'pinned' ? selectedFeatureNode?.id ?? '' : ''}`
   });
   useEffect(() => {
     setInPlaceEditFeatureId(
@@ -26471,7 +26485,7 @@ export function App() {
         ? phonePanel === id
         : !panelGeometry.parked[id] || panelLayout.revealed === id));
   /**
-   * A rail press. While a sketch or a drag has the panels stepped aside it is
+   * A rail press. While a sketch or command has the panels stepped aside it is
    * the user asking for them back: the pressed panel opens (or comes forward)
    * and the suspension is released for the rest of that mode, instead of
    * closing a panel nobody can see.
@@ -26489,8 +26503,8 @@ export function App() {
    * Brings History, Parameters or Revisions into view by name, as the
    * palette's feature and parameter results and the undo-floor notice do:
    * unpinned if it was closed, forward if it was open. Asking for it by name
-   * mid-sketch or mid-drag releases the suspension for the rest of that
-   * mode, like a rail press.
+   * mid-sketch or mid-command releases the suspension for the rest of that
+   * session, like a rail press.
    */
   const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
     setPanelLayout((current) =>
@@ -27574,7 +27588,7 @@ export function App() {
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
-          // keeps it open for the rest of the drag.
+          // keeps it open for the rest of the command.
           const hidden = panels.foldHidden;
           setPanelState((current) => ({
             ...current,
@@ -28329,6 +28343,7 @@ export function App() {
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
+            modelPanelsHidden={panelsHidden}
             axisPicker={modelingLocked ? null : inPlaceAxisPicker}
             onPickAxis={inPlace.pickAxis}
             curvePicker={modelingLocked ? null : inPlaceCurvePicker}

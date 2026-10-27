@@ -1157,6 +1157,8 @@ export interface ModelViewerProps {
     | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
+  /** Recheck Extrude clearance when an explicit request restores its panels. */
+  modelPanelsHidden?: boolean;
   /**
    * F01: a host waiting for a body face (an extrude's to-face target). A
    * click then resolves to the nearest face under the pointer only — never
@@ -2175,6 +2177,7 @@ export function ModelViewer({
   onPlacementClick,
   onMeasurePreview,
   regionHandle,
+  modelPanelsHidden = false,
   facePickOnly = false,
   sketchMode,
   sketchTextAnchorRef,
@@ -3255,6 +3258,7 @@ export function ModelViewer({
     const panelObserver = new MutationObserver(() => {
       if (
         (offsetChipRef.current && !offsetChipRef.current.hidden) ||
+        commandRigsRef.current.size > 0 ||
         host.querySelector(`.${SELECTION_CALLOUT_CHIP_CLASS}`)
       ) {
         requestRender();
@@ -3274,6 +3278,9 @@ export function ModelViewer({
       if (layer === watchedLayer) return;
       panelObserver.disconnect();
       watchedLayer = layer;
+      // Suspension can add/remove the whole layer without a later mutation
+      // in it. Reposition command chips against the newly visible obstacles.
+      requestRender();
       if (layer) {
         panelObserver.observe(layer, {
           subtree: true,
@@ -4152,6 +4159,12 @@ export function ModelViewer({
     /** Places each command chip at its handle; hides any off screen. */
     function updateCommandChips() {
       const rigs = commandRigsRef.current;
+      if (rigs.size === 0) {
+        if (E2E_CANVAS_HOOKS_ENABLED) {
+          delete renderer.domElement.dataset.e2eCommandHandles;
+        }
+        return;
+      }
       const owner = keypadAnchorOwnerRef.current;
       // A keypad another chip owns (or none does) is never moved from here.
       const activeId =
@@ -4174,6 +4187,33 @@ export function ModelViewer({
       // the command's Done stands): a chip held on the canvas there sat
       // under the bar and could not be tapped.
       const footTop = rigs.size > 0 ? bottomLaneTop() : null;
+      const stageRect = renderer.domElement.getBoundingClientRect();
+      const chipStage = {
+        left: stageRect.left,
+        right: stageRect.right,
+        top: stageRect.top,
+        bottom:
+          footTop === null
+            ? stageRect.bottom
+            : Math.min(
+                stageRect.bottom,
+                stageRect.top + footTop - COMMAND_CHIP_MARGIN_PX
+              )
+      };
+      const otherPanels = [
+        ...(renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelectorAll<HTMLElement>(MODEL_PANEL_OBSTACLES) ?? [])
+      ]
+        .filter((element) => !element.matches(RIGHT_LANE_MODEL_PANELS))
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      const topbarBottom =
+        otherPanels.length > 0
+          ? renderer.domElement.ownerDocument
+              .querySelector('.app-shell > .topbar')
+              ?.getBoundingClientRect().bottom ?? null
+          : null;
       const chipWidths = new Map(
         [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetWidth])
       );
@@ -4247,13 +4287,33 @@ export function ModelViewer({
                 )
           )
         );
+        // A restored floating window or left dock is outside rightLaneLeft.
+        // Dodge it from the projected position, so repeated frames never
+        // accumulate a shift, and the keypad follows the displayed chip.
+        const dodge =
+          otherPanels.length > 0
+            ? chipPanelDodge(
+                {
+                  left: stageRect.left + x - halfWidth,
+                  right: stageRect.left + x + halfWidth,
+                  top: stageRect.top + y - halfHeight,
+                  bottom: stageRect.top + y + halfHeight
+                },
+                otherPanels,
+                chipStage,
+                laneLeft === null ? null : laneLeft + stageRect.left,
+                topbarBottom
+              )
+            : { dx: 0, dy: 0 };
+        const chipX = x + dodge.dx;
+        const chipY = y + dodge.dy;
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
-        hud.showAt(entry.chip, x, y);
+        hud.showAt(entry.chip, chipX, chipY);
         // The keypad rides the chip it was opened from: the one dragged
         // last, else the first.
         if (valueId === activeId) {
-          keypadAnchorRef.current?.({ x, y });
+          keypadAnchorRef.current?.({ x: chipX, y: chipY });
           anchored = true;
         }
         if (E2E_CANVAS_HOOKS_ENABLED) {
@@ -4262,7 +4322,7 @@ export function ModelViewer({
           const grip = (entry.rig ? entry.rig.group.position : anchor)
             .clone()
             .project(context.activeCamera);
-          const rect = renderer.domElement.getBoundingClientRect();
+          const rect = stageRect;
           e2eHandles[valueId] = {
             x: rect.left + ((grip.x + 1) / 2) * rect.width,
             y: rect.top + ((1 - grip.y) / 2) * rect.height,
@@ -13042,8 +13102,8 @@ export function ModelViewer({
   // tends to leave one — had its arrow and preview drawn under the card.
   // Once the card is laid out, glide the view sideways (no orbit, no zoom)
   // just far enough to put the regions and their arrows in the stage the
-  // panels leave clear. Once per pick: a value change keeps the key, and
-  // an orbit afterwards is the user's own.
+  // panels leave clear. Once per pick or explicit panel request: value
+  // changes and later orbits keep the key. Ending the command never pans.
   const regionClearanceKey = regionHandle
     ? [
         regionHandle.sketchId,
@@ -13055,6 +13115,9 @@ export function ModelViewer({
     : null;
   useEffect(() => {
     const context = contextRef.current;
+    // At phone widths the panel lives in stage-right, outside the observed
+    // dock layer. Every command's chips must reflow when it is revealed.
+    context?.requestRender();
     if (!context || !regionClearanceKey) {
       return;
     }
@@ -13169,7 +13232,7 @@ export function ModelViewer({
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [regionClearanceKey]);
+  }, [regionClearanceKey, modelPanelsHidden]);
 
   // Ghost planes while the Sketch tool waits for one. Installed and torn
   // down with the armed state; the render loop keeps their screen size.

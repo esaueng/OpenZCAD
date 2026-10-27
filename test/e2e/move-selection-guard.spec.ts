@@ -607,6 +607,7 @@ test('a manual Sketch-filter profile pick settles the body Move before taking it
   await expect(move).toHaveCount(0);
   await expect(profileCard).toBeVisible();
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  await revealModelPanel(page, 'History');
   await expect(moveRows).toHaveCount(0);
   await page.keyboard.press('Escape');
 
@@ -617,6 +618,7 @@ test('a manual Sketch-filter profile pick settles the body Move before taking it
   await expect(ask).toHaveCount(0);
   await expect(move).toHaveCount(0);
   await expect(profileCard).toBeVisible();
+  await revealModelPanel(page, 'History');
   await expect(moveRows).toHaveCount(1);
   await expect(page.locator('.feature-row')).toHaveCount(3);
   await expectBodyCount(page, 1);

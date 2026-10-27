@@ -4,7 +4,8 @@ import {
   test,
   expect,
   stubApi,
-  enterCommandValue
+  enterCommandValue,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 test('invalid primitive dimensions never enter saved history', async ({
@@ -25,6 +26,7 @@ test('invalid primitive dimensions never enter saved history', async ({
   await entry.press('Enter');
   await expect(bar).toContainText('-5; Box width takes at least 0.001.');
   await expect(width).toContainText('Width 30');
+  await revealModelPanel(page, 'History');
   await expect(
     page.getByText(
       'No features yet. Pick a tool from the tool rail on the left to start.'

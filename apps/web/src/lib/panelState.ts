@@ -252,10 +252,10 @@ export function defaultPanelState(): PanelState {
 }
 
 /**
- * A sketch wants the stage to itself: it suspends every open model panel
- * (docked, unpinned or in the phone lane) and the command card's "More
- * tools" fold, and gives them back when it ends. A direct-manipulation drag
- * does not: the docks sit beside the model rather than over it, so hiding
+ * A sketch or feature command wants the stage to itself: it suspends every
+ * open model panel (docked, floating, unpinned or in the phone lane) and the
+ * command card's "More tools" fold, and gives them back when it ends. A
+ * direct-manipulation drag does not: the docks sit beside the model, so hiding
  * them mid-gesture only made the panels vanish and the rail jump while the
  * pointer was down. Suspension is not a preference: the stored panel layout
  * and `commandFoldOpen` keep what the user chose. A rail press, or a search that

@@ -14,7 +14,8 @@ import {
   test,
   setInPlaceOptionValues,
   editExtrudeFromHistory,
-  extrudeBar
+  extrudeBar,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 /**
@@ -286,6 +287,7 @@ for (const [units, mmPerUnit] of [
       .locator('.feature-row', { has: extrusion })
       .locator('.history-row-value');
     const expectedSummary = `${12.7 / mmPerUnit} + ${2.54 / mmPerUnit} ${units === 'inch' ? 'in' : units}`;
+    await revealModelPanel(page, 'History');
     await expect(extrusion).toHaveCount(0);
     await testInfo.attach(`${units}-unit-expression-preview`, {
       body: await page.screenshot({

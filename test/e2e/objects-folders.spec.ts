@@ -9,6 +9,7 @@ import {
   expect,
   expectBodyCount,
   promptField,
+  revealModelPanel,
   stubApi,
   test
 } from './openzcad-fixtures';
@@ -202,6 +203,7 @@ for (const operation of ['Union', 'Subtract', 'Intersect'] as const) {
         : 'Click the next body'
     );
     await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
+    await revealModelPanel(page, 'Objects');
     await objectsList(page)
       .getByRole('button', { name: 'Lug', exact: true })
       .click();

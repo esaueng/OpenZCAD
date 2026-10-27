@@ -11,7 +11,8 @@ import {
   test,
   chooseInPlaceOption,
   extrudeBar,
-  setInPlaceOptionValues
+  setInPlaceOptionValues,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 interface ExtrudeSync {
@@ -159,34 +160,35 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
   await expectBodyCount(page, 1);
   await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
   await page.keyboard.press('e');
+  await revealModelPanel(page, 'History');
   await chooseInPlaceOption(page, 'Extrude', 'Operation', 'Cut');
   await setInPlaceOptionValues(page, 'Extrude', { Distance: '-8' });
 
+  // A sync request names a candidate, not a finished preview. Panel/layout
+  // renders can let a newer candidate supersede it before it reaches the
+  // viewer: freeze the exact IDs only once that latest preview is visible.
+  let preview: ExtrudeSync | undefined;
   await expect
-    .poll(async () => {
-      const entries = await syncs();
-      return entries.some(
-        (entry) =>
-          entry.requestId !== null &&
-          entry.feature.data.operation === 'cut' &&
-          entry.feature.data.distance === -8
-      );
-    })
-    .toBe(true);
-  const previews = (await syncs()).filter(
-    (entry) =>
-      entry.requestId !== null &&
-      entry.feature.data.operation === 'cut' &&
-      entry.feature.data.distance === -8
-  );
-  const preview = previews.at(-1);
+    .poll(
+      async () => {
+        const candidate = (await syncs())
+          .filter(
+            (entry) =>
+              entry.requestId !== null &&
+              entry.feature.data.operation === 'cut' &&
+              entry.feature.data.distance === -8
+          )
+          .at(-1);
+        if (!candidate) return undefined;
+        const radius = (await readWall(candidate.feature.bodyId))?.radius;
+        if (radius === 2.5) preview = candidate;
+        return radius;
+      },
+      { timeout: 30_000 }
+    )
+    .toBe(2.5);
   expect(preview).toBeDefined();
   const resultBodyId = preview!.feature.bodyId;
-  await expect
-    .poll(async () => (await readWall(resultBodyId))?.radius, {
-      timeout: 30_000
-    })
-    .toBe(2.5);
   const previewWall = await readWall(resultBodyId);
   expect(previewWall?.surfaceType).toBe('cylinder');
   expect(previewWall?.axisStart).toBeDefined();

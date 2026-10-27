@@ -6,7 +6,8 @@ import {
   setSelectionFilter,
   locateEdge,
   enterCommandValue,
-  finishInPlaceCommand
+  finishInPlaceCommand,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 /**
@@ -43,6 +44,7 @@ for (const [tool, valueId, chip] of [
     await expect(page.getByTestId(`command-handle-${valueId}`)).toHaveText(
       `${chip} 1 mm`
     );
+    await revealModelPanel(page, 'History');
     await expect(page.locator('.feature-row')).toHaveCount(1);
     await finishInPlaceCommand(page, tool);
     const feature = page.locator('.feature-row', {
@@ -199,6 +201,7 @@ test('a new fillet keeps its edges lit across an undo', async ({ page }) => {
   const lit = await canvas.getAttribute('data-e2e-selected-edges');
   expect(lit).toBeTruthy();
   await page.keyboard.press('ControlOrMeta+z');
+  await revealModelPanel(page, 'History');
   await expect(page.locator('.feature-row')).toHaveCount(1);
   // The command still holds the edge, and it is still the one lit.
   await expect(bar).toContainText('1 edge · click more');

@@ -137,10 +137,14 @@ async function startExtrude(page: Page, canvas: Locator) {
   await expect(page.locator('form.feature-form')).toHaveCount(0);
   // Done waits for a distance.
   await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
+  // Request the saved dock before placing the handles, so this geometry
+  // journey keeps the same obstacles and chip positions throughout.
+  await revealModelPanel(page, 'History');
   await setInPlaceOptionValues(page, 'Extrude', { Distance: '10' });
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
     timeout: 30_000
   });
+  await waitForStillViewport(page);
   return bar;
 }
 
@@ -178,9 +182,16 @@ test('Extrude in place: a draft dragged on its wall, typed on its chip, refused 
   const [target] = await projected(canvas, [
     [40, side + inward * radius * Math.sin(lean), radius * Math.cos(lean)]
   ]);
-  await page.mouse.move(grip.x, grip.y);
+  // The Back chip can sit over the ball's lower half after panels return;
+  // press the exposed upper half, as the back-arrow gesture below does.
+  const press = { x: grip.x, y: grip.y - 6 };
+  await page.mouse.move(press.x, press.y);
   await page.mouse.down();
-  await page.mouse.move(target!.x, target!.y, { steps: 12 });
+  await page.mouse.move(
+    press.x + target!.x - grip.x,
+    press.y + target!.y - grip.y,
+    { steps: 12 }
+  );
   await page.mouse.up();
   const chip = page.getByTestId('command-handle-draftAngle');
   await expect(chip).toHaveText(/^Draft (\d+)°$/);
@@ -323,6 +334,7 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
     })
     .toBe(1);
   const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
+  await revealModelPanel(page, 'History');
 
   // The region arrow's chip is the same Distance as the bar's: Enter sets
   // it and leaves the command open for Options and Done.

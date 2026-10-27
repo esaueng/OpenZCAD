@@ -107,7 +107,9 @@ async function startTool(page: Page, tool: RegExp, title: string) {
   await expect(bar).toBeVisible();
   await expect(page.locator('form.feature-form')).toHaveCount(0);
   // Folded again, so it stands over nothing a later click aims at.
-  await moreTools.click();
+  if ((await moreTools.getAttribute('aria-expanded')) === 'true') {
+    await moreTools.click();
+  }
   return bar;
 }
 
