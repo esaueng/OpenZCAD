@@ -25,7 +25,7 @@ import {
 // U08 / #951: creation commands own the same temporary room as History
 // edits. Exercise the real entry paths, with docked, unpinned and floating
 // panels, rather than seeding model-only and hiding the missing suspension.
-async function openWorkspace(page: Page) {
+async function openWorkspace(page: Page, { locked = true } = {}) {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await stubApi(page, {
     panelLayout: {
@@ -41,7 +41,7 @@ async function openWorkspace(page: Page) {
           panels: ['diagnostics']
         }
       ],
-      options: { compact: true, locked: true, width: 'narrow' }
+      options: { compact: true, locked, width: 'narrow' }
     }
   });
   let document = addSketchFeature(
@@ -377,6 +377,59 @@ test('a phone panel request repaints non-Extrude command chips and leaves them t
   await enterCommandValue(page, 'height', '12');
   await expect(chip).toHaveText('Height 12 mm');
   await expect(modelPanel(page, 'History')).toBeVisible();
+});
+
+test('a restored floating panel leaves command values and their keypad accessible', async ({
+  page
+}) => {
+  await openWorkspace(page, { locked: false });
+  await page.keyboard.press('b');
+  await revealModelPanel(page, 'Diagnostics');
+  const chip = page.getByTestId('command-handle-height');
+  const chipRect = (await chip.boundingBox())!;
+  const window = page.locator('.panel-float');
+  const bounds = (await window.boundingBox())!;
+  const grip = (await modelPanel(page, 'Diagnostics')
+    .locator('.model-panel-title')
+    .boundingBox())!;
+  const dx = chipRect.x + chipRect.width / 2 - 100 - bounds.x;
+  const dy = chipRect.y + chipRect.height / 2 - 80 - bounds.y;
+  const press = { x: grip.x + 12, y: grip.y + grip.height / 2 };
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down();
+  await page.mouse.move(press.x + dx, press.y + dy, { steps: 12 });
+  await page.mouse.up();
+  const restored = (await window.boundingBox())!;
+  // Restarting the same command hides that saved window again. Its new
+  // height chip now has its model anchor underneath the window's saved spot.
+  await launch(page, 'Box');
+  await expectSuspended(page);
+  await waitForStillViewport(page);
+  const covered = (await chip.boundingBox())!;
+  const center = {
+    x: covered.x + covered.width / 2,
+    y: covered.y + covered.height / 2
+  };
+  expect(center.x).toBeGreaterThan(restored.x);
+  expect(center.x).toBeLessThan(restored.x + restored.width);
+  expect(center.y).toBeGreaterThan(restored.y);
+  expect(center.y).toBeLessThan(restored.y + restored.height);
+  await revealModelPanel(page, 'Diagnostics');
+  await expect
+    .poll(() =>
+      chip.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return (
+          document
+            .elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+            ?.closest('[data-testid="command-handle-height"]') === element
+        );
+      })
+    )
+    .toBe(true);
+  await enterCommandValue(page, 'height', '12');
+  await expect(chip).toHaveText('Height 12 mm');
+  await expect(modelPanel(page, 'Diagnostics')).toBeVisible();
 });
 
 test('an asynchronously loaded Image starts a suspended creation session and Cancel restores it', async ({

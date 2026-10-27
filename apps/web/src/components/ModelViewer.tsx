@@ -4159,6 +4159,12 @@ export function ModelViewer({
     /** Places each command chip at its handle; hides any off screen. */
     function updateCommandChips() {
       const rigs = commandRigsRef.current;
+      if (rigs.size === 0) {
+        if (E2E_CANVAS_HOOKS_ENABLED) {
+          delete renderer.domElement.dataset.e2eCommandHandles;
+        }
+        return;
+      }
       const owner = keypadAnchorOwnerRef.current;
       // A keypad another chip owns (or none does) is never moved from here.
       const activeId =
@@ -4181,6 +4187,33 @@ export function ModelViewer({
       // the command's Done stands): a chip held on the canvas there sat
       // under the bar and could not be tapped.
       const footTop = rigs.size > 0 ? bottomLaneTop() : null;
+      const stageRect = renderer.domElement.getBoundingClientRect();
+      const chipStage = {
+        left: stageRect.left,
+        right: stageRect.right,
+        top: stageRect.top,
+        bottom:
+          footTop === null
+            ? stageRect.bottom
+            : Math.min(
+                stageRect.bottom,
+                stageRect.top + footTop - COMMAND_CHIP_MARGIN_PX
+              )
+      };
+      const otherPanels = [
+        ...(renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelectorAll<HTMLElement>(MODEL_PANEL_OBSTACLES) ?? [])
+      ]
+        .filter((element) => !element.matches(RIGHT_LANE_MODEL_PANELS))
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      const topbarBottom =
+        otherPanels.length > 0
+          ? renderer.domElement.ownerDocument
+              .querySelector('.app-shell > .topbar')
+              ?.getBoundingClientRect().bottom ?? null
+          : null;
       const chipWidths = new Map(
         [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetWidth])
       );
@@ -4254,13 +4287,33 @@ export function ModelViewer({
                 )
           )
         );
+        // A restored floating window or left dock is outside rightLaneLeft.
+        // Dodge it from the projected position, so repeated frames never
+        // accumulate a shift, and the keypad follows the displayed chip.
+        const dodge =
+          otherPanels.length > 0
+            ? chipPanelDodge(
+                {
+                  left: stageRect.left + x - halfWidth,
+                  right: stageRect.left + x + halfWidth,
+                  top: stageRect.top + y - halfHeight,
+                  bottom: stageRect.top + y + halfHeight
+                },
+                otherPanels,
+                chipStage,
+                laneLeft === null ? null : laneLeft + stageRect.left,
+                topbarBottom
+              )
+            : { dx: 0, dy: 0 };
+        const chipX = x + dodge.dx;
+        const chipY = y + dodge.dy;
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
-        hud.showAt(entry.chip, x, y);
+        hud.showAt(entry.chip, chipX, chipY);
         // The keypad rides the chip it was opened from: the one dragged
         // last, else the first.
         if (valueId === activeId) {
-          keypadAnchorRef.current?.({ x, y });
+          keypadAnchorRef.current?.({ x: chipX, y: chipY });
           anchored = true;
         }
         if (E2E_CANVAS_HOOKS_ENABLED) {
@@ -4269,7 +4322,7 @@ export function ModelViewer({
           const grip = (entry.rig ? entry.rig.group.position : anchor)
             .clone()
             .project(context.activeCamera);
-          const rect = renderer.domElement.getBoundingClientRect();
+          const rect = stageRect;
           e2eHandles[valueId] = {
             x: rect.left + ((grip.x + 1) / 2) * rect.width,
             y: rect.top + ((1 - grip.y) / 2) * rect.height,
