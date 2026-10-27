@@ -552,6 +552,9 @@ function asApiError(error: unknown): unknown {
 const integrity = (reason: EncryptedIntegrityReason, message: string) =>
   new EncryptedProjectIntegrityError(reason, message);
 
+/** A concurrent owner refresh may prune a cursor between log pages. */
+class VersionHistoryPageChanged extends Error {}
+
 function logFailure(error: VersionLogError): EncryptedProjectIntegrityError {
   switch (error.reason) {
     case 'pinned-missing':
@@ -848,8 +851,7 @@ export function createEncryptedProjectStore(
         head.documentVersion
       );
       if (page.log[0]?.versionHash !== last.versionHash) {
-        throw integrity(
-          'fork',
+        throw new VersionHistoryPageChanged(
           'The account’s version history pages do not join.'
         );
       }
@@ -1220,12 +1222,19 @@ export function createEncryptedProjectStore(
           `The account offered version ${head.documentVersion} of this project, older than version ${pin.documentVersion} this browser already accepted. Your work stays on this device.`
         );
       }
-      const entries = await collectLog(
-        projectId,
-        metadata.log,
-        metadata.more,
-        head
-      );
+      let entries: E2eeVersionLogEntry[];
+      try {
+        entries = await collectLog(
+          projectId,
+          metadata.log,
+          metadata.more,
+          head
+        );
+      } catch (error) {
+        if (!(error instanceof VersionHistoryPageChanged)) throw error;
+        if (attempt < 2) continue;
+        throw integrity('fork', error.message);
+      }
       await verifyLog(projectId, pinHash, entries);
       const author = await authorOf(projectId, envelope, bytes(head.signature));
       const header = author.header;
@@ -2004,8 +2013,7 @@ export function createEncryptedProjectStore(
       const page = await api.versions(projectId, from, head.documentVersion);
       const last = entries.at(-1);
       if (last && page.log[0]?.versionHash !== last.versionHash) {
-        throw integrity(
-          'fork',
+        throw new VersionHistoryPageChanged(
           'The account’s version history pages do not join.'
         );
       }
@@ -2059,11 +2067,19 @@ export function createEncryptedProjectStore(
           `The room offered version ${record.documentVersion} of this project, older than version ${pin.documentVersion} this browser already accepted. Your work stays on this device.`
         );
       }
-      const entries = await roomLog(
-        projectId,
-        pin && pinHash ? pin.documentVersion : undefined,
-        record
-      );
+      let entries: E2eeVersionLogEntry[];
+      try {
+        entries = await roomLog(
+          projectId,
+          pin && pinHash ? pin.documentVersion : undefined,
+          record
+        );
+      } catch (error) {
+        if (!(error instanceof VersionHistoryPageChanged)) throw error;
+        // The old relayed head lost its proof. Read the current account head
+        // from the original durable pin; never accept the incomplete chain.
+        return readHead(projectId);
+      }
       await verifyLog(projectId, pinHash, entries);
       const author = await authorOf(
         projectId,

@@ -698,6 +698,73 @@ describe('registering a link (slice 8-C1)', { timeout: 120_000 }, () => {
 });
 
 describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
+  it.each(['account', 'room'] as const)(
+    'restarts a %s read when an owner refresh prunes its page cursor',
+    async (mode) => {
+      const { srv, laptop, member, projectId, document } =
+        await linkedProject();
+      const baseline = head(srv, projectId).document_version;
+      const columns = (
+        srv.db.prepare("PRAGMA table_info('e2ee_project_versions')").all() as {
+          name: string;
+        }[]
+      ).map((column) => column.name);
+      const selected = columns
+        .map((name) =>
+          name === 'document_version' ||
+          name === 'version_hash' ||
+          name === 'signer_user_id'
+            ? '?'
+            : name === 'envelope_inline' || name === 'envelope_key'
+              ? 'NULL'
+              : name
+        )
+        .join(', ');
+      const insert = srv.db
+        .prepare(`INSERT INTO e2ee_project_versions (${columns.join(', ')}) SELECT ${selected}
+      FROM e2ee_project_versions WHERE project_id = ? AND document_version = ?`);
+      for (let index = 1; index <= 4096; index++)
+        insert.run(
+          baseline + index,
+          index.toString(16).padStart(64, '0'),
+          OTHER,
+          projectId,
+          baseline
+        );
+      srv.db
+        .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+        .run(baseline + 4096, projectId);
+      await writeWithLinks(srv, member, projectId, document, {
+        grants: [],
+        tombstones: []
+      });
+      const prior = await member.documents.loadDocument(projectId);
+      const fresh = reload(srv, laptop, {
+        members: othersOf(owner),
+        pins: memoryVersionPins()
+      });
+      let pages = 0;
+      let refreshed = false;
+      fresh.before = async (path) => {
+        if (!path.includes('/versions?')) return;
+        pages++;
+        if (refreshed || pages !== (mode === 'account' ? 1 : 2)) return;
+        refreshed = true;
+        await writeWithLinks(srv, laptop, projectId, document, {
+          grants: [],
+          tombstones: []
+        });
+      };
+      const opened =
+        mode === 'account'
+          ? await fresh.store.loadProject(projectId)
+          : await fresh.store
+              .roomAccess()
+              .openHead(projectId, prior.metadata.head, prior.envelope);
+      expect(refreshed).toBe(true);
+      expect(opened.version).toBe(head(srv, projectId).document_version);
+    }
+  );
   it.each([false, true])(
     'accepts a directly verified legacy owner parent followed by an unchanged editor save (V1=%s)',
     async (legacy) => {
