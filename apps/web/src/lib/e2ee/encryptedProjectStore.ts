@@ -79,6 +79,7 @@ import {
   verifyProjectEnvelopeSignature,
   verifyVersionLog,
   versionHash,
+  projectStateCode as computeProjectStateCode,
   wrapKey,
   type BodyEnvelopeHeader,
   type EncryptedDocumentBody,
@@ -320,6 +321,7 @@ export const E2EE_CONTENT_UNAVAILABLE_MESSAGE =
 
 /** What this page remembers of a project's accepted head. */
 interface HeadState {
+  readonly stateCode: string | null;
   readonly version: number;
   readonly hash: string;
   readonly keyEpoch: number;
@@ -360,6 +362,8 @@ export interface EncryptedCopyRequest {
 }
 
 export interface EncryptedProjectStore {
+  /** Full comparison code of this page's verified current head, if available. */
+  stateCode?(projectId: string): string | null;
   createProject(request: CreateProjectRequest): Promise<CreateProjectResponse>;
   /** Stores a copy or branch of an encrypted project (slice 4-8). */
   copyProject(request: EncryptedCopyRequest): Promise<CreateProjectResponse>;
@@ -639,6 +643,22 @@ export function createEncryptedProjectStore(
     ctx.seal ?? ((job) => sealDocumentJob({ type: 'seal-document', ...job }));
   const now = ctx.now ?? Date.now;
   const heads = new Map<string, HeadState>();
+  /** A completed older request cannot replace a newer verified local head. */
+  function installHead(projectId: string, state: HeadState): HeadState {
+    const current = heads.get(projectId);
+    if (current && current.version > state.version) return current;
+    if (
+      current &&
+      current.version === state.version &&
+      current.hash !== state.hash
+    )
+      throw integrity(
+        'fork',
+        'Two different verified heads claim the same project version.'
+      );
+    heads.set(projectId, state);
+    return state;
+  }
   /**
    * Versions this page wrote that changed only the share-link set (slice
    * 5-10), from the head the page's document named to the one they left:
@@ -832,12 +852,23 @@ export function createEncryptedProjectStore(
     projectId: string,
     envelope: Uint8Array,
     signature: Uint8Array
-  ): Promise<VerifiedAuthor> {
+  ): Promise<VerifiedAuthor & { readonly identityKeyHash: Uint8Array }> {
     try {
-      return await verifyAuthoredEnvelope(envelope, signature, {
-        deviceLists: await projectDeviceLists(groups, projectId),
+      const deviceLists = await projectDeviceLists(groups, projectId);
+      const identities = new Map(
+        deviceLists.map((list) => [
+          list.userId,
+          new Uint8Array(list.identityKeyHash)
+        ])
+      );
+      const author = await verifyAuthoredEnvelope(envelope, signature, {
+        deviceLists,
         cutoffs: await cutoffsFor(projectId)
       });
+      return {
+        ...author,
+        identityKeyHash: identities.get(author.userId)!
+      };
     } catch (error) {
       if (error instanceof AuthorshipError) {
         throw integrity(
@@ -1327,6 +1358,13 @@ export function createEncryptedProjectStore(
           updatedAt
         });
       }
+      const stateCode = (
+        await computeProjectStateCode({
+          versionHash: author.versionHash,
+          documentVersion: header.documentVersion,
+          signerKeyHash: author.identityKeyHash
+        })
+      ).code;
       const accepted = await pins.advance(userId, projectId, pinHash, {
         headHash: hash,
         documentVersion: header.documentVersion,
@@ -1343,6 +1381,7 @@ export function createEncryptedProjectStore(
         hash
       });
       const state: HeadState = {
+        stateCode,
         version: header.documentVersion,
         hash,
         keyEpoch: header.keyEpoch,
@@ -1355,8 +1394,7 @@ export function createEncryptedProjectStore(
           pin?.infoSequence ?? 0
         )
       };
-      heads.set(projectId, state);
-      return state;
+      return installHead(projectId, state);
     }
     throw integrity(
       'fork',
@@ -1763,6 +1801,13 @@ export function createEncryptedProjectStore(
           'The account stored another version than this browser sent.'
         );
       }
+      const stateCode = (
+        await computeProjectStateCode({
+          versionHash: fromHex(sealed.hash),
+          documentVersion: response.version,
+          signerKeyHash: list().identityKeyHash
+        })
+      ).code;
       await pins.advance(userId, projectId, head.hash, {
         headHash: sealed.hash,
         documentVersion: response.version,
@@ -1792,6 +1837,7 @@ export function createEncryptedProjectStore(
         linkOnly.delete(projectId);
       }
       const state: HeadState = {
+        stateCode,
         version: response.version,
         hash: sealed.hash,
         keyEpoch: sealed.keyEpoch,
@@ -1801,9 +1847,10 @@ export function createEncryptedProjectStore(
         infoName: head.infoName,
         infoSequence: head.infoSequence
       };
-      heads.set(projectId, state);
-      await syncInfo(projectId, state);
-      written(projectId, state);
+      if (installHead(projectId, state) === state) {
+        await syncInfo(projectId, state);
+        written(projectId, state);
+      }
       return { response, document: sealed.document };
     }
   }
@@ -2160,6 +2207,13 @@ export function createEncryptedProjectStore(
         author.userId,
         body.shareLinks
       );
+      const stateCode = (
+        await computeProjectStateCode({
+          versionHash: author.versionHash,
+          documentVersion: header.documentVersion,
+          signerKeyHash: author.identityKeyHash
+        })
+      ).code;
       const advanced = await pins.advance(userId, projectId, pinHash, {
         headHash: hash,
         documentVersion: header.documentVersion,
@@ -2171,6 +2225,7 @@ export function createEncryptedProjectStore(
         if (current?.headHash !== hash) continue;
       }
       const state: HeadState = {
+        stateCode,
         version: header.documentVersion,
         hash,
         keyEpoch: header.keyEpoch,
@@ -2183,8 +2238,7 @@ export function createEncryptedProjectStore(
           pin?.infoSequence ?? 0
         )
       };
-      heads.set(projectId, state);
-      return state;
+      return installHead(projectId, state);
     }
     throw integrity(
       'fork',
@@ -2239,6 +2293,15 @@ export function createEncryptedProjectStore(
           'The room stored another version than this browser sent.'
         );
       }
+      const stateCode = roomSealed.has(sealed)
+        ? (
+            await computeProjectStateCode({
+              versionHash: fromHex(sealed.hash),
+              documentVersion: sealed.version,
+              signerKeyHash: list().identityKeyHash
+            })
+          ).code
+        : null;
       const advanced = await pins.advance(userId, projectId, base.hash, {
         headHash: sealed.hash,
         documentVersion: sealed.version,
@@ -2258,6 +2321,7 @@ export function createEncryptedProjectStore(
       }
       const previous = heads.get(projectId);
       const state: HeadState = {
+        stateCode,
         version: sealed.version,
         hash: sealed.hash,
         keyEpoch: sealed.keyEpoch,
@@ -2267,8 +2331,9 @@ export function createEncryptedProjectStore(
         infoName: previous?.infoName ?? null,
         infoSequence: previous?.infoSequence ?? 0
       };
-      heads.set(projectId, state);
       const ours = roomSealed.delete(sealed);
+      const accepted = installHead(projectId, state);
+      if (accepted !== state) return accepted;
       // The shelf's name follows the document, as after an account save:
       // through the project info's own chain (slice 4-7), keeping its
       // thumbnail and archived exports.
@@ -2476,13 +2541,21 @@ export function createEncryptedProjectStore(
       throw new Error('The encrypted project was not created.');
     }
     const { sealed, state, infoHash } = created;
+    const stateCode = (
+      await computeProjectStateCode({
+        versionHash: fromHex(sealed.hash),
+        documentVersion: sealed.document.version,
+        signerKeyHash: list().identityKeyHash
+      })
+    ).code;
     await pins.advance(userId, projectId, null, {
       headHash: sealed.hash,
       documentVersion: sealed.document.version,
       keyEpoch: 0
     });
     await pins.advanceInfo(userId, projectId, 1, infoHash);
-    heads.set(projectId, {
+    installHead(projectId, {
+      stateCode,
       version: sealed.document.version,
       hash: sealed.hash,
       keyEpoch: 0,
@@ -2537,6 +2610,7 @@ export function createEncryptedProjectStore(
   }
 
   return {
+    stateCode: (projectId) => heads.get(projectId)?.stateCode ?? null,
     createProject: guarded(async (request) => {
       writableDevice();
       const ownerUserId = userId as UserId;

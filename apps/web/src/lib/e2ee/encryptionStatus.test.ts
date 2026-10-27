@@ -52,6 +52,25 @@ const lockedError = () =>
 beforeEach(() => resetEncryptionStatus());
 
 describe('encryption status store', () => {
+  it('keeps full codes with verified heads and hides them while locked, refused or forgotten', () => {
+    const code = '01234 56789 01234 56789 01234 56789 01234 56789';
+    reportHeadVerified('proj_a', code);
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    reportVerificationWarning('proj_a', STALE);
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    reportKeysLocked();
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    reportKeysUnlocked();
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    reportEncryptedFailure('proj_a', integrityError());
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    reportHeadVerified('proj_a', code);
+    reportHeadVerified('proj_a');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    reportHeadVerified('proj_a', code);
+    beginKeySessionTeardown();
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+  });
   it('starts unverified and shows a verified head', () => {
     expect(encryptionStatusOf('proj_a').state).toBe('unverified');
     reportHeadVerified('proj_a');
@@ -177,6 +196,7 @@ describe('encryption status reports from the encrypted store', () => {
   const record = {} as E2eeStoredVersion;
 
   function fakeStore(fail: Error | null = null) {
+    retainEncryptionStatus('proj_a');
     const outcome = <T>(value: T) =>
       vi.fn(async () => {
         if (fail) throw fail;
@@ -259,12 +279,72 @@ describe('encryption status reports from the encrypted store', () => {
     expect(encryptionStatusOf('proj_a').state).toBe('unverified');
   });
 
+  it('transfers only the store’s verified code and ignores completion after teardown', async () => {
+    const { store } = fakeStore();
+    const code = '01234 56789 01234 56789 01234 56789 01234 56789';
+    store.stateCode = vi.fn(() => code);
+    let current = true;
+    const reporting = reportingEncryptedProjectStore(store, () => current);
+    await reporting.loadProject('proj_a');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+    resetEncryptionStatus();
+    const pending = reporting.loadProject('proj_a');
+    current = false;
+    await pending;
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+  });
+
+  it('does not recreate a closed project’s code or failure from a late operation', async () => {
+    const { store } = fakeStore();
+    const code = '01234 56789 01234 56789 01234 56789 01234 56789';
+    store.stateCode = () => code;
+    let finish!: (value: ProjectDocument) => void;
+    store.loadProject = vi.fn(
+      () =>
+        new Promise<ProjectDocument>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const reporting = reportingEncryptedProjectStore(store, () => true);
+    retainEncryptionStatus('proj_a');
+    const pending = reporting.loadProject('proj_a');
+    retainEncryptionStatus('proj_b');
+    finish(document);
+    await pending;
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+    retainEncryptionStatus('proj_a');
+    store.loadProject = vi.fn(async () => {
+      throw new TypeError('Offline');
+    });
+    await expect(reporting.loadProject('proj_a')).rejects.toThrow('Offline');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeUndefined();
+    store.loadProject = vi.fn(async () => document);
+    await reporting.loadProject('proj_a');
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBe(code);
+
+    let fail!: (error: Error) => void;
+    store.loadRevision = vi.fn(
+      () =>
+        new Promise<ProjectDocument>((_resolve, reject) => {
+          fail = reject;
+        })
+    );
+    const oldRead = reporting.loadRevision('proj_a', 'rev_old');
+    retainEncryptionStatus('proj_b');
+    fail(integrityError());
+    await expect(oldRead).rejects.toBeInstanceOf(
+      EncryptedProjectIntegrityError
+    );
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+  });
+
   it('reports an integrity failure from any path and rethrows it', async () => {
     const error = integrityError();
     const { store } = fakeStore(error);
     const reporting = reportingEncryptedProjectStore(store, () => true);
     await expect(reporting.loadProject('proj_a')).rejects.toBe(error);
     expect(encryptionStatusOf('proj_a').state).toBe('problem');
+    retainEncryptionStatus('proj_b');
     await expect(
       reporting.roomAccess().openHead('proj_b', record, null)
     ).rejects.toBe(error);
@@ -272,6 +352,7 @@ describe('encryption status reports from the encrypted store', () => {
     await expect(reporting.loadRevision('proj_c', 'rev_1')).rejects.toBe(error);
     expect(encryptionStatusOf('proj_c').state).toBe('problem');
     // The room's blob repair (slice 5-6) goes through the same report.
+    retainEncryptionStatus('proj_d');
     await expect(
       reporting.roomAccess().restoreBlobs('proj_d', ['blob_1'])
     ).rejects.toBe(error);
@@ -331,5 +412,20 @@ describe('encryption status reports from the encrypted store', () => {
   it('classifies a locked key session as locked', () => {
     reportEncryptedFailure(null, lockedError());
     expect(encryptionStatusOf('proj_a').state).toBe('locked');
+  });
+
+  it('ignores room operations that only start after their project closed', async () => {
+    const { store } = fakeStore();
+    store.stateCode = () => '01234 56789 01234 56789 01234 56789 01234 56789';
+    const reporting = reportingEncryptedProjectStore(store, () => true);
+    retainEncryptionStatus('proj_b');
+    await reporting.roomAccess().openHead('proj_a', record, null);
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+    retainEncryptionStatus(null);
+    await reporting.roomAccess().openHead('proj_a', record, null);
+    expect(encryptionStatusOf('proj_a')).toEqual({ state: 'unverified' });
+    retainEncryptionStatus('proj_a');
+    await reporting.roomAccess().openHead('proj_a', record, null);
+    expect(encryptionStatusOf('proj_a').projectStateCode).toBeDefined();
   });
 });

@@ -269,6 +269,68 @@ async function edit(
 }
 
 describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
+  it('does not decode after a codec download completes for a disposed room', async () => {
+    const base = createProjectDocument(
+      'Downloading codec',
+      toUserId('user_codec_download')
+    );
+    let release!: () => void;
+    loadEncryptedRoomCodec.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(codec);
+        })
+    );
+    const { rerender, onRemoteDocument, unmount } = await connectedOwner(base);
+    expect(codec.decode).not.toHaveBeenCalled();
+    rerender({
+      document: createProjectDocument('Different room', base.ownerUserId)
+    });
+    await flush();
+    act(() => release());
+    await flush();
+    expect(codec.decode).not.toHaveBeenCalled();
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('does not start a queued decode after its room is disposed by navigation', async () => {
+    const base = createProjectDocument(
+      'Old room',
+      toUserId('user_queued_decode')
+    );
+    const { socket, rerender, onRemoteDocument, unmount } =
+      await connectedOwner(base);
+    codec.decode.mockClear();
+    onRemoteDocument.mockClear();
+    let release!: () => void;
+    codec.decode.mockImplementationOnce(
+      (raw) =>
+        new Promise((resolve) => {
+          release = () => resolve(fakeDecode(raw));
+        })
+    );
+    socket.receive({
+      type: 'e2ee-document',
+      clientId: 'remote_first',
+      head: { plain: withBox(base, 'First') }
+    });
+    socket.receive({
+      type: 'e2ee-document',
+      clientId: 'remote_second',
+      head: { plain: withBox(base, 'Second') }
+    });
+    await flush();
+    expect(codec.decode).toHaveBeenCalledTimes(1);
+    rerender({ document: createProjectDocument('New room', base.ownerUserId) });
+    await flush();
+    act(() => release());
+    await flush();
+    expect(codec.decode).toHaveBeenCalledTimes(1);
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it('sends sealed envelopes, never a plaintext document, and reports the account version', async () => {
     const base = createProjectDocument('Sealed', toUserId('user_sealed'));
     const { socket, rerender, result, onAccountVersion, unmount } =

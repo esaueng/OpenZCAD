@@ -37,6 +37,7 @@ import {
   type EncryptedShareLinkClient
 } from './EncryptedShareLinks';
 import type { OwnerInvitation } from '../lib/e2ee/invitations';
+import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
 import {
   PrivateEmailInput,
   usePersonalInfoVisible
@@ -321,6 +322,9 @@ export function ProjectSharingDialog({
   onLeft,
   onClose
 }: ProjectSharingDialogProps) {
+  const encryption = useEncryptionStatus(
+    encrypted && !localProject ? projectId : null
+  );
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const shareLinkUrlRef = useRef<HTMLInputElement | null>(null);
   const [sharing, setSharing] = useState<ProjectSharingResponse | null>(null);
@@ -620,6 +624,30 @@ export function ProjectSharingDialog({
         </header>
 
         <div className="sharing-body">
+          {encrypted && !localProject ? (
+            <section
+              className="sharing-section sharing-state-comparison"
+              aria-label="Project state code"
+            >
+              <h3>Project state code</h3>
+              {encryption.projectStateCode ? (
+                <>
+                  <code className="sharing-state-code">
+                    {encryption.projectStateCode}
+                  </code>
+                  <p className="sharing-empty">
+                    After loading the latest saved version, compare this full
+                    code with your collaborator outside OpenZCAD. Matching codes
+                    confirm you see the same saved project state.
+                  </p>
+                </>
+              ) : (
+                <p className="sharing-empty">
+                  Load and verify the project to compare its state code.
+                </p>
+              )}
+            </section>
+          ) : null}
           <p
             className="sharing-status-line"
             data-tone={error ? 'error' : busy ? 'busy' : undefined}

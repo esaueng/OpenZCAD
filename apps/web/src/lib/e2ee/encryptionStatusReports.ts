@@ -10,7 +10,11 @@ import type {
   EncryptedProjectStore,
   EncryptedRoomAccess
 } from './encryptedProjectStore';
-import { reportEncryptedFailure, reportHeadVerified } from './encryptionStatus';
+import {
+  beginEncryptionStatusReport,
+  reportEncryptedFailure,
+  reportHeadVerified
+} from './encryptionStatus';
 
 /**
  * `current` says whether the key session that opened the store is still
@@ -20,27 +24,41 @@ export function reportingEncryptedProjectStore(
   store: EncryptedProjectStore,
   current: () => boolean
 ): EncryptedProjectStore {
-  const verifiedHead = <R>(
+  const verifiedHead = async <R>(
     run: () => Promise<R>,
     projectIdOf: (result: R) => string,
-    projectId: string | null
-  ): Promise<R> =>
-    run().then(
-      (result) => {
-        if (current()) reportHeadVerified(projectIdOf(result));
-        return result;
-      },
-      (error: unknown) => {
-        if (current()) reportEncryptedFailure(projectId, error);
-        throw error;
+    projectId: string | null,
+    retainedOnly = false
+  ): Promise<R> => {
+    const report = beginEncryptionStatusReport(projectId, retainedOnly);
+    try {
+      const result = await run();
+      if (report() && current()) {
+        const id = projectIdOf(result);
+        reportHeadVerified(id, store.stateCode?.(id));
       }
-    );
-  /** A read that checks a project without opening or writing its head. */
-  const checked = <R>(run: () => Promise<R>, projectId: string): Promise<R> =>
-    run().catch((error: unknown) => {
-      if (current()) reportEncryptedFailure(projectId, error);
+      return result;
+    } catch (error) {
+      if (report() && current()) reportEncryptedFailure(projectId, error);
       throw error;
-    });
+    }
+  };
+  /** A read that checks a project without opening or writing its head. */
+  const checked = async <R>(
+    run: () => Promise<R>,
+    projectId: string,
+    retainedOnly = false
+  ): Promise<R> => {
+    const report = beginEncryptionStatusReport(projectId, retainedOnly);
+    try {
+      const result = await run();
+      report();
+      return result;
+    } catch (error) {
+      if (report() && current()) reportEncryptedFailure(projectId, error);
+      throw error;
+    }
+  };
 
   let room: EncryptedRoomAccess | null = null;
   const roomAccess = (): EncryptedRoomAccess => {
@@ -49,28 +67,31 @@ export function reportingEncryptedProjectStore(
     room = {
       currentHead: (projectId) => access.currentHead(projectId),
       seal: (projectId, document, base) =>
-        checked(() => access.seal(projectId, document, base), projectId),
+        checked(() => access.seal(projectId, document, base), projectId, true),
       openHead: (projectId, record, envelope) =>
         verifiedHead(
           () => access.openHead(projectId, record, envelope),
           () => projectId,
-          projectId
+          projectId,
+          true
         ),
       accepted: (projectId, sealed, base, record) =>
         verifiedHead(
           () => access.accepted(projectId, sealed, base, record),
           () => projectId,
-          projectId
+          projectId,
+          true
         ),
       catchUp: (projectId) =>
-        checked(() => access.catchUp(projectId), projectId),
+        checked(() => access.catchUp(projectId), projectId, true),
       restoreBlobs: (projectId, blobIds) =>
-        checked(() => access.restoreBlobs(projectId, blobIds), projectId)
+        checked(() => access.restoreBlobs(projectId, blobIds), projectId, true)
     };
     return room;
   };
 
   return {
+    stateCode: store.stateCode?.bind(store),
     createProject: (request) =>
       verifiedHead(
         () => store.createProject(request),

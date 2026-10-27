@@ -162,6 +162,12 @@ test('creates, autosaves, reloads and saves an encrypted project', async ({
   await expect(
     encryptionIndicator(page).getByText('Verified', { exact: true })
   ).toBeVisible();
+  const comparisonCode = encryptionIndicator(page).locator(
+    '.encryption-menu-code code'
+  );
+  await expect(comparisonCode).toBeVisible();
+  const fullCode = await comparisonCode.innerText();
+  expect(fullCode).toMatch(/^\d{5}( \d{5}){7}$/);
   await expect(
     encryptionIndicator(page).getByRole('button', {
       name: 'Open Settings › Encryption'
@@ -169,6 +175,14 @@ test('creates, autosaves, reloads and saves an encrypted project', async ({
   ).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(encryptionIndicator(page)).not.toHaveAttribute('open', '');
+  await page.getByRole('button', { name: /^Open project sharing/ }).click();
+  const sharing = page.getByRole('dialog', {
+    name: 'Project sharing',
+    exact: true
+  });
+  await expect(sharing.getByText(fullCode, { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(sharing).toHaveCount(0);
 
   // A named save writes a revision.
   await page.keyboard.press('ControlOrMeta+s');

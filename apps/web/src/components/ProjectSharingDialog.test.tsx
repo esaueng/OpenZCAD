@@ -19,6 +19,11 @@ import {
 } from './ProjectSharingDialog';
 import type { OwnerInvitation } from '../lib/e2ee/invitations';
 import type { EncryptedShareLinkClient } from './EncryptedShareLinks';
+import {
+  reportHeadVerified,
+  reportKeysLocked,
+  resetEncryptionStatus
+} from '../lib/e2ee/encryptionStatus';
 
 const owner = toUserId('user_sharing_owner');
 const member = toUserId('user_sharing_member');
@@ -836,6 +841,30 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       leave: vi.fn(async () => undefined)
     };
   }
+
+  it('shows the full verified state code and comparison guidance, hiding it when keys lock', async () => {
+    resetEncryptionStatus();
+    const code = '01234 56789 01234 56789 01234 56789 01234 56789';
+    reportHeadVerified('proj_encrypted', code);
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="viewer"
+        collaborationStatus="offline"
+        lease={null}
+        client={client()}
+        encrypted
+        encryptedClient={encryptedClient([])}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText(code)).toBeVisible();
+    expect(screen.getByText(/compare this full code/)).toBeVisible();
+    act(() => reportKeysLocked());
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+    expect(screen.getByText(/Load and verify the project/)).toBeVisible();
+    resetEncryptionStatus();
+  });
 
   it('lists invitations by where they stand, verifies, revokes and invites through MLS', async () => {
     setPersonalInfoVisible(true);

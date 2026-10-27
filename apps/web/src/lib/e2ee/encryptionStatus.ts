@@ -35,6 +35,8 @@ export interface EncryptionStatusWarning {
 
 export interface EncryptionStatus {
   readonly state: EncryptionStatusState;
+  /** Full code of the last verified head; absent while locked or refused. */
+  readonly projectStateCode?: string;
   readonly warning?: EncryptionStatusWarning;
   /** The failed verification's own words, for `problem`. */
   readonly problem?: string;
@@ -43,6 +45,7 @@ export interface EncryptionStatus {
 /** A project-scoped verification outcome; the lock is device-wide. */
 interface ProjectRecord {
   readonly verified: boolean;
+  readonly projectStateCode?: string;
   readonly warning?: EncryptionStatusWarning;
   readonly problem?: string;
 }
@@ -55,6 +58,32 @@ const records = new Map<string, ProjectRecord>();
 const derived = new Map<string, EncryptionStatus>();
 const listeners = new Set<() => void>();
 let keysLocked = false;
+const pendingReports = new Set<{ projectId: string | null; valid: boolean }>();
+let retainedProject: string | null | undefined;
+
+/** Single-use guard for an operation; navigation and teardown invalidate it. */
+export function beginEncryptionStatusReport(
+  projectId: string | null,
+  retainedOnly = false
+): () => boolean {
+  // Explicit loads can prepare the next project; room callbacks must already
+  // belong to the retained one. Undefined is a store with no UI owner yet.
+  const pending = {
+    projectId,
+    valid:
+      !retainedOnly ||
+      retainedProject === undefined ||
+      retainedProject === projectId
+  };
+  if (pending.valid) pendingReports.add(pending);
+  let consumed = false;
+  return () => {
+    if (consumed) return false;
+    consumed = true;
+    pendingReports.delete(pending);
+    return pending.valid;
+  };
+}
 
 function changed(): void {
   derived.clear();
@@ -73,6 +102,7 @@ function store(projectId: string, next: ProjectRecord): boolean {
   if (
     previous &&
     previous.verified === next.verified &&
+    previous.projectStateCode === next.projectStateCode &&
     previous.warning === next.warning &&
     previous.problem === next.problem
   ) {
@@ -83,13 +113,17 @@ function store(projectId: string, next: ProjectRecord): boolean {
 }
 
 /** The last head this page opened or wrote for the project verified. */
-export function reportHeadVerified(projectId: string): void {
+export function reportHeadVerified(
+  projectId: string,
+  code?: string | null
+): void {
   const previous = records.get(projectId);
   // A head that verified shows the keys are open on this page.
   const wasLocked = keysLocked;
   keysLocked = false;
   const stored = store(projectId, {
     verified: true,
+    ...(code ? { projectStateCode: code } : {}),
     ...(previous?.warning ? { warning: previous.warning } : {})
   });
   if (stored || wasLocked) changed();
@@ -107,6 +141,9 @@ export function reportVerificationWarning(
   const previous = records.get(projectId);
   const stored = store(projectId, {
     verified: previous?.verified ?? false,
+    ...(previous?.projectStateCode
+      ? { projectStateCode: previous.projectStateCode }
+      : {}),
     warning,
     ...(previous?.problem ? { problem: previous.problem } : {})
   });
@@ -177,6 +214,13 @@ export function reportKeysUnlocked(): void {
  * project opened again is shown from what this page reads of it then.
  */
 export function retainEncryptionStatus(projectId: string | null): void {
+  retainedProject = projectId;
+  for (const pending of pendingReports) {
+    if (pending.projectId !== projectId) {
+      pending.valid = false;
+      pendingReports.delete(pending);
+    }
+  }
   let removed = false;
   for (const id of [...records.keys()]) {
     if (id !== projectId) {
@@ -189,6 +233,8 @@ export function retainEncryptionStatus(projectId: string | null): void {
 
 /** Forgets everything: the key session ended. */
 export function resetEncryptionStatus(): void {
+  for (const pending of pendingReports) pending.valid = false;
+  pendingReports.clear();
   if (records.size === 0 && !keysLocked) return;
   records.clear();
   keysLocked = false;
@@ -210,9 +256,20 @@ export function encryptionStatusOf(projectId: string): EncryptionStatus {
   } else if (keysLocked) {
     status = { state: 'locked' };
   } else if (record?.warning) {
-    status = { state: 'warning', warning: record.warning };
+    status = {
+      state: 'warning',
+      warning: record.warning,
+      ...(record.projectStateCode
+        ? { projectStateCode: record.projectStateCode }
+        : {})
+    };
   } else if (record?.verified) {
-    status = { state: 'verified' };
+    status = {
+      state: 'verified',
+      ...(record.projectStateCode
+        ? { projectStateCode: record.projectStateCode }
+        : {})
+    };
   } else {
     status = UNVERIFIED;
   }

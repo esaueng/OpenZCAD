@@ -1317,6 +1317,30 @@
   font-size: var(--fs-xs);
 }
 
+.sharing-state-comparison {
+  padding: 0 var(--sp-3);
+}
+
+.sharing-state-comparison h3 {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.sharing-state-comparison .sharing-empty {
+  padding: 0;
+}
+
+.sharing-state-code {
+  display: block;
+  margin-block: 8px;
+  overflow-wrap: anywhere;
+  user-select: all;
+  font-family: monospace;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
 .sharing-local {
   padding: 0 var(--sp-3);
 }
