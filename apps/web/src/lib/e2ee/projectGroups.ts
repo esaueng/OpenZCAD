@@ -82,6 +82,9 @@ import {
   epochBinding,
   fromBase64Url,
   generateAssetDedupeSecret,
+  decodeMlsAuthorityManifest,
+  signMlsAuthorityManifest,
+  toHex,
   signProjectEnvelope,
   toBase64Url,
   unwrapKey,
@@ -92,6 +95,7 @@ import {
   type ArchivedProjectKey,
   type GroupReset,
   type KeyArchiveBody,
+  type MlsAuthorityManifest,
   type ProjectEnvelopeHeaderInit,
   type RevocationCutoffHead,
   type RevocationCutoffs,
@@ -102,6 +106,7 @@ import {
 import type {
   CommitRequest,
   EpochChange,
+  EpochAuthority,
   ProjectRoles,
   RejoinPsk,
   SessionStatus
@@ -141,16 +146,28 @@ import {
 import { E2eeApiError } from './e2eeApi';
 import type { CertifyingDevice } from './mls/certify';
 import {
-  parseEpochContext,
+  groupInfoContextBytes,
   parseGroupInfoContext,
   parseSelfRemoveProposal,
-  projectGroupId,
-  type EpochContext
+  projectGroupId
 } from './mls/epochRoles';
 import type { DirectoryInput, LeafCertification } from './mls/directory';
 import type { MlsProjectRef, MlsProjectSessions } from './mls/projectSessions';
+import type { ProjectAuthorityStore } from './projectAuthorityStore';
+import type {
+  E2eeProjectAuthorityResponse,
+  E2eeSaveProjectAuthorityRequest
+} from '@openzcad/shared';
 import type { StoredLeaf } from './mls/sessionStore';
 import { rememberProjectKey, unlockedProjectKey } from './unlockedProjectKeys';
+import {
+  acceptProjectAuthorityManifest,
+  cachedProjectAuthorityManifest,
+  loadProjectAuthority,
+  publishProjectAuthority,
+  rememberExpectedProjectOwner
+} from './projectAuthority';
+import { projectAuthorityStore } from './projectAuthorityStore';
 
 // --- API -------------------------------------------------------------------
 
@@ -175,6 +192,11 @@ export interface KeyQuery {
 }
 
 export interface ProjectGroupsApi {
+  authority?(projectId: string): Promise<E2eeProjectAuthorityResponse>;
+  saveAuthority?(
+    projectId: string,
+    request: E2eeSaveProjectAuthorityRequest
+  ): Promise<E2eeProjectAuthorityResponse>;
   group(projectId: string): Promise<E2eeProjectGroupResponse>;
   createGroup(
     projectId: string,
@@ -285,6 +307,9 @@ export function createProjectGroupsApi(
     submitCommit: (projectId, request) =>
       call(`${base(projectId)}/mls/commits`, 'POST', request),
     leaves: (projectId) => call(`${base(projectId)}/mls/leaves`),
+    authority: (projectId) => call(`${base(projectId)}/authority`),
+    saveAuthority: (projectId, request) =>
+      call(`${base(projectId)}/authority`, 'POST', request),
     keys: (projectId, q = {}) =>
       call(
         `${base(projectId)}/keys${query({
@@ -338,6 +363,7 @@ export interface ProjectGroupAccount {
 }
 
 export interface ProjectGroupContext {
+  readonly authorityStore?: ProjectAuthorityStore;
   readonly api: ProjectGroupsApi;
   readonly sessions: MlsProjectSessions;
   readonly account: ProjectGroupAccount;
@@ -411,7 +437,10 @@ export interface ProjectMemberLists {
    * Verified, pinned device lists of the project's other members. A list
    * for this account's own user is ignored: its own list is the account's.
    */
-  lists(projectId: string): Promise<readonly VerifiedDeviceList[]>;
+  lists(
+    projectId: string,
+    historicalUsers?: readonly string[]
+  ): Promise<readonly VerifiedDeviceList[]>;
 }
 
 /** Where verified revocation cutoff statements come from. */
@@ -580,12 +609,13 @@ async function foreignLocalState(
  */
 export async function projectDeviceLists(
   ctx: ProjectGroupContext,
-  projectId: string
+  projectId: string,
+  historicalUsers?: readonly string[]
 ): Promise<VerifiedDeviceList[]> {
   const own = ctx.account.list;
   const lists = [own];
   if (!ctx.members) return lists;
-  for (const list of await ctx.members.lists(projectId)) {
+  for (const list of await ctx.members.lists(projectId, historicalUsers)) {
     if (list.userId === own.userId) continue;
     if (lists.some((known) => known.userId === list.userId)) {
       throw new ProjectGroupError(
@@ -1356,6 +1386,8 @@ interface History {
   readonly newest: KeyArchiveBody;
   /** Epoch records for MLS epochs 1..target, in order. */
   readonly records: Uint8Array[];
+  readonly anchor: Uint8Array;
+  readonly authority: EpochAuthority;
 }
 
 /**
@@ -1386,42 +1418,38 @@ async function loadHistory(
     newest.previousKeys.map((k) => [k.keyEpoch, new Uint8Array(k.key)])
   );
   keys.set(target, newestKey);
-  const records: Uint8Array[] = [];
-  let after = group.keyEpochBase;
-  while (records.length < targetEpoch) {
-    const page = await ctx.api.archives(projectId, { after });
-    for (const archive of page.archives) {
-      const expected = group.keyEpochBase + records.length + 1;
-      if (archive.keyEpoch > target) break;
-      if (archive.keyEpoch !== expected) {
-        throw new ProjectGroupError(
-          'archive-invalid',
-          `The key archive of epoch ${expected} is missing.`
-        );
-      }
-      const key = keys.get(expected);
-      if (!key) {
-        throw new ProjectGroupError(
-          'archive-invalid',
-          `The newest key archive does not carry the key of epoch ${expected}.`
-        );
-      }
-      const body =
-        expected === target
-          ? newest
-          : await openArchive(ctx, projectId, expected, key, archive);
-      records.push(body.epochRecord);
-      after = archive.keyEpoch;
-      if (records.length === targetEpoch) break;
-    }
-    if (records.length < targetEpoch && !page.more) {
-      throw new ProjectGroupError(
-        'archive-invalid',
-        'The project’s key archives end before its current epoch.'
-      );
-    }
+  const authority = await epochAuthority(ctx, projectId, target, {
+    body: newest,
+    key: newestKey
+  });
+  if (
+    authority.keyEpochBase !== group.keyEpochBase ||
+    authority.epoch !== targetEpoch
+  ) {
+    throw new ProjectGroupError(
+      'archive-invalid',
+      'The account returned another MLS generation.'
+    );
   }
-  return { keys, newest, records };
+  if (
+    !joined &&
+    !sameBytes(
+      authority.groupContext,
+      groupInfoContextBytes(bytes(group.groupInfo))
+    )
+  ) {
+    throw new ProjectGroupError(
+      'archive-invalid',
+      'The account GroupInfo differs from the authenticated MLS history.'
+    );
+  }
+  return {
+    keys,
+    newest,
+    records: authority.records,
+    anchor: authority.anchor,
+    authority
+  };
 }
 
 const previousKeysOf = (
@@ -1432,6 +1460,115 @@ const previousKeysOf = (
     .filter(([epoch]) => epoch < below)
     .sort(([a], [b]) => a - b)
     .map(([keyEpoch, key]) => ({ keyEpoch, key }));
+
+/** Bind application generation numbering to independently authenticated roots. */
+async function authorityManifestForState(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number,
+  groupInfo: Uint8Array,
+  previous?: SignedStatement,
+  resetGeneration?: number
+): Promise<SignedStatement> {
+  const device = requireDevice(ctx);
+  const prior =
+    previous ?? (await cachedProjectAuthorityManifest(ctx, projectId));
+  if (!prior && keyEpoch !== 0) {
+    throw new ProjectGroupError(
+      'archive-invalid',
+      'The project has no independently authenticated MLS roots.'
+    );
+  }
+  const value: MlsAuthorityManifest = prior
+    ? await acceptProjectAuthorityManifest(ctx, projectId, prior)
+    : {
+        projectId,
+        ownerUserId: ctx.account.userId,
+        ownerIdentityKeyHash: toHex(ctx.account.list.identityKeyHash),
+        roots: [{ generation: 0, keyEpochBase: 0, groupInfo: b64(groupInfo) }],
+        checkpoint: null,
+        signerDeviceId: device.deviceId
+      };
+  if (value.ownerUserId !== ctx.account.userId) {
+    if (!prior || resetGeneration !== undefined)
+      throw new ProjectGroupError(
+        'archive-invalid',
+        'Only the verified owner can establish MLS roots.'
+      );
+    return prior;
+  }
+  const roots =
+    resetGeneration === undefined
+      ? value.roots
+      : [
+          ...value.roots,
+          {
+            generation: resetGeneration,
+            keyEpochBase: keyEpoch,
+            groupInfo: b64(groupInfo)
+          }
+        ];
+  const root = roots.at(-1)!;
+  const context = parseGroupInfoContext(groupInfo);
+  if (context.epoch + root.keyEpochBase !== keyEpoch) {
+    throw new ProjectGroupError(
+      'archive-invalid',
+      'The MLS state does not match its authenticated generation.'
+    );
+  }
+  // Bound replay with periodic owner checkpoints. After an owner device was
+  // revoked, refresh on its next Commit so a retired leaf cannot remain the
+  // checkpoint signer. Editor Commits carry the owner's statement unchanged.
+  const refresh = keyEpoch - (value.checkpoint?.keyEpoch ?? root.keyEpochBase) >= 256 ||
+    revokedDevices(ctx.account.list).length > 0;
+  return signMlsAuthorityManifest(device.signing.privateKey, {
+    ...value,
+    roots,
+    checkpoint:
+      context.epoch === 0 ? null : refresh ? {
+            generation: root.generation,
+            keyEpoch,
+            groupInfo: b64(groupInfo)
+          } : value.checkpoint,
+    signerDeviceId: device.deviceId
+  });
+}
+
+/** Transfer only state this device's sealed MLS session has accepted. */
+async function publishSessionAuthority(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpochBase: number,
+  manifest?: SignedStatement
+): Promise<void> {
+  const device = requireDevice(ctx);
+  const material = await ctx.sessions.epochMaterial(
+    refOf(ctx, device, projectId)
+  );
+  const keyEpoch = keyEpochBase + material.epoch;
+  const body = manifest
+    ? null
+    : await openArchive(
+        ctx,
+        projectId,
+        keyEpoch,
+        material.projectKey,
+        await fetchArchive(ctx, projectId, keyEpoch)
+      );
+  const accepted = manifest ?? body?.authorityManifest;
+  if (!accepted)
+    throw new ProjectGroupError(
+      'archive-invalid',
+      'This epoch has no authenticated MLS roots.'
+    );
+  await publishProjectAuthority(
+    ctx,
+    projectId,
+    accepted,
+    keyEpoch,
+    material.groupInfo
+  );
+}
 
 // --- Create ----------------------------------------------------------------
 
@@ -1468,6 +1605,14 @@ export async function createProjectGroup(
   if (await serverGroup(ctx, projectId)) {
     return joinProjectGroup(ctx, projectId);
   }
+  if (options.replace) {
+    await (ctx.authorityStore ?? projectAuthorityStore()).forgetProject(
+      ctx.account.userId,
+      projectId
+    );
+    forgetEpochRoles(ctx.account.userId, projectId);
+  }
+  await rememberExpectedProjectOwner(ctx, projectId, ctx.account.list);
   // The server has no group, so nothing stored here belongs to one.
   const stale = await ctx.sessions.leaf(ref);
   if (stale) await ctx.sessions.discardSession(ref, stale.signatureKey);
@@ -1483,6 +1628,7 @@ export async function createProjectGroup(
   );
   const leaf = (await ctx.sessions.leaf(ref))!;
   let groupInfo: string | null = null;
+  let manifest: SignedStatement | undefined;
   try {
     if (!change.epochRecord) {
       throw new Error('A new MLS group produced no epoch record.');
@@ -1490,6 +1636,12 @@ export async function createProjectGroup(
     const material = await ctx.sessions.epochMaterial(ref);
     groupInfo = b64(material.groupInfo);
     const keyEpoch = 0;
+    manifest = await authorityManifestForState(
+      ctx,
+      projectId,
+      keyEpoch,
+      material.groupInfo
+    );
     const archive = await sealArchive(
       device,
       projectId,
@@ -1499,7 +1651,8 @@ export async function createProjectGroup(
         previousKeys: [],
         dedupeSecret: generateAssetDedupeSecret(),
         epochRecord: change.epochRecord,
-        epochAuthenticator: material.epochAuthenticator
+        epochAuthenticator: material.epochAuthenticator,
+        authorityManifest: manifest
       }
     );
     const { group } = await ctx.api.createGroup(projectId, {
@@ -1525,6 +1678,7 @@ export async function createProjectGroup(
       keyEpoch,
       material.projectKey
     );
+    await publishSessionAuthority(ctx, projectId, group.keyEpochBase, manifest);
     return { epoch: group.epoch, keyEpoch: group.keyEpochBase + group.epoch };
   } catch (error) {
     let group: E2eeProjectGroupRecord | null = null;
@@ -1540,6 +1694,12 @@ export async function createProjectGroup(
         projectId,
         group.keyEpochBase,
         await ctx.sessions.projectKey(ref)
+      );
+      await publishSessionAuthority(
+        ctx,
+        projectId,
+        group.keyEpochBase,
+        manifest
       );
       return { epoch: 0, keyEpoch: group.keyEpochBase };
     }
@@ -1605,9 +1765,11 @@ async function submitPending(
   const keyEpoch = keyEpochBase + next.epoch;
   let keys: ReadonlyMap<number, Uint8Array>;
   let dedupeSecret: Uint8Array;
+  let priorManifest: SignedStatement | undefined;
   if (pending.history) {
     keys = pending.history.keys;
     dedupeSecret = pending.history.newest.dedupeSecret;
+    priorManifest = pending.history.newest.authorityManifest;
   } else {
     const current = keyEpoch - 1;
     const currentKey = await ctx.sessions.projectKey(ref);
@@ -1626,7 +1788,15 @@ async function submitPending(
       [current, currentKey]
     ]);
     dedupeSecret = body.dedupeSecret;
+    priorManifest = body.authorityManifest;
   }
+  const manifest = await authorityManifestForState(
+    ctx,
+    projectId,
+    keyEpoch,
+    next.groupInfo,
+    priorManifest
+  );
   const archive = await sealArchive(
     device,
     projectId,
@@ -1638,7 +1808,8 @@ async function submitPending(
         ? generateAssetDedupeSecret()
         : dedupeSecret,
       epochRecord,
-      epochAuthenticator: next.epochAuthenticator
+      epochAuthenticator: next.epochAuthenticator,
+      authorityManifest: manifest
     }
   );
   const leaf = next.external ? await ctx.sessions.leaf(ref) : null;
@@ -1812,7 +1983,7 @@ export async function joinProjectGroup(
       bytes(group.groupInfo),
       {
         archive: {
-          initialGroupInfo: bytes(group.initialGroupInfo),
+          initialGroupInfo: history.anchor,
           epochRecords: history.records
         },
         psk
@@ -1846,6 +2017,7 @@ export async function joinProjectGroup(
     );
     if (submitted.accepted) {
       await ctx.sessions.confirmRejoin(ref, directory);
+      await publishSessionAuthority(ctx, projectId, group.keyEpochBase);
       // The Worker counts only a member Commit as this account's rotation
       // (it cannot tell what an External Commit removed, #908 review). When
       // this rejoin itself removed a revoked leaf (the last-leaf case),
@@ -1919,7 +2091,7 @@ export async function joinProjectByWelcome(
       key: joinedKey
     });
     await ctx.sessions.completeJoin(ref, directory, {
-      initialGroupInfo: bytes(group.initialGroupInfo),
+      initialGroupInfo: history.anchor,
       epochRecords: history.records
     });
   } catch (error) {
@@ -1930,7 +2102,11 @@ export async function joinProjectByWelcome(
   const keyEpoch = group.keyEpochBase + epoch;
   if (
     material.epoch !== epoch ||
-    !sameBytes(material.projectKey, history.keys.get(keyEpoch)!)
+    !sameBytes(material.projectKey, history.keys.get(keyEpoch)!) ||
+    !sameBytes(
+      groupInfoContextBytes(material.groupInfo),
+      history.authority.groupContext
+    )
   ) {
     throw new ProjectGroupError(
       'server-mismatch',
@@ -1944,6 +2120,7 @@ export async function joinProjectByWelcome(
   for (const [historic, key] of history.keys) {
     rememberProjectKey(ctx.account.userId, projectId, historic, key);
   }
+  await publishSessionAuthority(ctx, projectId, group.keyEpochBase);
   if (ctx.api.postKeys) {
     try {
       await postOwnEpochKeys(ctx, projectId, keyEpoch, material);
@@ -2487,6 +2664,11 @@ async function commitLoop(
     );
     if (submitted.accepted) {
       const change = await ctx.sessions.confirmCommit(ref, directory);
+      await publishSessionAuthority(
+        ctx,
+        projectId,
+        submitted.group.keyEpochBase
+      );
       await reportRemovals(
         ctx,
         ref,
@@ -3118,6 +3300,7 @@ export async function catchUpProjectGroup(
           `The server's group is at epoch ${group.epoch} but holds no Commit after ${epoch}.`
         );
       }
+      await publishSessionAuthority(ctx, projectId, group.keyEpochBase);
       return { epoch, keyEpoch: group.keyEpochBase + epoch };
     }
     // Leaves are stored with the Commit that adds them, so reading them
@@ -3302,54 +3485,221 @@ export async function epochRoles(
   projectId: string,
   keyEpoch: number
 ): Promise<ProjectRoles> {
-  const id = rolesId(ctx, projectId, keyEpoch);
-  const known = knownRoles.get(id);
-  if (known) return known;
-  const { keyEpochBase, current } = await groupBaseForKeyEpoch(
-    ctx,
-    projectId,
-    keyEpoch
-  );
-  const epoch = keyEpoch - keyEpochBase;
-  if (current && ctx.device) {
-    const ref = refOf(ctx, ctx.device, projectId);
-    const status = (await ctx.sessions.leaf(ref))
-      ? await ctx.sessions.status(ref).catch(() => null)
-      : null;
-    if (status?.inGroup && status.epoch === epoch && status.roles) {
-      knownRoles.set(id, status.roles);
-      return status.roles;
-    }
+  return (await epochAuthority(ctx, projectId, keyEpoch)).roles;
+}
+
+/** A policy-verified transcript/tree, never roles merely parsed from an archive. */
+export async function epochAuthority(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number,
+  opened?: {
+    readonly body: KeyArchiveBody;
+    readonly key: Uint8Array;
+    readonly genesis?: boolean;
   }
-  const invalid = (why: string): never => {
+): Promise<
+  EpochAuthority & {
+    readonly keyEpochBase: number;
+    readonly anchor: Uint8Array;
+    readonly records: Uint8Array[];
+  }
+> {
+  try {
+    await loadProjectAuthority(ctx, projectId);
+    const key =
+      opened?.key ?? (await projectKeyForEpoch(ctx, projectId, keyEpoch));
+    const body =
+      opened?.body ??
+      (await openArchive(
+        ctx,
+        projectId,
+        keyEpoch,
+        key,
+        await fetchArchive(ctx, projectId, keyEpoch)
+      ));
+    if (!body.authorityManifest)
+      throw new Error('The archive has no authenticated MLS roots.');
+    let manifest: MlsAuthorityManifest;
+    try {
+      manifest = await acceptProjectAuthorityManifest(
+        ctx,
+        projectId,
+        body.authorityManifest
+      );
+    } catch (error) {
+      // Retired owner devices cannot introduce checkpoints, but roots already
+      // accepted independently remain usable for full historical replay.
+      const pinned = await cachedProjectAuthorityManifest(ctx, projectId);
+      if (!pinned) throw error;
+      const trusted = decodeMlsAuthorityManifest(pinned.statement);
+      const claimed = decodeMlsAuthorityManifest(
+        body.authorityManifest.statement
+      );
+      if (
+        claimed.projectId !== trusted.projectId ||
+        claimed.ownerUserId !== trusted.ownerUserId ||
+        claimed.ownerIdentityKeyHash !== trusted.ownerIdentityKeyHash ||
+        claimed.roots.length > trusted.roots.length ||
+        claimed.roots.some(
+          (entry, index) =>
+            JSON.stringify(entry) !== JSON.stringify(trusted.roots[index])
+        )
+      )
+        throw error;
+      manifest = trusted;
+    }
+    const root = [...manifest.roots]
+      .reverse()
+      .find((entry) => entry.keyEpochBase <= keyEpoch);
+    if (!root)
+      throw new Error('No authenticated generation covers this key epoch.');
+    const newest = await cachedProjectAuthorityManifest(ctx, projectId);
+    if (newest) {
+      const roots = decodeMlsAuthorityManifest(newest.statement).roots;
+      const actual = [...roots]
+        .reverse()
+        .find((entry) => entry.keyEpochBase <= keyEpoch);
+      if (!actual || JSON.stringify(actual) !== JSON.stringify(root))
+        throw new Error(
+          'The archive assigns this key epoch to an older MLS generation.'
+        );
+    }
+    const epoch = keyEpoch - root.keyEpochBase;
+    let anchor = bytes(root.groupInfo);
+    let first = root.keyEpochBase;
+    const checkpoint = manifest.checkpoint;
+    if (
+      !opened?.genesis &&
+      checkpoint &&
+      checkpoint.generation === root.generation &&
+      checkpoint.keyEpoch <= keyEpoch
+    ) {
+      anchor = bytes(checkpoint.groupInfo);
+      first = checkpoint.keyEpoch;
+    }
+    if (keyEpoch - first > 4096)
+      throw new Error('This history needs a newer owner checkpoint.');
+    const keys = new Map(
+      body.previousKeys.map((entry) => [entry.keyEpoch, entry.key])
+    );
+    keys.set(keyEpoch, key);
+    const records: Uint8Array[] = [];
+    let total = anchor.length + body.epochRecord.length;
+    let after = first;
+    while (after < keyEpoch) {
+      const page = await ctx.api.archives(projectId, { after });
+      const before = after;
+      for (const archive of page.archives) {
+        if (archive.keyEpoch > keyEpoch) break;
+        if (archive.keyEpoch !== after + 1)
+          throw new Error('The MLS archive has a gap.');
+        const recordKey = keys.get(archive.keyEpoch);
+        if (!recordKey)
+          throw new Error('The archive omits a required historical key.');
+        const record =
+          archive.keyEpoch === keyEpoch
+            ? body
+            : await openArchive(
+                ctx,
+                projectId,
+                archive.keyEpoch,
+                recordKey,
+                archive
+              );
+        total += record.epochRecord.length;
+        if (total > 64 * 1024 * 1024)
+          throw new Error(
+            'This history exceeds the MLS verification byte budget.'
+          );
+        records.push(record.epochRecord);
+        after = archive.keyEpoch;
+        if (after === keyEpoch) break;
+      }
+      if (after === before || (after < keyEpoch && !page.more))
+        throw new Error('The MLS history ends before its target.');
+    }
+    const ref = {
+      userId: ctx.account.userId,
+      deviceId: ctx.device?.deviceId ?? 'authority-reader',
+      projectId
+    };
+    // Bounded, unverified hints: certifications and replay authenticate the tree.
+    const claims = new Map<string, LeafCertification>();
+    const collect = (members: readonly import('@openzcad/mls').LeafInfo[]) => {
+      for (const member of members) {
+        const claim = {
+          userId: member.userId,
+          deviceId: member.deviceId,
+          leafKey: member.signatureKey,
+          certification: member.certification
+        };
+        claims.set(
+          JSON.stringify([
+            claim.userId,
+            claim.deviceId,
+            b64(claim.leafKey),
+            b64(claim.certification)
+          ]),
+          claim
+        );
+        if (claims.size > 16384)
+          throw new Error('This history exceeds the MLS certification budget.');
+      }
+    };
+    collect((await ctx.sessions.inspectGroupInfo(ref, anchor)).members);
+    for (const record of [...records, body.epochRecord])
+      collect((await ctx.sessions.decodeEpochRecord(record)).members);
+    const lists = await projectDeviceLists(ctx, projectId, [
+      ...new Set([...claims.values()].map((claim) => claim.userId))
+    ]);
+    const group = await fetchGroup(ctx, projectId);
+    const cutoffs = await directoryCutoffs(ctx, projectId, lists, {
+      ...group,
+      keyEpochBase: root.keyEpochBase
+    });
+    for (const devices of cutoffs.values()) {
+      if ([...devices.values()].includes(UNSIGNED_SHARED_CUTOFF))
+        throw new Error(
+          'Historical MLS verification needs signed revocation cutoffs.'
+        );
+    }
+    const authority = await ctx.sessions
+      .verifyEpochAuthority({
+        projectId,
+        anchor,
+        records,
+        targetRecord: body.epochRecord,
+        ownerUserId: manifest.ownerUserId,
+        directory: {
+          lists,
+          certifications: [...claims.values()],
+          revocationCutoffs: cutoffs
+        }
+      })
+      .catch((error: unknown) => {
+        if (
+          first !== root.keyEpochBase &&
+          isPolicyRefusal(error, 'checkpoint-invalid')
+        )
+          return epochAuthority(ctx, projectId, keyEpoch, {
+            body,
+            key,
+            genesis: true
+          });
+        throw error;
+      });
+    if ('anchor' in authority) return authority;
+    if (authority.epoch !== epoch)
+      throw new Error('The verified MLS tree belongs to another epoch.');
+    return { ...authority, keyEpochBase: root.keyEpochBase, anchor, records };
+  } catch (error) {
+    if (error instanceof ProjectGroupError) throw error;
     throw new ProjectGroupError(
       'archive-invalid',
-      `The key archive of epoch ${keyEpoch} ${why}.`
+      `Historical MLS authority could not be verified: ${error instanceof Error ? error.message : String(error)}`
     );
-  };
-  const body = await openArchive(
-    ctx,
-    projectId,
-    keyEpoch,
-    await projectKeyForEpoch(ctx, projectId, keyEpoch),
-    await fetchArchive(ctx, projectId, keyEpoch)
-  );
-  let parsed: EpochContext;
-  try {
-    parsed = parseEpochContext(
-      (await ctx.sessions.decodeEpochRecord(body.epochRecord)).groupContext
-    );
-  } catch {
-    return invalid('carries no readable roles');
   }
-  if (
-    parsed.epoch !== epoch ||
-    !sameBytes(parsed.groupId, projectGroupId(projectId))
-  ) {
-    invalid('records another group or epoch');
-  }
-  knownRoles.set(id, parsed.roles);
-  return parsed.roles;
 }
 
 export type Recovery = 'none' | 'confirmed' | 'discarded' | 'resent';
@@ -3469,15 +3819,37 @@ async function newestRoles(
   group: E2eeProjectGroupRecord
 ): Promise<{ roles: ProjectRoles | null; others: boolean }> {
   const ownUser = ctx.account.userId;
-  const summary = await ctx.sessions.inspectGroupInfo(
-    ref,
-    bytes(group.groupInfo)
-  );
-  let roles = summary.roles;
-  let others = summary.members.some((member) => member.userId !== ownUser);
+  const book = await loadProjectAuthority(ctx, ref.projectId);
+  const keyEpoch = group.keyEpochBase + group.epoch;
+  if (
+    !book ||
+    book.value.latestKeyEpoch !== keyEpoch ||
+    !sameBytes(
+      groupInfoContextBytes(bytes(book.value.latestGroupInfo)),
+      groupInfoContextBytes(bytes(group.groupInfo))
+    )
+  ) {
+    throw new ProjectGroupError(
+      'reset-refused',
+      'The group does not match this account’s latest authenticated membership state.'
+    );
+  }
+  const verified = await epochAuthority(ctx, ref.projectId, keyEpoch);
+  let roles = verified.roles;
+  let others = verified.members.some((member) => member.userId !== ownUser);
   // This device's own verified state, when it still holds the group.
   if (await ctx.sessions.leaf(ref)) {
     const status = await ctx.sessions.status(ref).catch(() => null);
+    if (
+      status?.epoch !== null &&
+      status?.epoch !== undefined &&
+      status.epoch > group.epoch
+    ) {
+      throw new ProjectGroupError(
+        'reset-refused',
+        'The account returned an older membership state than this device accepted.'
+      );
+    }
     if (status?.roles) roles = status.roles;
     if (status?.members.some((member) => member.userId !== ownUser)) {
       others = true;
@@ -3589,6 +3961,14 @@ export async function resetProjectGroup(
   const material = await ctx.sessions.epochMaterial(ref);
   const leaf = (await ctx.sessions.leaf(ref))!;
   const keyEpoch = priorKeyEpoch + 1;
+  const manifest = await authorityManifestForState(
+    ctx,
+    projectId,
+    keyEpoch,
+    material.groupInfo,
+    undefined,
+    group.generation + 1
+  );
   const archive = await sealArchive(
     device,
     projectId,
@@ -3599,7 +3979,8 @@ export async function resetProjectGroup(
       // Whoever lost access may know the old one (decision D8).
       dedupeSecret: generateAssetDedupeSecret(),
       epochRecord: change.epochRecord,
-      epochAuthenticator: material.epochAuthenticator
+      epochAuthenticator: material.epochAuthenticator,
+      authorityManifest: manifest
     }
   );
   const { group: next } = await resetGroup!(projectId, {
@@ -3627,6 +4008,7 @@ export async function resetProjectGroup(
     keyEpoch,
     material.projectKey
   );
+  await publishSessionAuthority(ctx, projectId, next.keyEpochBase, manifest);
   return stateOf(next);
 }
 

@@ -593,6 +593,14 @@ export const isE2eeProjectGroupStorageReady = cachedSchemaProbe(
   (row) => row?.ready === E2EE_PROJECT_GROUP_TABLES.length
 );
 
+/** Migration 0044: account-authenticated MLS roots and membership state. */
+export const isE2eeProjectAuthorityStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_project_authority')
+   WHERE name IN ('user_id', 'project_id', 'sequence', 'account_key_generation',
+     'account_key_sequence', 'signer_device_id', 'record', 'record_mac', 'signature', 'updated_at')`,
+  (row) => row?.ready === 10
+);
+
 /** The tables migration 0033 adds (encrypted document versions). */
 export const E2EE_PROJECT_VERSION_TABLES = Object.freeze([
   'e2ee_project_envelopes',

@@ -5,6 +5,7 @@ import { inProcessMls } from '../../../../../../packages/mls/src/test-support';
 import {
   EpochRecordError,
   parseEpochContext,
+  groupInfoContextBytes,
   parseGroupInfoContext,
   parseSelfRemoveProposal,
   projectGroupId,
@@ -73,6 +74,8 @@ describe('epoch roles from archived records (slice 5-2)', () => {
       { userId: 'user_bob', role: 'editor', since: 1 }
     ]);
     const two = await read(demoted.epochRecord);
+    expect(groupInfoContextBytes((await mls.epochMaterial({ userId: alice.userId, deviceId: 'alice_laptop', projectId: 'proj_roles' })).groupInfo))
+      .toEqual((await mls.decodeEpochRecord(demoted.epochRecord!)).groupContext);
     expect(two.epoch).toBe(2);
     // The parser agrees with the engine's own view of the current epoch.
     expect(two.roles).toEqual(status.roles);

@@ -27,6 +27,7 @@ import {
   postOwnEpochKeys
 } from '../../apps/web/src/lib/e2ee/projectGroups';
 import { forgetAllProjectKeys } from '../../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import { rememberExpectedProjectOwner } from '../../apps/web/src/lib/e2ee/projectAuthority';
 import {
   OWNER,
   createEncrypted,
@@ -82,6 +83,13 @@ export async function addMember(
     setRoles: [{ userId: member.userId, role }]
   });
   const joined = device(srv, member, deviceId, { members: others });
+  // This test's hand-delivered membership stands in for the recipient-bound,
+  // verified owner invitation used by the production join flow.
+  await rememberExpectedProjectOwner(
+    joined.groups,
+    projectId,
+    ownerDevice.account.list
+  );
   await postOwnEpochKeys(
     joined.groups,
     projectId,

@@ -54,6 +54,7 @@ import {
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import { rememberExpectedProjectOwner } from '../apps/web/src/lib/e2ee/projectAuthority';
 import {
   OTHER,
   OWNER,
@@ -579,7 +580,7 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
     await expect(
       joinProjectByWelcome(invitee.groups, projectId)
     ).rejects.toSatisfy(
-      (error: unknown) => error instanceof Error && error.name === 'MlsError'
+      (error: unknown) => error instanceof ProjectGroupError && error.code === 'archive-invalid'
     );
     expect(
       await invitee.sessions.status({
@@ -712,6 +713,7 @@ describe('the slice 5-2 gap: a member’s External-Commit epoch', () => {
       setRoles: [{ userId: OTHER, role: 'editor' }]
     });
     const member = device(srv, other, 'other_laptop', { members: [owner] });
+    await rememberExpectedProjectOwner(member.groups, projectId, owner.list);
     await postOwnEpochKeys(
       member.groups,
       projectId,

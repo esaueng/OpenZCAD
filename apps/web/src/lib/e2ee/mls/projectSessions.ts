@@ -688,12 +688,19 @@ export class MlsProjectSessions {
   }
 
   async verifyEpochAuthority(
-    request: EpochAuthorityRequest
+    request: Omit<EpochAuthorityRequest, 'directory'> & {
+      readonly directory: DirectoryInput;
+    }
   ): Promise<EpochAuthority> {
     const guard = this.sessionGuard();
-    const result = await (
-      await this.loader.get()
-    ).verifyEpochAuthority(request);
+    const mls = await this.loader.get();
+    const directory = await buildDeviceDirectory(
+      mls,
+      request.projectId,
+      request.directory
+    );
+    guard.guard();
+    const result = await mls.verifyEpochAuthority({ ...request, directory });
     guard.guard();
     return result;
   }

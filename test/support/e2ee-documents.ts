@@ -46,6 +46,7 @@ import {
   type MlsSessionStore
 } from '../../apps/web/src/lib/e2ee/mls/sessionStore';
 import type { CertifyingDevice } from '../../apps/web/src/lib/e2ee/mls/certify';
+import { memoryProjectAuthorityStore } from '../../apps/web/src/lib/e2ee/projectAuthorityStore';
 import {
   createEncryptedDocumentsApi,
   type EncryptedDocumentsApi
@@ -454,6 +455,8 @@ export interface Device {
 }
 
 export interface DeviceOptions {
+  revocations?: ProjectGroupContext['revocations'];
+  authority?: import('../../apps/web/src/lib/e2ee/projectAuthorityStore').ProjectAuthorityStore;
   mls?: MlsSessionStore;
   pins?: VersionPinStore;
   cutoffs?: Map<string, VersionCutoff>;
@@ -524,6 +527,8 @@ export function device(
   const fetcher = (path: string, init?: RequestInit) =>
     result.fetcher(path, init);
   result.groups = {
+    revocations: options.revocations,
+    authorityStore: options.authority ?? memoryProjectAuthorityStore(),
     api: createProjectGroupsApi(fetcher),
     sessions,
     account: {
@@ -623,6 +628,7 @@ export const reload = (srv: Server, old: Device, options: DeviceOptions = {}) =>
   device(srv, old.account, old.deviceId, {
     mls: old.mls,
     pins: old.pins,
+    authority: old.groups.authorityStore,
     ...options
   });
 

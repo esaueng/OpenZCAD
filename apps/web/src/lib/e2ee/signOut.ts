@@ -5,6 +5,7 @@ import * as mlsStores from './mls/sessionStore';
 import { createE2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
 import { shareWorkStore } from './shareWorkStore';
+import { projectAuthorityStore } from './projectAuthorityStore';
 import {
   beginKeySessionTeardown,
   finishKeySessionTeardown
@@ -57,6 +58,8 @@ async function clearDeviceUnderLock(
     // Remove journals and MLS state before the device keys. A failed cleanup
     // keeps the device record so signing out can be retried.
     await shareWorkStore().deleteAccount(userId);
+    requireCurrentSession();
+    await projectAuthorityStore().deleteAccount(userId);
     requireCurrentSession();
     await mlsStores.indexedDbMlsSessionStore().deleteAccount(userId);
     requireCurrentSession();

@@ -56,11 +56,16 @@ export function contactMemberLists(
 ): ProjectMemberLists {
   const own = options.account.userId;
   return {
-    async lists(projectId: string): Promise<readonly VerifiedDeviceList[]> {
+    async lists(
+      projectId: string,
+      historicalUsers: readonly string[] = []
+    ): Promise<readonly VerifiedDeviceList[]> {
       const { leaves } = await options.leaves(projectId);
       const others = [
         ...new Set(
-          leaves.map((leaf) => leaf.userId).filter((userId) => userId !== own)
+          [...leaves.map((leaf) => leaf.userId), ...historicalUsers].filter(
+            (userId) => userId !== own
+          )
         )
       ].sort();
       if (others.length === 0) return [];
