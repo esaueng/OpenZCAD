@@ -544,6 +544,11 @@ async function groupCutoffs(
 
 /** Group and key-store refusals become ApiErrors the sync paths understand. */
 function asApiError(error: unknown): unknown {
+  if (error instanceof ProjectGroupError && error.code === 'archive-invalid')
+    return new EncryptedProjectIntegrityError(
+      'authority',
+      `This project’s history did not pass membership verification (${error.message}).`
+    );
   if (error instanceof ApiError || !(error instanceof E2eeApiError)) {
     return error;
   }

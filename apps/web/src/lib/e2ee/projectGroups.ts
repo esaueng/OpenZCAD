@@ -82,8 +82,12 @@ import {
   epochBinding,
   fromBase64Url,
   generateAssetDedupeSecret,
+  MAX_ARCHIVED_KEYS,
   decodeMlsAuthorityManifest,
   signMlsAuthorityManifest,
+  mlsAuthorityResetHash,
+  verifyMlsAuthorityReset,
+  decodeMlsAuthorityTrust,
   toHex,
   signProjectEnvelope,
   toBase64Url,
@@ -164,6 +168,7 @@ import { rememberProjectKey, unlockedProjectKey } from './unlockedProjectKeys';
 import {
   acceptProjectAuthorityManifest,
   cachedProjectAuthorityManifest,
+  cachedProjectAuthorityState,
   loadProjectAuthority,
   publishProjectAuthority,
   rememberExpectedProjectOwner,
@@ -1471,7 +1476,8 @@ async function authorityManifestForState(
   keyEpoch: number,
   groupInfo: Uint8Array,
   previous?: SignedStatement,
-  resetGeneration?: number
+  resetGeneration?: number,
+  resetAuthority?: SignedStatement
 ): Promise<SignedStatement> {
   const device = requireDevice(ctx);
   let prior =
@@ -1522,6 +1528,18 @@ async function authorityManifestForState(
       );
     return prior;
   }
+  const beforeReset =
+    resetGeneration === undefined
+      ? null
+      : await loadProjectAuthority(ctx, projectId);
+  if (
+    resetGeneration !== undefined &&
+    (!beforeReset || beforeReset.value.latestKeyEpoch + 1 !== keyEpoch)
+  )
+    throw new ProjectGroupError(
+      'reset-refused',
+      'The reset does not follow the last authenticated membership state.'
+    );
   const roots =
     resetGeneration === undefined
       ? value.roots
@@ -1530,10 +1548,22 @@ async function authorityManifestForState(
           {
             generation: resetGeneration,
             keyEpochBase: keyEpoch,
-            groupInfo: b64(groupInfo)
+            groupInfo: b64(groupInfo),
+            previousGroupInfo: beforeReset!.value.latestGroupInfo,
+            resetAuthority: resetAuthority && {
+              statement: b64(resetAuthority.statement),
+              signature: b64(resetAuthority.signature)
+            }
           }
         ];
   const root = roots.at(-1)!;
+  if (resetGeneration !== undefined) {
+    await verifyMlsAuthorityReset(
+      { ...value, roots, checkpoint: null },
+      resetGeneration,
+      ctx.account.list
+    );
+  }
   const context = parseGroupInfoContext(groupInfo);
   if (context.epoch + root.keyEpochBase !== keyEpoch) {
     throw new ProjectGroupError(
@@ -1576,20 +1606,27 @@ async function publishSessionAuthority(
     refOf(ctx, device, projectId)
   );
   const keyEpoch = keyEpochBase + material.epoch;
-  const body = manifest
-    ? null
-    : await openArchive(
-        ctx,
-        projectId,
-        keyEpoch,
-        material.projectKey,
-        await fetchArchive(ctx, projectId, keyEpoch)
-      );
+  const body = await openArchive(
+    ctx,
+    projectId,
+    keyEpoch,
+    material.projectKey,
+    await fetchArchive(ctx, projectId, keyEpoch)
+  );
   const accepted = manifest ?? body?.authorityManifest;
   if (!accepted)
     throw new ProjectGroupError(
       'archive-invalid',
       'This epoch has no authenticated MLS roots.'
+    );
+  const proof = await epochAuthority(ctx, projectId, keyEpoch, {
+    body,
+    key: material.projectKey
+  });
+  if (!sameBytes(proof.groupContext, groupInfoContextBytes(material.groupInfo)))
+    throw new ProjectGroupError(
+      'archive-invalid',
+      'This device’s MLS state conflicts with the account’s authenticated history.'
     );
   await publishProjectAuthority(
     ctx,
@@ -3570,6 +3607,7 @@ export async function epochAuthority(
       // Keep the independent roots; do not accept any part of the retired
       // sibling's unpinned record. Full transcript verification follows.
     });
+    const accountState = await cachedProjectAuthorityState(ctx, projectId);
     const pinned = await cachedProjectAuthorityManifest(ctx, projectId);
     const pinnedRoot =
       pinned &&
@@ -3582,6 +3620,10 @@ export async function epochAuthority(
       projectId,
       keyEpoch,
       pinnedRoot,
+      accountState && [
+        accountState.latestKeyEpoch,
+        accountState.latestGroupInfo
+      ],
       heads.map((list) => [
         list.userId,
         toHex(list.identityKeyHash),
@@ -3607,14 +3649,15 @@ export async function epochAuthority(
         key,
         await fetchArchive(ctx, projectId, keyEpoch)
       ));
-    if (!body.authorityManifest)
+    const suppliedManifest = body.authorityManifest ?? pinned;
+    if (!suppliedManifest)
       throw new Error('The archive has no authenticated MLS roots.');
     let manifest: MlsAuthorityManifest;
     try {
       manifest = await acceptProjectAuthorityManifest(
         ctx,
         projectId,
-        body.authorityManifest
+        suppliedManifest
       );
     } catch (error) {
       // Retired owner devices cannot introduce checkpoints, but roots already
@@ -3622,9 +3665,7 @@ export async function epochAuthority(
       const pinned = await cachedProjectAuthorityManifest(ctx, projectId);
       if (!pinned) throw error;
       const trusted = decodeMlsAuthorityManifest(pinned.statement);
-      const claimed = decodeMlsAuthorityManifest(
-        body.authorityManifest.statement
-      );
+      const claimed = decodeMlsAuthorityManifest(suppliedManifest.statement);
       if (
         claimed.projectId !== trusted.projectId ||
         claimed.ownerUserId !== trusted.ownerUserId ||
@@ -3644,6 +3685,9 @@ export async function epochAuthority(
     if (!root)
       throw new Error('No authenticated generation covers this key epoch.');
     const newest = await cachedProjectAuthorityManifest(ctx, projectId);
+    const trustedManifest = newest
+      ? decodeMlsAuthorityManifest(newest.statement)
+      : manifest;
     if (newest) {
       const roots = decodeMlsAuthorityManifest(newest.statement).roots;
       const actual = [...roots]
@@ -3655,6 +3699,27 @@ export async function epochAuthority(
         );
     }
     const epoch = keyEpoch - root.keyEpochBase;
+    const endpoints: { keyEpoch: number; groupInfo: string }[] = [];
+    const accountRoot =
+      accountState &&
+      decodeMlsAuthorityManifest(
+        bytes(accountState.manifest.statement)
+      ).roots.at(-1)!;
+    if (accountState && accountRoot?.generation === root.generation)
+      endpoints.push({
+        keyEpoch: accountState.latestKeyEpoch,
+        groupInfo: accountState.latestGroupInfo
+      });
+    const following = trustedManifest.roots[root.generation + 1];
+    if (following?.previousGroupInfo)
+      endpoints.push({
+        keyEpoch: following.keyEpochBase - 1,
+        groupInfo: following.previousGroupInfo
+      });
+    const through = Math.max(
+      keyEpoch,
+      ...endpoints.map((point) => point.keyEpoch)
+    );
     let anchor = bytes(root.groupInfo);
     let first = root.keyEpochBase;
     const checkpoint = manifest.checkpoint;
@@ -3662,50 +3727,70 @@ export async function epochAuthority(
       !opened?.genesis &&
       checkpoint &&
       checkpoint.generation === root.generation &&
-      checkpoint.keyEpoch <= keyEpoch
+      checkpoint.keyEpoch <=
+        Math.min(keyEpoch, ...endpoints.map((point) => point.keyEpoch))
     ) {
       anchor = bytes(checkpoint.groupInfo);
       first = checkpoint.keyEpoch;
     }
-    if (keyEpoch - first > 4096)
+    if (through - first > MAX_ARCHIVED_KEYS)
       throw new Error('This history needs a newer owner checkpoint.');
+    const terminalKey =
+      through === keyEpoch
+        ? key
+        : await projectKeyForEpoch(ctx, projectId, through);
+    const terminalBody =
+      through === keyEpoch
+        ? body
+        : await openArchive(
+            ctx,
+            projectId,
+            through,
+            terminalKey,
+            await fetchArchive(ctx, projectId, through)
+          );
     const keys = new Map(
-      body.previousKeys.map((entry) => [entry.keyEpoch, entry.key])
+      terminalBody.previousKeys.map((entry) => [entry.keyEpoch, entry.key])
     );
     keys.set(keyEpoch, key);
+    keys.set(through, terminalKey);
     const records: Uint8Array[] = [];
+    const recordBodies = new Map<number, KeyArchiveBody>([
+      [keyEpoch, body],
+      [through, terminalBody]
+    ]);
     let total = anchor.length + body.epochRecord.length;
     let after = first;
-    while (after < keyEpoch) {
+    while (after < through) {
       const page = await ctx.api.archives(projectId, { after });
       const before = after;
       for (const archive of page.archives) {
-        if (archive.keyEpoch > keyEpoch) break;
+        if (archive.keyEpoch > through) break;
         if (archive.keyEpoch !== after + 1)
           throw new Error('The MLS archive has a gap.');
         const recordKey = keys.get(archive.keyEpoch);
         if (!recordKey)
           throw new Error('The archive omits a required historical key.');
-        const record =
-          archive.keyEpoch === keyEpoch
-            ? body
-            : await openArchive(
-                ctx,
-                projectId,
-                archive.keyEpoch,
-                recordKey,
-                archive
-              );
+        const record = recordBodies.has(archive.keyEpoch)
+          ? recordBodies.get(archive.keyEpoch)!
+          : await openArchive(
+              ctx,
+              projectId,
+              archive.keyEpoch,
+              recordKey,
+              archive
+            );
         total += record.epochRecord.length;
         if (total > 64 * 1024 * 1024)
           throw new Error(
             'This history exceeds the MLS verification byte budget.'
           );
         records.push(record.epochRecord);
+        recordBodies.set(archive.keyEpoch, record);
         after = archive.keyEpoch;
-        if (after === keyEpoch) break;
+        if (after === through) break;
       }
-      if (after === before || (after < keyEpoch && !page.more))
+      if (after === before || (after < through && !page.more))
         throw new Error('The MLS history ends before its target.');
     }
     const ref = {
@@ -3742,21 +3827,62 @@ export async function epochAuthority(
     const lists = await projectDeviceLists(ctx, projectId, [
       ...new Set([...claims.values()].map((claim) => claim.userId))
     ]);
+    const manifestOwner = lists.find(
+      (list) => list.userId === trustedManifest.ownerUserId
+    );
+    if (trustedManifest.roots.length > 1) {
+      if (!manifestOwner)
+        throw new Error('The reset history has no verified owner identity.');
+      for (
+        let generation = 1;
+        generation < trustedManifest.roots.length;
+        generation++
+      )
+        await verifyMlsAuthorityReset(
+          trustedManifest,
+          generation,
+          manifestOwner
+        );
+    }
     const group = await fetchGroup(ctx, projectId);
     const cutoffs = await directoryCutoffs(ctx, projectId, lists, {
       ...group,
       keyEpochBase: root.keyEpochBase
     });
+    const resetOwner = lists.find(
+      (list) => list.userId === manifest.ownerUserId
+    );
+    const resetApproval =
+      following && resetOwner
+        ? await verifyMlsAuthorityReset(
+            trustedManifest,
+            root.generation + 1,
+            resetOwner
+          )
+        : null;
     for (const list of lists) {
       const devices = cutoffs.get(list.userId) ?? new Map<string, number>();
       for (const revoked of revokedDevices(list)) {
         if (!devices.has(revoked.id))
-          devices.set(revoked.id, UNSIGNED_SHARED_CUTOFF);
+          devices.set(
+            revoked.id,
+            resetApproval && list.userId === manifest.ownerUserId
+              ? following!.keyEpochBase - root.keyEpochBase
+              : UNSIGNED_SHARED_CUTOFF
+          );
       }
       cutoffs.set(list.userId, devices);
     }
-    // The engine preserves an unsigned shared cutoff solely as a PSK fence;
-    // it never reactivates that revoked credential at an earlier epoch.
+    const authenticatedEndpoint = endpoints.reduce<
+      { keyEpoch: number; groupInfo: string } | undefined
+    >(
+      (latest, point) =>
+        !latest || point.keyEpoch > latest.keyEpoch ? point : latest,
+      undefined
+    );
+    // Unknown-time credentials count only within the exact independently
+    // authenticated prefix, which Rust must reach before returning authority.
+    // Live joins and document-author revocation cutoffs remain unchanged.
     const authority = await ctx.sessions
       .verifyEpochAuthority({
         projectId,
@@ -3764,6 +3890,9 @@ export async function epochAuthority(
         records,
         targetRecord: body.epochRecord,
         ownerUserId: manifest.ownerUserId,
+        authenticatedGroupInfo: authenticatedEndpoint
+          ? bytes(authenticatedEndpoint.groupInfo)
+          : undefined,
         directory: {
           lists,
           certifications: [...claims.values()],
@@ -3785,17 +3914,65 @@ export async function epochAuthority(
     if ('anchor' in authority) return authority;
     if (authority.epoch !== epoch)
       throw new Error('The verified MLS tree belongs to another epoch.');
+    for (const point of endpoints) {
+      const pointKey = keys.get(point.keyEpoch);
+      if (!pointKey)
+        throw new Error(
+          'The authenticated membership state has no historical key.'
+        );
+      const pointBody =
+        recordBodies.get(point.keyEpoch) ??
+        (await openArchive(
+          ctx,
+          projectId,
+          point.keyEpoch,
+          pointKey,
+          await fetchArchive(ctx, projectId, point.keyEpoch)
+        ));
+      const verifiedPoint =
+        point.keyEpoch === keyEpoch
+          ? authority
+          : await ctx.sessions.verifyEpochAuthority({
+              projectId,
+              anchor,
+              records: records.slice(
+                0,
+                Math.max(point.keyEpoch, authenticatedEndpoint!.keyEpoch) -
+                  first
+              ),
+              targetRecord: pointBody.epochRecord,
+              ownerUserId: manifest.ownerUserId,
+              authenticatedGroupInfo: bytes(authenticatedEndpoint!.groupInfo),
+              directory: {
+                lists,
+                certifications: [...claims.values()],
+                revocationCutoffs: cutoffs
+              }
+            });
+      const expected = parseGroupInfoContext(bytes(point.groupInfo));
+      if (
+        expected.epoch !== point.keyEpoch - root.keyEpochBase ||
+        !sameBytes(
+          verifiedPoint.groupContext,
+          groupInfoContextBytes(bytes(point.groupInfo))
+        )
+      )
+        throw new Error(
+          'The MLS transcript does not reach the independently authenticated membership state.'
+        );
+    }
     const verified = {
       ...authority,
       keyEpochBase: root.keyEpochBase,
       anchor,
-      records
+      records: records.slice(0, keyEpoch - first)
     };
     if (cache.size >= 256) cache.delete(cache.keys().next().value!);
     cache.set(cacheId, structuredClone(verified));
     return verified;
   } catch (error) {
     if (error instanceof ProjectGroupError) throw error;
+    if (error instanceof E2eeApiError && error.status >= 500) throw error;
     throw new ProjectGroupError(
       'archive-invalid',
       `Historical MLS authority could not be verified: ${error instanceof Error ? error.message : String(error)}`
@@ -3917,7 +4094,8 @@ export interface GroupResetAuthority {
 async function newestRoles(
   ctx: ProjectGroupContext,
   ref: MlsProjectRef,
-  group: E2eeProjectGroupRecord
+  group: E2eeProjectGroupRecord,
+  identityApproved = false
 ): Promise<{ roles: ProjectRoles | null; others: boolean }> {
   const ownUser = ctx.account.userId;
   const book = await loadProjectAuthority(ctx, ref.projectId);
@@ -3935,7 +4113,19 @@ async function newestRoles(
       'The group does not match this account’s latest authenticated membership state.'
     );
   }
-  const verified = await epochAuthority(ctx, ref.projectId, keyEpoch);
+  // Cold D9 recovery explicitly approves this exact state with the identity
+  // key before adopting it. Ordinary reads never take this recovery path.
+  const verified = identityApproved
+    ? {
+        roles: parseGroupInfoContext(bytes(book.value.latestGroupInfo)).roles,
+        members: (
+          await ctx.sessions.inspectGroupInfo(
+            ref,
+            bytes(book.value.latestGroupInfo)
+          )
+        ).members
+      }
+    : await epochAuthority(ctx, ref.projectId, keyEpoch);
   let roles = verified.roles;
   let others = verified.members.some((member) => member.userId !== ownUser);
   // This device's own verified state, when it still holds the group.
@@ -4023,7 +4213,65 @@ export async function resetProjectGroup(
   if (leaves.some((leaf) => leaf.userId !== ctx.account.userId)) {
     refuse('Another account holds a key in this project.');
   }
-  const { roles, others } = await newestRoles(ctx, ref, group);
+  const priorKeyEpoch = group.keyEpochBase + group.epoch;
+  const head = ctx.account.list.entries.at(-1)!;
+  const approve = async (value: {
+    manifest: MlsAuthorityManifest;
+    latestKeyEpoch: number;
+    latestGroupInfo: string;
+  }) => {
+    if (
+      value.manifest.ownerUserId !== ctx.account.userId ||
+      value.latestKeyEpoch !== priorKeyEpoch ||
+      value.manifest.roots.at(-1)!.generation !== group.generation
+    )
+      throw new ProjectGroupError(
+        'reset-refused',
+        'The recovery record does not name this owner and group.'
+      );
+    return authority.sign({
+      userId: ctx.account.userId,
+      generation: authority.generation,
+      entrySequence: head.entry.sequence,
+      entryHash: head.hash,
+      projectId,
+      priorGroupGeneration: group.generation,
+      priorKeyEpoch,
+      issuedAt: Date.now(),
+      authorityHash: await mlsAuthorityResetHash(
+        value.manifest,
+        value.latestKeyEpoch,
+        value.latestGroupInfo
+      )
+    });
+  };
+  let signed: SignedStatement | undefined;
+  let identityApproved = false;
+  try {
+    await loadProjectAuthority(ctx, projectId);
+  } catch (error) {
+    if (
+      !(error instanceof ProjectAuthorityError) ||
+      error.code !== 'signer-untrusted' ||
+      !ctx.api.authority
+    )
+      throw error;
+    const candidate = (await ctx.api.authority(projectId)).authority;
+    if (!candidate) throw error;
+    const value = decodeMlsAuthorityTrust(bytes(candidate.record));
+    signed = await approve({
+      ...value,
+      manifest: decodeMlsAuthorityManifest(bytes(value.manifest.statement))
+    });
+    await loadProjectAuthority(ctx, projectId, { identityReset: signed });
+    identityApproved = true;
+  }
+  const { roles, others } = await newestRoles(
+    ctx,
+    ref,
+    group,
+    identityApproved
+  );
   if (
     others ||
     !roles ||
@@ -4033,19 +4281,11 @@ export async function resetProjectGroup(
   ) {
     refuse('Only a project whose only member is you can be reset.');
   }
-  const priorKeyEpoch = group.keyEpochBase + group.epoch;
   const keys = await carriedKeys(ctx, projectId, priorKeyEpoch);
-  const head = ctx.account.list.entries.at(-1)!;
-  const signed = await authority.sign({
-    userId: ctx.account.userId,
-    generation: authority.generation,
-    entrySequence: head.entry.sequence,
-    entryHash: head.hash,
-    projectId,
-    priorGroupGeneration: group.generation,
-    priorKeyEpoch,
-    issuedAt: Date.now()
-  });
+  if (!signed) {
+    const current = (await loadProjectAuthority(ctx, projectId))!;
+    signed = await approve({ ...current.value, manifest: current.manifest });
+  }
   const change = await ctx.sessions.createGroup(
     ref,
     device,
@@ -4068,7 +4308,8 @@ export async function resetProjectGroup(
     keyEpoch,
     material.groupInfo,
     undefined,
-    group.generation + 1
+    group.generation + 1,
+    signed
   );
   const archive = await sealArchive(
     device,

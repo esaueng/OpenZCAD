@@ -290,7 +290,8 @@ export class MlsEngine implements EngineApi {
           JSON.stringify(request.records.map(toHex)),
           request.targetRecord,
           request.ownerUserId,
-          directoryJson(request.directory)
+          directoryJson(request.directory),
+          request.authenticatedGroupInfo ?? new Uint8Array()
         )
       )
     );

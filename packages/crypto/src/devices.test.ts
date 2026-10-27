@@ -1243,6 +1243,35 @@ describe('group resets', () => {
     expect(encodeGroupReset(verified)).toEqual(signed.statement);
   });
 
+  it('binds version-two reset approval to the exact prior authority hash', async () => {
+    const { f, list, value } = await resetFixture();
+    const authorityHash = new Uint8Array(32).fill(7);
+    const signed = await signGroupReset(f.identity.privateKey, {
+      ...value,
+      authorityHash
+    });
+    expect(signed.statement[3]).toBe(2);
+    expect(await verifyGroupReset(signed, list, { generation: 1 })).toEqual({
+      ...value,
+      authorityHash
+    });
+    const changed = new Uint8Array(signed.statement);
+    changed[changed.length - 1] = changed[changed.length - 1]! ^ 1;
+    await rejectsWith(
+      verifyGroupReset({ ...signed, statement: changed }, list, {
+        generation: 1
+      }),
+      'authentication-failed'
+    );
+    throwsWith(
+      () =>
+        decodeGroupReset(
+          signed.statement.subarray(0, signed.statement.length - 1)
+        ),
+      'malformed'
+    );
+  });
+
   it('refuses another signer, user, generation, entry or malformed bytes', async () => {
     const { f, list, value } = await resetFixture();
     const other = await generateSigningKeyPair(false);
@@ -1287,7 +1316,7 @@ describe('group resets', () => {
     trailing.set(signed.statement);
     throwsWith(() => decodeGroupReset(trailing), 'malformed');
     const future = new Uint8Array(signed.statement);
-    future[3] = 2;
+    future[3] = 3;
     throwsWith(() => decodeGroupReset(future), 'unsupported-version');
     // A cutoff statement is not a reset, whatever its signature.
     throwsWith(

@@ -2,6 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { loadWasm } from './test-support';
 
 describe('raw MLS WASM boundaries', () => {
+  it('covers the full supported key archive while retaining authority proof budgets', () => {
+    const wasm = loadWasm();
+    const check = (count: number, anchor = new Uint8Array()) =>
+      wasm.verifyEpochAuthority(
+        'project',
+        anchor,
+        JSON.stringify(Array.from({ length: count }, () => '')),
+        new Uint8Array(),
+        'owner',
+        '{"users":[]}',
+        new Uint8Array()
+      );
+    expect(() => check(8193)).toThrow(/record budget/);
+    let refused: unknown;
+    try {
+      check(8192);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeDefined(); // Invalid empty MLS target, rather than a valid history.
+    expect(String(refused)).not.toContain('record budget');
+    expect(() => check(0, new Uint8Array(64 * 1024 * 1024 + 1))).toThrow(
+      /byte budget/
+    );
+  });
   it.each([undefined, null])(
     'rejects a revoked device with cutoff %s below the TypeScript wrapper',
     (cutoff) => {

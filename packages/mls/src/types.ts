@@ -227,6 +227,10 @@ export interface EpochAuthorityRequest {
   targetRecord: Uint8Array;
   ownerUserId: string;
   directory: DeviceDirectory;
+  /** Independently MAC/signature-authenticated account state, never an archive hint.
+   * Records must extend through it as well as the requested epoch. Unknown-time
+   * revocations are historical only within this exact verified prefix. */
+  authenticatedGroupInfo?: Uint8Array;
 }
 
 export interface EpochAuthority {

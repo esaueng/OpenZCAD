@@ -4,6 +4,7 @@ import {
   equalBytes,
   fromBase64Url,
   toBase64Url,
+  toHex,
   isUint,
   snapshotBytes,
   utf8,
@@ -13,6 +14,9 @@ import {
   signStatement,
   statementValid,
   verifyingKey,
+  decodeGroupReset,
+  verifyGroupReset,
+  type VerifiedDeviceList,
   type SignedStatement
 } from './devices';
 import { E2eeError } from './errors';
@@ -29,6 +33,12 @@ export interface MlsAuthorityRoot {
   readonly generation: number;
   readonly keyEpochBase: number;
   readonly groupInfo: string;
+  /** For a reset root, the authenticated terminal state of its predecessor. */
+  readonly previousGroupInfo?: string;
+  readonly resetAuthority?: {
+    readonly statement: string;
+    readonly signature: string;
+  };
 }
 export interface MlsAuthorityCheckpoint {
   readonly generation: number;
@@ -129,7 +139,16 @@ export function encodeMlsAuthorityManifest(value: MlsAuthorityManifest): Bytes {
     return {
       generation,
       keyEpochBase: root.keyEpochBase,
-      groupInfo: binary(root.groupInfo)
+      groupInfo: binary(root.groupInfo),
+      ...(generation === 0
+        ? {}
+        : {
+            previousGroupInfo: binary(root.previousGroupInfo),
+            resetAuthority: {
+              statement: binary(root.resetAuthority?.statement, 1024),
+              signature: binary(root.resetAuthority?.signature, 65)
+            }
+          })
     };
   });
   const checkpoint = value.checkpoint;
@@ -179,6 +198,71 @@ export function decodeMlsAuthorityManifest(
     signerDeviceId: record.signerDeviceId
   };
 }
+/** The identity's reset approval binds the prior roots and exact terminal state. */
+export async function mlsAuthorityResetHash(
+  manifest: MlsAuthorityManifest,
+  latestKeyEpoch: number,
+  latestGroupInfo: string
+): Promise<Bytes> {
+  const normalized = decodeMlsAuthorityManifest(
+    encodeMlsAuthorityManifest({ ...manifest, checkpoint: null })
+  );
+  if (!uint(latestKeyEpoch)) fail();
+  return new Uint8Array(
+    await subtle().digest(
+      'SHA-256',
+      encode({
+        v: 1,
+        kind: 'MLS-authority-reset',
+        projectId: normalized.projectId,
+        ownerUserId: normalized.ownerUserId,
+        ownerIdentityKeyHash: normalized.ownerIdentityKeyHash,
+        roots: normalized.roots,
+        latestKeyEpoch,
+        latestGroupInfo: binary(latestGroupInfo)
+      })
+    )
+  );
+}
+
+/** Verify a reset's identity approval without trusting its server metadata. */
+export async function verifyMlsAuthorityReset(
+  manifest: MlsAuthorityManifest,
+  generation: number,
+  owner: VerifiedDeviceList
+) {
+  const root = manifest.roots[generation];
+  if (
+    !root?.previousGroupInfo ||
+    !root.resetAuthority ||
+    generation < 1 ||
+    owner.userId !== manifest.ownerUserId ||
+    toHex(owner.identityKeyHash) !== manifest.ownerIdentityKeyHash
+  )
+    fail();
+  const signed = {
+    statement: fromBase64Url(root.resetAuthority.statement),
+    signature: fromBase64Url(root.resetAuthority.signature)
+  };
+  const value = await verifyGroupReset(signed, owner, {
+    generation: decodeGroupReset(signed.statement).generation
+  });
+  const expected = await mlsAuthorityResetHash(
+    { ...manifest, roots: manifest.roots.slice(0, generation) },
+    root.keyEpochBase - 1,
+    root.previousGroupInfo
+  );
+  if (
+    value.projectId !== manifest.projectId ||
+    value.priorGroupGeneration + 1 !== generation ||
+    value.priorKeyEpoch + 1 !== root.keyEpochBase ||
+    !value.authorityHash ||
+    !equalBytes(value.authorityHash, expected)
+  )
+    fail('The identity reset does not bind these roots and membership state.');
+  return value;
+}
+
 export async function signMlsAuthorityManifest(
   key: SigningPrivateKey,
   value: MlsAuthorityManifest

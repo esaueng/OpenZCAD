@@ -8,6 +8,9 @@ import {
   toBase64Url,
   toHex,
   verifyMlsAuthorityManifest,
+  verifyMlsAuthorityReset,
+  mlsAuthorityResetHash,
+  verifyGroupReset,
   type MlsAuthorityManifest,
   type MlsAuthorityTrust,
   type SignedStatement,
@@ -179,6 +182,16 @@ export async function cachedProjectAuthorityManifest(
   const local = await storeFor(ctx).read(ctx.account.userId, projectId);
   return local.manifest ? signed(local.manifest) : null;
 }
+/** Previously authenticated local state remains a pin, never a server hint. */
+export async function cachedProjectAuthorityState(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<MlsAuthorityTrust | null> {
+  const local = await storeFor(ctx).read(ctx.account.userId, projectId);
+  return local.accepted
+    ? decodeMlsAuthorityTrust(fromBase64Url(local.accepted.authority.record))
+    : null;
+}
 export interface TrustedProjectAuthority {
   readonly record: E2eeProjectAuthorityRecord;
   readonly value: MlsAuthorityTrust;
@@ -187,7 +200,8 @@ export interface TrustedProjectAuthority {
 /** Both the account MAC and the currently certified device signature must verify. */
 export async function loadProjectAuthority(
   ctx: ProjectGroupContext,
-  projectId: string
+  projectId: string,
+  options: { readonly identityReset?: SignedStatement } = {}
 ): Promise<TrustedProjectAuthority | null> {
   const guard = sessionGuard();
   if (!ctx.api.authority)
@@ -204,6 +218,7 @@ export async function loadProjectAuthority(
   const record = fromBase64Url(authority.record);
   const hash = await hashOf(record);
   const value = decodeMlsAuthorityTrust(record);
+  const manifest = decodeMlsAuthorityManifest(signed(value.manifest).statement);
   if (
     value.userId !== ctx.account.userId ||
     value.projectId !== projectId ||
@@ -224,7 +239,35 @@ export async function loadProjectAuthority(
         (entry) => entry.kind === 'device' && entry.id === value.signerDeviceId
       )?.device
     : undefined;
-  const signer = live ?? retired;
+  let recoverySigner: typeof live;
+  if (!live && !retired && options.identityReset) {
+    const reset = await verifyGroupReset(
+      options.identityReset,
+      ctx.account.list,
+      { generation: ctx.account.generation ?? 1 }
+    );
+    const expected = await mlsAuthorityResetHash(
+      manifest,
+      value.latestKeyEpoch,
+      value.latestGroupInfo
+    );
+    if (
+      reset.projectId !== projectId ||
+      reset.priorKeyEpoch !== value.latestKeyEpoch ||
+      reset.priorGroupGeneration !== manifest.roots.at(-1)!.generation ||
+      reset.entrySequence !== ctx.account.list.head.sequence ||
+      manifest.ownerUserId !== ctx.account.userId ||
+      manifest.ownerIdentityKeyHash !==
+        toHex(ctx.account.list.identityKeyHash) ||
+      !reset.authorityHash ||
+      !same(reset.authorityHash, expected)
+    )
+      fail('The identity reset does not approve this project authority state.');
+    recoverySigner = ctx.account.list.revoked.find(
+      (entry) => entry.kind === 'device' && entry.id === value.signerDeviceId
+    )?.device;
+  }
+  const signer = live ?? retired ?? recoverySigner;
   if (!signer)
     throw new ProjectAuthorityError(
       'No currently certified device vouches for this project authority record.',
@@ -250,7 +293,6 @@ export async function loadProjectAuthority(
     key.fill(0);
     account.key.fill(0);
   }
-  const manifest = decodeMlsAuthorityManifest(signed(value.manifest).statement);
   const context = parseGroupInfoContext(fromBase64Url(value.latestGroupInfo));
   if (
     manifest.projectId !== projectId ||
@@ -330,6 +372,14 @@ export async function acceptProjectAuthorityManifest(
   const signer = owner?.devices.find(
     (device) => device.deviceId === value.signerDeviceId
   );
+  if (value.roots.length > 1) {
+    if (!owner)
+      fail(
+        'The reset history needs the independently verified owner identity.'
+      );
+    for (let generation = 1; generation < value.roots.length; generation++)
+      await verifyMlsAuthorityReset(value, generation, owner);
+  }
   if (!signer) {
     if (
       local.manifest?.statement === toBase64Url(candidate.statement) &&

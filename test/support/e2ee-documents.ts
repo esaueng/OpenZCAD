@@ -46,7 +46,10 @@ import {
   type MlsSessionStore
 } from '../../apps/web/src/lib/e2ee/mls/sessionStore';
 import type { CertifyingDevice } from '../../apps/web/src/lib/e2ee/mls/certify';
-import { memoryProjectAuthorityStore } from '../../apps/web/src/lib/e2ee/projectAuthorityStore';
+import {
+  memoryProjectAuthorityStore,
+  type ProjectAuthorityStore
+} from '../../apps/web/src/lib/e2ee/projectAuthorityStore';
 import {
   createEncryptedDocumentsApi,
   type EncryptedDocumentsApi
@@ -466,7 +469,7 @@ export interface Device {
 
 export interface DeviceOptions {
   revocations?: ProjectGroupContext['revocations'];
-  authority?: import('../../apps/web/src/lib/e2ee/projectAuthorityStore').ProjectAuthorityStore;
+  authority?: ProjectAuthorityStore;
   mls?: MlsSessionStore;
   pins?: VersionPinStore;
   cutoffs?: Map<string, VersionCutoff>;

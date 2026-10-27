@@ -232,7 +232,13 @@ it('refuses a signed new generation that reassigns an already accepted key epoch
       ...trusted,
       roots: [
         ...trusted.roots,
-        { ...trusted.roots[0]!, generation: 1, keyEpochBase: 1 }
+        {
+          ...trusted.roots[0]!,
+          generation: 1,
+          keyEpochBase: 1,
+          previousGroupInfo: value.latestGroupInfo,
+          resetAuthority: { statement: 'AA', signature: 'AA' }
+        }
       ],
       checkpoint: null
     }

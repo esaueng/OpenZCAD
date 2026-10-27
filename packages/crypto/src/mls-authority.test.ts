@@ -24,7 +24,13 @@ const manifest: MlsAuthorityManifest = {
   ownerIdentityKeyHash: '1'.repeat(64),
   roots: [
     { generation: 0, keyEpochBase: 0, groupInfo: 'AA' },
-    { generation: 1, keyEpochBase: 7, groupInfo: 'AQ' }
+    {
+      generation: 1,
+      keyEpochBase: 7,
+      groupInfo: 'AQ',
+      previousGroupInfo: 'Aw',
+      resetAuthority: { statement: 'AA', signature: 'AA' }
+    }
   ],
   checkpoint: { generation: 1, keyEpoch: 9, groupInfo: 'Ag' },
   signerDeviceId: 'owner_laptop'
