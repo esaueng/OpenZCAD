@@ -5052,7 +5052,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // A staged session reserves the part only under its live lease, of
     // either direction (#925 follow-up: a decrypt staging's session too).
     const leaseFence = this.uploadLeaseFence(session);
-    let reserved: number | undefined;
+    let reserved: string | undefined;
     try {
       const result = await this.env.DB.prepare(
         `INSERT INTO artifact_upload_parts
@@ -5067,7 +5067,8 @@ export class D1R2PersistenceService implements PersistenceService {
          ON CONFLICT(upload_session_id, part_number) DO UPDATE SET
            bytes = excluded.bytes,
            etag = NULL,
-           reservation_token = excluded.reservation_token`
+           reservation_token = excluded.reservation_token
+         RETURNING reservation_token`
       )
         .bind(
           uploadSessionId,
@@ -5076,15 +5077,17 @@ export class D1R2PersistenceService implements PersistenceService {
           reservationToken,
           ...(leaseFence ? [uploadSessionId] : [])
         )
-        .run();
-      reserved = result.meta?.changes;
+        .first<{ reservation_token: string }>();
+      // Reservation triggers also update the session and account totals.
+      // Match this write's token instead of D1's trigger-inclusive count.
+      reserved = result?.reservation_token;
     } catch (error) {
       throw artifactAccountingError(
         error,
         (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
       );
     }
-    if (leaseFence && reserved !== 1) {
+    if (leaseFence && reserved !== reservationToken) {
       await this.refuseIfUploadLeaseLost(session);
       throw new ArtifactStorageError('Upload part could not be reserved.');
     }

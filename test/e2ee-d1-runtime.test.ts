@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import {
+  encryptContentBlob,
+  EnvelopeKey,
+  parseEnvelope
+} from '@openzcad/crypto';
 import { toUserId } from '@openzcad/shared';
 import { handleE2eeContactsRequest } from '../apps/web/worker/e2eeContacts';
 
@@ -130,4 +135,87 @@ it('loads contacts with every migration present under the real compound SELECT c
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ people: [] });
+});
+
+it('uploads and finalizes a staged asset with trigger-inclusive reservation accounting', async () => {
+  const id = 'proj_d1_staging';
+  const now = Date.now();
+  const staging = { leaseId: 'l'.repeat(43), now };
+  await proxy.env.DB.batch([
+    proxy.env.DB.prepare(
+      `INSERT INTO projects (id, user_id, name, document_json, updated_at)
+      VALUES (?, ?, 'Staging', '{}', '2026-10-27')`
+    ).bind(id, owner),
+    proxy.env.DB.prepare(
+      `INSERT INTO e2ee_project_migrations
+      (project_id, direction, state, owner_user_id, device_id, lease_id, lease_expires_at,
+       source_version, source_measurement_revision, started_at, updated_at)
+      VALUES (?, 'encrypt', 'staging', ?, 'local-device', ?, ?, 1, 0, '2026-10-27', '2026-10-27')`
+    ).bind(id, owner, staging.leaseId, now + 60_000)
+  ]);
+  const service = new D1R2PersistenceService({
+    DB: proxy.env.DB,
+    ARTIFACTS: proxy.env.ARTIFACTS,
+    E2EE_MIGRATION_ENABLED: 'true'
+  });
+  const sealed = await encryptContentBlob(
+    EnvelopeKey.generate(),
+    'import-source',
+    new TextEncoder().encode('runtime asset'),
+    { compression: 'none' }
+  );
+  const { blobId } = sealed.reference;
+  const authorization = { sql: '1', binds: [] };
+  const started = await service.createEncryptedBlobUpload(
+    owner,
+    { projectId: id, blobId, kind: 'import-source' },
+    authorization,
+    staging
+  );
+  if (started.committed) throw new Error('Expected a new upload session');
+  const bytes = sealed.envelope.buffer.slice(
+    sealed.envelope.byteOffset,
+    sealed.envelope.byteOffset + sealed.envelope.byteLength
+  );
+  await service.putUpload(owner, started.session.uploadSessionId, bytes);
+  await service.putUpload(owner, started.session.uploadSessionId, bytes);
+  const result = await service.finalizeEncryptedBlob(
+    owner,
+    {
+      projectId: id,
+      blobId,
+      uploadSessionId: started.session.uploadSessionId,
+      dedupeTag: null
+    },
+    authorization,
+    (head) => {
+      parseEnvelope(head);
+    },
+    staging
+  );
+  expect(
+    new Uint8Array(
+      await (await proxy.env.ARTIFACTS.get(result.objectKey))!.arrayBuffer()
+    )
+  ).toEqual(sealed.envelope);
+  expect(
+    await proxy.env.DB.prepare('SELECT id FROM upload_sessions WHERE id = ?')
+      .bind(started.session.uploadSessionId)
+      .first()
+  ).toBeNull();
+  expect(
+    await proxy.env.DB.prepare(
+      'SELECT reserved_bytes, finalized_bytes FROM artifact_account_usage WHERE owner_user_id = ?'
+    )
+      .bind(owner)
+      .first()
+    // Staged ciphertext is not charged until cutover (migration decision M10).
+  ).toEqual({ reserved_bytes: 0, finalized_bytes: 0 });
+  expect(
+    await proxy.env.DB.prepare(
+      'SELECT ciphertext_bytes FROM e2ee_content_blobs WHERE project_id = ? AND blob_id = ?'
+    )
+      .bind(id, blobId)
+      .first()
+  ).toEqual({ ciphertext_bytes: sealed.envelope.byteLength });
 });
