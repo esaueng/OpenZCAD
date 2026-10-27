@@ -143,7 +143,10 @@ describe('the section panel', () => {
     expect(onSectionCommit).not.toHaveBeenCalled();
     fireEvent.pointerUp(slider);
     expect(onSectionCommit).toHaveBeenCalledOnce();
+    fireEvent.change(slider, { target: { value: '5' } });
     fireEvent.keyUp(slider, { key: 'ArrowRight' });
+    expect(onSectionCommit).toHaveBeenCalledTimes(2);
+    fireEvent.blur(slider);
     expect(onSectionCommit).toHaveBeenCalledTimes(2);
   });
 });

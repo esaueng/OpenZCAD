@@ -249,6 +249,23 @@ test('exports the exact section of a transformed body as a measured DXF', async 
   await expect(page.getByRole('contentinfo')).toContainText(
     'Exported the XY section to Transformed-Section-section.dxf.'
   );
+
+  // A persisted cut restores its exact curves, not only its clipping settings.
+  const position = page.getByLabel('Cut position', { exact: true });
+  await position.fill('11.125');
+  await position.press('Enter');
+  await page.getByRole('button', { name: 'Flip cut direction' }).click();
+  await expect(exportButton).toBeEnabled();
+  await page.reload();
+  await expect(position).toHaveValue('11.125', { timeout: 30_000 });
+  await expect(
+    page.getByRole('button', { name: 'Flip cut direction' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(exportButton).toBeEnabled({ timeout: 30_000 });
+  await expect(page.locator('.rail-section-state-kind')).toHaveText('Exact');
+  await expect
+    .poll(async () => (await sectionState(page)).exactSections.length)
+    .toBe(1);
 });
 
 test('keeps a section hole in the exact DXF and shuts export during a posed preview', async ({

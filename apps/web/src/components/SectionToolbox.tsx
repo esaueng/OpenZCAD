@@ -54,6 +54,7 @@ export function SectionToolbox({
   const [sourceOffset, setSourceOffset] = useState(section.offset);
   const [draft, setDraft] = useState(String(section.offset));
   const cancelEdit = useRef(false);
+  const pendingSliderOffset = useRef<number | null>(null);
   if (sourceOffset !== section.offset) {
     setSourceOffset(section.offset);
     setDraft(String(section.offset));
@@ -115,6 +116,13 @@ export function SectionToolbox({
       // Pass the committed value: React has not rendered the new offset yet.
       onCommit(next);
     }
+  }
+
+  function commitSlider() {
+    const offset = pendingSliderOffset.current;
+    if (offset === null) return;
+    pendingSliderOffset.current = null;
+    onCommit(offset);
   }
 
   return (
@@ -196,11 +204,15 @@ export function SectionToolbox({
         max={range.max}
         step="any"
         value={section.offset}
-        onChange={(event) => onOffset(Number(event.target.value))}
-        onPointerUp={() => onCommit()}
-        onPointerCancel={() => onCommit()}
-        onKeyUp={() => onCommit()}
-        onBlur={() => onCommit()}
+        onChange={(event) => {
+          const offset = Number(event.target.value);
+          pendingSliderOffset.current = offset;
+          onOffset(offset);
+        }}
+        onPointerUp={commitSlider}
+        onPointerCancel={commitSlider}
+        onKeyUp={commitSlider}
+        onBlur={commitSlider}
         aria-label="Section plane offset"
         aria-valuetext={`${section.offset} ${units}`}
       />

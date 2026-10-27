@@ -3048,6 +3048,8 @@ export function App() {
   // one set of visible bodies. Everything that invalidates it bumps this
   // token, and an answer that arrives under an old token is dropped.
   const sectionTokenRef = useRef(0);
+  const pendingSectionRestoreRef = useRef<string | null>(null);
+  const restoredSectionRequestTokenRef = useRef<number | null>(null);
   // Key by membership so an unrelated dimension edit keeps the viewport's
   // body array stable instead of disposing and uploading identical meshes.
   const parameterHiddenBodyKey = useMemo(
@@ -8015,6 +8017,7 @@ export function App() {
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
     if (restoreView) {
+      pendingSectionRestoreRef.current = normalized.projectId;
       restoreProjectView(normalized.projectId, {
         projection: appSettings.viewport.defaultProjection,
         showGrid: appSettings.viewport.showGrid,
@@ -10469,6 +10472,12 @@ export function App() {
     setSectionOutline({ kind: 'computing' });
     const next = await resolveSectionOutline(geometry, view, section);
     if (token === sectionTokenRef.current) {
+      if (
+        restoredSectionRequestTokenRef.current === token &&
+        pendingSectionRestoreRef.current === view.document.projectId
+      ) {
+        pendingSectionRestoreRef.current = null;
+      }
       setSectionOutline(next);
     }
   }
@@ -10505,6 +10514,9 @@ export function App() {
   const sectionBodyKey = viewportGeometry.bodies
     .map((body) => body.bodyId)
     .join('|');
+  // A scene starting or retiring can report a new empty array. Only a
+  // different set of posed bodies invalidates an exact section.
+  const sectionPosedBodyKey = viewportGeometry.drawnElsewhere.join('|');
   /**
    * The live document is keyed by VERSION and everything drawn in its place
    * by IDENTITY, because that is how truthful each one is. `doc` is re-minted
@@ -10518,8 +10530,43 @@ export function App() {
     doc?.version,
     drawnInstead,
     viewportGeometry.standIns,
-    viewportGeometry.drawnElsewhere,
+    sectionPosedBodyKey,
     sectionBodyKey
+  ]);
+
+  const restoreExactSectionRef = useRef(requestExactSection);
+  restoreExactSectionRef.current = requestExactSection;
+  useEffect(() => {
+    if (!doc || pendingSectionRestoreRef.current !== doc.projectId) return;
+    const section = viewerSettings.sectionView;
+    if (!section) {
+      pendingSectionRestoreRef.current = null;
+      return;
+    }
+    // Stored clipping settings arrive before the worker has rebuilt the
+    // project. Recreate their exact curves once this document is on screen.
+    if (
+      !geometry.isReadyFor(doc) ||
+      viewportGeometry.document !== doc ||
+      viewportGeometry.standIns?.length ||
+      viewportGeometry.drawnElsewhere.length
+    ) {
+      return;
+    }
+    // A final viewport/rebuild update can invalidate the first request.
+    // Keep the restore pending until a current answer is actually applied;
+    // the token prevents duplicate requests for an unchanged source.
+    if (restoredSectionRequestTokenRef.current === sectionTokenRef.current) {
+      return;
+    }
+    restoredSectionRequestTokenRef.current = sectionTokenRef.current + 1;
+    void restoreExactSectionRef.current(section);
+  }, [
+    doc,
+    geometry,
+    viewportGeometry,
+    viewerSettings.sectionView,
+    sectionOutline.kind
   ]);
 
   // Follows the live section too, so a project's restored cut comes back on
@@ -10536,6 +10583,7 @@ export function App() {
    * and switching back on restores the complete cut last used.
    */
   function toggleSectionView() {
+    pendingSectionRestoreRef.current = null;
     if (viewerSettings.sectionView) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       clearSectionOutline();
@@ -10553,6 +10601,7 @@ export function App() {
 
   /** Cuts on `plane`, starting at the model's centre along its axis. */
   function setSectionPlane(plane: SectionPlaneId) {
+    pendingSectionRestoreRef.current = null;
     const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
     // The previous plane's exact section describes a cut that is gone.
@@ -10568,6 +10617,7 @@ export function App() {
   }
 
   function setSectionOffset(offset: number) {
+    pendingSectionRestoreRef.current = null;
     // The cut has moved, so the exact section that was on screen belongs to
     // a plane that is no longer there. Back to the clipped preview.
     clearSectionOutline();

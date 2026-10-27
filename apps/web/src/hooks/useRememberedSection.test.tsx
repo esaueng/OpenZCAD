@@ -46,6 +46,13 @@ describe('useRememberedSection', () => {
   });
 
   it('does not restore another project’s offset when the new project has no cut', () => {
+    const initialProps: {
+      projectId: string;
+      sectionView: SectionViewSettings | undefined;
+    } = {
+      projectId: 'first',
+      sectionView: { plane: 'YZ', offset: 200, flipped: true }
+    };
     const hook = renderHook(
       ({
         projectId,
@@ -55,11 +62,7 @@ describe('useRememberedSection', () => {
         sectionView: SectionViewSettings | undefined;
       }) => useRememberedSection(sectionView, projectId),
       {
-        initialProps: {
-          projectId: 'first',
-          sectionView: { plane: 'YZ', offset: 200, flipped: true } as
-            SectionViewSettings | undefined
-        }
+        initialProps
       }
     );
     hook.rerender({ projectId: 'first', sectionView: undefined });

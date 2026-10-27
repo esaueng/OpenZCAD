@@ -24,6 +24,29 @@ function setup() {
 }
 
 describe('compact section controls', () => {
+  it.each(['pointerUp', 'keyUp', 'pointerCancel'] as const)(
+    'commits a changed slider once on %s and skips a redundant blur',
+    (release) => {
+      const { onCommit } = setup();
+      const slider = screen.getByRole('slider');
+      fireEvent.change(slider, { target: { value: '3.125' } });
+      fireEvent[release](slider);
+      fireEvent.blur(slider);
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith(3.125);
+    }
+  );
+
+  it('commits on blur only if the changed slider has not been released', () => {
+    const { onCommit } = setup();
+    const slider = screen.getByRole('slider');
+    fireEvent.blur(slider);
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.change(slider, { target: { value: '7.5' } });
+    fireEvent.blur(slider);
+    fireEvent.pointerUp(slider);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith(7.5);
+  });
+
   it('commits a precise signed position without requesting exact geometry on every keystroke', () => {
     const { onOffset, onCommit } = setup();
     const input = screen.getByLabelText('Cut position');
