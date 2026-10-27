@@ -89,6 +89,7 @@ pub fn decode_epoch_record(bytes: &[u8]) -> Result<String, JsValue> {
         ratchet_tree: String,
         commit: String,
         proposals: Vec<String>,
+        members: Vec<session::LeafInfo>,
     }
     json(&Out {
         version: record.version,
@@ -97,7 +98,48 @@ pub fn decode_epoch_record(bytes: &[u8]) -> Result<String, JsValue> {
         ratchet_tree: hex::encode(&record.ratchet_tree),
         commit: hex::encode(&record.commit),
         proposals: record.proposals.iter().map(hex::encode).collect(),
+        members: archive::record_members(&record).map_err(to_js)?,
     })
+}
+
+/// Public historical authorization from an independently trusted anchor.
+#[wasm_bindgen(js_name = verifyEpochAuthority)]
+pub fn verify_epoch_authority(
+    project_id: &str,
+    anchor: &[u8],
+    records_json: &str,
+    target_record: &[u8],
+    owner_user_id: &str,
+    directory_json: &str,
+) -> Result<String, JsValue> {
+    if records_json.len() > 128 * 1024 * 1024 {
+        return Err(to_js(Error::input("epoch authority proof exceeds its byte budget")));
+    }
+    let encoded: Vec<String> =
+        serde_json::from_str(records_json).map_err(|e| to_js(Error::input(format!("epoch authority records: {e}"))))?;
+    if encoded.len() > 4096 {
+        return Err(to_js(Error::input("epoch authority proof exceeds its record budget")));
+    }
+    let records: Vec<Vec<u8>> = encoded
+        .iter()
+        .map(|value| hex::decode(value).map_err(|_| to_js(Error::input("epoch authority record is not hex"))))
+        .collect::<Result<_, _>>()?;
+    let total = records.iter().map(Vec::len).sum::<usize>() + anchor.len() + target_record.len();
+    if total > 64 * 1024 * 1024 {
+        return Err(to_js(Error::input("epoch authority proof exceeds its byte budget")));
+    }
+    let directory = Arc::new(DeviceDirectory::from_json(directory_json).map_err(to_js)?);
+    json(
+        &archive::verify_epoch_authority(
+            project_id.as_bytes(),
+            anchor,
+            &records,
+            target_record,
+            owner_user_id.as_bytes(),
+            directory,
+        )
+        .map_err(to_js)?,
+    )
 }
 
 #[wasm_bindgen]

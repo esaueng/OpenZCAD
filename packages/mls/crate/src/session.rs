@@ -72,7 +72,7 @@ pub struct LeafInfo {
     pub certification: String,
 }
 
-fn leaf_info(index: u32, identity: &SigningIdentity) -> Option<LeafInfo> {
+pub(crate) fn leaf_info(index: u32, identity: &SigningIdentity) -> Option<LeafInfo> {
     let credential = DeviceCredential::from_identity(identity).ok()?;
     Some(LeafInfo {
         index,
@@ -98,7 +98,7 @@ pub struct RolesInfo {
     pub users: Vec<RoleInfo>,
 }
 
-fn roles_info(roles: &ProjectRoles) -> RolesInfo {
+pub(crate) fn roles_info(roles: &ProjectRoles) -> RolesInfo {
     RolesInfo {
         rejoin_window: roles.rejoin_window,
         users: roles
@@ -578,7 +578,7 @@ impl Session {
                 group.context(),
                 &group.export_tree().to_bytes()?,
                 &pending.extensions,
-                directory.as_ref(),
+                directory,
             )?;
             self.policy.removals.lock().unwrap().merge(&verified);
             self.join_pending = None;
@@ -949,7 +949,7 @@ impl Session {
                     info.group_context(),
                     &tree.tree_data.to_bytes()?,
                     info.extensions(),
-                    self.policy.directory.get().as_ref(),
+                    self.policy.directory.get(),
                 )?;
             }
             self.rejoin_provisional(group_info, psk_epoch, psk, remove)
@@ -1001,7 +1001,7 @@ impl Session {
             records,
             group.context(),
             &group.export_tree().to_bytes()?,
-            self.policy.directory.get().as_ref(),
+            self.policy.directory.get(),
         )?;
         let result: Res<()> = (|| {
             let mut validation = Session::import(&backup, &self.project_id)?;
@@ -1518,7 +1518,7 @@ mod archive_tests {
             .map(|s| {
                 serde_json::json!({
                     "deviceId": display_id(&s.device_id), "status": "active",
-                    "leafKeys": [{"key": h(&s.signature_key()), "certifiedEpoch": 2}]
+                    "leafKeys": [{"key": h(&s.signature_key()), "certifiedEpoch": if s.device_id == b"joiner" { 2 } else { 0 }}]
                 })
             })
             .collect();
@@ -1767,7 +1767,7 @@ mod checkpoint_tests {
             let keys = if uncertified.contains(&s.device_id.as_slice()) {
                 serde_json::json!([])
             } else {
-                serde_json::json!([{"key": h(&s.signature_key()), "certifiedEpoch": 5}])
+                serde_json::json!([{"key": h(&s.signature_key()), "certifiedEpoch": if [b"joiner".as_slice(), b"rejoiner".as_slice()].contains(&s.device_id.as_slice()) { 5 } else { 0 }}])
             };
             let mut entry = serde_json::json!({
                 "deviceId": display_id(&s.device_id), "status": "active", "leafKeys": keys
@@ -1918,6 +1918,121 @@ mod checkpoint_tests {
 
     fn reason(error: &Error) -> &'static str {
         error.reasons.first().map(|r| r.code).unwrap_or("")
+    }
+
+    #[test]
+    fn stateless_authority_returns_the_exact_historical_roster() {
+        let f = fixture();
+        let authority = crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            f.owner.policy.directory.get(),
+        )
+        .unwrap();
+        assert_eq!(authority.epoch, 3);
+        assert!(authority.members.iter().any(|m| m.device_id == "second"));
+        assert!(!authority
+            .members
+            .iter()
+            .any(|m| m.device_id == "removed" || m.device_id == "joiner"));
+        assert!(authority
+            .roles
+            .users
+            .iter()
+            .any(|r| r.user_id == "B" && r.role == "editor"));
+        let from_checkpoint = crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.checkpoint,
+            &[],
+            &f.records[2],
+            b"A",
+            f.owner.policy.directory.get(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(authority).unwrap(),
+            serde_json::to_value(from_checkpoint).unwrap()
+        );
+        assert!(crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"B",
+            f.owner.policy.directory.get(),
+        )
+        .is_err());
+        assert!(crate::archive::verify_epoch_authority(
+            b"another-project",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            f.owner.policy.directory.get(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn stateless_authority_checks_policy_even_for_validly_signed_commits() {
+        let mut f = fixture();
+        let editor_backup = f.others[2].export().unwrap();
+        for spec in [
+            serde_json::json!({"setRoles": [{"userId": "C", "role": "editor"}]}),
+            serde_json::json!({"setRoles": [{"userId": "A", "role": "editor"}, {"userId": "B", "role": "owner"}]}),
+            serde_json::json!({"remove": [0]}),
+        ] {
+            let mut editor = Session::import(&editor_backup, b"checkpoint-test").unwrap();
+            editor.policy.directory.set(f.owner.policy.directory.get());
+            editor.set_skip_send_checks(true);
+            editor
+                .commit(serde_json::from_value(spec.clone()).unwrap(), vec![])
+                .unwrap();
+            let target = record(editor.confirm_commit().unwrap());
+            let mut records = f.records.clone();
+            records.push(target.clone());
+            assert!(
+                crate::archive::verify_epoch_authority(
+                    b"checkpoint-test",
+                    &f.initial,
+                    &records,
+                    &target,
+                    b"A",
+                    f.owner.policy.directory.get(),
+                )
+                .is_err(),
+                "unauthorized signed history: {spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn historical_authority_applies_each_revocation_at_its_cutoff() {
+        let f = fixture();
+        let revoked = directory(&f.everyone(), &[b"owner"], &[]);
+        // Epoch 3 precedes this device's signed cutoff at epoch 4.
+        crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records[..3],
+            &f.records[2],
+            b"A",
+            revoked.clone(),
+        )
+        .unwrap();
+        // The same key signed the epoch-4/5 Commits; those are now forbidden.
+        assert!(crate::archive::verify_epoch_authority(
+            b"checkpoint-test",
+            &f.initial,
+            &f.records,
+            &f.records[4],
+            b"A",
+            revoked,
+        )
+        .is_err());
     }
 
     #[test]

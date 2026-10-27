@@ -24,6 +24,8 @@ import type {
   DeviceDirectory,
   EpochChange,
   EpochRecord,
+  EpochAuthority,
+  EpochAuthorityRequest,
   GroupInfoSummary,
   JoinArchive,
   Mls,
@@ -683,6 +685,17 @@ export class MlsProjectSessions {
    */
   async decodeEpochRecord(record: Uint8Array): Promise<EpochRecord> {
     return (await this.loader.get()).decodeEpochRecord(record);
+  }
+
+  async verifyEpochAuthority(
+    request: EpochAuthorityRequest
+  ): Promise<EpochAuthority> {
+    const guard = this.sessionGuard();
+    const result = await (
+      await this.loader.get()
+    ).verifyEpochAuthority(request);
+    guard.guard();
+    return result;
   }
 
   /** Sessions held in this page's memory (tests and diagnostics). */

@@ -1,8 +1,9 @@
 //! Authenticate removal history against the public MLS transcript, anchored
 //! to the GroupContext the Welcome (or external join) actually authenticates.
-//! This is not historical device-list authorization: today's revocations must
-//! not retroactively invalidate an old Commit. Live joins still use ProjectIdentity
-//! and ProjectRules. No archive state is installed until verification succeeds.
+//! Every Commit is also checked with ProjectIdentity and ProjectRules using
+//! verified certifications and the per-device revocations effective in its
+//! epoch. Later revocations do not retroactively invalidate an old Commit.
+//! No archive state is installed until verification succeeds.
 //!
 //! Replay starts from an anchor GroupInfo: the project's initial GroupInfo
 //! (epoch 0), or an owner-signed checkpoint (ADR-024, "Historical
@@ -16,72 +17,103 @@
 //! GroupContext and tree; its removal records (epochs up to K) are trusted on
 //! the owner's signature and must still agree exactly with the target's.
 
+use std::sync::Arc;
+
 use mls_rs::{
     external_client::{ExternalClient, ExternalReceivedMessage},
     group::{proposal::Proposal, CommitEffect, Sender},
-    ExtensionList, IdentityProvider, MlsMessage,
+    ExtensionList, MlsMessage,
 };
 use mls_rs_codec::{MlsDecode, MlsEncode};
-use mls_rs_core::{
-    group::GroupContext,
-    identity::{CredentialType, MemberValidationContext, SigningIdentity},
-    time::MlsTime,
-};
+use mls_rs_core::group::GroupContext;
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
+use serde::Serialize;
 
 use crate::{
     directory::{CredentialStatus, DeviceListVerifier},
-    error::{Error, PolicyError, Reason, Res},
+    error::{Error, Reason, Res},
     model::*,
-    policy::ProjectIdentity,
-    session::EpochRecordV1,
+    policy::{PolicyState, ProjectIdentity, ProjectRules},
+    session::{leaf_info, roles_info, EpochRecordV1, LeafInfo, RolesInfo},
 };
 
-#[derive(Clone, Default)]
-struct ArchiveIdentity;
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpochAuthority {
+    pub epoch: u64,
+    pub roles: RolesInfo,
+    pub members: Vec<LeafInfo>,
+    pub group_context: String,
+    pub ratchet_tree: String,
+}
 
-impl IdentityProvider for ArchiveIdentity {
-    type Error = PolicyError;
+struct ReplayResult {
+    removals: LeafRemovals,
+    authority: EpochAuthority,
+}
 
-    fn validate_member(
-        &self,
-        identity: &SigningIdentity,
-        _: Option<MlsTime>,
-        _: MemberValidationContext<'_>,
-    ) -> Result<(), Self::Error> {
-        DeviceCredential::from_identity(identity)?;
-        Ok(())
+fn check_roster(
+    context: &GroupContext,
+    members: &[mls_rs::group::Member],
+    directory: &dyn DeviceListVerifier,
+    owner: &[u8],
+) -> Res<ProjectRoles> {
+    let roles = ProjectRoles::from_extensions(&context.extensions).map_err(|r| Error::policy(vec![r]))?;
+    if !roles.check_shape().is_empty()
+        || roles.users.iter().any(|r| r.since > context.epoch)
+        || roles
+            .users
+            .iter()
+            .find(|r| r.role == Role::Owner)
+            .map(|r| r.user_id.as_slice())
+            != Some(owner)
+    {
+        return Err(Error::policy(vec![Reason::new(
+            "roles-invalid",
+            "historical roles change the trusted owner or name a future epoch",
+        )]));
     }
-
-    fn validate_external_sender(
-        &self,
-        _: &SigningIdentity,
-        _: Option<MlsTime>,
-        _: Option<&ExtensionList>,
-    ) -> Result<(), Self::Error> {
-        Err(Reason::new("proposal-forbidden", "external senders are not used").into())
+    for member in members {
+        let credential =
+            DeviceCredential::from_identity(&member.signing_identity).map_err(|r| Error::policy(vec![r]))?;
+        if roles.role(&credential.user_id).is_none()
+            || directory
+                .certified_epoch(
+                    &credential.user_id,
+                    &credential.device_id,
+                    member.signing_identity.signature_key.as_bytes(),
+                )
+                .is_none_or(|at| at > context.epoch)
+        {
+            return Err(Error::policy(vec![Reason::new(
+                "credential-unknown",
+                "historical tree contains a leaf not certified for this epoch",
+            )]));
+        }
     }
-
-    fn identity(&self, identity: &SigningIdentity, extensions: &ExtensionList) -> Result<Vec<u8>, Self::Error> {
-        ProjectIdentity::default().identity(identity, extensions)
-    }
-
-    fn valid_successor(
-        &self,
-        predecessor: &SigningIdentity,
-        successor: &SigningIdentity,
-        extensions: &ExtensionList,
-    ) -> Result<bool, Self::Error> {
-        ProjectIdentity::default().valid_successor(predecessor, successor, extensions)
-    }
-
-    fn supported_types(&self) -> Vec<CredentialType> {
-        vec![DEVICE_CREDENTIAL]
-    }
+    Ok(roles)
 }
 
 fn invalid(detail: &str) -> Error {
     Error::input(format!("removal archive: {detail}"))
+}
+
+/// Unverified roster hints, solely for verifying the embedded leaf
+/// certifications before the complete policy replay. Never authority.
+pub fn record_members(record: &EpochRecordV1) -> Res<Vec<LeafInfo>> {
+    use mls_rs::extension::built_in::RatchetTreeExt;
+    let mut input = record.ratchet_tree.as_slice();
+    let tree = RatchetTreeExt::mls_decode(&mut input).map_err(Error::codec)?;
+    if !input.is_empty() {
+        return Err(invalid("trailing bytes after record tree"));
+    }
+    Ok(tree
+        .tree_data
+        .roster()
+        .members()
+        .iter()
+        .filter_map(|m| leaf_info(m.index, &m.signing_identity))
+        .collect())
 }
 
 fn message(bytes: &[u8]) -> Res<MlsMessage> {
@@ -151,11 +183,38 @@ pub fn replay(
     records: &[Vec<u8>],
     target: &GroupContext,
     target_tree: &[u8],
-    directory: &dyn DeviceListVerifier,
+    directory: Arc<dyn DeviceListVerifier>,
 ) -> Res<LeafRemovals> {
+    let roles = ProjectRoles::from_extensions(&target.extensions).map_err(|r| Error::policy(vec![r]))?;
+    let owner = roles
+        .users
+        .iter()
+        .find(|r| r.role == Role::Owner)
+        .ok_or_else(|| invalid("target has no owner"))?
+        .user_id
+        .clone();
+    Ok(replay_authority(anchor, records, target, target_tree, directory, &owner)?.removals)
+}
+
+fn replay_authority(
+    anchor: &[u8],
+    records: &[Vec<u8>],
+    target: &GroupContext,
+    target_tree: &[u8],
+    directory: Arc<dyn DeviceListVerifier>,
+    owner: &[u8],
+) -> Res<ReplayResult> {
+    let anchor_epoch = message(anchor)?
+        .into_group_info()
+        .ok_or_else(|| invalid("anchor is not a GroupInfo"))?
+        .group_context()
+        .epoch;
+    let state = PolicyState::default();
+    state.directory.set(directory.at_epoch(anchor_epoch));
     let client = ExternalClient::builder()
         .crypto_provider(RustCryptoProvider::with_enabled_cipher_suites(vec![SUITE]))
-        .identity_provider(ArchiveIdentity)
+        .identity_provider(ProjectIdentity { state: state.clone() })
+        .mls_rules(ProjectRules { state: state.clone() })
         .extension_type(ROLES_EXT)
         .custom_proposal_types([mls_rs_core::group::ProposalType::SELF_REMOVE])
         .build();
@@ -163,6 +222,7 @@ pub fn replay(
     let initial = group.group_context().clone();
     let roles = ProjectRoles::from_extensions(&initial.extensions).map_err(|r| Error::policy(vec![r]))?;
     let members = group.roster().members();
+    check_roster(&initial, &members, directory.as_ref(), owner)?;
     if initial.group_id != target.group_id || !roles.check_shape().is_empty() {
         return Err(invalid("expected an anchor GroupInfo of this project's group"));
     }
@@ -180,8 +240,9 @@ pub fn replay(
         }
         LeafRemovals::default()
     } else {
-        checkpoint_removals(anchor, &initial, &roles, &members, directory)?
+        checkpoint_removals(anchor, &initial, &roles, &members, directory.as_ref())?
     };
+    *state.removals.lock().unwrap() = removals.clone();
     if target
         .epoch
         .checked_sub(initial.epoch)
@@ -198,6 +259,7 @@ pub fn replay(
             return Err(invalid("invalid or nonconsecutive epoch record"));
         }
         let prior = group.roster().members();
+        state.directory.set(directory.at_epoch(record.epoch));
         for proposal in record.proposals {
             if !matches!(
                 group.process_incoming_message(message(&proposal)?)?,
@@ -245,11 +307,56 @@ pub fn replay(
         {
             return Err(invalid("record does not match the replayed transcript and tree"));
         }
+        check_roster(
+            group.group_context(),
+            &group.roster().members(),
+            directory.as_ref(),
+            owner,
+        )?;
+        *state.removals.lock().unwrap() = removals.clone();
     }
     if group.group_context() != target || group.export_tree()? != target_tree {
         return Err(invalid("history does not reach the authenticated joining state"));
     }
-    Ok(removals)
+    let roles = check_roster(target, &group.roster().members(), directory.as_ref(), owner)?;
+    Ok(ReplayResult {
+        removals,
+        authority: EpochAuthority {
+            epoch: target.epoch,
+            roles: roles_info(&roles),
+            members: group
+                .roster()
+                .members()
+                .iter()
+                .filter_map(|m| leaf_info(m.index, &m.signing_identity))
+                .collect(),
+            group_context: hex::encode(target.mls_encode_to_vec().map_err(Error::codec)?),
+            ratchet_tree: hex::encode(target_tree),
+        },
+    })
+}
+
+/// The caller independently authenticates the anchor and owner before using
+/// this result. No leaf key, live session or MLS epoch secret is required.
+pub fn verify_epoch_authority(
+    project_id: &[u8],
+    anchor: &[u8],
+    records: &[Vec<u8>],
+    target_record: &[u8],
+    owner: &[u8],
+    directory: Arc<dyn DeviceListVerifier>,
+) -> Res<EpochAuthority> {
+    let mut input = target_record;
+    let record = EpochRecordV1::mls_decode(&mut input).map_err(Error::codec)?;
+    if !input.is_empty() || record.version != 1 {
+        return Err(invalid("invalid target record"));
+    }
+    let mut context_bytes = record.group_context.as_slice();
+    let target = GroupContext::mls_decode(&mut context_bytes).map_err(Error::codec)?;
+    if !context_bytes.is_empty() || target.group_id != group_id(project_id) || target.epoch != record.epoch {
+        return Err(invalid("target records another project or epoch"));
+    }
+    Ok(replay_authority(anchor, records, &target, &record.ratchet_tree, directory, owner)?.authority)
 }
 
 pub fn verify(
@@ -258,7 +365,7 @@ pub fn verify(
     target: &GroupContext,
     target_tree: &[u8],
     extensions: &ExtensionList,
-    directory: &dyn DeviceListVerifier,
+    directory: Arc<dyn DeviceListVerifier>,
 ) -> Res<LeafRemovals> {
     let removals = replay(anchor, records, target, target_tree, directory)?;
     let carried = extensions

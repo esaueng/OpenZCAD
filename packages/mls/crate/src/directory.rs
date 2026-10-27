@@ -36,6 +36,9 @@ pub trait DeviceListVerifier: Send + Sync {
     /// Every revoked device whose revocation named this device as its
     /// replacement.
     fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Vec<Vec<u8>>;
+    /// Independently apply each device's signed cutoff, retaining earlier
+    /// revocations even when another device has a later cutoff.
+    fn at_epoch(&self, epoch: u64) -> Arc<dyn DeviceListVerifier>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -60,6 +63,18 @@ pub struct DeviceDirectory {
 }
 
 impl DeviceListVerifier for DeviceDirectory {
+    fn at_epoch(&self, epoch: u64) -> Arc<dyn DeviceListVerifier> {
+        let mut historical = self.clone();
+        for user in historical.users.values_mut() {
+            for device in user.devices.values_mut() {
+                device.leaf_keys.retain(|(_, at)| at.is_some_and(|at| at <= epoch));
+                if device.revoked && device.revocation_cutoff.is_some_and(|at| epoch < at) {
+                    device.revoked = false;
+                }
+            }
+        }
+        Arc::new(historical)
+    }
     fn credential_status(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> CredentialStatus {
         let Some(device) = self.users.get(user_id).and_then(|u| u.devices.get(device_id)) else {
             return CredentialStatus::Unknown;

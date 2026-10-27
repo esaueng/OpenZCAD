@@ -32,6 +32,10 @@ jobs:
           toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' packages/mls/crate/rust-toolchain.toml)"
           rustup toolchain install "$toolchain" --profile minimal --target wasm32-unknown-unknown
           cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - name: Test the MLS policy and archive verifier on Linux
+        run: |
+          toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' packages/mls/crate/rust-toolchain.toml)"
+          cargo +"$toolchain" test --locked --manifest-path packages/mls/crate/Cargo.toml
       - name: Rebuild and compare with the committed pkg
         run: packages/mls/build.sh --check
       - name: Keep the fresh build for inspection

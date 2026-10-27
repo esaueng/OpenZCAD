@@ -215,4 +215,24 @@ export interface EpochRecord {
   commit: Uint8Array;
   /** MLSMessage proposals the Commit applied by reference. */
   proposals: Uint8Array[];
+  /** Unverified hints for checking embedded certifications before replay. */
+  members: LeafInfo[];
+}
+
+export interface EpochAuthorityRequest {
+  projectId: string;
+  /** Authenticated independently by the application, including its owner. */
+  anchor: Uint8Array;
+  records: Uint8Array[];
+  targetRecord: Uint8Array;
+  ownerUserId: string;
+  directory: DeviceDirectory;
+}
+
+export interface EpochAuthority {
+  epoch: number;
+  roles: ProjectRoles;
+  members: LeafInfo[];
+  groupContext: Uint8Array;
+  ratchetTree: Uint8Array;
 }
