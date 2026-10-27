@@ -527,6 +527,56 @@ export const signWithIdentityKey =
 
 // --- Share keys -----------------------------------------------------------------
 
+/** Refresh each owned project's statements immediately after renewing its
+ * account-wide delegation for an owner-device removal. A failed project does
+ * not prevent the others; its stale signer/author set remains discoverable by
+ * ordinary upkeep on the next dialog open or save.
+ */
+export async function refreshOwnerShareAuthorities(
+  ctx: ShareLinksContext,
+  projectIds: readonly string[]
+): Promise<readonly { projectId: string; reason: string }[]> {
+  const failed: { projectId: string; reason: string }[] = [];
+  for (const projectId of new Set(projectIds)) {
+    try {
+      const head = await ctx.store.shareHead(projectId);
+      if (
+        (await projectOwnerOf(ctx.groups, projectId, head.keyEpoch)) !==
+        ctx.groups.account.userId
+      )
+        continue;
+      const snapshots = await publishShareSnapshots(ctx, projectId, head).catch(
+        (error: unknown): PublishOutcome => ({
+          published: [],
+          failed: [{ shareId: '*', reason: describe(error) }]
+        })
+      );
+      // Even if publication fails, remove the revoked signer from authority;
+      // an unavailable snapshot is preferable to extending removed access.
+      const outcome = await issueShareAuthorities(ctx, projectId, {
+        head,
+        force: true
+      });
+      if (
+        snapshots.failed.length ||
+        outcome.failed.length ||
+        outcome.needsConfirmation.length
+      ) {
+        failed.push({
+          projectId,
+          reason:
+            snapshots.failed[0]?.reason ??
+            outcome.failed[0]?.reason ??
+            'Sharing needs confirmation on a certified owner device.'
+        });
+      }
+    } catch (error) {
+      failed.push({ projectId, reason: describe(error) });
+    }
+  }
+  return failed;
+}
+
 /**
  * A link's share key: the newest of its wraps at or below `keyEpoch` that
  * opens under that epoch's project key to the grant's hash (a wrap that
