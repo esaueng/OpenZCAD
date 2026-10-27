@@ -69,6 +69,25 @@ describe('display-only solid section caps', () => {
       expect(geometry.getAttribute('position').array).toEqual(source);
     }
   );
+  it.each(['XY', 'XZ', 'YZ'] as const)(
+    'flips %s around the same offset and caps the other side',
+    (plane) => {
+      const normal = sectionClippingPlane({ plane, offset: 1 });
+      const flipped = sectionClippingPlane({ plane, offset: 1, flipped: true });
+      const positive = new THREE.Vector3(2, 2, 2);
+      expect(normal.distanceToPoint(positive)).toBeLessThan(0);
+      expect(flipped.distanceToPoint(positive)).toBeGreaterThan(0);
+      const cap = sectionCapGeometry(box(), flipped)!;
+      expect(area(cap)).toBeCloseTo(100);
+      const positions = cap.getAttribute('position');
+      for (let index = 0; index < positions.count; index++) {
+        const point = new THREE.Vector3().fromBufferAttribute(positions, index);
+        expect(normal.distanceToPoint(point)).toBeCloseTo(0);
+        expect(flipped.distanceToPoint(point)).toBeCloseTo(0);
+      }
+    }
+  );
+
   it('preserves a through hole without covering it with cap triangles', () => {
     const cap = sectionCapGeometry(tube(), xy())!;
     expect(area(cap)).toBeCloseTo(84);

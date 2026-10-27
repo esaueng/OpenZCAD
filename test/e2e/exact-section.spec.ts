@@ -170,7 +170,7 @@ async function openExactSection(page: Page) {
     page.getByRole('slider', { name: 'Section plane offset' })
   ).toBeVisible();
   await expect(
-    page.locator('.rail-section-state-kind', { hasText: 'Exact section' })
+    page.locator('.rail-section-state-kind', { hasText: 'Exact' })
   ).toBeVisible({ timeout: 30_000 });
   await expect
     .poll(async () => (await sectionState(page)).exactSections.length)
@@ -330,7 +330,7 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('2');
   await expect(page.locator('.rail-section-state-kind')).toContainText(
-    'Clipping preview'
+    'Preview'
   );
   // A Move's bar holds the command row, not the lane (U09), so the section
   // controls stay up; the export under them is disabled while it poses.

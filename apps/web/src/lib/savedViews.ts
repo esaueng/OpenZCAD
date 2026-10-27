@@ -83,7 +83,8 @@ const isSection = (value: unknown): boolean => {
     section &&
     SECTION_PLANES.includes(section.plane) &&
     typeof section.offset === 'number' &&
-    Number.isFinite(section.offset)
+    Number.isFinite(section.offset) &&
+    (section.flipped === undefined || typeof section.flipped === 'boolean')
   );
 };
 

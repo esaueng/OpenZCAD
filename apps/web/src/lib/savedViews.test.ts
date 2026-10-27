@@ -184,12 +184,23 @@ describe('saved view upkeep', () => {
             id: 'offset',
             sectionView: { plane: 'XY', offset: null }
           },
+          {
+            ...valid,
+            id: 'flipped',
+            sectionView: { plane: 'YZ', offset: -2.5, flipped: true }
+          },
+          {
+            ...valid,
+            id: 'invalid-flip',
+            sectionView: { plane: 'YZ', offset: -2.5, flipped: 'yes' }
+          },
           { ...valid, id: 'cut', sectionView: { plane: 'YZ', offset: -2.5 } },
           { ...valid, id: 'plain' }
         ]
       })
     );
     expect(loadSavedViews('p1', storage).map((v) => v.id)).toEqual([
+      'flipped',
       'cut',
       'plain'
     ]);

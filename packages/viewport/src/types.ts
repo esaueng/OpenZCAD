@@ -88,6 +88,8 @@ export interface SectionViewSettings {
   plane: SectionPlaneId;
   /** Plane position along its axis, in model units. */
   offset: number;
+  /** Keep the positive side instead; absent preserves the original direction. */
+  flipped?: boolean;
 }
 
 export interface ViewerSettings {

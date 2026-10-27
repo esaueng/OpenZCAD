@@ -68,6 +68,29 @@ describe('sketch visibility on this device', () => {
     pointerNavigation: 'auto' as const
   };
 
+  it('persists the plane, exact offset and flipped side without a camera gesture', async () => {
+    const first = renderHook(() => useProjectView('project-section'));
+    act(() =>
+      first.result.current.onCameraSettled('project-section', settledPose)
+    );
+    const sectionView = { plane: 'YZ' as const, offset: -3.125, flipped: true };
+    act(() =>
+      first.result.current.setSettings((current) => ({
+        ...current,
+        sectionView
+      }))
+    );
+    await waitFor(() =>
+      expect(loadProjectView('project-section')?.settings.sectionView).toEqual(
+        sectionView
+      )
+    );
+    first.unmount();
+    const next = renderHook(() => useProjectView('project-section'));
+    act(() => next.result.current.restore('project-section', defaults));
+    expect(next.result.current.settings.sectionView).toEqual(sectionView);
+  });
+
   it('survives a reload, and a view from another device keeps it', async () => {
     const first = renderHook(() => useProjectView('project-1'));
     act(() => first.result.current.onCameraSettled('project-1', settledPose));

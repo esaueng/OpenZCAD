@@ -20,11 +20,8 @@ import type {
   ViewerSettings
 } from '@openzcad/viewport';
 import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
-import {
-  describeSectionOutline,
-  sectionOutlineExportable,
-  type SectionOutlineState
-} from '../lib/sectionOutline';
+import type { SectionOutlineState } from '../lib/sectionOutline';
+import { SectionToolbox } from './SectionToolbox';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
 import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
 import { Tooltip } from './Tooltip';
@@ -90,7 +87,8 @@ interface ViewerToolbarProps {
   onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
   /** The section plane came to rest; the exact section can be computed. */
-  onSectionCommit(): void;
+  onSectionCommit(offset?: number): void;
+  onSectionFlip?(): void;
   /** Writes the exact section as a DXF drawing. */
   onExportSectionDxf(): void;
   /**
@@ -104,20 +102,11 @@ interface ViewerToolbarProps {
   units: string;
 }
 
-const SECTION_OUTLINE_LABELS: Record<SectionOutlineState['kind'], string> = {
-  clipping: 'Clipping preview',
-  computing: 'Computing section…',
-  exact: 'Exact section',
-  refused: 'No exact section'
-};
-
 const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
   XY: 'XY plane',
   XZ: 'XZ plane',
   YZ: 'YZ plane'
 };
-
-const SECTION_PLANES: readonly SectionPlaneId[] = ['XY', 'XZ', 'YZ'];
 
 /** Cased like the display modes the rail's other "Now:" lines name. */
 const PROJECTION_LABELS: Record<ProjectionMode, string> = {
@@ -153,6 +142,7 @@ export function ViewerToolbar({
   onSectionPlane,
   onSectionOffset,
   onSectionCommit,
+  onSectionFlip,
   onExportSectionDxf,
   sectionOutline,
   units
@@ -193,12 +183,6 @@ export function ViewerToolbar({
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
     : 'Off';
   const projectionLabel = PROJECTION_LABELS[projection];
-  const sectionStatus = describeSectionOutline(sectionOutline, units);
-  // Live only when the export can actually write every body the plane cuts.
-  // An exact section beside a body the kernel refused is still on screen and
-  // still worth showing — it just is not a drawing.
-  const canExportSection = sectionOutlineExportable(sectionOutline);
-
   // Close on an outside pointer or Escape; Escape hands focus back to the
   // control that opened the flyout, so the rail stays keyboard-navigable.
   useEffect(() => {
@@ -403,86 +387,28 @@ export function ViewerToolbar({
             onClick={(event) => pressSection(event.currentTarget)}
             aria-label={`Section view — now: ${sectionLabel}`}
             aria-pressed={sectionOn}
+            aria-expanded={sectionPanelShown}
           >
             <Slice size={16} aria-hidden="true" />
           </button>
         </Tooltip>
         {settings.sectionView && sectionRange && sectionPanelShown && (
-          <div
-            className="rail-section-panel"
-            data-rail-flyout=""
-            role="group"
-            aria-label="Section view"
-          >
-            <div
-              className="rail-section-planes"
-              role="group"
-              aria-label="Section plane"
-            >
-              {SECTION_PLANES.map((plane) => {
-                const current = settings.sectionView?.plane === plane;
-                return (
-                  <button
-                    key={plane}
-                    type="button"
-                    className="rail-section-plane"
-                    aria-label={SECTION_PLANE_LABELS[plane]}
-                    aria-pressed={current}
-                    onClick={() => {
-                      if (!current) {
-                        onSectionPlane(plane);
-                      }
-                    }}
-                  >
-                    {plane}
-                  </button>
-                );
-              })}
-            </div>
-            <input
-              type="range"
-              className="rail-section-slider"
-              min={sectionRange.min}
-              max={sectionRange.max}
-              step={(sectionRange.max - sectionRange.min) / 200 || 0.1}
-              value={settings.sectionView.offset}
-              onChange={(event) => onSectionOffset(Number(event.target.value))}
-              // The drag itself stays on the clipped preview; the exact
-              // section is computed once the plane comes to rest.
-              onPointerUp={onSectionCommit}
-              onKeyUp={onSectionCommit}
-              aria-label="Section plane offset"
-            />
-            <p
-              className={`rail-section-state is-${sectionStatus.kind}`}
-              role="status"
-            >
-              <span className="rail-section-state-kind">
-                {SECTION_OUTLINE_LABELS[sectionStatus.kind]}
-              </span>
-              <span className="rail-section-state-detail">
-                {sectionStatus.detail}
-              </span>
-            </p>
-            <Tooltip
-              label="Export section"
-              description={
-                canExportSection
-                  ? 'Writes the exact section curves as DXF'
-                  : 'Needs an exact section of every body the plane cuts'
-              }
-            >
-              <button
-                type="button"
-                className="rail-section-export"
-                onClick={onExportSectionDxf}
-                disabled={!canExportSection}
-                aria-label="Export the exact section as DXF"
-              >
-                DXF
-              </button>
-            </Tooltip>
-          </div>
+          <SectionToolbox
+            key={settings.sectionView.plane}
+            section={settings.sectionView}
+            range={sectionRange}
+            outline={sectionOutline}
+            units={units}
+            onClose={() => {
+              setSectionPanelOpen(false);
+              sectionTriggerRef.current?.focus();
+            }}
+            onPlane={onSectionPlane}
+            onOffset={onSectionOffset}
+            onCommit={onSectionCommit}
+            onFlip={onSectionFlip}
+            onExport={onExportSectionDxf}
+          />
         )}
       </div>
       <Tooltip

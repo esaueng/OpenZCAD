@@ -376,7 +376,7 @@ import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { sweepFacetingAdvisories } from './lib/sweepFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
-import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
+import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
@@ -10523,16 +10523,17 @@ export function App() {
   ]);
 
   // Follows the live section too, so a project's restored cut comes back on
-  // its own plane after being switched off and on.
-  const rememberedSectionPlane = useRememberedSectionPlane(
-    viewerSettings.sectionView
+  // its own plane, position and direction after being switched off and on.
+  const rememberedSection = useRememberedSection(
+    viewerSettings.sectionView,
+    doc?.projectId
   );
 
   /**
    * Switches the section view on or off. The rail button and the palette
    * both toggle: cycling through every plane to reach "off" took up to three
    * clicks. The plane is chosen inside the section panel (`setSectionPlane`),
-   * and switching back on returns to the plane last used.
+   * and switching back on restores the complete cut last used.
    */
   function toggleSectionView() {
     if (viewerSettings.sectionView) {
@@ -10541,7 +10542,13 @@ export function App() {
       setStatus('Section view off.');
       return;
     }
-    setSectionPlane(rememberedSectionPlane.current);
+    const remembered = rememberedSection.current;
+    if (remembered) {
+      setViewerSettings((current) => ({ ...current, sectionView: remembered }));
+      void requestExactSection(remembered);
+    } else {
+      setSectionPlane('XY');
+    }
   }
 
   /** Cuts on `plane`, starting at the model's centre along its axis. */
@@ -10569,6 +10576,16 @@ export function App() {
         ? { ...current, sectionView: { ...current.sectionView, offset } }
         : current
     );
+  }
+
+  function flipSectionDirection() {
+    const section = viewerSettingsRef.current.sectionView;
+    if (!section) return;
+    // The plane itself has not moved, so its exact curves remain valid.
+    setViewerSettings((current) => ({
+      ...current,
+      sectionView: { ...section, flipped: !section.flipped }
+    }));
   }
 
   /** Write the exact section — never the display caps — as a DXF drawing. */
@@ -28671,9 +28688,13 @@ export function App() {
             onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
             // The slider was released, or a key repeat ended: cut it exactly.
-            onSectionCommit={() =>
-              void requestExactSection(viewerSettingsRef.current.sectionView)
-            }
+            onSectionFlip={flipSectionDirection}
+            onSectionCommit={(offset) => {
+              const section = viewerSettingsRef.current.sectionView;
+              void requestExactSection(
+                section && offset !== undefined ? { ...section, offset } : section
+              );
+            }}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}
           />

@@ -57,7 +57,7 @@ function renderToolbar(
 describe('the section panel', () => {
   it('names the clipped preview and refuses to export it', () => {
     renderToolbar({ kind: 'clipping' });
-    expect(screen.getByText('Clipping preview')).toBeTruthy();
+    expect(screen.getByText('Preview')).toBeTruthy();
     expect(
       screen.getByText(/release the slider for section curves/)
     ).toBeTruthy();
@@ -72,7 +72,7 @@ describe('the section panel', () => {
       { kind: 'exact', regions: [], area: 187.4538, missed: 0, unsectioned: 0 },
       { onExportSectionDxf }
     );
-    expect(screen.getByText('Exact section')).toBeTruthy();
+    expect(screen.getByText('Exact')).toBeTruthy();
     expect(screen.getByText('187.45 mm² of material')).toBeTruthy();
     const button = screen.getByLabelText('Export the exact section as DXF');
     expect(button).toHaveProperty('disabled', false);
@@ -107,7 +107,7 @@ describe('the section panel', () => {
     // The kernel section IS on screen for the body that came out exact, so
     // the rail still names it; the drawing would be missing the other body's
     // material, and `exportSectionDxf` refuses rather than dropping it.
-    expect(screen.getByText('Exact section')).toBeTruthy();
+    expect(screen.getByText('Partial')).toBeTruthy();
     expect(
       screen.getByText(
         '540 mm² of material, 1 body has no exact section, so there is no drawing to export'
@@ -124,7 +124,7 @@ describe('the section panel', () => {
       kind: 'refused',
       detail: 'The section plane does not pass through this body.'
     });
-    expect(screen.getByText('No exact section')).toBeTruthy();
+    expect(screen.getByText('Preview')).toBeTruthy();
     expect(
       screen.getByText('The section plane does not pass through this body.')
     ).toBeTruthy();
@@ -344,9 +344,9 @@ describe('the section button and its panel', () => {
         button.getAttribute('aria-pressed')
       ])
     ).toEqual([
-      ['XY', 'true'],
-      ['XZ', 'false'],
-      ['YZ', 'false']
+      ['TopXY', 'true'],
+      ['FrontXZ', 'false'],
+      ['SideYZ', 'false']
     ]);
     fireEvent.click(screen.getByRole('button', { name: 'YZ plane' }));
     expect(onSectionPlane).toHaveBeenCalledWith('YZ');
@@ -372,6 +372,33 @@ describe('the section button and its panel', () => {
     // The next press brings the panel back rather than switching off.
     fireEvent.click(sectionButton());
     expect(panel()).not.toBeNull();
+    expect(onToggleSection).not.toHaveBeenCalled();
+  });
+
+  it('closes only the controls and reopens the same cut, position and direction', () => {
+    const onToggleSection = vi.fn();
+    renderSection(
+      { plane: 'YZ', offset: 4.25, flipped: true },
+      { onToggleSection }
+    );
+    expect(screen.getByLabelText('Cut position')).toHaveValue(4.25);
+    expect(screen.getByLabelText('Flip cut direction')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    fireEvent.click(screen.getByLabelText('Close section controls'));
+    expect(panel()).toBeNull();
+    expect(sectionButton()).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(sectionButton());
+    expect(screen.getByLabelText('Cut position')).toHaveValue(4.25);
+    expect(screen.getByLabelText('Flip cut direction')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(screen.getByLabelText('YZ plane')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
     expect(onToggleSection).not.toHaveBeenCalled();
   });
 

@@ -126,7 +126,8 @@ export function sectionClippingPlane(
       : section.plane === 'XZ'
         ? new THREE.Vector3(0, -1, 0)
         : new THREE.Vector3(-1, 0, 0);
-  return new THREE.Plane(normal, section.offset);
+  const plane = new THREE.Plane(normal, section.offset);
+  return section.flipped ? plane.negate() : plane;
 }
 
 /**

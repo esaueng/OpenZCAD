@@ -128,7 +128,8 @@ export function useProjectView(projectId: string | null): ProjectView {
     projection,
     settings.displayMode,
     settings.showGrid,
-    settings.xray
+    settings.xray,
+    settings.sectionView
   ]);
 
   return {
