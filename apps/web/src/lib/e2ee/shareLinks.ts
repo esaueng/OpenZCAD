@@ -379,14 +379,27 @@ export async function refreshOwnerShareAuthorities(
         ctx.groups.account.userId
       )
         continue;
+      const snapshots = await publishShareSnapshots(ctx, projectId, head).catch(
+        (error: unknown): PublishOutcome => ({
+          published: [],
+          failed: [{ shareId: '*', reason: describe(error) }]
+        })
+      );
+      // Even if publication fails, remove the revoked signer from authority;
+      // an unavailable snapshot is preferable to extending removed access.
       const outcome = await issueShareAuthorities(ctx, projectId, {
         head,
         force: true
       });
-      if (outcome.failed.length || outcome.needsConfirmation.length) {
+      if (
+        snapshots.failed.length ||
+        outcome.failed.length ||
+        outcome.needsConfirmation.length
+      ) {
         failed.push({
           projectId,
           reason:
+            snapshots.failed[0]?.reason ??
             outcome.failed[0]?.reason ??
             'Sharing needs confirmation on a certified owner device.'
         });

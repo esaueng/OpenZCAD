@@ -181,6 +181,7 @@ export async function renewShareDelegationAfterRemoval(
         {
           groups,
           api: createE2eeShareLinksApi(fetcher),
+          blobReferences: references,
           store: createEncryptedProjectStore({
             groups,
             pins: versionPins(),
