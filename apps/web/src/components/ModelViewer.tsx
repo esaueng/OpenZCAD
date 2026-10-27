@@ -1157,6 +1157,8 @@ export interface ModelViewerProps {
     | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
+  /** Recheck Extrude clearance when an explicit request restores its panels. */
+  modelPanelsHidden?: boolean;
   /**
    * F01: a host waiting for a body face (an extrude's to-face target). A
    * click then resolves to the nearest face under the pointer only — never
@@ -2175,6 +2177,7 @@ export function ModelViewer({
   onPlacementClick,
   onMeasurePreview,
   regionHandle,
+  modelPanelsHidden = false,
   facePickOnly = false,
   sketchMode,
   sketchTextAnchorRef,
@@ -3255,6 +3258,7 @@ export function ModelViewer({
     const panelObserver = new MutationObserver(() => {
       if (
         (offsetChipRef.current && !offsetChipRef.current.hidden) ||
+        commandRigsRef.current.size > 0 ||
         host.querySelector(`.${SELECTION_CALLOUT_CHIP_CLASS}`)
       ) {
         requestRender();
@@ -3274,6 +3278,9 @@ export function ModelViewer({
       if (layer === watchedLayer) return;
       panelObserver.disconnect();
       watchedLayer = layer;
+      // Suspension can add/remove the whole layer without a later mutation
+      // in it. Reposition command chips against the newly visible obstacles.
+      requestRender();
       if (layer) {
         panelObserver.observe(layer, {
           subtree: true,
@@ -13042,8 +13049,8 @@ export function ModelViewer({
   // tends to leave one — had its arrow and preview drawn under the card.
   // Once the card is laid out, glide the view sideways (no orbit, no zoom)
   // just far enough to put the regions and their arrows in the stage the
-  // panels leave clear. Once per pick: a value change keeps the key, and
-  // an orbit afterwards is the user's own.
+  // panels leave clear. Once per pick or explicit panel request: value
+  // changes and later orbits keep the key. Ending the command never pans.
   const regionClearanceKey = regionHandle
     ? [
         regionHandle.sketchId,
@@ -13169,7 +13176,7 @@ export function ModelViewer({
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [regionClearanceKey]);
+  }, [regionClearanceKey, modelPanelsHidden]);
 
   // Ghost planes while the Sketch tool waits for one. Installed and torn
   // down with the armed state; the render loop keeps their screen size.

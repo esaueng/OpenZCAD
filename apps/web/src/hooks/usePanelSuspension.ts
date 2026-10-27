@@ -10,7 +10,7 @@ type ReleaseRequests = Record<SuspendablePanel, number> & { version: number };
 
 /**
  * Suspends every open model panel and the "More tools" fold while a sketch
- * or feature form is open, and brings them back when it ends. Derived rather
+ * or feature command is open, and brings them back when it ends. Derived rather
  * than written at every way in and out of it, so no entry or exit path can
  * forget to restore them, and the stored layout is never touched. A
  * direct-manipulation drag leaves them where they are. See `effectivePanels`.

@@ -3426,6 +3426,7 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
   await expect(unionCard).toBeVisible();
+  await revealModelPanel(page, 'History');
   await expect(moveRows).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(unionCard).toHaveCount(0);
@@ -3434,6 +3435,7 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await openPendingMove();
   await ask.getByRole('button', { name: 'Apply' }).click();
   await expect(move).toHaveCount(0);
+  await revealModelPanel(page, 'History');
   await expect(moveRows).toHaveCount(1);
   await expect(unionCard).toBeVisible();
   await page.keyboard.press('Escape');
@@ -3446,6 +3448,7 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await expect(unionCard).toBeVisible();
   await expect(move).toHaveCount(0);
   await expect(ask).toHaveCount(0);
+  await revealModelPanel(page, 'History');
   await expect(moveRows).toHaveCount(1);
 });
 
@@ -4677,6 +4680,7 @@ test('a refused boolean never lands in history and says why in the form', async 
   await page.keyboard.press('i');
   const intersectBar = page.getByRole('group', { name: 'Intersect command' });
   await expect(intersectBar).toBeVisible();
+  await revealModelPanel(page, 'History');
   const featureRows = page.locator('.feature-row');
   const before = await featureRows.count();
   await pickObjectsBody(page, 'Box 1');

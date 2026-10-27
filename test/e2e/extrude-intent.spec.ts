@@ -14,7 +14,8 @@ import {
   chooseBarOption,
   editExtrudeFromHistory,
   chooseInPlaceOption,
-  extrudeBar
+  extrudeBar,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 interface ExtrudeValidationGate {
@@ -315,6 +316,7 @@ test('uses the shared editor for preview, cancel, create and operation changes i
         { timeout: 30_000 }
       )
       .toBe(2.5);
+    await revealModelPanel(page, 'History');
     await expect(extrusion).toHaveCount(0);
     const done = bar.getByRole('button', { name: 'Done' });
     await expect(done).toBeEnabled();

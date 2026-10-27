@@ -10,7 +10,8 @@ import {
   expect,
   stubApi,
   waitForStillViewport,
-  setInPlaceOptionValues
+  setInPlaceOptionValues,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 /*
@@ -114,6 +115,9 @@ for (const size of [
     await expect(
       card.getByRole('region', { name: 'Extrude operation' })
     ).toBeVisible();
+    // This clearance journey tests the card beside the stored dock. A new
+    // Extrude suspends that dock until it is explicitly requested.
+    await revealModelPanel(page, 'History');
     await waitForStillViewport(page);
     const cardBox = (await card.boundingBox())!;
     const under = (x: number) =>

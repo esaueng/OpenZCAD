@@ -49,6 +49,9 @@ export async function expectBodyCount(page: Page, count: number) {
  * row's own count is the observable; zero of them means no row at all.
  */
 export async function expectConsumedBodyCount(page: Page, count: number) {
+  // A reference pick may have revealed and then closed a suspended Objects
+  // panel. Read its contents explicitly; a hidden panel cannot prove zero.
+  await revealModelPanel(page, 'Objects');
   if (count === 0) {
     await expect(page.locator('.consumed-toggle')).toHaveCount(0);
   } else {
@@ -1197,10 +1200,10 @@ export function modelPanel(page: Page, title: PanelTitle) {
 }
 
 /**
- * A sketch (like a drag) takes the stage: every model panel steps aside
+ * A sketch or feature command takes the stage: every model panel steps aside
  * while it lasts, whatever the suite seeded. A spec that reads a panel from
- * inside a sketch asks for it the way a user would — its rail button —
- * which brings the panels back for the rest of that sketch. A no-op when
+ * inside a command asks for it the way a user would — its rail button —
+ * which brings the panels back for the rest of that session. A no-op when
  * the panel already shows.
  */
 export async function revealModelPanel(

@@ -353,6 +353,7 @@ interface ViewerShellProps {
       ) => string | null)
     | null;
   regionHandle: RegionHandleTarget | null;
+  modelPanelsHidden?: boolean;
   /** F01: a click picks only a body face (see `ModelViewer`). */
   facePickOnly?: boolean;
   onSelectSketchProfile(sketchId: string): void;
@@ -522,6 +523,7 @@ export function ViewerShell({
   onDatumOffsetEntry,
   onMeasurePreview,
   regionHandle,
+  modelPanelsHidden,
   facePickOnly,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -857,6 +859,7 @@ export function ViewerShell({
         {...(onPlacementClick ? { onPlacementClick } : {})}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
+        modelPanelsHidden={modelPanelsHidden}
         {...(facePickOnly ? { facePickOnly } : {})}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
