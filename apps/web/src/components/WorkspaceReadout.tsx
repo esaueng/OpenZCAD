@@ -1,4 +1,11 @@
-import { useEffect, useState, type ReactNode, type RefObject } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject
+} from 'react';
 import { Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
@@ -101,6 +108,35 @@ export function WorkspaceReadout({
   searchBar,
   repeatingToast = null
 }: WorkspaceReadoutProps) {
+  const laneRef = useRef<HTMLDivElement>(null);
+  const hasCommandRow = commandRow !== null;
+  useLayoutEffect(() => {
+    const lane = laneRef.current;
+    const viewer = lane?.closest<HTMLElement>('.viewer-area');
+    if (!lane || !viewer || !hasCommandRow) return;
+    const measure = () => {
+      const command = lane.querySelector<HTMLElement>('.in-place-command');
+      const height = command?.getBoundingClientRect().height ?? 0;
+      if (height > 0) {
+        viewer.style.setProperty(
+          '--in-place-command-h',
+          `${Math.ceil(height)}px`
+        );
+      }
+    };
+    measure();
+    // Watching the lane also handles a lazy command replacing its fallback,
+    // extra actions wrapping, and the viewport narrowing during a command.
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(lane);
+    return () => {
+      observer?.disconnect();
+      viewer.style.removeProperty('--in-place-command-h');
+    };
+  }, [hasCommandRow]);
   const sticky = statusSticky ?? false;
   // A message already past its lifetime when the readout mounts — entering
   // the workspace long after it was set — is not news, and stays gone.
@@ -208,7 +244,7 @@ export function WorkspaceReadout({
           The guidance is the prompt the summary below already carries for
           assistive tech, so it is drawn here but hidden from the tree; a live
           status message takes its place while the toast is up. */}
-      <div className="command-bar-lane">
+      <div className="command-bar-lane" ref={laneRef}>
         {commandRow ??
           (prompt && !shown ? (
             <p className="workspace-hint" aria-hidden="true">

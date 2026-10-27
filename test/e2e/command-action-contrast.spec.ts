@@ -113,5 +113,79 @@ for (const colorScheme of ['light', 'dark'] as const) {
         ).toBeVisible();
       });
     }
+
+    test('extra Hole actions stay clear of a toast as the phone resizes', async ({
+      page
+    }, testInfo) => {
+      await page.setViewportSize({ width: 390, height: 900 });
+      await stubApi(page, { panelLayout: null });
+      await page.goto('/');
+      await page.getByLabel('Project name').fill('Wrapped command feedback');
+      await page.getByRole('button', { name: 'Create project' }).click();
+      await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+      await page
+        .getByRole('group', { name: 'Box command' })
+        .getByRole('button', { name: 'Done', exact: true })
+        .click();
+      await page.getByRole('button', { name: /^Hole/ }).click();
+      const bar = page.getByRole('group', { name: 'Hole command' });
+      await expect(
+        bar.getByRole('button', { name: 'Precise values…' })
+      ).toBeVisible();
+      const toast = page.locator(
+        '.workspace-toast:not(.hidden) .workspace-toast-body'
+      );
+      await expect(toast).toBeVisible();
+      for (const width of [390, 320, 520, 1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await expect
+          .poll(async () => {
+            const commandBounds = await bar.boundingBox();
+            const toastBounds = await toast.boundingBox();
+            return commandBounds!.y - toastBounds!.y - toastBounds!.height;
+          })
+          .toBeGreaterThanOrEqual(8);
+        for (const action of await bar
+          .locator('button:visible, summary:visible')
+          .all()) {
+          const reachable = await action.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2
+            );
+            return (
+              box.x >= 0 &&
+              box.right <= innerWidth &&
+              box.y >= 0 &&
+              box.bottom <= innerHeight &&
+              hit !== null &&
+              element.contains(hit)
+            );
+          });
+          expect(
+            reachable,
+            (await action.textContent()) ?? 'Command action'
+          ).toBe(true);
+        }
+      }
+      await testInfo.attach('wrapped-hole-and-toast', {
+        body: await page.screenshot(),
+        contentType: 'image/png'
+      });
+      await bar.getByRole('button', { name: 'Cancel' }).click();
+      await expect(bar).toHaveCount(0);
+      await expect
+        .poll(() =>
+          page
+            .locator('.viewer-area')
+            .evaluate((element) =>
+              (element as HTMLElement).style.getPropertyValue(
+                '--in-place-command-h'
+              )
+            )
+        )
+        .toBe('');
+    });
   });
 }

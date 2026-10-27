@@ -3251,19 +3251,19 @@ button.model-panel-grip[aria-expanded='true'] {
    model and numbers ride their handles. The row is taller than the hint, so
    it claims its own lane height. */
 :where(.workspace:not(.with-assistant)) .viewer-area:has(.in-place-command) {
-  --lane-status: 48px;
+  --lane-status: calc(var(--in-place-command-h, 38px) + 10px);
 }
 
 /* The bar keeps its row while a command runs, so a status toast (or the
    activity lane) that speaks meanwhile stands on it rather than over it,
    and the rows above lift past both. */
 .viewer-area:has(.in-place-command) :is(.workspace-toast, .activity-lane) {
-  bottom: calc(var(--lane-base) + 48px);
+  bottom: calc(var(--lane-base) + var(--in-place-command-h, 38px) + 10px);
 }
 
 :where(.workspace:not(.with-assistant))
   .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden)) {
-  --lane-status: 88px;
+  --lane-status: calc(var(--in-place-command-h, 38px) + 50px);
 }
 
 .in-place-command {
@@ -3362,19 +3362,6 @@ button.model-panel-grip[aria-expanded='true'] {
   .in-place-command-done {
     gap: 4px;
     padding-inline: 5px;
-  }
-
-  :where(.workspace:not(.with-assistant)) .viewer-area:has(.in-place-command) {
-    --lane-status: 72px;
-  }
-
-  .viewer-area:has(.in-place-command) :is(.workspace-toast, .activity-lane) {
-    bottom: calc(var(--lane-base) + 72px);
-  }
-
-  :where(.workspace:not(.with-assistant))
-    .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden)) {
-    --lane-status: 112px;
   }
 }
 
