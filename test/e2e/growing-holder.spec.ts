@@ -213,6 +213,18 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   await expectExactReady(page);
 
   // Reopen from local persistence: both controls and the body survive.
+  // This scenario deliberately loses its account copy before reopening.
+  // The shared fixture now serves retained account heads, so model the
+  // intended absence explicitly instead of relying on the SPA fallback.
+  let missingAccountPath: string | null = null;
+  await page.route(/\/api\/projects\/[^/?]+$/, (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    missingAccountPath = new URL(route.request().url()).pathname;
+    return route.fulfill({
+      status: 404,
+      json: { error: 'Project not found.', code: 'PROJECT_NOT_FOUND' }
+    });
+  });
   await page.reload();
   await expect(page.getByLabel('Expression for opening_width')).toHaveValue(
     '52',
@@ -226,8 +238,8 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   });
   await expectBodyCount(page, 1);
   await expectExactReady(page);
-  // The shared API stub returns an empty account shelf on reload, so this
-  // restored device copy is local-only and its export must skip cloud archival.
+  // With the account copy absent, this restored device copy is local-only
+  // and its export must skip cloud archival.
   await expect(
     page.getByRole('button', { name: 'Save to my account', exact: true })
   ).toBeVisible();
@@ -251,18 +263,23 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   const source = await readFile(fixture('synthetic-holder.step'), 'utf8');
   expect(text).not.toBe(source);
 
-  // Only the initial import archive may fail on the static preview. Identify
-  // its kind and exact console source, and refuse an extra local-export upload.
+  // Identify the initial failed import archive and the deliberately missing
+  // account copy, and refuse an extra local-export upload.
   await expect(page.getByRole('contentinfo')).toContainText(
     'Exported 1 body to'
   );
   expect(archiveKinds).toEqual(['step-import']);
+  expect(missingAccountPath).toMatch(/^\/api\/projects\/proj_/);
   await expect
     .poll(() => consoleErrors)
     .toEqual([
       {
         text: 'Failed to load resource: the server responded with a status of 404 (Not Found)',
         path: '/api/uploads'
+      },
+      {
+        text: 'Failed to load resource: the server responded with a status of 404 (Not Found)',
+        path: missingAccountPath
       }
     ]);
 });

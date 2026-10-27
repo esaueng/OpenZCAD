@@ -37,3 +37,6 @@ Asset HTTP errors also preserve bounded JSON error codes and details, so
 finalizing encryption between the frame and asset reads takes the existing
 encrypted-format fallback immediately. The race regression failed before
 that correction and passes afterward for both account and migration reads.
+The holder import/reload/export regression explicitly removes its account
+copy before reopening, checks the exact expected missing-copy response, and
+still proves the restored local copy exports without a cloud upload.
