@@ -16,16 +16,20 @@ import {
   fromHex,
   parseEnvelope,
   signProjectEnvelope,
+  shareLinkSetCommitment,
   toBase64Url,
   toHex,
   versionHash,
   wrapKey,
-  type ProjectEnvelopeHeaderInit
+  type ProjectEnvelopeHeaderInit,
+  type ProjectEnvelopeHeader
 } from '@openzcad/crypto';
+import { encodeEnvelopePrefix } from '../packages/crypto/src/header';
 import {
   E2EE_FRAME_CONTENT_TYPE,
   encodeE2eeFrame,
   MAX_PROJECT_REVISIONS,
+  MAX_E2EE_FRAME_METADATA_BYTES,
   type E2eeVersionUpload,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -229,6 +233,9 @@ async function handVersion(
       authenticator
     ),
     schemaVersion: 1,
+    ...(!init.kind || init.kind === 'document'
+      ? { shareLinkSetHash: await shareLinkSetCommitment() }
+      : {}),
     ...init
   };
   const plaintext =
@@ -346,6 +353,201 @@ async function save(
 }
 
 // --- Version integrity ------------------------------------------------------
+
+it('paginates large signed prefixes below the document frame metadata ceiling', async () => {
+  const srv = server();
+  const laptop = device(srv, owner, 'owner_laptop');
+  const { document } = await createEncrypted(laptop);
+  const projectId = document.projectId;
+  const initial = await laptop.documents.loadDocument(projectId);
+  const originalHeader = parseEnvelope(initial.envelope)
+    .header as ProjectEnvelopeHeader;
+  const columns = (
+    srv.db.prepare("PRAGMA table_info('e2ee_project_versions')").all() as {
+      name: string;
+    }[]
+  ).map((column) => column.name);
+  const selected = columns
+    .map((name) =>
+      ['document_version', 'version_hash', 'prefix', 'signer_user_id'].includes(
+        name
+      )
+        ? '?'
+        : name
+    )
+    .join(', ');
+  const insert = srv.db
+    .prepare(`INSERT INTO e2ee_project_versions (${columns.join(', ')})
+    SELECT ${selected} FROM e2ee_project_versions WHERE project_id = ? AND document_version = ?`);
+  const blobIds = Array.from(
+    { length: 4096 },
+    (_, index) => `blob_${String(index).padStart(4, '0')}_${'x'.repeat(112)}`
+  );
+  // Storage framing is independent of signature verification. These log-only
+  // fixtures use maximal legal blob-reference lists to exercise its byte cap.
+  for (let index = 1; index <= 20; index++)
+    insert.run(
+      document.version + index,
+      index.toString(16).padStart(64, '0'),
+      toBase64Url(
+        encodeEnvelopePrefix({
+          ...originalHeader,
+          documentVersion: document.version + index,
+          blobIds
+        })
+      ),
+      OTHER,
+      projectId,
+      document.version
+    );
+  srv.db
+    .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+    .run(document.version + 20, projectId);
+  const loaded = await laptop.documents.loadDocument(projectId);
+  expect(loaded.metadata.more).toBe(true);
+  expect(encodeE2eeFrame(loaded.metadata).length).toBeLessThan(
+    MAX_E2EE_FRAME_METADATA_BYTES
+  );
+  const log = [...loaded.metadata.log];
+  let more = loaded.metadata.more;
+  while (more) {
+    const page = await laptop.documents.versions(
+      projectId,
+      log.at(-1)!.documentVersion
+    );
+    expect(page.log[0]!.versionHash).toBe(log.at(-1)!.versionHash);
+    expect(page.log.length).toBeGreaterThan(1);
+    expect(new TextEncoder().encode(JSON.stringify(page)).length).toBeLessThan(
+      MAX_E2EE_FRAME_METADATA_BYTES
+    );
+    log.push(...page.log.slice(1));
+    more = page.more;
+  }
+  expect(log).toHaveLength(21);
+  expect(() => encodeE2eeFrame({ ...loaded.metadata, log })).toThrow(
+    /metadata is too large/
+  );
+});
+
+it('bounds a fresh-read baseline to the captured head while an owner save races', async () => {
+  const srv = server();
+  const laptop = device(srv, owner, 'owner_laptop');
+  const { document } = await createEncrypted(laptop);
+  const projectId = document.projectId;
+  const next = await handVersion(
+    laptop,
+    projectId,
+    {
+      documentVersion: document.version + 1,
+      keyEpoch: 0,
+      previousVersionHash: fromHex(headOf(srv, projectId).version_hash)
+    },
+    { expectedVersion: document.version, document }
+  );
+  const push = srv.statements.push.bind(srv.statements);
+  let raced = false;
+  srv.statements.push = (...sql: string[]) => {
+    if (
+      sql.some((statement) =>
+        statement.includes('SELECT MAX(v.document_version) AS version')
+      )
+    ) {
+      srv.statements.push = push;
+      raced = true;
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_versions
+        (project_id, document_version, version_hash, key_epoch, prefix, signature,
+         signer_user_id, signer_device_id, envelope_inline, envelope_bytes, wrapped_version_key, created_at)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'now')`
+        )
+        .run(
+          projectId,
+          document.version + 1,
+          next.hash,
+          toBase64Url(parseEnvelope(next.envelope).prefix),
+          next.upload.signature,
+          OWNER,
+          next.upload.signerDeviceId,
+          toBase64Url(next.envelope),
+          next.envelope.length,
+          next.upload.wrappedVersionKey
+        );
+      srv.db
+        .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+        .run(document.version + 1, projectId);
+    }
+    return push(...sql);
+  };
+  const loaded = await laptop.documents.loadDocument(projectId);
+  expect(raced).toBe(true);
+  expect(loaded.metadata.head.documentVersion).toBe(document.version);
+  expect(loaded.metadata.log.at(-1)?.versionHash).toBe(
+    loaded.metadata.head.versionHash
+  );
+});
+
+it('opens a pinned history whose signed prefixes exceed one verifier byte window', async () => {
+  const srv = server();
+  const laptop = device(srv, owner, 'owner_laptop');
+  const { document } = await createEncrypted(laptop);
+  const projectId = document.projectId;
+  const blobIds = Array.from(
+    { length: 4096 },
+    (_, index) => `blob_${String(index).padStart(4, '0')}_${'x'.repeat(112)}`
+  );
+  let previous = headOf(srv, projectId).version_hash;
+  let prefixBytes = 0;
+  // These retained, authentically signed log records no longer need bodies.
+  // Only the final head is decrypted; its document has no imported assets.
+  for (let index = 1; index <= 141; index++) {
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: document.version + index,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(previous),
+        blobIds: index === 141 ? [] : blobIds
+      },
+      {
+        expectedVersion: document.version + index - 1,
+        document,
+        ...(index === 141 ? {} : { plaintext: new Uint8Array() })
+      }
+    );
+    const prefix = parseEnvelope(hand.envelope).prefix;
+    prefixBytes += prefix.length;
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_versions
+      (project_id, document_version, version_hash, key_epoch, prefix, signature,
+       signer_user_id, signer_device_id, envelope_inline, envelope_bytes,
+       wrapped_version_key, created_at)
+      VALUES (?, ?, ?, 0, ?, ?, ?, 'owner_laptop', ?, ?, ?, '2026-10-24T00:00:00.000Z')`
+      )
+      .run(
+        projectId,
+        document.version + index,
+        hand.hash,
+        toBase64Url(prefix),
+        hand.upload.signature,
+        OWNER,
+        index === 141 ? toBase64Url(hand.envelope) : null,
+        hand.envelope.length,
+        hand.upload.wrappedVersionKey
+      );
+    previous = hand.hash;
+  }
+  expect(prefixBytes).toBeGreaterThan(64 * 1024 * 1024);
+  srv.db
+    .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+    .run(document.version + 141, projectId);
+  const page = reload(srv, laptop);
+  const loaded = await page.store.loadProject(projectId);
+  expect(loaded.version).toBe(document.version + 141);
+  expect((await page.pins.read(OWNER, projectId))?.headHash).toBe(previous);
+}, 120_000);
 
 describe('version integrity', () => {
   it('refuses a rolled-back head and keeps its pin', async () => {
@@ -1009,7 +1211,9 @@ describe('writes', () => {
     // next head before retention looks for bodies nothing retains.
     const push = srv.statements.push.bind(srv.statements);
     srv.statements.push = (...sql: string[]) => {
-      if (sql.some((s) => s.includes('SELECT document_version, envelope_key'))) {
+      if (
+        sql.some((s) => s.includes('SELECT document_version, envelope_key'))
+      ) {
         srv.statements.push = push;
         srv.db
           .prepare(
