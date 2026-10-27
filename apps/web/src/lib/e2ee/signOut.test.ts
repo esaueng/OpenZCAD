@@ -7,6 +7,7 @@ import {
 import * as deviceStores from './deviceStore';
 import * as e2eeApis from './e2eeApi';
 import * as mlsStores from './mls/sessionStore';
+import { shareWorkStore } from './shareWorkStore';
 import { signOutAfterSaving } from './signOut';
 import {
   keyOperationGuard,
@@ -57,6 +58,23 @@ async function fixture() {
 }
 
 describe('saving before device-key sign-out', () => {
+  it('keeps device keys available for retry if the share journal cannot be erased', async () => {
+    const { userId, store } = await fixture();
+    vi.spyOn(shareWorkStore(), 'deleteAccount').mockRejectedValueOnce(new Error('Share work busy'));
+    const revokeSession = vi.fn();
+    await expect(signOutAfterSaving({ userId, keepDevice: false, isCurrentSession: () => true,
+      savePending: async () => {}, revokeSession })).rejects.toThrow('Share work busy');
+    expect(await store.loadDevice(userId)).not.toBeNull();
+    expect(revokeSession).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('discards pending share work only when keepDevice is %s', async (keepDevice) => {
+    const { userId } = await fixture();
+    const work = shareWorkStore();
+    await work.update(userId, 'project', (current) => ({ ...current, notice: 'saved' }));
+    await signOutAfterSaving({ userId, keepDevice, isCurrentSession: () => true,
+      savePending: async () => {}, revokeSession: async () => {} });
+    expect((await work.read(userId, 'project')).notice).toBe(keepDevice ? 'saved' : null);
+  });
   async function pendingApproval() {
     const current = await fixture();
     const device = (await current.store.loadDevice(current.userId))!;
