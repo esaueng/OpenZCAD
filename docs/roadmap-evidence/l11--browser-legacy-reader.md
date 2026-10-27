@@ -26,3 +26,10 @@ fetch and response-stream failures retain their original transport errors;
 HTTP asset failures preserve their status, while invalid/checksum-mismatched
 content retains the account-copy-unavailable classification. Migration reads
 use the same distinction. macOS verification remains deferred.
+
+The static-preview API fixture now retains successful creations (including
+prepared-document overrides) and hydrated saves, and serves those account
+heads on reload. Raw-read negotiation exposed the previous missing API,
+which had relied on the preview server's HTML fallback. The existing error
+assertions remain intact: fillet/reload journeys, both raw-reader journeys,
+six object journeys and all three unit-bearing text reopen journeys pass.

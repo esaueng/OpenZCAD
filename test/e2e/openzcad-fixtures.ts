@@ -102,6 +102,31 @@ export async function stubApi(
     commandFoldClosed?: boolean;
   } = {}
 ) {
+  const accountHeads = new Map<string, ProjectDocument>();
+  // Specs may override creation to supply a prepared CAD fixture. Observe
+  // that successful response too, so the common read service sees its head.
+  page.on('response', async (response) => {
+    if (
+      response.request().method() !== 'POST' ||
+      new URL(response.url()).pathname !== '/api/projects' ||
+      !response.ok()
+    )
+      return;
+    const payload = (await response.json()) as { document?: ProjectDocument };
+    if (payload.document)
+      accountHeads.set(payload.document.projectId, payload.document);
+  });
+  // A created account project must remain readable after reload. Relying on
+  // the SPA's HTML fallback left this API missing and hid its HTTP failures
+  // until document reads negotiated a non-HTML media type (ADR-024 8-3).
+  await page.route('**/api/projects/*', (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const projectId = decodeURIComponent(
+      new URL(route.request().url()).pathname.split('/').at(-1)!
+    );
+    const document = accountHeads.get(projectId);
+    return document ? route.fulfill({ json: document }) : route.fallback();
+  });
   if (!workspaceTour) {
     await seedDismissedWorkspaceTour(page);
   }
@@ -266,6 +291,7 @@ export async function stubApi(
               toUserId('user_e2e'),
               (payload.units as 'mm' | undefined) ?? 'mm'
             );
+      accountHeads.set(document.projectId, document);
       return route.fulfill({
         status: 201,
         json: {
@@ -347,11 +373,14 @@ export async function stubApi(
   // Unstubbed it would 404 against the static preview, and the console-error
   // assertions several specs make would be reporting the stub gap rather than
   // anything about the app.
-  await page.route('**/api/projects/*/document', (route) => {
-    const payload = route.request().postDataJSON() as {
+  await page.route('**/api/projects/*/document', async (route) => {
+    const payload = (await withHydratedDocument(
+      route.request().postDataJSON()
+    )) as {
       projectId: string;
-      document: { version: number };
+      document: ProjectDocument;
     };
+    accountHeads.set(payload.projectId, payload.document);
     return route.fulfill({
       json: {
         projectId: payload.projectId,
