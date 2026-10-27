@@ -266,9 +266,6 @@ export function EncryptedShareLinks({
 
   useEffect(() => {
     void load().catch((caught: unknown) => setError(message(caught)));
-    return () => {
-      loadRevision.current++;
-    };
   }, [load]);
 
   useEffect(

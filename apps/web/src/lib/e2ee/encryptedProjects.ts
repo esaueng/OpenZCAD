@@ -285,11 +285,11 @@ async function openStore(
     onMembersRemoved: (removal: MembersRemoved) => {
       const notify = removalNotifier(removal);
       void import('./shareLinks')
-        .then(({ shareLinksAfterRemoval }) =>
-          shareCtx
-            ? shareLinksAfterRemoval(shareCtx, removal, notify)
-            : notify()
-        )
+        .then(({ shareLinksAfterRemoval }) => {
+          if (shareCtx) return shareLinksAfterRemoval(shareCtx, removal, notify);
+          notify();
+          return null;
+        })
         .catch(() => notify());
     },
     // A co-member's device removal rotated a project (slice 5-7): the
@@ -302,11 +302,11 @@ async function openStore(
       };
       const notify = removalNotifier(notice);
       void import('./shareLinks')
-        .then(({ shareLinksAfterDeviceRemoval }) =>
-          shareCtx
-            ? shareLinksAfterDeviceRemoval(shareCtx, removal, notify)
-            : notify()
-        )
+        .then(({ shareLinksAfterDeviceRemoval }) => {
+          if (shareCtx) return shareLinksAfterDeviceRemoval(shareCtx, removal, notify);
+          notify();
+          return null;
+        })
         .catch(() => notify());
     },
     // A Commit refused because this account's devices changed elsewhere
