@@ -766,9 +766,12 @@ export function createEncryptedProjectStore(
   ): Promise<boolean> {
     const authority = await epochAuthority(groups, projectId, keyEpoch).catch(
       (error: unknown) => {
-        if (error instanceof ProjectGroupError && error.code === 'key-missing')
-          throw error;
-        return null;
+        if (
+          error instanceof ProjectGroupError &&
+          error.code === 'archive-invalid'
+        )
+          return null;
+        throw error;
       }
     );
     return editingMember(authority, authorId, deviceId, readOnly);
@@ -809,9 +812,12 @@ export function createEncryptedProjectStore(
   ): Promise<boolean> {
     const roles = await epochRoles(groups, projectId, keyEpoch).catch(
       (error: unknown) => {
-        if (error instanceof ProjectGroupError && error.code === 'key-missing')
-          throw error;
-        return null;
+        if (
+          error instanceof ProjectGroupError &&
+          error.code === 'archive-invalid'
+        )
+          return null;
+        throw error;
       }
     );
     const role = roles?.users.find((r) => r.userId === authorId);
@@ -980,7 +986,8 @@ export function createEncryptedProjectStore(
                 : null;
             } catch (error) {
               if (error instanceof AuthorshipError) authorship = error;
-              if (error instanceof ProjectGroupError) missingKey = error;
+              else if (error instanceof ProjectGroupError) missingKey = error;
+              else throw error;
               return null;
             }
           }

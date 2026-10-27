@@ -1,4 +1,4 @@
-import { beforeAll, expect, it } from 'vitest';
+import { beforeAll, expect, it, vi } from 'vitest';
 import {
   decodeMlsAuthorityTrust,
   fromBase64Url,
@@ -12,6 +12,8 @@ import {
 } from '@openzcad/crypto';
 import type { E2eeProjectAuthorityRecord } from '@openzcad/shared';
 import { loadProjectAuthority } from '../apps/web/src/lib/e2ee/projectAuthority';
+import { E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
+import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
 import {
   commitProjectGroup,
   epochAuthority
@@ -259,6 +261,46 @@ it('refuses a signed new generation that reassigns an already accepted key epoch
     /already authenticated/
   );
   expect(value.latestKeyEpoch).toBe(2);
+});
+
+it.each(['authority', 'archives'] as const)(
+  'keeps a transient %s read retryable instead of reporting a missing author leaf',
+  async (method) => {
+    const { srv, projectId } = await setup();
+    const reader = device(srv, account, null);
+    const outage = new E2eeApiError(
+      503,
+      'Temporary authority outage',
+      'E2EE_UNAVAILABLE'
+    );
+    const call = vi
+      .spyOn(reader.groups.api, method)
+      .mockRejectedValueOnce(outage);
+    const refused = await reader.store
+      .loadProject(projectId)
+      .catch((error: unknown) => error);
+    expect(call).toHaveBeenCalled();
+    expect(refused).not.toBeInstanceOf(EncryptedProjectIntegrityError);
+    expect(refused).toMatchObject({
+      status: 503,
+      code: 'E2EE_UNAVAILABLE',
+      message: outage.message
+    });
+    call.mockRestore();
+    expect((await reader.store.loadProject(projectId)).projectId).toBe(
+      projectId
+    );
+  }
+);
+
+it.each([
+  new TypeError('Failed to fetch'),
+  new DOMException('The session ended', 'AbortError')
+])('preserves a transport/session refusal: %s', async (outage) => {
+  const { srv, projectId } = await setup();
+  const reader = device(srv, account, null);
+  vi.spyOn(reader.groups.api, 'authority').mockRejectedValueOnce(outage);
+  await expect(reader.store.loadProject(projectId)).rejects.toBe(outage);
 });
 
 it('does not persist authority returned after key-session teardown', async () => {

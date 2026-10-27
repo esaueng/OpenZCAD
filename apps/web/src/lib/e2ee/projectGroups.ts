@@ -3972,7 +3972,12 @@ export async function epochAuthority(
     return verified;
   } catch (error) {
     if (error instanceof ProjectGroupError) throw error;
-    if (error instanceof E2eeApiError && error.status >= 500) throw error;
+    if (
+      error instanceof E2eeApiError ||
+      error instanceof TypeError ||
+      (error instanceof DOMException && error.name === 'AbortError')
+    )
+      throw error;
     throw new ProjectGroupError(
       'archive-invalid',
       `Historical MLS authority could not be verified: ${error instanceof Error ? error.message : String(error)}`

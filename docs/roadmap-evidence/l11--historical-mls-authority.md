@@ -34,5 +34,13 @@ MAC/signature/CAS pins, D4 history, forks, revoked checkpoint fallback and
 cold identity recovery. Replay is bounded to 8,192 records and 64 MiB. The
 Linux MLS workflow runs the native tests before reproducing committed WASM;
 candidate-wide build and CI verification are required before merge.
+The incompatible pre-0044 experimental archive transition is explicitly
+gated: 0044 aborts before deployment while any MLS group remains, including
+reset generations and unfinished staging. Transactional migration regressions
+preserve prior data and schema. Self-hosting documents retaining the prior
+release and an owner-consented verified client-side transition; there is no
+automatic encrypted-to-encrypted backfill. Authority, archive, network and
+session outages propagate as retryable/original errors through log and leaf
+verification; only actual verification refusals become integrity failures.
 Production activation remains off pending written outside-review clearance;
 macOS verification remains deferred.

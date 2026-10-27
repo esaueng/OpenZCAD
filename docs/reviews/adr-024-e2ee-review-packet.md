@@ -719,6 +719,15 @@ and on the scenario and archive tests.
   plaintext-pipeline deletion (8-5) remain held until written outside-review
   clearance; the review is not completed. The review tag and SHA above
   must be frozen before that review begins.
+- **Experimental archive-format cutover.** Migration 0044 refuses an
+  installation containing any earlier MLS groups, before supported deploy
+  commands publish code. V1 archives cannot supply the independent roots
+  this verifier requires, and the server must not invent them. Such
+  installations retain the prior release until owners authorize the
+  documented client-side transition in
+  [Self-hosting](../SELF_HOSTING.md#flags). There is no automatic
+  encrypted-to-encrypted legacy upgrader; owners who cannot consent to
+  the temporary plaintext reverse path must retain the prior release.
 - **Earlier deferred findings now implemented:** share-server storage,
   write fences, signed registration and anonymous repetition budgets
   ([8-C1 evidence](../roadmap-evidence/l11--share-links-hardening.md));
