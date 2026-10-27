@@ -33,7 +33,10 @@ interface ValidationReport {
   issues: { severity: string; description: string }[];
 }
 
-function inspect(stage: HolderStage) {
+function inspect(
+  stage: HolderStage,
+  points: readonly (readonly [number, number, number])[] = []
+) {
   const kernel = new RemusKernel();
   try {
     const build = buildDocumentHistory(kernel, stage.document);
@@ -53,7 +56,10 @@ function inspect(stage: HolderStage) {
         volume: kernel.volume(solid, 0.08),
         shells: kernel.getSolidShells(solid).length,
         faces: kernel.getSolidFaces(solid).length,
-        mesh: inspectTriangleMeshClosure(mesh.positions, mesh.indices)
+        mesh: inspectTriangleMeshClosure(mesh.positions, mesh.indices),
+        samples: points.map(([x, y, z]) =>
+          kernel.classifyPoint(solid, x, y, z, 1e-7)
+        )
       };
     } finally {
       mesh.free();
@@ -200,26 +206,94 @@ describe(
       expect(result.exportableBodyIds).toContain(stage.bodyId);
     });
 
-    it('fillets the plate and drills it after refused arm fillets, preserving input at each refusal', async () => {
-      const stage = createNativeHolderStages().secondArm;
-      const body = bodyOf(await adapter.syncDocument(stage.document), stage);
-      const armEdge = edgeAt(body, 35, 37);
-      for (const size of [3, 1]) {
+    // Volumes are measured witnesses; the section probes below independently
+    // require removal at the selected corner and preservation elsewhere.
+    it.each([
+      { size: 3, volume: 52162.57992682131 },
+      { size: 1, volume: 52302.36578078378 }
+    ])(
+      'fillets the arm at radius $size into a valid closed solid',
+      async ({ size, volume }) => {
+        const stage = createNativeHolderStages().secondArm;
+        const body = bodyOf(await adapter.syncDocument(stage.document), stage);
+        const points = [
+          [36.9, -42.9, 25], // Inside the square corner, outside its fillet circle.
+          [36, -42, 25], // Inside both the r1 and r3 fillet circles.
+          [-30, -40, 25], // Opposite arm remains intact.
+          [0, -30, 4], // Plate opening remains empty.
+          [0, 5, 4] // Plate material remains intact.
+        ] as const;
+        expect(inspect(stage, points).samples).toEqual([
+          'inside',
+          'inside',
+          'inside',
+          'outside',
+          'inside'
+        ]);
         const fillet = filletEdges(stage.document, {
           name: 'Arm fillet',
           targetBodyId: stage.bodyId,
-          edgeHashes: [armEdge.hash],
+          edgeHashes: [edgeAt(body, 35, 37).hash],
           size
         });
         const result = await adapter.syncDocument(fillet.document);
-        expect(result.warnings).toEqual([
-          expect.stringContaining(
-            `Fillet could not be created on 1 selected edge with radius ${size}.`
-          )
+        expect(result.warnings).toEqual([]);
+        expect(bodyOf(result, fillet).faceCount).toBe(27);
+        expect(bodyOf(result, stage).consumed).toBe(true);
+        expect(result.exportableBodyIds).toContain(fillet.bodyId);
+        const rounded = inspect(fillet, points);
+        expect(rounded.warnings).toEqual([]);
+        expect(rounded.strict).toBe(0);
+        expect(rounded.relaxed).toBe(0);
+        expect(rounded.report.issues).toEqual([]);
+        expect(rounded.shells).toBe(1);
+        expect(rounded.faces).toBe(27);
+        expect(rounded.bounds).toEqual([-37, -43, 0, 37, 10, 58]);
+        expect(rounded.mesh).toMatchObject({
+          boundaryEdges: 0,
+          nonManifoldEdges: 0,
+          inconsistentWindingEdges: 0
+        });
+        expect(rounded.volume).toBeCloseTo(volume, 4);
+        expect(rounded.volume).toBeLessThan(body.volume);
+        expect(rounded.samples).toEqual([
+          'outside',
+          'inside',
+          'inside',
+          'outside',
+          'inside'
         ]);
-        expect(result.bodyRepresentations[fillet.bodyId]).toBeUndefined();
-        expect(bodyOf(result, stage).consumed).toBe(false);
       }
+    );
+
+    it('refuses an oversized arm fillet and preserves its input', async () => {
+      const stage = createNativeHolderStages().secondArm;
+      const body = bodyOf(await adapter.syncDocument(stage.document), stage);
+      const fillet = filletEdges(stage.document, {
+        name: 'Arm fillet',
+        targetBodyId: stage.bodyId,
+        edgeHashes: [edgeAt(body, 35, 37).hash],
+        size: 100
+      });
+      const result = await adapter.syncDocument(fillet.document);
+      expect(result.warnings).toEqual([
+        expect.stringContaining(
+          'Fillet could not be created on 1 selected edge with radius 100.'
+        )
+      ]);
+      expect(result.bodyRepresentations[fillet.bodyId]).toBeUndefined();
+      expect(bodyOf(result, stage)).toMatchObject({
+        consumed: false,
+        faceCount: body.faceCount,
+        volume: body.volume,
+        topology: body.topology
+      });
+      expect(result.exportableBodyIds).toContain(stage.bodyId);
+    });
+
+    it('fillets the plate and drills it with simple and countersunk holes', async () => {
+      const stage = createNativeHolderStages().secondArm;
+      const body = bodyOf(await adapter.syncDocument(stage.document), stage);
       // The reversed-plane/run-out repair now rounds the complete top edge
       // under the arm foot. Verify a valid construction and its independent
       // quarter-circle cut, rather than preserving the old refusal baseline.
