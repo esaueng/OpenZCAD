@@ -280,7 +280,24 @@ export function EncryptedShareLinks({
     () =>
       client.subscribeRemovals(projectId, (notice) => {
         if (notice?.problem) setError(notice.problem);
-        if (notice) setTransientRemoval({ projectId, notice });
+        if (notice)
+          setTransientRemoval((current) => {
+            if (current?.projectId !== projectId) return { projectId, notice };
+            if (Number(current.notice.cursor) > Number(notice.cursor))
+              return current;
+            if (Number(current.notice.cursor) < Number(notice.cursor))
+              return { projectId, notice };
+            const links = new Map(
+              [...current.notice.links, ...notice.links].map((link) => [
+                link.shareId,
+                link
+              ])
+            );
+            return {
+              projectId,
+              notice: { ...notice, links: [...links.values()] }
+            };
+          });
         void load().catch((caught: unknown) => setError(message(caught)));
       }),
     [client, projectId, load]
@@ -312,16 +329,30 @@ export function EncryptedShareLinks({
   };
 
   const links = state?.links ?? [];
-  const transient = transientRemoval?.projectId === projectId ? transientRemoval : null;
+  const transient =
+    transientRemoval?.projectId === projectId ? transientRemoval : null;
   const removalCursor = transient?.notice.cursor ?? state?.removalNotice;
-  const removalLinks = (transient?.notice.links ?? state?.removalLinks ?? [])
-    .filter((affected) => transient
-      ? !links.some((link) => link.shareId === affected.shareId && link.status === 'revocation-pending')
-      : links.some((link) => link.shareId === affected.shareId && link.status !== 'revocation-pending'));
+  const removalLinks = (
+    transient?.notice.links ??
+    state?.removalLinks ??
+    []
+  ).filter((affected) =>
+    transient
+      ? !links.some(
+          (link) =>
+            link.shareId === affected.shareId &&
+            link.status === 'revocation-pending'
+        )
+      : links.some(
+          (link) =>
+            link.shareId === affected.shareId &&
+            link.status !== 'revocation-pending'
+        )
+  );
   const acknowledgeRemoval = async () => {
     if (removalCursor && !transient?.notice.problem)
       await client.dismissRemoval?.(projectId, removalCursor);
-    setTransientRemoval((current) => current === transient ? null : current);
+    setTransientRemoval((current) => (current === transient ? null : current));
   };
   const disabled = busy !== null || state === null;
 

@@ -56,18 +56,61 @@ const active: EncryptedShareLinksState = {
 };
 
 describe('EncryptedShareLinks (slice 5-10)', () => {
+  it('keeps the newest affected links when failed-journal callbacks arrive out of order', async () => {
+    const client = fakeClient([active]);
+    client.dismissRemoval = vi.fn(async () => {});
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText(/^Active until /);
+    act(() =>
+      client.fireRemoval({
+        cursor: '13',
+        links: [{ shareId: 'shr_b', mode: 'tweak' }],
+        problem: 'Storage unavailable'
+      })
+    );
+    act(() =>
+      client.fireRemoval({
+        cursor: '12',
+        links: [{ shareId: 'shr_a', mode: 'view' }],
+        problem: 'Storage unavailable'
+      })
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Reissue links' })
+    );
+    expect(client.reissue).toHaveBeenCalledWith('proj_x', [
+      { shareId: 'shr_b', mode: 'tweak' }
+    ]);
+  });
   it('keeps a transient removal across the initial pending list and later empty reloads until acknowledged', async () => {
     const client = fakeClient([active]);
     let release!: (state: EncryptedShareLinksState) => void;
-    vi.mocked(client.list).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+    vi.mocked(client.list)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          })
+      )
       .mockResolvedValue(active);
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
-    act(() => client.fireRemoval({ cursor: '12', links: [active.links[0]!], problem: 'Storage unavailable' }));
+    act(() =>
+      client.fireRemoval({
+        cursor: '12',
+        links: [active.links[0]!],
+        problem: 'Storage unavailable'
+      })
+    );
     expect(screen.getByText(/Someone lost access/)).toBeVisible();
-    await act(async () => { release(active); await Promise.resolve(); });
+    await act(async () => {
+      release(active);
+      await Promise.resolve();
+    });
     expect(screen.getByText(/Someone lost access/)).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Not now' }));
-    await waitFor(() => expect(screen.queryByText(/Someone lost access/)).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(/Someone lost access/)).toBeNull()
+    );
   });
   it('does not let an older reload erase a newer journaled notice', async () => {
     const client = fakeClient([active]);
@@ -123,7 +166,9 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
       })
     );
     expect(screen.getByText(/Someone lost access/)).toBeVisible();
-    expect(screen.getByRole('alert')).toHaveTextContent('Browser storage is unavailable.');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Browser storage is unavailable.'
+    );
     await userEvent.click(
       screen.getByRole('button', { name: 'Reissue links' })
     );
