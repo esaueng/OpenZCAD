@@ -96,7 +96,11 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       });
     const work = await links
       .shareWorkFor(ctx)
-      .read(ctx.groups.account.userId, projectId);
+      .read(ctx.groups.account.userId, projectId)
+      .catch((error: unknown) => {
+        upkeepError ??= message(error);
+        return null;
+      });
     const view = await links.listShareLinks(
       ctx,
       projectId,
@@ -112,9 +116,9 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       })),
       needsConfirmation:
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
-      retired: work.retired,
-      removalNotice: work.notice,
-      removalLinks: work.removalLinks,
+      retired: work?.retired ?? [],
+      removalNotice: work?.notice ?? null,
+      removalLinks: work?.removalLinks ?? [],
       problem:
         upkeepError ??
         (upkeep?.revocations.failed.length
