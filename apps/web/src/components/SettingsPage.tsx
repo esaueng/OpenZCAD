@@ -2342,7 +2342,7 @@ export function SettingsPage({
             encryptionAvailable && (
             <Section
               title="Encryption"
-              intro="Beta. Your keys for end-to-end encrypted projects. The server stores them only wrapped; projects are not encrypted yet."
+              intro="Beta. End-to-end encryption for cloud projects. The server stores your account keys only wrapped. Existing projects can be encrypted after setup."
             >
               <ErrorBoundary label="Encryption settings">
                 <Suspense
