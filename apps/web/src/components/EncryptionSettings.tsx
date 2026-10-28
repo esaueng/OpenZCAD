@@ -234,7 +234,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
             <Group title="Set up">
               <SettingRow
                 title="End-to-end encryption"
-                hint="Not set up. This creates your keys and a recovery key. Projects are not encrypted yet: that comes in a later beta step."
+                hint="Create your account keys and save a recovery key. Existing projects stay as they are until you encrypt them."
               >
                 <button
                   className="primary"

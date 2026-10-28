@@ -49,17 +49,14 @@
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
     "PROJECT_PERSONAL_SYNC_ENABLED": "true",
-    // End-to-end encryption keys (ADR-024 Phase 3) stay closed. Apply D1
-    // migration 0029 to production before turning this on, or the routes
-    // answer 503; E2EE_CANARY_EMAILS (a secret) opens them for named accounts.
+    // Global keys remain closed. E2EE_CANARY_EMAILS is a private secret:
+    // only those accounts can exercise the qualified E2EE rollout.
     "E2EE_KEYS_ENABLED": "false",
-    // Encrypted projects (ADR-024 Phase 4) stay closed too. They need the key
-    // routes for the account and D1 migrations 0031 and 0032 applied first.
-    "E2EE_PROJECTS_ENABLED": "false",
-    // Moving existing projects to encrypted storage (ADR-024 Phase 7) stays
-    // closed as well: it needs encrypted projects and D1 migration 0042, and
-    // migrating real projects needs its own production authorization.
-    "E2EE_MIGRATION_ENABLED": "false",
+    // Projects and opt-in migration remain gated by keys for each account.
+    // Apply reviewed migrations through 0044 and verify paired recovery
+    // before setting the canary secret on the reviewed production version.
+    "E2EE_PROJECTS_ENABLED": "true",
+    "E2EE_MIGRATION_ENABLED": "true",
     // The beta-only reverse path (ADR-024 Phase 7, slice 7-3), turning an
     // encrypted project back into plaintext, stays closed too. It needs
     // migration open and D1 migration 0043; Phase 8 deletes it.
