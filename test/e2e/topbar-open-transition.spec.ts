@@ -190,10 +190,30 @@ test('opens a cloud project without the action row flashing stale states or refl
   await page.evaluate(() => {
     const samples: ActionRowSample[] = [];
     window.__e2eActionRowSamples = samples;
+    // Record the real labels during preparation as well as after reveal.
+    // innerText is empty while an ancestor has visibility:hidden. Walk the
+    // text nodes instead, excluding icon text and closed menu contents.
+    const labels = (node: Node): string[] => {
+      if (node instanceof SVGElement) return [];
+      if (node instanceof HTMLElement) {
+        if (
+          node.hidden ||
+          node.getAttribute('aria-hidden') === 'true' ||
+          getComputedStyle(node).display === 'none'
+        )
+          return [];
+        if (node instanceof HTMLDetailsElement && !node.open) {
+          const summary = node.querySelector('summary');
+          return summary ? labels(summary) : [];
+        }
+      }
+      if (node.nodeType === Node.TEXT_NODE) return [node.textContent ?? ''];
+      return Array.from(node.childNodes).flatMap(labels);
+    };
     const sample = () => {
       const row = document.querySelector('.topbar-actions');
       if (!row) return;
-      const text = (row as HTMLElement).innerText.replace(/\s+/g, ' ').trim();
+      const text = labels(row).join(' ').replace(/\s+/g, ' ').trim();
       const width = Math.round(row.getBoundingClientRect().width);
       const last = samples.at(-1);
       if (!last || last.text !== text || last.width !== width) {

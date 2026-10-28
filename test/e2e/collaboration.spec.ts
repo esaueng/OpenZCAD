@@ -287,6 +287,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       releaseNew();
     }
     await expect(page.locator('.breadcrumb')).toContainText(latest.name);
+    await expect(page.locator('.breadcrumb')).toBeVisible();
     await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
     await expect(page.getByText(oldDocument.name, { exact: true })).toHaveCount(
       0
@@ -345,6 +346,7 @@ for (const stage of ['accept', 'document'] as const) {
     expect(calls).toBe(1);
     release();
     await expect(page.locator('.breadcrumb')).toContainText(document.name);
+    await expect(page.locator('.breadcrumb')).toBeVisible();
     await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
     await page.evaluate((token) => {
       window.location.hash = `invite=${token}`;
@@ -1432,6 +1434,7 @@ test('focuses signed-out invitation links on email sign-in and resumes them', as
     page.getByRole('button', { name: 'Rename project' })
   ).toHaveCount(0);
   await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  await expect(page.locator('.breadcrumb')).toBeVisible();
   await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
   expect(
     await page.evaluate(
