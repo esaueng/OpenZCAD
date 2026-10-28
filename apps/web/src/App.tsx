@@ -392,6 +392,7 @@ import {
   isProjectFormatUnsupportedError
 } from './lib/api';
 import type { ProjectListingProgress } from './lib/api';
+import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
@@ -2411,6 +2412,7 @@ export function App() {
   const accountSettingsRef = useRef(accountSettings);
   accountSettingsRef.current = accountSettings;
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
+  const cloudConfigurationReads = useRef(createCloudConfigurationReads());
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
   const [panelState, setPanelState] = useState<PanelState>(() =>
@@ -6031,8 +6033,13 @@ export function App() {
       try {
         const keySessionRevision = getKeySessionRevision();
         const startupSettings = appSettingsRef.current;
+        const ownsCloudMode = cloudConfigurationReads.current.captureMode();
+        const ownsHealthRead = cloudConfigurationReads.current.begin('health');
+        const ownsAuthRead = cloudConfigurationReads.current.begin('auth');
         const isCurrent = () =>
-          !cancelled && getKeySessionRevision() === keySessionRevision;
+          !cancelled &&
+          ownsCloudMode() &&
+          getKeySessionRevision() === keySessionRevision;
         const verifiedMetadata = new Map<string, ProjectSummary>();
         const local = listLocalProjects();
         // Cards already stored on this device need neither cloud discovery nor
@@ -6051,7 +6058,7 @@ export function App() {
             ? api.health().catch(() => null)
             : Promise.resolve(null)
         ).then((health) => {
-          if (!cancelled) setDeploymentHealth(health);
+          if (!cancelled && ownsHealthRead()) setDeploymentHealth(health);
         });
         void (
           bootCloudFunctionsEnabledRef.current
@@ -6061,7 +6068,7 @@ export function App() {
               )
             : Promise.resolve({ config: null, status: 'unavailable' as const })
         ).then((auth) => {
-          if (!cancelled) {
+          if (!cancelled && ownsAuthRead()) {
             setAuthConfig(auth.config);
             setAuthConfigStatus(auth.status);
           }
@@ -11245,6 +11252,7 @@ export function App() {
     if (next === cloudFunctionsEnabledRef.current) {
       return;
     }
+    cloudConfigurationReads.current.changeMode();
     if (!next) organizationBackground.cancel();
     // Flip the transport gate before React can render another cloud consumer.
     // This also aborts active browser API and assistant fetches when going off.
@@ -11316,11 +11324,22 @@ export function App() {
       return;
     }
     const keySessionRevision = getKeySessionRevision();
+    const ownsMode = cloudConfigurationReads.current.captureMode();
+    const ownsAuth = cloudConfigurationReads.current.begin('auth');
+    const ownsHealth = cloudConfigurationReads.current.begin('health');
+    const isCurrent = () =>
+      cloudFunctionsEnabledRef.current &&
+      ownsMode() &&
+      getKeySessionRevision() === keySessionRevision;
     setAuthConfigStatus('loading');
     void api
       .health()
-      .then(setDeploymentHealth)
-      .catch(() => setDeploymentHealth(null));
+      .catch(() => null)
+      .then((health) => {
+        if (ownsHealth() && cloudFunctionsEnabledRef.current) {
+          setDeploymentHealth(health);
+        }
+      });
     const [nextAuth, activeSession] = await Promise.all([
       api
         .authConfig()
@@ -11328,14 +11347,13 @@ export function App() {
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
     ]);
-    if (
-      !cloudFunctionsEnabledRef.current ||
-      getKeySessionRevision() !== keySessionRevision
-    ) {
+    if (!isCurrent()) {
       return;
     }
-    setAuthConfig(nextAuth.config);
-    setAuthConfigStatus(nextAuth.status);
+    if (ownsAuth()) {
+      setAuthConfig(nextAuth.config);
+      setAuthConfigStatus(nextAuth.status);
+    }
     organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
@@ -11360,7 +11378,7 @@ export function App() {
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
       ]);
-      if (!cloudFunctionsEnabledRef.current) {
+      if (!isCurrent()) {
         return;
       }
       accountSettingsRef.current = remoteSettings;
@@ -11369,7 +11387,7 @@ export function App() {
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );
-      if (!cloudFunctionsEnabledRef.current) {
+      if (!isCurrent()) {
         return;
       }
       setProjects(listed.projects);
@@ -11378,7 +11396,7 @@ export function App() {
       setSettingsMessage('Cloud profile connected.');
       setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
-      if (cloudFunctionsEnabledRef.current) {
+      if (isCurrent()) {
         setSettingsMessage(
           'Cloud profile unavailable · device settings remain active.'
         );
@@ -11416,10 +11434,13 @@ export function App() {
   }
 
   async function handleRefreshAuthConfig() {
+    if (!cloudFunctionsEnabledRef.current) return;
+    const ownsRead = cloudConfigurationReads.current.begin('auth');
     setAuthConfigStatus('loading');
     setSettingsMessage('Checking beta sign-in readiness…');
     try {
       const nextAuthConfig = await api.authConfig();
+      if (!ownsRead()) return;
       setAuthConfig(nextAuthConfig);
       setAuthConfigStatus('ready');
       setSettingsMessage(
@@ -11428,6 +11449,7 @@ export function App() {
           : 'Email sign-in is not configured · device settings remain active.'
       );
     } catch {
+      if (!ownsRead()) return;
       setAuthConfig(null);
       setAuthConfigStatus('unavailable');
       setSettingsMessage(
@@ -12429,12 +12451,6 @@ export function App() {
       await sharedThumbnailCapture.flush();
       if (!isCurrent()) return;
       sharedThumbnailCapture.discard();
-      if (
-        accountDocumentUnavailableProjectIdRef.current !== null &&
-        accountDocumentUnavailableProjectIdRef.current !== projectId
-      ) {
-        accountDocumentUnavailableProjectIdRef.current = null;
-      }
       const localDocumentPromise = loadLocalProject(projectId);
       const lastSyncedVersionPromise = loadLastSyncedVersion(projectId);
       const [localDocument, remoteResult, lastSyncedVersion] =
@@ -12467,8 +12483,6 @@ export function App() {
         setStatus(remoteResult.error.message);
         return;
       }
-      // The existing document effect loads the file count after hydration.
-      setArtifacts([]);
       // A project this device holds alone is not in the account, and the
       // account says so with a 404. That is the ordinary answer, not an
       // outage: reading it as one opened every device project with "The
@@ -12486,6 +12500,7 @@ export function App() {
           ? projectId
           : null;
         setCloudAvailable(false);
+        setArtifacts([]);
         hydrateDocument(localDocument, { activeProjectSince });
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
@@ -12508,20 +12523,16 @@ export function App() {
       if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
       }
-      if (
-        accountDocumentUnavailableProjectIdRef.current === projectId &&
-        remoteDocument
-      ) {
+      const commitAccountState = () => {
         accountDocumentUnavailableProjectIdRef.current = null;
-      }
-      setCloudAvailable(Boolean(remoteDocument));
-      if (remoteDocument) {
-        remoteVersionsRef.current.set(
-          remoteDocument.projectId,
-          remoteDocument.version
-        );
-      }
+        setCloudAvailable(Boolean(remoteDocument));
+        setArtifacts([]);
+        if (remoteDocument) {
+          remoteVersionsRef.current.set(remoteDocument.projectId, remoteDocument.version);
+        }
+      };
       if (outcome.choice === 'diverged') {
+        commitAccountState();
         // Both copies moved since this device last agreed with the account.
         // Open the local one — it is the work in front of the user — and ask
         // rather than discarding either side.
@@ -12542,12 +12553,14 @@ export function App() {
         outcome.choice === 'remote' && localDocument
           ? withLocalDerived(outcome.document, localDocument)
           : outcome.document;
-      hydrateDocument(openedDocument, { activeProjectSince });
       if (outcome.choice === 'remote') {
         await saveLocalProject(openedDocument);
+        if (!isCurrent()) return;
         await saveLastSyncedVersion(projectId, openedDocument.version);
       }
       if (!isCurrent()) return;
+      commitAccountState();
+      hydrateDocument(openedDocument, { activeProjectSince });
       setStatus(
         outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`

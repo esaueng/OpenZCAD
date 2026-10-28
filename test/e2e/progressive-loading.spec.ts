@@ -322,3 +322,188 @@ test('a shared viewer stays read-only before and after delayed capability discov
     capabilities.release();
   }
 });
+
+for (const store of ['projects', 'projectSync']) {
+  test(`cancel returns to the library while the ${store} write is still pending`, async ({
+    page
+  }) => {
+    await stubApi(page);
+    const document = createProjectDocument(
+      'Write-gated part',
+      toUserId('user_e2e')
+    );
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({
+        json: {
+          projects: [
+            {
+              projectId: document.projectId,
+              name: document.name,
+              revisionCount: 0,
+              updatedAt: document.derived.updatedAt
+            }
+          ]
+        }
+      })
+    );
+    await page.route(`**/api/projects/${document.projectId}`, (route) =>
+      route.fulfill({ json: document })
+    );
+    await page.goto('/');
+    const card = page.locator('.start-tile-open', { hasText: document.name });
+    await expect(card).toBeEnabled();
+    await page.evaluate((store) => {
+      const browser = window as typeof window & {
+        __projectWriteHeld?: boolean;
+        __releaseProjectWrite?: () => void;
+      };
+      const transact = IDBDatabase.prototype.transaction;
+      IDBDatabase.prototype.transaction = function (names, mode, options) {
+        const tx = transact.call(this, names, mode, options);
+        const stores = typeof names === 'string' ? [names] : Array.from(names);
+        if (
+          mode === 'readwrite' &&
+          stores.includes(store) &&
+          !browser.__projectWriteHeld
+        ) {
+          tx.addEventListener('complete', (event) => {
+            if (browser.__projectWriteHeld) return;
+            event.stopImmediatePropagation();
+            browser.__projectWriteHeld = true;
+            browser.__releaseProjectWrite = () => {
+              tx.oncomplete?.call(tx, new Event('complete'));
+            };
+          });
+        }
+        return tx;
+      };
+    }, store);
+    try {
+      await card.click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { __projectWriteHeld?: boolean })
+                .__projectWriteHeld
+          )
+        )
+        .toBe(true);
+      await expect(
+        page.getByRole('status', { name: 'Opening project', exact: true })
+      ).toBeVisible();
+      await page
+        .getByRole('button', { name: 'Back to parts', exact: true })
+        .click();
+      await expect(card.first()).toBeVisible();
+    } finally {
+      await page.evaluate(() =>
+        (
+          window as typeof window & { __releaseProjectWrite?: () => void }
+        ).__releaseProjectWrite?.()
+      );
+    }
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        )
+    );
+    await expect(card.first()).toBeVisible();
+    await expect(page.locator('.breadcrumb')).toHaveCount(0);
+    await expect(
+      page.getByRole('status', { name: 'Opening project', exact: true })
+    ).toHaveCount(0);
+  });
+}
+
+for (const changeMode of [false, true]) {
+  test(`late startup auth cannot replace a newer settings read${changeMode ? ' across cloud off then on' : ''}`, async ({
+    page
+  }) => {
+    await stubApi(page);
+    await page.route('**/api/session', (route) =>
+      route.fulfill({ json: null })
+    );
+    let requests = 0;
+    await page.route('**/api/auth/config', (route) =>
+      route.fulfill({
+        json: {
+          mode: 'development',
+          emailCodeEnabled: requests++ > 0,
+          turnstileSiteKey: '1x00000000000000000000AA'
+        }
+      })
+    );
+    await page.addInitScript(() => {
+      const browser = window as typeof window & {
+        __authHeld?: boolean;
+        __releaseStaleAuth?: () => void;
+      };
+      const fetchResponse = window.fetch.bind(window);
+      let captured = false;
+      window.fetch = async (...args) => {
+        const response = await fetchResponse(...args);
+        const input = args[0];
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        if (!captured && url.endsWith('/api/auth/config')) {
+          captured = true;
+          const read = response.json.bind(response);
+          response.json = async () => {
+            const payload: unknown = await read();
+            browser.__authHeld = true;
+            // Hold decoding after transport completed, so aborting fetch does
+            // not itself hide a stale callback after a cloud-mode change.
+            await new Promise<void>((resolve) => {
+              browser.__releaseStaleAuth = resolve;
+            });
+            return payload;
+          };
+        }
+        return response;
+      };
+    });
+    await page.goto('/');
+    await expect(
+      page.getByRole('button', { name: 'Create project', exact: true })
+    ).toBeEnabled();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as typeof window & { __authHeld?: boolean }).__authHeld
+        )
+      )
+      .toBe(true);
+    await page
+      .getByRole('button', { name: 'Open settings', exact: true })
+      .click();
+    await page.getByRole('button', { name: 'Account', exact: true }).click();
+    if (changeMode) {
+      const cloud = page.getByRole('checkbox', {
+        name: 'Cloud features',
+        exact: true
+      });
+      await cloud.uncheck();
+      await cloud.check();
+    }
+    await expect(
+      page.getByRole('textbox', { name: 'Email address', exact: true })
+    ).toBeVisible();
+    await page.evaluate(async () => {
+      (
+        window as typeof window & { __releaseStaleAuth?: () => void }
+      ).__releaseStaleAuth?.();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+    });
+    await expect(
+      page.getByRole('textbox', { name: 'Email address', exact: true })
+    ).toBeVisible();
+  });
+}

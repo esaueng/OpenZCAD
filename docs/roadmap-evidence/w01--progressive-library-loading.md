@@ -12,7 +12,9 @@ screen with cancellation; document reconciliation still precedes hydration,
 and the file count loads afterward. Regression coverage includes 150 encrypted
 cards, delayed optional services, cached rows, rejected/stale metadata, local
 settings changed during discovery, shared viewers awaiting capabilities,
-cancellation and superseded navigation
+cancellation during device writes, superseded navigation and late configuration
+responses after retries or cloud-mode changes
 (`progressive-loading.spec.ts`, `apiProjectListing.test.ts`,
-`progressiveShelf.test.ts`, `projectShelf.test.ts`). Original-account production
+`progressiveShelf.test.ts`, `projectShelf.test.ts`,
+`cloudConfigurationReads.test.ts`). Original-account production
 timing and target-hardware median/p95 qualification remain open.
