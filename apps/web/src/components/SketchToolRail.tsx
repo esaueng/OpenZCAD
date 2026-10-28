@@ -1126,7 +1126,11 @@ export function SketchToolRail({
           </button>
         </Tooltip>
         {modifyOpen && (
-          <SketchModifyFlyout anchorRef={modifyTriggerRef} id={modifyGroupId}>
+          <SketchModifyFlyout
+            anchorRef={modifyTriggerRef}
+            id={modifyGroupId}
+            onClose={() => setModifyOpen(false)}
+          >
             {SKETCH_EDIT_TOOL_SPECS.filter(({ kind }) =>
               FOLDED_EDIT_TOOLS.has(kind)
             ).map((spec) => editTool(spec, true))}

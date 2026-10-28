@@ -17,7 +17,10 @@ states are rendered at 320 x 568, 390 x 844 and 1440 x 900; the rail and sketch
 flyout also cover 844 x 390 landscape. Screenshot inspection and a separate
 comfortable-density browser check confirm the phone layout. The focused
 SketchToolRail, ViewerToolbar, ShortcutsOverlay and sidebar contract suites
-pass (65 tests), as does the full web suite (4,482 tests). All seven existing
+pass (66 tests), as does the full web suite. All seven existing
 `sketch-modify-tools.spec.ts` workflows still pass through the portalled menu,
-including their document and undo checks. Lint, typecheck, the parity corpus
+including their document and undo checks. Two additional Light/Dark browser
+cases verify focus entry, Tab and Shift+Tab traversal, Escape return and
+continuation to Construction at phone and desktop widths; all 27 browser
+cases pass together. Lint, typecheck, the parity corpus
 and the root production build with bundle budgets pass. U03 remains Partial.

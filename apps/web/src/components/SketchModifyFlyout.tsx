@@ -11,10 +11,12 @@ import { createPortal } from 'react-dom';
 export function SketchModifyFlyout({
   anchorRef,
   id,
+  onClose,
   children
 }: {
   anchorRef: RefObject<HTMLButtonElement | null>;
   id: string;
+  onClose(): void;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -48,6 +50,22 @@ export function SketchModifyFlyout({
     return () => cancelAnimationFrame(frame);
   }, [anchorRef]);
 
+  // A portal is last in document order. Enter its tools immediately and
+  // return to the rail when it closes, without stealing a later dialog's focus.
+  useLayoutEffect(() => {
+    const panel = ref.current;
+    const anchor = anchorRef.current;
+    if (!panel) return;
+    (
+      panel.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? panel
+    ).focus({ preventScroll: true });
+    return () => {
+      if (panel.contains(document.activeElement)) {
+        anchor?.focus({ preventScroll: true });
+      }
+    };
+  }, [anchorRef]);
+
   return createPortal(
     <div
       ref={ref}
@@ -55,11 +73,28 @@ export function SketchModifyFlyout({
       className="sketch-modify-flyout"
       role="group"
       aria-label="More modify tools"
+      tabIndex={-1}
       data-rail-flyout=""
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return;
+        const buttons = Array.from(
+          event.currentTarget.querySelectorAll<HTMLButtonElement>(
+            'button:not(:disabled)'
+          )
+        );
+        const active = document.activeElement;
+        const boundary = event.shiftKey ? buttons[0] : buttons.at(-1);
+        if (active !== event.currentTarget && active !== boundary) return;
+        anchorRef.current?.focus({ preventScroll: true });
+        onClose();
+        // Back from the first item stops on the trigger. Forward from the
+        // last lets the browser continue to the next tool after that trigger.
+        if (event.shiftKey) event.preventDefault();
+      }}
       style={{
         left: position?.x ?? 0,
         top: position?.y ?? 0,
-        visibility: position ? 'visible' : 'hidden'
+        opacity: position ? 1 : 0
       }}
     >
       {children}
