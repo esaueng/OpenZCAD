@@ -63,8 +63,11 @@ Do not promise erasure before the documented backup retention expires.
 
 Create empty D1 and R2 resources whose names start with
 `openzcad-recovery-drill-`. Deploy `restore-worker.mjs` as a private restore
-ingress, binding only its `TARGET` R2 bucket, setting `TARGET_BUCKET` to the
-same bucket name and storing a new random `RESTORE_TOKEN` as a Worker secret.
+ingress with `wrangler deploy --no-bundle`, binding only its `TARGET` R2 bucket,
+setting `TARGET_BUCKET` to the same bucket name and storing a new random
+`RESTORE_TOKEN` as a Worker secret.
+Enable `preview_urls` for this ingress (it contains no Durable Object), so
+uploads can use an immutable version URL rather than the mutable Worker URL.
 The ingress exposes no database or object-read route; uploads require the
 secret and use create-only conditions. Never bind it to production.
 
@@ -73,7 +76,15 @@ Worker, database name/UUID, bucket, HTTPS origin, ingress Worker/origin,
 workers.dev subdomain and target Wrangler config path), `wranglerCommand`
 (encrypted-auth command prefix) and `ingressTokenCommand` (encrypted secret
 lookup). The restore refuses source and official production resources, checks
-provider identities and the actual ingress binding, and requires empty targets.
+provider identities and the active ingress version's bindings, and requires
+empty targets. It verifies the configured workers.dev subdomain belongs to
+the target account before constructing the immutable upload URL.
+Before any target import, it requires a single unbundled module byte-identical
+to this checkout's `restore-worker.mjs`, with the content ETag matching the
+active version. Bundled, stale or additional modules are refused. It rechecks
+the version immediately before transfer and uploads only to that verified
+[immutable version URL](https://developers.cloudflare.com/workers/versions-and-deployments/version-urls/).
+Later deployments cannot replace the code receiving the snapshot bodies.
 
 ```sh
 python3 scripts/recovery/restore.py --config /private/disposable-drill.json \

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Restore a complete encrypted backup only into new disposable drill resources."""
 import argparse
+from email.parser import BytesParser
+from email.policy import default as mime_policy
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from urllib.parse import quote
 from urllib.request import Request
@@ -14,6 +17,78 @@ from cloud import Source, private_json, secret_command, owner_only_file
 from sealed import ram_directory, unseal
 from snapshot import (MAX_SQL_BYTES, MAX_OBJECT_BYTES, SnapshotError, canonical, load_sql, object_path,
                       read_private_file, snapshot_metadata, validate_restore_target)
+
+
+def ingress_read(provider, path, limit=65536):
+    try:
+        with provider.opener.open(Request('https://api.cloudflare.com/client/v4'+path,
+                                  headers={'Authorization':'Bearer '+provider.export_token,
+                                           'User-Agent':'OpenZCAD-Recovery/1.0',
+                                           'Accept-Encoding':'identity'}),timeout=30) as response:
+            body=response.read(limit+1)
+            if len(body)>limit:
+                raise SnapshotError('Restore ingress response exceeds supported capacity.')
+            return body,{key.lower():value for key,value in response.headers.items()}
+    except HTTPError as error:
+        raise SnapshotError('Restore ingress verification failed, HTTP '+str(error.code)) from None
+
+
+def verified_ingress(provider, target):
+    ingress=target['ingressWorker']
+    if (not re.fullmatch(r'openzcad-recovery-drill-[a-z0-9-]+',ingress)
+            or not re.fullmatch(r'[a-z0-9-]+',target['subdomain'])
+            or target['ingressOrigin']!='https://'+ingress+'.'+target['subdomain']+'.workers.dev'):
+        raise SnapshotError('Invalid disposable restore ingress identity.')
+    base='/accounts/'+target['account']+'/workers/scripts/'+ingress
+    def get(path):
+        value=json.loads(ingress_read(provider,base+path)[0])
+        if value.get('success') is not True:
+            raise SnapshotError('Restore ingress provider verification failed.')
+        return value['result']
+    deployments=get('/deployments')['deployments']
+    versions=deployments[0]['versions'] if deployments else []
+    if len(versions)!=1 or versions[0].get('percentage')!=100:
+        raise SnapshotError('Restore ingress must have one fully active version.')
+    version_id=versions[0].get('version_id','')
+    if not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',version_id):
+        raise SnapshotError('Restore ingress version identity is invalid.')
+    version=get('/versions/'+version_id)
+    if version.get('id')!=version_id:
+        raise SnapshotError('Restore ingress version identity changed.')
+    resources=version['resources']
+    bindings=resources['bindings']
+    expected=[{'type':'r2_bucket','name':'TARGET','bucket_name':target['bucket']},
+              {'type':'plain_text','name':'TARGET_BUCKET','text':target['bucket']},
+              {'type':'secret_text','name':'RESTORE_TOKEN'}]
+    if sorted(bindings,key=lambda item:item['name'])!=sorted(expected,key=lambda item:item['name']):
+        raise SnapshotError('Restore ingress has an unapproved provider binding.')
+    content,headers=ingress_read(provider,base+'/content/v2',1024**2)
+    etag=resources.get('script',{}).get('etag')
+    if not etag or headers.get('etag')!='"'+etag+'"':
+        raise SnapshotError('Restore ingress content does not name the active version.')
+    message=BytesParser(policy=mime_policy).parsebytes(
+        ('Content-Type: '+headers.get('content-type','')+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+content)
+    parts=list(message.iter_parts())
+    if message.defects or message.get_content_type()!='multipart/form-data' or len(parts)!=1:
+        raise SnapshotError('Restore ingress must contain only the reviewed module.')
+    part=parts[0]
+    if (part.defects or part.is_multipart() or part.get_content_type()!='application/javascript+module'
+            or part.get_content_disposition()!='form-data'
+            or part.get_filename()!='restore-worker.mjs'
+            or part.get_param('name',header='content-disposition')!='restore-worker.mjs'
+            or len(part.get_all('Content-Disposition',[]))!=1
+            or len(part.get_all('Content-Type',[]))!=1
+            or part.get('Content-Transfer-Encoding') is not None
+            or part.get_payload(decode=True)!=read_private_file(Path(__file__).with_name('restore-worker.mjs'),1024**2)):
+        raise SnapshotError('Restore ingress code differs from the reviewed module; deploy with --no-bundle.')
+    if get('/subdomain').get('previews_enabled') is not True:
+        raise SnapshotError('Restore ingress requires immutable version URLs.')
+    route=json.loads(ingress_read(provider,'/accounts/'+target['account']+'/workers/subdomain')[0])
+    if route.get('success') is not True or route.get('result',{}).get('subdomain')!=target['subdomain']:
+        raise SnapshotError('Restore ingress subdomain does not belong to the approved account.')
+    # Use the verified immutable version, never the mutable deployment URL or
+    # a preview alias. Later deployments cannot change this code or binding.
+    return 'https://'+version_id[:8]+'-'+ingress+'.'+target['subdomain']+'.workers.dev'
 
 
 def database_state(sql):
@@ -54,26 +129,7 @@ def restore(config, archive):
         identity = provider.json('GET',provider.d1)['result']
         if identity.get('name') != target['databaseName']:
             raise SnapshotError('Provider target database identity differs from configuration.')
-        ingress = target['ingressWorker']
-        if not ingress.startswith('openzcad-recovery-drill-'):
-            raise SnapshotError('Invalid disposable restore ingress identity.')
-        path='/accounts/'+target['account']+'/workers/scripts/'+ingress+'/settings'
-        # Read back the actual deployed binding, independent of local config.
-        try:
-            with provider.opener.open(Request('https://api.cloudflare.com/client/v4'+path,
-                                      headers={'Authorization':'Bearer '+export_token}),timeout=30) as response:
-                settings=json.load(response)
-        except HTTPError as error:
-            raise SnapshotError('Disposable ingress binding readback failed, HTTP '+str(error.code)) from None
-        bindings=settings['result']['bindings']
-        buckets=[binding for binding in bindings if binding.get('type')=='r2_bucket']
-        if (settings.get('success') is not True or len(buckets)!=1
-                or buckets[0].get('name')!='TARGET' or buckets[0].get('bucket_name')!=target['bucket']
-                or any(binding.get('type')=='d1' for binding in bindings)):
-            raise SnapshotError('Restore ingress has an unapproved provider binding.')
-        origin=target['ingressOrigin']
-        if origin!='https://'+ingress+'.'+target['subdomain']+'.workers.dev':
-            raise SnapshotError('Restore ingress origin does not match the approved Worker.')
+        origin = verified_ingress(provider,target)
         if provider.inventory():
             raise SnapshotError('Restore target bucket is not empty.')
         empty=ram/'empty-target'
@@ -97,6 +153,8 @@ def restore(config, archive):
         if result.returncode:
             raise SnapshotError('Disposable D1 import failed; provider output withheld.')
         ingress_token=secret_command(config['ingressTokenCommand']).decode()
+        if verified_ingress(provider,target)!=origin:
+            raise SnapshotError('Restore ingress version changed before object transfer.')
         for item in manifest['objects']:
             data=read_private_file(object_path(root,item['key']),MAX_OBJECT_BYTES)
             original=metadata[item['key']]
