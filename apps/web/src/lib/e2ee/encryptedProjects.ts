@@ -105,6 +105,7 @@ import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
 import type { ShareRemovalNotice } from './shareWorkStore';
 import { contactInvitationPeople, type InvitationContext } from './invitations';
 import { invitationStore } from './invitationStore';
+import { verifyShelfEntries } from './progressiveShelf';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -286,7 +287,8 @@ async function openStore(
       const notify = removalNotifier(removal);
       void import('./shareLinks')
         .then(({ shareLinksAfterRemoval }) => {
-          if (shareCtx) return shareLinksAfterRemoval(shareCtx, removal, notify);
+          if (shareCtx)
+            return shareLinksAfterRemoval(shareCtx, removal, notify);
           notify();
           return null;
         })
@@ -303,7 +305,8 @@ async function openStore(
       const notify = removalNotifier(notice);
       void import('./shareLinks')
         .then(({ shareLinksAfterDeviceRemoval }) => {
-          if (shareCtx) return shareLinksAfterDeviceRemoval(shareCtx, removal, notify);
+          if (shareCtx)
+            return shareLinksAfterDeviceRemoval(shareCtx, removal, notify);
           notify();
           return null;
         })
@@ -691,22 +694,30 @@ export interface EncryptedShelfEntry {
  * decrypts it like any other blob.
  */
 export async function encryptedProjectShelf(
-  records: readonly E2eeProjectEnvelopeRecord[]
+  records: readonly E2eeProjectEnvelopeRecord[],
+  progress?: {
+    isCurrent(): boolean;
+    onEntry(projectId: string, entry: EncryptedShelfEntry): void;
+  }
 ): Promise<Map<string, EncryptedShelfEntry>> {
+  const revision = getKeySessionRevision();
+  const isCurrent = () =>
+    isCurrentKeySession(revision) && (progress?.isCurrent() ?? true);
+  if (!isCurrent()) return new Map();
   const store = await encryptedProjectStore();
   const shelf = new Map<string, EncryptedShelfEntry>();
-  await Promise.all(
-    records.map(async (record) => {
-      try {
-        const body = await store.info.verify(record);
-        shelf.set(record.projectId, {
-          name: body.name,
-          ...(body.thumbnail ? { thumbnailBlobId: body.thumbnail.blobId } : {})
-        });
-      } catch {
-        // Left out: the placeholder name, no picture.
-      }
-    })
+  await verifyShelfEntries(
+    records,
+    (record) => store.info.verify(record),
+    (record, body) => {
+      const entry = {
+        name: body.name,
+        ...(body.thumbnail ? { thumbnailBlobId: body.thumbnail.blobId } : {})
+      };
+      shelf.set(record.projectId, entry);
+      progress?.onEntry(record.projectId, entry);
+    },
+    isCurrent
   );
-  return shelf;
+  return isCurrent() ? shelf : new Map();
 }

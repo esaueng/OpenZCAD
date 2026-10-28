@@ -1680,18 +1680,18 @@ export function StartScreen({
             </div>
           )}
 
+          {/* The heading and cloud card show refresh progress; announce it once. */}
           {loading && (
+            <div
+              className="start-loading visually-hidden"
+              role="status"
+              aria-label="Loading library"
+            >
+              Loading your parts and account…
+            </div>
+          )}
+          {loading && userProjects.length === 0 && (
             <>
-              {/* Announced, not shown: the heading's note and the cloud card
-                  already say so on screen, and a visible line here pushed the
-                  skeleton down by a row it then jumped back up from. */}
-              <div
-                className="start-loading visually-hidden"
-                role="status"
-                aria-label="Loading library"
-              >
-                Loading your parts and account…
-              </div>
               {layout === 'list' && (
                 <div className="start-list-head" aria-hidden="true">
                   <span>Name</span>
@@ -1740,7 +1740,7 @@ export function StartScreen({
             </>
           )}
 
-          {!loading && matchingProjects.length > 0 && (
+          {matchingProjects.length > 0 && (
             <>
               {layout === 'list' && (
                 <div className="start-list-head" aria-hidden="true">
