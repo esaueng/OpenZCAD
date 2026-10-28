@@ -35,15 +35,38 @@ vi.mock('../lib/e2ee/shareLinks', () => ({
 }));
 
 it.each([
-  { pending: ['authority'], message: /needs your confirmation/ },
-  { pending: ['snapshot'], message: /model is not published yet/ },
-  { pending: ['authority', 'snapshot'], message: /needs your confirmation/ }
+  {
+    pending: ['authority'],
+    needsConfirmation: true,
+    problem: null,
+    message: /needs your confirmation/
+  },
+  {
+    pending: ['snapshot'],
+    needsConfirmation: false,
+    problem: 'Model upload unavailable',
+    message: /Reopen sharing to retry.*Model upload unavailable/
+  },
+  {
+    pending: ['authority'],
+    needsConfirmation: false,
+    problem: 'Authority publication unavailable',
+    message: /Reopen sharing to retry.*Authority publication unavailable/
+  },
+  {
+    pending: ['authority', 'snapshot'],
+    needsConfirmation: true,
+    problem: null,
+    message: /needs your confirmation/
+  }
 ])(
   'does not offer a newly created link with pending $pending work',
-  async ({ pending, message }) => {
+  async ({ pending, needsConfirmation, problem, message }) => {
     createShareLink.mockResolvedValueOnce({
       url: 'https://app.example/#share=a.b.c',
-      pending
+      pending,
+      needsConfirmation,
+      problem
     });
     await expect(
       pageEncryptedShareLinkClient.create('project', 'view')

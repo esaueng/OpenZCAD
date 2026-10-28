@@ -138,9 +138,9 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     );
     if (created.pending.length) {
       throw new Error(
-        created.pending.includes('authority')
+        created.needsConfirmation
           ? 'The link needs your confirmation before it can open. Confirm sharing, then copy it from the link list.'
-          : 'The link was created, but its model is not published yet. Reopen sharing to retry before copying it.'
+          : `The link could not be published yet. Reopen sharing to retry.${created.problem ? ` ${created.problem}` : ''}`
       );
     }
     return { url: created.url };

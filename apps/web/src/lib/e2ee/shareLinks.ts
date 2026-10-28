@@ -966,6 +966,10 @@ export interface CreatedShareLink {
   readonly fragment: ShareFragmentParts;
   /** What the follow-up steps could not do yet (statement, snapshot). */
   readonly pending: readonly string[];
+  /** Only a delegation refusal requires another passkey/recovery ceremony. */
+  readonly needsConfirmation: boolean;
+  /** Preserve operational publication failures so the page can explain a retry. */
+  readonly problem: string | null;
 }
 
 /**
@@ -1200,7 +1204,8 @@ async function createStoredShareLink(
     needsConfirmation: [],
     failed: [{ shareId, reason: describe(error) }]
   }));
-  if (!stated.issued.includes(shareId)) pending.push('authority');
+  if (!stated.issued.includes(shareId) && !stated.current.includes(shareId))
+    pending.push('authority');
   const shown = await publishShareSnapshots(ctx, projectId, head, {
     only: [shareId]
   }).catch((error: unknown): PublishOutcome => ({
@@ -1233,7 +1238,12 @@ async function createStoredShareLink(
       fragment
     ),
     fragment,
-    pending
+    pending,
+    needsConfirmation: stated.needsConfirmation.includes(shareId),
+    problem:
+      stated.failed.find((failure) => failure.shareId === shareId)?.reason ??
+      shown.failed.find((failure) => failure.shareId === shareId)?.reason ??
+      null
   };
 }
 
@@ -1770,7 +1780,13 @@ export async function reissueShareLinks(
             mode: link.mode,
             url: link.url,
             fragment,
-            pending: link.status === 'active' ? [] : ['publication']
+            pending: link.status === 'active' ? [] : ['publication'],
+            needsConfirmation:
+              link.status !== 'active' &&
+              (view.delegation.status === 'missing' ||
+                view.delegation.status === 'expired' ||
+                !view.delegation.namesThisDevice),
+            problem: null
           });
       }
     }
