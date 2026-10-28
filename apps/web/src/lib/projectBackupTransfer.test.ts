@@ -254,7 +254,8 @@ it('backs up a cloud mesh payload once as a source while keeping its original fi
   ).toBeGreaterThan(backup.sources![0]!.base64.length);
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch).toHaveBeenCalledWith(
-    '/api/artifacts/artifact_original/download'
+    '/api/artifacts/artifact_original/download',
+    { signal: expect.any(AbortSignal) }
   );
 
   // A new device restores the payload even though it has no file entry, and
@@ -290,7 +291,8 @@ it('downloads a missing cloud mesh payload once into sources instead of files to
   expect(backup.sources![0]!.logicalBytes).toBe(ref.logicalBytes);
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch).toHaveBeenCalledWith(
-    '/api/artifacts/artifact_payload/download'
+    '/api/artifacts/artifact_payload/download',
+    { signal: expect.any(AbortSignal) }
   );
 });
 
