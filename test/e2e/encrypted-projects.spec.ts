@@ -213,7 +213,7 @@ test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-s
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await expect(
-    page.getByRole('dialog', { name: 'This project changed in two places' })
+    page.getByRole('dialog', { name: 'Choose a version to keep' })
   ).toHaveCount(0);
 
   // Reopening read and verified the account's encrypted head.

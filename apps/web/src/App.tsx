@@ -183,7 +183,6 @@ import {
   createCheckpoint,
   createFeatureOnlyIds,
   createSavePoint,
-  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -199,7 +198,6 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
-  normalizeDocumentHistory,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -1603,13 +1601,13 @@ import {
   clearUnresolvedConflict,
   conflictFromDocuments,
   hasUnresolvedConflict,
-  recoveryCopyName,
-  recoveryCopyNote,
+  conflictCopyNote,
   resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
   type ProjectConflict
 } from './lib/conflictRecovery';
+import { localConflictCopy } from './lib/conflictLocalCopy';
 import {
   buildModelingOperationSubmission,
   modelingFaceOptions,
@@ -2030,40 +2028,6 @@ async function loadProjectSummaries(
     remoteReached: Boolean(remote),
     cloudProjectIds: remoteIds
   };
-}
-
-function localRecoveryCopy(
-  source: ProjectDocument,
-  label: 'Recovery' | 'Local copy'
-): ProjectDocument {
-  const copy = structuredClone(source);
-  const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
-  const name = recoveryCopyName(source.name, label);
-  copy.projectId = projectId;
-  if (copy.editHistory) {
-    copy.editHistory.projectId = projectId;
-    for (const historical of documentNodesWithHistory(copy)) {
-      if (historical.kind === 'project') historical.projectId = projectId;
-    }
-  }
-  const beforeRename = structuredClone(copy);
-  copy.name = name;
-  copy.revisions = [];
-  copy.checkpoints = [];
-  copy.derived.updatedAt = new Date().toISOString();
-  const root = copy.nodes[copy.rootNodeId];
-  if (root?.kind === 'project') {
-    root.projectId = projectId;
-    root.name = name;
-    root.revisionId = null;
-  }
-  // The source's save points stay with the source; the copy starts its own
-  // record. Born with none at all, it could not be saved: every Save,
-  // including Save to my account, refused for want of a revision to name.
-  return createSavedRevision(
-    normalizeDocumentHistory(beforeRename, copy),
-    `Recovered from ${source.name}`
-  );
 }
 
 /**
@@ -5298,8 +5262,12 @@ export function App() {
   }
 
   const conflictHandlers: ConflictResolutionHandlers = {
-    async writeRecoveryCopy(source) {
-      const copy = localRecoveryCopy(source, 'Recovery');
+    async saveLocalAsCopy(source) {
+      const copy = await localConflictCopy(
+        source,
+        projects.map((project) => project.name),
+        session?.userId ?? localUserId
+      );
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
@@ -5318,31 +5286,30 @@ export function App() {
         )
         .catch(() => undefined);
       // From the document just written, so the card counts the copy's own
-      // recovery save point rather than claiming it has none.
+      // initial save point rather than claiming it has none.
       setProjects((current) =>
         mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
+      return copy.projectId;
+    },
+    async localCopyExists(projectId) {
+      const [document, snapshot] = await Promise.all([
+        loadLocalProject(projectId),
+        loadLocalProjectOrganizationSnapshot(projectId)
+      ]);
+      return document !== null && snapshot?.organization.status !== 'deleted';
     },
     useRemoteVersion(remoteDocument, outcome) {
       if (!collaboration.useRemoteVersion(remoteDocument.version)) {
         throw new Error(
-          'The room version changed before recovery could complete.'
+          'The live version changed before your choice could be applied.'
         );
       }
-      setStatus(
-        `Using the current room version; ${recoveryCopyNote(outcome)}.`
-      );
+      setStatus(`Using the live version${conflictCopyNote(outcome)}.`);
     },
     async keepMyVersion({ expectedRemoteVersion }) {
       await collaboration.keepLocalVersion(expectedRemoteVersion);
       setStatus('Kept this device’s version in the live session.');
-    },
-    saveLocalAsCopy(_document, outcome) {
-      setStatus(
-        outcome.recoveryCopy === 'already-preserved'
-          ? 'This version already has a local recovery project.'
-          : 'Saved the divergent document as a local recovery project.'
-      );
     }
   };
 
@@ -5353,7 +5320,8 @@ export function App() {
    * against the version the account reported.
    */
   const accountConflictHandlers: ConflictResolutionHandlers = {
-    writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
+    saveLocalAsCopy: conflictHandlers.saveLocalAsCopy,
+    localCopyExists: conflictHandlers.localCopyExists,
     async useRemoteVersion(incomingDocument, outcome) {
       // Account documents are stored without their derived projection.
       // Reattach the local one when it provably describes the same canonical
@@ -5382,9 +5350,7 @@ export function App() {
         rememberProject: false
       });
       setAccountConflict(null);
-      setStatus(
-        `Using the version from your account; ${recoveryCopyNote(outcome)}.`
-      );
+      setStatus(`Using the cloud version${conflictCopyNote(outcome)}.`);
     },
     async keepMyVersion({ document, expectedRemoteVersion }, outcome) {
       const saved = await api.saveRevision({
@@ -5410,7 +5376,7 @@ export function App() {
           restored.version
         );
         setAccountConflict(null);
-        setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
+        setStatus(`Kept this browser’s version${conflictCopyNote(outcome)}.`);
         return;
       }
       await saveLocalProject(restored);
@@ -5422,14 +5388,7 @@ export function App() {
       );
       setAccountConflict(null);
       setSaveState('synced');
-      setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
-    },
-    saveLocalAsCopy(_document, outcome) {
-      setStatus(
-        outcome.recoveryCopy === 'already-preserved'
-          ? 'This version already has a local recovery project.'
-          : 'Saved the divergent document as a local recovery project.'
-      );
+      setStatus(`Kept this browser’s version${conflictCopyNote(outcome)}.`);
     }
   };
 
