@@ -91,6 +91,12 @@
   animation: workspace-reveal 180ms ease-out;
 }
 
+/* A share destination covers the workspace without stopping its live work. */
+.workspace-reveal[aria-hidden='true'] {
+  visibility: hidden;
+  opacity: 0;
+}
+
 @keyframes workspace-reveal {
   from {
     opacity: 0;
