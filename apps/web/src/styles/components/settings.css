@@ -371,6 +371,25 @@
   border-bottom: var(--border-thin);
 }
 
+.data-download {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  max-width: 260px;
+}
+
+.data-download-feedback {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+}
+
+.data-download-feedback[role='alert'] {
+  color: var(--color-error-text);
+}
+
 .setting-row.compact {
   min-height: 40px;
   padding-block: 6px;

@@ -100,6 +100,7 @@ import {
   type SegmentOption
 } from './settingsControls';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { DataDownload } from './DataDownload';
 import {
   PersonalInfoToggle,
   PrivateEmailInput,
@@ -2385,6 +2386,21 @@ export function SettingsPage({
                 ) : null}
               </Group>
               <Group title="Your data">
+                <SettingRow
+                  title="Download your data"
+                  hint={
+                    session && cloudFunctionsEnabled
+                      ? 'Local and cloud projects, history, files, settings, and profile. Unencrypted ZIP; up to 512 MB.'
+                      : 'Device projects, files, and settings in an unencrypted ZIP. Sign in for cloud data. Up to 512 MB.'
+                  }
+                >
+                  <DataDownload
+                    settings={settings}
+                    session={session}
+                    cloudFunctionsEnabled={cloudFunctionsEnabled}
+                    busy={busy}
+                  />
+                </SettingRow>
                 <SettingRow
                   title="Local project data"
                   hint={
