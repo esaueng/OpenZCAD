@@ -2869,7 +2869,16 @@ export async function beginCompareApproval(
   const key = comparisonId(ctx, approvalId);
   let exchange = compareApprovals.get(key);
   if (exchange) {
-    exchange.assertActive();
+    try {
+      exchange.assertActive();
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'AbortError')
+        throw error;
+      throw new EncryptionFlowError(
+        'approval-gone',
+        'This comparison ended when the account was locked. Use Scan code, or deny this request and ask again on the new device.'
+      );
+    }
     requireCurrentComparison(ctx, account, exchange);
     requireApprovalBinding(initial, exchange);
     if (initial.state === 'responded' || initial.state === 'revealed') {

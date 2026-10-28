@@ -3944,6 +3944,37 @@ describe('device approval', () => {
       );
     });
 
+    it('offers a fresh scan after a stopped response and a new unlocked session', async () => {
+      const { laptop, account, phone, approval, scanCode } =
+        await comparisonFixture();
+      const respond = vi
+        .spyOn(laptop.api, 'respondApproval')
+        .mockRejectedValue(new Error('Not sent'));
+      await expect(
+        beginCompareApproval(laptop, account, approval.id)
+      ).rejects.toThrow('Not sent');
+      lockAccount(USER);
+      const current = ready(await loadEncryption(laptop));
+      await expect(
+        beginCompareApproval(laptop, current, approval.id)
+      ).rejects.toMatchObject({
+        code: 'approval-gone',
+        message: expect.stringContaining('Use Scan code')
+      });
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect((await laptop.api.getApproval(approval.id)).state).toBe(
+        'requested'
+      );
+      await approveDevice(
+        laptop,
+        current,
+        await laptop.api.getApproval(approval.id),
+        { kind: 'scan', code: scanCode },
+        null
+      );
+      expect((await advanceApprovalAsNewDevice(phone)).step).toBe('done');
+    });
+
     it('refuses a comparison retained across a lock and unlock', async () => {
       const { laptop, account, phone, approval } = await comparisonFixture();
       await beginCompareApproval(laptop, account, approval.id);
