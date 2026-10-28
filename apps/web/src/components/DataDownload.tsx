@@ -15,6 +15,8 @@ export function DataDownload({
   busy: boolean;
 }) {
   const [preparing, setPreparing] = useState(false);
+  const [includeOriginalImports, setIncludeOriginalImports] = useState(false);
+  const [includeDeviceSnapshot, setIncludeDeviceSnapshot] = useState(true);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [completed, setCompleted] = useState<{
@@ -56,6 +58,8 @@ export function DataDownload({
         settings,
         session,
         cloudFunctionsEnabled,
+        includeOriginalImports,
+        includeDeviceSnapshot,
         isCurrent,
         onProgress: (message) => {
           if (isCurrent()) setProgress(message);
@@ -85,6 +89,32 @@ export function DataDownload({
 
   return (
     <div className="data-download">
+      <label className="data-download-option">
+        <input
+          type="checkbox"
+          checked={includeOriginalImports}
+          disabled={busy || preparing}
+          onChange={(event) => setIncludeOriginalImports(event.target.checked)}
+        />
+        <span>Include original import files</span>
+      </label>
+      <p className="data-download-feedback">
+        Rebuild data is always included. This adds extra originals to project
+        backups.
+      </p>
+      <label className="data-download-option">
+        <input
+          type="checkbox"
+          checked={includeDeviceSnapshot}
+          disabled={busy || preparing}
+          onChange={(event) => setIncludeDeviceSnapshot(event.target.checked)}
+        />
+        <span>Include extra device recovery data</span>
+      </label>
+      <p className="data-download-feedback">
+        Adds browser recovery records, including any originals they hold. Turn
+        off for a smaller, faster download.
+      </p>
       <button
         className="secondary"
         type="button"

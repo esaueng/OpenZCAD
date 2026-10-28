@@ -137,3 +137,44 @@ it('hides a completed omissions list when the account changes, including when sw
   view.rerender(<DataDownload {...props} />);
   expect(screen.queryByText('Private part')).not.toBeInTheDocument();
 });
+
+it('passes explicit optional-data choices and disables them during a download', async () => {
+  let finish: (
+    summary: Awaited<ReturnType<typeof exporter.downloadAllData>>
+  ) => void = () => {};
+  const download = vi.spyOn(exporter, 'downloadAllData').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+  render(
+    <DataDownload
+      settings={DEFAULT_APP_SETTINGS}
+      session={null}
+      cloudFunctionsEnabled={false}
+      busy={false}
+    />
+  );
+  const user = userEvent.setup();
+  const originals = screen.getByRole('checkbox', {
+    name: 'Include original import files'
+  });
+  const recovery = screen.getByRole('checkbox', {
+    name: 'Include extra device recovery data'
+  });
+  expect(originals).not.toBeChecked();
+  expect(recovery).toBeChecked();
+  await user.click(originals);
+  await user.click(recovery);
+  await user.click(screen.getByRole('button', { name: 'Download all data' }));
+  await waitFor(() => expect(download).toHaveBeenCalledOnce());
+  expect(download.mock.calls[0]![0]).toMatchObject({
+    includeOriginalImports: true,
+    includeDeviceSnapshot: false
+  });
+  expect(originals).toBeDisabled();
+  expect(recovery).toBeDisabled();
+  finish({ includedProjects: 0, skippedProjects: [], omittedSections: [] });
+  await waitFor(() => expect(originals).toBeEnabled());
+});

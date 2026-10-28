@@ -100,6 +100,15 @@ for (const width of [1440, 390]) {
     await page
       .getByRole('button', { name: 'Privacy & data', exact: true })
       .click();
+    const originals = page.getByRole('checkbox', {
+      name: 'Include original import files'
+    });
+    const recovery = page.getByRole('checkbox', {
+      name: 'Include extra device recovery data'
+    });
+    await expect(originals).not.toBeChecked();
+    await expect(recovery).toBeChecked();
+    await recovery.uncheck();
     const button = page.getByRole('button', { name: 'Download all data' });
     await expect(button).toBeVisible();
     await expect(
@@ -118,6 +127,10 @@ for (const width of [1440, 390]) {
     expect(bytes.includes(Buffer.from('projects/local/1.openzcad'))).toBe(true);
     expect(bytes.includes(Buffer.from('Portable test project'))).toBe(true);
     expect(bytes.includes(Buffer.from('"cloudIncluded":false'))).toBe(true);
+    expect(bytes.includes(Buffer.from('device/database/'))).toBe(false);
+    expect(bytes.includes(Buffer.from('"deviceSnapshotRequested":false'))).toBe(
+      true
+    );
     await expect(
       page.getByRole('status').filter({ hasText: 'download is ready' })
     ).toBeVisible();

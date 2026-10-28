@@ -282,6 +282,8 @@ export function createMigrationController(
       fetcher,
       migrations,
       plaintext,
+      loadSource: async (checksum) =>
+        (await import('../localProjectStore')).loadSourceBlob(checksum),
       leases,
       createStaging: (leased) => opened.open(leased),
       flushProject: flushProjectEdits,

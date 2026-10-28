@@ -28,6 +28,23 @@ Encrypted project contents use the existing verified browser readers and blob
 decoder. Their exported copies are unencrypted. A locked device must unlock
 its keys first; server-side decryption and key export are not involved.
 
+Project backups always carry the canonical STEP sources, mesh payloads and
+reference-image pixels needed to reopen and rebuild the current model, undo
+history and retained save states. Legacy embedded imports are externalized in
+the exported copy using the existing source-reference format; the live project
+is unchanged. A checksum identifies one source payload across those snapshots.
+STEP sources are no longer repeated as original files in `files` as well as
+`sources`, including when original files were explicitly requested.
+
+**Include original import files** is off by default. Enable it to add optional
+original interchange files to the portable project backups. It never controls
+whether rebuild data is included. **Include extra device recovery data** stays
+on by default; turning it off skips the optional raw device database snapshot
+for a smaller, faster download. That snapshot can contain original files held
+on this device independently of the project-backup option. The manifest records
+both choices (`originalImportFilesInBackups` and `deviceSnapshotRequested`),
+and the README explains them.
+
 The existing 256 MiB project-backup bound remains. The ZIP is capped at
 512 MiB, including duplicate local/cloud copies and the raw device snapshot.
 Projects can be downloaded individually with File → Export project after
@@ -67,6 +84,12 @@ Other devices' unsynced data, expired/deleted data, encryption key
 stores, transient collaboration traffic and operational/security logs are
 outside this archive. Cloud readers run sequentially; changes during export
 can require a retry and are not a transaction spanning device and server.
+Within a project, independent revision/file catalog reads overlap. The file
+catalog is reused across its backups, and retained-save coverage is collected
+while building each backup instead of parsing its completed JSON again.
+Source preparation drops derived geometry before cloning; it never copies a
+large rendered mesh only to discard it. Capacity checks and per-project atomic
+staging remain in force.
 
 Coverage: `dataExport.test.ts` unzips and parses backups, verifies source bytes,
 Trash, local/cloud separation, unlinked revisions, account changes, size

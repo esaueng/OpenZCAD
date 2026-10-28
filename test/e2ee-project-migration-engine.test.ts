@@ -8,10 +8,14 @@
  * fresh browser opens it with its history.
  */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   E2EE_MIGRATION_CODES,
+  encodeImportedMeshPayload,
+  documentNodesWithHistory,
+  importedSourceReferenceOf,
   parseWorkspaceResumeState,
   type ProjectDocument,
   type ProjectSummary,
@@ -395,6 +399,7 @@ interface EngineDevice {
   engine: ReturnType<typeof createProjectMigrationEngine>;
   progress: MigrationProgress[];
   flushed: string[];
+  plaintext: ReturnType<typeof createMigrationPlaintextSource>;
   summary(projectId: string): Promise<ProjectSummary>;
 }
 
@@ -404,6 +409,7 @@ function engineOn(
   deviceId: string,
   options: {
     from?: Device;
+    loadSource?(checksum: string): Promise<Uint8Array | null>;
     leases?: MigrationLeaseStore;
     beforeStep?: (step: string, projectId: string) => void | Promise<void>;
   } = {}
@@ -423,6 +429,7 @@ function engineOn(
     fetcher: base,
     migrations: createProjectMigrationsApi(base),
     plaintext,
+    loadSource: options.loadSource,
     leases: options.leases ?? memoryLeaseStore(),
     createStaging: (leased) => {
       d.fetcher = leased;
@@ -447,6 +454,7 @@ function engineOn(
     engine,
     progress,
     flushed,
+    plaintext,
     summary: async (projectId) =>
       (await plaintext.listProjects()).find((p) => p.projectId === projectId)!
   };
@@ -1036,6 +1044,228 @@ describe('resuming', () => {
   });
 });
 
+describe('legacy import migration', () => {
+  const mesh = {
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+    indices: [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]
+  };
+  const step = readFileSync(
+    new URL('./parity/corpus/b-unit-mm-cube.step', import.meta.url),
+    'utf8'
+  );
+  async function embedded(kind: 'step' | 'mesh', archived = false) {
+    const srv = roomServer();
+    const created = await srv.call('POST', '/api/projects', {
+      body: {
+        name: 'Legacy import',
+        initialDocument: initialDocument('Legacy import')
+      }
+    });
+    expect(created.status).toBe(201);
+    const base = ((await created.json()) as { document: ProjectDocument })
+      .document;
+    const artifactId = archived
+      ? await upload(srv, base.projectId, {
+          fileName: 'original.stl',
+          contentType: 'model/stl',
+          kind: 'stl-import',
+          bytes: text('original mesh file, not the canonical payload')
+        })
+      : `artifact_missing_${kind}`;
+    const manager = new CommandManager(base);
+    manager.execute(
+      kind === 'step'
+        ? commandFactories.importStep({
+            name: 'Legacy STEP',
+            sourceName: 'cube.step',
+            artifactId,
+            stepText: step
+          })
+        : commandFactories.importMesh({
+            name: 'Legacy mesh',
+            sourceName: 'tetrahedron.stl',
+            artifactId,
+            triangleCount: 4,
+            ...mesh
+          })
+    );
+    const head = await autosave(srv, {
+      ...manager.document,
+      version: base.version
+    });
+    srv.roomSeed.set(head.projectId, head);
+    return {
+      srv,
+      base,
+      head,
+      artifactId,
+      bytes: kind === 'step' ? text(step) : encodeImportedMeshPayload(mesh)
+    };
+  }
+
+  it.each(['step', 'mesh'] as const)(
+    'encrypts an embedded %s without its original archive and reopens its canonical data on a fresh device',
+    async (kind) => {
+      const { srv, head, bytes } = await embedded(kind);
+      const e = engineOn(srv, owner, 'owner_laptop');
+      await migrateFully(e, head.projectId);
+      expect(formatOf(srv, head.projectId)).toBe(2);
+      const fresh = device(srv, owner, 'owner_desktop');
+      const opened = await fresh.store.loadProject(head.projectId);
+      const imports = [...documentNodesWithHistory(opened)].filter(
+        (node) => node.kind === 'feature'
+      );
+      expect(imports.length).toBeGreaterThan(0);
+      for (const node of imports) {
+        if (node.kind !== 'feature') continue;
+        const ref = importedSourceReferenceOf(node.data)!;
+        expect(ref.checksumSha256).toBe(sha256(bytes));
+        expect('stepText' in node.data || 'vertices' in node.data).toBe(false);
+        expect(
+          await fresh.blobs.read(
+            head.projectId,
+            (node.data as { artifactId: string }).artifactId
+          )
+        ).toEqual(bytes);
+      }
+      const manager = new CommandManager(opened);
+      manager.undo();
+      manager.redo();
+      expect(manager.document.nodes).toEqual(opened.nodes);
+      // A staging copy never rewrites the caller's plaintext document.
+      expect(JSON.stringify(head)).toContain(
+        kind === 'step' ? 'stepText' : 'vertices'
+      );
+      expect(count(srv, 'e2ee_content_blobs', head.projectId)).toBe(1);
+    }
+  );
+
+  it('retains a legacy import needed only by an old save state', async () => {
+    const { srv, base, head, bytes } = await embedded('step');
+    const saved = await namedSave(srv, head, 'Old imported state');
+    const clean = await autosave(srv, {
+      ...base,
+      version: saved.version,
+      revisions: saved.revisions,
+      checkpoints: saved.checkpoints
+    });
+    srv.roomSeed.set(clean.projectId, clean);
+    const e = engineOn(srv, owner, 'owner_laptop');
+    await migrateFully(e, clean.projectId);
+    const fresh = device(srv, owner, 'owner_desktop');
+    const opened = await fresh.store.loadProject(clean.projectId);
+    expect(opened.featureOrder).toEqual([]);
+    const old = await fresh.store.loadRevision(
+      clean.projectId,
+      saved.revisions.at(-1)!.revisionId
+    );
+    const imported = Object.values(old!.nodes).find(
+      (node) => node.kind === 'feature'
+    )!;
+    if (imported.kind !== 'feature') throw new Error('Missing saved import');
+    expect(
+      await fresh.blobs.read(
+        clean.projectId,
+        (imported.data as { artifactId: string }).artifactId
+      )
+    ).toEqual(bytes);
+  });
+
+  it('uses canonical mesh data when the optional original STL still exists', async () => {
+    const { srv, head, bytes } = await embedded('mesh', true);
+    const e = engineOn(srv, owner, 'owner_laptop');
+    await migrateFully(e, head.projectId);
+    const fresh = device(srv, owner, 'owner_desktop');
+    const opened = await fresh.store.loadProject(head.projectId);
+    const imported = Object.values(opened.nodes).find(
+      (node) => node.kind === 'feature'
+    )!;
+    if (imported.kind !== 'feature') throw new Error('Missing imported mesh');
+    expect(
+      await fresh.blobs.read(
+        head.projectId,
+        (imported.data as { artifactId: string }).artifactId
+      )
+    ).toEqual(bytes);
+  });
+
+  it.each(['artifact_missing_step', 'artifact_local_step'])(
+    'recovers %s from verified local source bytes',
+    async (artifactId) => {
+      const { srv, base, bytes } = await embedded('step');
+      const response = await srv.call('GET', `/api/projects/${base.projectId}`);
+      const current = (await response.json()) as ProjectDocument;
+      const head = await autosave(srv, {
+        ...withImport(base, artifactId, bytes),
+        version: current.version
+      });
+      srv.roomSeed.set(head.projectId, head);
+      const loadSource = vi.fn(async () => bytes);
+      const e = engineOn(srv, owner, 'owner_laptop', { loadSource });
+      await migrateFully(e, head.projectId);
+      expect(loadSource).toHaveBeenCalledWith(sha256(bytes));
+      expect(formatOf(srv, head.projectId)).toBe(2);
+    }
+  );
+
+  it('downloads and encrypts one source once across distinct import IDs and save states', async () => {
+    const srv = roomServer();
+    const created = await srv.call('POST', '/api/projects', {
+      body: {
+        name: 'Shared source',
+        initialDocument: initialDocument('Shared source')
+      }
+    });
+    const base = ((await created.json()) as { document: ProjectDocument })
+      .document;
+    const bytes = text(step);
+    const ids = [];
+    for (let index = 0; index < 2; index++)
+      ids.push(
+        await upload(srv, base.projectId, {
+          fileName: `cube-${index}.step`,
+          contentType: 'model/step',
+          kind: 'step-import',
+          bytes
+        })
+      );
+    let imported = base;
+    for (const id of ids) imported = withImport(imported, id, bytes);
+    const first = await autosave(srv, { ...imported, version: base.version });
+    const saved = await namedSave(srv, first, 'Shared source save');
+    srv.roomSeed.set(saved.projectId, saved);
+    const e = engineOn(srv, owner, 'owner_laptop');
+    const downloaded = vi.spyOn(e.plaintext, 'download');
+    const archived = vi.spyOn(e.d.blobs, 'archive');
+    await migrateFully(e, saved.projectId);
+    expect(downloaded).toHaveBeenCalledOnce();
+    expect(archived).toHaveBeenCalledOnce();
+    expect(count(srv, 'e2ee_content_blobs', saved.projectId)).toBe(1);
+  });
+
+  it('keeps plaintext and refuses cutover when required referenced bytes are missing or corrupt', async () => {
+    const { srv, base, bytes } = await embedded('step');
+    const current = await srv.call('GET', `/api/projects/${base.projectId}`);
+    const head = await autosave(srv, {
+      ...withImport(base, 'artifact_missing', bytes),
+      version: ((await current.json()) as ProjectDocument).version
+    });
+    srv.roomSeed.set(head.projectId, head);
+    const e = engineOn(srv, owner, 'owner_laptop', {
+      loadSource: async () => text('corrupt')
+    });
+    expect(await codeOfCall(migrateFully(e, head.projectId))).toBe(
+      'E2EE_MIGRATION_FILE_MISSING'
+    );
+    expect(formatOf(srv, head.projectId)).toBe(1);
+    expect(e.progress.at(-1)?.error).toMatchObject({ retryable: false });
+    expect(e.progress.at(-1)?.error?.message).toContain('secret-part.step');
+    expect(migrationRow(srv, head.projectId)).toMatchObject({
+      state: 'staging'
+    });
+  });
+});
+
 // --- Helpers ------------------------------------------------------------------------
 
 describe('engine helpers', () => {
@@ -1136,4 +1366,23 @@ describe('a named save read back as the head', () => {
       (await fresh.store.loadRevision(named.projectId, revisionId))?.version
     ).toBe(named.version);
   });
+});
+
+it('bounds migration source downloads by the recorded size without trusting Content-Length', async () => {
+  const cancel = vi.fn();
+  const plaintext = createMigrationPlaintextSource(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(64));
+          },
+          cancel
+        })
+      )
+  );
+  await expect(
+    plaintext.download('artifact_oversized', 16)
+  ).rejects.toMatchObject({ code: 'E2EE_MIGRATION_FILE_MISSING' });
+  expect(cancel).toHaveBeenCalledOnce();
 });
