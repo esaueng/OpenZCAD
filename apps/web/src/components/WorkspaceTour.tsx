@@ -190,6 +190,8 @@ export function WorkspaceTour({
           onClick={() => {
             if (last) {
               releaseFocus();
+              onDismiss();
+              return;
             }
             setIndex((current) => current + 1);
           }}
