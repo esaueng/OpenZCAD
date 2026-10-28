@@ -7,10 +7,17 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   appendRevision,
   createCheckpoint,
+  createSavedRevision,
   createProjectDocument,
   importStepBody
 } from '@openzcad/document-core';
-import { DEFAULT_APP_SETTINGS, toUserId, toRevisionId } from '@openzcad/shared';
+import {
+  DEFAULT_APP_SETTINGS,
+  toArtifactId,
+  toUserId,
+  toRevisionId,
+  type ArtifactRecord
+} from '@openzcad/shared';
 import type { SkippedDataProject } from './dataExportTypes';
 import { api } from './api';
 import * as localStore from './localProjectStore';
@@ -515,7 +522,87 @@ it('cancels rather than treating an account change during a project read as a sk
   expect(download).not.toHaveBeenCalled();
 });
 
-it('reads plaintext metadata together and avoids requests for history absent from the complete catalog', async () => {
+it('retains a checkpoint and file added while its document read is pending', async () => {
+  const saved = createSavedRevision(
+    createProjectDocument('Concurrent save', session.userId),
+    'Saved during download'
+  );
+  const document = appendRevision(saved, 'Following edit');
+  const revisionId = saved.revisions.at(-1)!.revisionId;
+  const fileBytes = new TextEncoder().encode('concurrent STEP export');
+  const artifact: ArtifactRecord = {
+    artifactId: toArtifactId('artifact_concurrent_export'),
+    projectId: document.projectId,
+    kind: 'step-export',
+    name: 'concurrent.step',
+    contentType: 'application/step',
+    objectKey: 'fixture',
+    bytes: fileBytes.length,
+    metadata: {},
+    createdAt: '2026-10-28T00:00:00.000Z'
+  };
+  vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
+  vi.spyOn(api, 'listProjects').mockResolvedValue({
+    projects: [
+      {
+        projectId: document.projectId,
+        name: document.name,
+        updatedAt: '2026-10-28T00:00:00.000Z',
+        revisionCount: 0
+      }
+    ]
+  });
+  let finish!: () => void;
+  let documentRead = false;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const reading = vi.spyOn(api, 'loadProject').mockImplementation(async () => {
+    await gate;
+    documentRead = true;
+    return document;
+  });
+  vi.spyOn(api, 'listRevisions').mockImplementation(async () => ({
+    revisions: documentRead
+      ? [
+          {
+            revisionId,
+            projectId: document.projectId,
+            reason: 'Saved during download',
+            createdAt: '2026-10-28T00:00:00.000Z',
+            documentBytes: 100
+          }
+        ]
+      : [],
+    maxRevisions: 50
+  }));
+  vi.spyOn(api, 'listArtifacts').mockImplementation(async () => ({
+    artifacts: documentRead ? [artifact] : []
+  }));
+  const revision = vi
+    .spyOn(api, 'loadRevision')
+    .mockImplementation(async (_id, id) => (id === revisionId ? saved : null));
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(fileBytes));
+  const exporting = createDataExport(options(true));
+  await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
+  finish();
+  const archive = await entries(await exporting);
+  const backup = await parseProjectBackup(
+    strFromU8(archive['projects/cloud/1/project.openzcad']!)
+  );
+  expect(
+    backup.saveStates!.some(
+      (state) => state.document.revisions.at(-1)?.revisionId === revisionId
+    )
+  ).toBe(true);
+  expect(revision).toHaveBeenCalledWith(document.projectId, revisionId);
+  expect(backup.files.map((file) => file.artifact.name)).toEqual([
+    'concurrent.step'
+  ]);
+  expect(atob(backup.files[0]!.base64)).toBe('concurrent STEP export');
+});
+
+it('reads catalogs together after the document and avoids requests for history absent from the complete catalog', async () => {
   const document = appendRevision(
     createCheckpoint(
       createProjectDocument('Catalog control', session.userId),
@@ -535,23 +622,42 @@ it('reads plaintext metadata together and avoids requests for history absent fro
     ]
   });
   let finish!: (value: typeof document) => void;
-  vi.spyOn(api, 'loadProject').mockImplementation(
+  const reading = vi.spyOn(api, 'loadProject').mockImplementation(
     () =>
       new Promise((resolve) => {
         finish = resolve;
       })
   );
-  const revisions = vi
-    .spyOn(api, 'listRevisions')
-    .mockResolvedValue({ revisions: [], maxRevisions: 50 });
-  const artifacts = vi
-    .spyOn(api, 'listArtifacts')
-    .mockResolvedValue({ artifacts: [] });
+  let finishRevisions!: (
+    value: Awaited<ReturnType<typeof api.listRevisions>>
+  ) => void;
+  let finishArtifacts!: (
+    value: Awaited<ReturnType<typeof api.listArtifacts>>
+  ) => void;
+  const revisions = vi.spyOn(api, 'listRevisions').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishRevisions = resolve;
+      })
+  );
+  const artifacts = vi.spyOn(api, 'listArtifacts').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishArtifacts = resolve;
+      })
+  );
   const missing = vi.spyOn(api, 'loadRevision').mockResolvedValue(null);
   const pending = createDataExport(options(true));
-  await vi.waitFor(() => expect(artifacts).toHaveBeenCalledOnce());
-  expect(revisions).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
+  expect(revisions).not.toHaveBeenCalled();
+  expect(artifacts).not.toHaveBeenCalled();
   finish(document);
+  await vi.waitFor(() => {
+    expect(revisions).toHaveBeenCalledOnce();
+    expect(artifacts).toHaveBeenCalledOnce();
+  });
+  finishRevisions({ revisions: [], maxRevisions: 50 });
+  finishArtifacts({ artifacts: [] });
   const archive = await entries(await pending);
   const backup = await parseProjectBackup(
     strFromU8(archive['projects/cloud/1/project.openzcad']!)

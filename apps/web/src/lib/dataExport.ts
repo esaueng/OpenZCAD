@@ -289,19 +289,17 @@ async function buildDataExport(options: DataExportOptions): Promise<{
         const folder = `projects/cloud/${index + 1}`;
         try {
           const pending = batch();
-          const readingDocument = api.loadProject(project.projectId);
-          // Plaintext metadata is independent. Encrypted revision names use
-          // the verified head, so wait for that read rather than fetching the
-          // head twice. The artifact catalog can overlap either document read.
-          const [document, revisions, catalog] = await Promise.all([
-            readingDocument,
-            isEncryptedProject(project.projectId)
-              ? readingDocument.then(() => api.listRevisions(project.projectId))
-              : api.listRevisions(project.projectId),
-            api.listArtifacts(project.projectId)
-          ]);
+          const document = await api.loadProject(project.projectId);
           if (!document)
             throw new Error('Project is no longer available. Try again.');
+          check();
+          // Catalogs must not predate this document: a concurrent save can
+          // add a retained checkpoint or file that the backup must include.
+          // Fetch them together; encrypted names reuse the verified head.
+          const [revisions, catalog] = await Promise.all([
+            api.listRevisions(project.projectId),
+            api.listArtifacts(project.projectId)
+          ]);
           const retainedRevisionIds = new Set(
             revisions.revisions.map((revision) => revision.revisionId as string)
           );
