@@ -89,7 +89,7 @@ are welcome but should name the commit.
 | `wasm-bindgen`             | `=0.2.126` (crate and CLI must match)                                                                                                                       | `Cargo.toml`, `build.sh`, `pkg/BUILD.json`                                                  |
 | Rust toolchain             | `1.96.0`, target `wasm32-unknown-unknown`, profile `minimal` (crate MSRV `rust-version = "1.88"`)                                                           | `packages/mls/crate/rust-toolchain.toml`                                                    |
 | Cipher suite               | `MLS_128_DHKEMP256_AES128GCM_SHA256_P256` (0x0002) and no other                                                                                             | `SUITE` in `packages/mls/crate/src/model.rs`; reported by `buildInfo` in `crate/src/lib.rs` |
-| Committed WASM             | `pkg/openzcad_mls_bg.wasm`, SHA-256 `f8953d68d3998bc56dad20e4b49ea33ea178888606fcae5ef658f06c1cc3a98b` (1,117,512 bytes)                                    | `packages/mls/pkg/BUILD.json`                                                               |
+| Committed WASM             | `pkg/openzcad_mls_bg.wasm`, SHA-256 `3e0330ef5193e89a9b4d4ff86224f43b4eabc90b420a500eb094d30f84f6648c` (1,117,756 bytes)                                    | `packages/mls/pkg/BUILD.json`                                                               |
 
 `pkg/BUILD.json` also records the SHA-256 of every crate source,
 `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`. When this packet was

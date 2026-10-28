@@ -98,6 +98,11 @@ which every decrypt path uses, prevents that:
   (`PLAINTEXT_CEILINGS`). That returns `limit-exceeded`.
 - It fails with `malformed` unless the result is exactly the declared length.
 
+The cap is checked for each chunk emitted by the platform decompressor,
+before accepting that chunk into the decoded result. The decompressor may
+allocate an emitted chunk first; this is not a zero-allocation bound on the
+platform's internal inflater.
+
 | Kind                                | Ceiling | Source                                                   |
 | ----------------------------------- | ------- | -------------------------------------------------------- |
 | document, share snapshot            | 24 MiB  | `MAX_CLOUD_PROJECT_DOCUMENT_BYTES`                       |
@@ -399,8 +404,11 @@ deviceKeysHash(signing, unlock)`, the `publicKeyHash` of both its public
   after it receives the approver's key and nonce `n_app` does it reveal
   `n_new`, which the approver checks against the commitment. Both show six
   digits: `SHA-256(label "v1 device approval code" | pk_new | pk_app | n_new | n_app)`
-  read as a u32 modulo 10⁶. This is the only short code, and the commitment
-  is what makes it safe.
+  read as a u32 modulo 10⁶. The commitment must be checked after the peer's
+  key/nonce are fixed and before accepting the comparison. The six digits
+  provide about a one-in-a-million active substitution chance per visible
+  comparison attempt; they are not a long fingerprint or a guarantee across
+  unbounded attempts.
 - **Recovery key:** the 32-byte secret plus the first 3 bytes of its SHA-256,
   as 56 Crockford base32 characters in hyphenated groups of four. Parsing
   ignores case, spaces and hyphens and reads O as 0 and I or L as 1.

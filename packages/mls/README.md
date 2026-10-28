@@ -18,6 +18,14 @@ authorization.
 
 ## Use
 
+`build.sh` requires the crates.io `wasm-bindgen-cli` 0.2.126 installed with
+`cargo install wasm-bindgen-cli --version 0.2.126 --locked`. Git-built release
+CLIs include a commit suffix in the WASM producer metadata and are refused,
+even when their numeric version matches. The pinned Rust toolchain's
+installed `rust-src` paths are normalized to `/rustc/<compiler-commit>/library`,
+so installing that optional component does not change the package bytes.
+`build.sh --check` still compares every generated file byte for byte.
+
 ```ts
 const { loadMls, generateStateKey } = await import('@openzcad/mls');
 const mls = loadMls();

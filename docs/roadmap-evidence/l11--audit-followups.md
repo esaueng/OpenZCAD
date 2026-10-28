@@ -18,6 +18,11 @@ the scenario matrix retain Welcome rollback and provisional-rejoin retry.
 The sender-check override is absent from the public session and refused by
 the production protocol; malicious-sender tests use an explicit test Worker.
 The committed package is regenerated with the pinned toolchain and manifest.
+Cross-host reproduction also fixes two environment-dependent inputs: a
+Git-built CLI's producer suffix and installed rust-src paths. The build
+requires the exact crates.io CLI version string and normalizes standard
+library paths, with executable build-boundary regressions and the existing
+byte-for-byte reproduction check retained.
 
 Checkpoint tests drive a real MLS group through 257 epochs, check the
 production manifest boundary at 255/256/257 and authenticate a suffix from
