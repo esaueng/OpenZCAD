@@ -113,6 +113,7 @@ import {
 } from './lib/localProjectStore';
 import {
   Suspense,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -390,6 +391,7 @@ import {
   isProjectDocumentUnavailableError,
   isProjectFormatUnsupportedError
 } from './lib/api';
+import type { ProjectListingProgress } from './lib/api';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
@@ -1453,6 +1455,7 @@ import {
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
+  withVerifiedShelfMetadata,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail
@@ -1942,7 +1945,11 @@ const organizationBackground = new OrganizationMirrorBackground();
  */
 async function loadProjectSummaries(
   accountId: string | null,
-  allowPurge = true
+  allowPurge = true,
+  options?: {
+    local?: Promise<ProjectSummary[]>;
+    progress?: ProjectListingProgress;
+  }
 ): Promise<{
   projects: ProjectSummary[];
   remoteReached: boolean;
@@ -1968,11 +1975,15 @@ async function loadProjectSummaries(
       return fallback;
     };
   const [local, organizationSnapshots, remote] = await Promise.all([
-    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
+    (options?.local ?? listLocalProjects()).catch(
+      unavailableAs<ProjectSummary[]>([])
+    ),
     listLocalProjectOrganizationSnapshots().catch(
       unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
     ),
-    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+    signedIn
+      ? api.listProjects(options?.progress).catch(() => null)
+      : Promise.resolve(null)
   ]);
   const localOrganizations = new Map(
     [...organizationSnapshots].map(([id, snapshot]) => [
@@ -2211,21 +2222,25 @@ export function App() {
   >(async () => undefined);
   const fragmentNavigationRef = useRef(0);
   const navigationBusyRef = useRef<object | null>(null);
+  const [openingProject, setOpeningProject] = useState<string | null>(null);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
   const cancelNavigationBusy = useCallback(() => {
     if (navigationBusyRef.current === null) return;
     navigationBusyRef.current = null;
+    setOpeningProject(null);
     setBusy(false);
   }, []);
-  const startNavigationBusy = useCallback(() => {
+  const startNavigationBusy = useCallback((projectName?: string) => {
     const owner = {};
     navigationBusyRef.current = owner;
     setBusy(true);
+    setOpeningProject(projectName ?? null);
     return () => {
       if (navigationBusyRef.current !== owner) return;
       navigationBusyRef.current = null;
+      setOpeningProject(null);
       setBusy(false);
     };
   }, []);
@@ -2889,7 +2904,7 @@ export function App() {
   // reports a stale chunk where the user is looking.
   useEffect(() => {
     // Save-Data asks for nothing speculative, as the chunk prefetch honours.
-    if (prefersSavingData()) return;
+    if (startupState !== 'ready' || prefersSavingData()) return;
     // Offline, a failed module download can stay cached until navigation,
     // so wait for the connection rather than poison the surfaces' own loads.
     const warm = () =>
@@ -2903,7 +2918,7 @@ export function App() {
     }
     const timer = window.setTimeout(warm, 2_000);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [startupState]);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));
@@ -6000,85 +6015,127 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let metadataTimer: ReturnType<typeof setTimeout> | undefined;
     mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
     void (async () => {
       try {
-        const [health, rememberedLocal, currentAuth] = await Promise.all([
+        const keySessionRevision = getKeySessionRevision();
+        const isCurrent = () =>
+          !cancelled && getKeySessionRevision() === keySessionRevision;
+        const verifiedMetadata = new Map<string, ProjectSummary>();
+        const local = listLocalProjects();
+        // Cards already stored on this device need neither cloud discovery nor
+        // decryption. Keep actions gated until account discovery settles.
+        void local.then(
+          (projects) => {
+            if (isCurrent() && !startupProjectId) {
+              setProjects(projects);
+              mark('startup.localLibrary.ready');
+            }
+          },
+          () => undefined
+        );
+        void (
           bootCloudFunctionsEnabledRef.current
             ? api.health().catch(() => null)
-            : null,
-          startupProjectId
-            ? timedAsync('startup.localProject', () =>
-                loadLocalProject(startupProjectId).catch(() => null)
-              )
-            : Promise.resolve(null),
+            : Promise.resolve(null)
+        ).then((health) => {
+          if (!cancelled) setDeploymentHealth(health);
+        });
+        void (
           bootCloudFunctionsEnabledRef.current
-            ? api
-                .authConfig()
-                .then((config) => ({
-                  config,
-                  status: 'ready' as const
-                }))
-                .catch(() => ({
-                  config: null,
-                  status: 'unavailable' as const
-                }))
-            : {
-                config: null,
-                status: 'unavailable' as const
-              }
-        ]);
-        const keySessionRevision = getKeySessionRevision();
+            ? api.authConfig().then(
+                (config) => ({ config, status: 'ready' as const }),
+                () => ({ config: null, status: 'unavailable' as const })
+              )
+            : Promise.resolve({ config: null, status: 'unavailable' as const })
+        ).then((auth) => {
+          if (!cancelled) {
+            setAuthConfig(auth.config);
+            setAuthConfigStatus(auth.status);
+          }
+        });
         let sessionLookupFailed = false;
-        const activeSession = bootCloudFunctionsEnabledRef.current
-          ? await timedAsync('startup.session', () =>
+        const sessionPromise = bootCloudFunctionsEnabledRef.current
+          ? timedAsync('startup.session', () =>
               api.session().catch(() => {
                 sessionLookupFailed = true;
                 return null;
               })
             )
-          : null;
+          : Promise.resolve(null);
+        const [rememberedLocal, activeSession] = await Promise.all([
+          startupProjectId
+            ? timedAsync('startup.localProject', () =>
+                loadLocalProject(startupProjectId).catch(() => null)
+              )
+            : Promise.resolve(null),
+          sessionPromise
+        ]);
+        if (!isCurrent()) return;
+        const progress: ProjectListingProgress = {
+          isCurrent,
+          onVerified(project) {
+            verifiedMetadata.set(project.projectId, project);
+            if (metadataTimer !== undefined) return;
+            metadataTimer = setTimeout(() => {
+              metadataTimer = undefined;
+              if (!isCurrent()) return;
+              startTransition(() =>
+                setProjects((current) => {
+                  const next = current.map((entry) =>
+                    withVerifiedShelfMetadata(entry, verifiedMetadata.get(entry.projectId))
+                  );
+                  return next.some((entry, index) => entry !== current[index])
+                    ? next
+                    : current;
+                })
+              );
+            }, 50);
+          }
+        };
+        const startupSettings = appSettingsRef.current;
+        const remoteSettingsPromise = activeSession
+          ? api.getSettings().catch(() => null)
+          : Promise.resolve(null);
+        const collaborationPromise = activeSession
+          ? api
+              .collaborationCapabilities()
+              .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+          : Promise.resolve(DISABLED_COLLABORATION_ROLLOUT);
         const listedPromise = timedAsync('startup.projectList', () =>
           loadProjectSummaries(
             activeSession?.userId ?? null,
-            !sessionLookupFailed
+            !sessionLookupFailed,
+            { local, progress }
           )
         );
         const lastSyncedVersionPromise = startupProjectId
           ? loadLastSyncedVersion(startupProjectId)
           : Promise.resolve(null);
-        const [
-          listed,
-          rememberedRemoteResult,
-          remoteSettings,
-          collaborationCapabilities,
-          lastSyncedVersion
-        ] = await Promise.all([
-          listedPromise,
-          activeSession && startupProjectId
-            ? lastSyncedVersionPromise.then((baseline) =>
-                loadAccountProjectResult(startupProjectId, {
-                  localDocument: rememberedLocal,
-                  previouslySynced: baseline !== null,
-                  accountProjects: listedPromise
-                })
-              )
-            : Promise.resolve<AccountProjectLoadResult>({
-                document: null
-              }),
-          activeSession ? api.getSettings().catch(() => null) : null,
-          activeSession
-            ? api
-                .collaborationCapabilities()
-                .catch(() => DISABLED_COLLABORATION_ROLLOUT)
-            : DISABLED_COLLABORATION_ROLLOUT,
-          lastSyncedVersionPromise
-        ]);
-        if (cancelled) {
-          return;
-        }
-        setDeploymentHealth(health);
-        const merged = listed.projects;
+        const [listed, rememberedRemoteResult, lastSyncedVersion] =
+          await Promise.all([
+            listedPromise,
+            activeSession && startupProjectId
+              ? lastSyncedVersionPromise.then((baseline) =>
+                  loadAccountProjectResult(startupProjectId, {
+                    localDocument: rememberedLocal,
+                    previouslySynced: baseline !== null,
+                    accountProjects: listedPromise
+                  })
+                )
+              : Promise.resolve<AccountProjectLoadResult>({
+                  document: null
+                }),
+            lastSyncedVersionPromise
+          ]);
+        if (!isCurrent()) return;
+        const merged = listed.projects.map((project) =>
+          withVerifiedShelfMetadata(
+            project,
+            verifiedMetadata.get(project.projectId)
+          )
+        );
         const rememberedRemote = rememberedRemoteResult.document;
         const accountOwnsStartupProject = Boolean(
           startupProjectId && listed.cloudProjectIds.has(startupProjectId)
@@ -6117,7 +6174,7 @@ export function App() {
             restoredDocument.projectId,
             restoredDocument.version
           );
-          if (cancelled) {
+          if (!isCurrent()) {
             return;
           }
         }
@@ -6126,7 +6183,13 @@ export function App() {
           accountDocumentNeedsRepair && startupProjectId
             ? startupProjectId
             : null;
-        setCollaborationRollout(collaborationCapabilities);
+        void collaborationPromise.then((capabilities) => {
+          if (
+            isCurrent() &&
+            sessionRef.current?.userId === activeSession?.userId
+          )
+            setCollaborationRollout(capabilities);
+        });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
@@ -6143,9 +6206,13 @@ export function App() {
           sessionRef.current = activeSession;
           setSession(activeSession);
         }
-        setAuthConfig(currentAuth.config);
-        setAuthConfigStatus(currentAuth.status);
-        if (remoteSettings) {
+        void remoteSettingsPromise.then((remoteSettings) => {
+          if (
+            !remoteSettings ||
+            !isCurrent() ||
+            sessionRef.current?.userId !== activeSession?.userId
+          )
+            return;
           accountSettingsRef.current = remoteSettings;
           setAccountSettings(remoteSettings);
           // Adopting the account copy over an unsaved local change would revert
@@ -6153,6 +6220,7 @@ export function App() {
           // not working at all.
           if (
             remoteSettings.synced &&
+            appSettingsRef.current === startupSettings &&
             shouldAdoptAccountSettings(bootSettingsRef.current)
           ) {
             appSettingsRef.current = remoteSettings.settings;
@@ -6176,7 +6244,7 @@ export function App() {
             );
             cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
-        }
+        });
         setSaveState(
           !canUseCloud
             ? accountDocumentNeedsRepair
@@ -6243,9 +6311,9 @@ export function App() {
             ? LIBRARY_MODE_STATUS.offlineMode
             : activeSession && listed.remoteReached
               ? LIBRARY_MODE_STATUS.cloudReady
-              : health
-                ? LIBRARY_MODE_STATUS.local
-                : LIBRARY_MODE_STATUS.offline
+              : sessionLookupFailed
+                ? LIBRARY_MODE_STATUS.offline
+                : LIBRARY_MODE_STATUS.local
         );
       } catch (error) {
         if (!cancelled) {
@@ -6258,12 +6326,14 @@ export function App() {
           measure('startup.restore', 'startup.begin', 'startup.ready');
           measure('startup.total', 'bundle.evaluated', 'startup.ready');
           setStartupState('ready');
+          window.dispatchEvent(new Event('openzcad:startup-ready'));
         }
       }
     })();
     return () => {
       cancelled = true;
       organizationBackground.dispose();
+      clearTimeout(metadataTimer);
     };
     // Startup settings are intentionally read once. Later settings changes
     // should not re-run project discovery or reopen a different document.
@@ -12338,7 +12408,7 @@ export function App() {
       return;
     }
     const activeProjectSince = snapshotActiveProject();
-    const finishBusy = startNavigationBusy();
+    const finishBusy = startNavigationBusy(listed?.name ?? 'project');
     try {
       await flushPendingLocalSave();
       if (!isCurrent()) return;
@@ -12356,7 +12426,7 @@ export function App() {
       }
       const localDocumentPromise = loadLocalProject(projectId);
       const lastSyncedVersionPromise = loadLastSyncedVersion(projectId);
-      const [localDocument, remoteResult, lastSyncedVersion, artifactList] =
+      const [localDocument, remoteResult, lastSyncedVersion] =
         await Promise.all([
           localDocumentPromise,
           session
@@ -12377,13 +12447,7 @@ export function App() {
             : Promise.resolve<AccountProjectLoadResult>({
                 document: null
               }),
-          lastSyncedVersionPromise,
-          // Read alongside the document so the File menu's count is on the
-          // bar from the workspace's first frame, not a round-trip later.
-          listProjectArtifacts(
-            projectId,
-            Boolean(session && cloudProjectIds.has(projectId))
-          )
+          lastSyncedVersionPromise
         ]);
       const remoteDocument = remoteResult.document;
       if (!isCurrent()) return;
@@ -12392,7 +12456,8 @@ export function App() {
         setStatus(remoteResult.error.message);
         return;
       }
-      setArtifacts(artifactList);
+      // The existing document effect loads the file count after hydration.
+      setArtifacts([]);
       // A project this device holds alone is not in the account, and the
       // account says so with a 404. That is the ordinary answer, not an
       // outage: reading it as one opened every device project with "The
@@ -25566,6 +25631,7 @@ export function App() {
    * they need to reach.
    */
   const workspaceInputEnabled =
+    openingProject === null &&
     !settingsOpen &&
     !sharingOpen &&
     !pendingShaprImport &&
@@ -26275,6 +26341,18 @@ export function App() {
       .filter((projectId) => hasUnresolvedConflict(projectId))
   );
 
+  if (openingProject !== null) {
+    return (
+      <StartupScreen
+        projectName={openingProject}
+        backLabel={doc ? 'Cancel opening' : 'Back to parts'}
+        onBack={() => {
+          beginProjectNavigation();
+          setStatus('');
+        }}
+      />
+    );
+  }
   if (startupState === 'restoring') {
     return <StartupScreen />;
   }

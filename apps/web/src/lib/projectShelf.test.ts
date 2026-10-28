@@ -3,6 +3,7 @@ import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import {
   cachedThumbnailSource,
   mergeProjectSummaries,
+  withVerifiedShelfMetadata,
   resolveShelfThumbnail,
   thumbnailRecordDescribes
 } from './projectShelf';
@@ -10,6 +11,34 @@ import type { ProjectThumbnailRecord } from './localProjectStore';
 
 const LISTED = '2026-08-07T12:25:30.000Z';
 const EARLIER = '2026-08-07T12:25:21.000Z';
+
+describe('late verified shelf metadata', () => {
+  const listed = {
+    projectId: 'proj_verified',
+    name: 'Encrypted project',
+    updatedAt: LISTED,
+    revisionCount: 1,
+    storageFormat: 2
+  } as ProjectSummary;
+  it('updates only presentation, preserving local organization', () => {
+    const organized = {
+      ...listed,
+      organization: { status: 'archived' as const, pinned: true, sortOrder: 7 }
+    };
+    expect(
+      withVerifiedShelfMetadata(organized, { ...listed, name: 'Verified part' })
+    ).toEqual({ ...organized, name: 'Verified part' });
+  });
+  it('does not overwrite a newer rename or a changed storage format', () => {
+    const verified = { ...listed, name: 'Old verified title' };
+    for (const changed of [
+      { ...listed, name: 'New local title', updatedAt: '2026-10-28T12:00:00Z' },
+      { ...listed, storageFormat: 1 }
+    ]) {
+      expect(withVerifiedShelfMetadata(changed, verified)).toBe(changed);
+    }
+  });
+});
 
 function summary(updatedAt: string): ProjectSummary {
   return {

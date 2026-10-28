@@ -156,6 +156,36 @@ export function mergeProjectSummaries(
   return [...merged.values()].sort(compareProjectSummaries);
 }
 
+/** A late verified title must not replace a newer local rename or shelf action. */
+export function withVerifiedShelfMetadata(
+  project: ProjectSummary,
+  verified: ProjectSummary | undefined
+): ProjectSummary {
+  if (
+    !verified ||
+    project.projectId !== verified.projectId ||
+    project.storageFormat !== verified.storageFormat ||
+    project.updatedAt !== verified.updatedAt ||
+    (project.documentVersion !== undefined &&
+      verified.documentVersion !== undefined &&
+      project.documentVersion !== verified.documentVersion)
+  )
+    return project;
+  if (
+    project.name === verified.name &&
+    (!verified.thumbnailArtifactId ||
+      project.thumbnailArtifactId === verified.thumbnailArtifactId)
+  )
+    return project;
+  return {
+    ...project,
+    name: verified.name,
+    ...(verified.thumbnailArtifactId
+      ? { thumbnailArtifactId: verified.thumbnailArtifactId }
+      : {})
+  };
+}
+
 /**
  * Applies device-owned shelf metadata after document summaries are merged.
  * Metadata can exist without a local document when this device organised a
