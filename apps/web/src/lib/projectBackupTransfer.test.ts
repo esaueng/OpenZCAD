@@ -194,6 +194,41 @@ it('applies a smaller bulk-export budget before reading sources and preserves th
   expect(source).toHaveBeenCalledOnce();
 });
 
+it.each([undefined, 12000])(
+  'bounds archived file reads with an optional declared size of %s',
+  async (size) => {
+    const document = createProjectDocument(
+      'Budgeted archive',
+      toUserId('owner')
+    );
+    vi.spyOn(api, 'listArtifacts').mockResolvedValue({
+      artifacts: [
+        {
+          artifactId: toArtifactId('budgeted_export'),
+          projectId: document.projectId,
+          kind: 'step-export',
+          name: 'part.step',
+          contentType: 'application/step',
+          bytes: size,
+          objectKey: 'archive',
+          metadata: {},
+          createdAt: new Date().toISOString()
+        }
+      ]
+    });
+    const fetch = vi.fn(async () => new Response(new Uint8Array(12000)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      createProjectBackup(document, true, undefined, { maxBytes: 4096 })
+    ).rejects.toThrow(
+      size === undefined
+        ? 'remaining download size limit'
+        : 'bulk-download memory budget'
+    );
+    expect(fetch).toHaveBeenCalledTimes(size === undefined ? 1 : 0);
+  }
+);
+
 it('rolls back all companion data when a project import transaction fails', async () => {
   const document = createProjectDocument('Atomic', toUserId('owner'));
   const backup = importProjectCopy(

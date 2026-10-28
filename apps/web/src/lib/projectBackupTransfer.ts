@@ -27,6 +27,14 @@ import {
   type ProjectBackup
 } from './projectBackup';
 
+function downloadSizeError(limit: number): Error {
+  return new Error(
+    limit === MAX_PROJECT_BACKUP_BYTES
+      ? 'Project backup exceeds the 256 MB limit.'
+      : 'Project backup exceeds the remaining download size limit.'
+  );
+}
+
 export async function readBackupResponse(
   response: Response,
   limit = MAX_PROJECT_BACKUP_BYTES
@@ -44,7 +52,7 @@ export async function readBackupResponse(
       length += value.length;
       if (length > limit) {
         await reader.cancel();
-        throw new Error('Project backup exceeds the 256 MB limit.');
+        throw downloadSizeError(limit);
       }
       chunks.push(value);
     }
@@ -73,7 +81,7 @@ async function archivedBytes(
   if (encrypted) {
     const bytes = await encrypted.read();
     if (limit !== undefined && bytes.byteLength > limit)
-      throw new Error('Project backup exceeds the 256 MB limit.');
+      throw downloadSizeError(limit);
     return new Uint8Array(bytes);
   }
   return readBackupResponse(
@@ -155,7 +163,8 @@ export async function createProjectBackup(
         files.some((file) => file.artifact.artifactId === artifact.artifactId)
       )
         continue;
-      ensureSpace(4 * Math.ceil(artifact.bytes / 3));
+      if (artifact.bytes !== undefined)
+        ensureSpace(4 * Math.ceil(artifact.bytes / 3));
       const body = await archivedBytes(
         artifact.artifactId,
         Math.max(0, Math.floor(((maxBytes - bytesUsed) * 3) / 4))
