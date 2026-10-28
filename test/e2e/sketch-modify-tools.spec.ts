@@ -195,7 +195,7 @@ function constraintKinds(constraints: SketchConstraintData[]) {
 const undo = (page: Page) =>
   page.getByRole('button', { name: 'Undo', exact: true }).click();
 
-test('Trim cuts a line back to its crossings, one undo step per click', async ({
+test('Trim cuts a line back to its crossings, one undo step per click', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(90_000);

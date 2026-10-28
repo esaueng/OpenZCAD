@@ -16,11 +16,13 @@ import {
   toHex,
   verifyDeviceList,
   type DeviceListEntry,
+  type ProjectInfoBody,
   type ProjectEnvelopeHeaderInit
 } from '@openzcad/crypto';
 import type { AccountView } from './accountKeys';
 import type { E2eeDecoder } from './decodeWorker';
 import type { EnvelopeOpener } from './encryptedProjectStore';
+import type { E2eeProjectEnvelopeRecord } from '@openzcad/shared';
 
 beforeEach(() => {
   vi.resetModules();
@@ -509,4 +511,66 @@ it('does not let a superseded opening failure overwrite fresh verification statu
   await refused;
   expect(await f.page.encryptedShareLinks()).toBe(fresh);
   expect(failure).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  'retries progressive shelf verification after an unlocked recheck (old verifier fails=%s)',
+  async (failOld) => {
+    const f = await fixture();
+    const stores = await import('./encryptedProjectStore');
+    const real = stores.createEncryptedProjectStore;
+    const verify = vi.fn(
+      async () => ({ name: 'Fresh project name' }) as ProjectInfoBody
+    );
+    verify.mockImplementationOnce(async () => {
+      f.events.encryptionStateChanged(f.userId);
+      if (failOld) throw new Error('Retired verifier failed');
+      return { name: 'Retired result' } as ProjectInfoBody;
+    });
+    vi.spyOn(stores, 'createEncryptedProjectStore').mockImplementation(
+      (ctx) => {
+        const store = real(ctx);
+        vi.spyOn(store.info, 'verify').mockImplementation(verify);
+        return store;
+      }
+    );
+    const record = { projectId: 'shelf_project' } as E2eeProjectEnvelopeRecord;
+    const onEntry = vi.fn();
+    const result = await f.page.encryptedProjectShelf([record], {
+      isCurrent: () => true,
+      onEntry
+    });
+    expect(result.get(record.projectId)).toEqual({
+      name: 'Fresh project name'
+    });
+    expect(onEntry).toHaveBeenCalledExactlyOnceWith(record.projectId, {
+      name: 'Fresh project name'
+    });
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(f.load).toHaveBeenCalledTimes(2);
+  }
+);
+
+it('does not retry or publish progressive shelf data after locking', async () => {
+  const f = await fixture();
+  const stores = await import('./encryptedProjectStore');
+  const real = stores.createEncryptedProjectStore;
+  const verify = vi.fn(async () => {
+    f.lock();
+    return { name: 'Private project name' } as ProjectInfoBody;
+  });
+  vi.spyOn(stores, 'createEncryptedProjectStore').mockImplementation((ctx) => {
+    const store = real(ctx);
+    vi.spyOn(store.info, 'verify').mockImplementation(verify);
+    return store;
+  });
+  const onEntry = vi.fn();
+  const result = await f.page.encryptedProjectShelf(
+    [{ projectId: 'shelf_project' } as E2eeProjectEnvelopeRecord],
+    { isCurrent: () => true, onEntry }
+  );
+  expect(result.size).toBe(0);
+  expect(onEntry).not.toHaveBeenCalled();
+  expect(verify).toHaveBeenCalledOnce();
+  expect(f.load).toHaveBeenCalledOnce();
 });

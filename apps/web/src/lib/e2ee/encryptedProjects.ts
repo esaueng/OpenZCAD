@@ -109,6 +109,7 @@ import { contactInvitationPeople, type InvitationContext } from './invitations';
 import { invitationStore } from './invitationStore';
 import { subscribeEncryptionState } from './encryptionStateEvents';
 import { unlockedAccount } from './unlockedKeys';
+import { verifyShelfEntries } from './progressiveShelf';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -821,22 +822,43 @@ export interface EncryptedShelfEntry {
  * decrypts it like any other blob.
  */
 export async function encryptedProjectShelf(
-  records: readonly E2eeProjectEnvelopeRecord[]
+  records: readonly E2eeProjectEnvelopeRecord[],
+  progress?: {
+    isCurrent(): boolean;
+    onEntry(projectId: string, entry: EncryptedShelfEntry): void;
+  }
 ): Promise<Map<string, EncryptedShelfEntry>> {
-  const store = await encryptedProjectStore();
+  const revision = getKeySessionRevision();
+  const sessionCurrent = () =>
+    isCurrentKeySession(revision) && (progress?.isCurrent() ?? true);
+  if (!sessionCurrent()) return new Map();
+  const view = await openedForSession();
+  let store = await view.store;
+  const isCurrent = () => sessionCurrent() && !!unlockedAccount(view.userId);
   const shelf = new Map<string, EncryptedShelfEntry>();
-  await Promise.all(
-    records.map(async (record) => {
+  await verifyShelfEntries(
+    records,
+    async (record) => {
       try {
-        const body = await store.info.verify(record);
-        shelf.set(record.projectId, {
-          name: body.name,
-          ...(body.thumbnail ? { thumbnailBlobId: body.thumbnail.blobId } : {})
-        });
-      } catch {
-        // Left out: the placeholder name, no picture.
+        return await store.info.verify(record);
+      } catch (error) {
+        if (!(error instanceof KeySessionEndedError) || !isCurrent())
+          throw error;
+        // A settings recheck retired the captured verifier. Retry once
+        // against the fresh account view without another catalog request.
+        store = await encryptedProjectStore();
+        return store.info.verify(record);
       }
-    })
+    },
+    (record, body) => {
+      const entry = {
+        name: body.name,
+        ...(body.thumbnail ? { thumbnailBlobId: body.thumbnail.blobId } : {})
+      };
+      shelf.set(record.projectId, entry);
+      progress?.onEntry(record.projectId, entry);
+    },
+    isCurrent
   );
-  return shelf;
+  return isCurrent() ? shelf : new Map();
 }

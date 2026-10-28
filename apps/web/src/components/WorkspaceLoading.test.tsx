@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceLoading, WorkspacePending } from './WorkspaceLoading';
 import { createLazyPanel } from './LazyPanel';
@@ -25,6 +25,35 @@ describe('coordinated workspace reveal', () => {
         current.forEach((callback) => callback(0));
       });
   }
+
+  it('keeps live workspace children mounted while a share destination covers them', () => {
+    const frame = frames();
+    const unmounted = vi.fn();
+    function LiveWork() {
+      useEffect(() => unmounted, []);
+      return <button>Live workspace</button>;
+    }
+    const view = (covered: boolean) => (
+      <WorkspaceLoading ready covered={covered} onBack={vi.fn()}>
+        <LiveWork />
+      </WorkspaceLoading>
+    );
+    const { container, rerender } = render(view(false));
+    frame();
+    frame();
+    const original = screen.getByRole('button', { name: 'Live workspace' });
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'Live workspace' })).toBeNull();
+    expect(container.querySelector('.workspace-reveal')).toHaveAttribute(
+      'inert'
+    );
+    expect(unmounted).not.toHaveBeenCalled();
+    rerender(view(false));
+    expect(screen.getByRole('button', { name: 'Live workspace' })).toBe(
+      original
+    );
+    expect(unmounted).not.toHaveBeenCalled();
+  });
 
   it('waits for the model and every initial lazy surface, then reveals once', async () => {
     const frame = frames();

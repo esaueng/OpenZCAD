@@ -66,7 +66,7 @@ async function projectSavedWithOneBodyThenTwo(page: Page, name: string) {
   await expectBodyCount(page, 2);
 }
 
-test('restores a save state and undoes the restore', async ({ page }) => {
+test('restores a save state and undoes the restore', { tag: '@ci-smoke' }, async ({ page }) => {
   await projectSavedWithOneBodyThenTwo(page, 'Restore Part');
 
   const savedRow = revisionRow(page, 'Manual save');
@@ -103,7 +103,7 @@ test('a restored project reopens restored', async ({ page }) => {
   await expect(revisionRow(page, 'Before restore')).toBeVisible();
 });
 
-test('branches a save state into its own project, leaving the original alone', async ({
+test('branches a save state into its own project, leaving the original alone', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await projectSavedWithOneBodyThenTwo(page, 'Branch Source');

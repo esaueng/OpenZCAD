@@ -113,6 +113,7 @@ import {
 } from './lib/localProjectStore';
 import {
   Suspense,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -183,7 +184,6 @@ import {
   createCheckpoint,
   createFeatureOnlyIds,
   createSavePoint,
-  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -199,7 +199,6 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
-  normalizeDocumentHistory,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -390,6 +389,8 @@ import {
   isProjectDocumentUnavailableError,
   isProjectFormatUnsupportedError
 } from './lib/api';
+import type { ProjectListingProgress } from './lib/api';
+import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
@@ -563,6 +564,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
+import { SharePage, type SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import {
   WorkspaceAppShell,
@@ -582,8 +584,9 @@ import {
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import {
-  captureProjectShareLink,
+  captureProjectShareRequest,
   isEncryptedShareLink,
+  shareLinkFromHash,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
@@ -1453,6 +1456,7 @@ import {
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
+  withVerifiedShelfMetadata,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail
@@ -1601,13 +1605,13 @@ import {
   clearUnresolvedConflict,
   conflictFromDocuments,
   hasUnresolvedConflict,
-  recoveryCopyName,
-  recoveryCopyNote,
+  conflictCopyNote,
   resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
   type ProjectConflict
 } from './lib/conflictRecovery';
+import { localConflictCopy } from './lib/conflictLocalCopy';
 import {
   buildModelingOperationSubmission,
   modelingFaceOptions,
@@ -1942,7 +1946,11 @@ const organizationBackground = new OrganizationMirrorBackground();
  */
 async function loadProjectSummaries(
   accountId: string | null,
-  allowPurge = true
+  allowPurge = true,
+  options?: {
+    local?: Promise<ProjectSummary[]>;
+    progress?: ProjectListingProgress;
+  }
 ): Promise<{
   projects: ProjectSummary[];
   remoteReached: boolean;
@@ -1968,11 +1976,15 @@ async function loadProjectSummaries(
       return fallback;
     };
   const [local, organizationSnapshots, remote] = await Promise.all([
-    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
+    (options?.local ?? listLocalProjects()).catch(
+      unavailableAs<ProjectSummary[]>([])
+    ),
     listLocalProjectOrganizationSnapshots().catch(
       unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
     ),
-    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+    signedIn
+      ? api.listProjects(options?.progress).catch(() => null)
+      : Promise.resolve(null)
   ]);
   const localOrganizations = new Map(
     [...organizationSnapshots].map(([id, snapshot]) => [
@@ -2028,40 +2040,6 @@ async function loadProjectSummaries(
     remoteReached: Boolean(remote),
     cloudProjectIds: remoteIds
   };
-}
-
-function localRecoveryCopy(
-  source: ProjectDocument,
-  label: 'Recovery' | 'Local copy'
-): ProjectDocument {
-  const copy = structuredClone(source);
-  const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
-  const name = recoveryCopyName(source.name, label);
-  copy.projectId = projectId;
-  if (copy.editHistory) {
-    copy.editHistory.projectId = projectId;
-    for (const historical of documentNodesWithHistory(copy)) {
-      if (historical.kind === 'project') historical.projectId = projectId;
-    }
-  }
-  const beforeRename = structuredClone(copy);
-  copy.name = name;
-  copy.revisions = [];
-  copy.checkpoints = [];
-  copy.derived.updatedAt = new Date().toISOString();
-  const root = copy.nodes[copy.rootNodeId];
-  if (root?.kind === 'project') {
-    root.projectId = projectId;
-    root.name = name;
-    root.revisionId = null;
-  }
-  // The source's save points stay with the source; the copy starts its own
-  // record. Born with none at all, it could not be saved: every Save,
-  // including Save to my account, refused for want of a revision to name.
-  return createSavedRevision(
-    normalizeDocumentHistory(beforeRename, copy),
-    `Recovered from ${source.name}`
-  );
 }
 
 /**
@@ -2163,7 +2141,7 @@ export function App() {
   );
   const [pendingInvitationToken, setPendingInvitationToken] = useState(() => {
     // An explicit public link supersedes an invitation retained for sign-in.
-    if (captureProjectShareLink()) {
+    if (captureProjectShareRequest() !== null) {
       clearPendingProjectInvitation();
       return null;
     }
@@ -2187,7 +2165,10 @@ export function App() {
    * verified statement's mode: a view-only link pins the visitor to View.
    */
   const [pendingShareToken, setPendingShareToken] = useState(
-    captureProjectShareLink
+    captureProjectShareRequest
+  );
+  const [sharePage, setSharePage] = useState<SharePageState | null>(() =>
+    pendingShareToken === null ? null : { phase: 'loading' }
   );
   const [shareSession, setShareSession] = useState<{
     token: string;
@@ -2211,36 +2192,44 @@ export function App() {
   >(async () => undefined);
   const fragmentNavigationRef = useRef(0);
   const navigationBusyRef = useRef<object | null>(null);
+  const [openingProject, setOpeningProject] = useState<string | null>(null);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
   const cancelNavigationBusy = useCallback(() => {
     if (navigationBusyRef.current === null) return;
     navigationBusyRef.current = null;
+    setOpeningProject(null);
     setBusy(false);
   }, []);
-  const startNavigationBusy = useCallback(() => {
+  const startNavigationBusy = useCallback((projectName?: string) => {
     const owner = {};
     navigationBusyRef.current = owner;
     setBusy(true);
+    setOpeningProject(projectName ?? null);
     return () => {
       if (navigationBusyRef.current !== owner) return;
       navigationBusyRef.current = null;
+      setOpeningProject(null);
       setBusy(false);
     };
   }, []);
-  function beginProjectNavigation(clearShareFragment = true) {
-    cancelNavigationBusy();
-    if (clearShareFragment) clearProjectShareFragment();
-    const navigation = ++fragmentNavigationRef.current;
-    clearPendingProjectInvitation();
-    pendingInvitationAttemptRef.current = null;
-    setPendingInvitationToken(null);
-    setPendingInvitationError(null);
-    shareOpenAttemptRef.current = null;
-    setPendingShareToken(null);
-    return () => fragmentNavigationRef.current === navigation;
-  }
+  const beginProjectNavigation = useCallback(
+    (clearShareFragment = true) => {
+      cancelNavigationBusy();
+      if (clearShareFragment) clearProjectShareFragment();
+      const navigation = ++fragmentNavigationRef.current;
+      clearPendingProjectInvitation();
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationToken(null);
+      setPendingInvitationError(null);
+      shareOpenAttemptRef.current = null;
+      setPendingShareToken(null);
+      setSharePage(null);
+      return () => fragmentNavigationRef.current === navigation;
+    },
+    [cancelNavigationBusy]
+  );
   const restoreShareSessionFragment = useCallback(() => {
     const active = shareSessionRef.current;
     if (!active) return;
@@ -2251,11 +2240,13 @@ export function App() {
     );
     shareOpenAttemptRef.current = active.token;
     setPendingShareToken(active.token);
+    setSharePage(null);
   }, []);
   useEffect(() => {
     const openFragment = () => {
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
+          beginProjectNavigation(false);
           updateSettingsViewState({ open: true, activeSection: 'encryption' });
           setSettingsOpen(true);
         }
@@ -2286,6 +2277,7 @@ export function App() {
           setPendingInvitationToken(token);
           setInvitationNavigation((current) => current + 1);
           setPendingShareToken(null);
+          setSharePage(null);
           updateSettingsViewState({ open: true, activeSection: 'account' });
           setSettingsOpen(true);
           return;
@@ -2295,10 +2287,11 @@ export function App() {
       pendingInvitationAttemptRef.current = null;
       setPendingInvitationToken(null);
       setPendingInvitationError(null);
-      const token = captureProjectShareLink();
+      const token = captureProjectShareRequest();
       shareOpenAttemptRef.current = null;
       setPendingShareToken(token);
-      if (!token) {
+      setSharePage(token === null ? null : { phase: 'loading' });
+      if (token === null) {
         if (shareSessionRef.current) {
           void leaveShareSessionRef.current(
             () => fragmentNavigationRef.current === navigation
@@ -2310,7 +2303,7 @@ export function App() {
     };
     window.addEventListener('hashchange', openFragment);
     return () => window.removeEventListener('hashchange', openFragment);
-  }, [cancelNavigationBusy]);
+  }, [beginProjectNavigation, cancelNavigationBusy]);
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
@@ -2373,7 +2366,7 @@ export function App() {
       startupPointer: pointer,
       startupProjectId:
         !pendingInvitationToken &&
-        !pendingShareToken &&
+        pendingShareToken === null &&
         appSettings.general.reopenLastProject
           ? pointer.activeProjectId
           : null
@@ -2396,6 +2389,7 @@ export function App() {
   const accountSettingsRef = useRef(accountSettings);
   accountSettingsRef.current = accountSettings;
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
+  const cloudConfigurationReads = useRef(createCloudConfigurationReads());
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
   const [panelState, setPanelState] = useState<PanelState>(() =>
@@ -2889,7 +2883,7 @@ export function App() {
   // reports a stale chunk where the user is looking.
   useEffect(() => {
     // Save-Data asks for nothing speculative, as the chunk prefetch honours.
-    if (prefersSavingData()) return;
+    if (startupState !== 'ready' || prefersSavingData()) return;
     // Offline, a failed module download can stay cached until navigation,
     // so wait for the connection rather than poison the surfaces' own loads.
     const warm = () =>
@@ -2903,7 +2897,7 @@ export function App() {
     }
     const timer = window.setTimeout(warm, 2_000);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [startupState]);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));
@@ -4787,6 +4781,12 @@ export function App() {
     doc?.ownerUserId !== session.userId &&
     !encryptedMemberProject
   );
+  // Discovery may display the model before the optional capability read ends.
+  // A foreign plaintext document never grants a seat by arriving first.
+  const pendingSharedProjectAccessReason =
+    sharedAccountProject && !projectSharingEnabled
+      ? 'Waiting for project access'
+      : null;
 
   // An end-to-end encrypted project's room relays ciphertext (ADR-024
   // slice 4-9), and every version the room accepts is already the account's.
@@ -5005,19 +5005,21 @@ export function App() {
   // workspace is the parameters, and Make a copy is the road to Build.
   const seatBuildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
-    : !sharedProjectDisabled && encryptedMemberEditReason
-      ? // An encrypted member who may not edit (a viewer, or one whose role
-        // is not known, or no longer exists) is held in View, as a
-        // read-only collaborator is (slice 5-4).
-        encryptedMemberEditReason
-      : !sharedProjectDisabled &&
-          cloudAvailable &&
-          session &&
-          projectSharingEnabled &&
-          (collaboration.role === 'viewer' ||
-            collaboration.status === 'read-only')
-        ? 'This shared project is read-only'
-        : null;
+    : !sharedProjectDisabled && pendingSharedProjectAccessReason
+      ? pendingSharedProjectAccessReason
+      : !sharedProjectDisabled && encryptedMemberEditReason
+        ? // An encrypted member who may not edit (a viewer, or one whose role
+          // is not known, or no longer exists) is held in View, as a
+          // read-only collaborator is (slice 5-4).
+          encryptedMemberEditReason
+        : !sharedProjectDisabled &&
+            cloudAvailable &&
+            session &&
+            projectSharingEnabled &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          ? 'This shared project is read-only'
+          : null;
   const buildModeDisabledReason =
     !shareSession && migrationEditReason
       ? migrationEditReason
@@ -5112,26 +5114,28 @@ export function App() {
         null
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
-        : encryptedMemberProject
-          ? encryptedMemberEditReason
-          : !activeProjectIsCloud ||
-              !cloudAvailable ||
-              !session ||
-              !projectSharingEnabled
-            ? null
-            : collaboration.conflict
-              ? 'Resolve the collaboration conflict before editing'
-              : collaboration.role === 'viewer' ||
-                  collaboration.status === 'read-only'
-                ? 'This shared project is read-only'
-                : collaboration.role === null
-                  ? 'Waiting for project access'
-                  : collaborationRollout.editLeasesEnforced &&
-                      !activeCollaborationLease
-                    ? collaboration.status === 'lease-denied'
-                      ? 'Another collaborator holds the edit lease'
-                      : 'Waiting for the project edit lease'
-                    : null;
+        : pendingSharedProjectAccessReason
+          ? pendingSharedProjectAccessReason
+          : encryptedMemberProject
+            ? encryptedMemberEditReason
+            : !activeProjectIsCloud ||
+                !cloudAvailable ||
+                !session ||
+                !projectSharingEnabled
+              ? null
+              : collaboration.conflict
+                ? 'Resolve the collaboration conflict before editing'
+                : collaboration.role === 'viewer' ||
+                    collaboration.status === 'read-only'
+                  ? 'This shared project is read-only'
+                  : collaboration.role === null
+                    ? 'Waiting for project access'
+                    : collaborationRollout.editLeasesEnforced &&
+                        !activeCollaborationLease
+                      ? collaboration.status === 'lease-denied'
+                        ? 'Another collaborator holds the edit lease'
+                        : 'Waiting for the project edit lease'
+                      : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
   const projectEditDisabledReason =
@@ -5285,8 +5289,12 @@ export function App() {
   }
 
   const conflictHandlers: ConflictResolutionHandlers = {
-    async writeRecoveryCopy(source) {
-      const copy = localRecoveryCopy(source, 'Recovery');
+    async saveLocalAsCopy(source) {
+      const copy = await localConflictCopy(
+        source,
+        projects.map((project) => project.name),
+        session?.userId ?? localUserId
+      );
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
@@ -5305,31 +5313,30 @@ export function App() {
         )
         .catch(() => undefined);
       // From the document just written, so the card counts the copy's own
-      // recovery save point rather than claiming it has none.
+      // initial save point rather than claiming it has none.
       setProjects((current) =>
         mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
+      return copy.projectId;
+    },
+    async localCopyExists(projectId) {
+      const [document, snapshot] = await Promise.all([
+        loadLocalProject(projectId),
+        loadLocalProjectOrganizationSnapshot(projectId)
+      ]);
+      return document !== null && snapshot?.organization.status !== 'deleted';
     },
     useRemoteVersion(remoteDocument, outcome) {
       if (!collaboration.useRemoteVersion(remoteDocument.version)) {
         throw new Error(
-          'The room version changed before recovery could complete.'
+          'The live version changed before your choice could be applied.'
         );
       }
-      setStatus(
-        `Using the current room version; ${recoveryCopyNote(outcome)}.`
-      );
+      setStatus(`Using the live version${conflictCopyNote(outcome)}.`);
     },
     async keepMyVersion({ expectedRemoteVersion }) {
       await collaboration.keepLocalVersion(expectedRemoteVersion);
       setStatus('Kept this device’s version in the live session.');
-    },
-    saveLocalAsCopy(_document, outcome) {
-      setStatus(
-        outcome.recoveryCopy === 'already-preserved'
-          ? 'This version already has a local recovery project.'
-          : 'Saved the divergent document as a local recovery project.'
-      );
     }
   };
 
@@ -5340,7 +5347,8 @@ export function App() {
    * against the version the account reported.
    */
   const accountConflictHandlers: ConflictResolutionHandlers = {
-    writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
+    saveLocalAsCopy: conflictHandlers.saveLocalAsCopy,
+    localCopyExists: conflictHandlers.localCopyExists,
     async useRemoteVersion(incomingDocument, outcome) {
       // Account documents are stored without their derived projection.
       // Reattach the local one when it provably describes the same canonical
@@ -5369,9 +5377,7 @@ export function App() {
         rememberProject: false
       });
       setAccountConflict(null);
-      setStatus(
-        `Using the version from your account; ${recoveryCopyNote(outcome)}.`
-      );
+      setStatus(`Using the cloud version${conflictCopyNote(outcome)}.`);
     },
     async keepMyVersion({ document, expectedRemoteVersion }, outcome) {
       const saved = await api.saveRevision({
@@ -5397,7 +5403,7 @@ export function App() {
           restored.version
         );
         setAccountConflict(null);
-        setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
+        setStatus(`Kept this browser’s version${conflictCopyNote(outcome)}.`);
         return;
       }
       await saveLocalProject(restored);
@@ -5409,14 +5415,7 @@ export function App() {
       );
       setAccountConflict(null);
       setSaveState('synced');
-      setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
-    },
-    saveLocalAsCopy(_document, outcome) {
-      setStatus(
-        outcome.recoveryCopy === 'already-preserved'
-          ? 'This version already has a local recovery project.'
-          : 'Saved the divergent document as a local recovery project.'
-      );
+      setStatus(`Kept this browser’s version${conflictCopyNote(outcome)}.`);
     }
   };
 
@@ -6000,85 +5999,133 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let metadataTimer: ReturnType<typeof setTimeout> | undefined;
     mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
     void (async () => {
       try {
-        const [health, rememberedLocal, currentAuth] = await Promise.all([
+        const keySessionRevision = getKeySessionRevision();
+        const startupSettings = appSettingsRef.current;
+        const ownsCloudMode = cloudConfigurationReads.current.captureMode();
+        const ownsHealthRead = cloudConfigurationReads.current.begin('health');
+        const ownsAuthRead = cloudConfigurationReads.current.begin('auth');
+        const isCurrent = () =>
+          !cancelled &&
+          ownsCloudMode() &&
+          getKeySessionRevision() === keySessionRevision;
+        const verifiedMetadata = new Map<string, ProjectSummary>();
+        const local = listLocalProjects();
+        // Cards already stored on this device need neither cloud discovery nor
+        // decryption. Keep actions gated until account discovery settles.
+        void local.then(
+          (projects) => {
+            if (isCurrent() && !startupProjectId) {
+              setProjects(projects);
+              mark('startup.localLibrary.ready');
+            }
+          },
+          () => undefined
+        );
+        void (
           bootCloudFunctionsEnabledRef.current
             ? api.health().catch(() => null)
-            : null,
-          startupProjectId
-            ? timedAsync('startup.localProject', () =>
-                loadLocalProject(startupProjectId).catch(() => null)
-              )
-            : Promise.resolve(null),
+            : Promise.resolve(null)
+        ).then((health) => {
+          if (!cancelled && ownsHealthRead()) setDeploymentHealth(health);
+        });
+        void (
           bootCloudFunctionsEnabledRef.current
-            ? api
-                .authConfig()
-                .then((config) => ({
-                  config,
-                  status: 'ready' as const
-                }))
-                .catch(() => ({
-                  config: null,
-                  status: 'unavailable' as const
-                }))
-            : {
-                config: null,
-                status: 'unavailable' as const
-              }
-        ]);
-        const keySessionRevision = getKeySessionRevision();
+            ? api.authConfig().then(
+                (config) => ({ config, status: 'ready' as const }),
+                () => ({ config: null, status: 'unavailable' as const })
+              )
+            : Promise.resolve({ config: null, status: 'unavailable' as const })
+        ).then((auth) => {
+          if (!cancelled && ownsAuthRead()) {
+            setAuthConfig(auth.config);
+            setAuthConfigStatus(auth.status);
+          }
+        });
         let sessionLookupFailed = false;
-        const activeSession = bootCloudFunctionsEnabledRef.current
-          ? await timedAsync('startup.session', () =>
+        const sessionPromise = bootCloudFunctionsEnabledRef.current
+          ? timedAsync('startup.session', () =>
               api.session().catch(() => {
                 sessionLookupFailed = true;
                 return null;
               })
             )
-          : null;
+          : Promise.resolve(null);
+        const [rememberedLocal, activeSession] = await Promise.all([
+          startupProjectId
+            ? timedAsync('startup.localProject', () =>
+                loadLocalProject(startupProjectId).catch(() => null)
+              )
+            : Promise.resolve(null),
+          sessionPromise
+        ]);
+        if (!isCurrent()) return;
+        const progress: ProjectListingProgress = {
+          isCurrent,
+          onVerified(project) {
+            verifiedMetadata.set(project.projectId, project);
+            if (metadataTimer !== undefined) return;
+            metadataTimer = setTimeout(() => {
+              metadataTimer = undefined;
+              if (!isCurrent()) return;
+              startTransition(() =>
+                setProjects((current) => {
+                  if (!isCurrent()) return current;
+                  const next = current.map((entry) =>
+                    withVerifiedShelfMetadata(entry, verifiedMetadata.get(entry.projectId))
+                  );
+                  return next.some((entry, index) => entry !== current[index])
+                    ? next
+                    : current;
+                })
+              );
+            }, 50);
+          }
+        };
+        const remoteSettingsPromise = activeSession
+          ? api.getSettings().catch(() => null)
+          : Promise.resolve(null);
+        const collaborationPromise = activeSession
+          ? api
+              .collaborationCapabilities()
+              .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+          : Promise.resolve(DISABLED_COLLABORATION_ROLLOUT);
         const listedPromise = timedAsync('startup.projectList', () =>
           loadProjectSummaries(
             activeSession?.userId ?? null,
-            !sessionLookupFailed
+            !sessionLookupFailed,
+            { local, progress }
           )
         );
         const lastSyncedVersionPromise = startupProjectId
           ? loadLastSyncedVersion(startupProjectId)
           : Promise.resolve(null);
-        const [
-          listed,
-          rememberedRemoteResult,
-          remoteSettings,
-          collaborationCapabilities,
-          lastSyncedVersion
-        ] = await Promise.all([
-          listedPromise,
-          activeSession && startupProjectId
-            ? lastSyncedVersionPromise.then((baseline) =>
-                loadAccountProjectResult(startupProjectId, {
-                  localDocument: rememberedLocal,
-                  previouslySynced: baseline !== null,
-                  accountProjects: listedPromise
-                })
-              )
-            : Promise.resolve<AccountProjectLoadResult>({
-                document: null
-              }),
-          activeSession ? api.getSettings().catch(() => null) : null,
-          activeSession
-            ? api
-                .collaborationCapabilities()
-                .catch(() => DISABLED_COLLABORATION_ROLLOUT)
-            : DISABLED_COLLABORATION_ROLLOUT,
-          lastSyncedVersionPromise
-        ]);
-        if (cancelled) {
-          return;
-        }
-        setDeploymentHealth(health);
-        const merged = listed.projects;
+        const [listed, rememberedRemoteResult, lastSyncedVersion] =
+          await Promise.all([
+            listedPromise,
+            activeSession && startupProjectId
+              ? lastSyncedVersionPromise.then((baseline) =>
+                  loadAccountProjectResult(startupProjectId, {
+                    localDocument: rememberedLocal,
+                    previouslySynced: baseline !== null,
+                    accountProjects: listedPromise
+                  })
+                )
+              : Promise.resolve<AccountProjectLoadResult>({
+                  document: null
+                }),
+            lastSyncedVersionPromise
+          ]);
+        if (!isCurrent()) return;
+        const merged = listed.projects.map((project) =>
+          withVerifiedShelfMetadata(
+            project,
+            verifiedMetadata.get(project.projectId)
+          )
+        );
         const rememberedRemote = rememberedRemoteResult.document;
         const accountOwnsStartupProject = Boolean(
           startupProjectId && listed.cloudProjectIds.has(startupProjectId)
@@ -6117,7 +6164,7 @@ export function App() {
             restoredDocument.projectId,
             restoredDocument.version
           );
-          if (cancelled) {
+          if (!isCurrent()) {
             return;
           }
         }
@@ -6126,7 +6173,13 @@ export function App() {
           accountDocumentNeedsRepair && startupProjectId
             ? startupProjectId
             : null;
-        setCollaborationRollout(collaborationCapabilities);
+        void collaborationPromise.then((capabilities) => {
+          if (
+            isCurrent() &&
+            sessionRef.current?.userId === activeSession?.userId
+          )
+            setCollaborationRollout(capabilities);
+        });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
@@ -6143,9 +6196,13 @@ export function App() {
           sessionRef.current = activeSession;
           setSession(activeSession);
         }
-        setAuthConfig(currentAuth.config);
-        setAuthConfigStatus(currentAuth.status);
-        if (remoteSettings) {
+        void remoteSettingsPromise.then((remoteSettings) => {
+          if (
+            !remoteSettings ||
+            !isCurrent() ||
+            sessionRef.current?.userId !== activeSession?.userId
+          )
+            return;
           accountSettingsRef.current = remoteSettings;
           setAccountSettings(remoteSettings);
           // Adopting the account copy over an unsaved local change would revert
@@ -6153,6 +6210,7 @@ export function App() {
           // not working at all.
           if (
             remoteSettings.synced &&
+            appSettingsRef.current === startupSettings &&
             shouldAdoptAccountSettings(bootSettingsRef.current)
           ) {
             appSettingsRef.current = remoteSettings.settings;
@@ -6176,7 +6234,7 @@ export function App() {
             );
             cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
-        }
+        });
         setSaveState(
           !canUseCloud
             ? accountDocumentNeedsRepair
@@ -6243,9 +6301,9 @@ export function App() {
             ? LIBRARY_MODE_STATUS.offlineMode
             : activeSession && listed.remoteReached
               ? LIBRARY_MODE_STATUS.cloudReady
-              : health
-                ? LIBRARY_MODE_STATUS.local
-                : LIBRARY_MODE_STATUS.offline
+              : sessionLookupFailed
+                ? LIBRARY_MODE_STATUS.offline
+                : LIBRARY_MODE_STATUS.local
         );
       } catch (error) {
         if (!cancelled) {
@@ -6258,12 +6316,14 @@ export function App() {
           measure('startup.restore', 'startup.begin', 'startup.ready');
           measure('startup.total', 'bundle.evaluated', 'startup.ready');
           setStartupState('ready');
+          window.dispatchEvent(new Event('openzcad:startup-ready'));
         }
       }
     })();
     return () => {
       cancelled = true;
       organizationBackground.dispose();
+      clearTimeout(metadataTimer);
     };
     // Startup settings are intentionally read once. Later settings changes
     // should not re-run project discovery or reopen a different document.
@@ -11164,6 +11224,7 @@ export function App() {
     if (next === cloudFunctionsEnabledRef.current) {
       return;
     }
+    cloudConfigurationReads.current.changeMode();
     if (!next) organizationBackground.cancel();
     // Flip the transport gate before React can render another cloud consumer.
     // This also aborts active browser API and assistant fetches when going off.
@@ -11235,11 +11296,22 @@ export function App() {
       return;
     }
     const keySessionRevision = getKeySessionRevision();
+    const ownsMode = cloudConfigurationReads.current.captureMode();
+    const ownsAuth = cloudConfigurationReads.current.begin('auth');
+    const ownsHealth = cloudConfigurationReads.current.begin('health');
+    const isCurrent = () =>
+      cloudFunctionsEnabledRef.current &&
+      ownsMode() &&
+      getKeySessionRevision() === keySessionRevision;
     setAuthConfigStatus('loading');
     void api
       .health()
-      .then(setDeploymentHealth)
-      .catch(() => setDeploymentHealth(null));
+      .catch(() => null)
+      .then((health) => {
+        if (ownsHealth() && cloudFunctionsEnabledRef.current) {
+          setDeploymentHealth(health);
+        }
+      });
     const [nextAuth, activeSession] = await Promise.all([
       api
         .authConfig()
@@ -11247,14 +11319,13 @@ export function App() {
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
     ]);
-    if (
-      !cloudFunctionsEnabledRef.current ||
-      getKeySessionRevision() !== keySessionRevision
-    ) {
+    if (!isCurrent()) {
       return;
     }
-    setAuthConfig(nextAuth.config);
-    setAuthConfigStatus(nextAuth.status);
+    if (ownsAuth()) {
+      setAuthConfig(nextAuth.config);
+      setAuthConfigStatus(nextAuth.status);
+    }
     organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
@@ -11279,7 +11350,7 @@ export function App() {
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
       ]);
-      if (!cloudFunctionsEnabledRef.current) {
+      if (!isCurrent()) {
         return;
       }
       accountSettingsRef.current = remoteSettings;
@@ -11288,7 +11359,7 @@ export function App() {
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );
-      if (!cloudFunctionsEnabledRef.current) {
+      if (!isCurrent()) {
         return;
       }
       setProjects(listed.projects);
@@ -11297,7 +11368,7 @@ export function App() {
       setSettingsMessage('Cloud profile connected.');
       setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
-      if (cloudFunctionsEnabledRef.current) {
+      if (isCurrent()) {
         setSettingsMessage(
           'Cloud profile unavailable · device settings remain active.'
         );
@@ -11335,10 +11406,13 @@ export function App() {
   }
 
   async function handleRefreshAuthConfig() {
+    if (!cloudFunctionsEnabledRef.current) return;
+    const ownsRead = cloudConfigurationReads.current.begin('auth');
     setAuthConfigStatus('loading');
     setSettingsMessage('Checking beta sign-in readiness…');
     try {
       const nextAuthConfig = await api.authConfig();
+      if (!ownsRead()) return;
       setAuthConfig(nextAuthConfig);
       setAuthConfigStatus('ready');
       setSettingsMessage(
@@ -11347,6 +11421,7 @@ export function App() {
           : 'Email sign-in is not configured · device settings remain active.'
       );
     } catch {
+      if (!ownsRead()) return;
       setAuthConfig(null);
       setAuthConfigStatus('unavailable');
       setSettingsMessage(
@@ -12338,7 +12413,7 @@ export function App() {
       return;
     }
     const activeProjectSince = snapshotActiveProject();
-    const finishBusy = startNavigationBusy();
+    const finishBusy = startNavigationBusy(listed?.name ?? 'project');
     try {
       await flushPendingLocalSave();
       if (!isCurrent()) return;
@@ -12348,15 +12423,9 @@ export function App() {
       await sharedThumbnailCapture.flush();
       if (!isCurrent()) return;
       sharedThumbnailCapture.discard();
-      if (
-        accountDocumentUnavailableProjectIdRef.current !== null &&
-        accountDocumentUnavailableProjectIdRef.current !== projectId
-      ) {
-        accountDocumentUnavailableProjectIdRef.current = null;
-      }
       const localDocumentPromise = loadLocalProject(projectId);
       const lastSyncedVersionPromise = loadLastSyncedVersion(projectId);
-      const [localDocument, remoteResult, lastSyncedVersion, artifactList] =
+      const [localDocument, remoteResult, lastSyncedVersion] =
         await Promise.all([
           localDocumentPromise,
           session
@@ -12377,13 +12446,7 @@ export function App() {
             : Promise.resolve<AccountProjectLoadResult>({
                 document: null
               }),
-          lastSyncedVersionPromise,
-          // Read alongside the document so the File menu's count is on the
-          // bar from the workspace's first frame, not a round-trip later.
-          listProjectArtifacts(
-            projectId,
-            Boolean(session && cloudProjectIds.has(projectId))
-          )
+          lastSyncedVersionPromise
         ]);
       const remoteDocument = remoteResult.document;
       if (!isCurrent()) return;
@@ -12392,7 +12455,6 @@ export function App() {
         setStatus(remoteResult.error.message);
         return;
       }
-      setArtifacts(artifactList);
       // A project this device holds alone is not in the account, and the
       // account says so with a 404. That is the ordinary answer, not an
       // outage: reading it as one opened every device project with "The
@@ -12410,6 +12472,7 @@ export function App() {
           ? projectId
           : null;
         setCloudAvailable(false);
+        setArtifacts([]);
         hydrateDocument(localDocument, { activeProjectSince });
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
@@ -12432,20 +12495,16 @@ export function App() {
       if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
       }
-      if (
-        accountDocumentUnavailableProjectIdRef.current === projectId &&
-        remoteDocument
-      ) {
+      const commitAccountState = () => {
         accountDocumentUnavailableProjectIdRef.current = null;
-      }
-      setCloudAvailable(Boolean(remoteDocument));
-      if (remoteDocument) {
-        remoteVersionsRef.current.set(
-          remoteDocument.projectId,
-          remoteDocument.version
-        );
-      }
+        setCloudAvailable(Boolean(remoteDocument));
+        setArtifacts([]);
+        if (remoteDocument) {
+          remoteVersionsRef.current.set(remoteDocument.projectId, remoteDocument.version);
+        }
+      };
       if (outcome.choice === 'diverged') {
+        commitAccountState();
         // Both copies moved since this device last agreed with the account.
         // Open the local one — it is the work in front of the user — and ask
         // rather than discarding either side.
@@ -12466,12 +12525,14 @@ export function App() {
         outcome.choice === 'remote' && localDocument
           ? withLocalDerived(outcome.document, localDocument)
           : outcome.document;
-      hydrateDocument(openedDocument, { activeProjectSince });
       if (outcome.choice === 'remote') {
         await saveLocalProject(openedDocument);
+        if (!isCurrent()) return;
         await saveLastSyncedVersion(projectId, openedDocument.version);
       }
       if (!isCurrent()) return;
+      commitAccountState();
+      hydrateDocument(openedDocument, { activeProjectSince });
       setStatus(
         outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`
@@ -12533,26 +12594,31 @@ export function App() {
     if (
       startupState !== 'ready' ||
       foregroundBusy ||
-      !pendingShareToken ||
+      pendingShareToken === null ||
       shareOpenAttemptRef.current === pendingShareToken
     ) {
       return;
     }
     shareOpenAttemptRef.current = pendingShareToken;
+    updateSettingsViewState({ open: false });
+    setSettingsOpen(false);
+    setSharingOpen(false);
+    if (!shareLinkFromHash(`#share=${pendingShareToken}`)) {
+      setSharePage({
+        phase: 'error',
+        title: 'This share link is incomplete',
+        message:
+          'The link is incomplete or has been changed, so the shared model cannot be opened.',
+        guidance:
+          'Ask the owner to send the full link again. Copy everything, including the part after #share=.'
+      });
+      return;
+    }
     let cancelled = false;
     const navigation = fragmentNavigationRef.current;
     const isCurrent = () =>
       !cancelled && fragmentNavigationRef.current === navigation;
     const finishBusy = startNavigationBusy();
-    const restoreActiveShare = () => {
-      const active = shareSessionRef.current;
-      if (!active || active.token === pendingShareToken) return;
-      finishBusy();
-      restoreShareSessionFragment();
-    };
-    updateSettingsViewState({ open: false });
-    setSettingsOpen(false);
-    setSharingOpen(false);
     // An encrypted link's failures are worded by its loader (slice 5-11).
     let describeFailure: ((error: unknown) => string) | null = null;
     void (async () => {
@@ -12592,11 +12658,14 @@ export function App() {
         }
         if (!isCurrent()) return;
         if (!shared) {
-          restoreActiveShare();
-          setStatus(
-            'This share link is no longer available. It may have been revoked.',
-            { sticky: true }
-          );
+          setSharePage({
+            phase: 'error',
+            title: 'This share link is unavailable',
+            message:
+              'This share link is no longer available. It may have expired, been revoked, or the owner may have removed the model.',
+            guidance:
+              'Ask the owner to check sharing and send you a working link.'
+          });
           return;
         }
         await flushPendingLocalSaveRef.current();
@@ -12617,6 +12686,7 @@ export function App() {
           : { token: pendingShareToken };
         setShareSession(opened);
         shareSessionRef.current = opened;
+        setSharePage(null);
         hydrateSharedDocumentRef.current(shared.document, {
           rememberProject: false
         });
@@ -12627,13 +12697,15 @@ export function App() {
         );
       } catch (error) {
         if (isCurrent()) {
-          restoreActiveShare();
-          setStatus(
-            describeFailure
+          setSharePage({
+            phase: 'error',
+            title: 'We couldn’t open this shared model',
+            message: describeFailure
               ? describeFailure(error)
               : errorMessage(error, 'Could not open the share link.'),
-            { sticky: true }
-          );
+            guidance:
+              'Check your connection and try again. If it still won’t open, ask the owner to check the link and its sharing settings.'
+          });
         }
       } finally {
         finishBusy();
@@ -12648,8 +12720,7 @@ export function App() {
     startupState,
     foregroundBusy,
     startNavigationBusy,
-    setStatus,
-    restoreShareSessionFragment
+    setStatus
   ]);
 
   /**
@@ -25566,6 +25637,7 @@ export function App() {
    * they need to reach.
    */
   const workspaceInputEnabled =
+    openingProject === null &&
     !settingsOpen &&
     !sharingOpen &&
     !pendingShaprImport &&
@@ -25585,6 +25657,7 @@ export function App() {
   useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
       if (
+        sharePage !== null ||
         !workspaceInputEnabled ||
         workspaceRef.current?.closest('[inert]') ||
         modalHoldsKeyboard()
@@ -26274,6 +26347,47 @@ export function App() {
       .map((project) => project.projectId)
       .filter((projectId) => hasUnresolvedConflict(projectId))
   );
+
+  if (openingProject !== null) {
+    return (
+      <StartupScreen
+        projectName={openingProject}
+        backLabel={doc ? 'Cancel opening' : 'Back to parts'}
+        onBack={() => {
+          beginProjectNavigation();
+          setStatus('');
+        }}
+      />
+    );
+  }
+  const shareDestination = sharePage ? (
+    <SharePage
+      state={sharePage}
+      onRetry={
+        pendingShareToken !== null &&
+        shareLinkFromHash(`#share=${pendingShareToken}`)
+          ? () => {
+              shareOpenAttemptRef.current = null;
+              setSharePage({ phase: 'loading' });
+              setShareNavigation((current) => current + 1);
+            }
+          : undefined
+      }
+      onBack={() => {
+        const isCurrent = beginProjectNavigation();
+        void handleGoHome(isCurrent);
+      }}
+      onReturnToModel={
+        doc
+          ? () => {
+              beginProjectNavigation();
+              restoreShareSessionFragment();
+            }
+          : undefined
+      }
+    />
+  ) : null;
+  if (shareDestination && !doc) return shareDestination;
 
   if (startupState === 'restoring') {
     return <StartupScreen />;
@@ -27687,8 +27801,9 @@ export function App() {
     onIsolate: isolateBody,
     onShowAll: showAllBodies
   };
-  return (
+  const workspace = (
     <WorkspaceAppShell
+      covered={sharePage !== null}
       projectId={doc.projectId}
       loadingReady={
         displayedGeometryComplete ||
@@ -30045,5 +30160,11 @@ export function App() {
         </>
       }
     />
+  );
+  return (
+    <>
+      {workspace}
+      {shareDestination}
+    </>
   );
 }

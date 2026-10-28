@@ -53,7 +53,7 @@ async function selectRailView(page: Page, name: RegExp | string) {
   await page.getByRole('button', { name }).click();
 }
 
-test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
+test('keeps undo and redo in the quick-actions rail', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('History Rail Part');
@@ -193,7 +193,7 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
   ).toHaveCount(0);
 });
 
-test('P toggles the camera projection', async ({ page }) => {
+test('P toggles the camera projection', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Projection Part');
@@ -300,7 +300,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     .not.toBe(zoomedLabel);
 });
 
-test('Space centres and faces an exact planar selection head-on', async ({
+test('Space centres and faces an exact planar selection head-on', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);

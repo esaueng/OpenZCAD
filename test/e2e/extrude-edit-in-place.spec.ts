@@ -168,7 +168,7 @@ test('an untouched Done writes the extrude back exactly as stored', async ({
   expect(errors).toEqual([]);
 });
 
-test('a History row re-arms the extrude: a drag, the keypad and an Option, then Done', async ({
+test('a History row re-arms the extrude: a drag, the keypad and an Option, then Done', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(150_000);
@@ -225,7 +225,7 @@ test('a History row re-arms the extrude: a drag, the keypad and an Option, then 
   expect(errors).toEqual([]);
 });
 
-test('Esc leaves an extrude edit with the feature as it was', async ({
+test('Esc leaves an extrude edit with the feature as it was', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(120_000);

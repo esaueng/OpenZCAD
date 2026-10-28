@@ -28,9 +28,14 @@ export function reportingEncryptedProjectStore(
 ): EncryptedProjectStore {
   const active = async <R>(run: () => Promise<R>): Promise<R> => {
     assertActive?.();
-    const result = await run();
-    assertActive?.();
-    return result;
+    try {
+      const result = await run();
+      assertActive?.();
+      return result;
+    } catch (error) {
+      assertActive?.();
+      throw error;
+    }
   };
   const verifiedHead = async <R>(
     run: () => Promise<R>,
@@ -49,6 +54,7 @@ export function reportingEncryptedProjectStore(
       }
       return result;
     } catch (error) {
+      assertActive?.();
       if (report() && current()) reportEncryptedFailure(projectId, error);
       throw error;
     }
@@ -67,6 +73,7 @@ export function reportingEncryptedProjectStore(
       report();
       return result;
     } catch (error) {
+      assertActive?.();
       if (report() && current()) reportEncryptedFailure(projectId, error);
       throw error;
     }

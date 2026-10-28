@@ -8,13 +8,33 @@ import {
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 
-it('opens the official project and migration cohort only for the private account selection', () => {
+function officialEnv(): CloudflareEnv {
   const config = ts.parseConfigFileTextToJson(
     'wrangler.jsonc',
     readFileSync('wrangler.jsonc', 'utf8')
   ).config as { vars: CloudflareEnv };
+  return config.vars;
+}
+
+it('offers opt-in encryption to every authenticated beta account without a canary selection', () => {
+  const env = { ...officialEnv(), E2EE_CANARY_EMAILS: undefined };
+  expect(env.E2EE_KEYS_ENABLED).toBe('true');
+  expect(env.E2EE_PROJECTS_ENABLED).toBe('true');
+  expect(env.E2EE_MIGRATION_ENABLED).toBe('true');
+  expect(env.E2EE_DEFAULT_ON).toBe('false');
+  expect(env.E2EE_PLAINTEXT_FROZEN).toBe('false');
+  expect(env.E2EE_REVERSE_ENABLED).toBe('false');
+  for (const email of ['cohort@example.test', 'outside@example.test']) {
+    expect(isE2eeKeysEnabled(env, email)).toBe(true);
+    expect(isE2eeProjectsEnabled(env, email)).toBe(true);
+    expect(isE2eeMigrationEnabled(env, email)).toBe(true);
+  }
+});
+
+it('retains the private account selection when global keys are closed again', () => {
   const env: CloudflareEnv = {
-    ...config.vars,
+    ...officialEnv(),
+    E2EE_KEYS_ENABLED: 'false',
     E2EE_CANARY_EMAILS: 'cohort@example.test'
   };
   expect(env.E2EE_KEYS_ENABLED).toBe('false');

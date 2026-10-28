@@ -127,7 +127,7 @@ test('switches a blind cut to through all and back through undo', async ({
   await expect(panel).toContainText('15700', { timeout: 30_000 });
 });
 
-test('creates a cut through all straight from a sketch', async ({ page }) => {
+test('creates a cut through all straight from a sketch', { tag: '@ci-smoke' }, async ({ page }) => {
   test.setTimeout(120_000);
   await stubApi(page);
   let document = createProjectDocument(

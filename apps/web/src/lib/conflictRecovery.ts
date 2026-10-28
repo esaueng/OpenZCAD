@@ -3,15 +3,14 @@ import type {
   ProjectDocument,
   ProjectEditLease
 } from '@openzcad/shared';
-import {
-  projectRebuildInputs,
-  projectsHaveSameRebuildInputs
-} from './localProjectStore';
+import { projectRebuildInputs } from './localProjectStore';
 
 const CONFLICT_MARKER_PREFIX = 'openzcad-unresolved-project-conflict:';
-const RECOVERY_LEDGER_PREFIX = 'openzcad-recovery-copies:';
+// Separate from legacy automatic-recovery records: those must not consume an
+// explicit Keep both request. This ledger only prevents duplicate retries.
+const COPY_LEDGER_PREFIX = 'openzcad-explicit-conflict-copies:';
 /** Enough for any realistic run of resolutions; the ledger is a dedupe, not a history. */
-const RECOVERY_LEDGER_LIMIT = 32;
+const COPY_LEDGER_LIMIT = 32;
 
 /**
  * Where the divergent copy came from. The resolutions are identical either
@@ -35,32 +34,16 @@ export interface UnresolvedConflictMarker {
   localVersion: number;
   remoteVersion: number;
   detectedAt: number;
-  /**
-   * Which sides of THIS divergence have already been preserved as recovery
-   * projects, as `side:version` keys. A conflict is re-raised on every room
-   * frame while it stays unresolved, and a failed resolution can be retried —
-   * without this record each attempt would mint another recovery project.
-   */
-  recoveryCopies?: string[];
 }
 
 export type ConflictResolution = 'use-remote' | 'keep-mine' | 'save-local-copy';
 
-/**
- * What became of the side the user did not keep. Handlers receive it so the
- * status they show can say what actually happened instead of always claiming
- * a copy was saved.
- */
+/** Whether an explicit Keep both request saved a local project. */
 export interface ConflictResolutionOutcome {
-  recoveryCopy: 'written' | 'already-preserved' | 'nothing-to-preserve';
+  localCopy: 'not-requested' | 'saved' | 'already-saved';
 }
 
-export interface ConflictRecoveryCopyWriter {
-  /** Persist the untouched divergent document before any resolution mutates state. */
-  writeRecoveryCopy(document: ProjectDocument): Promise<void>;
-}
-
-export interface ConflictResolutionHandlers extends ConflictRecoveryCopyWriter {
+export interface ConflictResolutionHandlers {
   useRemoteVersion(
     document: ProjectDocument,
     outcome: ConflictResolutionOutcome
@@ -74,10 +57,10 @@ export interface ConflictResolutionHandlers extends ConflictRecoveryCopyWriter {
     },
     outcome: ConflictResolutionOutcome
   ): Promise<void> | void;
-  saveLocalAsCopy(
-    document: ProjectDocument,
-    outcome: ConflictResolutionOutcome
-  ): Promise<void> | void;
+  /** Persist a new project before replacing the local original. */
+  saveLocalAsCopy(document: ProjectDocument): Promise<string>;
+  /** Check durable storage, since a saved retry copy may have been deleted. */
+  localCopyExists(projectId: string): Promise<boolean>;
 }
 
 export interface ConflictResolutionContext {
@@ -198,7 +181,7 @@ export function clearUnresolvedConflict(
 }
 
 function ledgerKey(projectId: string): string {
-  return `${RECOVERY_LEDGER_PREFIX}${encodeURIComponent(projectId)}`;
+  return `${COPY_LEDGER_PREFIX}${encodeURIComponent(projectId)}`;
 }
 
 /** JSON with object keys in sorted order, so equal values print equally. */
@@ -227,63 +210,56 @@ function fnv1a64(text: string): string {
   return hash.toString(16).padStart(16, '0');
 }
 
-/**
- * Identifies what a recovery copy would preserve: the document's rebuild
- * inputs, and nothing about how it got there. A recovery project is born
- * without its source's revisions and save points (they stay with the
- * source), so they cannot tell two copies apart — and keying on them
- * reopened the September burst: a keep-mine is a fenced write that stamps a
- * new save point on the same model, the room and the account (or a second
- * tab) cite that resaved document in their next dialog, and every hop came
- * back under a fresh key and wrote another copy.
- */
-export function recoveryCopyKey(document: ProjectDocument): string {
+/** The model a local copy preserves, independent of remote version fences. */
+function localCopyKey(document: ProjectDocument): string {
   return `content:${fnv1a64(canonicalJson(projectRebuildInputs(document)))}`;
 }
 
-/**
- * Which document states of a project already have a recovery project. Kept
- * apart from the conflict marker on purpose: the marker is rewritten for
- * every new version pair, and the room and the account each raise the same
- * divergence with the roles swapped — so a record scoped to one pair let the
- * losing side be copied again on every hop between the two dialogs.
- */
-export function readRecoveryLedger(
+interface CopyLedgerEntry {
+  copyKey: string;
+  copyProjectId: string;
+}
+
+/** Successfully written explicit copies survive a failed remote adoption. */
+function readCopyLedger(
   projectId: string,
   storage: Storage = localStorage
-): string[] {
+): CopyLedgerEntry[] {
   try {
     const parsed: unknown = JSON.parse(
       storage.getItem(ledgerKey(projectId)) ?? '[]'
     );
     return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      ? parsed.filter((entry): entry is CopyLedgerEntry => {
+          if (!entry || typeof entry !== 'object') return false;
+          const record = entry as Partial<CopyLedgerEntry>;
+          return (
+            typeof record.copyKey === 'string' &&
+            typeof record.copyProjectId === 'string' &&
+            record.copyProjectId.length > 0 &&
+            record.copyProjectId !== projectId
+          );
+        })
       : [];
   } catch {
     return [];
   }
 }
 
-export function rememberRecoveryCopy(
+function rememberLocalCopy(
   projectId: string,
   copyKey: string,
+  copyProjectId: string,
   storage: Storage = localStorage
 ): void {
-  const ledger = readRecoveryLedger(projectId, storage).filter(
-    (entry) => entry !== copyKey
+  const ledger = readCopyLedger(projectId, storage).filter(
+    (entry) => entry.copyKey !== copyKey
   );
-  ledger.push(copyKey);
+  ledger.push({ copyKey, copyProjectId });
   storage.setItem(
     ledgerKey(projectId),
-    JSON.stringify(ledger.slice(-RECOVERY_LEDGER_LIMIT))
+    JSON.stringify(ledger.slice(-COPY_LEDGER_LIMIT))
   );
-}
-
-export function clearRecoveryLedger(
-  projectId: string,
-  storage: Storage = localStorage
-): void {
-  storage.removeItem(ledgerKey(projectId));
 }
 
 export function conflictFromDocuments(
@@ -299,8 +275,7 @@ export function conflictFromDocuments(
     );
   }
   // A conflict is re-detected on every inbound frame while unresolved. Keep
-  // the original detection time and the record of recovery copies already
-  // written for the same divergence; only a new version pair resets them.
+  // the original detection time for the same divergence.
   const existing = readUnresolvedConflict(localDocument.projectId, source);
   const sameDivergence =
     existing !== null &&
@@ -311,10 +286,7 @@ export function conflictFromDocuments(
     source,
     localVersion: localDocument.version,
     remoteVersion: remoteDocument.version,
-    detectedAt: sameDivergence ? existing.detectedAt : detectedAt,
-    ...(sameDivergence && existing.recoveryCopies
-      ? { recoveryCopies: existing.recoveryCopies }
-      : {})
+    detectedAt: sameDivergence ? existing.detectedAt : detectedAt
   });
   return {
     projectId: localDocument.projectId,
@@ -326,29 +298,9 @@ export function conflictFromDocuments(
 }
 
 /**
- * Names a recovery project after its source without letting the labels nest:
- * a copy of "Part (Recovery)" is another "Part (Recovery)", never
- * "Part (Recovery) (Recovery)".
- */
-export function recoveryCopyName(
-  name: string,
-  label: 'Recovery' | 'Local copy'
-): string {
-  const stripped = name.replace(/(?:\s*\((?:Recovery|Local copy)\))+$/, '');
-  return `${stripped.trimEnd() || name} (${label})`;
-}
-
-/**
- * Resolve an explicit user choice. Once authorization and version invariants
- * are known to be valid, the side the user is NOT keeping is written as a
- * recovery project before invoking a handler that can replace either side of
- * the conflict — but only when there is something to preserve: not when the
- * two sides would rebuild to the same model, and not when that model already
- * has a recovery project. The same conflict can be
- * re-raised by every room frame, a failed handler can be retried, and the
- * room and the account can pass one divergence back and forth under new
- * version numbers; none of
- * those may mint another copy.
+ * Resolve only the user's chosen version on the original project. No automatic
+ * copy is made. Keep both durably copies the local work before adopting remote;
+ * retries reuse that copy while version fencing and room authorization remain.
  */
 export async function resolveProjectConflict(
   conflict: ProjectConflict,
@@ -397,52 +349,21 @@ export async function resolveProjectConflict(
     }
   }
 
-  // 'keep-mine' discards the remote copy; the other two discard the local one
-  // ('save-local-copy' preserves it via this same write).
-  const losingSide = resolution === 'keep-mine' ? 'remote' : 'local';
-  const losingDocument =
-    losingSide === 'remote' ? conflict.remoteDocument : conflict.localDocument;
-  const winningDocument =
-    losingSide === 'remote' ? conflict.localDocument : conflict.remoteDocument;
-  const copyKey = recoveryCopyKey(losingDocument);
-  const marker = readUnresolvedConflict(conflict.projectId, conflict.source);
-  const markerMatches =
-    marker !== null &&
-    marker.localVersion === conflict.localDocument.version &&
-    marker.remoteVersion === conflict.remoteDocument.version;
-  // An explicit "save a local copy" is honoured even when the two sides match:
-  // the user asked for the project, not for a judgement about its contents.
-  // Otherwise a losing side that rebuilds to the kept model holds nothing a
-  // recovery project could carry; its save points stay with the project.
-  const nothingToPreserve =
-    resolution !== 'save-local-copy' &&
-    projectsHaveSameRebuildInputs(losingDocument, winningDocument);
-  const alreadyPreserved =
-    (markerMatches && (marker.recoveryCopies ?? []).includes(copyKey)) ||
-    readRecoveryLedger(conflict.projectId).includes(copyKey);
-  const outcome: ConflictResolutionOutcome = {
-    recoveryCopy: nothingToPreserve
-      ? 'nothing-to-preserve'
-      : alreadyPreserved
-        ? 'already-preserved'
-        : 'written'
-  };
-  if (outcome.recoveryCopy === 'written') {
-    await handlers.writeRecoveryCopy(structuredClone(losingDocument));
-    rememberRecoveryCopy(conflict.projectId, copyKey);
-    rememberUnresolvedConflict({
-      projectId: conflict.projectId,
-      source: conflict.source,
-      localVersion: conflict.localDocument.version,
-      remoteVersion: conflict.remoteDocument.version,
-      detectedAt: markerMatches
-        ? marker.detectedAt
-        : (context.now ?? Date.now()),
-      recoveryCopies: [
-        ...(markerMatches ? (marker.recoveryCopies ?? []) : []),
-        copyKey
-      ]
-    });
+  const outcome: ConflictResolutionOutcome = { localCopy: 'not-requested' };
+  if (resolution === 'save-local-copy') {
+    const copyKey = localCopyKey(conflict.localDocument);
+    const recorded = readCopyLedger(conflict.projectId).find(
+      (entry) => entry.copyKey === copyKey
+    );
+    if (recorded && (await handlers.localCopyExists(recorded.copyProjectId))) {
+      outcome.localCopy = 'already-saved';
+    } else {
+      const copyProjectId = await handlers.saveLocalAsCopy(
+        structuredClone(conflict.localDocument)
+      );
+      rememberLocalCopy(conflict.projectId, copyKey, copyProjectId);
+      outcome.localCopy = 'saved';
+    }
   }
 
   if (resolution === 'use-remote') {
@@ -460,26 +381,29 @@ export async function resolveProjectConflict(
       outcome
     );
   } else {
-    await handlers.saveLocalAsCopy(
-      structuredClone(conflict.localDocument),
-      outcome
-    );
     await handlers.useRemoteVersion(
       structuredClone(conflict.remoteDocument),
       outcome
     );
   }
+  if (resolution === 'save-local-copy') {
+    // Successful adoption completes this request. A later, separate Keep both
+    // choice must still be able to create a copy, even of the same model.
+    const copyKey = localCopyKey(conflict.localDocument);
+    const pending = readCopyLedger(conflict.projectId).filter(
+      (entry) => entry.copyKey !== copyKey
+    );
+    localStorage.setItem(
+      ledgerKey(conflict.projectId),
+      JSON.stringify(pending)
+    );
+  }
   return outcome;
 }
 
-/** The clause a status line appends after naming the version that was kept. */
-export function recoveryCopyNote(outcome: ConflictResolutionOutcome): string {
-  switch (outcome.recoveryCopy) {
-    case 'written':
-      return 'a local recovery copy was saved';
-    case 'already-preserved':
-      return 'the other version already had a recovery copy';
-    case 'nothing-to-preserve':
-      return 'both versions held the same model, so nothing was discarded';
-  }
+/** Only Keep both should claim that a separate project exists. */
+export function conflictCopyNote(outcome: ConflictResolutionOutcome): string {
+  return outcome.localCopy === 'not-requested'
+    ? ''
+    : '; your changes were kept as a separate project';
 }

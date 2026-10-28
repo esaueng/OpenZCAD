@@ -70,6 +70,13 @@ import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
+import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
+
+/** Optional presentation updates; document opens still perform full verification. */
+export interface ProjectListingProgress {
+  isCurrent(): boolean;
+  onVerified(project: ProjectSummary): void;
+}
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -587,17 +594,53 @@ export const api = {
    * otherwise. A thumbnail is named by its blob id, whose reference this
    * page then holds, so the shelf reads it through the decode worker.
    */
-  listProjects: async (): Promise<ListProjectsResponse> => {
+  listProjects: async (
+    progress?: ProjectListingProgress
+  ): Promise<ListProjectsResponse> => {
+    const revision = getKeySessionRevision();
+    const isCurrent = () =>
+      isCurrentKeySession(revision) && (progress?.isCurrent() ?? true);
     const { encryptedProjectInfo, ...listing } = await requestJson<
       ListProjectsResponse & E2eeListProjectsExtension
     >('/api/projects');
+    if (progress && !isCurrent()) return listing;
     if (Array.isArray(listing.projects))
       rememberProjectFormats(listing.projects);
     if (!encryptedProjectInfo?.length) return listing;
+    if (progress) {
+      const projects = new Map<string, ProjectSummary>(
+        listing.projects.map((p) => [p.projectId, p])
+      );
+      // The HTTP listing is enough to draw cards and establish storage formats.
+      // Names and thumbnail references arrive only after the existing verifier.
+      void encryptedProjects()
+        .then((module) =>
+          module.encryptedProjectShelf(encryptedProjectInfo, {
+            isCurrent,
+            onEntry(projectId, entry) {
+              const project = projects.get(projectId);
+              if (!project || !isCurrent()) return;
+              progress.onVerified({
+                ...project,
+                name: entry.name,
+                ...(entry.thumbnailBlobId
+                  ? {
+                      thumbnailArtifactId:
+                        entry.thumbnailBlobId as ProjectSummary['thumbnailArtifactId']
+                    }
+                  : {})
+              });
+            }
+          })
+        )
+        .catch(() => undefined);
+      return listing;
+    }
     try {
       const shelf = await (
         await encryptedProjects()
       ).encryptedProjectShelf(encryptedProjectInfo);
+      if (!isCurrent()) return listing;
       return {
         ...listing,
         projects: listing.projects.map((project) => {
