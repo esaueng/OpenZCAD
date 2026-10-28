@@ -120,7 +120,41 @@ function contactsBrowser(srv: Server, pins = memoryContactPins()) {
   return { d, pins, requests, inspected };
 }
 
+it('opens a cold shared project within its verification request budget', async () => {
+  const { srv, projectId } = await sharedWithEdit();
+  const { d, requests } = contactsBrowser(srv);
+  expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
+  expect(
+    requests.filter((path) => path.endsWith('/mls/leaves')).length
+  ).toBeLessThanOrEqual(14);
+  expect(requests.length).toBeLessThanOrEqual(57);
+});
+
 describe('co-members’ device lists from contacts (5-1 into 5-2)', () => {
+  it('refreshes membership inputs on the next read and refuses a withdrawn co-member list', async () => {
+    const { srv, projectId } = await sharedWithEdit();
+    const { d, requests } = contactsBrowser(srv);
+    expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
+    requests.length = 0;
+    const real = d.fetcher;
+    d.fetcher = async (path, init) =>
+      path.endsWith(`/users/${OTHER}/device-list`)
+        ? new Response(
+            JSON.stringify({
+              error: 'Not found.',
+              code: 'E2EE_CONTACT_NOT_FOUND'
+            }),
+            {
+              status: 404,
+              headers: { 'content-type': 'application/json' }
+            }
+          )
+        : real(path, init);
+    await expect(d.store.loadProject(projectId)).rejects.toBeInstanceOf(
+      EncryptedProjectIntegrityError
+    );
+    expect(requests).toContain(`/api/e2ee/projects/${projectId}/mls/leaves`);
+  });
   it('reads a member’s version with their seen list and pins its head', async () => {
     const { srv, projectId } = await sharedWithEdit();
     const { d, pins, requests, inspected } = contactsBrowser(srv);

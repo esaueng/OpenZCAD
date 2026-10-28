@@ -501,6 +501,11 @@ it('cancels rather than treating an account change during a project read as a sk
     current = false;
     throw new Error('Old account error');
   });
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [] });
+  vi.spyOn(api, 'listRevisions').mockResolvedValue({
+    revisions: [],
+    maxRevisions: 50
+  });
   const download = vi
     .spyOn(transfers, 'downloadBackupFile')
     .mockImplementation(() => {});
@@ -508,6 +513,51 @@ it('cancels rather than treating an account change during a project read as a sk
     downloadAllData({ ...options(true), isCurrent: () => current })
   ).rejects.toThrow('account changed');
   expect(download).not.toHaveBeenCalled();
+});
+
+it('reads plaintext metadata together and avoids requests for history absent from the complete catalog', async () => {
+  const document = appendRevision(
+    createCheckpoint(
+      createProjectDocument('Catalog control', session.userId),
+      'Unretained checkpoint'
+    ),
+    'Later edit'
+  );
+  vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
+  vi.spyOn(api, 'listProjects').mockResolvedValue({
+    projects: [
+      {
+        projectId: document.projectId,
+        name: document.name,
+        updatedAt: new Date().toISOString(),
+        revisionCount: 0
+      }
+    ]
+  });
+  let finish!: (value: typeof document) => void;
+  vi.spyOn(api, 'loadProject').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+  const revisions = vi
+    .spyOn(api, 'listRevisions')
+    .mockResolvedValue({ revisions: [], maxRevisions: 50 });
+  const artifacts = vi
+    .spyOn(api, 'listArtifacts')
+    .mockResolvedValue({ artifacts: [] });
+  const missing = vi.spyOn(api, 'loadRevision').mockResolvedValue(null);
+  const pending = createDataExport(options(true));
+  await vi.waitFor(() => expect(artifacts).toHaveBeenCalledOnce());
+  expect(revisions).toHaveBeenCalledOnce();
+  finish(document);
+  const archive = await entries(await pending);
+  const backup = await parseProjectBackup(
+    strFromU8(archive['projects/cloud/1/project.openzcad']!)
+  );
+  expect(backup.document.projectId).toBe(document.projectId);
+  expect(missing).not.toHaveBeenCalled();
 });
 
 it('can skip the extra device snapshot without reading its stores, while keeping portable project backups', async () => {

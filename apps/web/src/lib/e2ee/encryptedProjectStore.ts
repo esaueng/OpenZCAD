@@ -848,13 +848,30 @@ export function createEncryptedProjectStore(
     );
   }
 
+  type AuthorshipInputs = {
+    deviceLists: VerifiedDeviceList[];
+    cutoffs: Awaited<ReturnType<typeof cutoffsFor>>;
+  };
+
+  async function authorshipInputs(
+    projectId: string
+  ): Promise<AuthorshipInputs> {
+    const [deviceLists, cutoffs] = await Promise.all([
+      projectDeviceLists(groups, projectId),
+      cutoffsFor(projectId)
+    ]);
+    return { deviceLists, cutoffs };
+  }
+
   async function authorOf(
     projectId: string,
     envelope: Uint8Array,
-    signature: Uint8Array
+    signature: Uint8Array,
+    inputs?: AuthorshipInputs
   ): Promise<VerifiedAuthor & { readonly identityKeyHash: Uint8Array }> {
     try {
-      const deviceLists = await projectDeviceLists(groups, projectId);
+      const { deviceLists, cutoffs } =
+        inputs ?? (await authorshipInputs(projectId));
       const identities = new Map(
         deviceLists.map((list) => [
           list.userId,
@@ -863,7 +880,7 @@ export function createEncryptedProjectStore(
       );
       const author = await verifyAuthoredEnvelope(envelope, signature, {
         deviceLists,
-        cutoffs: await cutoffsFor(projectId)
+        cutoffs
       });
       return {
         ...author,
@@ -934,14 +951,15 @@ export function createEncryptedProjectStore(
     projectId: string,
     pinHash: string | null,
     entries: readonly E2eeVersionLogEntry[]
-  ): Promise<void> {
-    const cutoffs = await cutoffsFor(projectId);
-    const lists = await projectDeviceLists(groups, projectId);
+  ): Promise<AuthorshipInputs> {
+    // One current snapshot for this log and its head. Never retained across
+    // reads: a later read must observe device removals and contact changes.
+    const { deviceLists: lists, cutoffs } = await authorshipInputs(projectId);
     const verifiedEpochs = new Map<number, ReturnType<typeof epochAuthority>>();
     const authorityFor = (epoch: number) => {
       let proof = verifiedEpochs.get(epoch);
       if (!proof) {
-        proof = epochAuthority(groups, projectId, epoch);
+        proof = epochAuthority(groups, projectId, epoch, undefined, lists);
         verifiedEpochs.set(epoch, proof);
       }
       return proof;
@@ -1097,6 +1115,7 @@ export function createEncryptedProjectStore(
       }
       commitment = next;
     }
+    return { deviceLists: lists, cutoffs };
   }
 
   async function versionKeyOf(
@@ -1283,6 +1302,7 @@ export function createEncryptedProjectStore(
         );
       }
       let entries: E2eeVersionLogEntry[];
+      let authorship: AuthorshipInputs;
       try {
         entries = await collectLog(
           projectId,
@@ -1290,7 +1310,7 @@ export function createEncryptedProjectStore(
           metadata.more,
           head
         );
-        await verifyLog(projectId, pinHash, entries);
+        authorship = await verifyLog(projectId, pinHash, entries);
       } catch (error) {
         if (!retryableHistory(error)) throw error;
         if (attempt < 2) continue;
@@ -1298,7 +1318,12 @@ export function createEncryptedProjectStore(
           ? integrity('fork', error.message)
           : error;
       }
-      const author = await authorOf(projectId, envelope, bytes(head.signature));
+      const author = await authorOf(
+        projectId,
+        envelope,
+        bytes(head.signature),
+        authorship
+      );
       const header = author.header;
       const hash = toHex(author.versionHash);
       if (
@@ -2142,13 +2167,14 @@ export function createEncryptedProjectStore(
         );
       }
       let entries: E2eeVersionLogEntry[];
+      let authorship: AuthorshipInputs;
       try {
         entries = await roomLog(
           projectId,
           pin && pinHash ? pin.documentVersion : undefined,
           record
         );
-        await verifyLog(projectId, pinHash, entries);
+        authorship = await verifyLog(projectId, pinHash, entries);
       } catch (error) {
         if (!retryableHistory(error)) throw error;
         // The old relayed head lost its proof. Read the current account head
@@ -2158,7 +2184,8 @@ export function createEncryptedProjectStore(
       const author = await authorOf(
         projectId,
         envelope,
-        bytes(record.signature)
+        bytes(record.signature),
+        authorship
       );
       const header = author.header;
       const hash = toHex(author.versionHash);

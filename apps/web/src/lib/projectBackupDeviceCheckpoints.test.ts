@@ -98,7 +98,13 @@ it.each(['new version', 'old artifact id'] as const)(
     const backup = await parseProjectBackup(
       await createProjectBackup(
         { ...migrated, version: migrated.version + 1 },
-        true
+        true,
+        undefined,
+        {
+          retainedRevisionIds: new Set([
+            original.checkpoints.at(-1)!.revisionId
+          ])
+        }
       )
     );
     expect(remote).toHaveBeenCalledWith(

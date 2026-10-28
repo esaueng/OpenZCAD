@@ -289,13 +289,22 @@ async function buildDataExport(options: DataExportOptions): Promise<{
         const folder = `projects/cloud/${index + 1}`;
         try {
           const pending = batch();
-          const document = await api.loadProject(project.projectId);
-          if (!document)
-            throw new Error('Project is no longer available. Try again.');
-          const [revisions, catalog] = await Promise.all([
-            api.listRevisions(project.projectId),
+          const readingDocument = api.loadProject(project.projectId);
+          // Plaintext metadata is independent. Encrypted revision names use
+          // the verified head, so wait for that read rather than fetching the
+          // head twice. The artifact catalog can overlap either document read.
+          const [document, revisions, catalog] = await Promise.all([
+            readingDocument,
+            isEncryptedProject(project.projectId)
+              ? readingDocument.then(() => api.listRevisions(project.projectId))
+              : api.listRevisions(project.projectId),
             api.listArtifacts(project.projectId)
           ]);
+          if (!document)
+            throw new Error('Project is no longer available. Try again.');
+          const retainedRevisionIds = new Set(
+            revisions.revisions.map((revision) => revision.revisionId as string)
+          );
           check();
           let measurements: StoredMeasurementRecord | null = null;
           if (isEncryptedProject(project.projectId)) {
@@ -338,6 +347,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
                 includeEncryptedFiles: true,
                 includeOriginalImports: options.includeOriginalImports,
                 artifacts: catalog.artifacts,
+                retainedRevisionIds,
                 onSaveState: coverHistory
                   ? (revisionId) => covered.add(revisionId)
                   : undefined,

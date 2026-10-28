@@ -100,6 +100,8 @@ export async function createProjectBackup(
     includeOriginalImports?: boolean;
     /** Reuse one project-scoped catalog throughout a bulk download. */
     artifacts?: readonly ArtifactRecord[];
+    /** Complete cloud retention catalog, when a bulk export already read it. */
+    retainedRevisionIds?: ReadonlySet<string>;
     /** Avoid parsing the finished backup again just to discover its coverage. */
     onSaveState?(revisionId: string): void;
     /** A bulk export can impose a smaller remaining staging budget. */
@@ -221,7 +223,10 @@ export async function createProjectBackup(
           importArtifactIds(local).some((id) => id.startsWith('artifact_'))));
     const saved =
       (stale ? null : local) ??
-      (remote && !privatePoint
+      (remote &&
+      !privatePoint &&
+      (options.retainedRevisionIds === undefined ||
+        options.retainedRevisionIds.has(checkpoint.revisionId))
         ? await api.loadRevision(snapshot.projectId, checkpoint.revisionId)
         : null);
     if (saved) {

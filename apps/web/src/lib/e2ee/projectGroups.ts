@@ -3599,7 +3599,9 @@ export async function epochAuthority(
     readonly body: KeyArchiveBody;
     readonly key: Uint8Array;
     readonly genesis?: boolean;
-  }
+  },
+  /** Current, verified lists already read by this log-verification operation. */
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<VerifiedEpochAuthority> {
   try {
     await loadProjectAuthority(ctx, projectId).catch(async (error: unknown) => {
@@ -3625,7 +3627,7 @@ export async function epochAuthority(
       [...decodeMlsAuthorityManifest(pinned.statement).roots]
         .reverse()
         .find((root) => root.keyEpochBase <= keyEpoch);
-    const heads = await projectDeviceLists(ctx, projectId);
+    const heads = deviceLists ?? (await projectDeviceLists(ctx, projectId));
     const cacheId = JSON.stringify([
       getKeySessionRevision(),
       projectId,
