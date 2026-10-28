@@ -241,8 +241,22 @@ export type EncryptionState =
   /** The server showed an older or forked device list. */
   | { readonly kind: 'fork'; readonly message: string };
 
-/** Approver nonces of compare-form approvals this page started. */
-const approverNonces = new Map<string, Bytes>();
+interface CompareApproval {
+  readonly id: string;
+  readonly deviceId: string;
+  readonly signingKey: Bytes;
+  readonly unlockKey: Bytes;
+  readonly commitment: Bytes;
+  readonly approverId: string;
+  readonly approverKey: Bytes;
+  readonly nonce: Bytes;
+  readonly assertActive: () => void;
+}
+
+/** Private, session-bound observations made before releasing our nonce. */
+const compareApprovals = new Map<string, CompareApproval>();
+const comparisonId = (ctx: E2eeContext, id: string) =>
+  JSON.stringify([ctx.userId, id]);
 
 export { lockAccount };
 
@@ -2037,9 +2051,17 @@ export async function forgetThisDevice(ctx: E2eeContext): Promise<void> {
         requireActiveKeyContext(ctx)
       );
     requireActiveKeyContext(ctx);
-    await (await import('./shareWorkStore')).shareWorkStore().deleteAccount(ctx.userId);
+    await (
+      await import('./shareWorkStore')
+    )
+      .shareWorkStore()
+      .deleteAccount(ctx.userId);
     requireActiveKeyContext(ctx);
-    await (await import('./projectAuthorityStore')).projectAuthorityStore().deleteAccount(ctx.userId);
+    await (
+      await import('./projectAuthorityStore')
+    )
+      .projectAuthorityStore()
+      .deleteAccount(ctx.userId);
     requireActiveKeyContext(ctx);
     await ctx.store.deleteDevice(ctx.userId);
   });
@@ -2477,6 +2499,12 @@ function requireUnlockedApprover(
   ctx: E2eeContext,
   account: AccountView
 ): { device: StoredDevice; unlocked: UnlockedAccount } {
+  if (account.userId !== ctx.userId) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'The account session ended.'
+    );
+  }
   const unlocked = unlockedAccount(ctx.userId);
   if (!account.device || account.deviceStatus !== 'certified') {
     throw new EncryptionFlowError(
@@ -2496,19 +2524,108 @@ function requireUnlockedApprover(
   return { device: account.device, unlocked };
 }
 
-/** Starts the compare form: sends this device's key and a fresh nonce. */
+function changedApproval(): never {
+  throw new EncryptionFlowError(
+    'commitment-mismatch',
+    'The new device’s keys changed after it committed to them. Do not approve it.'
+  );
+}
+
+function approvalBinding(approval: E2eeApprovalRecord) {
+  try {
+    if (
+      typeof approval.id !== 'string' ||
+      typeof approval.deviceId !== 'string' ||
+      !approval.deviceId ||
+      !approval.commitment
+    )
+      return changedApproval();
+    return {
+      id: approval.id,
+      deviceId: approval.deviceId,
+      signingKey: fromBase64Url(approval.signingKey, 65),
+      unlockKey: fromBase64Url(approval.unlockKey, 65),
+      commitment: fromBase64Url(approval.commitment, 32)
+    };
+  } catch {
+    return changedApproval();
+  }
+}
+
+function requireApprovalBinding(
+  approval: E2eeApprovalRecord,
+  exchange: CompareApproval
+): void {
+  const binding = approvalBinding(approval);
+  if (
+    binding.id !== exchange.id ||
+    binding.deviceId !== exchange.deviceId ||
+    !sameBytes(binding.signingKey, exchange.signingKey) ||
+    !sameBytes(binding.unlockKey, exchange.unlockKey) ||
+    !sameBytes(binding.commitment, exchange.commitment)
+  )
+    changedApproval();
+}
+
+function requireCurrentComparison(
+  ctx: E2eeContext,
+  account: AccountView,
+  exchange: CompareApproval
+): void {
+  requireActiveKeyContext(ctx);
+  const { device } = requireUnlockedApprover(ctx, account);
+  if (
+    compareApprovals.get(comparisonId(ctx, exchange.id)) !== exchange ||
+    exchange.approverId !== device.deviceId ||
+    !sameBytes(exchange.approverKey, device.signingPublicKey)
+  ) {
+    throw new EncryptionFlowError(
+      'approval-gone',
+      'This comparison was started elsewhere. Start it again.'
+    );
+  }
+}
+
+/** Pins the request before sending this device's key and a fresh nonce. */
 export async function beginCompareApproval(
   ctx: E2eeContext,
   account: AccountView,
   approvalId: string
 ): Promise<E2eeApprovalRecord> {
   const { device } = requireUnlockedApprover(ctx, account);
-  const nonce = createApprovalNonce();
-  approverNonces.set(approvalId, nonce);
-  return ctx.api.respondApproval(approvalId, {
-    approverKey: b64(device.signingPublicKey),
-    approverNonce: b64(nonce)
+  const guard = keyOperationGuard(ctx.userId, ctx.readScope);
+  const sessionGuard = keyOperationGuard(ctx.userId);
+  requireActiveKeyContext(ctx);
+  const initial = { ...(await ctx.api.getApproval(approvalId)) };
+  guard();
+  requireActiveKeyContext(ctx);
+  if (initial.id !== approvalId) changedApproval();
+  const key = comparisonId(ctx, approvalId);
+  let exchange = compareApprovals.get(key);
+  if (exchange) {
+    requireApprovalBinding(initial, exchange);
+  } else {
+    exchange = {
+      ...approvalBinding(initial),
+      approverId: device.deviceId,
+      approverKey: device.signingPublicKey.slice(),
+      nonce: createApprovalNonce(),
+      assertActive: sessionGuard
+    };
+    // Retain even if the response is lost: the relay may have seen the nonce.
+    // Concurrent/duplicate starts must never replace this observation.
+    compareApprovals.set(key, exchange);
+  }
+  exchange.assertActive();
+  requireCurrentComparison(ctx, account, exchange);
+  const response = await ctx.api.respondApproval(approvalId, {
+    approverKey: b64(exchange.approverKey),
+    approverNonce: b64(exchange.nonce)
   });
+  guard();
+  requireCurrentComparison(ctx, account, exchange);
+  requireApprovalBinding(response, exchange);
+  return response;
 }
 
 /**
@@ -2520,14 +2637,24 @@ export async function approverComparisonCode(
   account: AccountView,
   approval: E2eeApprovalRecord
 ): Promise<string | null> {
+  approval = { ...approval };
+  const guard = keyOperationGuard(ctx.userId, ctx.readScope);
+  const exchange = compareApprovals.get(comparisonId(ctx, approval.id));
+  if (!exchange) {
+    throw new EncryptionFlowError(
+      'approval-gone',
+      'This comparison was started elsewhere. Start it again.'
+    );
+  }
+  exchange.assertActive();
+  requireCurrentComparison(ctx, account, exchange);
+  requireApprovalBinding(approval, exchange);
   if (approval.state !== 'revealed') return null;
-  const { device } = requireUnlockedApprover(ctx, account);
-  const nonce = approverNonces.get(approval.id);
   if (
-    !nonce ||
-    approval.approverKey !== b64(device.signingPublicKey) ||
-    approval.approverNonce !== b64(nonce) ||
-    !approval.commitment ||
+    !approval.approverKey ||
+    !sameBytes(fromBase64Url(approval.approverKey, 65), exchange.approverKey) ||
+    !approval.approverNonce ||
+    !sameBytes(fromBase64Url(approval.approverNonce, 32), exchange.nonce) ||
     !approval.deviceNonce
   ) {
     throw new EncryptionFlowError(
@@ -2535,28 +2662,26 @@ export async function approverComparisonCode(
       'This comparison was started elsewhere. Start it again.'
     );
   }
-  const keys = [
-    fromBase64Url(approval.signingKey),
-    fromBase64Url(approval.unlockKey)
-  ];
+  const keys = [exchange.signingKey, exchange.unlockKey];
+  const deviceNonce = fromBase64Url(approval.deviceNonce, 32);
   if (
     !(await verifyDeviceApprovalCommitment(
       keys,
-      fromBase64Url(approval.deviceNonce),
-      fromBase64Url(approval.commitment)
+      deviceNonce,
+      exchange.commitment
     ))
   ) {
-    throw new EncryptionFlowError(
-      'commitment-mismatch',
-      'The new device’s keys changed after it committed to them. Do not approve it.'
-    );
+    changedApproval();
   }
-  return deviceApprovalCode({
+  const code = await deviceApprovalCode({
     newDevicePublicKey: keys,
-    approverPublicKey: device.signingPublicKey,
-    newDeviceNonce: fromBase64Url(approval.deviceNonce),
-    approverNonce: nonce
+    approverPublicKey: exchange.approverKey,
+    newDeviceNonce: deviceNonce,
+    approverNonce: exchange.nonce
   });
+  guard();
+  requireCurrentComparison(ctx, account, exchange);
+  return code;
 }
 
 /**
@@ -2607,7 +2732,21 @@ export async function approveDevice(
   proof: ApprovalProof,
   recoverySecret: Uint8Array | null
 ): Promise<EncryptionState> {
+  approval = { ...approval };
   const { device, unlocked } = requireUnlockedApprover(ctx, account);
+  const started = compareApprovals.get(comparisonId(ctx, approval.id));
+  const exchange =
+    started?.approverId === device.deviceId ? started : undefined;
+  const guard = keyOperationGuard(ctx.userId, ctx.readScope);
+  const assertComparison = () => {
+    if (!exchange) return;
+    // A fresh full-hash scan authenticates independently of the old nonce.
+    // Its current operation must still preserve the pin and session lifetime.
+    guard();
+    requireCurrentComparison(ctx, account, exchange);
+    requireApprovalBinding(approval, exchange);
+  };
+  assertComparison();
   const signingKey = fromBase64Url(approval.signingKey);
   const unlockKey = fromBase64Url(approval.unlockKey);
   if (proof.kind === 'scan') {
@@ -2627,6 +2766,7 @@ export async function approveDevice(
       'Compare the codes before approving.'
     );
   }
+  assertComparison();
   let list = account.list;
   let certified = false;
   let sealedAccountKey: string | undefined;
@@ -2700,6 +2840,7 @@ export async function approveDevice(
       unlockId: approval.deviceId
     });
     accountKey.fill(0);
+    assertComparison();
     const response = await ctx.api.appendDeviceList({
       generation: account.generation,
       entry: b64(signed.entry),
@@ -2719,6 +2860,7 @@ export async function approveDevice(
     });
     certified = true;
   } else if (!certified) {
+    assertComparison();
     sealedAccountKey = b64(
       await sealKey(unlockKey, unlocked.accountKey, {
         purpose: 'account-key',
@@ -2740,11 +2882,14 @@ export async function approveDevice(
     issuedAt: now(ctx),
     contacts: await approverContactsHead(ctx, list)
   });
+  assertComparison();
   await ctx.api.completeApproval(approval.id, {
     grant: { statement: b64(grant.statement), signature: b64(grant.signature) },
     ...(sealedAccountKey ? { sealedAccountKey } : {})
   });
-  approverNonces.delete(approval.id);
+  if (compareApprovals.get(comparisonId(ctx, approval.id)) === exchange) {
+    compareApprovals.delete(comparisonId(ctx, approval.id));
+  }
   return loadEncryption(ctx);
 }
 
@@ -2782,6 +2927,6 @@ export async function denyApproval(
   ctx: E2eeContext,
   approvalId: string
 ): Promise<void> {
-  approverNonces.delete(approvalId);
+  compareApprovals.delete(comparisonId(ctx, approvalId));
   await ctx.api.cancelApproval(approvalId);
 }
