@@ -57,7 +57,7 @@ describe('verified shelf name hints', () => {
     const oldScope = background.begin('account-a');
     rememberVerifiedShelfName('account-a', project);
     const oldHints = cachedShelfNames('account-a');
-    const oldListingIds = new Set([project.projectId]);
+    const oldListingIds = new Set<string>([project.projectId]);
     const newScope = background.begin('account-a');
     const added = {
       ...project,
