@@ -45,12 +45,21 @@ def stored_representation_matches(data, response_etag, metadata):
             and hashlib.md5(data, usedforsecurity=False).hexdigest() == expected)
 
 
+def owner_only_file(path, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as file:
+        info = os.fstat(file.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > limit):
+            raise SnapshotError('Operator files must be bounded regular owner-only files.')
+        value = file.read(limit + 1)
+        if len(value) > limit:
+            raise SnapshotError('Operator file exceeds supported capacity.')
+        return value
+
+
 def private_json(path):
-    info = path.lstat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-            or stat.S_IMODE(info.st_mode) != 0o600):
-        raise SnapshotError('Operator files must be regular owner-only files.')
-    return json.loads(read_private_file(path, 65536))
+    return json.loads(owner_only_file(path, 65536))
 
 
 def secret_command(args):
@@ -194,11 +203,7 @@ class Source:
 
 def backup(config, destination):
     token_path = Path(config['readTokenFile'])
-    token_info = token_path.lstat()
-    if (not stat.S_ISREG(token_info.st_mode) or token_info.st_uid!=os.getuid()
-            or stat.S_IMODE(token_info.st_mode)!=0o600):
-        raise SnapshotError('The source read token must remain owner-only.')
-    read_token = read_private_file(token_path,16384).decode().strip()
+    read_token = owner_only_file(token_path,16384).decode().strip()
     export_token = json.loads(secret_command(config['exportTokenCommand']))['token']
     password = secret_command(config['passphraseCommand'])
     source = Source(config['source'],read_token,export_token)

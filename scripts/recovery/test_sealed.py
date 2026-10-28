@@ -9,9 +9,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cloud import Source, stored_representation_matches
+from cloud import Source, stored_representation_matches, owner_only_file
 from sealed import gpg, ram_directory, safe_extract, seal, unseal
-from snapshot import SnapshotError, complete_snapshot
+from snapshot import MAX_OBJECT_BYTES, SnapshotError, complete_snapshot
+from restore import database_state
 from test_snapshot import SCHEMA, SOURCE
 
 
@@ -129,6 +130,44 @@ class SealedTests(unittest.TestCase):
         self.assertFalse(stored_representation_matches(data+b'x','W/"'+etag+'"',metadata))
         self.assertFalse(stored_representation_matches(data,'W/"'+etag+'-2"',{'size':len(data),'etag':etag+'-2'}))
         self.assertFalse(stored_representation_matches(data,'W/"'+'0'*32+'"',metadata))
+
+    def test_backup_refuses_objects_outside_the_shared_restore_bound(self):
+        db=sqlite3.connect(':memory:')
+        db.executescript(SCHEMA)
+        db.execute("INSERT INTO artifacts VALUES('too-large')")
+        (self.root/'database.sql').write_text('\n'.join(db.iterdump()))
+        db.close()
+        client=Source(SOURCE,'read-token','export-token')
+        with patch.object(client,'inventory',return_value={'too-large':{'key':'too-large','size':MAX_OBJECT_BYTES+1}}),\
+             patch.object(client,'request') as request:
+            with self.assertRaises(SnapshotError):client.copy(self.root)
+            request.assert_not_called()
+
+    def test_operator_file_modes_and_ownership_are_enforced_on_open_descriptor(self):
+        token=self.ram/'synthetic-token'
+        token.write_bytes(b'synthetic credential')
+        token.chmod(0o644)
+        with self.assertRaises(SnapshotError):owner_only_file(token,1024)
+        token.chmod(0o600)
+        self.assertEqual(owner_only_file(token,1024),b'synthetic credential')
+        with patch('cloud.os.getuid',return_value=token.stat().st_uid+1):
+            with self.assertRaises(SnapshotError):owner_only_file(token,1024)
+
+    def test_restore_schema_comparison_includes_constraints_indexes_and_triggers(self):
+        base='CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY,p INTEGER REFERENCES parent(id),v TEXT CHECK(length(v)<10));'
+        full=base+'CREATE INDEX lookup ON child(p); CREATE TRIGGER protect BEFORE DELETE ON child BEGIN SELECT RAISE(ABORT,\'protected\'); END;'
+        for changed in [base, full.replace('CREATE INDEX lookup ON child(p);',''),
+                        full.replace('CHECK(length(v)<10)','CHECK(length(v)<20)'),
+                        full.replace('REFERENCES parent(id)','REFERENCES parent(id) ON DELETE CASCADE'),
+                        full.replace('CREATE TABLE parent(id INTEGER PRIMARY KEY);','CREATE TABLE parent(id INTEGER PRIMARY KEY) WITHOUT ROWID;')]:
+            with self.subTest(changed=changed):
+                self.assertNotEqual(database_state(full.encode()),database_state(changed.encode()))
+
+    def test_restore_row_comparison_preserves_sqlite_storage_types_and_ignores_row_order(self):
+        self.assertNotEqual(database_state(b"CREATE TABLE t(v);INSERT INTO t VALUES(X'DEAD');"),
+                            database_state(b"CREATE TABLE t(v);INSERT INTO t VALUES('dead');"))
+        self.assertEqual(database_state(b'CREATE TABLE t(v);INSERT INTO t VALUES(1),(2);'),
+                         database_state(b'CREATE TABLE t(v);INSERT INTO t VALUES(2),(1);'))
 
 
 

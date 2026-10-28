@@ -10,9 +10,9 @@ from urllib.parse import quote
 from urllib.request import Request
 from urllib.error import HTTPError
 
-from cloud import Source, private_json, secret_command
+from cloud import Source, private_json, secret_command, owner_only_file
 from sealed import ram_directory, unseal
-from snapshot import (MAX_SQL_BYTES, SnapshotError, canonical, load_sql, object_path,
+from snapshot import (MAX_SQL_BYTES, MAX_OBJECT_BYTES, SnapshotError, canonical, load_sql, object_path,
                       read_private_file, validate_restore_target)
 
 
@@ -23,18 +23,23 @@ def database_state(sql):
         tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'")]
         for table in tables:
             quoted='"'+table.replace('"','""')+'"'
-            rows = [canonical([value.hex() if isinstance(value,bytes) else value for value in row])
+            rows = [canonical([[type(value).__name__, value.hex() if isinstance(value,bytes) else value] for value in row])
                     for row in db.execute('SELECT * FROM '+quoted)]
             result[table] = {'rows':len(rows),'digest':hashlib.sha256(b'\n'.join(sorted(rows))).hexdigest(),
-                             'columns':[tuple(row) for row in db.execute('PRAGMA table_info('+quoted+')')]}
-        return result
+                             'columns':[tuple(row) for row in db.execute('PRAGMA table_info('+quoted+')')],
+                             'foreignKeys':[tuple(row) for row in db.execute('PRAGMA foreign_key_list('+quoted+')')]}
+        schema = [tuple(row) for row in db.execute('''SELECT type,name,tbl_name,sql FROM sqlite_master
+                  WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'
+                    AND tbl_name NOT LIKE 'sqlite_%' AND tbl_name NOT LIKE '_cf_%'
+                  ORDER BY type,name''')]
+        return {'tables':result,'schema':schema}
     finally:
         db.close()
 
 
 def restore(config, archive):
     password = secret_command(config['passphraseCommand'])
-    read_token = read_private_file(Path(config['readTokenFile']),16384).decode().strip()
+    read_token = owner_only_file(Path(config['readTokenFile']),16384).decode().strip()
     export_token = json.loads(secret_command(config['exportTokenCommand']))['token']
     target = config['target']
     with ram_directory() as temporary:
@@ -95,7 +100,7 @@ def restore(config, archive):
         if set(metadata)!=set(item['key'] for item in manifest['objects']):
             raise SnapshotError('Backup object metadata and references differ.')
         for item in manifest['objects']:
-            data=read_private_file(object_path(root,item['key']),100*1024**2)
+            data=read_private_file(object_path(root,item['key']),MAX_OBJECT_BYTES)
             original=metadata[item['key']]
             encoded=quote(json.dumps(original,separators=(',',':')),safe='')
             request=Request(origin+'/restore',data=data,method='PUT',headers={
@@ -127,7 +132,7 @@ def restore(config, archive):
         restored=database_state(read_private_file(exported/'database.sql',MAX_SQL_BYTES))
         if expected!=restored:
             raise SnapshotError('Restored database content or schema differs from the paired backup.')
-        return {'objects':len(manifest['objects']),'tables':len(expected),'status':'restored-and-verified'}
+        return {'objects':len(manifest['objects']),'tables':len(expected['tables']),'status':'restored-and-verified'}
 
 
 if __name__=='__main__':

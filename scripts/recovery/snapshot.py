@@ -18,7 +18,8 @@ import zlib
 
 FORMAT = 'openzcad-cloud-recovery-v1'
 MAX_SQL_BYTES = 512 * 1024 * 1024
-MAX_OBJECT_BYTES = 2 * 1024 * 1024 * 1024
+MAX_OBJECT_BYTES = 100 * 1024 * 1024
+MAX_LOGICAL_OBJECT_BYTES = 2 * 1024 * 1024 * 1024
 OFFICIAL_DATABASE = '7263c6f1-8781-40d1-a0fa-ea03ce874ef2'
 OFFICIAL_BUCKET = 'openzcad-beta-artifacts'
 OBJECT_COLUMNS = {
@@ -76,7 +77,7 @@ def load_sql(data: bytes):
             return sqlite3.SQLITE_DENY
         if action == sqlite3.SQLITE_PRAGMA and arg1.lower() not in {
             'foreign_keys', 'defer_foreign_keys', 'table_info', 'integrity_check',
-            'foreign_key_check', 'query_only',
+            'foreign_key_check', 'foreign_key_list', 'query_only',
         }:
             return sqlite3.SQLITE_DENY
         if action == sqlite3.SQLITE_FUNCTION and (arg2 or '').lower() in {
@@ -151,7 +152,7 @@ def required_objects(db):
             if logical:
                 item.update(logicalBytes=row['logical_bytes'], logicalSha256=row['checksum_sha256'], encoding=row['content_encoding'])
                 if (item['encoding'] != 'gzip' or not isinstance(item['logicalBytes'], int)
-                        or not 0 <= item['logicalBytes'] <= MAX_OBJECT_BYTES
+                        or not 0 <= item['logicalBytes'] <= MAX_LOGICAL_OBJECT_BYTES
                         or not re.fullmatch(r'[0-9a-f]{64}', item['logicalSha256'])):
                     raise SnapshotError('Invalid logical object integrity metadata.')
             previous = references.get(key)

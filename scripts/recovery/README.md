@@ -8,7 +8,8 @@ Prerequisites: Linux, Python 3.10+, GnuPG 2.2+, a private `/dev/shm` tmpfs,
 disabled or encrypted disk swap, and enough free RAM for verified readback.
 No Python packages are required. The current implementation supports migrations
 0001 through 0044, including the intentional 0035 gap, SQL exports up to 512 MiB,
-snapshots up to 4 GiB and individual restored objects up to 100 MiB. It refuses
+snapshots up to 4 GiB and individual stored objects up to 100 MiB in both backup
+and restore (logical gzip content may be up to 2 GiB). It refuses
 larger inputs. Review and qualify new schemas before changing those bounds.
 
 ## Backup
