@@ -166,7 +166,9 @@ it('keeps local and cloud copies and every retained cloud revision separate', as
     ]
   });
   vi.spyOn(api, 'loadProject').mockResolvedValue(document);
-  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [] });
+  const artifacts = vi
+    .spyOn(api, 'listArtifacts')
+    .mockResolvedValue({ artifacts: [] });
   vi.spyOn(api, 'listRevisions').mockResolvedValue({
     revisions: [
       {
@@ -193,6 +195,7 @@ it('keeps local and cloud copies and every retained cloud revision separate', as
     ).document.name
   ).toBe('Original');
   expect(archive['projects/cloud/1/revisions/1.openzcad']).toBeDefined();
+  expect(artifacts).toHaveBeenCalledOnce();
   const account = JSON.parse(strFromU8(archive['cloud/account.json']!)) as {
     profile: { userId: string };
   };
@@ -505,4 +508,24 @@ it('cancels rather than treating an account change during a project read as a sk
     downloadAllData({ ...options(true), isCurrent: () => current })
   ).rejects.toThrow('account changed');
   expect(download).not.toHaveBeenCalled();
+});
+
+it('can skip the extra device snapshot without reading its stores, while keeping portable project backups', async () => {
+  const document = createProjectDocument('Portable project', session.userId);
+  await localStore.saveLocalProject(document);
+  const visit = vi.spyOn(localStore, 'visitLocalProjectData');
+  const archive = await entries(
+    await createDataExport({ ...options(), includeDeviceSnapshot: false })
+  );
+  expect(visit).toHaveBeenCalledOnce();
+  expect(visit.mock.calls[0]![1]).toEqual(['projects']);
+  expect(archive['projects/local/1.openzcad']).toBeDefined();
+  expect(
+    Object.keys(archive).some((path) => path.startsWith('device/database/'))
+  ).toBe(false);
+  const manifest = JSON.parse(strFromU8(archive['manifest.json']!)) as {
+    deviceSnapshotRequested: boolean;
+  };
+  expect(manifest.deviceSnapshotRequested).toBe(false);
+  expect(strFromU8(archive['README.txt']!)).toContain('was not requested');
 });

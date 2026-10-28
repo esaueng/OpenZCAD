@@ -386,6 +386,19 @@
   color: var(--color-text-muted);
 }
 
+.data-download-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.data-download-option input {
+  flex-shrink: 0;
+  margin: 2px 0 0;
+}
+
 .data-download-feedback[role='alert'] {
   color: var(--color-error-text);
 }

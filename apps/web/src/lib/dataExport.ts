@@ -42,6 +42,10 @@ export interface DataExportOptions {
   settings: AppSettings;
   session: AuthSession | null;
   cloudFunctionsEnabled: boolean;
+  /** Rebuild sources always travel; redundant original imports are opt-in. */
+  includeOriginalImports?: boolean;
+  /** Keep the full device snapshot by default; users may choose a smaller ZIP. */
+  includeDeviceSnapshot?: boolean;
   onProgress(message: string): void;
   /** Prevent a late result from downloading into a different account session. */
   isCurrent(): boolean;
@@ -155,6 +159,8 @@ async function buildDataExport(options: DataExportOptions): Promise<{
     version: number;
     exportedAt: string;
     cloudIncluded: boolean;
+    originalImportFilesInBackups: boolean;
+    deviceSnapshotRequested: boolean;
     localProjects: { projectId: string; name: string; path: string }[];
     cloudProjects: { projectId: string; name: string; path: string }[];
     skippedProjects: SkippedDataProject[];
@@ -164,6 +170,8 @@ async function buildDataExport(options: DataExportOptions): Promise<{
     version: 1,
     exportedAt: new Date().toISOString(),
     cloudIncluded: cloud,
+    originalImportFilesInBackups: options.includeOriginalImports === true,
+    deviceSnapshotRequested: options.includeDeviceSnapshot !== false,
     localProjects: [],
     cloudProjects: [],
     skippedProjects: [],
@@ -256,6 +264,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           strToU8(
             await createProjectBackup(document, false, undefined, {
               localOnly: true,
+              includeOriginalImports: options.includeOriginalImports,
               maxBytes: pending.backupBudget()
             })
           )
@@ -283,6 +292,11 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           const document = await api.loadProject(project.projectId);
           if (!document)
             throw new Error('Project is no longer available. Try again.');
+          const [revisions, catalog] = await Promise.all([
+            api.listRevisions(project.projectId),
+            api.listArtifacts(project.projectId)
+          ]);
+          check();
           let measurements: StoredMeasurementRecord | null = null;
           if (isEncryptedProject(project.projectId)) {
             const encrypted = await import('./e2ee/encryptedProjects');
@@ -315,24 +329,23 @@ async function buildDataExport(options: DataExportOptions): Promise<{
             path: string,
             coverHistory = false
           ) => {
+            const covered = new Set<string>();
             const backupText = await createProjectBackup(
               saved,
               true,
               measurements,
-              { includeEncryptedFiles: true, maxBytes: pending.backupBudget() }
+              {
+                includeEncryptedFiles: true,
+                includeOriginalImports: options.includeOriginalImports,
+                artifacts: catalog.artifacts,
+                onSaveState: coverHistory
+                  ? (revisionId) => covered.add(revisionId)
+                  : undefined,
+                maxBytes: pending.backupBudget()
+              }
             );
             pending.add(path, strToU8(backupText));
-            if (!coverHistory) return new Set<string | undefined>();
-            const backup = JSON.parse(backupText) as {
-              saveStates?: {
-                document: { revisions: { revisionId: string }[] };
-              }[];
-            };
-            return new Set(
-              backup.saveStates?.map(
-                (state) => state.document.revisions.at(-1)?.revisionId
-              )
-            );
+            return covered;
           };
           // A retained revision need not still have a checkpoint in today's
           // document. Export those snapshots too, with their own source bytes.
@@ -341,7 +354,6 @@ async function buildDataExport(options: DataExportOptions): Promise<{
             `${folder}/project.openzcad`,
             true
           );
-          const revisions = await api.listRevisions(project.projectId);
           pending.json(`${folder}/revisions.json`, revisions);
           for (const [
             revisionIndex,
@@ -380,54 +392,59 @@ async function buildDataExport(options: DataExportOptions): Promise<{
     }
     // Prefer complete portable project backups over this redundant raw snapshot.
     // If the snapshot cannot fit/read, discard the entire section and report it.
-    options.onProgress('Preparing the device database snapshot…');
-    try {
-      const snapshot = batch();
-      let recordNumber = 0;
-      let binaryNumber = 0;
-      await visitLocalProjectData((store, key, value) => {
-        check();
-        const text = JSON.stringify({ key, value }, (_key, child: unknown) => {
-          if (child instanceof Blob) {
-            const path = `device/binary/${++binaryNumber}`;
-            snapshot.add(path, child);
-            return {
-              format: 'openzcad-blob',
-              path,
-              type: child.type,
-              size: child.size
-            };
-          }
-          if (child instanceof ArrayBuffer || ArrayBuffer.isView(child)) {
-            const data =
-              child instanceof ArrayBuffer
-                ? new Uint8Array(child)
-                : new Uint8Array(
-                    child.buffer,
-                    child.byteOffset,
-                    child.byteLength
-                  );
-            const path = `device/binary/${++binaryNumber}`;
-            snapshot.add(path, data);
-            return { format: 'openzcad-bytes', path };
-          }
-          return child;
+    if (options.includeDeviceSnapshot !== false) {
+      options.onProgress('Preparing extra device recovery data…');
+      try {
+        const snapshot = batch();
+        let recordNumber = 0;
+        let binaryNumber = 0;
+        await visitLocalProjectData((store, key, value) => {
+          check();
+          const text = JSON.stringify(
+            { key, value },
+            (_key, child: unknown) => {
+              if (child instanceof Blob) {
+                const path = `device/binary/${++binaryNumber}`;
+                snapshot.add(path, child);
+                return {
+                  format: 'openzcad-blob',
+                  path,
+                  type: child.type,
+                  size: child.size
+                };
+              }
+              if (child instanceof ArrayBuffer || ArrayBuffer.isView(child)) {
+                const data =
+                  child instanceof ArrayBuffer
+                    ? new Uint8Array(child)
+                    : new Uint8Array(
+                        child.buffer,
+                        child.byteOffset,
+                        child.byteLength
+                      );
+                const path = `device/binary/${++binaryNumber}`;
+                snapshot.add(path, data);
+                return { format: 'openzcad-bytes', path };
+              }
+              return child;
+            }
+          );
+          snapshot.add(
+            `device/database/${store}/${++recordNumber}.json`,
+            strToU8(text)
+          );
         });
-        snapshot.add(
-          `device/database/${store}/${++recordNumber}.json`,
-          strToU8(text)
-        );
-      });
-      await snapshot.commit();
-    } catch (error) {
-      check();
-      manifest.omittedSections.push({
-        name: 'Raw device database snapshot',
-        reason:
-          error instanceof ExportCapacityError
-            ? 'The raw snapshot would exceed the space or browser-memory budget for the 512 MB download. Complete project backups take priority.'
-            : failureReason(error)
-      });
+        await snapshot.commit();
+      } catch (error) {
+        check();
+        manifest.omittedSections.push({
+          name: 'Raw device database snapshot',
+          reason:
+            error instanceof ExportCapacityError
+              ? 'The raw snapshot would exceed the space or browser-memory budget for the 512 MB download. Complete project backups take priority.'
+              : failureReason(error)
+        });
+      }
     }
     const summary: DataExportSummary = {
       includedProjects:
@@ -467,6 +484,12 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           'When included, device/database preserves project database records. Binary values refer to files under device/binary. This optional raw snapshot is for data access; automatic whole-account restore is not supported. Check NOT-INCLUDED.txt for any omissions.',
           'cloud/account.json contains profile, stored settings, collaboration, session metadata, consent and saved workspace/measurement records. projects/cloud contains readable backups and retained history available to this account, including shared projects.',
           'Only data available on this device and in the signed-in account at download time can be included. Other devices’ unsynced data and permanently deleted/expired history are unavailable. Changes made during export may require another download.',
+          options.includeOriginalImports
+            ? 'Project backups include requested original interchange files when available, except STEP bytes already retained as canonical rebuild sources.'
+            : 'Project backups omit redundant original interchange files. Every included project retains the source data required to reopen and rebuild it.',
+          options.includeDeviceSnapshot === false
+            ? 'Extra device recovery data was not requested; the raw device snapshot is absent.'
+            : 'Extra device recovery data was requested; check NOT-INCLUDED.txt for any unavailable section.',
           'Encrypted project backups are decrypted on this device. Protect this unencrypted archive.',
           'Passwords, API credentials, session tokens, invitation/share secrets and encryption private/recovery keys are excluded. Encryption key stores, transient collaboration transport and server operational/security logs are not account backups.',
           cloud

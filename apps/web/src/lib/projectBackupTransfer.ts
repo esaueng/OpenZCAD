@@ -1,15 +1,11 @@
-import {
-  documentNodesWithHistory,
-  importedSourceReferenceOf,
-  referenceImagesWithHistory,
-  type ImportedSourceReference
-} from '@openzcad/shared';
+import { documentAssetsWithHistory } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import { importArtifactIds } from '@openzcad/persistence';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
 import { api, isEncryptedProject } from './api';
 import { desktopFetch } from './desktopBridge';
+import { prepareProjectSources, type ProjectSource } from './projectSources';
 import { encryptedBlobSource } from './e2ee/blobReferences';
 import {
   loadLastSyncedVersion,
@@ -100,6 +96,12 @@ export async function createProjectBackup(
   options: {
     localOnly?: boolean;
     includeEncryptedFiles?: boolean;
+    /** Original interchange files are optional; rebuild sources always travel. */
+    includeOriginalImports?: boolean;
+    /** Reuse one project-scoped catalog throughout a bulk download. */
+    artifacts?: readonly ArtifactRecord[];
+    /** Avoid parsing the finished backup again just to discover its coverage. */
+    onSaveState?(revisionId: string): void;
     /** A bulk export can impose a smaller remaining staging budget. */
     maxBytes?: number;
   } = {}
@@ -114,17 +116,13 @@ export async function createProjectBackup(
         ? 'Project backup exceeds the remaining bulk-download memory budget. Download this project separately.'
         : 'Project backup exceeds the 256 MB limit.'
     );
-  const snapshot = withoutDerivedProjection(structuredClone(document));
+  const snapshot = withoutDerivedProjection(document);
   const storedFiles = await loadProjectBackupFiles(snapshot.projectId);
   // Internal mesh payloads belong in sources, where their content key makes
   // one copy serve the current document, undo history and saved states.
   // Keep older backups' file bytes available as a source-resolution fallback.
   // Reference-image pictures (I05) are sources in the same way.
-  const files = storedFiles.filter(
-    (file) =>
-      file.artifact.kind !== 'mesh-payload' &&
-      file.artifact.kind !== 'reference-image'
-  );
+  const files: ProjectBackup['files'] = [];
   const backup: ProjectBackup = {
     format: 'openzcad-project',
     version: 1,
@@ -141,7 +139,8 @@ export async function createProjectBackup(
     !options.localOnly &&
     (cloudProject ||
       (await loadLastSyncedVersion(snapshot.projectId)) !== null);
-  let bytesUsed = new Blob([JSON.stringify(backup)]).size;
+  let bytesUsed = new Blob([JSON.stringify({ ...backup, document: null })])
+    .size;
   const ensureSpace = (length: number) => {
     if (bytesUsed + length > maxBytes) throw capacityError();
   };
@@ -150,31 +149,54 @@ export async function createProjectBackup(
     bytesUsed += length;
   };
   ensureSpace(0);
-  // Bulk data downloads also carry exports from encrypted project info.
-  // Their bytes are opened through the same verified blob reader as sources.
-  if (
+  const artifacts =
     remote &&
     (!isEncryptedProject(snapshot.projectId) || options.includeEncryptedFiles)
-  ) {
-    const archived = await api.listArtifacts(snapshot.projectId);
-    for (const artifact of archived.artifacts) {
-      if (
-        artifact.kind === 'mesh-payload' ||
-        artifact.kind === 'reference-image' ||
-        files.some((file) => file.artifact.artifactId === artifact.artifactId)
-      )
-        continue;
-      if (artifact.bytes !== undefined)
-        ensureSpace(4 * Math.ceil(artifact.bytes / 3));
-      const body = await archivedBytes(
-        artifact.artifactId,
-        Math.max(0, Math.floor(((maxBytes - bytesUsed) * 3) / 4))
+      ? (options.artifacts ??
+        (await api.listArtifacts(snapshot.projectId)).artifacts)
+      : [];
+  const sourceChecksums = new Set<string>();
+  async function archiveSource(source: ProjectSource): Promise<string> {
+    const { ref, artifactId } = source;
+    if (sourceChecksums.has(ref.checksumSha256)) return artifactId;
+    ensureSpace(4 * Math.ceil(ref.logicalBytes / 3));
+    let bytes = source.bytes ?? (await loadSourceBlob(ref.checksumSha256));
+    if (!bytes) {
+      const archived = storedFiles.find(
+        (file) => file.artifact.artifactId === artifactId
       );
-      const file = await packBackupFile(artifact, body.buffer);
-      reserve(new Blob([JSON.stringify(file)]).size);
-      files.push(file);
+      bytes = archived
+        ? backupFileBytes(archived)
+        : options.localOnly
+          ? null
+          : await archivedBytes(
+              artifactId,
+              Math.max(0, Math.floor(((maxBytes - bytesUsed) * 3) / 4))
+            );
     }
+    if (
+      !bytes ||
+      bytes.length !== ref.logicalBytes ||
+      (await checksum(bytes)) !== ref.checksumSha256
+    )
+      throw new Error(
+        `Missing or damaged ${source.kind === 'mesh-payload' ? 'mesh data' : source.kind === 'reference-image' ? 'image' : 'STEP source'}: ${source.name}`
+      );
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 32768)
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    const packed = {
+      sha256: ref.checksumSha256,
+      logicalBytes: bytes.length,
+      base64: btoa(binary)
+    };
+    reserve(new Blob([JSON.stringify(packed)]).size);
+    backup.sources!.push(packed);
+    sourceChecksums.add(ref.checksumSha256);
+    return artifactId;
   }
+  backup.document = await prepareProjectSources(snapshot, archiveSource);
+  reserve(new Blob([JSON.stringify(backup.document)]).size - 4);
   const canonicalIds = new Set(
     snapshot.checkpoints.map((checkpoint) => checkpoint.checkpointId)
   );
@@ -205,81 +227,79 @@ export async function createProjectBackup(
     if (saved) {
       const state = {
         checkpointId: checkpoint.checkpointId,
-        document: withoutDerivedProjection(saved),
+        document: await prepareProjectSources(saved, archiveSource),
         ...(privatePoint ? { deviceOnly: true as const } : {})
       };
       reserve(new Blob([JSON.stringify(state)]).size);
       backup.saveStates!.push(state);
+      const revisionId = state.document.revisions.at(-1)?.revisionId;
+      if (revisionId) options.onSaveState?.(revisionId);
     }
   }
+  // Assets not satisfied by canonical sources still need their file contents.
+  const requiredFiles = new Set<string>();
   for (const candidate of [
-    snapshot,
+    backup.document,
     ...backup.saveStates!.map((state) => state.document)
   ]) {
-    // STEP sources and mesh payloads: a restored project must rebuild
-    // without the account, so it carries the bytes its references name. A
-    // reference image's picture travels the same way.
-    const needed: {
-      ref: ImportedSourceReference;
-      artifactId: string;
-      what: string;
-    }[] = [];
-    for (const node of documentNodesWithHistory(candidate)) {
-      if (node.kind !== 'feature') continue;
-      const ref = importedSourceReferenceOf(node.data);
-      if (!ref) continue;
-      needed.push({
-        ref,
-        artifactId: (node.data as { artifactId: string }).artifactId,
-        what: `${node.data.featureKind === 'imported-mesh' ? 'mesh data' : 'STEP source'}: ${node.name}`
-      });
-    }
-    for (const image of referenceImagesWithHistory(candidate)) {
-      needed.push({
-        ref: image.source,
-        artifactId: image.artifactId,
-        what: `image: ${image.name}`
-      });
-    }
-    for (const { ref, artifactId, what } of needed) {
+    for (const asset of documentAssetsWithHistory(candidate)) {
       if (
-        backup.sources!.some((source) => source.sha256 === ref.checksumSha256)
+        asset.artifactId &&
+        (!asset.checksum || !sourceChecksums.has(asset.checksum))
+      )
+        requiredFiles.add(asset.artifactId);
+    }
+  }
+  const originalImport = (kind: string) =>
+    ['step-import', 'stl-import', 'mesh-import'].includes(kind);
+  const wantFile = (artifact: ArtifactRecord) =>
+    artifact.kind !== 'mesh-payload' &&
+    artifact.kind !== 'reference-image' &&
+    (!originalImport(artifact.kind) ||
+      options.includeOriginalImports ||
+      requiredFiles.has(artifact.artifactId));
+  const addFile = (file: ProjectBackup['files'][number]) => {
+    if (
+      file.artifact.kind === 'step-import' &&
+      sourceChecksums.has(file.sha256)
+    ) {
+      // Even an opt-in original under a different archive ID need not repeat
+      // identical STEP bytes. Its metadata can resolve the canonical source.
+      for (const candidate of [
+        backup.document,
+        ...backup.saveStates!.map((state) => state.document)
+      ]) {
+        for (const asset of documentAssetsWithHistory(candidate)) {
+          if (asset.artifactId === file.artifact.artifactId)
+            asset.checksum = file.sha256;
+        }
+      }
+      return;
+    }
+    reserve(new Blob([JSON.stringify(file)]).size);
+    files.push(file);
+  };
+  for (const file of storedFiles) {
+    if (wantFile(file.artifact)) addFile(file);
+  }
+  // Bulk exports keep archived exports too, using the verified blob reader.
+  if (
+    remote &&
+    (!isEncryptedProject(snapshot.projectId) || options.includeEncryptedFiles)
+  ) {
+    for (const artifact of artifacts) {
+      if (
+        !wantFile(artifact) ||
+        files.some((file) => file.artifact.artifactId === artifact.artifactId)
       )
         continue;
-      // Reject a source that cannot fit before reading or base64-encoding it.
-      ensureSpace(4 * Math.ceil(ref.logicalBytes / 3));
-      let bytes = await loadSourceBlob(ref.checksumSha256);
-      if (!bytes) {
-        const archived =
-          storedFiles.find((file) => file.artifact.artifactId === artifactId) ??
-          files.find((file) => file.artifact.artifactId === artifactId);
-        bytes = archived
-          ? backupFileBytes(archived)
-          : options.localOnly
-            ? null
-            : await archivedBytes(
-                artifactId,
-                Math.max(0, Math.floor(((maxBytes - bytesUsed) * 3) / 4))
-              );
-      }
-      if (
-        !bytes ||
-        bytes.length !== ref.logicalBytes ||
-        (await checksum(bytes)) !== ref.checksumSha256
-      )
-        throw new Error(`Missing or damaged ${what}`);
-      let binary = '';
-      for (let offset = 0; offset < bytes.length; offset += 32768)
-        binary += String.fromCharCode(
-          ...bytes.subarray(offset, offset + 32768)
-        );
-      const source = {
-        sha256: ref.checksumSha256,
-        logicalBytes: bytes.length,
-        base64: btoa(binary)
-      };
-      reserve(new Blob([JSON.stringify(source)]).size);
-      backup.sources!.push(source);
+      if (artifact.bytes !== undefined)
+        ensureSpace(4 * Math.ceil(artifact.bytes / 3));
+      const body = await archivedBytes(
+        artifact.artifactId,
+        Math.max(0, Math.floor(((maxBytes - bytesUsed) * 3) / 4))
+      );
+      addFile(await packBackupFile(artifact, body.buffer));
     }
   }
   const text = JSON.stringify(backup);
