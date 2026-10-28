@@ -9,6 +9,9 @@ Ordinary CI selects the tagged browser smoke journeys; local and explicit
 full runs retain the extended matrix. See [Browser test suites](browser-test-suites.md)
 for the coverage tradeoff, full-run command and separate timing weights.
 
+Root and web Vitest jobs likewise use the focused [unit smoke selection](unit-test-suites.md)
+in CI. `pnpm test:full` retains both complete unit suites explicitly.
+
 ## Changing the fleet workflow
 
 `ci.yml` must pin a commit main already contains. Actions cannot resolve a

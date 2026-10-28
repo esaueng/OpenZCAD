@@ -203,6 +203,7 @@ def deadline_evidence():
                 name, path, env, log = case
                 process = subprocess.Popen(
                     [node, str(ROOT / "node_modules/vitest/vitest.mjs"), "run",
+                     "--config", "vitest.fixture.config.ts",
                      str(path.relative_to(ROOT)), "-t", "retires the orphan OIDC workflow",
                      "--maxWorkers=1"], cwd=ROOT, env=env, text=True,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)

@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { unitTestInclude } from './scripts/unit-suites.mjs';
 
 const WORKSPACE_PACKAGES = [
   'shared',
@@ -49,12 +50,13 @@ export default defineConfig({
     // file-level parallelism bounded. The qualified kernel's refusal probes
     // are CPU-heavy; four simultaneous suites caused both the unchanged
     // sequential-fillet and unrelated glyph-audit deadlines to fail in CI.
-    // Run every case and probe with less CPU/memory contention.
+    // Keep this limit for both the smoke and full suite.
     maxWorkers: 2,
     // Package-owned tests live beside their source so they resolve that
     // package's own dependencies (`three` is not a root dependency).
-    include: ['test/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
+    include: unitTestInclude('root'),
     setupFiles: ['test/setup.ts'],
+    globalSetup: ['test/unit-global-setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
