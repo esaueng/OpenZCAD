@@ -390,6 +390,39 @@
   color: var(--color-error-text);
 }
 
+.data-download-omissions {
+  max-width: 100%;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.data-download-omissions summary {
+  color: var(--color-error-text);
+  cursor: pointer;
+  font-weight: var(--fw-medium);
+}
+
+.data-download-omissions p {
+  margin: 8px 0;
+  color: var(--color-text-muted);
+}
+
+.data-download-omissions ul {
+  margin: 8px 0;
+  padding-left: 18px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.data-download-omissions li {
+  margin: 8px 0;
+}
+
+.data-download-omissions li span {
+  display: block;
+  color: var(--color-text-muted);
+}
+
 .setting-row.compact {
   min-height: 40px;
   padding-block: 6px;

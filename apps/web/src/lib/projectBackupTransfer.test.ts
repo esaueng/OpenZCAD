@@ -167,6 +167,68 @@ it('enforces streamed download limits even without content-length', async () => 
   ).rejects.toThrow('limit');
 });
 
+it('applies a smaller bulk-export budget before reading sources and preserves the normal individual-export limit', async () => {
+  const bytes = new Uint8Array(4096);
+  const ref = await putSourceBlob(bytes);
+  const document = importStepBody(
+    createProjectDocument('Budgeted source', toUserId('owner')),
+    {
+      name: 'STEP source',
+      sourceName: 'part.step',
+      artifactId: 'budget_source',
+      stepSourceRef: ref
+    }
+  ).document;
+  const source = vi.spyOn(localProjectStore, 'loadSourceBlob');
+  await expect(
+    createProjectBackup(document, false, undefined, {
+      localOnly: true,
+      maxBytes: 4096
+    })
+  ).rejects.toThrow('bulk-download memory budget');
+  expect(source).not.toHaveBeenCalled();
+  const backup = await parseProjectBackup(
+    await createProjectBackup(document, false)
+  );
+  expect(backup.sources).toHaveLength(1);
+  expect(source).toHaveBeenCalledOnce();
+});
+
+it.each([undefined, 12000])(
+  'bounds archived file reads with an optional declared size of %s',
+  async (size) => {
+    const document = createProjectDocument(
+      'Budgeted archive',
+      toUserId('owner')
+    );
+    vi.spyOn(api, 'listArtifacts').mockResolvedValue({
+      artifacts: [
+        {
+          artifactId: toArtifactId('budgeted_export'),
+          projectId: document.projectId,
+          kind: 'step-export',
+          name: 'part.step',
+          contentType: 'application/step',
+          bytes: size,
+          objectKey: 'archive',
+          metadata: {},
+          createdAt: new Date().toISOString()
+        }
+      ]
+    });
+    const fetch = vi.fn(async () => new Response(new Uint8Array(12000)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      createProjectBackup(document, true, undefined, { maxBytes: 4096 })
+    ).rejects.toThrow(
+      size === undefined
+        ? 'remaining download size limit'
+        : 'bulk-download memory budget'
+    );
+    expect(fetch).toHaveBeenCalledTimes(size === undefined ? 1 : 0);
+  }
+);
+
 it('rolls back all companion data when a project import transaction fails', async () => {
   const document = createProjectDocument('Atomic', toUserId('owner'));
   const backup = importProjectCopy(

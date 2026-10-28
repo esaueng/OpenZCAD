@@ -497,11 +497,14 @@ export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
  * Encryption private keys live in separate databases and never enter this path.
  */
 export async function visitLocalProjectData(
-  visit: (store: string, key: IDBValidKey, value: unknown) => void
+  visit: (store: string, key: IDBValidKey, value: unknown) => void,
+  selectedStores?: readonly string[]
 ): Promise<void> {
   const database = await openDatabase();
   try {
-    const names = Array.from(database.objectStoreNames);
+    const names = selectedStores
+      ? [...selectedStores]
+      : Array.from(database.objectStoreNames);
     const tx = database.transaction(names, 'readonly');
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
