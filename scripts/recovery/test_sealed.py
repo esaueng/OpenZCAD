@@ -16,9 +16,50 @@ from restore import database_state
 from test_snapshot import SCHEMA, SOURCE
 
 
+class RamPolicyTests(unittest.TestCase):
+    def test_plaintext_staging_requires_tmpfs_and_safe_swap(self):
+        mounts = 'tmpfs /dev/shm tmpfs rw 0 0\n'
+        header = 'Filename Type Size Used Priority\n'
+        for mounted, device, identity, allowed in [
+            (False, None, None, False),
+            (True, None, None, True),
+            (True, 'zram0', None, True),
+            (True, 'sda2', None, False),
+            (True, 'swapfile', None, False),
+            (True, 'dm-0', 'LVM-unencrypted', False),
+            (True, 'dm-0', 'CRYPT-PLAIN-cryptswap', True),
+            (True, 'dm-0', 'CRYPT-LUKS2-test', True),
+        ]:
+            with self.subTest(mounted=mounted, device=device, identity=identity):
+                files = {'/proc/mounts': mounts if mounted else '',
+                         '/proc/swaps': header + (f'/dev/{device} partition 1024 0 -2\n' if device else '')}
+                if identity is not None:
+                    files[f'/sys/class/block/{device}/dm/uuid'] = identity
+                def read(path):
+                    return files[str(path)]
+                with patch.object(Path, 'read_text', read), \
+                     patch.object(Path, 'is_file', lambda path: str(path) in files), \
+                     patch('sealed.tempfile.TemporaryDirectory') as allocate:
+                    if allowed:
+                        self.assertIs(ram_directory(), allocate.return_value)
+                        allocate.assert_called_once_with(prefix='openzcad-recovery-', dir=Path('/dev/shm'))
+                    else:
+                        with self.assertRaises(SnapshotError):
+                            ram_directory()
+                        allocate.assert_not_called()
+
+
 class SealedTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = ram_directory()
+        # These archives contain only synthetic fixtures and public test keys.
+        # Exercise the host staging policy separately, without requiring CI's
+        # swap configuration to qualify it for handling production plaintext.
+        def synthetic_ram():
+            return tempfile.TemporaryDirectory(prefix='openzcad-recovery-test-', dir='/dev/shm')
+        allocator = patch('sealed.ram_directory', synthetic_ram)
+        allocator.start()
+        self.addCleanup(allocator.stop)
+        self.temporary = synthetic_ram()
         self.addCleanup(self.temporary.cleanup)
         self.ram = Path(self.temporary.name)
         self.root = self.ram/'snapshot'
