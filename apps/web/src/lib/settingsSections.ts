@@ -259,6 +259,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Usage analytics',
       'Diagnostic report',
       'Cloud account statistics',
+      'Download your data',
       'Local project data',
       'Cloud data',
       'Delete all cloud projects',
@@ -268,6 +269,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     searchTerms: [
       'privacy policy',
       'personal data',
+      'download all data',
+      'export account',
+      'backup projects',
       'delete account',
       'erase account',
       'optional usage analytics',

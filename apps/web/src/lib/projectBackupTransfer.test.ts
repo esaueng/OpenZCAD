@@ -253,8 +253,11 @@ it('backs up a cloud mesh payload once as a source while keeping its original fi
     new NodeBlob([duplicated]).size - new NodeBlob([text]).size
   ).toBeGreaterThan(backup.sources![0]!.base64.length);
   expect(fetch).toHaveBeenCalledOnce();
+  const signal = vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
   expect(fetch).toHaveBeenCalledWith(
-    '/api/artifacts/artifact_original/download'
+    '/api/artifacts/artifact_original/download',
+    { signal }
   );
 
   // A new device restores the payload even though it has no file entry, and
@@ -289,8 +292,11 @@ it('downloads a missing cloud mesh payload once into sources instead of files to
   expect(backup.sources![0]!.sha256).toBe(await checksum(bytes));
   expect(backup.sources![0]!.logicalBytes).toBe(ref.logicalBytes);
   expect(fetch).toHaveBeenCalledOnce();
+  const signal = vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
   expect(fetch).toHaveBeenCalledWith(
-    '/api/artifacts/artifact_payload/download'
+    '/api/artifacts/artifact_payload/download',
+    { signal }
   );
 });
 
@@ -380,9 +386,7 @@ it('backs up an encrypted project’s sources through its blob reader', async ()
       logicalBytes: bytes.byteLength
     }
   }).document;
-  rememberProjectFormats([
-    { projectId: document.projectId, storageFormat: 2 }
-  ]);
+  rememberProjectFormats([{ projectId: document.projectId, storageFormat: 2 }]);
   pageBlobReferences.remember(document.projectId, {
     blobId,
     kind: 'import-source',
@@ -406,6 +410,54 @@ it('backs up an encrypted project’s sources through its blob reader', async ()
     ]);
     expect(reader).toHaveBeenCalledOnce();
     expect(listArtifacts).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  } finally {
+    setEncryptedBlobReader(null);
+    pageBlobReferences.clear();
+    rememberProjectFormats([{ projectId: document.projectId }]);
+  }
+});
+
+it('includes encrypted archived exports in a bulk backup without plaintext requests', async () => {
+  const document = createProjectDocument('Encrypted export', toUserId('owner'));
+  const blobId = 'd'.repeat(32);
+  const bytes = new TextEncoder().encode('exported STEP bytes');
+  rememberProjectFormats([{ projectId: document.projectId, storageFormat: 2 }]);
+  pageBlobReferences.remember(document.projectId, {
+    blobId,
+    kind: 'export',
+    key: new Uint8Array(32),
+    ciphertextHash: new Uint8Array(32),
+    plaintextLength: bytes.length
+  });
+  const reader = vi.fn(async () => bytes);
+  setEncryptedBlobReader(reader);
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({
+    artifacts: [
+      {
+        artifactId: toArtifactId(blobId),
+        projectId: document.projectId,
+        kind: 'step-export',
+        name: 'model.step',
+        contentType: 'application/step',
+        objectKey: '',
+        bytes: bytes.length,
+        createdAt: new Date().toISOString(),
+        metadata: {}
+      }
+    ]
+  });
+  vi.spyOn(api, 'loadRevision').mockResolvedValue(null);
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const backup = await parseProjectBackup(
+      await createProjectBackup(document, true, null, {
+        includeEncryptedFiles: true
+      })
+    );
+    expect(backup.files).toHaveLength(1);
+    expect(backupFileBytes(backup.files[0]!)).toEqual(bytes);
     expect(fetch).not.toHaveBeenCalled();
   } finally {
     setEncryptedBlobReader(null);
