@@ -2075,7 +2075,7 @@ async function loadProjectSummaries(
     ? remote?.pendingEncryptedProjectIds
     : undefined;
   if (accountId && isCurrentKeySession(keySessionRevision)) {
-    if (remote) forgetShelfProjectNames(accountId, [...shelfNames.keys()].filter((id) => !remoteIds.has(id)));
+    if (remote) forgetShelfProjectNames(accountId, [...shelfNames.keys()].filter((id) => !remoteIds.has(id)), scope.ownsDiscovery);
     for (const project of remoteProjects) {
       if (
         project.storageFormat === 2 &&

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '@openzcad/shared';
+import { OrganizationMirrorBackground } from './projectOrganizationBackground';
 import {
   allowKeySession,
   blockKeySession,
@@ -48,6 +49,47 @@ afterEach(() => {
 });
 
 describe('verified shelf name hints', () => {
+  it('does not let an older same-account listing purge titles learned by a newer discovery', () => {
+    const background = new OrganizationMirrorBackground({
+      storage: localStorage,
+      locks: null
+    });
+    const oldScope = background.begin('account-a');
+    rememberVerifiedShelfName('account-a', project);
+    const oldHints = cachedShelfNames('account-a');
+    const oldListingIds = new Set([project.projectId]);
+    const newScope = background.begin('account-a');
+    const added = {
+      ...project,
+      projectId: 'proj_newly_shared',
+      name: 'New shared bracket'
+    } as ProjectSummary;
+    rememberVerifiedShelfName('account-a', added);
+    expect(oldScope.ownsDiscovery()).toBe(false);
+    // The old response resumes with the same key revision and a live reference
+    // to the shared cache, which now includes the newly verified project.
+    forgetShelfProjectNames(
+      'account-a',
+      [...oldHints.keys()].filter((id) => !oldListingIds.has(id)),
+      oldScope.ownsDiscovery
+    );
+    vi.advanceTimersByTime(100);
+    expect(cachedShelfNames('account-a').get(added.projectId)?.name).toBe(
+      added.name
+    );
+    expect(JSON.parse(localStorage.getItem(storageKey)!)).toContainEqual([
+      added.projectId,
+      added.name,
+      added.updatedAt
+    ]);
+    forgetShelfProjectNames(
+      'account-a',
+      [project.projectId],
+      newScope.ownsDiscovery
+    );
+    expect(cachedShelfNames('account-a').has(project.projectId)).toBe(false);
+    expect(cachedShelfNames('account-a').has(added.projectId)).toBe(true);
+  });
   it('forgets purged names without discarding other cached titles or allowing a queued write to restore them', () => {
     rememberVerifiedShelfName('account-a', project);
     rememberVerifiedShelfName('account-a', {

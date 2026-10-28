@@ -109,8 +109,10 @@ export function rememberVerifiedShelfName(
 /** Purged projects and withdrawn account memberships leave no stale title. */
 export function forgetShelfProjectNames(
   accountId: string,
-  projectIds: Iterable<string>
+  projectIds: Iterable<string>,
+  isCurrent?: () => boolean
 ): void {
+  if (isCurrent?.() === false) return;
   if (!isKeySessionActive()) {
     forgetShelfNames(accountId);
     return;
