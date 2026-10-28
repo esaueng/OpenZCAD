@@ -20,7 +20,130 @@ async function createListedProject(page: Page, name: string) {
       : route.fallback()
   );
   await page.getByTitle('Back to projects').click();
+  return project;
 }
+
+test(
+  'cached names and decoded thumbnails survive provisional encrypted listings',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    const project = await createListedProject(page, 'Recognizable bracket');
+    await expect(
+      page.locator('.start-tile-open', { hasText: 'Recognizable bracket' })
+    ).toBeVisible();
+    const source = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 16;
+      const context = canvas.getContext('2d')!;
+      context.fillStyle = 'blue';
+      context.fillRect(0, 0, 16, 16);
+      return canvas.toDataURL('image/webp');
+    });
+    await page.evaluate(
+      async ({ project, source }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open('openzcad-v2');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () =>
+            reject(request.error ?? new Error('Cache open failed'));
+        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction('projectThumbnails', 'readwrite');
+            tx.objectStore('projectThumbnails').put({
+              projectId: project.projectId,
+              source,
+              version: 0,
+              updatedAt: project.updatedAt
+            });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () =>
+              reject(tx.error ?? new Error('Cache write failed'));
+          });
+        } finally {
+          db.close();
+        }
+      },
+      { project, source }
+    );
+    const listing = gate();
+    let listingReturned = false;
+    await page.route('**/api/projects', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await listing.promise;
+      listingReturned = true;
+      await route.fulfill({
+        json: {
+          projects: [
+            {
+              ...project,
+              name: 'Encrypted project',
+              storageFormat: 2,
+              updatedAt: '2030-10-28T12:00:00Z',
+              documentVersion: 9
+            }
+          ]
+        }
+      });
+    });
+    const card = page.locator('.start-tile', {
+      hasText: 'Recognizable bracket'
+    });
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      const image = card.locator('.start-tile-thumb img');
+      await expect(image).toHaveAttribute('src', source);
+      // Record every mutation, including a placeholder removed in the same frame
+      // that a promise resolves; a final screenshot alone misses that flash.
+      await card.evaluate((tile) => {
+        const browser = window as typeof window & {
+          __thumbnailRegressions?: string[];
+        };
+        browser.__thumbnailRegressions = [];
+        new MutationObserver((mutations) => {
+          for (const mutation of mutations) {
+            for (const removed of mutation.removedNodes) {
+              if (removed instanceof HTMLImageElement)
+                browser.__thumbnailRegressions!.push('image removed');
+            }
+          }
+          if (tile.textContent?.includes('Encrypted project'))
+            browser.__thumbnailRegressions!.push('name reset');
+          if (!tile.querySelector('.start-tile-thumb img'))
+            browser.__thumbnailRegressions!.push('preview missing');
+        }).observe(tile, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+          attributes: true
+        });
+      });
+      listing.release();
+      await expect.poll(() => listingReturned).toBe(true);
+      await expect(card.locator('.start-tile-open')).toBeEnabled();
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          )
+      );
+      await expect(image).toHaveAttribute('src', source);
+      expect(
+        await page.evaluate(
+          () =>
+            (window as typeof window & { __thumbnailRegressions?: string[] })
+              .__thumbnailRegressions
+        )
+      ).toEqual([]);
+      await expect(
+        page.locator('.start-tile', { hasText: 'Encrypted project' })
+      ).toHaveCount(0);
+    } finally {
+      listing.release();
+    }
+  }
+);
 
 function gate() {
   let release!: () => void;

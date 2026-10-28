@@ -81,6 +81,7 @@
     "src/components/FileDropTarget.test.tsx",
     "src/components/InPlaceCommandBar.test.tsx",
     "src/components/NumericKeypad.test.tsx",
+    "src/components/PartThumbnail.test.tsx",
     "src/components/ProjectConflictDialog.test.tsx",
     "src/components/ProjectEncryptionPreference.test.tsx",
     "src/components/ProjectSharingDialog.test.tsx",

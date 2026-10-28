@@ -130,7 +130,8 @@ export function cachedThumbnailSource(
  */
 export function mergeProjectSummaries(
   local: ProjectSummary[],
-  remote: ProjectSummary[]
+  remote: ProjectSummary[],
+  pendingEncryptedProjectIds?: ReadonlySet<string>
 ): ProjectSummary[] {
   const merged = new Map(local.map((project) => [project.projectId, project]));
   for (const project of remote) {
@@ -140,20 +141,58 @@ export function mergeProjectSummaries(
       continue;
     }
     const newest = project.updatedAt > existing.updatedAt ? project : existing;
+    // A transport placeholder is not a rename. Keep this device's known
+    // presentation until the encrypted info passes its existing verifier.
+    const pending =
+      project.storageFormat === 2 &&
+      pendingEncryptedProjectIds?.has(project.projectId);
     const organization = existing.organization ?? project.organization;
-    const thumbnailArtifactId =
-      project.thumbnailArtifactId ?? existing.thumbnailArtifactId;
+    const thumbnailArtifactId = pending
+      ? existing.thumbnailArtifactId
+      : (project.thumbnailArtifactId ?? existing.thumbnailArtifactId);
     // The account decides how it stores the project: a device record from
     // before it was encrypted must not make it look openable again.
     const storageFormat = project.storageFormat ?? existing.storageFormat;
-    merged.set(project.projectId, {
+    const summary = {
       ...newest,
+      ...(pending ? { name: existing.name } : {}),
       ...(thumbnailArtifactId ? { thumbnailArtifactId } : {}),
       ...(organization ? { organization } : {}),
       ...(storageFormat !== undefined ? { storageFormat } : {})
-    });
+    };
+    if (pending && !thumbnailArtifactId) delete summary.thumbnailArtifactId;
+    merged.set(project.projectId, summary);
   }
   return [...merged.values()].sort(compareProjectSummaries);
+}
+
+/** Keep cached cards in place while ciphertext transport dates are provisional. */
+export function retainPendingShelfOrder(
+  projects: ProjectSummary[],
+  previous: ProjectSummary[],
+  pendingEncryptedProjectIds?: ReadonlySet<string>
+): ProjectSummary[] {
+  if (!pendingEncryptedProjectIds?.size) return projects;
+  const cached = new Map(
+    previous.map((project) => [project.projectId, project])
+  );
+  const ordering = new Map(
+    projects.map((project) => {
+      const old = pendingEncryptedProjectIds.has(project.projectId)
+        ? cached.get(project.projectId)
+        : undefined;
+      return [
+        project.projectId,
+        old ? { ...project, updatedAt: old.updatedAt } : project
+      ];
+    })
+  );
+  return [...projects].sort((a, b) =>
+    compareProjectSummaries(
+      ordering.get(a.projectId)!,
+      ordering.get(b.projectId)!
+    )
+  );
 }
 
 /** A late verified title must not replace a newer local rename or shelf action. */

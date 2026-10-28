@@ -65,7 +65,10 @@ describe('progressive project listing', () => {
     const onVerified = vi.fn();
     expect(
       await api.listProjects({ isCurrent: () => true, onVerified })
-    ).toEqual({ projects: [project] });
+    ).toEqual({
+      projects: [project],
+      pendingEncryptedProjectIds: new Set([project.projectId])
+    });
     await vi.waitFor(() => expect(progress).toBeDefined());
     expect(onVerified).not.toHaveBeenCalled();
     progress!.onEntry(project.projectId, {
@@ -88,7 +91,9 @@ describe('progressive project listing', () => {
     await vi.waitFor(() => expect(encryptedProjectShelf).toHaveBeenCalled());
     expect(settled).toBe(false);
     finish(new Map([[project.projectId, { name: 'Verified bracket' }]]));
-    expect((await listing).projects[0]?.name).toBe('Verified bracket');
+    const result = await listing;
+    expect(result.projects[0]?.name).toBe('Verified bracket');
+    expect(result.pendingEncryptedProjectIds).toBeUndefined();
   });
 
   it.each(['navigation', 'key session'])(
@@ -111,5 +116,21 @@ describe('progressive project listing', () => {
     session.revision++;
     finish(new Map([[project.projectId, { name: 'Former account title' }]]));
     expect((await listing).projects[0]?.name).toBe('Encrypted project');
+  });
+
+  it('marks names pending when verification cannot produce metadata', async () => {
+    const listing = api.listProjects();
+    await vi.waitFor(() => expect(encryptedProjectShelf).toHaveBeenCalled());
+    finish(new Map());
+    expect((await listing).pendingEncryptedProjectIds).toEqual(
+      new Set([project.projectId])
+    );
+  });
+
+  it('does not mark a verified literal "Encrypted project" title as a placeholder', async () => {
+    const listing = api.listProjects();
+    await vi.waitFor(() => expect(encryptedProjectShelf).toHaveBeenCalled());
+    finish(new Map([[project.projectId, { name: 'Encrypted project' }]]));
+    expect((await listing).pendingEncryptedProjectIds).toBeUndefined();
   });
 });

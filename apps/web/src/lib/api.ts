@@ -78,6 +78,11 @@ export interface ProjectListingProgress {
   onVerified(project: ProjectSummary): void;
 }
 
+/** Client-only presentation state; never part of the server/storage contract. */
+interface ShelfListingResponse extends ListProjectsResponse {
+  pendingEncryptedProjectIds?: ReadonlySet<string>;
+}
+
 /**
  * An API call that reached the server and came back refused. Callers need the
  * status to tell a rejected request apart from an unreachable backend: the
@@ -596,17 +601,28 @@ export const api = {
    */
   listProjects: async (
     progress?: ProjectListingProgress
-  ): Promise<ListProjectsResponse> => {
+  ): Promise<ShelfListingResponse> => {
     const revision = getKeySessionRevision();
     const isCurrent = () =>
       isCurrentKeySession(revision) && (progress?.isCurrent() ?? true);
     const { encryptedProjectInfo, ...listing } = await requestJson<
       ListProjectsResponse & E2eeListProjectsExtension
     >('/api/projects');
-    if (progress && !isCurrent()) return listing;
+    const pending = new Set<string>(
+      Array.isArray(listing.projects)
+        ? listing.projects
+            .filter((project) => project.storageFormat === 2)
+            .map((project) => project.projectId)
+        : []
+    );
+    const unverified = (): ShelfListingResponse =>
+      pending.size
+        ? { ...listing, pendingEncryptedProjectIds: pending }
+        : listing;
+    if (progress && !isCurrent()) return unverified();
     if (Array.isArray(listing.projects))
       rememberProjectFormats(listing.projects);
-    if (!encryptedProjectInfo?.length) return listing;
+    if (!encryptedProjectInfo?.length) return unverified();
     if (progress) {
       const projects = new Map<string, ProjectSummary>(
         listing.projects.map((p) => [p.projectId, p])
@@ -634,15 +650,16 @@ export const api = {
           })
         )
         .catch(() => undefined);
-      return listing;
+      return unverified();
     }
     try {
       const shelf = await (
         await encryptedProjects()
       ).encryptedProjectShelf(encryptedProjectInfo);
-      if (!isCurrent()) return listing;
+      if (!isCurrent()) return unverified();
+      for (const id of shelf.keys()) pending.delete(id);
       return {
-        ...listing,
+        ...unverified(),
         projects: listing.projects.map((project) => {
           const entry = shelf.get(project.projectId);
           return entry === undefined
@@ -660,7 +677,7 @@ export const api = {
         })
       };
     } catch {
-      return listing;
+      return unverified();
     }
   },
   /**

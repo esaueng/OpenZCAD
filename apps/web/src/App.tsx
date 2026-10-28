@@ -359,6 +359,7 @@ import {
   announceKeySessionChange,
   blockKeySession,
   getKeySessionRevision,
+  isCurrentKeySession,
   subscribeKeySession,
   type KeySessionEvent
 } from './lib/e2ee/keySession';
@@ -1457,6 +1458,7 @@ import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
   withVerifiedShelfMetadata,
+  retainPendingShelfOrder,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail
@@ -1962,6 +1964,7 @@ async function loadProjectSummaries(
    */
   cloudProjectIds: Set<string>;
 }> {
+  const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
   const unavailableAs =
@@ -2028,9 +2031,16 @@ async function loadProjectSummaries(
         unavailableAs(localOrganizations)
       )
     : localOrganizations;
-  const projects = applyLocalProjectOrganizations(
-    mergeProjectSummaries(local, remoteProjects),
-    settledOrganizations
+  const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
+    ? remote?.pendingEncryptedProjectIds
+    : undefined;
+  const projects = retainPendingShelfOrder(
+    applyLocalProjectOrganizations(
+      mergeProjectSummaries(local, remoteProjects, pendingEncryptedProjectIds),
+      settledOrganizations
+    ),
+    local,
+    pendingEncryptedProjectIds
   ).filter(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
@@ -26502,6 +26512,7 @@ export function App() {
           }
           onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
           loadThumbnail={loadThumbnail}
+          thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
         />
         {settingsOverlay}
