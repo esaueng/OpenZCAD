@@ -107,7 +107,11 @@ def database_state(sql):
                   WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'
                     AND tbl_name NOT LIKE 'sqlite_%' AND tbl_name NOT LIKE '_cf_%'
                   ORDER BY type,name''')]
-        return {'tables':result,'schema':schema}
+        sequences={}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='sqlite_sequence'").fetchone():
+            sequences={name:value for name,value in db.execute('SELECT name,seq FROM sqlite_sequence')
+                       if name in result}
+        return {'tables':result,'schema':schema,'sequences':sequences}
     finally:
         db.close()
 

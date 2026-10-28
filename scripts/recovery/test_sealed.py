@@ -242,6 +242,16 @@ class SealedTests(unittest.TestCase):
         self.assertEqual(database_state(b'CREATE TABLE t(v);INSERT INTO t VALUES(1),(2);'),
                          database_state(b'CREATE TABLE t(v);INSERT INTO t VALUES(2),(1);'))
 
+    def test_restore_comparison_preserves_deleted_autoincrement_history(self):
+        base=b'CREATE TABLE audit(id INTEGER PRIMARY KEY AUTOINCREMENT);'
+        used=base+b'INSERT INTO audit VALUES(10);DELETE FROM audit;'
+        self.assertNotEqual(database_state(base),database_state(used))
+        preserved=base+b"INSERT INTO sqlite_sequence VALUES('audit',10);"
+        self.assertEqual(database_state(used),database_state(preserved))
+        # Cloudflare's own internal counters are outside the user-data restore.
+        internal=b'CREATE TABLE _cf_internal(id INTEGER PRIMARY KEY AUTOINCREMENT);'
+        self.assertEqual(database_state(internal),database_state(internal+b'INSERT INTO _cf_internal VALUES(20);DELETE FROM _cf_internal;'))
+
 
 
 if __name__=='__main__': unittest.main()

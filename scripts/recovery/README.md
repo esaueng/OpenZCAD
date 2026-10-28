@@ -93,7 +93,8 @@ python3 scripts/recovery/restore.py --config /private/disposable-drill.json \
 
 The archive is authenticated and safely extracted before remote writes. The
 tool restores the paired SQL and opaque R2 keys/metadata, exports the new D1
-again, compares every table's columns and rows, and reads back every R2 body
+again, compares every table's schema, typed rows and AUTOINCREMENT sequence
+state (including counters above retained row IDs), and reads back every R2 body
 and its metadata, including the original Standard or InfrequentAccess storage
 class. Missing or unsupported storage classes are refused before import.
 Failed/partial drills are retained for investigation; retry
