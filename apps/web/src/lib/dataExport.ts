@@ -88,7 +88,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
   };
   // Stage a complete project before touching the ZIP or its byte budget.
   // Blob sizes are checked before any of their bytes are read.
-  const batch = () => {
+  const batch = (bufferBlobs = false) => {
     const pending: PendingEntry[] = [];
     let length = 0;
     const add = (path: string, data: Uint8Array | Blob) => {
@@ -97,7 +97,9 @@ async function buildDataExport(options: DataExportOptions): Promise<{
         (data instanceof Blob ? data.size : data.byteLength) +
         92 +
         strToU8(path).byteLength * 2;
-      checkSize(length + size);
+      // A raw snapshot is read atomically before output. Budget both its
+      // staged input and ZIP output, in addition to the existing archive.
+      checkSize((length + size) * (bufferBlobs ? 2 : 1));
       length += size;
       pending.push({ path, data });
     };
@@ -106,8 +108,8 @@ async function buildDataExport(options: DataExportOptions): Promise<{
       json: (path: string, value: unknown) =>
         add(path, strToU8(JSON.stringify(value))),
       async commit() {
-        checkSize(length);
-        const ready: { path: string; data: Uint8Array }[] = [];
+        checkSize(length * (bufferBlobs ? 2 : 1));
+        const ready: ({ path: string; data: Uint8Array } | undefined)[] = [];
         for (const entry of pending) {
           check();
           ready.push({
@@ -119,7 +121,10 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           });
         }
         check();
-        for (const entry of ready) {
+        pending.length = 0;
+        for (let index = 0; index < ready.length; index++) {
+          const entry = ready[index]!;
+          ready[index] = undefined;
           const file = new ZipPassThrough(entry.path);
           zip.add(file);
           file.push(entry.data, true);
@@ -353,7 +358,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
     // If the snapshot cannot fit/read, discard the entire section and report it.
     options.onProgress('Preparing the device database snapshot…');
     try {
-      const snapshot = batch();
+      const snapshot = batch(true);
       let recordNumber = 0;
       let binaryNumber = 0;
       await visitLocalProjectData((store, key, value) => {
@@ -396,7 +401,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
         name: 'Raw device database snapshot',
         reason:
           error instanceof ExportCapacityError
-            ? 'The raw snapshot would exceed the remaining space in the 512 MB archive. Complete project backups take priority.'
+            ? 'The raw snapshot would exceed the space or browser-memory budget for the 512 MB download. Complete project backups take priority.'
             : failureReason(error)
       });
     }

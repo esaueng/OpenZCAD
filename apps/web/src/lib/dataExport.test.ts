@@ -224,33 +224,37 @@ it('refuses an account switch or a response from another account', async () => {
   );
 });
 
-it('omits an oversized raw snapshot before reading bytes and still downloads other data', async () => {
-  const blob = new Blob(['tiny']);
-  Object.defineProperty(blob, 'size', { value: MAX_DATA_EXPORT_BYTES + 1 });
-  const read = vi.spyOn(blob, 'arrayBuffer');
-  vi.spyOn(localStore, 'visitLocalProjectData').mockImplementation(
-    async (visit, selectedStores) => {
-      if (!selectedStores) visit('sourceBlobs', 'large', { body: blob });
-    }
-  );
-  const archive = await entries(await createDataExport(options()));
-  const manifest = JSON.parse(strFromU8(archive['manifest.json']!)) as {
-    omittedSections: { name: string; reason: string }[];
-  };
-  expect(manifest.omittedSections).toHaveLength(1);
-  expect(manifest.omittedSections[0]?.name).toBe(
-    'Raw device database snapshot'
-  );
-  expect(manifest.omittedSections[0]?.reason).toContain('512 MB');
-  expect(archive['device/settings.json']).toBeDefined();
-  expect(
-    Object.keys(archive).some(
-      (path) =>
-        path.startsWith('device/binary/') || path.startsWith('device/database/')
-    )
-  ).toBe(false);
-  expect(read).not.toHaveBeenCalled();
-});
+it.each([MAX_DATA_EXPORT_BYTES + 1, MAX_DATA_EXPORT_BYTES / 2 + 1])(
+  'omits a raw snapshot of %i bytes before reading when archive or staged-memory capacity is exceeded',
+  async (size) => {
+    const blob = new Blob(['tiny']);
+    Object.defineProperty(blob, 'size', { value: size });
+    const read = vi.spyOn(blob, 'arrayBuffer');
+    vi.spyOn(localStore, 'visitLocalProjectData').mockImplementation(
+      async (visit, selectedStores) => {
+        if (!selectedStores) visit('sourceBlobs', 'large', { body: blob });
+      }
+    );
+    const archive = await entries(await createDataExport(options()));
+    const manifest = JSON.parse(strFromU8(archive['manifest.json']!)) as {
+      omittedSections: { name: string; reason: string }[];
+    };
+    expect(manifest.omittedSections).toHaveLength(1);
+    expect(manifest.omittedSections[0]?.name).toBe(
+      'Raw device database snapshot'
+    );
+    expect(manifest.omittedSections[0]?.reason).toContain('512 MB');
+    expect(archive['device/settings.json']).toBeDefined();
+    expect(
+      Object.keys(archive).some(
+        (path) =>
+          path.startsWith('device/binary/') ||
+          path.startsWith('device/database/')
+      )
+    ).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+  }
+);
 
 it('skips unreadable and incomplete cloud backups atomically, then includes later projects and reports every omission', async () => {
   const broken = createProjectDocument('Unavailable project', session.userId);

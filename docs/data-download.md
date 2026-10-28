@@ -41,6 +41,10 @@ before adding any of its files to the ZIP, so a failure leaves no incomplete
 project folder and spends no archive space. Portable project backups take
 priority over the optional raw device snapshot. If that snapshot cannot fit or
 be read, its entire section is omitted and reported.
+The raw snapshot's capacity check budgets both staged Blob bytes and their ZIP
+output alongside the existing archive, so it can be omitted even when its
+payload alone would fit. Staged input references are released as entries are
+written.
 
 The completion screen lists every skipped project's name, ID, local/cloud copy
 and reason, with instructions to open the project and choose File → Export
