@@ -92,6 +92,7 @@ describe('privacy policy page', () => {
     expect(document.querySelector('h1')?.textContent?.trim()).toBe(
       'Privacy policy'
     );
+    expect(pageText()).toContain('Effective October 28, 2026');
     // No script means no sign-in, no app boot and nothing for the entry
     // budget; nothing is fetched from another origin either.
     expect(parsed.querySelectorAll('script')).toHaveLength(0);
