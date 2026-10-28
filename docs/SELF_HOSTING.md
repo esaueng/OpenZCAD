@@ -388,8 +388,10 @@ off while default-on is enabled; the preflight rejects enabling both. A later re
 removes it; after that the only way out is the export described below.
 
 `E2EE_CANARY_EMAILS` is a Worker secret, never a `var`. It opens the key routes
-to the listed accounts while `E2EE_KEYS_ENABLED` stays off, which is how the
-official beta stages its rollout. The self-host preflight cannot see secrets,
+to the listed accounts while `E2EE_KEYS_ENABLED` stays off. The official beta
+now offers opt-in encryption to every authenticated account; the secret remains
+available as a scoped fallback if global keys are closed again. The self-host
+preflight cannot see secrets,
 so it does not accept `E2EE_PROJECTS_ENABLED` while `E2EE_KEYS_ENABLED` is off;
 try encryption on a separate test instance instead.
 

@@ -49,12 +49,11 @@
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
     "PROJECT_PERSONAL_SYNC_ENABLED": "true",
-    // Global keys remain closed. E2EE_CANARY_EMAILS is a private secret:
-    // only those accounts can exercise the qualified E2EE rollout.
-    "E2EE_KEYS_ENABLED": "false",
-    // Projects and opt-in migration remain gated by keys for each account.
-    // Apply reviewed migrations through 0044 and verify paired recovery
-    // before setting the canary secret on the reviewed production version.
+    // Every authenticated beta account may set up encryption and opt in.
+    // E2EE_CANARY_EMAILS remains an optional fallback if global keys close.
+    "E2EE_KEYS_ENABLED": "true",
+    // Key setup, new-project encryption and existing-project migration remain
+    // separate user choices. The Worker still checks the required storage schema.
     "E2EE_PROJECTS_ENABLED": "true",
     "E2EE_MIGRATION_ENABLED": "true",
     // The beta-only reverse path (ADR-024 Phase 7, slice 7-3), turning an
