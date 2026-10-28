@@ -58,7 +58,9 @@ export interface ConflictResolutionHandlers {
     outcome: ConflictResolutionOutcome
   ): Promise<void> | void;
   /** Persist a new project before replacing the local original. */
-  saveLocalAsCopy(document: ProjectDocument): Promise<void>;
+  saveLocalAsCopy(document: ProjectDocument): Promise<string>;
+  /** Check durable storage, since a saved retry copy may have been deleted. */
+  localCopyExists(projectId: string): Promise<boolean>;
 }
 
 export interface ConflictResolutionContext {
@@ -213,17 +215,31 @@ function localCopyKey(document: ProjectDocument): string {
   return `content:${fnv1a64(canonicalJson(projectRebuildInputs(document)))}`;
 }
 
+interface CopyLedgerEntry {
+  copyKey: string;
+  copyProjectId: string;
+}
+
 /** Successfully written explicit copies survive a failed remote adoption. */
 function readCopyLedger(
   projectId: string,
   storage: Storage = localStorage
-): string[] {
+): CopyLedgerEntry[] {
   try {
     const parsed: unknown = JSON.parse(
       storage.getItem(ledgerKey(projectId)) ?? '[]'
     );
     return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      ? parsed.filter((entry): entry is CopyLedgerEntry => {
+          if (!entry || typeof entry !== 'object') return false;
+          const record = entry as Partial<CopyLedgerEntry>;
+          return (
+            typeof record.copyKey === 'string' &&
+            typeof record.copyProjectId === 'string' &&
+            record.copyProjectId.length > 0 &&
+            record.copyProjectId !== projectId
+          );
+        })
       : [];
   } catch {
     return [];
@@ -233,12 +249,13 @@ function readCopyLedger(
 function rememberLocalCopy(
   projectId: string,
   copyKey: string,
+  copyProjectId: string,
   storage: Storage = localStorage
 ): void {
   const ledger = readCopyLedger(projectId, storage).filter(
-    (entry) => entry !== copyKey
+    (entry) => entry.copyKey !== copyKey
   );
-  ledger.push(copyKey);
+  ledger.push({ copyKey, copyProjectId });
   storage.setItem(
     ledgerKey(projectId),
     JSON.stringify(ledger.slice(-COPY_LEDGER_LIMIT))
@@ -335,11 +352,16 @@ export async function resolveProjectConflict(
   const outcome: ConflictResolutionOutcome = { localCopy: 'not-requested' };
   if (resolution === 'save-local-copy') {
     const copyKey = localCopyKey(conflict.localDocument);
-    if (readCopyLedger(conflict.projectId).includes(copyKey)) {
+    const recorded = readCopyLedger(conflict.projectId).find(
+      (entry) => entry.copyKey === copyKey
+    );
+    if (recorded && (await handlers.localCopyExists(recorded.copyProjectId))) {
       outcome.localCopy = 'already-saved';
     } else {
-      await handlers.saveLocalAsCopy(structuredClone(conflict.localDocument));
-      rememberLocalCopy(conflict.projectId, copyKey);
+      const copyProjectId = await handlers.saveLocalAsCopy(
+        structuredClone(conflict.localDocument)
+      );
+      rememberLocalCopy(conflict.projectId, copyKey, copyProjectId);
       outcome.localCopy = 'saved';
     }
   }
@@ -369,7 +391,7 @@ export async function resolveProjectConflict(
     // choice must still be able to create a copy, even of the same model.
     const copyKey = localCopyKey(conflict.localDocument);
     const pending = readCopyLedger(conflict.projectId).filter(
-      (key) => key !== copyKey
+      (entry) => entry.copyKey !== copyKey
     );
     localStorage.setItem(
       ledgerKey(conflict.projectId),

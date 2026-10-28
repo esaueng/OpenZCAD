@@ -14,13 +14,13 @@ import { pathToFileURL } from 'node:url';
  *
  * This script instead assigns whole spec files to shards by recorded seconds
  * (longest-processing-time first, into the lightest shard), reading the
- * weights from `test/e2e/shard-weights.json`. Every `*.spec.ts` in the
- * directory is assigned exactly once; a file with no recorded weight gets
- * `DEFAULT_WEIGHT_SECONDS`, so a new spec runs on its first CI pass without
- * touching the weights file. Refresh the weights from the `e2e-report-*`
+ * weights for the selected suite. Full runs assign every `*.spec.ts` once;
+ * CI smoke runs assign files containing `@ci-smoke`, and Playwright filters
+ * the cases by that tag. A file with no recorded weight gets
+ * `DEFAULT_WEIGHT_SECONDS`. Refresh weights from the `e2e-report-*`
  * artifacts a `ci` run uploads:
  *
- *   node scripts/e2e-shards.mjs --update path/to/e2e-report-*.json
+ *   node scripts/e2e-shards.mjs --suite smoke --update path/to/e2e-report-*.json
  *
  * and print the file filters for one shard (what the workflow passes to
  * `playwright test`):
@@ -30,6 +30,8 @@ import { pathToFileURL } from 'node:url';
 
 export const SPEC_DIR = 'test/e2e';
 export const WEIGHTS_PATH = 'test/e2e/shard-weights.json';
+export const SMOKE_WEIGHTS_PATH = 'test/e2e/smoke-shard-weights.json';
+export const SMOKE_TAG = '@ci-smoke';
 /** Mirrors `testMatch` in `playwright.config.ts`; the test keeps them equal. */
 export const SPEC_PATTERN = /\.spec\.ts$/;
 /**
@@ -63,6 +65,29 @@ export function listSpecs(dir = SPEC_DIR) {
   };
   visit(dir);
   return specs.sort((a, b) => a.localeCompare(b));
+}
+
+/** CI trades the extended regression matrix for explicitly tagged journeys. */
+export function resolveSuite(env = process.env) {
+  const probe = env.OZ_PERF || env.OZ_CAPTURE || env.H02_SESSION_PROBE === '1';
+  const suite = env.OPENZCAD_E2E_SUITE ?? (env.CI && !probe ? 'smoke' : 'full');
+  if (suite !== 'smoke' && suite !== 'full') {
+    throw new Error(`Unknown browser suite "${suite}"; use smoke or full.`);
+  }
+  return suite;
+}
+
+/** Keep the runner's file filters and Playwright's smoke tag in agreement. */
+export function suiteSpecs(suite, dir = SPEC_DIR) {
+  if (suite !== 'smoke' && suite !== 'full') {
+    throw new Error(`Unknown browser suite "${suite}"; use smoke or full.`);
+  }
+  const specs = listSpecs(dir);
+  return suite === 'full'
+    ? specs
+    : specs.filter((spec) =>
+        readFileSync(join(dir, spec), 'utf8').includes(SMOKE_TAG)
+      );
 }
 
 /** @param {string} value like `3/6` */
@@ -199,24 +224,46 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  const [command, ...rest] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const suiteIndex = args.indexOf('--suite');
+  const suite = resolveSuite(
+    suiteIndex < 0
+      ? process.env
+      : { OPENZCAD_E2E_SUITE: args.splice(suiteIndex, 2)[1] ?? '' }
+  );
+  const weightsPath = suite === 'smoke' ? SMOKE_WEIGHTS_PATH : WEIGHTS_PATH;
+  const [command, ...rest] = args;
   if (command === '--update') {
     if (rest.length === 0) {
       throw new Error('Pass at least one Playwright JSON report to --update.');
     }
     const reports = rest.map((path) => JSON.parse(readFileSync(path, 'utf8')));
+    for (const report of reports) {
+      // Reports before suite metadata existed are full-suite measurements.
+      const reportedSuite = report?.config?.metadata?.e2eSuite ?? 'full';
+      if (reportedSuite !== suite) {
+        throw new Error(
+          `Cannot update ${suite} weights from a ${reportedSuite} report.`
+        );
+      }
+    }
     const next = mergeWeights(
-      readWeights(),
+      readWeights(weightsPath),
       weightsFromReports(reports),
-      listSpecs()
+      suiteSpecs(suite)
     );
-    writeFileSync(WEIGHTS_PATH, `${JSON.stringify(next, null, 2)}\n`);
-    for (const shard of partitionSpecs(listSpecs(), next, rest.length)) {
+    writeFileSync(weightsPath, `${JSON.stringify(next, null, 2)}\n`);
+    for (const shard of partitionSpecs(suiteSpecs(suite), next, rest.length)) {
       console.error(`${Math.round(shard.seconds)}s ${shard.files.join(' ')}`);
     }
   } else {
     const { shard, total } = parseShard(command);
-    const filters = shardFilters(shard, total, listSpecs(), readWeights());
+    const filters = shardFilters(
+      shard,
+      total,
+      suiteSpecs(suite),
+      readWeights(weightsPath)
+    );
     if (filters.length === 0) {
       throw new Error(`Shard ${shard}/${total} would run no spec files.`);
     }

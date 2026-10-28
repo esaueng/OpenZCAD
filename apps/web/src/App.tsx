@@ -5277,6 +5277,14 @@ export function App() {
       setProjects((current) =>
         mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
+      return copy.projectId;
+    },
+    async localCopyExists(projectId) {
+      const [document, snapshot] = await Promise.all([
+        loadLocalProject(projectId),
+        loadLocalProjectOrganizationSnapshot(projectId)
+      ]);
+      return document !== null && snapshot?.organization.status !== 'deleted';
     },
     useRemoteVersion(remoteDocument, outcome) {
       if (!collaboration.useRemoteVersion(remoteDocument.version)) {
@@ -5300,6 +5308,7 @@ export function App() {
    */
   const accountConflictHandlers: ConflictResolutionHandlers = {
     saveLocalAsCopy: conflictHandlers.saveLocalAsCopy,
+    localCopyExists: conflictHandlers.localCopyExists,
     async useRemoteVersion(incomingDocument, outcome) {
       // Account documents are stored without their derived projection.
       // Reattach the local one when it provably describes the same canonical

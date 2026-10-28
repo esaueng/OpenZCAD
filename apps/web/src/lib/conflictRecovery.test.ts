@@ -33,7 +33,8 @@ function handlers(): ConflictResolutionHandlers {
   return {
     useRemoteVersion: vi.fn(async () => undefined),
     keepMyVersion: vi.fn(async () => undefined),
-    saveLocalAsCopy: vi.fn(async () => undefined)
+    saveLocalAsCopy: vi.fn(async () => 'proj_local_copy'),
+    localCopyExists: vi.fn(async () => true)
   };
 }
 
@@ -154,6 +155,7 @@ describe('collaboration conflict recovery', () => {
         expect(document).toEqual(original.localDocument);
         document.name = 'A copy handler may mutate its private clone';
         order.push('copy');
+        return 'proj_local_copy';
       });
       vi.mocked(host.useRemoteVersion).mockImplementation(async (document) => {
         expect(document).toEqual(original.remoteDocument);
@@ -241,6 +243,9 @@ describe('collaboration conflict recovery', () => {
     expect(
       await resolveProjectConflict(retried, 'save-local-copy', context, host)
     ).toEqual({ localCopy: 'already-saved' });
+    expect(host.localCopyExists).toHaveBeenCalledExactlyOnceWith(
+      'proj_local_copy'
+    );
     expect(host.saveLocalAsCopy).toHaveBeenCalledOnce();
     await resolveProjectConflict(
       conflictFromDocuments(
@@ -252,6 +257,76 @@ describe('collaboration conflict recovery', () => {
       host
     );
     expect(host.saveLocalAsCopy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['room', 'account'] as const)(
+    'replaces a deleted retry copy before adopting the %s version',
+    async (source) => {
+      const base = createProjectDocument('Conflict', owner);
+      const conflict = conflictFromDocuments(
+        edited(base, 4, 'here'),
+        edited(base, 5, 'there'),
+        source
+      );
+      const host = handlers();
+      const context = {
+        role: 'owner' as const,
+        lease: null,
+        leasesEnforced: false
+      };
+      vi.mocked(host.useRemoteVersion).mockRejectedValueOnce(
+        new Error('remote moved')
+      );
+      await expect(
+        resolveProjectConflict(conflict, 'save-local-copy', context, host)
+      ).rejects.toThrow('remote moved');
+
+      // Decide later, then delete the saved shelf project before retrying.
+      vi.mocked(host.localCopyExists).mockResolvedValue(false);
+      vi.mocked(host.saveLocalAsCopy).mockRejectedValueOnce(
+        new Error('disk full')
+      );
+      await expect(
+        resolveProjectConflict(conflict, 'save-local-copy', context, host)
+      ).rejects.toThrow('disk full');
+      expect(host.useRemoteVersion).toHaveBeenCalledOnce();
+      vi.mocked(host.saveLocalAsCopy).mockResolvedValueOnce(
+        'proj_local_replacement'
+      );
+      await expect(
+        resolveProjectConflict(conflict, 'save-local-copy', context, host)
+      ).resolves.toEqual({ localCopy: 'saved' });
+      expect(host.saveLocalAsCopy).toHaveBeenCalledTimes(3);
+      expect(host.useRemoteVersion).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it('does not adopt remote when the saved copy cannot be checked', async () => {
+    const base = createProjectDocument('Conflict', owner);
+    const conflict = conflictFromDocuments(
+      edited(base, 4, 'here'),
+      edited(base, 5, 'there')
+    );
+    const host = handlers();
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    vi.mocked(host.useRemoteVersion).mockRejectedValueOnce(
+      new Error('remote moved')
+    );
+    await expect(
+      resolveProjectConflict(conflict, 'save-local-copy', context, host)
+    ).rejects.toThrow('remote moved');
+    vi.mocked(host.localCopyExists).mockRejectedValueOnce(
+      new Error('storage unavailable')
+    );
+    await expect(
+      resolveProjectConflict(conflict, 'save-local-copy', context, host)
+    ).rejects.toThrow('storage unavailable');
+    expect(host.saveLocalAsCopy).toHaveBeenCalledOnce();
+    expect(host.useRemoteVersion).toHaveBeenCalledOnce();
   });
 
   it('honors a separate Keep both request after the previous one completed', async () => {

@@ -13,7 +13,7 @@ import {
  * Before this, the scene showed one name with a "+1". Booleans run in place
  * (U09): bodies are picked from the model or the Objects list, no card.
  */
-test('numbers the picked bodies in the viewport as an in-place boolean takes them', async ({
+test('numbers the picked bodies in the viewport as an in-place boolean takes them', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);

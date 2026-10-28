@@ -35,7 +35,7 @@ const SYNC_BUDGET_MS = process.env.CI ? 30_000 : 10_000;
 
 const accountUserId = toUserId('user_cloud_sync_e2e');
 
-test('keeps exact geometry and undo through a save echo and reopens compatible saved history without a conflict', async ({
+test('keeps exact geometry and undo through a save echo and reopens compatible saved history without a conflict', { tag: '@ci-smoke' }, async ({
   page
 }, testInfo) => {
   const browserErrors: string[] = [];
@@ -139,7 +139,7 @@ test('keeps exact geometry and undo through a save echo and reopens compatible s
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await expect(
-    page.getByRole('dialog', { name: 'Choose a version to keep' })
+    page.getByRole('dialog', { name: 'This project changed in two places' })
   ).toHaveCount(0);
   expect(await count()).toBe(broadcasts);
   const reopenedCheckpoints = api.project.checkpoints.length;
@@ -481,11 +481,7 @@ test('drains a pending account edit before opening a public share', async ({
   );
   await page.route('**/api/share/*', (route) =>
     route.fulfill({
-      json: {
-        document: shared,
-        project: { projectId: shared.projectId, name: shared.name },
-        mode: 'tweak'
-      }
+      json: { document: shared, project: { projectId: shared.projectId, name: shared.name }, mode: 'tweak' }
     })
   );
   await page.goto('/');
@@ -1088,7 +1084,7 @@ for (const uploadAvailable of [true, false]) {
       page.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await expect(
-      page.getByRole('dialog', { name: 'Choose a version to keep' })
+      page.getByRole('dialog', { name: 'This project changed in two places' })
     ).toHaveCount(0);
     await expectBodyCount(page, 1);
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
@@ -1099,7 +1095,7 @@ for (const uploadAvailable of [true, false]) {
       page.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await expect(
-      page.getByRole('dialog', { name: 'Choose a version to keep' })
+      page.getByRole('dialog', { name: 'This project changed in two places' })
     ).toHaveCount(0);
     // Finish the original device before clearing its optional view handoff.
     // A late session write would otherwise open the fresh device's resume UI.
@@ -1260,160 +1256,168 @@ for (const resolution of [
   'keep-mine',
   'save-local-copy'
 ] as const) {
-  test(`syncs across two devices with explicit conflict choice ${resolution}`, async ({
-    browser
-  }, testInfo) => {
-    test.setTimeout(60_000);
-    const api = new SharedCloudProjectApi();
-    const deviceA = await browser.newContext();
-    const deviceB = await browser.newContext({
-      viewport:
-        resolution === 'save-local-copy'
-          ? { width: 390, height: 740 }
-          : { width: 1280, height: 800 },
-      timezoneId: 'America/Detroit'
-    });
-    const pageA = await deviceA.newPage();
-    const pageB = await deviceB.newPage();
-
-    try {
-      await api.install(pageA);
-      await api.install(pageB);
-
-      await pageA.goto('/');
-      await pageA.getByLabel('Project name').fill('Shared Bracket');
-      await pageA.getByRole('button', { name: 'Create project' }).click();
-      await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
-        timeout: SYNC_BUDGET_MS
+  test(
+    `syncs across two devices with explicit conflict choice ${resolution}`,
+    { tag: '@ci-smoke' },
+    async ({ browser }, testInfo) => {
+      test.setTimeout(60_000);
+      const api = new SharedCloudProjectApi();
+      const deviceA = await browser.newContext();
+      const deviceB = await browser.newContext({
+        viewport:
+          resolution === 'save-local-copy'
+            ? { width: 390, height: 740 }
+            : { width: 1280, height: 800 },
+        timezoneId: 'America/Detroit'
       });
-      await expect(
-        pageA.getByRole('group', { name: 'Workspace status', exact: true })
-      ).toContainText('syncSynced');
+      const pageA = await deviceA.newPage();
+      const pageB = await deviceB.newPage();
 
-      await pageA.reload();
-      await expect(
-        pageA.getByRole('button', { name: 'Rename project' })
-      ).toContainText('Shared Bracket');
-      // A reload is a second cold start, so the save chip passes back through
-      // "Saving" before it settles — the same allowance the first open above
-      // already takes. It does not excuse a save that never lands: a document
-      // that never reaches the account stays on "Saving" and still fails here.
-      await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
-        timeout: SYNC_BUDGET_MS
-      });
+      try {
+        await api.install(pageA);
+        await api.install(pageB);
 
-      await pageB.goto('/');
-      await pageB
-        .locator('.start-tile-open', { hasText: 'Shared Bracket' })
-        .click();
-      await expect(
-        pageB.getByRole('button', { name: 'Rename project' })
-      ).toContainText('Shared Bracket');
-      await expect(pageB.getByRole('status', { name: 'Saved' })).toBeVisible({
-        timeout: SYNC_BUDGET_MS
-      });
-
-      await renameProject(pageA, 'Shared Bracket from A');
-      await expect
-        .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
-        .toBe('Shared Bracket from A');
-
-      await pageB.bringToFront();
-      await pageB.evaluate(() => {
-        window.dispatchEvent(new Event('online'));
-        window.dispatchEvent(new Event('focus'));
-      });
-      await expect(
-        pageB.getByRole('button', { name: 'Rename project' })
-      ).toContainText('Shared Bracket from A', { timeout: SYNC_BUDGET_MS });
-
-      await renameProject(pageB, 'Device B unsent edit');
-      await deviceB.setOffline(true);
-      await renameProject(pageA, 'Device A account edit');
-      await pageA.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-      await expect
-        .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
-        .toBe('Device A account edit');
-      await deviceB.setOffline(false);
-
-      const conflict = pageB.getByRole('dialog', {
-        name: 'Choose a version to keep'
-      });
-      await expect(conflict).toBeVisible({ timeout: SYNC_BUDGET_MS });
-      await pageB.screenshot({
-        path: testInfo.outputPath('conflict-details.png')
-      });
-      // The top bar's save state is the one sync readout now.
-      await expect(pageB.locator('.save-state')).toContainText('Conflict');
-      // A lower overlay may mount after async conflict detection. The account
-      // dialog remains painted above it and must not become inert just because
-      // the lower overlay registered its focus trap later.
-      await pageB.keyboard.press('?');
-      await expect(
-        pageB.locator('.conflict-dialog').locator('..')
-      ).not.toHaveAttribute('inert', '');
-      const originalProjectId = api.project!.projectId;
-      const choice =
-        resolution === 'keep-mine'
-          ? /^This browser/
-          : resolution === 'use-remote'
-            ? /^Cloud/
-            : /^Keep both/;
-      const times = conflict.locator('time');
-      await expect(times).toHaveCount(2);
-      await expect(times.nth(0)).toHaveAttribute('datetime', /T/);
-      await expect(times.nth(1)).toHaveAttribute('datetime', /T/);
-      await expect(
-        conflict.getByRole('button', { name: /^Cloud/ })
-      ).toContainText('Newer');
-      if (resolution === 'keep-mine') {
-        await conflict.getByRole('button', { name: choice }).focus();
-        await pageB.keyboard.press('Enter');
-      } else {
-        await conflict.getByRole('button', { name: choice }).click();
-      }
-      await pageB.keyboard.press('Escape');
-      await expect(
-        pageB.getByRole('button', { name: 'Rename project' })
-      ).toContainText(
-        resolution === 'keep-mine'
-          ? 'Device B unsent edit'
-          : 'Device A account edit'
-      );
-      await expect(pageB.getByRole('status', { name: 'Saved' })).toBeVisible();
-      expect(api.project!.projectId).toBe(originalProjectId);
-
-      await pageB.getByTitle('Back to projects').click();
-      await expect(pageB.locator('.start-tile')).toHaveCount(
-        resolution === 'save-local-copy' ? 2 : 1
-      );
-      await expect(
-        pageB.getByText('Recovery copy', { exact: true })
-      ).toHaveCount(0);
-      if (resolution === 'save-local-copy') {
-        const copy = pageB.locator('.start-tile-open', {
-          hasText: 'Device B unsent edit (copy)'
+        await pageA.goto('/');
+        await pageA.getByLabel('Project name').fill('Shared Bracket');
+        await pageA.getByRole('button', { name: 'Create project' }).click();
+        await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
+          timeout: SYNC_BUDGET_MS
         });
-        await expect(copy).toBeVisible();
-        await expect(copy.locator('.start-tile-rev')).toHaveText('1 save');
-        await copy.click();
         await expect(
-          pageB.getByRole('button', { name: 'Undo', exact: true })
-        ).toBeEnabled();
-        await pageB.getByRole('button', { name: 'Undo', exact: true }).click();
+          pageA.getByRole('group', { name: 'Workspace status', exact: true })
+        ).toContainText('syncSynced');
+
+        await pageA.reload();
+        await expect(
+          pageA.getByRole('button', { name: 'Rename project' })
+        ).toContainText('Shared Bracket');
+        // A reload is a second cold start, so the save chip passes back through
+        // "Saving" before it settles — the same allowance the first open above
+        // already takes. It does not excuse a save that never lands: a document
+        // that never reaches the account stays on "Saving" and still fails here.
+        await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
+          timeout: SYNC_BUDGET_MS
+        });
+
+        await pageB.goto('/');
+        await pageB
+          .locator('.start-tile-open', { hasText: 'Shared Bracket' })
+          .click();
         await expect(
           pageB.getByRole('button', { name: 'Rename project' })
-        ).toContainText('Shared Bracket from A');
-        await pageB.getByRole('button', { name: 'Redo', exact: true }).click();
+        ).toContainText('Shared Bracket');
+        await expect(pageB.getByRole('status', { name: 'Saved' })).toBeVisible({
+          timeout: SYNC_BUDGET_MS
+        });
+
+        await renameProject(pageA, 'Shared Bracket from A');
+        await expect
+          .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
+          .toBe('Shared Bracket from A');
+
+        await pageB.bringToFront();
+        await pageB.evaluate(() => {
+          window.dispatchEvent(new Event('online'));
+          window.dispatchEvent(new Event('focus'));
+        });
         await expect(
           pageB.getByRole('button', { name: 'Rename project' })
-        ).toContainText('Device B unsent edit (copy)');
+        ).toContainText('Shared Bracket from A', { timeout: SYNC_BUDGET_MS });
+
+        await renameProject(pageB, 'Device B unsent edit');
+        await deviceB.setOffline(true);
+        await renameProject(pageA, 'Device A account edit');
+        await pageA.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+        await expect
+          .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
+          .toBe('Device A account edit');
+        await deviceB.setOffline(false);
+
+        const conflict = pageB.getByRole('dialog', {
+          name: 'Choose a version to keep'
+        });
+        await expect(conflict).toBeVisible({ timeout: SYNC_BUDGET_MS });
+        await pageB.screenshot({
+          path: testInfo.outputPath('conflict-details.png')
+        });
+        // The top bar's save state is the one sync readout now.
+        await expect(pageB.locator('.save-state')).toContainText('Conflict');
+        // A lower overlay may mount after async conflict detection. The account
+        // dialog remains painted above it and must not become inert just because
+        // the lower overlay registered its focus trap later.
+        await pageB.keyboard.press('?');
+        await expect(
+          pageB.locator('.conflict-dialog').locator('..')
+        ).not.toHaveAttribute('inert', '');
+        const originalProjectId = api.project!.projectId;
+        const choice =
+          resolution === 'keep-mine'
+            ? /^This browser/
+            : resolution === 'use-remote'
+              ? /^Cloud/
+              : /^Keep both/;
+        const times = conflict.locator('time');
+        await expect(times).toHaveCount(2);
+        await expect(times.nth(0)).toHaveAttribute('datetime', /T/);
+        await expect(times.nth(1)).toHaveAttribute('datetime', /T/);
+        await expect(
+          conflict.getByRole('button', { name: /^Cloud/ })
+        ).toContainText('Newer');
+        if (resolution === 'keep-mine') {
+          await conflict.getByRole('button', { name: choice }).focus();
+          await pageB.keyboard.press('Enter');
+        } else {
+          await conflict.getByRole('button', { name: choice }).click();
+        }
+        await pageB.keyboard.press('Escape');
+        await expect(
+          pageB.getByRole('button', { name: 'Rename project' })
+        ).toContainText(
+          resolution === 'keep-mine'
+            ? 'Device B unsent edit'
+            : 'Device A account edit'
+        );
+        await expect(
+          pageB.getByRole('status', { name: 'Saved' })
+        ).toBeVisible();
+        expect(api.project!.projectId).toBe(originalProjectId);
+
+        await pageB.getByTitle('Back to projects').click();
+        await expect(pageB.locator('.start-tile')).toHaveCount(
+          resolution === 'save-local-copy' ? 2 : 1
+        );
+        await expect(
+          pageB.getByText('Recovery copy', { exact: true })
+        ).toHaveCount(0);
+        if (resolution === 'save-local-copy') {
+          const copy = pageB.locator('.start-tile-open', {
+            hasText: 'Device B unsent edit (copy)'
+          });
+          await expect(copy).toBeVisible();
+          await expect(copy.locator('.start-tile-rev')).toHaveText('1 save');
+          await copy.click();
+          await expect(
+            pageB.getByRole('button', { name: 'Undo', exact: true })
+          ).toBeEnabled();
+          await pageB
+            .getByRole('button', { name: 'Undo', exact: true })
+            .click();
+          await expect(
+            pageB.getByRole('button', { name: 'Rename project' })
+          ).toContainText('Shared Bracket from A');
+          await pageB
+            .getByRole('button', { name: 'Redo', exact: true })
+            .click();
+          await expect(
+            pageB.getByRole('button', { name: 'Rename project' })
+          ).toContainText('Device B unsent edit (copy)');
+        }
+      } finally {
+        await deviceA.close();
+        await deviceB.close();
       }
-    } finally {
-      await deviceA.close();
-      await deviceB.close();
     }
-  });
+  );
 }
 
 test('resumes a workspace on another device and carries undo and redo back across devices', async ({

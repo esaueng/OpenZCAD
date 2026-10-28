@@ -5,6 +5,10 @@ immutable commit from `ci.yml`. GitHub evaluates the runner expression before
 scheduling each job. There is no GitHub-hosted authorization or routing job in
 front of the Linux checks, and no routing HTTP request from Actions.
 
+Ordinary CI selects the tagged browser smoke journeys; local and explicit
+full runs retain the extended matrix. See [Browser test suites](browser-test-suites.md)
+for the coverage tradeoff, full-run command and separate timing weights.
+
 ## Changing the fleet workflow
 
 `ci.yml` must pin a commit main already contains. Actions cannot resolve a

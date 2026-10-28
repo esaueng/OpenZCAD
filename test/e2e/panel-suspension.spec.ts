@@ -252,7 +252,7 @@ test('Objects can be requested for body reference picking and stay released thro
   expect(await framing(page)).toEqual(camera);
 });
 
-test('Done restores the saved panels and fold without reframing a new primitive', async ({
+test('Done restores the saved panels and fold without reframing a new primitive', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await openWorkspace(page);
@@ -343,7 +343,7 @@ test('Move leaves the saved panels and tool fold visible', async ({ page }) => {
   expect(await preferences(page)).toEqual(saved);
 });
 
-test('a phone panel request repaints non-Extrude command chips and leaves them tappable', async ({
+test('a phone panel request repaints non-Extrude command chips and leaves them tappable', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await openWorkspace(page);

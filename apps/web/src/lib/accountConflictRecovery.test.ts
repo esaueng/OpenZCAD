@@ -28,7 +28,9 @@ function handlers(order: string[] = []): ConflictResolutionHandlers {
     }),
     saveLocalAsCopy: vi.fn(async () => {
       order.push('copy');
-    })
+      return 'proj_local_account_copy';
+    }),
+    localCopyExists: vi.fn(async () => true)
   };
 }
 
