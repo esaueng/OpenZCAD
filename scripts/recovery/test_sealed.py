@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from cloud import Source, stored_representation_matches, owner_only_file
 from sealed import gpg, ram_directory, safe_extract, seal, unseal
-from snapshot import MAX_METADATA_BYTES, MAX_OBJECT_BYTES, SnapshotError, complete_snapshot
+from snapshot import MAX_METADATA_BYTES, MAX_OBJECT_BYTES, SnapshotError, complete_snapshot, snapshot_metadata
 from restore import database_state
 from test_snapshot import SCHEMA, SOURCE
 
@@ -102,6 +102,16 @@ class SealedTests(unittest.TestCase):
             with patch('snapshot.MAX_METADATA_BYTES', 20 if index==0 else MAX_METADATA_BYTES):
                 with self.assertRaises(SnapshotError):
                     safe_extract(archive,self.ram/f'metadata-output-{index}')
+
+    def test_metadata_preserves_supported_storage_classes_and_refuses_unknown_classes(self):
+        manifest={'objects':[{'key':'fixture'}]}
+        for storage_class in ['Standard','InfrequentAccess',None,'unknown']:
+            item={'storage_class':storage_class}
+            (self.root/'metadata.json').write_text(json.dumps({'objects':{'fixture':item}}))
+            if storage_class in {'Standard','InfrequentAccess'}:
+                self.assertEqual(snapshot_metadata(self.root,manifest),{'fixture':item})
+            else:
+                with self.assertRaises(SnapshotError):snapshot_metadata(self.root,manifest)
 
     def test_wrong_password_tamper_and_truncation_never_extract(self):
         archive = self.ram/'backup.gpg'

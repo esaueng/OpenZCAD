@@ -46,6 +46,8 @@ export default {
       )
         throw new Error();
       if (metadata.size !== length) throw new Error();
+      if (!['Standard', 'InfrequentAccess'].includes(metadata.storage_class))
+        throw new Error();
       if (metadata.http_metadata?.cacheExpiry)
         metadata.http_metadata.cacheExpiry = new Date(
           metadata.http_metadata.cacheExpiry
@@ -56,6 +58,7 @@ export default {
     // If the target already contains an object, fail instead of overwriting a drill.
     const result = await env.TARGET.put(metadata.key, request.body, {
       onlyIf: { etagDoesNotMatch: '*' },
+      storageClass: metadata.storage_class,
       httpMetadata: metadata.http_metadata ?? {},
       customMetadata: metadata.custom_metadata ?? {}
     });

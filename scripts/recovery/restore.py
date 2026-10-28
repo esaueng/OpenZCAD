@@ -173,7 +173,7 @@ def restore(config, archive):
         for item in manifest['objects']:
             original=metadata[item['key']]
             restored=actual[item['key']]
-            for field in ['size','http_metadata','custom_metadata']:
+            for field in ['size','http_metadata','custom_metadata','storage_class']:
                 if restored.get(field)!=original.get(field):
                     raise SnapshotError('Restored object metadata differs from its source.')
             encoding=(restored.get('http_metadata') or {}).get('contentEncoding') or 'identity'

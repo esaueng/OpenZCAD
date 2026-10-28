@@ -23,6 +23,7 @@ const token = 'synthetic-restore-token-0123456789-0123456789-0123456789';
 const metadata = {
   key: 'nested/../opaque-key',
   size: 4,
+  storage_class: 'InfrequentAccess',
   http_metadata: { contentType: 'application/example' },
   custom_metadata: { fixture: 'true' }
 };
@@ -76,6 +77,7 @@ it('restores the original opaque key and metadata only with create-only storage'
     expect(await new Response(body).text()).toBe('data');
     expect(options).toEqual({
       onlyIf: { etagDoesNotMatch: '*' },
+      storageClass: metadata.storage_class,
       httpMetadata: metadata.http_metadata,
       customMetadata: metadata.custom_metadata
     });
@@ -102,6 +104,16 @@ it('refuses malformed, mismatched and oversized restore input', async () => {
     { 'x-openzcad-metadata': 'broken' },
     { 'content-length': String(101 * 1024 ** 2) },
     { 'content-length': '5' },
+    {
+      'x-openzcad-metadata': encodeURIComponent(
+        JSON.stringify({ ...metadata, storage_class: 'unknown' })
+      )
+    },
+    {
+      'x-openzcad-metadata': encodeURIComponent(
+        JSON.stringify({ ...metadata, storage_class: undefined })
+      )
+    },
     {
       'x-openzcad-metadata': encodeURIComponent(
         JSON.stringify({ ...metadata, key: 'bad\0key' })

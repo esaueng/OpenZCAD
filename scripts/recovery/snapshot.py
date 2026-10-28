@@ -267,6 +267,9 @@ def snapshot_metadata(root: Path, manifest):
     objects = value.get('objects') if isinstance(value, dict) else None
     if not isinstance(objects, dict) or set(objects) != {item['key'] for item in manifest['objects']}:
         raise SnapshotError('Backup object metadata and references differ.')
+    if any(not isinstance(item,dict) or item.get('storage_class') not in {'Standard','InfrequentAccess'}
+           for item in objects.values()):
+        raise SnapshotError('Backup object storage class is missing or unsupported.')
     return objects
 
 
