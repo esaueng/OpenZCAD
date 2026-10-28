@@ -12,7 +12,7 @@ import {
   seedE2eeDevice
 } from './e2ee-fixtures';
 
-test('a delayed tab cannot overwrite the device-list pin advanced by another tab', async ({
+test('a delayed tab cannot overwrite the device-list pin advanced by another tab', { tag: '@ci-smoke' }, async ({
   page,
   context
 }) => {

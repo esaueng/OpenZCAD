@@ -35,7 +35,7 @@ const SYNC_BUDGET_MS = process.env.CI ? 30_000 : 10_000;
 
 const accountUserId = toUserId('user_cloud_sync_e2e');
 
-test('keeps exact geometry and undo through a save echo and reopens compatible saved history without a conflict', async ({
+test('keeps exact geometry and undo through a save echo and reopens compatible saved history without a conflict', { tag: '@ci-smoke' }, async ({
   page
 }, testInfo) => {
   const browserErrors: string[] = [];
@@ -1251,7 +1251,7 @@ test('syncs View measurements to a second device without changing the CAD docume
   }
 });
 
-test('syncs across two devices and preserves the losing side of a conflict', async ({
+test('syncs across two devices and preserves the losing side of a conflict', { tag: '@ci-smoke' }, async ({
   browser
 }, testInfo) => {
   test.setTimeout(60_000);

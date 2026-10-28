@@ -91,8 +91,8 @@ pnpm build
 They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
 Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
 project via `pnpm test:web`, the parity corpus, the build). Together `unit`
-and `validation` are `pnpm test`. The Playwright suite runs as six shards
-on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
+and `validation` are `pnpm test`. The tagged Playwright smoke suite runs as
+six shards on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
 cancels a superseded run's shards, and manual dispatches run the same set
 (`e2e-tests`). Merge-queue candidates run no shards: auto-merge enqueues
 a PR only after `checks / e2e` passed on its head, so a candidate runs only
@@ -102,14 +102,20 @@ spec files `scripts/e2e-shards.mjs` assigns it (every shard runs
 `pnpm exec playwright install chromium` first, browser binaries only), and an
 `e2e` gate job aggregates the shards for branch protection; on a queue
 candidate it passes with no shard run. Shards are balanced by the
-per-file seconds in `test/e2e/shard-weights.json`; a new spec file needs no
-entry (it gets a default weight), and each shard uploads its Playwright JSON
-report as an `e2e-report-N` artifact, so after the suite drifts, download
-those and run `node scripts/e2e-shards.mjs --update <reports>` to rebalance.
+per-file seconds in `test/e2e/smoke-shard-weights.json`. CI selects only
+`@ci-smoke` cases; an untagged new regression runs only in the full suite.
+Each shard uploads its Playwright JSON report as an `e2e-report-N` artifact.
+After smoke timings drift, download those and run
+`node scripts/e2e-shards.mjs --suite smoke --update <reports>` to rebalance.
+`pnpm test:e2e:full` runs the complete suite even with `CI` set. Its separate
+`test/e2e/shard-weights.json` is refreshed with `--suite full`; reports from
+the wrong suite are rejected. See [Browser test suites](docs/browser-test-suites.md)
+for selection, explicit full runs and performance probes.
 
 The Playwright install downloads Chromium; do not run it where network or system changes are unavailable. `pnpm test:e2e`
-builds and serves the web app and is the slow gate. CI intentionally does not
-rerun after merge while the product is in beta. Validate the pull-request head
+builds and serves the web app, using the full suite locally and smoke coverage
+in CI. CI intentionally does not rerun after merge while the product is in beta.
+Validate the pull-request head
 before enqueueing, then verify the separate `merge_group` run on the queue
 candidate. Use the manual dispatch when a pull-request CI rerun is needed; a
 manual run does not replace the queue candidate’s required checks.

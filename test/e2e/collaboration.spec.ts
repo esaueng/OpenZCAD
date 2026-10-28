@@ -54,7 +54,7 @@ async function hasCachedProjectThumbnail(page: Page): Promise<boolean> {
   );
 }
 
-test('loads the OpenZCAD shell', async ({ page }) => {
+test('loads the OpenZCAD shell', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await expect(page.getByText('OpenZCAD')).toBeVisible();
@@ -1079,7 +1079,7 @@ test('makes a durable share copy without storing the owner snapshot', async ({
   expect(ids).not.toContain(document.projectId);
 });
 
-test('saves incoming member updates through the room without refused account writes', async ({
+test('saves incoming member updates through the room without refused account writes', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   const document = createProjectDocument(
@@ -1444,7 +1444,7 @@ test('focuses signed-out invitation links on email sign-in and resumes them', as
   ).toBeNull();
 });
 
-test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
+test('keeps a shared-project viewer visibly read-only', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page, { collaborationRole: 'viewer' });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Viewer Role Part');
@@ -1911,7 +1911,7 @@ test('leaves the restore screen when a remembered project is missing', async ({
   );
 });
 
-test('keeps anonymous CAD creation local without calling cloud projects', async ({
+test('keeps anonymous CAD creation local without calling cloud projects', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubAnonymousApi(page);
@@ -1947,7 +1947,7 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
   expect(cloudProjectRequests).toBe(0);
 });
 
-test('signs in with an email code only when cloud profile access is requested', async ({
+test('signs in with an email code only when cloud profile access is requested', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   const emailApi = await stubEmailLoginApi(page);

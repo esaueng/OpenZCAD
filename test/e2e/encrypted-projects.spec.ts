@@ -63,7 +63,7 @@ const count = (server: E2eeServer, sql: string) =>
  * run over SQLite, the browser runs the real MLS Worker, and no plaintext
  * project route ever receives the document.
  */
-test('creates, autosaves, reloads and saves an encrypted project', async ({
+test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-smoke' }, async ({
   page,
   context
 }) => {

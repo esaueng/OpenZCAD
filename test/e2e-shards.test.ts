@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WEIGHT_SECONDS,
@@ -15,17 +16,22 @@ import {
   parseShard,
   partitionSpecs,
   readWeights,
+  resolveSuite,
   shardFilters,
   SPEC_DIR,
   SPEC_PATTERN,
+  SMOKE_TAG,
+  SMOKE_WEIGHTS_PATH,
   specFilter,
+  suiteSpecs,
   weightsFromReports
 } from '../scripts/e2e-shards.mjs';
 
 /**
  * The CI matrix passes each shard's file list to `playwright test`, so the
- * assignment is a gate: a spec left out of every shard never runs, and one
- * assigned twice wastes a runner. The shard count here mirrors
+ * assignment is a gate: a selected spec left out of every shard never runs,
+ * and one assigned twice wastes a runner. Test both the full and smoke plans.
+ * The shard count here mirrors
  * the active fleet workflow selected by `ci.yml`.
  */
 const CI_SHARDS = 6;
@@ -33,6 +39,71 @@ const CI_SHARDS = 6;
 describe('balanced e2e shards', () => {
   const specs = listSpecs();
   const weights = readWeights();
+
+  it('uses smoke coverage in CI and preserves explicit full runs and probes', () => {
+    expect(resolveSuite({})).toBe('full');
+    expect(resolveSuite({ CI: 'true' })).toBe('smoke');
+    expect(resolveSuite({ CI: 'true', OPENZCAD_E2E_SUITE: 'full' })).toBe(
+      'full'
+    );
+    for (const env of [
+      { OZ_PERF: '1' },
+      { OZ_CAPTURE: '1' },
+      { H02_SESSION_PROBE: '1' }
+    ]) {
+      expect(resolveSuite({ CI: 'true', ...env })).toBe('full');
+    }
+    expect(() =>
+      resolveSuite({ CI: 'true', OPENZCAD_E2E_SUITE: 'typo' })
+    ).toThrow('Unknown browser suite');
+  });
+
+  it('runs only tagged files in smoke shards, with every file assigned once', () => {
+    const smoke = suiteSpecs('smoke');
+    const smokeWeights = readWeights(SMOKE_WEIGHTS_PATH);
+    expect(smoke.length).toBeGreaterThan(CI_SHARDS);
+    expect(smoke.length).toBeLessThan(specs.length);
+    expect(Object.keys(smokeWeights).sort()).toEqual(smoke);
+    const plans = partitionSpecs(smoke, smokeWeights, CI_SHARDS);
+    expect(plans.every((plan) => plan.files.length > 0)).toBe(true);
+    expect(plans.flatMap((plan) => plan.files).sort()).toEqual(smoke);
+    for (const spec of smoke) {
+      expect(readFileSync(`${SPEC_DIR}/${spec}`, 'utf8')).toContain(
+        `tag: '${SMOKE_TAG}'`
+      );
+    }
+    expect(suiteSpecs('full')).toEqual(specs);
+  });
+
+  it('never overwrites full-suite weights with smoke measurements or vice versa', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-suite-report-'));
+    try {
+      for (const [target, reported] of [
+        ['full', 'smoke'],
+        ['smoke', 'full']
+      ]) {
+        const report = join(dir, `${reported}.json`);
+        writeFileSync(
+          report,
+          JSON.stringify({
+            config: { metadata: { e2eSuite: reported } },
+            suites: []
+          })
+        );
+        const result = spawnSync(
+          process.execPath,
+          ['scripts/e2e-shards.mjs', '--suite', target!, '--update', report],
+          { encoding: 'utf8' }
+        );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `Cannot update ${target} weights from a ${reported} report.`
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('assigns every spec file on disk to exactly one CI shard', () => {
     const assigned = Array.from({ length: CI_SHARDS }, (_, index) =>

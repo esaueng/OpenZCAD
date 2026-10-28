@@ -64,7 +64,7 @@ async function startTopSketch(
   return { canvas, bounds };
 }
 
-test('T opens the text card, the outline follows the typing, and a click places it', async ({
+test('T opens the text card, the outline follows the typing, and a click places it', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(60_000);
