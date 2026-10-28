@@ -1200,6 +1200,23 @@
     padding: var(--sp-3);
   }
 
+  /* Build identifiers can be wider than their labels. Compact readouts need
+     the same stacked layout as other phone rows; switches retain theirs. */
+  .setting-row.compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .setting-row.compact > .setting-control {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .setting-row.compact .settings-state {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .settings-control-groups {
     grid-template-columns: 1fr;
   }

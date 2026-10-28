@@ -658,9 +658,11 @@ describe('SketchToolRail', () => {
     });
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const group = within(rail).getByRole('group', {
+    const group = screen.getByRole('group', {
       name: 'More modify tools'
     });
+    expect(rail).not.toContainElement(group);
+    expect(within(group).getByRole('button', { name: 'Offset' })).toHaveFocus();
     expect(
       within(group)
         .getAllByRole('button')
@@ -680,8 +682,39 @@ describe('SketchToolRail', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     // Escape closes the list from inside without reaching the canvas.
     await user.click(toggle);
+    within(screen.getByRole('group', { name: 'More modify tools' }))
+      .getByRole('button', { name: 'Mirror' })
+      .focus();
     await user.keyboard('{Escape}');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveFocus();
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Construction' }));
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps Tab traversal beside the rail trigger across the portal', async () => {
+    const user = userEvent.setup();
+    renderRail({ canConstrain: true });
+    const toggle = screen.getByRole('button', { name: 'More modify tools' });
+    toggle.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Offset' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Trim' })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole('button', { name: 'Offset' })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(toggle).toHaveFocus();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.keyboard('{Enter}');
+    for (let i = 0; i < 4; i++) await user.tab();
+    expect(
+      screen.getByRole('button', { name: 'Circular pattern' })
+    ).toHaveFocus();
+    await user.tab();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: 'Construction' })).toHaveFocus();
   });
 
   it("rides Offset's corner join and Chain beside its slot while it is armed", async () => {
@@ -961,9 +994,7 @@ describe('SketchRelationsRail', () => {
     expect(
       within(strip).getByRole('radio', { name: 'Linked' })
     ).toHaveAttribute('aria-checked', 'true');
-    await user.click(
-      within(strip).getByRole('radio', { name: 'Unlinked' })
-    );
+    await user.click(within(strip).getByRole('radio', { name: 'Unlinked' }));
     expect(onProjectMode).toHaveBeenLastCalledWith('unlinked');
     expect(
       screen.getByRole('button', { name: 'Project edges' })

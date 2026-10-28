@@ -56,6 +56,16 @@
   white-space: nowrap;
 }
 
+@media (max-width: 380px) {
+  .inspector .panel-title-row .panel-eyebrow {
+    display: none;
+  }
+
+  .inspector .panel-title-row h2 {
+    flex: 1;
+  }
+}
+
 .inspector.object-readout .panel-title-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -119,13 +119,14 @@ describe('model panels', () => {
   it('fits the taller rail in one column down to 541px by compacting it', () => {
     // Revisions and Diagnostics made one column 522px tall. Side by side
     // from 600px instead, the islands squeezed a 320 × 568 phone's sketch
-    // flyouts to 68px; the buttons give up 4px each there instead.
+    // flyouts to 68px. Keep 24px targets instead: 26px still overflowed
+    // below the two-row phone header, as the rendered regression verifies.
     const block = stage.slice(
       stage.indexOf('@media (min-height: 541px) and (max-height: 600px)')
     );
     expect(
       rule(block, '.workspace.column-layout .instrument-rail .rail-button')
-    ).toMatch(/height:\s*26px/);
+    ).toMatch(/height:\s*24px/);
     expect(stage).toContain(
       '@media (max-height: 540px) {\n  .workspace.column-layout .instrument-rail {'
     );

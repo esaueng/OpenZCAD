@@ -264,6 +264,12 @@
   transform: none;
 }
 
+/* Each island is a stacking context. Lift the viewer island while its
+   toolbox is open so the later panel island cannot paint over its controls. */
+.instrument-rail > .viewer-rail:has(.rail-section-panel) {
+  z-index: calc(var(--z-viewer-overlay) + 1);
+}
+
 /* The section controls open to the rail's left, over the lane. A command
    card or a tool's create card there is what the user is working in, so the
    section panel steps aside while one is up and returns when it closes; the
@@ -2020,11 +2026,11 @@ button.command-rail:disabled {
    past a 541–600px window. Rather than stand the islands side by side
    there too (which took 50px more of a phone's width and squeezed the
    sketch flyouts beside the relations to 68px at 320 × 568), the buttons
-   give up 4px of height each and the column fits again, 24px targets
-   kept. */
+   use 24px targets. That also clears the taller two-row header at 320px
+   wide, where 26px buttons still put Activity below the viewport. */
 @media (min-height: 541px) and (max-height: 600px) {
   .workspace.column-layout .instrument-rail .rail-button {
-    height: 26px;
+    height: 24px;
   }
 }
 
@@ -2856,13 +2862,15 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .sketch-modify-flyout {
-  position: absolute;
-  top: 0;
-  left: calc(100% + var(--island-gap));
-  z-index: calc(var(--z-inspector-float) + 4);
+  /* Portalled out of the transformed, scrolling tool column. */
+  position: fixed;
+  z-index: var(--z-popover);
   display: grid;
   gap: 2px;
   min-width: 168px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
   padding: 3px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
@@ -2871,7 +2879,7 @@ button.model-panel-grip[aria-expanded='true'] {
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
-.workspace-column .sketch-rail .sketch-modify-item {
+.sketch-modify-flyout .sketch-modify-item {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -2883,13 +2891,26 @@ button.model-panel-grip[aria-expanded='true'] {
   font-weight: var(--fw-medium);
   text-align: left;
   white-space: nowrap;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
 }
 
-.viewer-area .workspace-column-float:has(.sketch-rail) .sketch-modify-flyout {
-  position: fixed;
-  /* Level with its rail slot: its static position. */
-  top: auto;
-  left: calc(100% + var(--island-gap));
+.sketch-modify-item:hover:not(:disabled):not(.active) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.sketch-modify-item.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.sketch-modify-item:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
 }
 
 /* Finish is the column's foot, lit like the primary verb. */

@@ -67,6 +67,7 @@ import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../lib/sketch/offset';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
+import { SketchModifyFlyout } from './SketchModifyFlyout';
 import { RelationGlyphFilter } from './RelationGlyphFilter';
 import { useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
@@ -663,6 +664,7 @@ export function SketchToolRail({
     onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
   const constraintGroupRef = useRef<HTMLFieldSetElement>(null);
   const [modifyOpen, setModifyOpen] = useState(false);
+  const modifyTriggerRef = useRef<HTMLButtonElement>(null);
   const modifyGroupId = useId();
   const reviewRequested = useRef(false);
   const [inspectedConstraintId, setInspectedConstraintId] = useState<
@@ -1115,6 +1117,7 @@ export function SketchToolRail({
             type="button"
             className={foldArmed ? 'active' : undefined}
             aria-label="More modify tools"
+            ref={modifyTriggerRef}
             aria-expanded={modifyOpen}
             aria-controls={modifyOpen ? modifyGroupId : undefined}
             onClick={() => setModifyOpen((open) => !open)}
@@ -1123,17 +1126,15 @@ export function SketchToolRail({
           </button>
         </Tooltip>
         {modifyOpen && (
-          <span
+          <SketchModifyFlyout
+            anchorRef={modifyTriggerRef}
             id={modifyGroupId}
-            className="sketch-modify-flyout"
-            role="group"
-            aria-label="More modify tools"
-            data-rail-flyout=""
+            onClose={() => setModifyOpen(false)}
           >
             {SKETCH_EDIT_TOOL_SPECS.filter(({ kind }) =>
               FOLDED_EDIT_TOOLS.has(kind)
             ).map((spec) => editTool(spec, true))}
-          </span>
+          </SketchModifyFlyout>
         )}
         {pendingEdit?.kind === 'offset' && !modifyOpen ? (
           // Like the circle's types: Offset's settings ride beside its slot

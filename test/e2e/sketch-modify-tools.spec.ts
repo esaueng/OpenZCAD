@@ -93,11 +93,62 @@ async function modifyTool(page: Page, name: string) {
   });
   await fold.click();
   await expect(fold).toHaveAttribute('aria-expanded', 'true');
-  await rail
+  await page
     .getByRole('group', { name: 'More modify tools' })
     .getByRole('button', { name, exact: true })
     .click();
   await expect(fold).toHaveAttribute('aria-expanded', 'false');
+}
+
+for (const colorScheme of ['light', 'dark'] as const) {
+  test.describe(`${colorScheme} modify menu keyboard`, () => {
+    test.use({ colorScheme, reducedMotion: 'reduce' });
+    test('enters the portal and returns to the adjacent rail tools', async ({
+      page
+    }) => {
+      await page.setViewportSize({ width: 320, height: 568 });
+      const at = await startSketch(page, 'Modify keyboard');
+      await drawLine(page, at(0.4, 0.4), at(0.55, 0.5));
+      const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+      const fold = rail.getByRole('button', { name: 'More modify tools' });
+      const menu = page.getByRole('group', { name: 'More modify tools' });
+      for (const size of [
+        { width: 320, height: 568 },
+        { width: 1440, height: 900 }
+      ]) {
+        await page.setViewportSize(size);
+        await fold.press('Enter');
+        await expect(
+          menu.getByRole('button', { name: 'Offset', exact: true })
+        ).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(
+          menu.getByRole('button', { name: 'Trim', exact: true })
+        ).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+        await expect(
+          menu.getByRole('button', { name: 'Offset', exact: true })
+        ).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+        await expect(fold).toBeFocused();
+        await expect(menu).toHaveCount(0);
+        await fold.press('Enter');
+        await page.keyboard.press('Escape');
+        await expect(fold).toBeFocused();
+        await expect(menu).toHaveCount(0);
+        await fold.press('Enter');
+        for (let i = 0; i < 4; i++) await page.keyboard.press('Tab');
+        await expect(
+          menu.getByRole('button', { name: 'Circular pattern', exact: true })
+        ).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(menu).toHaveCount(0);
+        await expect(
+          rail.getByRole('button', { name: 'Construction', exact: true })
+        ).toBeFocused();
+      }
+    });
+  });
 }
 
 async function exportSketch(page: Page) {
