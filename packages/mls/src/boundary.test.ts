@@ -2,6 +2,44 @@ import { describe, expect, it } from 'vitest';
 import { loadWasm, wasmMemoryForTests } from './test-support';
 
 describe('raw MLS WASM boundaries', () => {
+  it('refuses oversized record arrays before the glue allocates or reads entries', () => {
+    const wasm = loadWasm();
+    const session = wasm.MlsSession.generate('project', 'owner', 'device');
+    const empty = new Uint8Array();
+    const records = Array<Uint8Array>(2_000_000).fill(empty);
+    const memory = wasmMemoryForTests();
+    const before = memory.buffer.byteLength;
+    try {
+      const calls = [
+        () => session.join(empty, empty, records),
+        () => session.rejoin(empty, 0n, empty, undefined, empty, records),
+        () => session.completeRejoin(empty, records)
+      ];
+      for (const call of calls) {
+        expect(call).toThrow(/record budget/);
+        expect(memory.buffer.byteLength - before).toBeLessThan(1024 * 1024);
+      }
+      // No provisional Welcome exists here; rollback keeps its state error.
+      expect(() => session.completeJoin(empty, records)).toThrow(
+        /no Welcome join is pending/
+      );
+      expect(memory.buffer.byteLength - before).toBeLessThan(1024 * 1024);
+      // A sparse oversized array must be refused without visiting an entry.
+      const sparse = Array<Uint8Array>(2_000_000);
+      Object.defineProperty(sparse, 0, {
+        get() {
+          throw new Error('record getter must not run');
+        }
+      });
+      expect(() => session.join(empty, empty, sparse)).toThrow(/record budget/);
+      expect(() => session.join(empty, empty, [null])).toThrow(
+        /record must be a Uint8Array/
+      );
+    } finally {
+      session.free();
+    }
+  });
+
   it('bounds join and rejoin inputs below the TypeScript and Worker wrappers', () => {
     const wasm = loadWasm();
     const session = wasm.MlsSession.generate('project', 'owner', 'device');

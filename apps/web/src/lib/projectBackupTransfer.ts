@@ -6,6 +6,7 @@ import {
 } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
+import { importArtifactIds } from '@openzcad/persistence';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
 import { api, isEncryptedProject } from './api';
 import { encryptedBlobSource } from './e2ee/blobReferences';
@@ -148,8 +149,22 @@ export async function createProjectBackup(
   ).filter((checkpoint) => !canonicalIds.has(checkpoint.checkpointId));
   for (const checkpoint of [...snapshot.checkpoints, ...deviceOnly]) {
     const privatePoint = !canonicalIds.has(checkpoint.checkpointId);
+    const local = await loadLocalSaveState(
+      snapshot.projectId,
+      checkpoint.checkpointId
+    );
+    // A migration can retain the checkpoint under a new signed version.
+    // A cached plaintext snapshot still has its original version and files;
+    // use the canonical remote snapshot rather than exporting that stale copy.
+    const stale =
+      remote &&
+      !privatePoint &&
+      local &&
+      (local.version !== checkpoint.documentVersion ||
+        (isEncryptedProject(snapshot.projectId) &&
+          importArtifactIds(local).some((id) => id.startsWith('artifact_'))));
     const saved =
-      (await loadLocalSaveState(snapshot.projectId, checkpoint.checkpointId)) ??
+      (stale ? null : local) ??
       (remote && !privatePoint
         ? await api.loadRevision(snapshot.projectId, checkpoint.revisionId)
         : null);

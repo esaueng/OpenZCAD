@@ -171,46 +171,43 @@ export class MlsSession {
     }
     /**
      * @param {Uint8Array} initial_group_info
-     * @param {Uint8Array[]} records
+     * @param {Array<any>} records
      * @returns {string}
      */
     completeJoin(initial_group_info, records) {
-        let deferred3_0;
-        let deferred3_1;
+        let deferred2_0;
+        let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayJsValueToWasm0(records, wasm.__wbindgen_export3);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.mlssession_completeJoin(retptr, this.__wbg_ptr, addBorrowedObject(initial_group_info), ptr0, len0);
+            wasm.mlssession_completeJoin(retptr, this.__wbg_ptr, addBorrowedObject(initial_group_info), addBorrowedObject(records));
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
             var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr2 = r0;
-            var len2 = r1;
+            var ptr1 = r0;
+            var len1 = r1;
             if (r3) {
-                ptr2 = 0; len2 = 0;
+                ptr1 = 0; len1 = 0;
                 throw takeObject(r2);
             }
-            deferred3_0 = ptr2;
-            deferred3_1 = len2;
-            return getStringFromWasm0(ptr2, len2);
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             heap[stack_pointer++] = undefined;
-            wasm.__wbindgen_export2(deferred3_0, deferred3_1, 1);
+            heap[stack_pointer++] = undefined;
+            wasm.__wbindgen_export2(deferred2_0, deferred2_1, 1);
         }
     }
     /**
      * @param {Uint8Array} initial_group_info
-     * @param {Uint8Array[]} records
+     * @param {Array<any>} records
      */
     completeRejoin(initial_group_info, records) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayJsValueToWasm0(records, wasm.__wbindgen_export3);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.mlssession_completeRejoin(retptr, this.__wbg_ptr, addBorrowedObject(initial_group_info), ptr0, len0);
+            wasm.mlssession_completeRejoin(retptr, this.__wbg_ptr, addBorrowedObject(initial_group_info), addBorrowedObject(records));
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             if (r1) {
@@ -218,6 +215,7 @@ export class MlsSession {
             }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
+            heap[stack_pointer++] = undefined;
             heap[stack_pointer++] = undefined;
         }
     }
@@ -522,35 +520,34 @@ export class MlsSession {
     /**
      * @param {Uint8Array} welcome
      * @param {Uint8Array} initial_group_info
-     * @param {Uint8Array[]} records
+     * @param {Array<any>} records
      * @returns {string}
      */
     join(welcome, initial_group_info, records) {
-        let deferred3_0;
-        let deferred3_1;
+        let deferred2_0;
+        let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayJsValueToWasm0(records, wasm.__wbindgen_export3);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.mlssession_join(retptr, this.__wbg_ptr, addBorrowedObject(welcome), addBorrowedObject(initial_group_info), ptr0, len0);
+            wasm.mlssession_join(retptr, this.__wbg_ptr, addBorrowedObject(welcome), addBorrowedObject(initial_group_info), addBorrowedObject(records));
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
             var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr2 = r0;
-            var len2 = r1;
+            var ptr1 = r0;
+            var len1 = r1;
             if (r3) {
-                ptr2 = 0; len2 = 0;
+                ptr1 = 0; len1 = 0;
                 throw takeObject(r2);
             }
-            deferred3_0 = ptr2;
-            deferred3_1 = len2;
-            return getStringFromWasm0(ptr2, len2);
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             heap[stack_pointer++] = undefined;
             heap[stack_pointer++] = undefined;
-            wasm.__wbindgen_export2(deferred3_0, deferred3_1, 1);
+            heap[stack_pointer++] = undefined;
+            wasm.__wbindgen_export2(deferred2_0, deferred2_1, 1);
         }
     }
     /**
@@ -698,36 +695,35 @@ export class MlsSession {
      * @param {Uint8Array} psk
      * @param {number | null | undefined} remove
      * @param {Uint8Array} initial_group_info
-     * @param {Uint8Array[]} records
+     * @param {Array<any>} records
      * @returns {string}
      */
     rejoin(group_info, psk_epoch, psk, remove, initial_group_info, records) {
-        let deferred3_0;
-        let deferred3_1;
+        let deferred2_0;
+        let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayJsValueToWasm0(records, wasm.__wbindgen_export3);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.mlssession_rejoin(retptr, this.__wbg_ptr, addBorrowedObject(group_info), psk_epoch, addBorrowedObject(psk), isLikeNone(remove) ? Number.MAX_SAFE_INTEGER : (remove) >>> 0, addBorrowedObject(initial_group_info), ptr0, len0);
+            wasm.mlssession_rejoin(retptr, this.__wbg_ptr, addBorrowedObject(group_info), psk_epoch, addBorrowedObject(psk), isLikeNone(remove) ? Number.MAX_SAFE_INTEGER : (remove) >>> 0, addBorrowedObject(initial_group_info), addBorrowedObject(records));
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
             var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr2 = r0;
-            var len2 = r1;
+            var ptr1 = r0;
+            var len1 = r1;
             if (r3) {
-                ptr2 = 0; len2 = 0;
+                ptr1 = 0; len1 = 0;
                 throw takeObject(r2);
             }
-            deferred3_0 = ptr2;
-            deferred3_1 = len2;
-            return getStringFromWasm0(ptr2, len2);
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             heap[stack_pointer++] = undefined;
             heap[stack_pointer++] = undefined;
             heap[stack_pointer++] = undefined;
-            wasm.__wbindgen_export2(deferred3_0, deferred3_1, 1);
+            heap[stack_pointer++] = undefined;
+            wasm.__wbindgen_export2(deferred2_0, deferred2_1, 1);
         }
     }
     /**
@@ -1013,7 +1009,25 @@ function __wbg_get_imports() {
         __wbg_getRandomValues_c44a50d8cfdaebeb: function() { return handleError(function (arg0, arg1) {
             getObject(arg0).getRandomValues(getObject(arg1));
         }, arguments); },
+        __wbg_get_507a50627bffa49b: function(arg0, arg1) {
+            const ret = getObject(arg0)[arg1 >>> 0];
+            return addHeapObject(ret);
+        },
+        __wbg_instanceof_Uint8Array_309b927aaf7a3fc7: function(arg0) {
+            let result;
+            try {
+                result = getObject(arg0) instanceof Uint8Array;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
         __wbg_length_1f0964f4a5e2c6d8: function(arg0) {
+            const ret = getObject(arg0).length;
+            return ret;
+        },
+        __wbg_length_370319915dc99107: function(arg0) {
             const ret = getObject(arg0).length;
             return ret;
         },

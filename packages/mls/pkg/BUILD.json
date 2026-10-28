@@ -3,10 +3,10 @@
   "target": "wasm32-unknown-unknown",
   "wasmBindgen": "0.2.126",
   "files": {
-    "openzcad_mls.d.ts": "61bbdb53e69d7a000ab7810b0cdee88a56ac2d3b51ab7e71172f7f346daf68be",
-    "openzcad_mls.js": "19a814f409c419fdc72c633dcb887ec657acbd503ff940ebfafabc367b57d8f7",
-    "openzcad_mls_bg.wasm": "3e0330ef5193e89a9b4d4ff86224f43b4eabc90b420a500eb094d30f84f6648c",
-    "openzcad_mls_bg.wasm.d.ts": "09a71b6c9cb0695e90a7fb54f50fd463d6deeb70dfd7c6975ac835dc5c388d5b",
+    "openzcad_mls.d.ts": "0841fb4ad8bb6053663473e132a15e751b05aa64a5354d4078ac10b9115c4c2d",
+    "openzcad_mls.js": "e80ea0e6eb59c94b48b4faca5781a652cc21fcc009e2b230df0bb127aba4931b",
+    "openzcad_mls_bg.wasm": "fb4709149d413113b71de97cb7acf0c5aaf672a010de8195b62fb22b80acdecc",
+    "openzcad_mls_bg.wasm.d.ts": "901dcb7723685492e2bd2248d326c8be5ef3199af2fa69cdcca96bc108ce276a",
     "snippets/mls-rs-core-f99cdecbb456b09c/inline0.js": "6739cfe5b7f2a23d65a1c2a0912a691701e50793dca7c0f95c89dae38861c2f6"
   },
   "sources": {
@@ -16,7 +16,7 @@
     "crate/src/archive.rs": "d8d27388daab9d562df1d9471b7c637be9d582d03ce763e0c93de53d138dddd6",
     "crate/src/directory.rs": "ed090d4b7a1e821706eb9c6af2a53b23ed2754de9d867374ad5c1804640e2ab7",
     "crate/src/error.rs": "2d6df2b6335a5dafa353e5caf906c57b0b70db6fbb980bb120b53ff0c004736e",
-    "crate/src/lib.rs": "ce4bcf1dc58a174accd13cbff30ec58ea048d25f2c74ef8829db1ea260c8ac88",
+    "crate/src/lib.rs": "32a62acdc0a9aef3121ca41089a67200d32c9bada58f1a4d7232451e64dda579",
     "crate/src/model.rs": "e98245aa9bd9e037b54ce311299e0b6e159c0d26738cc6f823fd57e33e48fe13",
     "crate/src/policy.rs": "4e8f6fc32eb3f5bb815a81a329c7e54076c047f49d040dae4b0c8b804a82c464",
     "crate/src/session.rs": "68f8165e729263ef2dbf50026564395ebb587dde7028723c407dda41c176c722",

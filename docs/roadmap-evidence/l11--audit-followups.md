@@ -13,7 +13,9 @@ concurrent duplicate and final-quota-slot tests preserve refusal and limits.
 Device-list verification validates malformed/sparse entries as `E2eeError`
 and captures signed bytes before asynchronous verification. MLS admission
 uses shared checked-arithmetic replay budgets in native Rust and rejects
-oversized JS byte arrays before native copies. Raw-WASM memory checks and
+oversized JS byte arrays before native copies. Record arrays are borrowed
+and counted before glue marshalling; two-million-entry and sparse-array
+regressions pin bounded allocation on every admission entry. Raw-WASM memory checks and
 the scenario matrix retain Welcome rollback and provisional-rejoin retry.
 The sender-check override is absent from the public session and refused by
 the production protocol; malicious-sender tests use an explicit test Worker.
@@ -41,3 +43,9 @@ visibility are explicit. Real Keychain ACL/signed-host qualification remains
 in the existing manual macOS workflow; browser and Linux checks do not prove
 those platform properties. No production flag, migration, dependency pin,
 merge protection or automatic deployment authorization changes.
+
+Isolated staging also exposed retained-save identity drift: encryption gives
+snapshots new signed versions, so migration now remaps checkpoint versions
+from the verified staged journal, including interruption/resume. Backup export
+uses the canonical saved version when its plaintext cache is stale. Migration
+and backup regressions preserve strict identity validation and saved geometry.

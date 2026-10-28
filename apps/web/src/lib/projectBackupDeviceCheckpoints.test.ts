@@ -6,10 +6,16 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createProjectDocument,
   createSavedRevision,
-  restoreFromSaveState
+  restoreFromSaveState,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
-import { encodeImportedMeshPayload, toUserId } from '@openzcad/shared';
-import { api } from './api';
+import {
+  encodeImportedMeshPayload,
+  toArtifactId,
+  toAssetId,
+  toUserId
+} from '@openzcad/shared';
+import { api, rememberProjectFormats } from './api';
 import { preserveFailedCheckpoint } from './collaborationCheckpointFallback';
 import {
   listLocalSaveStateCheckpoints,
@@ -51,6 +57,62 @@ it('keeps canonical checkpoint backups compatible without a device-only marker',
   expect(state.document.nodes).toEqual(saved.nodes);
   expect(state.deviceOnly).toBeUndefined();
 });
+
+it.each(['new version', 'old artifact id'] as const)(
+  'uses the migrated signed save instead of a cached plaintext snapshot with %s',
+  async (stale) => {
+    const original = createSavedRevision(
+      {
+        ...createProjectDocument('Migrated backup', toUserId('owner')),
+        checkpoints: []
+      },
+      'Retained point'
+    );
+    if (stale === 'old artifact id') {
+      original.assets[toAssetId('legacy')] = {
+        assetId: toAssetId('legacy'),
+        artifactId: toArtifactId('artifact_plaintext'),
+        kind: 'thumbnail',
+        name: 'Original thumbnail',
+        contentType: 'image/webp',
+        storage: 'remote',
+        createdAt: original.checkpoints.at(-1)!.createdAt
+      };
+    }
+    await saveLocalSaveStates([original]);
+    const migratedVersion =
+      original.version + (stale === 'new version' ? 4 : 0);
+    const migrated = {
+      ...original,
+      assets: {},
+      version: migratedVersion,
+      checkpoints: original.checkpoints.map((checkpoint) => ({
+        ...checkpoint,
+        documentVersion: migratedVersion
+      }))
+    };
+    rememberProjectFormats([
+      { projectId: original.projectId, storageFormat: 2 }
+    ]);
+    const remote = vi.mocked(api.loadRevision).mockResolvedValue(migrated);
+    const backup = await parseProjectBackup(
+      await createProjectBackup(
+        { ...migrated, version: migrated.version + 1 },
+        true
+      )
+    );
+    expect(remote).toHaveBeenCalledWith(
+      original.projectId,
+      original.checkpoints.at(-1)!.revisionId
+    );
+    expect(backup.saveStates).toEqual([
+      {
+        checkpointId: original.checkpoints.at(-1)!.checkpointId,
+        document: withoutDerivedProjection(migrated)
+      }
+    ]);
+  }
+);
 
 it('moves a failed member save and its exclusive mesh source to a fresh device without publishing its checkpoint', async () => {
   const initial = createProjectDocument('Member project', toUserId('owner'));

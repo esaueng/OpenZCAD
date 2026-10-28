@@ -689,6 +689,7 @@ export function createProjectMigrationEngine(
     // The journal: what an earlier run staged, verified.
     let stagedVersion = migration.stagedVersion;
     const staged = new Set<string>();
+    const revisionVersions = new Map<string, number>();
     if (stagedVersion > 0) {
       await check('journal');
       try {
@@ -696,7 +697,8 @@ export function createProjectMigrationEngine(
         for (const revisionId of map.keys()) {
           // Opening each one hands this page its blob keys, so the dedupe
           // tags find the files it already stored.
-          await store.loadRevision(projectId, revisionId);
+          const saved = await store.loadRevision(projectId, revisionId);
+          if (saved) revisionVersions.set(revisionId, saved.version);
           staged.add(revisionId);
         }
       } catch (error) {
@@ -711,6 +713,26 @@ export function createProjectMigrationEngine(
         }
         throw error;
       }
+    }
+
+    // Encryption gives retained saves new signed versions. Keep the head's
+    // checkpoint identities aligned with those versions, including a resume's
+    // already-staged journal, so backups can restore each retained snapshot.
+    function withCheckpointVersions(
+      document: ProjectDocument,
+      current?: { revisionId: string; version: number }
+    ): ProjectDocument {
+      return {
+        ...document,
+        checkpoints: document.checkpoints.map((checkpoint) => ({
+          ...checkpoint,
+          documentVersion:
+            (checkpoint.revisionId === current?.revisionId
+              ? current.version
+              : revisionVersions.get(checkpoint.revisionId)) ??
+            checkpoint.documentVersion
+        }))
+      };
     }
 
     // Files: each one stored once, named by its blob id.
@@ -789,10 +811,17 @@ export function createProjectMigrationEngine(
           projectId,
           reason: revision.reason,
           expectedVersion: stagedVersion,
-          document: { ...document, version: stagedVersion },
+          document: {
+            ...withCheckpointVersions(document, {
+              revisionId: revision.revisionId,
+              version: stagedVersion + 1
+            }),
+            version: stagedVersion
+          },
           savedRevisionId: revision.revisionId
         })
       ).version;
+      revisionVersions.set(revision.revisionId, stagedVersion);
       staged.add(revision.revisionId);
       done++;
       advance(revision.documentBytes, { revisionsDone: done });
@@ -809,7 +838,7 @@ export function createProjectMigrationEngine(
     await store.saveProjectDocument({
       projectId,
       expectedVersion: stagedVersion,
-      document: { ...document, version: headVersion }
+      document: { ...withCheckpointVersions(document), version: headVersion }
     });
     advance(documentBytes(head));
 

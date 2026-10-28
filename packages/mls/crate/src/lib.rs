@@ -38,7 +38,14 @@ fn json<T: Serialize>(value: &T) -> Result<String, JsValue> {
 }
 
 /// Refuse oversized inputs before copying JS arrays into native memory.
-fn bounded_records(anchor: &js_sys::Uint8Array, records: &[js_sys::Uint8Array], extra: &[&js_sys::Uint8Array]) -> Result<Vec<Vec<u8>>, JsValue> {
+fn bounded_records(anchor: &js_sys::Uint8Array, records: &js_sys::Array, extra: &[&js_sys::Uint8Array]) -> Result<Vec<Vec<u8>>, JsValue> {
+    // Borrow the array across the WASM boundary: Vec<T> glue allocates and
+    // visits every entry before this function could check the record count.
+    let count = records.length();
+    archive::check_budget(count as usize, std::iter::empty()).map_err(to_js)?;
+    let records = (0..count).map(|index| records.get(index).dyn_into::<js_sys::Uint8Array>()
+        .map_err(|_| to_js(Error::input("archive record must be a Uint8Array"))))
+        .collect::<Result<Vec<_>, _>>()?;
     archive::check_budget(records.len(), std::iter::once(anchor.length() as usize)
         .chain(extra.iter().map(|b| b.length() as usize))
         .chain(records.iter().map(|r| r.length() as usize))).map_err(to_js)?;
@@ -223,7 +230,7 @@ impl MlsSession {
         &mut self,
         welcome: &js_sys::Uint8Array,
         initial_group_info: &js_sys::Uint8Array,
-        records: Vec<js_sys::Uint8Array>,
+        records: &js_sys::Array,
     ) -> Result<String, JsValue> {
         let records = bounded_records(initial_group_info, &records, &[welcome])?;
         json(&self.inner.join(&welcome.to_vec(), &initial_group_info.to_vec(), &records).map_err(to_js)?)
@@ -238,7 +245,7 @@ impl MlsSession {
     pub fn complete_join(
         &mut self,
         initial_group_info: &js_sys::Uint8Array,
-        records: Vec<js_sys::Uint8Array>,
+        records: &js_sys::Array,
     ) -> Result<String, JsValue> {
         let records = match bounded_records(initial_group_info, &records, &[]) {
             Ok(records) => records,
@@ -317,7 +324,7 @@ impl MlsSession {
         psk: &js_sys::Uint8Array,
         remove: Option<u32>,
         initial_group_info: &js_sys::Uint8Array,
-        records: Vec<js_sys::Uint8Array>,
+        records: &js_sys::Array,
     ) -> Result<String, JsValue> {
         let records = bounded_records(initial_group_info, &records, &[group_info, psk])?;
         json(
@@ -348,7 +355,7 @@ impl MlsSession {
     pub fn complete_rejoin(
         &mut self,
         initial_group_info: &js_sys::Uint8Array,
-        records: Vec<js_sys::Uint8Array>,
+        records: &js_sys::Array,
     ) -> Result<(), JsValue> {
         let records = bounded_records(initial_group_info, &records, &[])?;
         self.inner.complete_rejoin(&initial_group_info.to_vec(), &records).map_err(to_js)
