@@ -81,6 +81,40 @@ function keyIdOf(device: StoredDevice): string {
 }
 
 describe('Keychain device store', () => {
+  it('retains requester comparison metadata through native handle serialization', async () => {
+    const { host: keychain } = host();
+    const store = keychainDeviceStore(cloningStore(), keychain);
+    const mac = await device(keychain);
+    const pending = {
+      ...mac,
+      approval: {
+        id: 'request',
+        nonce: new Uint8Array(32),
+        confirmedApproverKey: null,
+        comparison: {
+          commitment: 'commitment',
+          responder: { key: 'key', nonce: 'nonce' },
+          confirmed: false
+        }
+      }
+    };
+    await store.saveDevice(pending);
+    const loaded = (await store.loadDevice(USER))!;
+    expect(loaded.approval).toEqual(pending.approval);
+    expect(
+      await store.replaceDeviceIfCurrent(loaded, {
+        ...loaded,
+        approval: {
+          ...loaded.approval!,
+          comparison: { ...loaded.approval!.comparison!, confirmed: true }
+        }
+      })
+    ).toBe(true);
+    expect(
+      (await store.loadDevice(USER))!.approval!.comparison!.confirmed
+    ).toBe(true);
+  });
+
   it('stores only key ids and rebuilds native handles on load', async () => {
     const { host: keychain } = host();
     const inner = cloningStore();

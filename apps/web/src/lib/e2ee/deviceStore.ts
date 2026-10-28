@@ -48,6 +48,15 @@ export interface StoredDevice {
      * server answering in the approver's place gains nothing.
      */
     readonly confirmedApproverKey?: string | null;
+    /** Present only when this request can pin its responder before reveal. */
+    readonly comparison?: {
+      readonly commitment: string;
+      readonly responder: {
+        readonly key: string;
+        readonly nonce: string;
+      } | null;
+      readonly confirmed: boolean;
+    };
   } | null;
 }
 
@@ -177,6 +186,21 @@ const samePin = (a: DeviceListPin | null, b: DeviceListPin | null) =>
       sameBytes(a.identityKeyHash, b.identityKeyHash) &&
       sameBytes(a.entryHash, b.entryHash);
 
+function sameComparison(
+  a: NonNullable<StoredDevice['approval']>['comparison'],
+  b: NonNullable<StoredDevice['approval']>['comparison']
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.commitment === b.commitment &&
+    a.confirmed === b.confirmed &&
+    (a.responder === null || b.responder === null
+      ? a.responder === b.responder
+      : a.responder.key === b.responder.key &&
+        a.responder.nonce === b.responder.nonce)
+  );
+}
+
 function sameDeviceState(
   a: StoredDevice | null,
   b: StoredDevice | null
@@ -195,6 +219,7 @@ function sameDeviceState(
   return (
     a.approval.id === b.approval.id &&
     a.approval.confirmedApproverKey === b.approval.confirmedApproverKey &&
+    sameComparison(a.approval.comparison, b.approval.comparison) &&
     (a.approval.nonce === null || b.approval.nonce === null
       ? a.approval.nonce === b.approval.nonce
       : sameBytes(a.approval.nonce, b.approval.nonce)) &&

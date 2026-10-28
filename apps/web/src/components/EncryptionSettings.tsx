@@ -863,7 +863,10 @@ function EnrollPanel({
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      const next = await confirmApprovalCode(ctx);
+                      const next = await confirmApprovalCode(
+                        ctx,
+                        step.approval
+                      );
                       if (next.step === 'done') {
                         setFlow(null);
                         notifyContactsChanged();
@@ -904,6 +907,31 @@ function EnrollPanel({
         <Notice tone="warning" role="status">
           That approval request expired. Ask again.
         </Notice>
+      ) : null}
+      {account.device?.approval ? (
+        <SettingRow
+          title="Continue your approval request"
+          hint="Resume the request already started on this device."
+        >
+          <button
+            className="secondary"
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const next = await advanceApprovalAsNewDevice(ctx);
+                if (next.step === 'done') {
+                  setFlow(null);
+                  notifyContactsChanged();
+                  return next.state;
+                }
+                setFlow({ kind: 'request', step: next });
+              })
+            }
+          >
+            Resume approval
+          </button>
+        </SettingRow>
       ) : null}
       <SettingRow
         title="Approve from another device"

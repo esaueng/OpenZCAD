@@ -340,6 +340,56 @@ test('resumes comparison after an accepted response is lost', async ({
   }
 });
 
+test('resumes the requesting device comparison after reloading its browser', async ({
+  page,
+  browser
+}) => {
+  const server = createE2eeServer();
+  const { settings } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  try {
+    let phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    await expect(
+      phoneSettings.getByRole('img', { name: 'Device approval QR code' })
+    ).toBeVisible();
+    await settings
+      .getByRole('button', { name: 'Compare codes' })
+      .click({ timeout: 10_000 });
+    await expect(phoneSettings.getByLabel('Approval code')).toHaveText(
+      /^\d{3} \d{3}$/,
+      { timeout: 15_000 }
+    );
+    const original = await phoneSettings
+      .getByLabel('Approval code')
+      .textContent();
+    await phone.page.reload();
+    phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Resume approval' })
+      .click();
+    await expect(phoneSettings.getByLabel('Approval code')).toHaveText(
+      original!,
+      { timeout: 15_000 }
+    );
+    await expect(settings.getByLabel('Approval code')).toHaveText(original!);
+    await phoneSettings.getByRole('button', { name: 'Codes match' }).click();
+    await settings
+      .getByRole('button', { name: 'Codes match, approve' })
+      .click();
+    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(
+      phoneSettings.getByText('Unlocked', { exact: true })
+    ).toBeVisible();
+  } finally {
+    await phone.context.close();
+  }
+});
+
 test('approves read-only after both devices show the same six digits', async ({
   page,
   browser
