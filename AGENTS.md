@@ -91,8 +91,13 @@ pnpm build
 They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
 Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
 project via `pnpm test:web`, the parity corpus, the build). Together `unit`
-and `validation` are `pnpm test`. The tagged Playwright smoke suite runs as
-six shards on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
+and `validation` are `pnpm test`. Root and web Vitest use the focused smoke
+selection in CI; local runs remain full. `pnpm test:full` explicitly runs both
+complete projects even with `CI` set (`test:unit:full` and `test:web:full` run
+either one). See [Unit test suites](docs/unit-test-suites.md) for the manifest,
+coverage tradeoff and pre-worker Git fixture preparation. The separate parity
+corpus and policy assertions remain required. The tagged Playwright smoke suite
+runs as six shards on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
 cancels a superseded run's shards, and manual dispatches run the same set
 (`e2e-tests`). Merge-queue candidates run no shards: auto-merge enqueues
 a PR only after `checks / e2e` passed on its head, so a candidate runs only
