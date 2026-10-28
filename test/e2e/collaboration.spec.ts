@@ -697,7 +697,7 @@ for (const active of [false, true]) {
 }
 
 for (const status of [404, 503]) {
-  test(`restores the active model URL when a replacement share returns ${status}`, async ({
+  test(`offers the active model when a replacement share returns ${status}`, async ({
     page
   }) => {
     await stubAnonymousApi(page);
@@ -719,11 +719,14 @@ for (const status of [404, 503]) {
     await page.evaluate(() => {
       window.location.hash = `share=${'b'.repeat(43)}`;
     });
-    await expect(page.getByRole('contentinfo')).toContainText(
+    await expect(page.getByRole('main', { name: 'Shared model' })).toContainText(
       status === 404
         ? 'This share link is no longer available'
         : 'Replacement unavailable.'
     );
+    expect(new URL(page.url()).hash).toBe(`#share=${'b'.repeat(43)}`);
+    await expect(page.locator('.breadcrumb')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Return to previous model' }).click();
     expect(new URL(page.url()).hash).toBe(`#share=${'a'.repeat(43)}`);
     await expect(page.locator('.breadcrumb')).toContainText(document.name);
     await expect(
@@ -767,10 +770,10 @@ for (const status of [404, 503]) {
             : 'Unavailable share'
       })
     ).toBeVisible();
+    await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
     await page
-      .locator('.start-tile-open', {
-        hasText: 'Local project after failed link'
-      })
+      .getByRole('tabpanel', { name: 'Parts 1' })
+      .getByRole('button', { name: /^Local project after failed link/ })
       .click();
     await expect(page.locator('.breadcrumb')).toContainText(
       'Local project after failed link'
@@ -831,6 +834,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
             .getByRole('status')
             .filter({ hasText: 'This share link is no longer available' })
         ).toBeVisible();
+      await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
       try {
         if (action === 'create') {
           await page.getByLabel('Project name').fill('New shelf project');
@@ -900,7 +904,7 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
     await route.fulfill({ status: 401, json: { error: 'Signed out' } });
   });
   await page.goto(`/#share=${'a'.repeat(43)}`);
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'Shared model' })).toBeVisible();
   await expect(
     page
       .getByRole('status')
@@ -909,9 +913,7 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
   // Status lifetime must not erase the explanation before the user reads it.
   await page.waitForTimeout(6500);
   await expect(
-    page.getByText(
-      'This share link is no longer available. It may have been revoked.'
-    )
+    page.getByRole('heading', { name: 'This share link is unavailable' })
   ).toBeVisible();
 });
 

@@ -8,6 +8,23 @@
  */
 export const PROJECT_SHARE_HASH_PREFIX = 'share=';
 
+/** Recognize the share destination even when its capability is incomplete. */
+export function shareRequestFromHash(hash: string): string | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  return raw.startsWith(PROJECT_SHARE_HASH_PREFIX)
+    ? raw.slice(PROJECT_SHARE_HASH_PREFIX.length).trim()
+    : null;
+}
+
+/** Includes empty/malformed links so they reach the dedicated share page. */
+export function captureProjectShareRequest(): string | null {
+  try {
+    return shareRequestFromHash(globalThis.location?.hash ?? '');
+  } catch {
+    return null;
+  }
+}
+
 /** A creation result is copyable only after every publication step finished. */
 export function shareLinkCreationProblem(created: {
   readonly pending: readonly string[];
@@ -88,7 +105,7 @@ export function captureProjectShareToken(): string | null {
  */
 export function clearProjectShareFragment(): void {
   try {
-    if (shareLinkFromHash(globalThis.location?.hash ?? '') !== null) {
+    if (captureProjectShareRequest() !== null) {
       globalThis.history.replaceState(null, '', projectLinkPath());
     }
   } catch {
