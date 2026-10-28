@@ -115,7 +115,9 @@ def restore(config, archive):
             for field in ['size','http_metadata','custom_metadata']:
                 if restored.get(field)!=original.get(field):
                     raise SnapshotError('Restored object metadata differs from its source.')
-            data,_=provider.request('GET',provider.r2+'/'+quote(item['key'],safe='/'),limit=item['bytes'])
+            encoding=(restored.get('http_metadata') or {}).get('contentEncoding') or 'identity'
+            data,_=provider.request('GET',provider.r2+'/'+quote(item['key'],safe='/'),limit=item['bytes'],
+                                    headers={'Accept-Encoding':encoding})
             if hashlib.sha256(data).hexdigest()!=item['storedSha256']:
                 raise SnapshotError('Restored object stored-byte digest differs.')
         exported=ram/'target'

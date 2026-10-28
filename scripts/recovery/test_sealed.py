@@ -1,4 +1,5 @@
 import io
+import gzip
 import json
 from pathlib import Path
 import sqlite3
@@ -93,10 +94,31 @@ class SealedTests(unittest.TestCase):
         with patch.object(client,'inventory',return_value={'fixture':item}),\
              patch.object(client,'request',return_value=(b'data',{'etag':'"changed"'})):
             with self.assertRaises(SnapshotError):client.copy(self.root)
+
         changed={**item,'http_metadata':{'contentType':'changed'}}
         with patch.object(client,'inventory',side_effect=[{'fixture':item},{'fixture':changed}]),\
              patch.object(client,'request',return_value=(b'data',{'etag':'"first"'})):
             with self.assertRaises(SnapshotError):client.copy(self.root)
+
+    def test_source_copy_preserves_stored_gzip_representation(self):
+        db=sqlite3.connect(':memory:')
+        db.executescript(SCHEMA)
+        db.execute("INSERT INTO artifacts VALUES('fixture')")
+        (self.root/'database.sql').write_text('\n'.join(db.iterdump()))
+        db.close()
+        data=gzip.compress(b'synthetic stored representation')
+        item={'key':'fixture','size':len(data),'etag':'stored',
+              'http_metadata':{'contentEncoding':'gzip'},'custom_metadata':{}}
+        client=Source(SOURCE,'read-token','export-token')
+        def fetch(method,path,**kwargs):
+            self.assertEqual(kwargs['headers']['Accept-Encoding'],'gzip')
+            return data,{'etag':'"stored"'}
+        with patch.object(client,'inventory',return_value={'fixture':item}),\
+             patch.object(client,'request',side_effect=fetch):
+            client.copy(self.root)
+        from snapshot import object_path
+        self.assertEqual(object_path(self.root,'fixture').read_bytes(),data)
+
 
 
 if __name__=='__main__': unittest.main()

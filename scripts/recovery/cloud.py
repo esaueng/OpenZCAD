@@ -156,7 +156,11 @@ class Source:
             if not item or not 0 <= item['size'] <= MAX_OBJECT_BYTES:
                 raise SnapshotError('A committed object is missing or exceeds capacity.')
             path = self.r2 + '/' + quote(ref['key'],safe='/')
-            data, headers = self.request('GET',path,limit=item['size'])
+            # Preserve the stored representation: asking for identity makes the
+            # provider decompress gzip objects and return a weak ETag.
+            encoding = (item.get('http_metadata') or {}).get('contentEncoding') or 'identity'
+            data, headers = self.request('GET',path,limit=item['size'],
+                                         headers={'Accept-Encoding':encoding})
             if len(data)!=item['size'] or headers.get('etag','').strip('"')!=item['etag']:
                 raise SnapshotError('Source object changed during transfer.')
             write_new(object_path(root,ref['key']),data)
