@@ -29283,7 +29283,7 @@ export function App() {
       stage={
         drawingMode ? (
           <ErrorBoundary label="Drawings" resetKey={doc.projectId}>
-            <Suspense fallback={null}>
+            <Suspense fallback={<WorkspacePending />}>
               <LazyDrawingWorkspace
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}

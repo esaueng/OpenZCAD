@@ -108,3 +108,66 @@ test('offline boot keeps restoring a saved local workspace without a connection 
   });
   await expectBodyCount(page, 1);
 });
+
+for (const width of [1440, 390]) {
+  test(`drawing reload keeps the restoration screen until its stage is ready at ${width}px`, async ({
+    page
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await stubApi(page);
+    await createProject(page, 'Drawing reload');
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: /^Draw(?: —|$)/ })
+      .click();
+    await expect(page.getByRole('region', { name: 'Drawings' })).toBeVisible();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    await page.route('**/assets/DrawingWorkspace-*.js', async (route) => {
+      held = true;
+      await gate;
+      await route.continue();
+    });
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect.poll(() => held).toBe(true);
+      // All the other initial surfaces can prepare while just Draw is held.
+      await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+        'data-e2e-rendered-bodies',
+        '1'
+      );
+      await expect(page.locator('.command-bar input')).toBeAttached();
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve())
+              )
+            );
+          })
+      );
+      await expect(page.locator('.workspace-reveal')).toHaveAttribute('inert');
+      await expect(
+        page.getByRole('status', { name: 'Restoring workspace' })
+      ).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Drawings' })).toHaveCount(
+        0
+      );
+    } finally {
+      release();
+    }
+    await expect(page.getByRole('region', { name: 'Drawings' })).toBeVisible();
+    await expect(page.locator('.workspace-reveal')).not.toHaveAttribute(
+      'inert'
+    );
+    await expect(
+      page.getByRole('status', { name: 'Restoring workspace' })
+    ).toHaveCount(0);
+  });
+}
