@@ -18,7 +18,7 @@ async function openPart(page: Page) {
   const sketch = addSketchFeature(
     createProjectDocument('Design review fixture', toUserId('user_e2e')),
     {
-      name: 'Sketch',
+      name: 'Sketch 01',
       plane: 'XY',
       offset: 0,
       objects: [
@@ -175,6 +175,271 @@ for (const colorScheme of ['light', 'dark'] as const) {
         }
       }
       await capture(page, testInfo, 'complete-tool-names');
+    });
+
+    test('section controls clear both rails and short-screen rail buttons fit', async ({
+      page
+    }, testInfo) => {
+      await page.setViewportSize({ width: 320, height: 568 });
+      await openPart(page);
+      for (const size of [
+        { width: 320, height: 568 },
+        { width: 390, height: 844 },
+        { width: 844, height: 390 },
+        { width: 1440, height: 900 }
+      ]) {
+        await page.setViewportSize(size);
+        // Before clicking, so automatic scroll-into-view cannot conceal a
+        // rail that initially extends beyond the viewport.
+        for (const control of await page
+          .locator('.instrument-rail .rail-button')
+          .all()) {
+          await reachable(control);
+        }
+        await page
+          .getByRole('button', { name: /^Section view — now: Off$/ })
+          .click();
+        const section = page.getByRole('group', {
+          name: 'Section view',
+          exact: true
+        });
+        await expect(section).toBeVisible();
+        const dxf = section.getByRole('button', {
+          name: 'Export the exact section as DXF'
+        });
+        await expect
+          .poll(() =>
+            dxf.evaluate((element) => {
+              const r = element.getBoundingClientRect();
+              return [0.15, 0.5, 0.85, 0.95].every((fraction) => {
+                const hit = document.elementFromPoint(
+                  r.x + r.width * fraction,
+                  r.y + r.height / 2
+                );
+                return hit !== null && element.contains(hit);
+              });
+            })
+          )
+          .toBe(true);
+        await reachable(
+          section.getByRole('button', { name: 'Close section controls' })
+        );
+        await capture(page, testInfo, `section-${size.width}x${size.height}`);
+        await page
+          .getByRole('button', { name: /^Section view — now: XY plane$/ })
+          .press('Enter');
+        await expect(section).toHaveCount(0);
+      }
+    });
+
+    test('narrow shortcut descriptions and compact settings rows do not collide', async ({
+      page
+    }, testInfo) => {
+      await page.setViewportSize({ width: 320, height: 568 });
+      await openPart(page);
+      await page.keyboard.press('?');
+      const controls = page.getByRole('dialog', {
+        name: 'Controls',
+        exact: true
+      });
+      await expect(controls).toBeVisible();
+      const list = controls.getByRole('region', { name: 'Controls list' });
+      await expect
+        .poll(() =>
+          list.evaluate(
+            (element) => element.scrollWidth <= element.clientWidth + 1
+          )
+        )
+        .toBe(true);
+      const descriptions = await list
+        .locator('dd')
+        .evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().width)
+        );
+      expect(Math.min(...descriptions)).toBeGreaterThan(150);
+      await capture(page, testInfo, '320px-shortcut-descriptions');
+      for (const size of [
+        { width: 390, height: 844 },
+        { width: 1440, height: 900 }
+      ]) {
+        await page.setViewportSize(size);
+        await expect
+          .poll(() =>
+            list.evaluate(
+              (element) => element.scrollWidth <= element.clientWidth + 1
+            )
+          )
+          .toBe(true);
+        await reachable(
+          controls.getByRole('button', { name: 'Close', exact: true })
+        );
+        await capture(page, testInfo, `shortcuts-${size.width}x${size.height}`);
+      }
+      await controls
+        .getByRole('button', { name: 'Close', exact: true })
+        .click();
+      await page.getByRole('button', { name: 'Open settings' }).click();
+      await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+      for (const width of [320, 390, 1440]) {
+        await page.setViewportSize({
+          width,
+          height: width === 320 ? 568 : 900
+        });
+        const row = page
+          .locator('.setting-row')
+          .filter({ has: page.getByText('Kernel version', { exact: true }) });
+        await expect
+          .poll(() =>
+            row.evaluate((element) => {
+              const label = element
+                .querySelector('.setting-title')!
+                .getBoundingClientRect();
+              const value = element
+                .querySelector('.settings-state')!
+                .getBoundingClientRect();
+              const overlapX =
+                Math.min(label.right, value.right) -
+                Math.max(label.left, value.left);
+              const overlapY =
+                Math.min(label.bottom, value.bottom) -
+                Math.max(label.top, value.top);
+              return overlapX <= 0 || overlapY <= 0;
+            })
+          )
+          .toBe(true);
+        await capture(page, testInfo, `build-version-${width}px`);
+      }
+      await page.setViewportSize({ width: 320, height: 568 });
+      await capture(page, testInfo, '320px-build-version');
+    });
+
+    test('phone history names and inspector titles keep room for their text', async ({
+      page
+    }, testInfo) => {
+      await page.setViewportSize({ width: 320, height: 568 });
+      await openPart(page);
+      await revealModelPanel(page, 'History');
+      const names = page
+        .getByRole('region', { name: 'History', exact: true })
+        .locator('.feature-name');
+      for (const size of [
+        { width: 320, height: 568 },
+        { width: 390, height: 844 },
+        { width: 1440, height: 900 }
+      ]) {
+        await page.setViewportSize(size);
+        await expect
+          .poll(() =>
+            names.evaluateAll((elements) =>
+              elements.every(
+                (element) => element.clientWidth >= element.scrollWidth
+              )
+            )
+          )
+          .toBe(true);
+        await capture(page, testInfo, `history-names-${size.width}px`);
+      }
+      await page.setViewportSize({ width: 320, height: 568 });
+      const sketchMore = page.getByRole('button', {
+        name: 'More actions for Sketch 01'
+      });
+      await reachable(sketchMore);
+      await sketchMore.click();
+      await expect(
+        page.getByRole('menuitem', { name: 'Suppress', exact: true })
+      ).toBeVisible();
+      await expect(
+        page.getByRole('menuitem', { name: 'Roll back to here', exact: true })
+      ).toBeVisible();
+      await page.keyboard.press('Escape');
+      await capture(page, testInfo, '320px-history-names');
+      const row = page.locator('.feature-row-main[title^="Extrude — "]');
+      const bar = await editExtrudeFromHistory(page, row, 'Extrude');
+      const title = page
+        .getByRole('region', { name: 'Feature inspector' })
+        .getByRole('heading', { name: 'Extrude', exact: true });
+      for (const size of [
+        { width: 320, height: 568 },
+        { width: 390, height: 844 },
+        { width: 1440, height: 900 }
+      ]) {
+        await page.setViewportSize(size);
+        await expect
+          .poll(() =>
+            title.evaluate(
+              (element) => element.clientWidth >= element.scrollWidth
+            )
+          )
+          .toBe(true);
+        await capture(page, testInfo, `inspector-title-${size.width}px`);
+      }
+      await bar.getByRole('button', { name: 'Cancel' }).click();
+    });
+
+    test('sketch modify flyout follows a scrolled trigger and stays inside the viewport', async ({
+      page
+    }, testInfo) => {
+      await page.setViewportSize({ width: 320, height: 568 });
+      await openPart(page);
+      await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+      await page.getByRole('button', { name: 'Top (XY)', exact: true }).click();
+      const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+      const toggle = rail.getByRole('button', { name: 'More modify tools' });
+      await toggle.click();
+      const flyout = page.getByRole('group', {
+        name: 'More modify tools',
+        exact: true
+      });
+      const follows = () =>
+        flyout.evaluate((element) => {
+          const r = element.getBoundingClientRect();
+          const trigger = document
+            .querySelector<HTMLButtonElement>(
+              'button[aria-label="More modify tools"]'
+            )!
+            .getBoundingClientRect();
+          const expectedY = Math.max(
+            8,
+            Math.min(trigger.top, innerHeight - r.height - 8)
+          );
+          return (
+            r.left >= 8 &&
+            r.right <= innerWidth - 8 &&
+            r.top >= 8 &&
+            r.bottom <= innerHeight - 8 &&
+            Math.abs(r.top - expectedY) < 1
+          );
+        });
+      await expect.poll(follows).toBe(true);
+      await reachable(
+        flyout.getByRole('button', { name: 'Circular pattern', exact: true })
+      );
+      await capture(page, testInfo, '320px-sketch-modify');
+      const scroller = page.locator('.workspace-column-tools');
+      const bounds = (await scroller.boundingBox())!;
+      await page.mouse.move(
+        bounds.x + bounds.width / 2,
+        bounds.y + bounds.height / 2
+      );
+      await page.mouse.wheel(0, -70);
+      await expect.poll(follows).toBe(true);
+      for (const size of [
+        { width: 390, height: 844 },
+        { width: 844, height: 390 },
+        { width: 1440, height: 900 }
+      ]) {
+        await page.setViewportSize(size);
+        await expect.poll(follows).toBe(true);
+        await reachable(
+          flyout.getByRole('button', { name: 'Circular pattern', exact: true })
+        );
+      }
+      await capture(page, testInfo, 'desktop-sketch-modify');
+      await toggle.press('Escape');
+      await expect(flyout).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await expect(rail).toHaveCount(0);
     });
 
     test('options scroll on rotation and exact entry remains clickable through resize and cancel', async ({

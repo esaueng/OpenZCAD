@@ -658,9 +658,10 @@ describe('SketchToolRail', () => {
     });
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const group = within(rail).getByRole('group', {
+    const group = screen.getByRole('group', {
       name: 'More modify tools'
     });
+    expect(rail).not.toContainElement(group);
     expect(
       within(group)
         .getAllByRole('button')
@@ -961,9 +962,7 @@ describe('SketchRelationsRail', () => {
     expect(
       within(strip).getByRole('radio', { name: 'Linked' })
     ).toHaveAttribute('aria-checked', 'true');
-    await user.click(
-      within(strip).getByRole('radio', { name: 'Unlinked' })
-    );
+    await user.click(within(strip).getByRole('radio', { name: 'Unlinked' }));
     expect(onProjectMode).toHaveBeenLastCalledWith('unlinked');
     expect(
       screen.getByRole('button', { name: 'Project edges' })

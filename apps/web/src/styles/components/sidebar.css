@@ -998,6 +998,30 @@
   }
 }
 
+/* The named More menu already exposes suppression and rollback. Keep that
+   menu visible on a narrow phone instead of reserving three action targets
+   beside a name, a reorder grip and the hidden-sketch visibility control. */
+@media (max-width: 380px) {
+  .history-timeline .history-row-actions :is(.row-suppression, .row-rollback),
+  .history-timeline .history-row-value {
+    display: none;
+  }
+
+  .history-timeline .history-row-actions {
+    opacity: 1;
+    transform: none;
+  }
+
+  .history-timeline .history-row-tail {
+    flex-shrink: 0;
+  }
+
+  .history-timeline .feature-row-main {
+    gap: 3px;
+    padding-inline: 2px;
+  }
+}
+
 /* A rule above the details, not below: the History section's own
    border-bottom sits just under it and the two read as a double line. The
    margin clears the end-of-history handle, which hangs 10px below the list. */

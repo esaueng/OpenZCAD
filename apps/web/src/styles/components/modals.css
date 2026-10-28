@@ -1494,6 +1494,24 @@
   font-size: var(--fs-sm);
 }
 
+/* A longest-chord column leaves only 35px for descriptions on a 320px
+   phone. Keep each binding and its description together on separate lines. */
+@media (max-width: 380px) {
+  .shortcuts-grid dl {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--sp-3);
+  }
+
+  .shortcuts-grid .shortcut-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-1);
+  }
+
+  .shortcuts-grid .shortcut-key-sequence {
+    flex-wrap: wrap;
+  }
+}
+
 /* Every dialog card settles in from just under full size, so it lands in
    front of the dimmed stage rather than appearing on it. On the token
    duration and curve, without overshoot: a 320ms spring from 90% outlasted
