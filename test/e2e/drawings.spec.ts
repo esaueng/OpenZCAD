@@ -229,7 +229,7 @@ test('exports the same bytes after a reload re-meshes the model', async ({
     { timeout: 60_000 }
   );
   await expect(page.getByRole('contentinfo')).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 60_000 }
   );
   // R20 → R21 stays inside the display mesh's held-deflection band, so this

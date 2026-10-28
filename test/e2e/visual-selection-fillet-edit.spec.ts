@@ -96,7 +96,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   const status = page.getByRole('contentinfo');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
 
@@ -137,7 +137,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await expect(status).toContainText('Filleted 1 edge at 1 mm.');
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
 
@@ -251,7 +251,7 @@ test('Delete removes the fillet whose face is picked in the viewport', async ({
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
   const rebuilding =
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i;
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i;
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect(status).not.toContainText(rebuilding, { timeout: 30_000 });
   await expect
@@ -330,7 +330,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   const status = page.getByRole('contentinfo');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
   await expect

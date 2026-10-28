@@ -158,6 +158,8 @@ test('a remapped back-view key reaches the same view after reopen', async ({
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/, {
     timeout: 30_000
   });
+  // The canvas prepares offscreen before the coordinated workspace reveal.
+  await expect(canvas).toBeVisible();
   await page.keyboard.press('1');
   await expectDirection(canvas, [0, -1, 0]);
   await page.keyboard.press('8');

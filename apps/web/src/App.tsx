@@ -521,7 +521,6 @@ import {
   toolApplies,
   type CommandSelection
 } from './lib/commandContext';
-import { AppShell } from './components/AppShell';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
 import {
   ActivityLogButton,
@@ -565,6 +564,10 @@ import {
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
+import {
+  WorkspaceAppShell,
+  WorkspacePending
+} from './components/WorkspaceLoading';
 import type { AuthConfigStatus } from './components/SettingsPage';
 import {
   DEMO_DEFINITIONS,
@@ -957,7 +960,7 @@ const extrudeInference = () => import('./lib/extrudeInference');
 function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   return function Suspended(props: P) {
     return (
-      <Suspense fallback={null}>
+      <Suspense fallback={<WorkspacePending />}>
         <Lazy {...props} />
       </Suspense>
     );
@@ -1030,13 +1033,7 @@ const LazyCommandBar = lazyWithStaleChunkNotice(() =>
 function CommandBar(props: ComponentProps<typeof LazyCommandBar>) {
   return (
     <ErrorBoundary label="Search bar">
-      <Suspense
-        fallback={
-          <div className="command-bar-row">
-            <div className="command-bar" />
-          </div>
-        }
-      >
+      <Suspense fallback={<WorkspacePending />}>
         <LazyCommandBar {...props} />
       </Suspense>
     </ErrorBoundary>
@@ -1308,14 +1305,7 @@ const AssistantPanel = withSuspense(LazyAssistantPanel);
 
 function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
-    <Suspense
-      fallback={
-        <div className="viewer-shell viewport-loading" role="status">
-          <span className="workspace-loading-ring spin" aria-hidden="true" />
-          <span>Loading 3D viewport…</span>
-        </div>
-      }
-    >
+    <Suspense fallback={<WorkspacePending />}>
       <LazyViewerShell {...props} />
     </Suspense>
   );
@@ -25594,7 +25584,11 @@ export function App() {
   const workspaceKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
-      if (!workspaceInputEnabled || modalHoldsKeyboard()) {
+      if (
+        !workspaceInputEnabled ||
+        workspaceRef.current?.closest('[inert]') ||
+        modalHoldsKeyboard()
+      ) {
         return;
       }
       const meta = event.ctrlKey || event.metaKey;
@@ -26403,8 +26397,8 @@ export function App() {
   }
 
   const geometryPhaseLabel: Record<typeof geometry.state.phase, string> = {
-    starting: 'Starting geometry worker',
-    'loading-remus': 'Loading exact Remus kernel',
+    starting: 'Preparing model…',
+    'loading-remus': 'Preparing model…',
     rebuilding: 'Rebuilding exact geometry',
     ready: 'Exact geometry ready',
     failed: 'Exact geometry failed'
@@ -27694,7 +27688,14 @@ export function App() {
     onShowAll: showAllBodies
   };
   return (
-    <AppShell
+    <WorkspaceAppShell
+      projectId={doc.projectId}
+      loadingReady={
+        displayedGeometryComplete ||
+        viewerBodies.length > 0 ||
+        geometry.state.phase === 'failed'
+      }
+      onLoadingBack={() => void handleGoHome()}
       workspaceRef={workspaceRef}
       parameterDefinition={
         doc && !parameterEditDisabledReason
@@ -29282,7 +29283,7 @@ export function App() {
       stage={
         drawingMode ? (
           <ErrorBoundary label="Drawings" resetKey={doc.projectId}>
-            <Suspense fallback={null}>
+            <Suspense fallback={<WorkspacePending />}>
               <LazyDrawingWorkspace
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}

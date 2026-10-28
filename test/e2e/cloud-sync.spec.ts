@@ -500,6 +500,9 @@ test('drains a pending account edit before opening a public share', async ({
   });
   await expect(page.locator('.breadcrumb')).toContainText(shared.name);
   expect(api.project?.name).toBe('Account edit retained');
+  // The drain is proved above with the debounce clock still paused. Resume
+  // painting as the shared workspace's remaining lazy tools arrive.
+  await page.clock.resume();
   await expect(
     page.getByRole('button', { name: 'Make a copy', exact: true })
   ).toBeVisible();

@@ -1,13 +1,7 @@
-import {
-  test,
-  expect,
-  createProject,
-  MODEL_ONLY,
-  stubApi
-} from './openzcad-fixtures';
+import { test, expect, MODEL_ONLY, stubApi } from './openzcad-fixtures';
 
 for (const width of [1440, 390]) {
-  test(`cold workspace loading stays in its viewport and rail at ${width}px`, async ({
+  test(`cold workspace loading coordinates its reveal and keeps later View tools in their rail at ${width}px`, async ({
     page,
     context
   }, testInfo) => {
@@ -33,35 +27,46 @@ for (const width of [1440, 390]) {
       await route.continue();
     });
     try {
-      await createProject(page, 'Loading placeholders');
+      await page.goto('/');
+      await page.getByLabel('Project name').fill('Loading placeholders');
+      await page.getByRole('button', { name: 'Create project' }).click();
+      const startup = page.getByRole('status', { name: 'Restoring workspace' });
+      await expect(startup).toBeVisible();
+      await expect(page.locator('.workspace-reveal')).toHaveAttribute('inert');
+      await expect(page.locator('.viewport-loading')).toHaveCount(0);
+      const card = (await page.locator('.startup-card').boundingBox())!;
+      expect(Math.abs(card.x + card.width / 2 - width / 2)).toBeLessThan(2);
+      expect(card.y).toBeGreaterThan(0);
+      expect(card.y + card.height).toBeLessThan(844);
+      await expect(page.locator('.startup-progress')).toHaveCSS(
+        'animation-name',
+        'none'
+      );
+      await context.setOffline(true);
+      await expect(
+        page.getByText(
+          'You’re offline. Connect to finish loading the workspace.'
+        )
+      ).toBeVisible();
+      await context.setOffline(false);
+      releaseViewport();
+      await expect(
+        page.getByRole('button', { name: /^Box \(B\)/ })
+      ).toBeVisible();
+      await expect(startup).toHaveCount(0);
+      await expect(page.locator('.viewer-host canvas')).toBeVisible();
       await page.getByRole('button', { name: /^View(?: —|$)/ }).click();
-      const viewport = page.locator('.viewport-loading');
       const tools = page.locator('.view-tools-loading');
-      await expect(viewport).toBeVisible();
       await expect(tools).toBeVisible();
       await expect(tools).toContainText('Loading view tools…');
       await expect(tools).toHaveCSS('translate', 'none');
       await expect(page.locator('.error-boundary, .error-page')).toHaveCount(0);
-      const stage = (await page.locator('.viewer-area').boundingBox())!;
-      const label = (await viewport
-        .getByText('Loading 3D viewport…')
-        .boundingBox())!;
-      expect(
-        Math.abs(label.x + label.width / 2 - (stage.x + stage.width / 2))
-      ).toBeLessThan(2);
-      expect(
-        Math.abs(label.y + label.height / 2 - (stage.y + stage.height / 2))
-      ).toBeLessThan(25);
       const waitingRail = (await tools.boundingBox())!;
       expect(waitingRail.x).toBeGreaterThan(width - 70);
       expect(waitingRail.x + waitingRail.width).toBeLessThanOrEqual(width);
       expect(waitingRail.width).toBeLessThanOrEqual(44);
       expect(waitingRail.y).toBeGreaterThan(60);
       await expect(tools.locator('.spin')).toHaveCSS('animation-name', 'none');
-      await expect(viewport.locator('.spin')).toHaveCSS(
-        'animation-name',
-        'none'
-      );
       await testInfo.attach('cold-workspace-loading', {
         body: await page.screenshot(),
         contentType: 'image/png'
@@ -76,9 +81,6 @@ for (const width of [1440, 390]) {
       expect(message.x).toBeGreaterThanOrEqual(0);
       expect(message.x + message.width).toBeLessThanOrEqual(waitingRail.x);
       await context.setOffline(false);
-      releaseViewport();
-      await expect(page.locator('.viewer-host canvas')).toBeVisible();
-      await expect(viewport).toHaveCount(0);
       await expect(tools).toBeVisible();
       releaseTools();
       const toolbar = page.getByRole('toolbar', { name: 'View tools' });

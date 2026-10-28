@@ -87,7 +87,7 @@ test('imports FreeCAD final solids through the picker with undo, visibility and 
   ).toHaveCount(0);
   await expect(
     page.getByText(
-      /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry/
+      /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry/
     )
   ).toHaveCount(0, { timeout: 30000 });
   await expect(page.locator('canvas[data-engine]')).toBeVisible();

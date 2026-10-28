@@ -1,6 +1,7 @@
 import { Suspense, useSyncExternalStore, type ComponentType } from 'react';
 import { lazyWithStaleChunkNotice, loadWhenOnline } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
+import { useWorkspacePending } from './WorkspaceLoading';
 
 function subscribeOnline(changed: () => void) {
   window.addEventListener('online', changed);
@@ -20,6 +21,7 @@ function LoadingPanel({
   label: string;
   presentation: LoadingPresentation;
 }) {
+  useWorkspacePending();
   const online = useSyncExternalStore(
     subscribeOnline,
     () => navigator.onLine !== false

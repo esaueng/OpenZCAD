@@ -16,17 +16,17 @@
 .startup-card {
   display: grid;
   justify-items: center;
-  gap: var(--sp-2);
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  gap: var(--sp-3);
+  max-width: 360px;
+  padding: var(--sp-5);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-base);
 }
 
 .startup-card svg {
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   color: var(--color-accent);
 }
 
@@ -36,6 +36,74 @@
   font-weight: var(--fw-medium);
   letter-spacing: 0.01em;
   text-transform: none;
+}
+
+.startup-card [role='status'] {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.startup-card p {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.startup-card button {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--color-text-muted);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.startup-card button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* Keep the restore card still before navigation is available, without
+   presenting an escape that cannot be used during local discovery. */
+.startup-card button:disabled {
+  visibility: hidden;
+}
+
+.startup-progress {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-accent-dim);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+}
+
+/* Keep the canvas at its final size while its first frame and panels load. */
+.workspace-reveal {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.workspace-reveal.is-ready {
+  visibility: visible;
+  opacity: 1;
+  animation: workspace-reveal 180ms ease-out;
+}
+
+@keyframes workspace-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-reveal.is-ready {
+    animation: none;
+  }
 }
 
 /* ── StartScreen ─────────────────────────────────────────── */
@@ -636,6 +704,7 @@
 }
 
 .start-filter-count {
+  min-width: 3ch;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
@@ -703,6 +772,7 @@
 }
 
 .start-shelf-group span {
+  min-width: 3ch;
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
@@ -1506,28 +1576,20 @@
   background: var(--color-surface);
 }
 
-/* A real tile's text sits in its open button, whose line-height is the UA's
-   normal rather than the page's 1.5. Each bar takes the height of the line it
-   stands in for (name, then meta), so the grid does not shift as the parts
-   arrive. */
-.start-tile-placeholder .start-tile-body {
+/* Identical text rows, thumbnail ratio and footer keep both layouts steady. */
+.start-tile-placeholder .start-tile-open {
   line-height: normal;
 }
 
-.start-tile-placeholder .start-tile-body > span {
-  width: 55%;
-  height: 10px;
-  margin-block: calc((1lh - 10px) / 2);
-  background: var(--color-surface-2);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-base);
+.start-tile-placeholder .start-tile-name,
+.start-tile-placeholder .start-tile-meta time {
+  background: linear-gradient(var(--color-surface-2), var(--color-surface-2))
+    left center / 55% 8px no-repeat;
 }
 
-.start-tile-placeholder .start-tile-body > span + span {
-  width: 35%;
-  height: 8px;
-  margin-block: calc((1lh - 8px) / 2);
-  font-size: var(--fs-xs);
+.start-tile-placeholder .start-tile-meta time {
+  width: 60%;
+  background-size: 65% 6px;
 }
 
 /* ── First run ───────────────────────────────────────────── */

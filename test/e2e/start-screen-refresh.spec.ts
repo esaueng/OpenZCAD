@@ -157,3 +157,127 @@ test('failed account listing finishes refresh with the saved device library', as
     page.getByRole('button', { name: 'Create project' })
   ).toBeEnabled();
 });
+
+for (const layout of ['grid', 'list']) {
+  for (const width of [1440, 390]) {
+    test(`reload preserves pinned sections and ${layout} geometry at ${width}px`, async ({
+      page
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      if (width === 390) await page.emulateMedia({ reducedMotion: 'reduce' });
+      await stubApi(page);
+      await page.addInitScript(
+        (layout) => localStorage.setItem('openzcad.start.layout', layout),
+        layout
+      );
+      let release = () => {};
+      let gate = Promise.resolve();
+      await page.route('**/api/projects', async (route) => {
+        await gate;
+        await route.fulfill({
+          json: {
+            projects: [
+              {
+                projectId: 'pinned-part',
+                name: 'Pinned part',
+                revisionCount: 4,
+                updatedAt: '2026-10-27T12:00:00Z',
+                organization: { status: 'active', pinned: true, sortOrder: 0 }
+              },
+              {
+                projectId: 'regular-part',
+                name: 'Regular part',
+                revisionCount: 2,
+                updatedAt: '2026-10-27T12:00:00Z'
+              },
+              {
+                projectId: 'recovery-part',
+                name: 'Pinned part (Recovery)',
+                revisionCount: 1,
+                updatedAt: '2026-10-27T12:00:00Z'
+              }
+            ]
+          }
+        });
+      });
+      await page.goto('/');
+      await expect(page.locator('.start-tile-project')).toHaveCount(3);
+      const positions = () =>
+        page.locator('.start-shelf-group').evaluateAll((headings) =>
+          headings.map((heading) => ({
+            x: heading.getBoundingClientRect().x,
+            y: heading.getBoundingClientRect().y
+          }))
+        );
+      const before = await positions();
+      const firstTile = await page
+        .locator('.start-tile-project')
+        .first()
+        .boundingBox();
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await expect(
+          page.getByRole('status', { name: 'Loading library' })
+        ).toBeVisible();
+        await expect(page.locator('.start-tile-placeholder')).toHaveCount(3);
+        const during = await positions();
+        expect(during).toHaveLength(before.length);
+        during.forEach((position, index) => {
+          expect(position.x).toBeCloseTo(before[index]!.x, 0);
+          expect(position.y).toBeCloseTo(before[index]!.y, 0);
+        });
+        const placeholder = await page
+          .locator('.start-tile-placeholder')
+          .first()
+          .boundingBox();
+        expect(placeholder?.height).toBeCloseTo(firstTile!.height, 0);
+        expect(placeholder?.width).toBeCloseTo(firstTile!.width, 0);
+        if (process.env.OZ_RELOAD_SCREENSHOTS)
+          await page.screenshot({
+            path: `${process.env.OZ_RELOAD_SCREENSHOTS}/library-${layout}-${width}-loading.png`
+          });
+      } finally {
+        release();
+      }
+      await expect(page.locator('.start-tile-project')).toHaveCount(3);
+      expect(await positions()).toEqual(before);
+    });
+  }
+}
+
+for (const width of [1440, 390]) {
+  test(`reload keeps a known-empty library free of placeholder cards at ${width}px`, async ({
+    page
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await stubApi(page);
+    let release = () => {};
+    let gate = Promise.resolve();
+    await page.route('**/api/projects', async (route) => {
+      await gate;
+      await route.fulfill({ json: { projects: [] } });
+    });
+    await page.goto('/');
+    await expect(page.getByText('No parts yet', { exact: true })).toBeVisible();
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect(
+        page.getByRole('status', { name: 'Loading library' })
+      ).toBeVisible();
+      await expect(page.locator('.start-tile-placeholder')).toHaveCount(0);
+      await expect(page.getByText('No parts yet', { exact: true })).toHaveCount(
+        0
+      );
+    } finally {
+      release();
+    }
+    await expect(page.getByText('No parts yet', { exact: true })).toBeVisible();
+    await expect(page.locator('.start-tile-placeholder')).toHaveCount(0);
+  });
+}

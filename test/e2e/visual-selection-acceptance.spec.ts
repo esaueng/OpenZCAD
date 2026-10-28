@@ -89,7 +89,7 @@ interface ChipAnchor {
 const REPUBLISH = { timeout: 30_000 } as const;
 
 const REBUILDING =
-  /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i;
+  /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i;
 
 async function probeFace(
   canvas: Locator,
