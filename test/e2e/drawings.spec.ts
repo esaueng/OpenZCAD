@@ -34,7 +34,7 @@ async function viewCentreX(panel: Locator): Promise<number> {
   return Number(await panel.getByLabel('Centre X (mm)').inputValue());
 }
 
-test('lays out, places, exports and fences a drawing sheet', async ({
+test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(180_000);

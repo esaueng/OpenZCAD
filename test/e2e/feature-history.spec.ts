@@ -14,7 +14,7 @@ import {
   setBarValues
 } from './openzcad-fixtures';
 
-test('explains a failed downstream edit and opens the exact feature for repair', async ({
+test('explains a failed downstream edit and opens the exact feature for repair', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(90_000);
@@ -320,7 +320,7 @@ test.describe('on a touch screen', () => {
   });
 });
 
-test('names a deleted sketch input and restores the dependent model with undo', async ({
+test('names a deleted sketch input and restores the dependent model with undo', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -356,7 +356,7 @@ test('names a deleted sketch input and restores the dependent model with undo', 
   await expect(details.getByText(/An input sketch is missing/)).toHaveCount(0);
 });
 
-test('undo inside a text field edits the text, not the document', async ({
+test('undo inside a text field edits the text, not the document', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);

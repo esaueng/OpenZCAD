@@ -72,7 +72,7 @@ test('a signed-in visitor can retry an unavailable account encryption check', as
  * recently confirmed the link; after the owner revokes it, a visitor sees
  * the refusal.
  */
-test('a visitor opens an encrypted share link, copies it, and is refused once it lapses or is revoked', async ({
+test('a visitor opens an encrypted share link, copies it, and is refused once it lapses or is revoked', { tag: '@ci-smoke' }, async ({
   browser
 }) => {
   test.setTimeout(300_000);

@@ -86,7 +86,7 @@ async function grabHandleCenter(page: Page) {
   return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
 }
 
-test('dragging a circle by its centre snaps it onto another centre', async ({
+test('dragging a circle by its centre snaps it onto another centre', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(90_000);

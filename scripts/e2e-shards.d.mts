@@ -1,5 +1,7 @@
 export const SPEC_DIR: string;
 export const WEIGHTS_PATH: string;
+export const SMOKE_WEIGHTS_PATH: string;
+export const SMOKE_TAG: string;
 export const SPEC_PATTERN: RegExp;
 export const DEFAULT_WEIGHT_SECONDS: number;
 
@@ -9,6 +11,11 @@ export interface ShardPlan {
 }
 
 export function listSpecs(dir?: string): string[];
+export type E2eSuite = 'smoke' | 'full';
+export function resolveSuite(
+  env?: Record<string, string | undefined>
+): E2eSuite;
+export function suiteSpecs(suite: E2eSuite, dir?: string): string[];
 
 export function parseShard(value: string): { shard: number; total: number };
 
