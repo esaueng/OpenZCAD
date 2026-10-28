@@ -183,7 +183,6 @@ import {
   createCheckpoint,
   createFeatureOnlyIds,
   createSavePoint,
-  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
