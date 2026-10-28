@@ -1,6 +1,8 @@
 import { test, expect, stubApi, createProject } from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 import type { ProjectSummary } from '@openzcad/shared';
+import { toUserId } from '@openzcad/shared';
+import { createProjectDocument } from '@openzcad/document-core';
 
 async function createListedProject(page: Page, name: string) {
   const response = page.waitForResponse(
@@ -186,7 +188,9 @@ test('150 encrypted cards do not wait for the encryption account read', async ({
   }
 });
 
-test('selection shows a loading page before the document arrives; cancel fences its late result', async ({ page }, testInfo) => {
+test('selection shows a loading page before the document arrives; cancel fences its late result', async ({
+  page
+}, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await stubApi(page);
@@ -258,5 +262,63 @@ test('a slow file count does not block the model workspace', async ({
     ).toHaveCount(0);
   } finally {
     files.release();
+  }
+});
+
+test('a shared viewer stays read-only before and after delayed capability discovery', async ({
+  page
+}) => {
+  await stubApi(page, { collaborationRole: 'viewer' });
+  const document = createProjectDocument(
+    'Shared viewer part',
+    toUserId('user_other_owner')
+  );
+  const capabilities = gate();
+  await page.route('**/api/collaboration/config', async (route) => {
+    await capabilities.promise;
+    await route.fallback();
+  });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json: {
+        projects: [
+          {
+            projectId: document.projectId,
+            name: document.name,
+            revisionCount: 0,
+            updatedAt: document.derived.updatedAt
+          }
+        ]
+      }
+    })
+  );
+  await page.route(`**/api/projects/${document.projectId}`, (route) =>
+    route.fulfill({ json: document })
+  );
+  try {
+    await page.goto('/');
+    await page.locator('.start-tile-open', { hasText: document.name }).click();
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+    const mode = page.getByRole('group', { name: 'Workspace mode' });
+    await expect(
+      mode.getByRole('button', { name: 'Build', exact: true })
+    ).toBeDisabled();
+    await expect(
+      mode.getByRole('button', { name: 'View', exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('b');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Waiting for project access'
+    );
+    capabilities.release();
+    await expect(
+      page.getByRole('button', { name: 'Open project sharing' })
+    ).toContainText('Read-only');
+    await expect(
+      mode.getByRole('button', { name: 'Build', exact: true })
+    ).toBeDisabled();
+    await expect(page.locator('.feature-row')).toHaveCount(0);
+  } finally {
+    capabilities.release();
   }
 });

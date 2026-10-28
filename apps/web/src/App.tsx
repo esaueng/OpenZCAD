@@ -4802,6 +4802,12 @@ export function App() {
     doc?.ownerUserId !== session.userId &&
     !encryptedMemberProject
   );
+  // Discovery may display the model before the optional capability read ends.
+  // A foreign plaintext document never grants a seat by arriving first.
+  const pendingSharedProjectAccessReason =
+    sharedAccountProject && !projectSharingEnabled
+      ? 'Waiting for project access'
+      : null;
 
   // An end-to-end encrypted project's room relays ciphertext (ADR-024
   // slice 4-9), and every version the room accepts is already the account's.
@@ -5020,19 +5026,21 @@ export function App() {
   // workspace is the parameters, and Make a copy is the road to Build.
   const seatBuildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
-    : !sharedProjectDisabled && encryptedMemberEditReason
-      ? // An encrypted member who may not edit (a viewer, or one whose role
-        // is not known, or no longer exists) is held in View, as a
-        // read-only collaborator is (slice 5-4).
-        encryptedMemberEditReason
-      : !sharedProjectDisabled &&
-          cloudAvailable &&
-          session &&
-          projectSharingEnabled &&
-          (collaboration.role === 'viewer' ||
-            collaboration.status === 'read-only')
-        ? 'This shared project is read-only'
-        : null;
+    : !sharedProjectDisabled && pendingSharedProjectAccessReason
+      ? pendingSharedProjectAccessReason
+      : !sharedProjectDisabled && encryptedMemberEditReason
+        ? // An encrypted member who may not edit (a viewer, or one whose role
+          // is not known, or no longer exists) is held in View, as a
+          // read-only collaborator is (slice 5-4).
+          encryptedMemberEditReason
+        : !sharedProjectDisabled &&
+            cloudAvailable &&
+            session &&
+            projectSharingEnabled &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          ? 'This shared project is read-only'
+          : null;
   const buildModeDisabledReason =
     !shareSession && migrationEditReason
       ? migrationEditReason
@@ -5127,26 +5135,28 @@ export function App() {
         null
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
-        : encryptedMemberProject
-          ? encryptedMemberEditReason
-          : !activeProjectIsCloud ||
-              !cloudAvailable ||
-              !session ||
-              !projectSharingEnabled
-            ? null
-            : collaboration.conflict
-              ? 'Resolve the collaboration conflict before editing'
-              : collaboration.role === 'viewer' ||
-                  collaboration.status === 'read-only'
-                ? 'This shared project is read-only'
-                : collaboration.role === null
-                  ? 'Waiting for project access'
-                  : collaborationRollout.editLeasesEnforced &&
-                      !activeCollaborationLease
-                    ? collaboration.status === 'lease-denied'
-                      ? 'Another collaborator holds the edit lease'
-                      : 'Waiting for the project edit lease'
-                    : null;
+        : pendingSharedProjectAccessReason
+          ? pendingSharedProjectAccessReason
+          : encryptedMemberProject
+            ? encryptedMemberEditReason
+            : !activeProjectIsCloud ||
+                !cloudAvailable ||
+                !session ||
+                !projectSharingEnabled
+              ? null
+              : collaboration.conflict
+                ? 'Resolve the collaboration conflict before editing'
+                : collaboration.role === 'viewer' ||
+                    collaboration.status === 'read-only'
+                  ? 'This shared project is read-only'
+                  : collaboration.role === null
+                    ? 'Waiting for project access'
+                    : collaborationRollout.editLeasesEnforced &&
+                        !activeCollaborationLease
+                      ? collaboration.status === 'lease-denied'
+                        ? 'Another collaborator holds the edit lease'
+                        : 'Waiting for the project edit lease'
+                      : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
   const projectEditDisabledReason =

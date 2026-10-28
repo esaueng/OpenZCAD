@@ -11,7 +11,8 @@ the initial library. Selecting a project immediately shows its named loading
 screen with cancellation; document reconciliation still precedes hydration,
 and the file count loads afterward. Regression coverage includes 150 encrypted
 cards, delayed optional services, cached rows, rejected/stale metadata, local
-settings changed during discovery, cancellation and superseded navigation
+settings changed during discovery, shared viewers awaiting capabilities,
+cancellation and superseded navigation
 (`progressive-loading.spec.ts`, `apiProjectListing.test.ts`,
 `progressiveShelf.test.ts`, `projectShelf.test.ts`). Original-account production
 timing and target-hardware median/p95 qualification remain open.
