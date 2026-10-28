@@ -136,6 +136,13 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       projectId,
       mode
     );
+    if (created.pending.length) {
+      throw new Error(
+        created.pending.includes('authority')
+          ? 'The link needs your confirmation before it can open. Confirm sharing, then copy it from the link list.'
+          : 'The link was created, but its model is not published yet. Reopen sharing to retry before copying it.'
+      );
+    }
     return { url: created.url };
   },
   async revoke(projectId, shareId) {
@@ -373,7 +380,7 @@ export function EncryptedShareLinks({
         <button
           type="button"
           className="primary sharing-share-create"
-          disabled={disabled}
+          disabled={disabled || state?.needsConfirmation}
           onClick={() =>
             void run('create', async () => {
               setCreated(null);
@@ -457,7 +464,8 @@ export function EncryptedShareLinks({
         ) : (
           <div className="sharing-share-notice" role="status">
             <span className="sharing-tag">
-              Links need your confirmation to keep opening for visitors.
+              Confirm sharing before creating a link. Existing links also need
+              confirmation to keep opening for visitors.
             </span>
             <button
               type="button"
@@ -567,7 +575,7 @@ export function EncryptedShareLinks({
                 <button
                   type="button"
                   className="sharing-row-action"
-                  disabled={busy !== null}
+                  disabled={busy !== null || row.status !== 'active'}
                   aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
                   onClick={() => void copy(row.url!, row.shareId)}
                 >

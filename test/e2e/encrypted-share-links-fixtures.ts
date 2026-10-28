@@ -163,6 +163,9 @@ export async function ownerWithShareLink(
   });
 
   // Sharing needs the identity key's confirmation (the share delegation).
+  await expect(
+    links.getByRole('button', { name: 'Create link' })
+  ).toBeDisabled();
   await links.getByRole('button', { name: 'Confirm sharing…' }).click();
   const confirm = links.getByRole('group', { name: 'Confirm sharing' });
   await confirm.getByLabel('Recovery key').fill(seeded.recoveryKey);
