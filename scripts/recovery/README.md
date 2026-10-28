@@ -18,7 +18,13 @@ larger inputs. Review and qualify new schemas before changing those bounds.
 Keep the operator JSON configuration outside the repository, mode 0600. It names:
 
 - `source`: explicit `account`, `database` UUID and `bucket`.
-- `readTokenFile`: an owner-only user API token file with source R2 Read access.
+- `readTokenFile`: an owner-only **user API token** file with the account-level
+  **Workers R2 Storage: Read** permission, restricted to the source account.
+  Inventory uses the REST API to retain complete HTTP/custom metadata and
+  storage classes. Bucket-scoped R2 **Object Read-only** tokens are unsupported:
+  [Cloudflare rejects them on REST object endpoints](https://developers.cloudflare.com/r2/platform/troubleshooting/#object-level-api-tokens-fail-against-the-rest-api).
+  This is the account-level read credential already required for inventory;
+  no account or bucket write permission is required.
   Object reads use the R2 S3 endpoint, deriving the S3 credentials in memory
   from this token's verified ID and SHA-256 value, as documented in
   [R2 API tokens](https://developers.cloudflare.com/r2/api/tokens/).
