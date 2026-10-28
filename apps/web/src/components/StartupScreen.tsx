@@ -21,7 +21,7 @@ export function StartupScreen({ onBack }: { onBack?(): void }) {
         <BrandMark />
         <strong>OpenZCAD</strong>
         <div role="status" aria-live="polite" aria-label="Restoring workspace">
-          <span className="startup-progress" aria-hidden="true" />
+          <span className="startup-progress spin" aria-hidden="true" />
           <span>Restoring workspace…</span>
         </div>
         <p>

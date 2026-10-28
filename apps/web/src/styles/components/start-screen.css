@@ -71,13 +71,6 @@
   border: 2px solid var(--color-accent-dim);
   border-top-color: var(--color-accent);
   border-radius: 50%;
-  animation: startup-turn 1s linear infinite;
-}
-
-@keyframes startup-turn {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* Keep the canvas at its final size while its first frame and panels load. */
@@ -102,7 +95,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .startup-progress,
   .workspace-reveal.is-ready {
     animation: none;
   }
