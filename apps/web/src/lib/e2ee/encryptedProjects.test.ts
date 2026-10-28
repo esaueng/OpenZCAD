@@ -400,6 +400,42 @@ it('keeps concurrent blob lookups encrypted while the fresh account view is open
   }
 });
 
+it('keeps lazy encrypted blob access retryable after a transient account fetch failure', async () => {
+  const f = await blobFixture();
+  await f.source();
+  f.events.encryptionStateChanged(f.userId);
+  f.load.mockRejectedValueOnce(new Error('Temporary account fetch failure'));
+  const attempted = f.registry.encryptedBlobSource(f.blobId)!;
+  await expect(attempted.read()).rejects.toThrow(
+    'Temporary account fetch failure'
+  );
+  const retry = f.registry.encryptedBlobSource(f.blobId);
+  expect(retry).not.toBeNull();
+  expect(await retry!.read()).toEqual(f.plaintext);
+  expect(f.load).toHaveBeenCalledTimes(3);
+  expect(f.download).toHaveBeenCalledOnce();
+});
+
+it('clears retryable lazy file access when locking after a failed reopen', async () => {
+  const f = await blobFixture();
+  await f.source();
+  f.events.encryptionStateChanged(f.userId);
+  f.load.mockRejectedValueOnce(new Error('Temporary account fetch failure'));
+  await expect(
+    f.registry.encryptedBlobSource(f.blobId)!.read()
+  ).rejects.toThrow('Temporary account fetch failure');
+  const retry = f.registry.encryptedBlobSource(f.blobId)!;
+  expect(retry).not.toBeNull();
+  f.lock();
+  expect(f.registry.encryptedBlobSource(f.blobId)).toBeNull();
+  expect(f.registry.pageBlobReferences.get(f.projectId, f.blobId)).toBeNull();
+  await expect(retry.read()).rejects.toMatchObject({
+    name: 'KeySessionEndedError'
+  });
+  expect(f.load).toHaveBeenCalledTimes(2);
+  expect(f.download).not.toHaveBeenCalled();
+});
+
 it('refuses a lazy source if locking lands during its session check', async () => {
   const f = await blobFixture();
   await f.source();

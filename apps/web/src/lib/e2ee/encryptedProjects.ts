@@ -178,7 +178,7 @@ function forgetOpened(keepStateSubscription = false): void {
   }
 }
 
-/** Direct thumbnail/source/backup readers also reopen after an unlocked recheck. */
+/** Retire the view; unlocked direct file readers can reopen lazily. */
 function invalidateAccountClients(userId: string, revision: number): void {
   if (!opened) accountViewRevision += 1;
   forgetOpened(true);
@@ -686,7 +686,7 @@ async function openedForSession(
       (error: unknown) => {
         const report =
           opened === current && getKeySessionRevision() === revision;
-        if (opened === current) forgetOpened();
+        if (opened === current) invalidateAccountClients(userId, revision);
         // A locked key session shows on the indicator; nothing else does.
         if (report) {
           reportEncryptedFailure(null, error);
