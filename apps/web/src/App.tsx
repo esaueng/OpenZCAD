@@ -5250,7 +5250,7 @@ export function App() {
 
   const conflictHandlers: ConflictResolutionHandlers = {
     async saveLocalAsCopy(source) {
-      const copy = localConflictCopy(
+      const copy = await localConflictCopy(
         source,
         projects.map((project) => project.name),
         session?.userId ?? localUserId
