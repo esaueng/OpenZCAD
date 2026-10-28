@@ -2869,18 +2869,25 @@ export async function beginCompareApproval(
   const key = comparisonId(ctx, approvalId);
   let exchange = compareApprovals.get(key);
   if (exchange) {
+    requireCurrentComparison(ctx, account, exchange);
+    requireApprovalBinding(initial, exchange);
     try {
       exchange.assertActive();
     } catch (error) {
       if (!(error instanceof DOMException) || error.name !== 'AbortError')
         throw error;
-      throw new EncryptionFlowError(
-        'approval-gone',
-        'This comparison ended when the account was locked. Use Scan code, or deny this request and ask again on the new device.'
-      );
+      if (initial.state !== 'requested') {
+        throw new EncryptionFlowError(
+          'approval-gone',
+          'This comparison ended when the account was locked. Use Scan code, or deny this request and ask again on the new device.'
+        );
+      }
+      // Restart only under the current unlocked session. A failed send may
+      // have reached the relay: preserve every pinned field and the original
+      // response nonce even when the relay still reports `requested`.
+      exchange = { ...exchange, assertActive: sessionGuard };
+      compareApprovals.set(key, exchange);
     }
-    requireCurrentComparison(ctx, account, exchange);
-    requireApprovalBinding(initial, exchange);
     if (initial.state === 'responded' || initial.state === 'revealed') {
       requireComparisonResponse(initial, exchange);
       return initial;

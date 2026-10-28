@@ -340,6 +340,97 @@ test('resumes comparison after an accepted response is lost', async ({
   }
 });
 
+test('restarts comparison after session lock before response delivery', async ({
+  page,
+  browser
+}, testInfo) => {
+  const server = createE2eeServer();
+  const { settings } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  const responses: unknown[] = [];
+  await page.route('**/api/e2ee/approvals/*/respond', async (route) => {
+    responses.push(route.request().postDataJSON());
+    if (responses.length === 1) await route.abort('failed');
+    else await route.fallback();
+  });
+  try {
+    const phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    await expect(
+      phoneSettings.getByRole('img', { name: 'Device approval QR code' })
+    ).toBeVisible();
+    await settings
+      .getByRole('button', { name: 'Compare codes' })
+      .click({ timeout: 10_000 });
+    await expect(
+      settings.getByText(
+        'Encryption keys are unavailable right now. Check your connection and try again.'
+      )
+    ).toBeVisible();
+    expect(responses).toHaveLength(1);
+    expect(
+      server.db.prepare('SELECT state FROM e2ee_device_approvals').get()
+    ).toEqual({ state: 'requested' });
+
+    // Deliver the same cross-tab lifecycle notices as session teardown.
+    // The ended notice permits reopening only after a fresh session read.
+    await page.evaluate(() => {
+      const channel = new BroadcastChannel('openzcad:e2ee-key-session:v1');
+      channel.postMessage({
+        id: 'approval-lock-prepare',
+        operation: 'approval-lock',
+        phase: 'prepare'
+      });
+      channel.close();
+    });
+    await expect(
+      settings.getByText(
+        'Encryption keys are locked while the account session is checked.'
+      )
+    ).toBeVisible();
+    const rechecked = page.waitForResponse('**/api/session');
+    await page.evaluate(() => {
+      const channel = new BroadcastChannel('openzcad:e2ee-key-session:v1');
+      channel.postMessage({
+        id: 'approval-lock-ended',
+        operation: 'approval-lock',
+        phase: 'ended'
+      });
+      channel.close();
+    });
+    await rechecked;
+    await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+    await settings.getByRole('button', { name: 'Compare codes' }).click();
+    const phoneCode = phoneSettings.getByLabel('Approval code');
+    const laptopCode = settings.getByLabel('Approval code');
+    await expect(phoneCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    await expect(laptopCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    expect(await laptopCode.textContent()).toBe(await phoneCode.textContent());
+    expect(responses).toHaveLength(2);
+    expect(responses[1]).toEqual(responses[0]);
+    await testInfo.attach('restarted-comparison', {
+      body: await page.screenshot({
+        path: testInfo.outputPath('restarted-comparison.png')
+      }),
+      contentType: 'image/png'
+    });
+    await phoneSettings.getByRole('button', { name: 'Codes match' }).click();
+    await settings
+      .getByRole('button', { name: 'Codes match, approve' })
+      .click();
+    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(
+      phoneSettings.getByText('Unlocked', { exact: true })
+    ).toBeVisible();
+  } finally {
+    await phone.context.close();
+  }
+});
+
 test('resumes the requesting device comparison after reloading its browser', async ({
   page,
   browser
