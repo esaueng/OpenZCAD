@@ -105,6 +105,7 @@ import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
 import type { ShareRemovalNotice } from './shareWorkStore';
 import { contactInvitationPeople, type InvitationContext } from './invitations';
 import { invitationStore } from './invitationStore';
+import { subscribeEncryptionState } from './encryptionStateEvents';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -132,6 +133,7 @@ export interface PageShareLinks {
 }
 
 let opened: Opened | null = null;
+let stopEncryptionState: (() => void) | null = null;
 let decoder: E2eeDecoder | null = null;
 const warningListeners = new Set<(warning: EncryptedProjectWarning) => void>();
 type SharingRemoval = MembersRemoved & {
@@ -153,8 +155,14 @@ export function subscribeMemberRemovals(
   return () => removalListeners.delete(listener);
 }
 
-subscribeKeySession(() => {
+function forgetOpened(): void {
   opened = null;
+  stopEncryptionState?.();
+  stopEncryptionState = null;
+}
+
+subscribeKeySession(() => {
+  forgetOpened();
   decoder?.dispose();
   decoder = null;
   // Blob keys go with the key session that opened their documents.
@@ -224,7 +232,8 @@ const locked = () =>
 async function openStore(
   userId: string,
   revision: number,
-  email: string | null
+  email: string | null,
+  current: () => boolean
 ): Promise<{
   store: EncryptedProjectStore;
   blobs: EncryptedContentBlobs;
@@ -286,7 +295,8 @@ async function openStore(
       const notify = removalNotifier(removal);
       void import('./shareLinks')
         .then(({ shareLinksAfterRemoval }) => {
-          if (shareCtx) return shareLinksAfterRemoval(shareCtx, removal, notify);
+          if (shareCtx)
+            return shareLinksAfterRemoval(shareCtx, removal, notify);
           notify();
           return null;
         })
@@ -303,7 +313,8 @@ async function openStore(
       const notify = removalNotifier(notice);
       void import('./shareLinks')
         .then(({ shareLinksAfterDeviceRemoval }) => {
-          if (shareCtx) return shareLinksAfterDeviceRemoval(shareCtx, removal, notify);
+          if (shareCtx)
+            return shareLinksAfterDeviceRemoval(shareCtx, removal, notify);
           notify();
           return null;
         })
@@ -314,9 +325,7 @@ async function openStore(
     // store again on a freshly loaded account view, whose Commit carries
     // the rotation a removal made due. The unlocked keys stay.
     onDeviceListChanged: () => {
-      if (opened?.userId === userId && opened.revision === revision) {
-        opened = null;
-      }
+      if (current()) forgetOpened();
     }
   };
   const blobs = createEncryptedContentBlobs({
@@ -334,7 +343,8 @@ async function openStore(
   const pins = versionPins();
   let shareCtx: ShareLinksContext | null = null;
   // The editor's encryption indicator hears what this key session verifies.
-  const sessionCurrent = () => getKeySessionRevision() === revision;
+  const sessionCurrent = () =>
+    current() && getKeySessionRevision() === revision;
   const verifying = createEncryptedProjectStore({
     groups,
     pins,
@@ -540,7 +550,8 @@ async function openedForSession(): Promise<Opened> {
   const { userId, email } = await pageSession();
   const revision = getKeySessionRevision();
   if (opened?.userId !== userId || opened.revision !== revision) {
-    const both = openStore(userId, revision, email);
+    forgetOpened();
+    const both = openStore(userId, revision, email, () => opened === current);
     const current: Opened = {
       userId,
       revision,
@@ -552,18 +563,29 @@ async function openedForSession(): Promise<Opened> {
       sharing: both.then(({ sharing }) => sharing)
     };
     opened = current;
+    // Settings can rotate this account's keys without ending its session.
+    // Every client above captures the verified account view, so reopen them
+    // after that change rather than pairing the old view with the new key.
+    // Keep the decoder and unlocked keys: this is not a sign-out or lock.
+    stopEncryptionState = subscribeEncryptionState(userId, () => {
+      if (opened === current) forgetOpened();
+    });
     both.then(
       () => {
-        if (getKeySessionRevision() === revision) reportKeysUnlocked();
+        if (opened === current && getKeySessionRevision() === revision)
+          reportKeysUnlocked();
       },
       (error: unknown) => {
-        if (opened === current) opened = null;
+        const report =
+          opened === current && getKeySessionRevision() === revision;
+        if (opened === current) forgetOpened();
         // A locked key session shows on the indicator; nothing else does.
-        if (getKeySessionRevision() === revision) {
+        if (report) {
           reportEncryptedFailure(null, error);
         }
       }
     );
+    current.store.catch(() => undefined);
     current.blobs.catch(() => undefined);
     current.measurements.catch(() => undefined);
     current.viewStates.catch(() => undefined);
