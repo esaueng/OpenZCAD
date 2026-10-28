@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import type { AppSettings, AuthSession } from '@openzcad/shared';
+import type { DataExportSummary } from '../lib/dataExportTypes';
 
 export function DataDownload({
   settings,
@@ -16,6 +17,10 @@ export function DataDownload({
   const [preparing, setPreparing] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
+  const [completed, setCompleted] = useState<{
+    revision: number;
+    summary: DataExportSummary;
+  } | null>(null);
   const identity = `${session?.userId ?? ''}:${cloudFunctionsEnabled}`;
   const currentIdentity = useRef({ identity, revision: 0 });
   if (currentIdentity.current.identity !== identity) {
@@ -24,6 +29,10 @@ export function DataDownload({
       revision: currentIdentity.current.revision + 1
     };
   }
+  const summary =
+    completed?.revision === currentIdentity.current.revision
+      ? completed.summary
+      : null;
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -36,13 +45,14 @@ export function DataDownload({
     if (preparing) return;
     setPreparing(true);
     setError('');
+    setCompleted(null);
     const startedFor = currentIdentity.current.revision;
     const isCurrent = () =>
       mounted.current && currentIdentity.current.revision === startedFor;
     try {
       setProgress('Preparing your download…');
       const { downloadAllData } = await import('../lib/dataExport');
-      await downloadAllData({
+      const result = await downloadAllData({
         settings,
         session,
         cloudFunctionsEnabled,
@@ -51,7 +61,12 @@ export function DataDownload({
           if (isCurrent()) setProgress(message);
         }
       });
-      if (isCurrent()) setProgress('Your data download is ready.');
+      if (isCurrent()) {
+        setCompleted({ revision: startedFor, summary: result });
+        setProgress(
+          `Your data download is ready. ${result.includedProjects} project backup${result.includedProjects === 1 ? '' : 's'} included; ${result.skippedProjects.length} skipped.`
+        );
+      }
     } catch (failure) {
       if (mounted.current) {
         setProgress('');
@@ -89,6 +104,47 @@ export function DataDownload({
         <p className="data-download-feedback" role="alert">
           {error}
         </p>
+      ) : null}
+      {summary &&
+      (summary.skippedProjects.length > 0 ||
+        summary.omittedSections.length > 0) ? (
+        <details className="data-download-omissions" open>
+          <summary>Not included in this download</summary>
+          {summary.skippedProjects.length > 0 ? (
+            <>
+              <p>
+                Open these projects from Projects, then choose File → Export
+                project to download them manually.
+              </p>
+              <ul aria-label="Project backups not included">
+                {summary.skippedProjects.map((project) => (
+                  <li key={`${project.scope}:${project.projectId}`}>
+                    <strong>{project.name}</strong>
+                    <span>
+                      {project.scope === 'local' ? 'Local copy' : 'Cloud copy'}{' '}
+                      · {project.projectId}
+                    </span>
+                    <span>{project.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {summary.omittedSections.length > 0 ? (
+            <ul aria-label="Other data not included">
+              {summary.omittedSections.map((section) => (
+                <li key={section.name}>
+                  <strong>{section.name}</strong>
+                  <span>{section.reason}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <p>
+            This list is also in NOT-INCLUDED.txt and manifest.json inside your
+            ZIP.
+          </p>
+        </details>
       ) : null}
     </div>
   );

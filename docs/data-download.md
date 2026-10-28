@@ -10,7 +10,7 @@ The ZIP contains:
 - `manifest.json`, mapping project IDs to separately preserved local and cloud
   `.openzcad` backups. Extract and import a backup from the projects screen to
   open an independent copy. The ZIP itself is not an account-restore format.
-- A readonly snapshot of every record in the local project database, including
+- An optional readonly snapshot of every record in the local project database, including
   sources, measurements, thumbnails, recovery copies, save states, shelf state
   and identity mappings. Binary records use explicit paths into `device/binary`.
 - Device settings, saved views, selected UI preferences, assistant history and
@@ -28,15 +28,33 @@ Encrypted project contents use the existing verified browser readers and blob
 decoder. Their exported copies are unencrypted. A locked device must unlock
 its keys first; server-side decryption and key export are not involved.
 
-The existing 256 MiB project-backup bound remains. The ZIP's input is capped at
+The existing 256 MiB project-backup bound remains. The ZIP is capped at
 512 MiB, including duplicate local/cloud copies and the raw device snapshot.
-Large projects can still be downloaded individually from their project menu.
+Projects can be downloaded individually with File → Export project after
+opening them, subject to the same per-project bound.
 The archive uses ZIP stored entries through `fflate` 0.8.3, already used by
 other workspace packages and now a direct, lazy-loaded web dependency.
 
-A failed read, account change, missing source or size refusal prevents a
-partial download. Nothing is saved, adopted, purged or overwritten by the
-exporter. Other devices' unsynced data, expired/deleted data, encryption key
+Unavailable, unreadable or oversized project copies are skipped while later
+projects are still attempted. Each project is staged with its retained history
+before adding any of its files to the ZIP, so a failure leaves no incomplete
+project folder and spends no archive space. Portable project backups take
+priority over the optional raw device snapshot. If that snapshot cannot fit or
+be read, its entire section is omitted and reported.
+
+The completion screen lists every skipped project's name, ID, local/cloud copy
+and reason, with instructions to open the project and choose File → Export
+project. The same list is in `NOT-INCLUDED.txt` and `manifest.json` in the ZIP,
+along with any omitted data sections. Space is reserved for the report even
+when the archive fills up; ZIP entry overhead counts toward the size limit.
+A download with no successful project backups still includes available
+settings/account data and the omissions report. A skipped portable backup may
+still have raw device records or account metadata in the ZIP; the manifest
+identifies the complete backups that were included.
+
+Account changes, failed account discovery and ZIP errors still cancel the
+download. Nothing is saved, adopted, purged or overwritten by the exporter.
+Other devices' unsynced data, expired/deleted data, encryption key
 stores, transient collaboration traffic and operational/security logs are
 outside this archive. Cloud readers run sequentially; changes during export
 can require a retry and are not a transaction spanning device and server.
