@@ -2,6 +2,19 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import { PartThumbnail } from './PartThumbnail';
+import {
+  allowKeySession,
+  blockKeySession,
+  getKeySessionRevision
+} from '../lib/e2ee/keySession';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 function summary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
@@ -13,8 +26,308 @@ function summary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
 }
 
 describe('PartThumbnail', () => {
-  beforeEach(() => vi.stubGlobal('IntersectionObserver', undefined));
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.spyOn(HTMLImageElement.prototype, 'decode').mockResolvedValue(undefined);
+    allowKeySession(getKeySessionRevision());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the same image node through metadata, artifact and document refreshes until decoding completes', async () => {
+    const project = summary({ thumbnailArtifactId: toArtifactId('old') });
+    const replacement = deferred<string>();
+    const decoding = deferred<void>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce('data:image/webp;base64,AA')
+      .mockReturnValue(replacement.promise);
+    const publish = vi.fn();
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toBeTruthy()
+    );
+    const image = view.container.querySelector('img');
+    view.rerender(
+      <PartThumbnail
+        project={{ ...project, name: 'Verified name' }}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    expect(load).toHaveBeenCalledTimes(1);
+    vi.mocked(HTMLImageElement.prototype.decode).mockReturnValueOnce(
+      decoding.promise
+    );
+    view.rerender(
+      <PartThumbnail
+        project={{
+          ...project,
+          updatedAt: '2026-10-28',
+          thumbnailArtifactId: toArtifactId('new')
+        }}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    expect(view.container.querySelector('img')).toBe(image);
+    await act(async () => replacement.resolve('data:image/webp;base64,BB'));
+    expect(image).toHaveAttribute('src', 'data:image/webp;base64,AA');
+    await act(async () => decoding.resolve());
+    expect(view.container.querySelector('img')).toBe(image);
+    expect(image).toHaveAttribute('src', 'data:image/webp;base64,BB');
+  });
+
+  it.each(['miss', 'network failure', 'decode failure'])(
+    'retains a usable preview after a refresh %s',
+    async (failure) => {
+      const project = summary({ thumbnailArtifactId: toArtifactId('old') });
+      const load = vi.fn().mockResolvedValue('data:image/webp;base64,AA');
+      const publish = vi.fn().mockResolvedValue(undefined);
+      const view = render(
+        <PartThumbnail
+          project={project}
+          loadThumbnail={load}
+          publishThumbnail={publish}
+        />
+      );
+      await waitFor(() =>
+        expect(view.container.querySelector('img')).toBeTruthy()
+      );
+      const image = view.container.querySelector('img');
+      if (failure === 'miss') load.mockResolvedValue(undefined);
+      else if (failure === 'network failure')
+        load.mockRejectedValue(new Error('offline'));
+      else {
+        load.mockResolvedValue('invalid-image');
+        vi.mocked(HTMLImageElement.prototype.decode).mockRejectedValueOnce(
+          new Error('corrupt image')
+        );
+      }
+      view.rerender(
+        <PartThumbnail
+          project={{ ...project, documentVersion: 2 }}
+          loadThumbnail={load}
+          publishThumbnail={publish}
+        />
+      );
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      await act(async () => undefined);
+      expect(view.container.querySelector('img')).toBe(image);
+      expect(image).toHaveAttribute('src', 'data:image/webp;base64,AA');
+    }
+  );
+
+  it('renders the decoded preview synchronously when returning to the library', async () => {
+    const project = summary({ thumbnailArtifactId: toArtifactId('existing') });
+    const load = vi.fn().mockResolvedValue('data:image/webp;base64,AA');
+    const publish = vi.fn();
+    const first = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    await waitFor(() =>
+      expect(first.container.querySelector('img')).toBeTruthy()
+    );
+    first.unmount();
+    const second = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    expect(second.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,AA'
+    );
+    expect(second.container.querySelector('svg')).toBeNull();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a real empty result and retries it when the document changes', async () => {
+    const project = summary({ thumbnailArtifactId: toArtifactId('existing') });
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce('data:image/webp;base64,AA')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('data:image/webp;base64,BB');
+    const publish = vi.fn();
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toBeTruthy()
+    );
+    view.rerender(
+      <PartThumbnail
+        project={{ ...project, documentVersion: 2 }}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container).toHaveTextContent('No geometry')
+    );
+    view.rerender(
+      <PartThumbnail
+        project={{ ...project, documentVersion: 3 }}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/webp;base64,BB'
+      )
+    );
+  });
+
+  it('preserves a device preview when the account identifies the same project as encrypted', async () => {
+    const project = summary({ thumbnailArtifactId: toArtifactId('existing') });
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce('data:image/webp;base64,AA')
+      .mockReturnValue(new Promise(() => undefined));
+    const publish = vi.fn();
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toBeTruthy()
+    );
+    const image = view.container.querySelector('img');
+    view.rerender(
+      <PartThumbnail
+        accountId="account-a"
+        project={{ ...project, storageFormat: 2 }}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    expect(view.container.querySelector('img')).toBe(image);
+    act(() => blockKeySession());
+    expect(view.container.querySelector('img')).toBeNull();
+  });
+
+  it.each(['account', 'key session', 'unsupported format'])(
+    'invalidates protected previews on %s changes and refuses late results',
+    async (change) => {
+      const project = summary({
+        storageFormat: 2,
+        thumbnailArtifactId: toArtifactId('existing')
+      });
+      const late = deferred<string>();
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce('data:image/webp;base64,AA')
+        .mockReturnValueOnce(late.promise)
+        .mockResolvedValue(undefined);
+      const publish = vi.fn().mockResolvedValue(undefined);
+      const view = render(
+        <PartThumbnail
+          accountId="account-a"
+          project={project}
+          loadThumbnail={load}
+          publishThumbnail={publish}
+        />
+      );
+      await waitFor(() =>
+        expect(view.container.querySelector('img')).toBeTruthy()
+      );
+      const updated = { ...project, documentVersion: 2 };
+      view.rerender(
+        <PartThumbnail
+          accountId="account-a"
+          project={updated}
+          loadThumbnail={load}
+          publishThumbnail={publish}
+        />
+      );
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      if (change === 'key session') act(() => blockKeySession());
+      else
+        view.rerender(
+          <PartThumbnail
+            accountId={change === 'account' ? 'account-b' : 'account-a'}
+            project={
+              change === 'unsupported format'
+                ? { ...updated, storageFormat: 3 }
+                : updated
+            }
+            loadThumbnail={load}
+            publishThumbnail={publish}
+          />
+        );
+      expect(view.container.querySelector('img')).toBeNull();
+      await act(async () => late.resolve('data:image/webp;base64,BB'));
+      expect(view.container.querySelector('img')).toBeNull();
+    }
+  );
+
+  it('does not let an older request replace a newer preview in the remount cache', async () => {
+    const project = summary({ thumbnailArtifactId: toArtifactId('existing') });
+    const old = deferred<string>();
+    const load = vi
+      .fn()
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValueOnce('data:image/webp;base64,BB');
+    const publish = vi.fn();
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    const updated = { ...project, documentVersion: 2 };
+    view.rerender(
+      <PartThumbnail
+        project={updated}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/webp;base64,BB'
+      )
+    );
+    await act(async () => old.resolve('data:image/webp;base64,AA'));
+    view.unmount();
+    const remount = render(
+      <PartThumbnail
+        project={updated}
+        loadThumbnail={load}
+        publishThumbnail={publish}
+      />
+    );
+    expect(remount.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,BB'
+    );
+  });
 
   it('defers offscreen previews until they approach the viewport and disconnects on unmount', async () => {
     const observers: Array<{

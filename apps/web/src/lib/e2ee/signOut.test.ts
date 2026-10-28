@@ -9,6 +9,7 @@ import * as e2eeApis from './e2eeApi';
 import * as mlsStores from './mls/sessionStore';
 import { shareWorkStore } from './shareWorkStore';
 import { signOutAfterSaving } from './signOut';
+import { SHELF_NAMES_PREFIX } from '../projectShelfNames';
 import {
   keyOperationGuard,
   lockAccountsExcept,
@@ -58,6 +59,13 @@ async function fixture() {
 }
 
 describe('saving before device-key sign-out', () => {
+  it.each([undefined, false, true])('removes cached titles when signing out with keepDevice %s', async (keepDevice) => {
+    const { userId } = await fixture();
+    const key = SHELF_NAMES_PREFIX + userId;
+    localStorage.setItem(key, JSON.stringify([['proj_title', 'Verified name', '2026-10-28']]));
+    await signOutAfterSaving({ userId, keepDevice, isCurrentSession: () => true, savePending: async () => {}, revokeSession: async () => {} });
+    expect(localStorage.getItem(key)).toBeNull();
+  });
   it('keeps device keys available for retry if the share journal cannot be erased', async () => {
     const { userId, store } = await fixture();
     vi.spyOn(shareWorkStore(), 'deleteAccount').mockRejectedValueOnce(new Error('Share work busy'));

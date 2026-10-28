@@ -55,6 +55,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createId,
+  compareProjectSummaries,
   ENCRYPTED_PROJECTS_REQUIRED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
@@ -71,11 +72,18 @@ import { localStoragePreferencePins } from './e2ee/preferencePins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
+import { prioritizeShelfEntries } from './projectShelf';
 
 /** Optional presentation updates; document opens still perform full verification. */
 export interface ProjectListingProgress {
   isCurrent(): boolean;
+  priorityProjectIds?(projects: readonly ProjectSummary[]): readonly string[];
   onVerified(project: ProjectSummary): void;
+}
+
+/** Client-only presentation state; never part of the server/storage contract. */
+interface ShelfListingResponse extends ListProjectsResponse {
+  pendingEncryptedProjectIds?: ReadonlySet<string>;
 }
 
 /**
@@ -596,17 +604,28 @@ export const api = {
    */
   listProjects: async (
     progress?: ProjectListingProgress
-  ): Promise<ListProjectsResponse> => {
+  ): Promise<ShelfListingResponse> => {
     const revision = getKeySessionRevision();
     const isCurrent = () =>
       isCurrentKeySession(revision) && (progress?.isCurrent() ?? true);
     const { encryptedProjectInfo, ...listing } = await requestJson<
       ListProjectsResponse & E2eeListProjectsExtension
     >('/api/projects');
-    if (progress && !isCurrent()) return listing;
+    const pending = new Set<string>(
+      Array.isArray(listing.projects)
+        ? listing.projects
+            .filter((project) => project.storageFormat === 2)
+            .map((project) => project.projectId)
+        : []
+    );
+    const unverified = (): ShelfListingResponse =>
+      pending.size
+        ? { ...listing, pendingEncryptedProjectIds: pending }
+        : listing;
+    if (progress && !isCurrent()) return unverified();
     if (Array.isArray(listing.projects))
       rememberProjectFormats(listing.projects);
-    if (!encryptedProjectInfo?.length) return listing;
+    if (!encryptedProjectInfo?.length) return unverified();
     if (progress) {
       const projects = new Map<string, ProjectSummary>(
         listing.projects.map((p) => [p.projectId, p])
@@ -615,34 +634,43 @@ export const api = {
       // Names and thumbnail references arrive only after the existing verifier.
       void encryptedProjects()
         .then((module) =>
-          module.encryptedProjectShelf(encryptedProjectInfo, {
-            isCurrent,
-            onEntry(projectId, entry) {
-              const project = projects.get(projectId);
-              if (!project || !isCurrent()) return;
-              progress.onVerified({
-                ...project,
-                name: entry.name,
-                ...(entry.thumbnailBlobId
-                  ? {
-                      thumbnailArtifactId:
-                        entry.thumbnailBlobId as ProjectSummary['thumbnailArtifactId']
-                    }
-                  : {})
-              });
+          module.encryptedProjectShelf(
+            prioritizeShelfEntries(encryptedProjectInfo, [
+              ...(progress.priorityProjectIds?.(listing.projects) ?? []),
+              ...[...listing.projects]
+                .sort(compareProjectSummaries)
+                .map((project) => project.projectId)
+            ]),
+            {
+              isCurrent,
+              onEntry(projectId, entry) {
+                const project = projects.get(projectId);
+                if (!project || !isCurrent()) return;
+                progress.onVerified({
+                  ...project,
+                  name: entry.name,
+                  ...(entry.thumbnailBlobId
+                    ? {
+                        thumbnailArtifactId:
+                          entry.thumbnailBlobId as ProjectSummary['thumbnailArtifactId']
+                      }
+                    : {})
+                });
+              }
             }
-          })
+          )
         )
         .catch(() => undefined);
-      return listing;
+      return unverified();
     }
     try {
       const shelf = await (
         await encryptedProjects()
       ).encryptedProjectShelf(encryptedProjectInfo);
-      if (!isCurrent()) return listing;
+      if (!isCurrent()) return unverified();
+      for (const id of shelf.keys()) pending.delete(id);
       return {
-        ...listing,
+        ...unverified(),
         projects: listing.projects.map((project) => {
           const entry = shelf.get(project.projectId);
           return entry === undefined
@@ -660,7 +688,7 @@ export const api = {
         })
       };
     } catch {
-      return listing;
+      return unverified();
     }
   },
   /**

@@ -3,6 +3,8 @@ import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import {
   cachedThumbnailSource,
   mergeProjectSummaries,
+  retainPendingShelfOrder,
+  prioritizeShelfEntries,
   withVerifiedShelfMetadata,
   resolveShelfThumbnail,
   thumbnailRecordDescribes
@@ -11,6 +13,105 @@ import type { ProjectThumbnailRecord } from './localProjectStore';
 
 const LISTED = '2026-08-07T12:25:30.000Z';
 const EARLIER = '2026-08-07T12:25:21.000Z';
+
+it('verifies pinned and visible cards first without dropping or mutating records', () => {
+  const records = ['offscreen', 'visible', 'pinned', 'other'].map(
+    (projectId) => ({ projectId })
+  );
+  expect(
+    prioritizeShelfEntries(records, ['pinned', 'visible', 'pinned']).map(
+      (entry) => entry.projectId
+    )
+  ).toEqual(['pinned', 'visible', 'offscreen', 'other']);
+  expect(records[0]?.projectId).toBe('offscreen');
+});
+
+describe('provisional encrypted shelf refresh', () => {
+  const local = {
+    projectId: 'proj_pending',
+    name: 'Device bracket',
+    updatedAt: EARLIER,
+    revisionCount: 1,
+    thumbnailArtifactId: toArtifactId('cached-preview'),
+    documentVersion: 2
+  } as ProjectSummary;
+  const remote = {
+    ...local,
+    name: 'Encrypted project',
+    storageFormat: 2,
+    thumbnailArtifactId: toArtifactId('unverified-preview'),
+    updatedAt: LISTED,
+    documentVersion: 3
+  };
+  const pending = new Set([local.projectId]);
+
+  it('keeps known presentation while preserving remote format and version conflict fences', () => {
+    const [merged] = mergeProjectSummaries([local], [remote], pending);
+    expect(merged).toEqual({
+      ...remote,
+      name: local.name,
+      thumbnailArtifactId: local.thumbnailArtifactId
+    });
+    expect(
+      withVerifiedShelfMetadata(merged!, {
+        ...remote,
+        name: 'Verified bracket'
+      })
+    ).toEqual({
+      ...merged,
+      name: 'Verified bracket',
+      thumbnailArtifactId: remote.thumbnailArtifactId
+    });
+    expect(
+      withVerifiedShelfMetadata(
+        { ...merged!, documentVersion: 4, name: 'New local edit' },
+        remote
+      ).name
+    ).toBe('New local edit');
+  });
+
+  it('accepts verified and ordinary renames, including the literal placeholder text', () => {
+    expect(mergeProjectSummaries([local], [remote])[0]?.name).toBe(
+      'Encrypted project'
+    );
+    expect(
+      mergeProjectSummaries(
+        [local],
+        [{ ...remote, storageFormat: 1 }],
+        pending
+      )[0]?.name
+    ).toBe('Encrypted project');
+    expect(mergeProjectSummaries([], [remote], pending)[0]?.name).toBe(
+      'Encrypted project'
+    );
+  });
+
+  it('does not pick up unverified thumbnail references when the device has none', () => {
+    const { thumbnailArtifactId: _thumbnail, ...noPreview } = local;
+    expect(
+      mergeProjectSummaries([noPreview], [remote], pending)[0]
+        ?.thumbnailArtifactId
+    ).toBeUndefined();
+  });
+
+  it('holds card order while preserving the real transport timestamps for verification', () => {
+    const other = {
+      ...local,
+      projectId: 'proj_other',
+      updatedAt: '2026-08-07T12:25:25.000Z'
+    } as ProjectSummary;
+    const projects = mergeProjectSummaries([local, other], [remote], pending);
+    const stable = retainPendingShelfOrder(projects, [local, other], pending);
+    expect(stable.map((project) => project.projectId)).toEqual([
+      other.projectId,
+      local.projectId
+    ]);
+    expect(stable[1]?.updatedAt).toBe(LISTED);
+    expect(
+      retainPendingShelfOrder(projects, [local, other])[0]?.projectId
+    ).toBe(local.projectId);
+  });
+});
 
 describe('late verified shelf metadata', () => {
   const listed = {

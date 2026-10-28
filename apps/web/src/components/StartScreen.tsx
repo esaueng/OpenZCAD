@@ -128,6 +128,7 @@ interface StartScreenProps {
    * memory, which is exactly the project whose tile a viewer wants to see.
    */
   loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  thumbnailAccountId?: string | null;
   /**
    * Answers a cache miss and publishes an existing preview to the account.
    * Called as tiles approach the viewport, without rebuilding documents.
@@ -311,6 +312,7 @@ export function StartScreen({
   onDeleteForever,
   onEmptyTrash,
   loadThumbnail,
+  thumbnailAccountId,
   publishThumbnail
 }: StartScreenProps) {
   const settingsKey = useKeymap().label('app-settings');
@@ -630,6 +632,7 @@ export function StartScreen({
           ) : (
             <PartThumbnail
               project={project}
+              accountId={thumbnailAccountId}
               loadThumbnail={loadThumbnail}
               publishThumbnail={publishThumbnail}
             />

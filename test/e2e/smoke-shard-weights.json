@@ -16,7 +16,7 @@
   "measure.spec.ts": 7,
   "modeling.spec.ts": 136,
   "panel-suspension.spec.ts": 13,
-  "progressive-loading.spec.ts": 6,
+  "progressive-loading.spec.ts": 10,
   "save-state-history.spec.ts": 13,
   "settings.spec.ts": 8,
   "sketch-modify-tools.spec.ts": 9,

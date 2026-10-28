@@ -359,6 +359,7 @@ import {
   announceKeySessionChange,
   blockKeySession,
   getKeySessionRevision,
+  isCurrentKeySession,
   subscribeKeySession,
   type KeySessionEvent
 } from './lib/e2ee/keySession';
@@ -1457,11 +1458,18 @@ import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
   withVerifiedShelfMetadata,
+  retainPendingShelfOrder,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail
 } from './lib/projectShelf';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
+import {
+  cachedShelfNames,
+  forgetShelfProjectNames,
+  rememberVerifiedShelfName,
+  withCachedShelfNames
+} from './lib/projectShelfNames';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
@@ -1962,6 +1970,7 @@ async function loadProjectSummaries(
    */
   cloudProjectIds: Set<string>;
 }> {
+  const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
   const unavailableAs =
@@ -1975,15 +1984,49 @@ async function loadProjectSummaries(
       }
       return fallback;
     };
+  let priorityProjects: ProjectSummary[] = [];
+  const localRead = (options?.local ?? listLocalProjects())
+    .catch(unavailableAs<ProjectSummary[]>([]))
+    .then((projects) => {
+      priorityProjects = projects;
+      return projects;
+    });
+  const progress = options?.progress;
+  const shelfNames = cachedShelfNames(accountId);
   const [local, organizationSnapshots, remote] = await Promise.all([
-    (options?.local ?? listLocalProjects()).catch(
-      unavailableAs<ProjectSummary[]>([])
-    ),
+    localRead,
     listLocalProjectOrganizationSnapshots().catch(
       unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
     ),
     signedIn
-      ? api.listProjects(options?.progress).catch(() => null)
+      ? api
+          .listProjects(
+            progress
+              ? {
+                  ...progress,
+                  priorityProjectIds: (projects) =>
+                    retainPendingShelfOrder(
+                      mergeProjectSummaries(priorityProjects, [...projects]),
+                      priorityProjects,
+                      new Set(
+                        projects
+                          .filter((project) => project.storageFormat === 2)
+                          .map((project) => project.projectId)
+                      )
+                    ).map((project) => project.projectId),
+                  onVerified(project) {
+                    if (
+                      !isCurrentKeySession(keySessionRevision) ||
+                      !progress.isCurrent()
+                    )
+                      return;
+                    rememberVerifiedShelfName(accountId, project);
+                    progress.onVerified(project);
+                  }
+                }
+              : undefined
+          )
+          .catch(() => null)
       : Promise.resolve(null)
   ]);
   const localOrganizations = new Map(
@@ -2028,9 +2071,35 @@ async function loadProjectSummaries(
         unavailableAs(localOrganizations)
       )
     : localOrganizations;
-  const projects = applyLocalProjectOrganizations(
-    mergeProjectSummaries(local, remoteProjects),
-    settledOrganizations
+  const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
+    ? remote?.pendingEncryptedProjectIds
+    : undefined;
+  if (accountId && isCurrentKeySession(keySessionRevision)) {
+    if (remote) forgetShelfProjectNames(accountId, [...shelfNames.keys()].filter((id) => !remoteIds.has(id)), scope.ownsDiscovery);
+    for (const project of remoteProjects) {
+      if (
+        project.storageFormat === 2 &&
+        !remote?.pendingEncryptedProjectIds?.has(project.projectId)
+      )
+        rememberVerifiedShelfName(accountId, project);
+    }
+  }
+  const projects = retainPendingShelfOrder(
+    applyLocalProjectOrganizations(
+      withCachedShelfNames(
+        mergeProjectSummaries(
+          local,
+          remoteProjects,
+          pendingEncryptedProjectIds
+        ),
+        shelfNames,
+        pendingEncryptedProjectIds,
+        local
+      ),
+      settledOrganizations
+    ),
+    local,
+    pendingEncryptedProjectIds
   ).filter(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
@@ -11850,6 +11919,8 @@ export function App() {
                 projectController?.closeProject();
               }
             });
+      if (scope === 'projects' && departingSession)
+        forgetShelfProjectNames(departingSession.userId, deleted.deletedProjectIds);
       if (deleted.signedOut) {
         if (sessionRef.current !== null) return;
         organizationBackground.confirmSignedOut();
@@ -13437,6 +13508,7 @@ export function App() {
       current.filter((project) => !destroyed.has(project.projectId))
     );
     if (destroyed.size > 0) {
+      if (session) forgetShelfProjectNames(session.userId, destroyed);
       void import('./lib/savedViews').then(({ forgetSavedViews }) =>
         destroyed.forEach((projectId) => forgetSavedViews(projectId))
       );
@@ -26502,6 +26574,7 @@ export function App() {
           }
           onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
           loadThumbnail={loadThumbnail}
+          thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
         />
         {settingsOverlay}
