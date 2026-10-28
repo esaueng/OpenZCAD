@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { E2eeConfigResponse } from '@openzcad/shared';
 import { desktopFetch } from '../lib/desktopBridge';
+import { shareLinkCreationProblem } from '../lib/projectShareLink';
 import {
   pageMigrationController,
   type MigrationController
@@ -323,7 +324,12 @@ function RevokedFollowUps({
 }) {
   const [working, setWorking] = useState(false);
   const [links, setLinks] = useState<
-    { shareId: string; url: string; mode: string; pending: boolean }[]
+    {
+      shareId: string;
+      url: string | null;
+      mode: string;
+      problem: string | null;
+    }[]
   >([]);
   const [message, setMessage] = useState<string | null>(null);
   const revoked = progress.revoked;
@@ -357,12 +363,15 @@ function RevokedFollowUps({
                     progress.projectId
                   );
                   setLinks(
-                    created.map((link) => ({
-                      shareId: link.shareId,
-                      url: link.url,
-                      mode: link.mode,
-                      pending: link.pending.length > 0
-                    }))
+                    created.map((link) => {
+                      const problem = shareLinkCreationProblem(link);
+                      return {
+                        shareId: link.shareId,
+                        url: problem ? null : link.url,
+                        mode: link.mode,
+                        problem
+                      };
+                    })
                   );
                   return null;
                 })
@@ -415,23 +424,26 @@ function RevokedFollowUps({
         >
           {links.map((link) => (
             <li key={link.shareId}>
-              <code>{link.url}</code>
-              <button
-                className="secondary"
-                type="button"
-                onClick={() =>
-                  void navigator.clipboard
-                    ?.writeText(link.url)
-                    .catch(() => undefined)
-                }
-              >
-                <Copy size={13} aria-hidden="true" />
-                Copy
-              </button>
-              {link.pending ? (
+              {link.url ? (
+                <>
+                  <code>{link.url}</code>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() =>
+                      void navigator.clipboard
+                        ?.writeText(link.url!)
+                        .catch(() => undefined)
+                    }
+                  >
+                    <Copy size={13} aria-hidden="true" />
+                    Copy
+                  </button>
+                </>
+              ) : null}
+              {link.problem ? (
                 <span className="encryption-migration-member-action">
-                  Confirm it in the project’s sharing dialog before visitors can
-                  open it.
+                  {link.problem}
                 </span>
               ) : null}
             </li>

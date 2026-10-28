@@ -374,6 +374,59 @@ async function writeWithLinks(
 }
 
 describe('creating a link (slice 5-10)', { timeout: 120_000 }, () => {
+  it('accepts an authority another publication already made current', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const register = laptop.shareLinks.api.create.bind(laptop.shareLinks.api);
+    vi.spyOn(laptop.shareLinks.api, 'create').mockImplementation(
+      async (...args) => {
+        const result = await register(...args);
+        await issueShareAuthorities(laptop.shareLinks, projectId);
+        return result;
+      }
+    );
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    expect(created.pending).toEqual([]);
+    expect(created.needsConfirmation).toBe(false);
+    expect(created.problem).toBeNull();
+    expect((await visit(srv, created.url)).document).toBeTruthy();
+  });
+
+  it.each(['authority', 'snapshot'] as const)(
+    'preserves a failed %s publication and retries without another confirmation',
+    async (stage) => {
+      const { srv, laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      const reason = `${stage} publication unavailable`;
+      const unavailable = vi
+        .spyOn(
+          laptop.shareLinks.api,
+          stage === 'authority' ? 'putAuthority' : 'putSnapshot'
+        )
+        .mockRejectedValue(new Error(reason));
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      expect(created.pending).toEqual([stage]);
+      expect(created.needsConfirmation).toBe(false);
+      expect(created.problem).toBe(reason);
+      expect((await served(srv, created.fragment.token)).status).toBe(404);
+      unavailable.mockRestore();
+      if (stage === 'authority') {
+        expect(
+          (await issueShareAuthorities(laptop.shareLinks, projectId)).issued
+        ).toEqual([created.shareId]);
+      } else {
+        expect(
+          (await publishShareSnapshots(laptop.shareLinks, projectId)).published
+        ).toEqual([created.shareId]);
+      }
+      expect((await visit(srv, created.url)).document).toBeTruthy();
+    }
+  );
+
   it('writes a grant, and the anonymous route serves a snapshot that verifies end to end', async () => {
     const { srv, laptop, member, projectId, document } = await linkedProject();
     await delegate(laptop);
@@ -1812,6 +1865,8 @@ describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
     // Without a delegation the link exists but has no statement yet.
     const created = await createShareLink(laptop.shareLinks, projectId, 'view');
     expect(created.pending).toEqual(['authority']);
+    expect(created.needsConfirmation).toBe(true);
+    expect(created.problem).toBeNull();
     expect((await served(srv, created.fragment.token)).status).toBe(404);
     // The passkey touch when sharing opens.
     expect((await delegate(laptop)).status).toBe('valid');
