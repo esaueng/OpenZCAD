@@ -132,7 +132,7 @@ type NativeInvoke = typeof tauriInvoke;
  * The download routes Rust streams instead of buffering
  * (`blob_stream_destination` in `desktop_auth.rs`, which has the final say):
  * a share link's anonymous read, a member's read of a project's blob, and
- * authenticated archived artifact downloads. A
+ * authenticated archived artifact and account export downloads. A
  * 128 MiB import source or mesh payload is larger than the buffered bridge's
  * 50 MiB response cap.
  */
@@ -143,7 +143,9 @@ const NATIVE_ARTIFACT_STREAM_PATH =
 
 function isNativeBlobStreamPath(path: string): boolean {
   return (
-    NATIVE_BLOB_STREAM_PATH.test(path) || NATIVE_ARTIFACT_STREAM_PATH.test(path)
+    NATIVE_BLOB_STREAM_PATH.test(path) ||
+    NATIVE_ARTIFACT_STREAM_PATH.test(path) ||
+    path === '/api/account/export'
   );
 }
 

@@ -485,33 +485,34 @@ describe('desktop bridge', () => {
     }
   });
 
-  it('streams an authenticated archived artifact above the buffered bridge limit', async () => {
-    markDesktopRuntime();
-    const chunk = new Uint8Array(1024 * 1024).fill(17);
-    const count = 51;
-    mockNativeBlobStream(
-      Array.from({ length: count }, () => chunk),
-      {
-        contentLength: count * chunk.byteLength
+  it.each(['/api/artifacts/artifact_large/download', '/api/account/export'])(
+    'streams an authenticated download above the buffered bridge limit: %s',
+    async (path) => {
+      markDesktopRuntime();
+      const chunk = new Uint8Array(1024 * 1024).fill(17);
+      const count = 51;
+      mockNativeBlobStream(
+        Array.from({ length: count }, () => chunk),
+        {
+          contentLength: count * chunk.byteLength
+        }
+      );
+      const response = await desktopFetch(path);
+      expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
+        path
+      });
+      const reader = response.body!.getReader();
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        expect(value[0]).toBe(17);
+        total += value.byteLength;
       }
-    );
-    const response = await desktopFetch(
-      '/api/artifacts/artifact_large/download'
-    );
-    expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
-      path: '/api/artifacts/artifact_large/download'
-    });
-    const reader = response.body!.getReader();
-    let total = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      expect(value[0]).toBe(17);
-      total += value.byteLength;
+      expect(total).toBe(51 * 1024 * 1024);
+      expect(nativeCommands()).not.toContain('desktop_api_request');
     }
-    expect(total).toBe(51 * 1024 * 1024);
-    expect(nativeCommands()).not.toContain('desktop_api_request');
-  });
+  );
 
   it('carries a refused blob read back whole, with its status and words', async () => {
     markDesktopRuntime();

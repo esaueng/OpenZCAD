@@ -33,6 +33,8 @@ const MAX_NATIVE_API_RESPONSE_BYTES: usize = 50 * 1024 * 1024;
 const MAX_NATIVE_BLOB_STREAM_BYTES: u64 = 168 * 1024 * 1024;
 // Plaintext archived files use the project backup's existing 256 MiB ceiling.
 const MAX_NATIVE_ARTIFACT_STREAM_BYTES: u64 = 256 * 1024 * 1024;
+// Account metadata shares the browser data archive's 512 MiB ceiling.
+const MAX_NATIVE_ACCOUNT_EXPORT_STREAM_BYTES: u64 = 512 * 1024 * 1024;
 // Bytes one renderer read takes before it returns (plus one network chunk).
 const NATIVE_BLOB_READ_BYTES: usize = 1024 * 1024;
 // Network chunks a stream holds before it waits for the renderer to read.
@@ -303,7 +305,7 @@ fn blob_id_segment(segment: &str) -> bool {
 }
 
 /// Stream only anonymous encrypted share blobs, authenticated project blobs,
-/// and authenticated archived artifacts. The path must already be in its
+/// and authenticated archived artifacts/account exports. The path must already be in its
 /// parsed form (no query, fragment,
 /// escape or dot segment) and classify exactly as `desktop_api_request` would.
 fn blob_stream_destination(path: &str) -> Result<BlobStreamDestination, String> {
@@ -326,6 +328,7 @@ fn blob_stream_destination(path: &str) -> Result<BlobStreamDestination, String> 
         ["", "api", "artifacts", artifact_id, "download"] if plain_route_segment(artifact_id) => {
             (false, MAX_NATIVE_ARTIFACT_STREAM_BYTES)
         }
+        ["", "api", "account", "export"] => (false, MAX_NATIVE_ACCOUNT_EXPORT_STREAM_BYTES),
         _ => return Err(refused()),
     };
     let general = renderer_api_destination(path)?;
@@ -1438,7 +1441,18 @@ mod tests {
             "https://zcad.app/api/artifacts/artifact_large/download"
         );
         assert_eq!(artifact.max_bytes, super::MAX_NATIVE_ARTIFACT_STREAM_BYTES);
+        let account = blob_stream_destination("/api/account/export").unwrap();
+        assert!(!account.public);
+        assert_eq!(account.url.as_str(), "https://zcad.app/api/account/export");
+        assert_eq!(
+            account.max_bytes,
+            super::MAX_NATIVE_ACCOUNT_EXPORT_STREAM_BYTES
+        );
         for path in [
+            "/api/account/export?user=other".to_string(),
+            "/api/account/export#fragment".to_string(),
+            "/api/account/%65xport".to_string(),
+            "/api/account/delete-data".to_string(),
             "/api/artifacts/artifact_large/download?extra=1".to_string(),
             "/api/artifacts/artifact_large/download#fragment".to_string(),
             "/api/artifacts/%61rtifact_large/download".to_string(),
