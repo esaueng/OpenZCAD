@@ -3955,12 +3955,19 @@ describe('device approval', () => {
       ).rejects.toThrow('Not sent');
       lockAccount(USER);
       const current = ready(await loadEncryption(laptop));
-      await expect(
-        beginCompareApproval(laptop, current, approval.id)
-      ).rejects.toMatchObject({
-        code: 'approval-gone',
-        message: expect.stringContaining('Use Scan code')
-      });
+      const stopped: unknown = await beginCompareApproval(
+        laptop,
+        current,
+        approval.id
+      ).then(
+        () => null,
+        (error: unknown) => error
+      );
+      expect(stopped).toBeInstanceOf(EncryptionFlowError);
+      if (!(stopped instanceof EncryptionFlowError))
+        throw new Error('Expected a comparison refusal');
+      expect(stopped.code).toBe('approval-gone');
+      expect(stopped.message).toContain('Use Scan code');
       expect(respond).toHaveBeenCalledTimes(1);
       expect((await laptop.api.getApproval(approval.id)).state).toBe(
         'requested'
