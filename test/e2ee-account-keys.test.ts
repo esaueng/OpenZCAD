@@ -4,6 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import {
   accountKeyCommitment,
   accountKeySequence,
+  commitDeviceApproval,
   exportPrivateKey,
   publicKeyHash,
   toHex,
@@ -41,6 +42,8 @@ import {
   cancelApprovalRequest,
   approverComparisonCode,
   beginCompareApproval,
+  canResumeCompareApproval,
+  denyApproval,
   deviceScanCode,
   enrollWithRecoveryKey,
   EncryptionFlowError,
@@ -61,6 +64,7 @@ import {
 } from '../apps/web/src/lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
 import {
+  invalidateAccountKeyReads,
   lockAccountsExcept,
   unlockedAccount
 } from '../apps/web/src/lib/e2ee/unlockedKeys';
@@ -75,7 +79,7 @@ import {
   memoryDeviceStore,
   type DeviceKeyStore
 } from '../apps/web/src/lib/e2ee/deviceStore';
-import type { E2eeSetupRequest } from '@openzcad/shared';
+import type { E2eeApprovalRecord, E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
 import { eraseAccountWithKeyCleanup } from '../apps/web/src/lib/e2ee/accountErasure';
 import { signOutAfterSaving } from '../apps/web/src/lib/e2ee/signOut';
@@ -93,6 +97,12 @@ import {
 } from '../apps/web/src/lib/e2ee/keySession';
 
 const USER = 'user_alice';
+
+beforeEach(() => {
+  // Each fixture starts a fresh signed-in page; session-ending tests then
+  // invalidate their own operations without leaking that state to later tests.
+  allowKeySession(getKeySessionRevision());
+});
 
 interface Server {
   db: DatabaseSync;
@@ -234,6 +244,23 @@ async function setUp(srv: Server) {
     })
   );
   return { recovery, laptop, account };
+}
+
+async function comparisonFixture() {
+  const srv = server();
+  const setup = await setUp(srv);
+  const phone = device(srv);
+  const request = await requestApproval(phone, null, 'Phone');
+  if (request.step !== 'waiting') throw new Error('Expected request');
+  const approval = request.approval;
+  return { srv, ...setup, phone, approval, scanCode: request.scanCode };
+}
+
+async function confirmShownApproval(ctx: E2eeContext) {
+  const shown = await advanceApprovalAsNewDevice(ctx);
+  if (shown.step !== 'compare')
+    throw new Error('Expected a displayed comparison');
+  return confirmApprovalCode(ctx, shown.approval);
 }
 
 async function enrolled(
@@ -2780,7 +2807,7 @@ describe('device approval', () => {
       { kind: 'scan', code: request.scanCode },
       null
     );
-    const done = await confirmApprovalCode(phone);
+    const done = await confirmShownApproval(phone);
     if (done.step !== 'done') throw new Error('Expected completed comparison');
     expect(ready(done.state).unlocked).toBe(true);
   });
@@ -2976,7 +3003,7 @@ describe('device approval', () => {
         )
       ).toBe(0);
       await approveDevice(laptop, account, pending, { kind: 'compare' }, null);
-      const done = await confirmApprovalCode(phone);
+      const done = await confirmShownApproval(phone);
       if (done.step !== 'done')
         throw new Error('Expected completed comparison');
       expect(ready(done.state).unlocked).toBe(true);
@@ -3221,7 +3248,7 @@ describe('device approval', () => {
     // complete; then it finishes.
     const waiting = await advanceApprovalAsNewDevice(phone);
     expect(waiting).toMatchObject({ step: 'compare', confirmed: false });
-    const done = await confirmApprovalCode(phone);
+    const done = await confirmShownApproval(phone);
     if (done.step !== 'done') throw new Error(`got ${done.step}`);
     const readOnly = ready(done.state);
     expect(readOnly.deviceStatus).toBe('approved');
@@ -3239,6 +3266,1021 @@ describe('device approval', () => {
         `SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'`
       )
     ).toBe(0);
+  });
+
+  describe('requester comparison continuity', () => {
+    async function respondedFixture() {
+      const fixture = await comparisonFixture();
+      const responded = await beginCompareApproval(
+        fixture.laptop,
+        fixture.account,
+        fixture.approval.id
+      );
+      return { ...fixture, responded };
+    }
+
+    function changedResponse(
+      field: 'approverKey' | 'approverNonce',
+      original: E2eeApprovalRecord,
+      phoneKey: Uint8Array
+    ): string {
+      if (field === 'approverKey') return toBase64Url(phoneKey);
+      const nonce = fromBase64Url(original.approverNonce!);
+      nonce[0] = nonce[0]! ^ 1;
+      return toBase64Url(nonce);
+    }
+
+    it.each(['approverKey', 'approverNonce'] as const)(
+      'refuses changed %s when confirming the displayed comparison',
+      async (field) => {
+        const { phone, approval } = await respondedFixture();
+        const shown = await advanceApprovalAsNewDevice(phone);
+        if (shown.step !== 'compare') throw new Error('Expected comparison');
+        const local = (await phone.store.loadDevice(USER))!;
+        const replacement = changedResponse(
+          field,
+          shown.approval,
+          local.signingPublicKey
+        );
+        const get = phone.api.getApproval;
+        phone.api.getApproval = async (id) => ({
+          ...(await get(id)),
+          [field]: replacement
+        });
+        await flowRefusal(
+          confirmApprovalCode(phone, shown.approval),
+          'grant-invalid'
+        );
+        expect(
+          (await phone.store.loadDevice(USER))!.approval!.confirmedApproverKey
+        ).toBeNull();
+        expect(
+          (await phone.store.loadDevice(USER))!.approval!.comparison!.confirmed
+        ).toBe(false);
+        phone.api.getApproval = get;
+        expect((await phone.api.getApproval(approval.id)).state).toBe(
+          'revealed'
+        );
+      }
+    );
+
+    it.each(['approverKey', 'approverNonce'] as const)(
+      'retains %s before retrying a stopped reveal',
+      async (field) => {
+        const { phone, responded } = await respondedFixture();
+        const release = vi
+          .spyOn(phone.api, 'revealApproval')
+          .mockRejectedValue(new Error('Send stopped'));
+        await expect(advanceApprovalAsNewDevice(phone)).rejects.toThrow(
+          'Send stopped'
+        );
+        const local = (await phone.store.loadDevice(USER))!;
+        const replacement = changedResponse(
+          field,
+          responded,
+          local.signingPublicKey
+        );
+        const get = phone.api.getApproval;
+        phone.api.getApproval = async (id) => ({
+          ...(await get(id)),
+          [field]: replacement
+        });
+        release.mockClear();
+        await flowRefusal(advanceApprovalAsNewDevice(phone), 'grant-invalid');
+        expect(release).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['approverKey', 'approverNonce', 'deviceNonce'] as const)(
+      'refuses changed %s in the reveal reply',
+      async (field) => {
+        const { phone } = await respondedFixture();
+        const reveal = phone.api.revealApproval;
+        const local = (await phone.store.loadDevice(USER))!;
+        phone.api.revealApproval = async (...args) => {
+          const record = await reveal(...args);
+          return {
+            ...record,
+            [field]:
+              field === 'approverKey'
+                ? toBase64Url(local.signingPublicKey)
+                : toBase64Url(generateSymmetricKey())
+          };
+        };
+        await flowRefusal(advanceApprovalAsNewDevice(phone), 'grant-invalid');
+        expect(
+          (await phone.store.loadDevice(USER))!.approval!.comparison!.confirmed
+        ).toBe(false);
+      }
+    );
+
+    it.each([
+      'id',
+      'deviceId',
+      'signingKey',
+      'unlockKey',
+      'commitment'
+    ] as const)('checks requester %s before reveal', async (field) => {
+      const { phone, responded } = await respondedFixture();
+      const replacement =
+        field === 'id' || field === 'deviceId'
+          ? 'another-request'
+          : field === 'commitment'
+            ? toBase64Url(generateSymmetricKey())
+            : field === 'signingKey'
+              ? responded.unlockKey
+              : responded.signingKey;
+      const get = phone.api.getApproval;
+      phone.api.getApproval = async (id) => ({
+        ...(await get(id)),
+        [field]: replacement
+      });
+      const reveal = vi.spyOn(phone.api, 'revealApproval');
+      await flowRefusal(advanceApprovalAsNewDevice(phone), 'grant-invalid');
+      expect(reveal).not.toHaveBeenCalled();
+    });
+
+    it('resumes a lost reveal reply from the persisted observation without revealing twice', async () => {
+      const { laptop, account, phone, approval } = await respondedFixture();
+      const reveal = phone.api.revealApproval;
+      const release = vi
+        .spyOn(phone.api, 'revealApproval')
+        .mockImplementation(async (...args) => {
+          await reveal(...args);
+          throw new Error('Reply lost');
+        });
+      await expect(advanceApprovalAsNewDevice(phone)).rejects.toThrow(
+        'Reply lost'
+      );
+      const reopened = { ...phone, store: { ...phone.store }, readScope: {} };
+      const shown = await advanceApprovalAsNewDevice(reopened);
+      if (shown.step !== 'compare') throw new Error('Expected comparison');
+      expect(release).toHaveBeenCalledTimes(1);
+      const record = await laptop.api.getApproval(approval.id);
+      expect(await approverComparisonCode(laptop, account, record)).toBe(
+        shown.code
+      );
+      await approveDevice(laptop, account, record, { kind: 'compare' }, null);
+      expect((await confirmShownApproval(reopened)).step).toBe('done');
+    });
+
+    it.each(['approverKey', 'approverNonce'] as const)(
+      'keeps confirmed %s fixed during later polling',
+      async (field) => {
+        const { phone } = await respondedFixture();
+        const shown = await advanceApprovalAsNewDevice(phone);
+        if (shown.step !== 'compare') throw new Error('Expected comparison');
+        expect((await confirmShownApproval(phone)).step).toBe('compare');
+        const local = (await phone.store.loadDevice(USER))!;
+        const get = phone.api.getApproval;
+        phone.api.getApproval = async (id) => ({
+          ...(await get(id)),
+          [field]: changedResponse(
+            field,
+            shown.approval,
+            local.signingPublicKey
+          )
+        });
+        await flowRefusal(advanceApprovalAsNewDevice(phone), 'grant-invalid');
+      }
+    );
+
+    it('does not downgrade an observed comparison to a scanned completion', async () => {
+      const { phone } = await respondedFixture();
+      await advanceApprovalAsNewDevice(phone);
+      const get = phone.api.getApproval;
+      phone.api.getApproval = async (id) => ({
+        ...(await get(id)),
+        state: 'completed',
+        approverKey: null,
+        approverNonce: null
+      });
+      await flowRefusal(advanceApprovalAsNewDevice(phone), 'grant-invalid');
+    });
+
+    it('refuses confirmation from a tab displaying a replaced requester request', async () => {
+      const { laptop, account, phone } = await respondedFixture();
+      const shown = await advanceApprovalAsNewDevice(phone);
+      if (shown.step !== 'compare') throw new Error('Expected comparison');
+      const otherTab = { ...phone, readScope: {} };
+      const replacement = await requestApproval(otherTab, null, 'Phone');
+      if (replacement.step !== 'waiting') throw new Error('Expected request');
+      await beginCompareApproval(laptop, account, replacement.approval.id);
+      await advanceApprovalAsNewDevice(otherTab);
+      await flowRefusal(
+        confirmApprovalCode(phone, shown.approval),
+        'grant-invalid'
+      );
+      expect(
+        (await phone.store.loadDevice(USER))!.approval!.comparison!.confirmed
+      ).toBe(false);
+    });
+
+    it.each(['completion cancellation', '404 cleanup'] as const)(
+      'does not reopen keys after invalidation during %s',
+      async (boundary) => {
+        const { laptop, account, phone, approval } = await respondedFixture();
+        const shown = await advanceApprovalAsNewDevice(phone);
+        if (shown.step !== 'compare') throw new Error('Expected comparison');
+        await approveDevice(
+          laptop,
+          account,
+          await laptop.api.getApproval(approval.id),
+          { kind: 'compare' },
+          null
+        );
+        if (boundary === 'completion cancellation') {
+          const cancel = phone.api.cancelApproval;
+          phone.api.cancelApproval = async (id) => {
+            const result = await cancel(id);
+            lockAccount(USER);
+            return result;
+          };
+          await expect(confirmShownApproval(phone)).rejects.toMatchObject({
+            name: 'AbortError'
+          });
+        } else {
+          phone.api.getApproval = async () => {
+            throw Object.assign(new Error('Gone'), { status: 404 });
+          };
+          const clear = phone.store.clearApprovalIfCurrent;
+          phone.store.clearApprovalIfCurrent = async (...args) => {
+            await clear(...args);
+            lockAccount(USER);
+          };
+          await expect(advanceApprovalAsNewDevice(phone)).rejects.toMatchObject(
+            { name: 'AbortError' }
+          );
+        }
+        expect(unlockedAccount(USER)).toBeUndefined();
+      }
+    );
+
+    it('requires older unbound comparison requests to restart without deleting device keys', async () => {
+      const { phone } = await respondedFixture();
+      const original = (await phone.store.loadDevice(USER))!;
+      await phone.store.saveDevice({
+        ...original,
+        approval: { ...original.approval!, comparison: undefined }
+      });
+      const reveal = vi.spyOn(phone.api, 'revealApproval');
+      await flowRefusal(advanceApprovalAsNewDevice(phone), 'grant-invalid');
+      expect(reveal).not.toHaveBeenCalled();
+      expect((await phone.store.loadDevice(USER))!.deviceId).toBe(
+        original.deviceId
+      );
+    });
+
+    it('accepts equivalent encoded responder fields and persists canonical values', async () => {
+      const { laptop, account, phone, approval, responded } =
+        await respondedFixture();
+      const alphabet =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+      const alias = (value: string) =>
+        value.slice(0, -1) + alphabet[alphabet.indexOf(value.at(-1)!) ^ 1];
+      const get = phone.api.getApproval;
+      phone.api.getApproval = async (id) => ({
+        ...(await get(id)),
+        approverKey: alias(responded.approverKey!),
+        approverNonce: alias(responded.approverNonce!)
+      });
+      const shown = await advanceApprovalAsNewDevice(phone);
+      if (shown.step !== 'compare') throw new Error('Expected comparison');
+      await confirmShownApproval(phone);
+      const local = (await phone.store.loadDevice(USER))!;
+      expect(local.approval!.confirmedApproverKey).toBe(responded.approverKey);
+      const record = await laptop.api.getApproval(approval.id);
+      expect(await approverComparisonCode(laptop, account, record)).toBe(
+        shown.code
+      );
+      await approveDevice(laptop, account, record, { kind: 'compare' }, null);
+      expect((await advanceApprovalAsNewDevice(phone)).step).toBe('done');
+    });
+
+    it('prevents competing first observations from both releasing the nonce', async () => {
+      const { phone, responded } = await respondedFixture();
+      const local = (await phone.store.loadDevice(USER))!;
+      let reads = 0;
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const get = phone.api.getApproval;
+      phone.api.getApproval = async (id) => {
+        const record = await get(id);
+        const ordinal = ++reads;
+        if (reads === 2) release();
+        await barrier;
+        return ordinal === 1
+          ? record
+          : {
+              ...record,
+              approverKey: changedResponse(
+                'approverKey',
+                responded,
+                local.signingPublicKey
+              )
+            };
+      };
+      const reveal = vi
+        .spyOn(phone.api, 'revealApproval')
+        .mockRejectedValue(new Error('Send stopped'));
+      const unlocked = {
+        ...phone,
+        store: {
+          ...phone.store,
+          withDeviceLock: <T>(_userId: string, run: () => Promise<T>) => run()
+        }
+      };
+      await Promise.allSettled([
+        advanceApprovalAsNewDevice(unlocked),
+        advanceApprovalAsNewDevice(unlocked)
+      ]);
+      expect(reveal).toHaveBeenCalledTimes(1);
+      expect(
+        (await phone.store.loadDevice(USER))!.approval!.comparison!.responder!
+          .key
+      ).toBe(responded.approverKey);
+    });
+
+    it.each(['lock', 'close view'] as const)(
+      'aborts an outstanding requester read after %s',
+      async (action) => {
+        const { phone } = await respondedFixture();
+        const scope = {};
+        const get = phone.api.getApproval;
+        phone.api.getApproval = async (id) => {
+          const record = await get(id);
+          if (action === 'lock') lockAccount(USER);
+          else invalidateAccountKeyReads(USER, scope);
+          return record;
+        };
+        const reveal = vi.spyOn(phone.api, 'revealApproval');
+        await expect(
+          advanceApprovalAsNewDevice({ ...phone, readScope: scope })
+        ).rejects.toMatchObject({ name: 'AbortError' });
+        expect(reveal).not.toHaveBeenCalled();
+      }
+    );
+
+    it('continues the original requester snapshot when the reply object changes during pin persistence', async () => {
+      const { phone, responded } = await respondedFixture();
+      phone.api.getApproval = async () => responded;
+      const replace = phone.store.replaceDeviceIfCurrent;
+      phone.store.replaceDeviceIfCurrent = async (...args) => {
+        Object.assign(responded, {
+          id: 'changed',
+          approverNonce: toBase64Url(generateSymmetricKey())
+        });
+        return replace(...args);
+      };
+      expect((await advanceApprovalAsNewDevice(phone)).step).toBe('compare');
+    });
+  });
+
+  describe('compare approval request binding', () => {
+    const replacements = [
+      ['deviceId', 'different-device'],
+      ['signingKey', toBase64Url(new Uint8Array(65))],
+      ['unlockKey', toBase64Url(new Uint8Array(65))],
+      ['commitment', toBase64Url(new Uint8Array(32))]
+    ] as const;
+
+    it.each(replacements)(
+      'rejects a changed %s in the response and later reads',
+      async (field, value) => {
+        const { laptop, account, phone, approval } = await comparisonFixture();
+        const respond = laptop.api.respondApproval;
+        laptop.api.respondApproval = async (id, body) => ({
+          ...(await respond(id, body)),
+          [field]: value
+        });
+        await flowRefusal(
+          beginCompareApproval(laptop, account, approval.id),
+          'commitment-mismatch'
+        );
+        laptop.api.respondApproval = respond;
+        // A rejected response cannot replace the original observation.
+        const responded = await laptop.api.getApproval(approval.id);
+        await flowRefusal(
+          approverComparisonCode(laptop, account, {
+            ...responded,
+            [field]: value
+          }),
+          'commitment-mismatch'
+        );
+        await advanceApprovalAsNewDevice(phone);
+        const revealed = await laptop.api.getApproval(approval.id);
+        expect(await approverComparisonCode(laptop, account, revealed)).toMatch(
+          /^\d{3} \d{3}$/
+        );
+      }
+    );
+
+    it.each([null, 'recovery'] as const)(
+      'refuses a replacement before approval writes (%s)',
+      async (mode) => {
+        const { laptop, account, recovery, phone, approval, scanCode } =
+          await comparisonFixture();
+        await beginCompareApproval(laptop, account, approval.id);
+        await advanceApprovalAsNewDevice(phone);
+        const revealed = await laptop.api.getApproval(approval.id);
+        const complete = vi.spyOn(laptop.api, 'completeApproval');
+        const append = vi.spyOn(laptop.api, 'appendDeviceList');
+        for (const [field, value] of replacements) {
+          for (const proof of [
+            { kind: 'compare' } as const,
+            { kind: 'scan', code: scanCode } as const
+          ]) {
+            await flowRefusal(
+              approveDevice(
+                laptop,
+                account,
+                {
+                  ...revealed,
+                  [field]: value
+                },
+                proof,
+                mode ? recovery.secret : null
+              ),
+              'commitment-mismatch'
+            );
+          }
+        }
+        expect(complete).not.toHaveBeenCalled();
+        expect(append).not.toHaveBeenCalled();
+      }
+    );
+
+    it('rejects self-consistent replacement keys and commitment', async () => {
+      const { laptop, account, phone, approval } = await comparisonFixture();
+      await beginCompareApproval(laptop, account, approval.id);
+      await advanceApprovalAsNewDevice(phone);
+      const revealed = await laptop.api.getApproval(approval.id);
+      const keys = [
+        await exportPublicKey((await generateSigningKeyPair()).publicKey),
+        await exportPublicKey((await generateEncryptionKeyPair()).publicKey)
+      ];
+      const replacement = await commitDeviceApproval(keys);
+      await flowRefusal(
+        approverComparisonCode(laptop, account, {
+          ...revealed,
+          signingKey: toBase64Url(keys[0]!),
+          unlockKey: toBase64Url(keys[1]!),
+          commitment: toBase64Url(replacement.commitment),
+          deviceNonce: toBase64Url(replacement.nonce)
+        }),
+        'commitment-mismatch'
+      );
+    });
+
+    it('accepts equivalent byte encodings of the pinned fields and nonces', async () => {
+      const { laptop, account, phone, approval } = await comparisonFixture();
+      await beginCompareApproval(laptop, account, approval.id);
+      const shown = await advanceApprovalAsNewDevice(phone);
+      if (shown.step !== 'compare') throw new Error('Expected comparison');
+      const revealed = await laptop.api.getApproval(approval.id);
+      const alphabet =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+      const alias = (value: string) =>
+        value.slice(0, -1) + alphabet[alphabet.indexOf(value.at(-1)!) ^ 1];
+      const equivalent = { ...revealed };
+      for (const field of [
+        'signingKey',
+        'unlockKey',
+        'commitment',
+        'approverKey',
+        'approverNonce',
+        'deviceNonce'
+      ] as const) {
+        equivalent[field] = alias(revealed[field]!);
+        expect(fromBase64Url(equivalent[field])).toEqual(
+          fromBase64Url(revealed[field]!)
+        );
+      }
+      expect(await approverComparisonCode(laptop, account, equivalent)).toBe(
+        shown.code
+      );
+      await approveDevice(
+        laptop,
+        account,
+        equivalent,
+        { kind: 'compare' },
+        null
+      );
+      expect((await confirmShownApproval(phone)).step).toBe('done');
+    });
+
+    it('retains the original nonce through concurrent starts and a lost response', async () => {
+      const { laptop, account, phone, approval } = await comparisonFixture();
+      const respond = laptop.api.respondApproval;
+      const get = laptop.api.getApproval;
+      let initialReads = 0;
+      let release!: () => void;
+      const readBarrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      laptop.api.getApproval = async (id) => {
+        const record = await get(id);
+        if (++initialReads === 2) release();
+        await readBarrier;
+        return record;
+      };
+      const nonces: string[] = [];
+      laptop.api.respondApproval = async (id, body) => {
+        nonces.push(body.approverNonce);
+        await respond(id, body);
+        throw new Error('Response lost');
+      };
+      const starts = await Promise.allSettled([
+        beginCompareApproval(laptop, account, approval.id),
+        beginCompareApproval(laptop, account, approval.id)
+      ]);
+      expect(starts.every((start) => start.status === 'rejected')).toBe(true);
+      expect(nonces).toHaveLength(2);
+      expect(new Set(nonces).size).toBe(1);
+      laptop.api.getApproval = get;
+      laptop.api.respondApproval = respond;
+      const resumed = await beginCompareApproval(laptop, account, approval.id);
+      expect(resumed.state).toBe('responded');
+      expect(resumed.approverNonce).toBe(nonces[0]);
+      const shown = await advanceApprovalAsNewDevice(phone);
+      if (shown.step !== 'compare') throw new Error('Expected comparison');
+      expect(
+        await approverComparisonCode(
+          laptop,
+          account,
+          await laptop.api.getApproval(approval.id)
+        )
+      ).toBe(shown.code);
+    });
+
+    it.each(['responded', 'revealed'] as const)(
+      'resumes a retained %s comparison after the response is lost',
+      async (state) => {
+        const { laptop, account, phone, approval } = await comparisonFixture();
+        const respond = laptop.api.respondApproval;
+        laptop.api.respondApproval = async (id, body) => {
+          await respond(id, body);
+          throw new Error('Response lost');
+        };
+        await expect(
+          beginCompareApproval(laptop, account, approval.id)
+        ).rejects.toThrow('Response lost');
+        const original = await laptop.api.getApproval(approval.id);
+        expect(canResumeCompareApproval(laptop, account, original)).toBe(true);
+        if (state === 'revealed') await advanceApprovalAsNewDevice(phone);
+        laptop.api.respondApproval = respond;
+        const repeated = vi.spyOn(laptop.api, 'respondApproval');
+        const resumed = await beginCompareApproval(
+          laptop,
+          account,
+          approval.id
+        );
+        expect(resumed.state).toBe(state);
+        expect(resumed.approverNonce).toBe(original.approverNonce);
+        expect(repeated).not.toHaveBeenCalled();
+        const shown = await advanceApprovalAsNewDevice(phone);
+        if (shown.step !== 'compare') throw new Error('Expected comparison');
+        const revealed = await laptop.api.getApproval(approval.id);
+        expect(await approverComparisonCode(laptop, account, revealed)).toBe(
+          shown.code
+        );
+        await approveDevice(
+          laptop,
+          account,
+          revealed,
+          { kind: 'compare' },
+          null
+        );
+        expect((await confirmShownApproval(phone)).step).toBe('done');
+      }
+    );
+
+    it.each(['approverKey', 'approverNonce'] as const)(
+      'refuses to resume a changed %s',
+      async (field) => {
+        const { laptop, account, approval } = await comparisonFixture();
+        const responded = await beginCompareApproval(
+          laptop,
+          account,
+          approval.id
+        );
+        const replacement =
+          field === 'approverKey'
+            ? await exportPublicKey((await generateSigningKeyPair()).publicKey)
+            : generateSymmetricKey();
+        const changed = { ...responded, [field]: toBase64Url(replacement) };
+        expect(canResumeCompareApproval(laptop, account, changed)).toBe(false);
+        const get = laptop.api.getApproval;
+        laptop.api.getApproval = async () => changed;
+        const respond = vi.spyOn(laptop.api, 'respondApproval');
+        await flowRefusal(
+          beginCompareApproval(laptop, account, approval.id),
+          'approval-gone'
+        );
+        expect(respond).not.toHaveBeenCalled();
+        laptop.api.getApproval = get;
+        expect(
+          await beginCompareApproval(laptop, account, approval.id)
+        ).toEqual(responded);
+      }
+    );
+
+    it('does not resume a response without a retained local comparison', async () => {
+      const { laptop, account, approval } = await comparisonFixture();
+      const responded = await laptop.api.respondApproval(approval.id, {
+        approverKey: toBase64Url(account.device!.signingPublicKey),
+        approverNonce: toBase64Url(generateSymmetricKey())
+      });
+      expect(canResumeCompareApproval(laptop, account, responded)).toBe(false);
+      expect(
+        (await refusal(beginCompareApproval(laptop, account, approval.id)))
+          .status
+      ).toBe(409);
+      expect(canResumeCompareApproval(laptop, account, responded)).toBe(false);
+    });
+
+    it('does not release a nonce after the initial read outlives the session', async () => {
+      const { laptop, account, approval } = await comparisonFixture();
+      const get = laptop.api.getApproval;
+      laptop.api.getApproval = async (id) => {
+        const record = await get(id);
+        lockAccount(USER);
+        return record;
+      };
+      const respond = vi.spyOn(laptop.api, 'respondApproval');
+      await expect(
+        beginCompareApproval(laptop, account, approval.id)
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(respond).not.toHaveBeenCalled();
+    });
+
+    it('refuses a changed approval ID before responding and while polling', async () => {
+      const { laptop, account, approval } = await comparisonFixture();
+      const get = laptop.api.getApproval;
+      const respond = vi.spyOn(laptop.api, 'respondApproval');
+      laptop.api.getApproval = async (id) => ({
+        ...(await get(id)),
+        id: 'different-approval'
+      });
+      await flowRefusal(
+        beginCompareApproval(laptop, account, approval.id),
+        'commitment-mismatch'
+      );
+      expect(respond).not.toHaveBeenCalled();
+      laptop.api.getApproval = get;
+      const responded = await beginCompareApproval(
+        laptop,
+        account,
+        approval.id
+      );
+      await flowRefusal(
+        approverComparisonCode(laptop, account, {
+          ...responded,
+          id: 'different-approval'
+        }),
+        'approval-gone'
+      );
+    });
+
+    it.each(['lock', 'sign-out'] as const)(
+      'restarts a still-requested comparison after %s before response delivery',
+      async (action) => {
+        const { laptop, account, phone, approval } = await comparisonFixture();
+        const respond = vi
+          .spyOn(laptop.api, 'respondApproval')
+          .mockRejectedValueOnce(new Error('Not sent'));
+        await expect(
+          beginCompareApproval(laptop, account, approval.id)
+        ).rejects.toThrow('Not sent');
+        expect((await laptop.api.getApproval(approval.id)).state).toBe(
+          'requested'
+        );
+        if (action === 'lock') lockAccount(USER);
+        else {
+          await signOutAfterSaving({
+            userId: USER,
+            isCurrentSession: () => true,
+            savePending: async () => {},
+            revokeSession: async () => {}
+          });
+          allowKeySession(getKeySessionRevision());
+        }
+        const current = ready(await loadEncryption(laptop));
+        const restarted = await beginCompareApproval(
+          laptop,
+          current,
+          approval.id
+        );
+        expect(restarted.state).toBe('responded');
+        expect(respond).toHaveBeenCalledTimes(2);
+        // A failed send may still have been observed by the relay. Keep the
+        // original nonce and responder key as well as the request binding.
+        expect(respond.mock.calls[1]).toEqual(respond.mock.calls[0]);
+        const shown = await advanceApprovalAsNewDevice(phone);
+        if (shown.step !== 'compare') throw new Error('Expected comparison');
+        const revealed = await laptop.api.getApproval(approval.id);
+        expect(await approverComparisonCode(laptop, current, revealed)).toBe(
+          shown.code
+        );
+        await approveDevice(
+          laptop,
+          current,
+          revealed,
+          { kind: 'compare' },
+          null
+        );
+        const done = await confirmShownApproval(phone);
+        if (done.step !== 'done') throw new Error('Expected approval');
+        expect(ready(done.state).unlocked).toBe(true);
+      }
+    );
+
+    it('offers a fresh scan after a stopped response and a new unlocked session', async () => {
+      const { laptop, account, phone, approval, scanCode } =
+        await comparisonFixture();
+      const respond = vi
+        .spyOn(laptop.api, 'respondApproval')
+        .mockRejectedValue(new Error('Not sent'));
+      await expect(
+        beginCompareApproval(laptop, account, approval.id)
+      ).rejects.toThrow('Not sent');
+      lockAccount(USER);
+      const current = ready(await loadEncryption(laptop));
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect((await laptop.api.getApproval(approval.id)).state).toBe(
+        'requested'
+      );
+      await approveDevice(
+        laptop,
+        current,
+        await laptop.api.getApproval(approval.id),
+        { kind: 'scan', code: scanCode },
+        null
+      );
+      expect((await advanceApprovalAsNewDevice(phone)).step).toBe('done');
+    });
+
+    it.each(replacements)(
+      'refuses a changed %s before restarting an inactive comparison',
+      async (field, value) => {
+        const { laptop, account, phone, approval } = await comparisonFixture();
+        const respond = vi
+          .spyOn(laptop.api, 'respondApproval')
+          .mockRejectedValueOnce(new Error('Not sent'));
+        await expect(
+          beginCompareApproval(laptop, account, approval.id)
+        ).rejects.toThrow('Not sent');
+        lockAccount(USER);
+        const current = ready(await loadEncryption(laptop));
+        const get = laptop.api.getApproval;
+        laptop.api.getApproval = async (id) => ({
+          ...(await get(id)),
+          [field]: value
+        });
+        await flowRefusal(
+          beginCompareApproval(laptop, current, approval.id),
+          'commitment-mismatch'
+        );
+        expect(respond).toHaveBeenCalledTimes(1);
+        laptop.api.getApproval = get;
+        // The refusal must not replace the original pinned observation.
+        await beginCompareApproval(laptop, current, approval.id);
+        expect(respond.mock.calls[1]).toEqual(respond.mock.calls[0]);
+        expect((await advanceApprovalAsNewDevice(phone)).step).toBe('compare');
+      }
+    );
+
+    it('keeps the response nonce when a stale requested read hides an accepted response', async () => {
+      const { laptop, account, approval } = await comparisonFixture();
+      const respond = laptop.api.respondApproval;
+      const sent = vi
+        .spyOn(laptop.api, 'respondApproval')
+        .mockImplementationOnce(async (id, body) => {
+          await respond(id, body);
+          throw new Error('Response lost');
+        });
+      await expect(
+        beginCompareApproval(laptop, account, approval.id)
+      ).rejects.toThrow('Response lost');
+      lockAccount(USER);
+      const current = ready(await loadEncryption(laptop));
+      laptop.api.getApproval = async () => ({ ...approval });
+      // The Worker still rejects a duplicate transition. No new nonce is
+      // released even when the read falsely says the response never arrived.
+      expect(
+        (await refusal(beginCompareApproval(laptop, current, approval.id)))
+          .status
+      ).toBe(409);
+      expect(sent).toHaveBeenCalledTimes(2);
+      expect(sent.mock.calls[1]).toEqual(sent.mock.calls[0]);
+    });
+
+    it.each(['responded', 'revealed'] as const)(
+      'refuses a retained %s comparison across a lock and unlock',
+      async (state) => {
+        const { laptop, account, phone, approval } = await comparisonFixture();
+        await beginCompareApproval(laptop, account, approval.id);
+        if (state === 'revealed') await advanceApprovalAsNewDevice(phone);
+        lockAccount(USER);
+        const reloaded = ready(await loadEncryption(laptop));
+        const record = await laptop.api.getApproval(approval.id);
+        expect(canResumeCompareApproval(laptop, reloaded, record)).toBe(false);
+        const respond = vi.spyOn(laptop.api, 'respondApproval');
+        await flowRefusal(
+          beginCompareApproval(laptop, reloaded, approval.id),
+          'approval-gone'
+        );
+        expect(respond).not.toHaveBeenCalled();
+        await expect(
+          approverComparisonCode(laptop, reloaded, record)
+        ).rejects.toMatchObject({ name: 'AbortError' });
+      }
+    );
+
+    it.each([null, 'recovery'] as const)(
+      'retains the pinned observation when Settings is reopened (%s)',
+      async (mode) => {
+        const { laptop, account, recovery, phone, approval, scanCode } =
+          await comparisonFixture();
+        const oldScope = {};
+        await beginCompareApproval(
+          { ...laptop, readScope: oldScope },
+          account,
+          approval.id
+        );
+        invalidateAccountKeyReads(USER, oldScope);
+        const reopened = { ...laptop, readScope: {} };
+        const shown = await advanceApprovalAsNewDevice(phone);
+        if (shown.step !== 'compare') throw new Error('Expected comparison');
+        const revealed = await laptop.api.getApproval(approval.id);
+        expect(await approverComparisonCode(reopened, account, revealed)).toBe(
+          shown.code
+        );
+        await approveDevice(
+          reopened,
+          account,
+          revealed,
+          { kind: 'scan', code: scanCode },
+          mode ? recovery.secret : null
+        );
+        expect((await confirmShownApproval(phone)).step).toBe('done');
+      }
+    );
+
+    it.each([null, 'recovery'] as const)(
+      'allows a fresh full-hash scan after locking and unlocking (%s)',
+      async (mode) => {
+        const { laptop, account, recovery, phone, approval, scanCode } =
+          await comparisonFixture();
+        await beginCompareApproval(laptop, account, approval.id);
+        await advanceApprovalAsNewDevice(phone);
+        lockAccount(USER);
+        const current = ready(await loadEncryption(laptop));
+        const revealed = await laptop.api.getApproval(approval.id);
+        await expect(
+          approverComparisonCode(laptop, current, revealed)
+        ).rejects.toMatchObject({ name: 'AbortError' });
+        await approveDevice(
+          laptop,
+          current,
+          revealed,
+          { kind: 'scan', code: scanCode },
+          mode ? recovery.secret : null
+        );
+        expect((await confirmShownApproval(phone)).step).toBe('done');
+      }
+    );
+
+    it('keeps identical approval IDs separate across accounts', async () => {
+      const { laptop, account, phone, approval } = await comparisonFixture();
+      await beginCompareApproval(laptop, account, approval.id);
+      const srv = server();
+      const bob = device(srv, 'user_bob');
+      srv.db
+        .prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
+        .run(bob.userId, 'bob@example.com', '2026-10-20');
+      const bobAccount = ready(
+        await setUpEncryption(bob, {
+          recoverySecret: (await generateRecoveryKey()).secret,
+          label: 'Bob'
+        })
+      );
+      if (!approval.commitment)
+        throw new Error('Expected comparison commitment');
+      const second = await bob.api.createApproval({
+        deviceId: approval.deviceId,
+        label: 'Phone',
+        signingKey: approval.signingKey,
+        unlockKey: approval.unlockKey,
+        commitment: approval.commitment
+      });
+      srv.db
+        .prepare('UPDATE e2ee_device_approvals SET id = ? WHERE id = ?')
+        .run(approval.id, second.id);
+      await beginCompareApproval(bob, bobAccount, approval.id);
+      const shown = await advanceApprovalAsNewDevice(phone);
+      if (shown.step !== 'compare') throw new Error('Expected comparison');
+      expect(
+        await approverComparisonCode(
+          laptop,
+          account,
+          await laptop.api.getApproval(approval.id)
+        )
+      ).toBe(shown.code);
+      await flowRefusal(
+        approverComparisonCode(
+          bob,
+          account,
+          await laptop.api.getApproval(approval.id)
+        ),
+        'invalid-request'
+      );
+    });
+
+    it('keeps an owned approval snapshot across asynchronous certification', async () => {
+      const { laptop, account, recovery, phone, approval } =
+        await comparisonFixture();
+      await beginCompareApproval(laptop, account, approval.id);
+      await advanceApprovalAsNewDevice(phone);
+      const revealed = await laptop.api.getApproval(approval.id);
+      const original = { ...revealed };
+      const getAccount = laptop.api.account;
+      laptop.api.account = async () => {
+        Object.assign(revealed, {
+          id: 'different-approval',
+          deviceId: 'different-device',
+          label: 'Changed',
+          unlockKey: 'AAAA'
+        });
+        return getAccount();
+      };
+      await approveDevice(
+        laptop,
+        account,
+        revealed,
+        { kind: 'compare' },
+        recovery.secret
+      );
+      const completed = await laptop.api.getApproval(original.id);
+      expect(completed.state).toBe('completed');
+      expect(
+        decodeDeviceApprovalGrant(fromBase64Url(completed.grant!.statement))
+          .deviceId
+      ).toBe(original.deviceId);
+      expect((await confirmShownApproval(phone)).step).toBe('done');
+    });
+
+    it('retains the comparison after certification until completion succeeds', async () => {
+      const { laptop, account, recovery, phone, approval } =
+        await comparisonFixture();
+      await beginCompareApproval(laptop, account, approval.id);
+      await advanceApprovalAsNewDevice(phone);
+      const revealed = await laptop.api.getApproval(approval.id);
+      const complete = laptop.api.completeApproval;
+      laptop.api.completeApproval = async () => {
+        throw new Error('Offline');
+      };
+      await expect(
+        approveDevice(
+          laptop,
+          account,
+          revealed,
+          { kind: 'compare' },
+          recovery.secret
+        )
+      ).rejects.toThrow('Offline');
+      laptop.api.completeApproval = complete;
+      await approveDevice(
+        laptop,
+        account,
+        revealed,
+        { kind: 'compare' },
+        recovery.secret
+      );
+      await flowRefusal(
+        approverComparisonCode(
+          laptop,
+          ready(await loadEncryption(laptop)),
+          revealed
+        ),
+        'approval-gone'
+      );
+      expect((await confirmShownApproval(phone)).step).toBe('done');
+    });
+
+    it('clears the local comparison on denial', async () => {
+      const { laptop, account, phone, approval } = await comparisonFixture();
+      await beginCompareApproval(laptop, account, approval.id);
+      await advanceApprovalAsNewDevice(phone);
+      const revealed = await laptop.api.getApproval(approval.id);
+      await denyApproval(laptop, approval.id);
+      await flowRefusal(
+        approverComparisonCode(laptop, account, revealed),
+        'approval-gone'
+      );
+    });
   });
 
   it('ignores a grant from whoever answered unless the user confirmed its digits', async () => {
@@ -3314,11 +4356,24 @@ describe('device approval', () => {
       })
     );
     expect([early.status, early.code]).toEqual([409, 'E2EE_APPROVAL_STATE']);
-    await beginCompareApproval(laptop, approver, approval!.id);
-    const twice = await refusal(
-      beginCompareApproval(laptop, approver, approval!.id)
+    const responded = await beginCompareApproval(
+      laptop,
+      approver,
+      approval!.id
     );
-    expect(twice.status).toBe(409);
+    expect(await beginCompareApproval(laptop, approver, approval!.id)).toEqual(
+      responded
+    );
+    const twice = await refusal(
+      laptop.api.respondApproval(approval!.id, {
+        approverKey: responded.approverKey!,
+        approverNonce: toBase64Url(generateSymmetricKey())
+      })
+    );
+    expect([twice.status, twice.code]).toEqual([409, 'E2EE_APPROVAL_STATE']);
+    expect((await laptop.api.getApproval(approval!.id)).approverNonce).toBe(
+      responded.approverNonce
+    );
     // Responded but not revealed: completing now would skip the code.
     const skipped = await refusal(
       approveDevice(
@@ -3627,8 +4682,13 @@ describe('profile deletion', () => {
   it('still forgets the MLS state when device-key cleanup fails after erasure', async () => {
     const srv = server();
     const { laptop } = await setUp(srv);
-    const journal = (await import('../apps/web/src/lib/e2ee/shareWorkStore')).shareWorkStore();
-    await journal.update(USER, 'project', (current) => ({ ...current, notice: 'saved' }));
+    const journal = (
+      await import('../apps/web/src/lib/e2ee/shareWorkStore')
+    ).shareWorkStore();
+    await journal.update(USER, 'project', (current) => ({
+      ...current,
+      notice: 'saved'
+    }));
     const mls = mlsStores.memoryMlsSessionStore();
     await mls.getOrCreateStateKey(
       USER,
@@ -5487,7 +6547,7 @@ describe('cross-tab pin persistence', () => {
     );
     await approveDevice(laptop, approver, revealed, { kind: 'compare' }, null);
     lockAccount(USER);
-    const completed = await confirmApprovalCode(phone.ctx);
+    const completed = await confirmShownApproval(phone.ctx);
     if (completed.step !== 'done')
       throw new Error('Expected a completed approval');
     expect(ready(completed.state).unlocked).toBe(true);
