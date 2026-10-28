@@ -1,5 +1,6 @@
 import io
 import gzip
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -8,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cloud import Source
+from cloud import Source, stored_representation_matches
 from sealed import gpg, ram_directory, safe_extract, seal, unseal
 from snapshot import SnapshotError, complete_snapshot
 from test_snapshot import SCHEMA, SOURCE
@@ -118,6 +119,16 @@ class SealedTests(unittest.TestCase):
             client.copy(self.root)
         from snapshot import object_path
         self.assertEqual(object_path(self.root,'fixture').read_bytes(),data)
+
+    def test_weak_http_tag_requires_exact_single_part_stored_bytes(self):
+        data=b'{"synthetic":"unchanged stored JSON"}'
+        etag=hashlib.md5(data,usedforsecurity=False).hexdigest()
+        metadata={'size':len(data),'etag':etag}
+        self.assertTrue(stored_representation_matches(data,'W/"'+etag+'"',metadata))
+        self.assertFalse(stored_representation_matches(data[:-1]+b'x','W/"'+etag+'"',metadata))
+        self.assertFalse(stored_representation_matches(data+b'x','W/"'+etag+'"',metadata))
+        self.assertFalse(stored_representation_matches(data,'W/"'+etag+'-2"',{'size':len(data),'etag':etag+'-2'}))
+        self.assertFalse(stored_representation_matches(data,'W/"'+'0'*32+'"',metadata))
 
 
 

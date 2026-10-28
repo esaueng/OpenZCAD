@@ -5,6 +5,7 @@ The only source POST is D1's polling export; there are no source data writes.
 Configuration and credentials are private operator inputs, never repository data.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,21 @@ from sealed import ram_directory, seal, unseal
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
+
+
+def stored_representation_matches(data, response_etag, metadata):
+    if len(data) != metadata['size']:
+        return False
+    expected = metadata['etag']
+    if response_etag == '"' + expected + '"':
+        return True
+    # The HTTP edge can weaken a JSON tag after transfer decoding even when
+    # its bytes are identical to R2. Accept only a single-part stored ETag
+    # whose byte digest also matches; never infer multipart hashes this way.
+    # SHA-256 remains the snapshot's content-integrity digest.
+    return (response_etag == 'W/"' + expected + '"'
+            and re.fullmatch(r'[0-9a-f]{32}', expected) is not None
+            and hashlib.md5(data, usedforsecurity=False).hexdigest() == expected)
 
 
 def private_json(path):
@@ -161,8 +177,13 @@ class Source:
             encoding = (item.get('http_metadata') or {}).get('contentEncoding') or 'identity'
             data, headers = self.request('GET',path,limit=item['size'],
                                          headers={'Accept-Encoding':encoding})
-            if len(data)!=item['size'] or headers.get('etag','').strip('"')!=item['etag']:
-                raise SnapshotError('Source object changed during transfer.')
+            if not stored_representation_matches(data,headers.get('etag',''),item):
+                response_encoding=headers.get('content-encoding')
+                encoding_label=response_encoding if response_encoding in {'gzip','br','deflate'} else 'other-or-none'
+                raise SnapshotError('Source object changed during transfer '
+                    f"(expectedBytes={item['size']}, receivedBytes={len(data)}, "
+                    f"etagMatches={headers.get('etag','').strip(chr(34))==item['etag']}, "
+                    f"responseEncoding={encoding_label}).")
             write_new(object_path(root,ref['key']),data)
             metadata[ref['key']] = item
         last = self.inventory()
