@@ -25,6 +25,7 @@ import type {
   EncryptedRoomDecoding
 } from './e2ee/encryptedRoomCodec';
 import { useCollaboration } from './useCollaboration';
+import { encryptionStateChanged } from './e2ee/encryptionStateEvents';
 
 const codec = {
   encode: vi.fn<EncryptedRoomCodec['encode']>(),
@@ -269,6 +270,69 @@ async function edit(
 }
 
 describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
+  it.each([true, false])(
+    'refreshes only encrypted codecs after account key-state changes (encrypted=%s)',
+    async (encrypted) => {
+      const base = createProjectDocument('Recheck keys', toUserId('owner'));
+      const hook = await connectedOwner(base, encrypted);
+      const local = withBox(base, 'Unsent work');
+      hook.rerender({ document: local });
+      act(() => encryptionStateChanged('another_account'));
+      await flush();
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      act(() => encryptionStateChanged(base.ownerUserId));
+      await flush();
+      expect(FakeWebSocket.instances).toHaveLength(encrypted ? 2 : 1);
+      if (!encrypted) {
+        expect(hook.socket.readyState).toBe(FakeWebSocket.OPEN);
+        expect(loadEncryptedRoomCodec).not.toHaveBeenCalled();
+        hook.unmount();
+        return;
+      }
+      expect(hook.socket.readyState).toBe(FakeWebSocket.CLOSED);
+      expect(loadEncryptedRoomCodec).toHaveBeenCalledTimes(2);
+      const fresh = FakeWebSocket.instances[1]!;
+      act(() => fresh.open());
+      fresh.receive({
+        type: 'e2ee-state',
+        members: [],
+        role: 'owner',
+        lease: null,
+        keyEpoch: 1,
+        head: { plain: base }
+      });
+      await flush();
+      fresh.receive({
+        type: 'lease-granted',
+        lease: {
+          leaseId: 'fresh_lease',
+          projectId: base.projectId,
+          clientId: fresh.frames()[0]!.clientId!,
+          userId: base.ownerUserId,
+          expiresAt: Date.now() + 30_000
+        }
+      });
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(codec.encode).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          nodes: local.nodes,
+          featureOrder: local.featureOrder
+        }),
+        // A new codec uses its freshly verified head as the base.
+        null
+      );
+      expect(
+        fresh.frames().some((frame) => frame.type === 'e2ee-document')
+      ).toBe(true);
+      expect(hook.onRemoteDocument).not.toHaveBeenCalled();
+      expect(hook.result.current.status).toBe('live');
+      hook.unmount();
+    }
+  );
+
   it('does not decode after a codec download completes for a disposed room', async () => {
     const base = createProjectDocument(
       'Downloading codec',
