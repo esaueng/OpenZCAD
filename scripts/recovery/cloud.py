@@ -5,7 +5,9 @@ The only source POST is D1's polling export; there are no source data writes.
 Configuration and credentials are private operator inputs, never repository data.
 """
 import argparse
+from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -28,6 +30,24 @@ from sealed import ram_directory, seal, unseal
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
+
+
+def s3_get_authorization(uri, headers, access, secret, region='auto'):
+    """AWS SigV4 for a bodyless GET with no query, without path normalization."""
+    stamp = headers['x-amz-date']
+    scope = stamp[:8] + '/' + region + '/s3/aws4_request'
+    names = ';'.join(sorted(headers))
+    canonical_headers = ''.join(name + ':' + headers[name] + '\n' for name in sorted(headers))
+    canonical_request = ('GET\n' + uri + '\n\n' + canonical_headers + '\n' + names
+                         + '\n' + headers['x-amz-content-sha256'])
+    to_sign = ('AWS4-HMAC-SHA256\n' + stamp + '\n' + scope + '\n'
+               + hashlib.sha256(canonical_request.encode()).hexdigest())
+    key = ('AWS4' + secret).encode()
+    for segment in (stamp[:8], region, 's3', 'aws4_request'):
+        key = hmac.new(key, segment.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    return ('AWS4-HMAC-SHA256 Credential=' + access + '/' + scope
+            + ',SignedHeaders=' + names + ',Signature=' + signature)
 
 
 def stored_representation_matches(data, response_etag, metadata):
@@ -84,12 +104,13 @@ class Source:
         self.read_token = read_token
         self.export_token = export_token
         self.opener = build_opener(NoRedirect)
+        self.s3_access = None
 
     def request(self, method, path, body=None, *, limit=16*1024**2, headers=None):
         clean = urlsplit(path).path
         export = method == 'POST' and path == self.d1 + '/export'
         if not export and not (method == 'GET' and
-                (clean == self.d1 or clean == self.r2 or clean.startswith(self.r2 + '/'))):
+                (clean == self.d1 or clean == self.r2)):
             raise SnapshotError('Operation is outside the read-only source allowlist.')
         auth = self.export_token if export else self.read_token
         req = Request('https://api.cloudflare.com/client/v4' + path, method=method,
@@ -104,6 +125,46 @@ class Source:
                 return data, dict((key.lower(),value) for key,value in response.headers.items())
         except HTTPError as error:
             raise SnapshotError('Source provider request failed, HTTP '+str(error.code)) from None
+
+    def read_object(self, key, limit):
+        object_path(Path('.'), key)
+        if not isinstance(limit, int) or not 0 <= limit <= MAX_OBJECT_BYTES:
+            raise SnapshotError('Object transfer exceeds the supported capacity.')
+        try:
+            if self.s3_access is None:
+                request = Request('https://api.cloudflare.com/client/v4/user/tokens/verify',
+                    headers={'Authorization': 'Bearer ' + self.read_token,
+                             'User-Agent': 'OpenZCAD-Recovery/1.0'})
+                with self.opener.open(request, timeout=45) as response:
+                    data = response.read(65537)
+                if len(data) > 65536:
+                    raise SnapshotError('Token verification exceeds the supported capacity.')
+                verification = json.loads(data)
+                result = verification.get('result') or {}
+                if (verification.get('success') is not True or result.get('status') != 'active'
+                        or not re.fullmatch(r'[0-9a-f]{32}', result.get('id', ''))):
+                    raise SnapshotError('Object reads require an active user R2 read token.')
+                self.s3_access = result['id']
+            # Cloudflare documents deriving S3 credentials from the existing
+            # read token: its ID and SHA-256 of its value. Keep both in memory.
+            host = self.source['account'] + '.r2.cloudflarestorage.com'
+            uri = '/' + self.source['bucket'] + '/' + quote(key, safe='/~')
+            headers = {'host': host, 'x-amz-content-sha256': hashlib.sha256(b'').hexdigest(),
+                       'x-amz-date': datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}
+            headers['Authorization'] = s3_get_authorization(uri, headers, self.s3_access,
+                hashlib.sha256(self.read_token.encode()).hexdigest())
+            headers.update({'User-Agent': 'OpenZCAD-Recovery/1.0', 'Accept-Encoding': 'identity'})
+            # Encode the bucket/key separator too, so a scalar '.' or '..'
+            # never becomes a URL path segment at the HTTP edge. R2 decodes
+            # this transport path before checking the unnormalized signature.
+            path = '/' + self.source['bucket'] + '%2F' + quote(key, safe='~')
+            with self.opener.open(Request('https://' + host + path, headers=headers), timeout=45) as response:
+                data = response.read(limit + 1)
+                if len(data) > limit:
+                    raise SnapshotError('Object response exceeds the supported capacity.')
+                return data, {name.lower(): value for name, value in response.headers.items()}
+        except HTTPError as error:
+            raise SnapshotError('Object provider request failed, HTTP ' + str(error.code)) from None
 
     def json(self, method, path, body=None):
         value = json.loads(self.request(method,path,body)[0])
@@ -180,12 +241,7 @@ class Source:
             item = first.get(ref['key'])
             if not item or not 0 <= item['size'] <= MAX_OBJECT_BYTES:
                 raise SnapshotError('A committed object is missing or exceeds capacity.')
-            path = self.r2 + '/' + quote(ref['key'],safe='/')
-            # Preserve the stored representation: asking for identity makes the
-            # provider decompress gzip objects and return a weak ETag.
-            encoding = (item.get('http_metadata') or {}).get('contentEncoding') or 'identity'
-            data, headers = self.request('GET',path,limit=item['size'],
-                                         headers={'Accept-Encoding':encoding})
+            data, headers = self.read_object(ref['key'], item['size'])
             if not stored_representation_matches(data,headers.get('etag',''),item):
                 response_encoding=headers.get('content-encoding')
                 encoding_label=response_encoding if response_encoding in {'gzip','br','deflate'} else 'other-or-none'

@@ -18,7 +18,14 @@ larger inputs. Review and qualify new schemas before changing those bounds.
 Keep the operator JSON configuration outside the repository, mode 0600. It names:
 
 - `source`: explicit `account`, `database` UUID and `bucket`.
-- `readTokenFile`: an owner-only source read token file.
+- `readTokenFile`: an owner-only user API token file with source R2 Read access.
+  Object reads use the R2 S3 endpoint, deriving the S3 credentials in memory
+  from this token's verified ID and SHA-256 value, as documented in
+  [R2 API tokens](https://developers.cloudflare.com/r2/api/tokens/).
+  The complete key and its bucket separator are encoded for transport, while
+  the SigV4 canonical path retains the original key. This preserves scalar
+  dot keys, dot segments, repeated slashes, Unicode and literal percent signs.
+  Restore readback uses the same bounded reader; redirects are refused.
 - `exportTokenCommand`: a command array returning Wrangler's `auth token --json`
   response, using encrypted credential storage. D1 export may require broader
   D1 permission than the source object reader; that credential is used only for

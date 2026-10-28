@@ -167,12 +167,12 @@ class SealedTests(unittest.TestCase):
         item={'key':'fixture','size':4,'etag':'first','http_metadata':{},'custom_metadata':{}}
         client=Source(SOURCE,'read-token','export-token')
         with patch.object(client,'inventory',return_value={'fixture':item}),\
-             patch.object(client,'request',return_value=(b'data',{'etag':'"changed"'})):
+             patch.object(client,'read_object',return_value=(b'data',{'etag':'"changed"'})):
             with self.assertRaises(SnapshotError):client.copy(self.root)
 
         changed={**item,'http_metadata':{'contentType':'changed'}}
         with patch.object(client,'inventory',side_effect=[{'fixture':item},{'fixture':changed}]),\
-             patch.object(client,'request',return_value=(b'data',{'etag':'"first"'})):
+             patch.object(client,'read_object',return_value=(b'data',{'etag':'"first"'})):
             with self.assertRaises(SnapshotError):client.copy(self.root)
 
     def test_source_copy_preserves_stored_gzip_representation(self):
@@ -185,11 +185,11 @@ class SealedTests(unittest.TestCase):
         item={'key':'fixture','size':len(data),'etag':'stored',
               'http_metadata':{'contentEncoding':'gzip'},'custom_metadata':{}}
         client=Source(SOURCE,'read-token','export-token')
-        def fetch(method,path,**kwargs):
-            self.assertEqual(kwargs['headers']['Accept-Encoding'],'gzip')
+        def fetch(key,limit):
+            self.assertEqual((key,limit),('fixture',len(data)))
             return data,{'etag':'"stored"'}
         with patch.object(client,'inventory',return_value={'fixture':item}),\
-             patch.object(client,'request',side_effect=fetch):
+             patch.object(client,'read_object',side_effect=fetch):
             client.copy(self.root)
         from snapshot import object_path
         self.assertEqual(object_path(self.root,'fixture').read_bytes(),data)
@@ -212,7 +212,7 @@ class SealedTests(unittest.TestCase):
         db.close()
         client=Source(SOURCE,'read-token','export-token')
         with patch.object(client,'inventory',return_value={'too-large':{'key':'too-large','size':MAX_OBJECT_BYTES+1}}),\
-             patch.object(client,'request') as request:
+             patch.object(client,'read_object') as request:
             with self.assertRaises(SnapshotError):client.copy(self.root)
             request.assert_not_called()
 
