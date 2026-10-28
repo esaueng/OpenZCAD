@@ -13,7 +13,7 @@ from urllib.error import HTTPError
 from cloud import Source, private_json, secret_command, owner_only_file
 from sealed import ram_directory, unseal
 from snapshot import (MAX_SQL_BYTES, MAX_OBJECT_BYTES, SnapshotError, canonical, load_sql, object_path,
-                      read_private_file, validate_restore_target)
+                      read_private_file, snapshot_metadata, validate_restore_target)
 
 
 def database_state(sql):
@@ -46,6 +46,7 @@ def restore(config, archive):
         ram = Path(temporary)
         root = ram/'snapshot'
         manifest = unseal(archive,root,password)
+        metadata = snapshot_metadata(root,manifest)
         validate_restore_target(manifest['source'],target)
         if manifest['source'] != config['source']:
             raise SnapshotError('Archive source does not match the approved operator configuration.')
@@ -96,9 +97,6 @@ def restore(config, archive):
         if result.returncode:
             raise SnapshotError('Disposable D1 import failed; provider output withheld.')
         ingress_token=secret_command(config['ingressTokenCommand']).decode()
-        metadata=json.loads(read_private_file(root/'metadata.json',64*1024**2))['objects']
-        if set(metadata)!=set(item['key'] for item in manifest['objects']):
-            raise SnapshotError('Backup object metadata and references differ.')
         for item in manifest['objects']:
             data=read_private_file(object_path(root,item['key']),MAX_OBJECT_BYTES)
             original=metadata[item['key']]

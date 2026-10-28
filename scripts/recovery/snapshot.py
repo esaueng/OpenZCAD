@@ -18,6 +18,7 @@ import zlib
 
 FORMAT = 'openzcad-cloud-recovery-v1'
 MAX_SQL_BYTES = 512 * 1024 * 1024
+MAX_METADATA_BYTES = 64 * 1024 * 1024
 MAX_OBJECT_BYTES = 100 * 1024 * 1024
 MAX_LOGICAL_OBJECT_BYTES = 2 * 1024 * 1024 * 1024
 OFFICIAL_DATABASE = '7263c6f1-8781-40d1-a0fa-ea03ce874ef2'
@@ -259,6 +260,14 @@ def verify_snapshot(root: Path):
     if migrations != manifest['migrations'] or actual != manifest['objects']:
         raise SnapshotError('Snapshot references or object digests do not match.')
     return manifest
+
+
+def snapshot_metadata(root: Path, manifest):
+    value = json.loads(read_private_file(root / 'metadata.json', MAX_METADATA_BYTES))
+    objects = value.get('objects') if isinstance(value, dict) else None
+    if not isinstance(objects, dict) or set(objects) != {item['key'] for item in manifest['objects']}:
+        raise SnapshotError('Backup object metadata and references differ.')
+    return objects
 
 
 def validate_restore_target(source, target):

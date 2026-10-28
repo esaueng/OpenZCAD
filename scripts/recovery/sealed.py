@@ -12,7 +12,7 @@ import subprocess
 import tarfile
 import tempfile
 
-from snapshot import SnapshotError, verify_snapshot
+from snapshot import SnapshotError, snapshot_metadata, verify_snapshot
 
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MEMBER = re.compile(r'(?:database\.sql|manifest\.json|metadata\.json|COMPLETE|objects/[0-9a-f]{64}\.bin)')
@@ -85,13 +85,14 @@ def safe_extract(archive, destination):
                 shutil.copyfileobj(source, output, 1024 * 1024)
     if not {'database.sql','manifest.json','metadata.json','COMPLETE'} <= names:
         raise SnapshotError('Recovery archive is incomplete.')
-    return verify_snapshot(destination)
+    manifest = verify_snapshot(destination)
+    snapshot_metadata(destination, manifest)
+    return manifest
 
 
 def seal(snapshot, destination, password):
     manifest = verify_snapshot(snapshot)
-    if not (snapshot / 'metadata.json').is_file():
-        raise SnapshotError('Cloud object metadata is required.')
+    snapshot_metadata(snapshot, manifest)
     with ram_directory() as temporary:
         ram = Path(temporary)
         archive = ram / 'snapshot.tar'

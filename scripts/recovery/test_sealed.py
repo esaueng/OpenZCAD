@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from cloud import Source, stored_representation_matches, owner_only_file
 from sealed import gpg, ram_directory, safe_extract, seal, unseal
-from snapshot import MAX_OBJECT_BYTES, SnapshotError, complete_snapshot
+from snapshot import MAX_METADATA_BYTES, MAX_OBJECT_BYTES, SnapshotError, complete_snapshot
 from restore import database_state
 from test_snapshot import SCHEMA, SOURCE
 
@@ -80,6 +80,28 @@ class SealedTests(unittest.TestCase):
         self.assertEqual(unseal(archive,self.ram/'restored',self.password),expected)
         self.assertEqual((self.ram/'restored/metadata.json').read_bytes(),
                          (self.root/'metadata.json').read_bytes())
+
+    def test_oversized_metadata_is_refused_before_sealing(self):
+        archive = self.ram/'refused.gpg'
+        with (self.root/'metadata.json').open('wb') as file:
+            file.truncate(MAX_METADATA_BYTES+1)
+        with patch('sealed.gpg') as encrypt:
+            with self.assertRaises(SnapshotError):
+                seal(self.root,archive,self.password)
+            encrypt.assert_not_called()
+        self.assertFalse(archive.exists())
+
+    def test_extracted_metadata_uses_the_same_bound_and_reference_check(self):
+        for index, value in enumerate([{'objects':{},'padding':'synthetic'},
+                                       {'objects':{'unreferenced':{}}}]):
+            (self.root/'metadata.json').write_text(json.dumps(value))
+            archive = self.ram/f'metadata-{index}.tar'
+            with tarfile.open(archive,'w:') as tar:
+                for name in ['database.sql','metadata.json','manifest.json','COMPLETE']:
+                    tar.add(self.root/name,arcname=name)
+            with patch('snapshot.MAX_METADATA_BYTES', 20 if index==0 else MAX_METADATA_BYTES):
+                with self.assertRaises(SnapshotError):
+                    safe_extract(archive,self.ram/f'metadata-output-{index}')
 
     def test_wrong_password_tamper_and_truncation_never_extract(self):
         archive = self.ram/'backup.gpg'
