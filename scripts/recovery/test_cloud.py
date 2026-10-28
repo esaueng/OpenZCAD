@@ -35,6 +35,19 @@ class ObjectReadTests(unittest.TestCase):
         self.assertEqual(result.rsplit('Signature=',1)[1],
                          'f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41')
 
+    def test_d1_identity_and_export_use_only_the_d1_capable_credential(self):
+        for method,kind,expected in [('GET','d1','d1-only'),('POST','export','d1-only'),
+                                     ('GET','r2','r2-only')]:
+            client=Source(SOURCE,'r2-only','d1-only')
+            client.opener=Mock()
+            response=io.BytesIO(b'{}'); response.headers={}
+            client.opener.open.return_value=response
+            path=client.d1+'/export' if kind=='export' else client.d1 if kind=='d1' else client.r2
+            client.request(method,path)
+            request=client.opener.open.call_args.args[0]
+            self.assertEqual(request.get_header('Authorization'),'Bearer '+expected)
+            self.assertEqual(request.full_url,'https://api.cloudflare.com/client/v4'+path)
+
     def test_opaque_keys_are_not_normalized_into_other_objects_or_resources(self):
         for key in ['.','..','../../escape','prefix/../key','prefix//key','/key',
                     'prefix/%2E/%2F/key','unicode/\u2713?x=#fragment']:

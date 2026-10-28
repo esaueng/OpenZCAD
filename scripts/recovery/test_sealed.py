@@ -2,8 +2,10 @@ import io
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
+import stat
 import tarfile
 import tempfile
 import unittest
@@ -75,11 +77,25 @@ class SealedTests(unittest.TestCase):
 
     def test_encrypted_roundtrip_and_independent_verify(self):
         archive = self.ram/'backup.gpg'
-        expected = seal(self.root,archive,self.password)
+        synced=[]
+        real_sync=os.fsync
+        def sync(fd):
+            synced.append(stat.S_IFMT(os.fstat(fd).st_mode))
+            real_sync(fd)
+        with patch('sealed.os.fsync',side_effect=sync):
+            expected = seal(self.root,archive,self.password)
+        self.assertEqual(synced,[stat.S_IFREG,stat.S_IFDIR])
         self.assertNotIn(b'CREATE TABLE',archive.read_bytes())
         self.assertEqual(unseal(archive,self.ram/'restored',self.password),expected)
         self.assertEqual((self.ram/'restored/metadata.json').read_bytes(),
                          (self.root/'metadata.json').read_bytes())
+
+    def test_sync_failure_never_reports_a_qualified_recovery_point(self):
+        archive=self.ram/'unsynced.gpg'
+        with patch('sealed.os.fsync',side_effect=OSError('synthetic sync failure')):
+            with self.assertRaises(OSError):
+                seal(self.root,archive,self.password)
+        self.assertTrue(archive.exists())
 
     def test_oversized_metadata_is_refused_before_sealing(self):
         archive = self.ram/'refused.gpg'

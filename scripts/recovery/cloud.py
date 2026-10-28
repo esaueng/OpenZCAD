@@ -112,7 +112,10 @@ class Source:
         if not export and not (method == 'GET' and
                 (clean == self.d1 or clean == self.r2)):
             raise SnapshotError('Operation is outside the read-only source allowlist.')
-        auth = self.export_token if export else self.read_token
+        # D1 metadata and polling export require the D1-capable credential.
+        # The independent object token needs only R2 read permissions.
+        d1_read = method == 'GET' and clean == self.d1
+        auth = self.export_token if export or d1_read else self.read_token
         req = Request('https://api.cloudflare.com/client/v4' + path, method=method,
                       data=json.dumps(body).encode() if body is not None else None,
                       headers={'Authorization':'Bearer '+auth, 'Content-Type':'application/json',

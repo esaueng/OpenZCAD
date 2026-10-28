@@ -29,7 +29,7 @@ Keep the operator JSON configuration outside the repository, mode 0600. It names
 - `exportTokenCommand`: a command array returning Wrangler's `auth token --json`
   response, using encrypted credential storage. D1 export may require broader
   D1 permission than the source object reader; that credential is used only for
-  the fixed export endpoint. The source client refuses SQL query/import, object
+  D1 identity metadata and the fixed export endpoint. The source client refuses SQL query/import, object
   writes/deletes and unrelated endpoints.
 - `passphraseCommand`: a command array returning a separately generated random
   backup passphrase of at least 32 bytes from an encrypted secret store.

@@ -116,6 +116,18 @@ def seal(snapshot, destination, password):
         restored = safe_extract(decoded, ram / 'restored')
         if restored != manifest:
             raise SnapshotError('Encrypted backup readback differs from its source.')
+    # Readback can be satisfied from cache. Persist both ciphertext and its
+    # directory entry before qualifying this as a durable local recovery point.
+    fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
     return manifest
 
 
