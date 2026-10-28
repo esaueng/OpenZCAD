@@ -569,6 +569,8 @@ export const api = {
       { method: 'POST', body: '{}' }
     ),
   storageUsage: () => requestJson<AccountStorageUsage>('/api/account/storage'),
+  exportAccountData: () =>
+    requestJson<Record<string, unknown>>('/api/account/export'),
   accountDeletionPreview: (scope: AccountDeletionScope) =>
     requestJson<AccountDeletionPreview>(
       `/api/account/deletion-preview?scope=${encodeURIComponent(scope)}`

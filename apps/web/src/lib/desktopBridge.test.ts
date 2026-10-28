@@ -451,7 +451,7 @@ describe('desktop bridge', () => {
     ]);
   });
 
-  it('streams only encrypted blob reads; everything else stays buffered', async () => {
+  it('streams only blob and archived artifact reads; everything else stays buffered', async () => {
     markDesktopRuntime();
     mockNativeBlobStream([new Uint8Array([9])]);
     const streamed = await desktopFetch(
@@ -473,7 +473,10 @@ describe('desktop bridge', () => {
         { method: 'POST', body: '{}' }
       ],
       [`/api/e2ee/projects/proj_1/blobs/${BLOB_ID}`, { method: 'DELETE' }],
-      [`/api/projects/proj_1/assets/${BLOB_ID}`, {}]
+      [`/api/projects/proj_1/assets/${BLOB_ID}`, {}],
+      ['/api/artifacts/artifact_1/download?extra=1', {}],
+      ['/api/artifacts/artifact_1/download', { method: 'DELETE' }],
+      ['/api/artifacts/artifact_1/download', { method: 'POST', body: '{}' }]
     ] as const) {
       vi.mocked(invoke).mockReset();
       vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
@@ -481,6 +484,35 @@ describe('desktop bridge', () => {
       expect(nativeCommands(), path).toEqual(['desktop_api_request']);
     }
   });
+
+  it.each(['/api/artifacts/artifact_large/download', '/api/account/export'])(
+    'streams an authenticated download above the buffered bridge limit: %s',
+    async (path) => {
+      markDesktopRuntime();
+      const chunk = new Uint8Array(1024 * 1024).fill(17);
+      const count = 51;
+      mockNativeBlobStream(
+        Array.from({ length: count }, () => chunk),
+        {
+          contentLength: count * chunk.byteLength
+        }
+      );
+      const response = await desktopFetch(path);
+      expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
+        path
+      });
+      const reader = response.body!.getReader();
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        expect(value[0]).toBe(17);
+        total += value.byteLength;
+      }
+      expect(total).toBe(51 * 1024 * 1024);
+      expect(nativeCommands()).not.toContain('desktop_api_request');
+    }
+  );
 
   it('carries a refused blob read back whole, with its status and words', async () => {
     markDesktopRuntime();
