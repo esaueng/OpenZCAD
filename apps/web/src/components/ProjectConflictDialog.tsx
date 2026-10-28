@@ -1,58 +1,55 @@
 import { useRef, useState } from 'react';
-import { TriangleAlert } from 'lucide-react';
+import type { ProjectDocument } from '@openzcad/shared';
+import { ChevronRight, Cloud, Copy, Monitor, Pause } from 'lucide-react';
 import type {
   ConflictResolution,
-  ConflictSource,
   ProjectConflict
 } from '../lib/conflictRecovery';
 import { useModalFocus } from '../lib/useModalFocus';
 import { errorMessage } from '../lib/errors';
-import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
 
 export interface ProjectConflictDialogProps {
   conflict: ProjectConflict;
   busy: boolean;
-  /**
-   * Why keeping this device's version is not on offer — a viewer, or a room
-   * that demands an edit lease this client does not hold. Null offers it.
-   */
+  /** A viewer or a room without the required edit lease cannot replace remote. */
   keepMineDisabledReason?: string | null;
   onResolve(resolution: ConflictResolution): void | Promise<void>;
   onClose(): void;
 }
 
-/** How the other copy is named, by who raised the conflict. */
-const OTHER_SIDE: Record<
-  ConflictSource,
-  { where: string; use: string; copyThenUse: string }
-> = {
-  account: {
-    where: 'in your account',
-    use: 'Use my account’s version',
-    copyThenUse: 'Save mine as a copy, then use the account’s'
-  },
-  room: {
-    where: 'in the live session',
-    use: 'Use the live version',
-    copyThenUse: 'Save mine as a copy, then use the live version'
-  }
-};
+/** Display only: device clocks never choose a winner or bypass a version fence. */
+function modifiedTime(value: string): number | null {
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+}
 
-/**
- * The choice between this device's copy of a project and the other one —
- * the account's, or the live session's. One dialog for both sources: the
- * resolutions are the same three, and two dialogs citing the same project
- * from different remotes read as contradicting each other.
- *
- * Deliberately separate from the sharing dialog. That one is about who else
- * can see a project, and it is gated behind a rollout flag; this one has to
- * work with sharing off, which is when a two-device divergence is most
- * likely to go unnoticed.
- *
- * Closing without choosing is allowed. The divergence is recorded, both
- * documents still exist, and forcing a decision at the moment of interruption
- * is how people pick the wrong one.
- */
+/** Rebuild projections can retain an old time after a canonical edit (e.g. rename). */
+function lastModified(document: ProjectDocument): string {
+  const editTime = document.revisions.at(-1)?.createdAt;
+  return editTime && modifiedTime(editTime) !== null
+    ? editTime
+    : document.derived.updatedAt;
+}
+
+function ModifiedAt({ value }: { value: string }) {
+  const time = modifiedTime(value);
+  return time === null ? (
+    <span className="conflict-choice-detail">Modified time unavailable</span>
+  ) : (
+    <time className="conflict-choice-detail" dateTime={value}>
+      {new Date(time).toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      })}
+    </time>
+  );
+}
+
+/** One choice dialog for account and live-session conflicts; close defers it. */
 export function ProjectConflictDialog({
   conflict,
   busy,
@@ -65,15 +62,15 @@ export function ProjectConflictDialog({
   const [error, setError] = useState<string | null>(null);
   const working = busy || resolving;
   useModalFocus(dialogRef, { autoFocus: true });
-  const other = OTHER_SIDE[conflict.source];
-  const sameGeometry =
-    canonicalProjectContentKey(conflict.localDocument) ===
-    canonicalProjectContentKey(conflict.remoteDocument);
+  const other = conflict.source === 'account' ? 'Cloud' : 'Live session';
+  const localModified = lastModified(conflict.localDocument);
+  const remoteModified = lastModified(conflict.remoteDocument);
+  const localTime = modifiedTime(localModified);
+  const remoteTime = modifiedTime(remoteModified);
+  const canCompareTimes = localTime !== null && remoteTime !== null;
 
   async function resolve(resolution: ConflictResolution) {
-    if (working) {
-      return;
-    }
+    if (working) return;
     setError(null);
     setResolving(true);
     try {
@@ -95,6 +92,7 @@ export function ProjectConflictDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-conflict-title"
+        aria-describedby="project-conflict-consequence"
         aria-busy={working}
         tabIndex={-1}
         onKeyDown={(event) => {
@@ -104,55 +102,29 @@ export function ProjectConflictDialog({
           }
         }}
       >
-        <h2 id="project-conflict-title">
-          <TriangleAlert size={16} aria-hidden="true" />
-          This project changed in two places
-        </h2>
-        <p>
-          <strong>{conflict.localDocument.name}</strong> is at version{' '}
-          {conflict.localDocument.version} on this device and version{' '}
-          {conflict.remoteDocument.version} {other.where}. Both still exist. Any
-          work missing from the version you choose is saved as a separate
-          recovery project first.
+        <div className="conflict-dialog-header">
+          <span className="conflict-project-name">
+            {conflict.localDocument.name}
+          </span>
+          <span className="conflict-sync-paused">
+            <Pause size={12} aria-hidden="true" />
+            Sync paused
+          </span>
+        </div>
+        <h2 id="project-conflict-title">Choose a version to keep</h2>
+        <p id="project-conflict-consequence">
+          Using one version replaces the other.
         </p>
-        <p className="conflict-dialog-note">
-          {sameGeometry
-            ? 'The model matches; the saved or undo history needs reconciliation.'
-            : 'The model differs between these copies.'}{' '}
-          Version numbers alone do not tell you which copy to keep.
-        </p>
-        {[
-          { label: 'This device', document: conflict.localDocument },
-          {
-            label:
-              conflict.source === 'account' ? 'Your account' : 'Live session',
-            document: conflict.remoteDocument
-          }
-        ].map(({ label, document }) => {
-          const checkpoint = document.checkpoints.at(-1);
-          return (
-            <p className="conflict-dialog-note" key={label}>
-              {label}: {document.checkpoints.length} save{' '}
-              {document.checkpoints.length === 1 ? 'point' : 'points'}
-              {checkpoint ? (
-                <>
-                  {' '}
-                  · Latest: {checkpoint.reason} (
-                  <time dateTime={checkpoint.createdAt}>
-                    {new Date(checkpoint.createdAt).toLocaleString()}
-                  </time>
-                  )
-                </>
-              ) : null}
-            </p>
-          );
-        })}
-        {/* aria-disabled, not disabled, while working: disabling the focused
-            choice dropped focus on the body, out of reach of Escape and of
-            the error that a failed resolution then showed. */}
-        <div className="conflict-dialog-actions">
+        <div
+          className="conflict-dialog-actions"
+          role="group"
+          aria-label="Last modified"
+        >
+          {/* aria-disabled keeps focus on the row during async confirmation,
+              so errors and Escape remain reachable after a failed resolution. */}
           <button
             type="button"
+            className="conflict-choice"
             disabled={keepMineDisabledReason !== null}
             aria-disabled={working || undefined}
             aria-describedby={
@@ -162,26 +134,55 @@ export function ProjectConflictDialog({
             }
             onClick={() => void resolve('keep-mine')}
           >
-            Keep this device’s version
+            <Monitor size={18} aria-hidden="true" />
+            <span className="conflict-choice-content">
+              <span className="conflict-choice-label">
+                This browser
+                {canCompareTimes && localTime > remoteTime && (
+                  <span className="conflict-newer">Newer</span>
+                )}
+              </span>
+              <ModifiedAt value={localModified} />
+            </span>
+            <ChevronRight size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
+            className="conflict-choice"
             aria-disabled={working || undefined}
             onClick={() => void resolve('use-remote')}
           >
-            {other.use}
+            <Cloud size={18} aria-hidden="true" />
+            <span className="conflict-choice-content">
+              <span className="conflict-choice-label">
+                {other}
+                {canCompareTimes && remoteTime > localTime && (
+                  <span className="conflict-newer">Newer</span>
+                )}
+              </span>
+              <ModifiedAt value={remoteModified} />
+            </span>
+            <ChevronRight size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
+            className="conflict-choice"
             aria-disabled={working || undefined}
             onClick={() => void resolve('save-local-copy')}
           >
-            {other.copyThenUse}
+            <Copy size={18} aria-hidden="true" />
+            <span className="conflict-choice-content">
+              <span className="conflict-choice-label">Keep both</span>
+              <span className="conflict-choice-detail">
+                {other} stays original; yours becomes a copy.
+              </span>
+            </span>
+            <ChevronRight size={16} aria-hidden="true" />
           </button>
         </div>
         {working && (
           <p className="conflict-dialog-note" role="status">
-            Preserving both versions and waiting for confirmation…
+            Waiting for confirmation…
           </p>
         )}
         {error && (

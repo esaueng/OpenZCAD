@@ -129,10 +129,10 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
     );
   }, remote);
   const dialog = page.getByRole('dialog', {
-    name: 'This project changed in two places'
+    name: 'Choose a version to keep'
   });
   const keep = dialog.getByRole('button', {
-    name: 'Keep this device’s version'
+    name: /^This browser/
   });
   await expect(keep).toBeEnabled();
   await keep.click();

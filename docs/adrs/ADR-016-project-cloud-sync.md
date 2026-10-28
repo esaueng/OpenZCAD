@@ -18,7 +18,7 @@ work.
 
 The pieces needed to close that gap mostly exist. Settings already ride a
 debounced, retrying, offline-aware autosave controller. Divergence already has
-a recovery-copy-first resolution contract. A Durable Object room already pushes
+an explicit conflict-resolution contract. A Durable Object room already pushes
 document updates to connected clients. What is missing is the decision about
 how these compose for a single user with several browsers, and that decision
 has to be made once rather than per call site, because the failure mode is
@@ -40,11 +40,23 @@ automatically. Merging them would mean merging geometry semantics, and a wrong
 merge produces a part that is silently incorrect rather than visibly broken —
 the one failure this project cannot ship.
 
-When a write is fenced off, the client writes an untouched recovery copy of the
-local document before any resolution mutates state, then offers the same three
-resolutions the collaboration path already offers: take the account's version,
-keep this device's version, or save this device's version as a separate copy
-and take the account's. Operational transform and CRDT convergence are rejected
+When a write is fenced off, sync pauses and the client asks which version to
+keep. The account and live-session paths offer the same three choices: take
+the remote version, keep this browser's version, or Keep both. The first two
+replace the unwanted version on the original project without creating any
+recovery project. Only Keep both writes a separate ordinary project containing
+this browser's changes, then adopts remote on the original. The local copy must
+be durable before adoption; retries reuse a successfully saved copy.
+
+The dialog shows each document's latest canonical edit date, local time and
+timezone, falling back to the recorded project time for legacy files. A Newer
+label appears only when both timestamps are valid and different.
+These timestamps are information for the user, never authority to pick a winner:
+version fences, viewer restrictions and room edit-lease checks still apply.
+Existing recovery projects are retained; no cleanup migration deletes saved work.
+This 28 October 2026 decision supersedes automatic recovery-copy-first resolution.
+
+Operational transform and CRDT convergence are rejected
 for the document; they remain available in principle for future
 non-geometric state.
 
@@ -68,12 +80,12 @@ metadata, in the device-owned IndexedDB store that is already excluded from
 document sync. Sync decisions read it rather than comparing wall-clock
 timestamps:
 
-| local vs `lastSyncedVersion` | account vs `lastSyncedVersion` | outcome                           |
-| ---------------------------- | ------------------------------ | --------------------------------- |
-| unchanged                    | unchanged                      | in sync                           |
-| ahead                        | unchanged                      | push                              |
-| unchanged                    | ahead                          | pull and hydrate                  |
-| ahead                        | ahead                          | conflict: recovery copy, then ask |
+| local vs `lastSyncedVersion` | account vs `lastSyncedVersion` | outcome                 |
+| ---------------------------- | ------------------------------ | ----------------------- |
+| unchanged                    | unchanged                      | in sync                 |
+| ahead                        | unchanged                      | push                    |
+| unchanged                    | ahead                          | pull and hydrate        |
+| ahead                        | ahead                          | conflict: pause and ask |
 
 The fourth row is the reason this exists. Comparing `version` and then
 `derived.updatedAt` — what open-time reconciliation does today — cannot
@@ -138,10 +150,11 @@ device has never organised. It describes a desk, not a part.
 
 ## Verification
 
-Unit tests cover the truth table case by case, recovery-copy ordering before
-every resolution, autosave debounce and single-flight behaviour, fenced-write
-handling, adoption round trips including retry recovery and independent account bindings,
+Unit tests cover the truth table case by case, no-copy replacement choices,
+copy-before-adoption and retry ordering for Keep both, autosave debounce and
+single-flight behaviour, fenced-write handling, adoption round trips including
+retry recovery and independent account bindings,
 and the size ceiling refusing before the D1 write. The Playwright flow in
 `test/e2e/cloud-sync.spec.ts` covers create, autosave, reload, cross-device
-pull, two-device divergence, and confirmation that the losing side survives as
-a recovery copy.
+pull, all three two-device conflict choices, original project identity, and
+confirmation that only Keep both creates one independently usable project.

@@ -2,7 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { ConflictSource, ProjectConflict } from '../lib/conflictRecovery';
 import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
 import { ProjectConflictDialog } from './ProjectConflictDialog';
@@ -18,6 +18,11 @@ function conflict(source: ConflictSource): ProjectConflict {
     remoteDocument: { ...structuredClone(base), version: 9 },
     expectedRemoteVersion: 9
   };
+}
+
+function setModified(document: ProjectDocument, value: string) {
+  document.derived.updatedAt = value;
+  document.revisions.at(-1)!.createdAt = value;
 }
 
 describe('ProjectConflictDialog', () => {
@@ -43,14 +48,14 @@ describe('ProjectConflictDialog', () => {
         />
       );
       const keep = screen.getByRole('button', {
-        name: 'Keep this device’s version'
+        name: /^This browser/
       });
       await user.click(keep);
       expect(screen.getByRole('alert')).toHaveTextContent(STALE_CHUNK_MESSAGE);
       expect(keep).toBeEnabled();
       expect(keep).not.toHaveAttribute('aria-disabled');
       expect(
-        screen.getByRole('button', { name: 'Use the live version' })
+        screen.getByRole('button', { name: /^Live session/ })
       ).toBeEnabled();
       expect(value).toEqual(original);
       expect(onClose).not.toHaveBeenCalled();
@@ -58,18 +63,53 @@ describe('ProjectConflictDialog', () => {
     }
   );
 
-  it('explains matching version numbers and shows the saved-history differences', () => {
+  it.each(['account', 'room'] as const)(
+    'shows both modified timestamps for %s and marks the later time, not the higher version',
+    (source) => {
+      const value = conflict(source);
+      setModified(value.localDocument, '2026-10-28T20:32:00Z');
+      setModified(value.remoteDocument, '2026-10-28T20:40:00Z');
+      render(
+        <ProjectConflictDialog
+          conflict={value}
+          busy={false}
+          onResolve={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      const local = screen.getByRole('button', { name: /^This browser/ });
+      const remote = screen.getByRole('button', {
+        name: source === 'account' ? /^Cloud/ : /^Live session/
+      });
+      expect(local.querySelector('time')).toHaveAttribute(
+        'dateTime',
+        '2026-10-28T20:32:00Z'
+      );
+      expect(remote.querySelector('time')).toHaveAttribute(
+        'dateTime',
+        '2026-10-28T20:40:00Z'
+      );
+      expect(remote).toHaveTextContent('Newer');
+      expect(local).not.toHaveTextContent('Newer');
+      const formatted = new Date(
+        value.remoteDocument.derived.updatedAt
+      ).toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      });
+      expect(remote).toHaveTextContent(formatted);
+      expect(screen.queryByText(/recovery project/)).not.toBeInTheDocument();
+    }
+  );
+
+  it('marks the local row newer when its recorded modified time is later', () => {
     const value = conflict('account');
-    value.remoteDocument.version = value.localDocument.version;
-    value.expectedRemoteVersion = value.localDocument.version;
-    value.remoteDocument.checkpoints.push({
-      checkpointId: 'cp_before_drilling',
-      revisionId: value.remoteDocument.revisions.at(-1)!.revisionId,
-      documentVersion: value.expectedRemoteVersion,
-      reason: 'Before drilling',
-      createdAt: '2026-10-05T05:00:00Z'
-    });
-    value.localDocument = { ...value.localDocument, checkpoints: [] };
+    setModified(value.localDocument, '2026-10-28T21:00:00Z');
+    setModified(value.remoteDocument, '2026-10-28T20:40:00Z');
     render(
       <ProjectConflictDialog
         conflict={value}
@@ -78,20 +118,76 @@ describe('ProjectConflictDialog', () => {
         onClose={vi.fn()}
       />
     );
-    expect(screen.getByText(/The model matches/)).toHaveTextContent(
-      'Version numbers alone do not tell you which copy to keep.'
+    expect(
+      screen.getByRole('button', { name: /^This browser/ })
+    ).toHaveTextContent('Newer');
+    expect(
+      screen.getByRole('button', { name: /^Cloud/ })
+    ).not.toHaveTextContent('Newer');
+  });
+
+  it.each(['equal', 'invalid'] as const)(
+    'never labels a version newer for %s timestamps',
+    (kind) => {
+      const value = conflict('account');
+      setModified(
+        value.remoteDocument,
+        kind === 'equal' ? value.localDocument.derived.updatedAt : 'unknown'
+      );
+      render(
+        <ProjectConflictDialog
+          conflict={value}
+          busy={false}
+          onResolve={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      expect(screen.queryByText('Newer')).not.toBeInTheDocument();
+      if (kind === 'invalid')
+        expect(
+          screen.getByRole('button', { name: /^Cloud/ })
+        ).toHaveTextContent('Modified time unavailable');
+    }
+  );
+
+  it('uses the latest canonical edit time even when geometry has not rebuilt', () => {
+    const value = conflict('account');
+    setModified(value.localDocument, '2026-10-28T20:32:00Z');
+    setModified(value.remoteDocument, '2026-10-28T20:40:00Z');
+    value.remoteDocument.derived.updatedAt = '2026-10-01T10:00:00Z';
+    render(
+      <ProjectConflictDialog
+        conflict={value}
+        busy={false}
+        onResolve={vi.fn()}
+        onClose={vi.fn()}
+      />
     );
-    expect(screen.getByText(/Your account:.*save points/)).toHaveTextContent(
-      'Before drilling'
+    const cloud = screen.getByRole('button', { name: /^Cloud/ });
+    expect(cloud.querySelector('time')).toHaveAttribute(
+      'dateTime',
+      '2026-10-28T20:40:00Z'
+    );
+    expect(cloud).toHaveTextContent('Newer');
+  });
+
+  it('falls back to recorded project time for legacy documents without revisions', () => {
+    const value = conflict('account');
+    value.localDocument.revisions = [];
+    value.localDocument.derived.updatedAt = '2026-10-28T20:32:00Z';
+    render(
+      <ProjectConflictDialog
+        conflict={value}
+        busy={false}
+        onResolve={vi.fn()}
+        onClose={vi.fn()}
+      />
     );
     expect(
-      screen.getByText(/Your account:.*save points/).querySelector('time')
-    ).toHaveAttribute('dateTime', '2026-10-05T05:00:00Z');
-    // A side with no save points says so once, not as "0 save points ·
-    // No saved checkpoint".
-    expect(screen.getByText(/^This device:/)).toHaveTextContent(
-      /^This device: 0 save points$/
-    );
+      screen
+        .getByRole('button', { name: /^This browser/ })
+        .querySelector('time')
+    ).toHaveAttribute('dateTime', '2026-10-28T20:32:00Z');
   });
 
   it('closes on Escape once focus has fallen out of it', async () => {
@@ -124,23 +220,24 @@ describe('ProjectConflictDialog', () => {
     );
 
     expect(
-      screen.getByRole('dialog', { name: 'This project changed in two places' })
+      screen.getByRole('dialog', { name: 'Choose a version to keep' })
     ).toBeInTheDocument();
     expect(
-      screen.getByText(
-        /version 27 on this device and version 9 in your account/
-      )
+      screen.getByText('Using one version replaces the other.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Cloud stays original; yours becomes a copy.')
     ).toBeInTheDocument();
 
     await user.click(
-      screen.getByRole('button', { name: 'Keep this device’s version' })
+      screen
+        .getByRole('button', { name: /^This browser/ })
+        .querySelector('time')!
     );
-    await user.click(
-      screen.getByRole('button', { name: 'Use my account’s version' })
-    );
+    await user.click(screen.getByRole('button', { name: /^Cloud/ }));
     await user.click(
       screen.getByRole('button', {
-        name: 'Save mine as a copy, then use the account’s'
+        name: /^Keep both/
       })
     );
     expect(onResolve).toHaveBeenNthCalledWith(1, 'keep-mine');
@@ -162,16 +259,12 @@ describe('ProjectConflictDialog', () => {
     );
 
     expect(
-      screen.getByText(
-        /version 27 on this device and version 9 in the live session/
-      )
+      screen.getByText('Live session stays original; yours becomes a copy.')
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Use the live version' })
-    ).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Live session/ })).toBeEnabled();
     expect(
       screen.getByRole('button', {
-        name: 'Save mine as a copy, then use the live version'
+        name: /^Keep both/
       })
     ).toBeEnabled();
   });
@@ -189,15 +282,13 @@ describe('ProjectConflictDialog', () => {
     );
 
     const keepMine = screen.getByRole('button', {
-      name: 'Keep this device’s version'
+      name: /^This browser/
     });
     expect(keepMine).toBeDisabled();
     expect(keepMine).toHaveAccessibleDescription(
       'Keeping this device’s version requires an active edit lease.'
     );
-    expect(
-      screen.getByRole('button', { name: 'Use the live version' })
-    ).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Live session/ })).toBeEnabled();
   });
 
   it('lets the user decide later, by button or Escape, without resolving', async () => {
@@ -241,7 +332,7 @@ describe('ProjectConflictDialog', () => {
       />
     );
     const keep = screen.getByRole('button', {
-      name: 'Keep this device’s version'
+      name: /^This browser/
     });
     await user.click(keep);
     // aria-disabled rather than disabled: disabling the focused choice
@@ -249,7 +340,7 @@ describe('ProjectConflictDialog', () => {
     expect(keep).toHaveAttribute('aria-disabled', 'true');
     expect(keep).toHaveFocus();
     expect(screen.getByRole('status')).toHaveTextContent(
-      /waiting for confirmation/
+      /Waiting for confirmation/
     );
     await user.click(keep);
     expect(onResolve).toHaveBeenCalledOnce();
