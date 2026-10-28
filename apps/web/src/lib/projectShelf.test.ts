@@ -4,6 +4,7 @@ import {
   cachedThumbnailSource,
   mergeProjectSummaries,
   retainPendingShelfOrder,
+  prioritizeShelfEntries,
   withVerifiedShelfMetadata,
   resolveShelfThumbnail,
   thumbnailRecordDescribes
@@ -12,6 +13,18 @@ import type { ProjectThumbnailRecord } from './localProjectStore';
 
 const LISTED = '2026-08-07T12:25:30.000Z';
 const EARLIER = '2026-08-07T12:25:21.000Z';
+
+it('verifies pinned and visible cards first without dropping or mutating records', () => {
+  const records = ['offscreen', 'visible', 'pinned', 'other'].map(
+    (projectId) => ({ projectId })
+  );
+  expect(
+    prioritizeShelfEntries(records, ['pinned', 'visible', 'pinned']).map(
+      (entry) => entry.projectId
+    )
+  ).toEqual(['pinned', 'visible', 'offscreen', 'other']);
+  expect(records[0]?.projectId).toBe('offscreen');
+});
 
 describe('provisional encrypted shelf refresh', () => {
   const local = {

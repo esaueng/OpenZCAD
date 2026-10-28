@@ -122,6 +122,7 @@
     "src/lib/projectBackupWorkerClient.test.ts",
     "src/lib/projectProperties.test.ts",
     "src/lib/projectShelf.test.ts",
+    "src/lib/projectShelfNames.test.ts",
     "src/lib/savedViews.test.ts",
     "src/lib/selectionFeature.test.ts",
     "src/lib/selectionFilter.test.ts",

@@ -12,5 +12,13 @@ images or accept late results. Regression coverage exercises provisional
 listings, verified renames, decode failures, empty projects, stale requests,
 remounts and session invalidation (`PartThumbnail.test.tsx`,
 `apiProjectListing.test.ts`, `projectShelf.test.ts`, and the smoke-tagged
-thumbnail continuity journey in `progressive-loading.spec.ts`). Target-hardware
+thumbnail continuity journey in `progressive-loading.spec.ts`). Previously
+verified cloud-only titles are cached as account-scoped device presentation
+hints, like local document summaries, and appear with the HTTP listing while
+encrypted metadata is still pending. Pinned and visible cards are verified
+first; current signatures, authority, rollback checks and document loads remain
+authoritative. Name hints never change versions, thumbnail references or
+permissions, and clear at sign-out. Coverage includes 150 cached titles while
+the encryption account request is held, cache isolation, unavailable storage
+and newer device renames (`projectShelfNames.test.ts`). Target-hardware
 median/p95 qualification remains open.

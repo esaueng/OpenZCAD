@@ -55,6 +55,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createId,
+  compareProjectSummaries,
   ENCRYPTED_PROJECTS_REQUIRED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
@@ -71,10 +72,12 @@ import { localStoragePreferencePins } from './e2ee/preferencePins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
+import { prioritizeShelfEntries } from './projectShelf';
 
 /** Optional presentation updates; document opens still perform full verification. */
 export interface ProjectListingProgress {
   isCurrent(): boolean;
+  priorityProjectIds?(projects: readonly ProjectSummary[]): readonly string[];
   onVerified(project: ProjectSummary): void;
 }
 
@@ -631,23 +634,31 @@ export const api = {
       // Names and thumbnail references arrive only after the existing verifier.
       void encryptedProjects()
         .then((module) =>
-          module.encryptedProjectShelf(encryptedProjectInfo, {
-            isCurrent,
-            onEntry(projectId, entry) {
-              const project = projects.get(projectId);
-              if (!project || !isCurrent()) return;
-              progress.onVerified({
-                ...project,
-                name: entry.name,
-                ...(entry.thumbnailBlobId
-                  ? {
-                      thumbnailArtifactId:
-                        entry.thumbnailBlobId as ProjectSummary['thumbnailArtifactId']
-                    }
-                  : {})
-              });
+          module.encryptedProjectShelf(
+            prioritizeShelfEntries(encryptedProjectInfo, [
+              ...(progress.priorityProjectIds?.(listing.projects) ?? []),
+              ...[...listing.projects]
+                .sort(compareProjectSummaries)
+                .map((project) => project.projectId)
+            ]),
+            {
+              isCurrent,
+              onEntry(projectId, entry) {
+                const project = projects.get(projectId);
+                if (!project || !isCurrent()) return;
+                progress.onVerified({
+                  ...project,
+                  name: entry.name,
+                  ...(entry.thumbnailBlobId
+                    ? {
+                        thumbnailArtifactId:
+                          entry.thumbnailBlobId as ProjectSummary['thumbnailArtifactId']
+                      }
+                    : {})
+                });
+              }
             }
-          })
+          )
         )
         .catch(() => undefined);
       return unverified();

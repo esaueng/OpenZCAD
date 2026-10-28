@@ -263,57 +263,75 @@ test('settings edited during startup survive a late account-settings response', 
   }
 });
 
-test(
-  '150 encrypted cards do not wait for the encryption account read',
-  { tag: '@ci-smoke' },
-  async ({ page }) => {
-    await stubApi(page);
-    const encryption = gate();
-    const projects = Array.from({ length: 150 }, (_, index) => ({
-      projectId: `proj_encrypted_${index}`,
-      name: 'Encrypted project',
-      storageFormat: 2,
-      revisionCount: 1,
-      updatedAt: '2026-10-28T12:00:00Z'
-    }));
-    await page.route('**/api/projects', (route) =>
-      route.fulfill({
-        json: {
-          projects,
-          encryptedProjectInfo: projects.map((project) => ({
-            projectId: project.projectId,
-            kind: 'project-info',
-            envelope: '',
-            signature: '',
-            wrappedVersionKey: '',
-            signerDeviceId: 'device_fixture',
-            sequence: 1,
-            keyEpoch: 0
-          }))
-        }
-      })
-    );
-    await page.route('**/api/e2ee/account', async (route) => {
-      await encryption.promise;
-      await route.fulfill({ json: { current: null, previous: [] } });
-    });
-    try {
-      await page.goto('/', { waitUntil: 'domcontentloaded' });
-      await expect(page.locator('.start-tile-project')).toHaveCount(150);
-      await expect(
-        page.getByRole('button', { name: 'Create project', exact: true })
-      ).toBeEnabled();
-      await expect(
-        page.getByRole('status', { name: 'Loading library' })
-      ).toHaveCount(0);
-      await expect(page.locator('.start-tile-project').first()).toContainText(
-        'Encrypted project'
+for (const cachedNames of [false, true])
+  test(
+    `150 encrypted cards ${cachedNames ? 'show known names before decryption' : 'do not wait for the encryption account read'}`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      await stubApi(page);
+      const encryption = gate();
+      const projects = Array.from({ length: 150 }, (_, index) => ({
+        projectId: `proj_encrypted_${index}`,
+        name: 'Encrypted project',
+        storageFormat: 2,
+        revisionCount: 1,
+        updatedAt: '2026-10-28T12:00:00Z'
+      }));
+      if (cachedNames)
+        await page.addInitScript((projects) => {
+          localStorage.setItem(
+            'openzcad:shelf-names:v1:user_e2e',
+            JSON.stringify(
+              projects.map((project, index) => [
+                project.projectId,
+                `Verified part ${index}`,
+                project.updatedAt
+              ])
+            )
+          );
+        }, projects);
+      await page.route('**/api/projects', (route) =>
+        route.fulfill({
+          json: {
+            projects,
+            encryptedProjectInfo: projects.map((project) => ({
+              projectId: project.projectId,
+              kind: 'project-info',
+              envelope: '',
+              signature: '',
+              wrappedVersionKey: '',
+              signerDeviceId: 'device_fixture',
+              sequence: 1,
+              keyEpoch: 0
+            }))
+          }
+        })
       );
-    } finally {
-      encryption.release();
+      await page.route('**/api/e2ee/account', async (route) => {
+        await encryption.promise;
+        await route.fulfill({ json: { current: null, previous: [] } });
+      });
+      try {
+        await page.goto('/', { waitUntil: 'domcontentloaded' });
+        await expect(page.locator('.start-tile-project')).toHaveCount(150);
+        await expect(
+          page.getByRole('button', { name: 'Create project', exact: true })
+        ).toBeEnabled();
+        await expect(
+          page.getByRole('status', { name: 'Loading library' })
+        ).toHaveCount(0);
+        await expect(page.locator('.start-tile-project').first()).toContainText(
+          cachedNames ? 'Verified part' : 'Encrypted project'
+        );
+        if (cachedNames)
+          await expect(
+            page.locator('.start-tile-name', { hasText: /^Encrypted project$/ })
+          ).toHaveCount(0);
+      } finally {
+        encryption.release();
+      }
     }
-  }
-);
+  );
 
 test(
   'selection shows a loading page before the document arrives; cancel fences its late result',

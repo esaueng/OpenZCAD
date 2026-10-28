@@ -195,6 +195,21 @@ export function retainPendingShelfOrder(
   );
 }
 
+/** Verify cards in the order the library shows them, retaining all entries. */
+export function prioritizeShelfEntries<T extends { projectId: string }>(
+  entries: readonly T[],
+  projectIds: readonly string[]
+): T[] {
+  const order = new Map(
+    [...new Set(projectIds)].map((id, index) => [id, index])
+  );
+  return [...entries].sort(
+    (a, b) =>
+      (order.get(a.projectId) ?? Number.MAX_SAFE_INTEGER) -
+      (order.get(b.projectId) ?? Number.MAX_SAFE_INTEGER)
+  );
+}
+
 /** A late verified title must not replace a newer local rename or shelf action. */
 export function withVerifiedShelfMetadata(
   project: ProjectSummary,

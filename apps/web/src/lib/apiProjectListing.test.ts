@@ -96,6 +96,32 @@ describe('progressive project listing', () => {
     expect(result.pendingEncryptedProjectIds).toBeUndefined();
   });
 
+  it('prioritizes displayed cards before unrelated encrypted envelopes', async () => {
+    const visible = { ...project, projectId: toProjectId('proj_visible') };
+    vi.mocked(desktopFetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projects: [project, visible],
+          encryptedProjectInfo: [
+            records[0],
+            { ...records[0], projectId: visible.projectId }
+          ]
+        })
+      )
+    );
+    await api.listProjects({
+      isCurrent: () => true,
+      onVerified: vi.fn(),
+      priorityProjectIds: () => [visible.projectId]
+    });
+    await vi.waitFor(() => expect(encryptedProjectShelf).toHaveBeenCalled());
+    expect(
+      vi
+        .mocked(encryptedProjectShelf)
+        .mock.calls[0]?.[0].map((record) => record.projectId)
+    ).toEqual([visible.projectId, project.projectId]);
+  });
+
   it.each(['navigation', 'key session'])(
     'ignores metadata finishing after %s changes',
     async (change) => {
