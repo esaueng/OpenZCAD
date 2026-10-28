@@ -2864,7 +2864,7 @@ button.model-panel-grip[aria-expanded='true'] {
 .sketch-modify-flyout {
   /* Portalled out of the transformed, scrolling tool column. */
   position: fixed;
-  z-index: var(--z-context-menu);
+  z-index: var(--z-popover);
   display: grid;
   gap: 2px;
   min-width: 168px;

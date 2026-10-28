@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -49,6 +50,17 @@ export function SketchModifyFlyout({
     place();
     return () => cancelAnimationFrame(frame);
   }, [anchorRef]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (ref.current?.contains(target) || anchorRef.current?.contains(target))
+        return;
+      onClose();
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, [anchorRef, onClose]);
 
   // A portal is last in document order. Enter its tools immediately and
   // return to the rail when it closes, without stealing a later dialog's focus.

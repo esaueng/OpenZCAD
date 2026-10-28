@@ -688,6 +688,9 @@ describe('SketchToolRail', () => {
     await user.keyboard('{Escape}');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveFocus();
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Construction' }));
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('keeps Tab traversal beside the rail trigger across the portal', async () => {

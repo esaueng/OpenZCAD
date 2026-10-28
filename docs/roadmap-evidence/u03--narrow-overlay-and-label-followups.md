@@ -24,3 +24,8 @@ cases verify focus entry, Tab and Shift+Tab traversal, Escape return and
 continuation to Construction at phone and desktop widths; all 27 browser
 cases pass together. Lint, typecheck, the parity corpus
 and the root production build with bundle budgets pass. U03 remains Partial.
+
+The flyout uses the popover layer below dialogs and closes on an outside
+press, matching the existing View options menu. The rendered phone/desktop
+cases open Export mesh from File while the flyout is up, verify dismissal,
+cancel the dialog and reopen the tools without exporting a file.

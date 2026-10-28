@@ -390,6 +390,27 @@ for (const colorScheme of ['light', 'dark'] as const) {
         name: 'More modify tools',
         exact: true
       });
+      const checkDialogStack = async () => {
+        await page.locator('details.file-menu > summary').click();
+        await expect(flyout).toHaveCount(0);
+        await page.getByRole('button', { name: /^Export mesh/ }).click();
+        const dialog = page.getByRole('dialog', {
+          name: 'Export mesh',
+          exact: true
+        });
+        await expect(dialog).toBeVisible();
+        await capture(
+          page,
+          testInfo,
+          `modify-under-dialog-${page.viewportSize()!.width}px`
+        );
+        await dialog
+          .getByRole('button', { name: 'Cancel', exact: true })
+          .click();
+        await expect(dialog).toHaveCount(0);
+        await toggle.click();
+        await expect(flyout).toBeVisible();
+      };
       const follows = () =>
         flyout.evaluate((element) => {
           const r = element.getBoundingClientRect();
@@ -415,6 +436,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         flyout.getByRole('button', { name: 'Circular pattern', exact: true })
       );
       await capture(page, testInfo, '320px-sketch-modify');
+      await checkDialogStack();
       const scroller = page.locator('.workspace-column-tools');
       const bounds = (await scroller.boundingBox())!;
       await page.mouse.move(
@@ -435,6 +457,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         );
       }
       await capture(page, testInfo, 'desktop-sketch-modify');
+      await checkDialogStack();
       await toggle.press('Escape');
       await expect(flyout).toHaveCount(0);
       await page.keyboard.press('Escape');
