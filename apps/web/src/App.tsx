@@ -199,7 +199,6 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
-  normalizeDocumentHistory,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -1607,6 +1606,7 @@ import {
   type ConflictResolutionHandlers,
   type ProjectConflict
 } from './lib/conflictRecovery';
+import { localConflictCopy } from './lib/conflictLocalCopy';
 import {
   buildModelingOperationSubmission,
   modelingFaceOptions,
@@ -2027,40 +2027,6 @@ async function loadProjectSummaries(
     remoteReached: Boolean(remote),
     cloudProjectIds: remoteIds
   };
-}
-
-function localConflictCopy(
-  source: ProjectDocument,
-  existingNames: Iterable<string>
-): ProjectDocument {
-  const copy = structuredClone(source);
-  const projectId = toProjectId(`proj_local_${crypto.randomUUID()}`);
-  const name = duplicateProjectName(source.name, existingNames);
-  copy.projectId = projectId;
-  if (copy.editHistory) {
-    copy.editHistory.projectId = projectId;
-    for (const historical of documentNodesWithHistory(copy)) {
-      if (historical.kind === 'project') historical.projectId = projectId;
-    }
-  }
-  const beforeRename = structuredClone(copy);
-  copy.name = name;
-  copy.revisions = [];
-  copy.checkpoints = [];
-  copy.derived.updatedAt = new Date().toISOString();
-  const root = copy.nodes[copy.rootNodeId];
-  if (root?.kind === 'project') {
-    root.projectId = projectId;
-    root.name = name;
-    root.revisionId = null;
-  }
-  // The source's save points stay with the source; the copy starts its own
-  // record. Born with none at all, it could not be saved: every Save,
-  // including Save to my account, refused for want of a revision to name.
-  return createSavedRevision(
-    normalizeDocumentHistory(beforeRename, copy),
-    `Copied from ${source.name}`
-  );
 }
 
 /**
@@ -5287,7 +5253,8 @@ export function App() {
     async saveLocalAsCopy(source) {
       const copy = localConflictCopy(
         source,
-        projects.map((project) => project.name)
+        projects.map((project) => project.name),
+        session?.userId ?? localUserId
       );
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
