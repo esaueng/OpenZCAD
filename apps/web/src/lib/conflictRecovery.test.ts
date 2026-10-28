@@ -9,7 +9,6 @@ import {
   conflictFromDocuments,
   hasUnresolvedConflict,
   readUnresolvedConflict,
-  recoveryCopyName,
   rememberUnresolvedConflict,
   resolveProjectConflict,
   type ConflictResolutionHandlers
@@ -21,11 +20,7 @@ function version(document: ProjectDocument, value: number): ProjectDocument {
   return { ...structuredClone(document), version: value };
 }
 
-/**
- * A distinct model at the given version. Recovery copies are keyed on what
- * a rebuild reads, so two versions of unchanged content are one thing to
- * preserve; a test that expects a copy has to change the model.
- */
+/** Distinct local work for each divergence. */
 function edited(
   document: ProjectDocument,
   value: number,
@@ -36,10 +31,10 @@ function edited(
 
 function handlers(): ConflictResolutionHandlers {
   return {
-    writeRecoveryCopy: vi.fn(async () => undefined),
     useRemoteVersion: vi.fn(async () => undefined),
     keepMyVersion: vi.fn(async () => undefined),
-    saveLocalAsCopy: vi.fn(async () => undefined)
+    saveLocalAsCopy: vi.fn(async () => 'proj_local_copy'),
+    localCopyExists: vi.fn(async () => true)
   };
 }
 
@@ -115,407 +110,259 @@ describe('collaboration conflict recovery', () => {
     expect(hasUnresolvedConflict(projectId)).toBe(false);
   });
 
-  it.each(['use-remote', 'keep-mine', 'save-local-copy'] as const)(
-    'writes a recovery copy before %s mutates either document',
-    async (resolution) => {
+  it.each(['room', 'account'] as const)(
+    'only Keep both creates a project for %s conflicts',
+    async (source) => {
       const base = createProjectDocument('Conflict', owner);
       const conflict = conflictFromDocuments(
         edited(base, 4, 'here'),
-        edited(base, 5, 'there')
+        edited(base, 5, 'there'),
+        source
       );
-      const calls: string[] = [];
-      const recoveryHandlers: ConflictResolutionHandlers = {
-        writeRecoveryCopy: vi.fn(async () => {
-          calls.push('recovery');
-        }),
-        useRemoteVersion: vi.fn(async () => {
-          calls.push('room');
-        }),
-        keepMyVersion: vi.fn(async () => {
-          calls.push('mine');
-        }),
-        saveLocalAsCopy: vi.fn(async () => {
-          calls.push('copy');
-        })
+      const original = structuredClone(conflict);
+      const context = {
+        role: 'owner' as const,
+        lease: null,
+        leasesEnforced: false
       };
-
-      await resolveProjectConflict(
+      for (const resolution of ['use-remote', 'keep-mine'] as const) {
+        const host = handlers();
+        const outcome = await resolveProjectConflict(
+          conflict,
+          resolution,
+          context,
+          host
+        );
+        expect(host.saveLocalAsCopy).not.toHaveBeenCalled();
+        expect(outcome.localCopy).toBe('not-requested');
+        if (resolution === 'use-remote') {
+          expect(host.useRemoteVersion).toHaveBeenCalledWith(
+            original.remoteDocument,
+            outcome
+          );
+          expect(host.keepMyVersion).not.toHaveBeenCalled();
+        } else {
+          expect(host.keepMyVersion).toHaveBeenCalledWith(
+            { document: original.localDocument, expectedRemoteVersion: 5 },
+            outcome
+          );
+          expect(host.useRemoteVersion).not.toHaveBeenCalled();
+        }
+      }
+      const order: string[] = [];
+      const host = handlers();
+      vi.mocked(host.saveLocalAsCopy).mockImplementation(async (document) => {
+        expect(document).toEqual(original.localDocument);
+        document.name = 'A copy handler may mutate its private clone';
+        order.push('copy');
+        return 'proj_local_copy';
+      });
+      vi.mocked(host.useRemoteVersion).mockImplementation(async (document) => {
+        expect(document).toEqual(original.remoteDocument);
+        order.push('remote');
+      });
+      const outcome = await resolveProjectConflict(
         conflict,
-        resolution,
-        {
-          role: 'owner',
-          lease: {
-            projectId: base.projectId,
-            leaseId: 'lease_active',
-            clientId: 'client',
-            userId: owner,
-            expiresAt: 20_000
-          },
-          now: 10_000
-        },
-        recoveryHandlers
+        'save-local-copy',
+        context,
+        host
       );
-
-      expect(calls[0]).toBe('recovery');
-      expect(calls.slice(1)).toEqual(
-        resolution === 'use-remote'
-          ? ['room']
-          : resolution === 'keep-mine'
-            ? ['mine']
-            : ['copy', 'room']
-      );
+      expect(order).toEqual(['copy', 'remote']);
+      expect(outcome.localCopy).toBe('saved');
+      expect(conflict).toEqual(original);
     }
   );
 
-  it('preserves the side the user is not keeping', async () => {
+  it('never creates copies across repeated replacements, version changes, and remote sources', async () => {
     const base = createProjectDocument('Conflict', owner);
-    const context = {
-      role: 'owner' as const,
-      lease: {
-        projectId: base.projectId,
-        leaseId: 'lease_active',
-        clientId: 'client',
-        userId: owner,
-        expiresAt: 20_000
-      },
-      now: 10_000
-    };
-
-    const useRemote = handlers();
-    await resolveProjectConflict(
-      conflictFromDocuments(edited(base, 4, 'here'), edited(base, 5, 'there')),
-      'use-remote',
-      context,
-      useRemote
-    );
-    expect(useRemote.writeRecoveryCopy).toHaveBeenCalledWith(
-      expect.objectContaining({ version: 4 })
-    );
-
-    localStorage.clear();
-    const keepMine = handlers();
-    await resolveProjectConflict(
-      conflictFromDocuments(edited(base, 4, 'here'), edited(base, 5, 'there')),
-      'keep-mine',
-      context,
-      keepMine
-    );
-    expect(keepMine.writeRecoveryCopy).toHaveBeenCalledWith(
-      expect.objectContaining({ version: 5 })
-    );
-  });
-
-  it('writes one recovery copy per divergence, not one per attempt', async () => {
-    const base = createProjectDocument('Conflict', owner);
-    const context = {
-      role: 'owner' as const,
-      lease: null,
-      leasesEnforced: false
-    };
-    const failing: ConflictResolutionHandlers = {
-      ...handlers(),
-      useRemoteVersion: vi.fn(async () => {
-        throw new Error('the room moved');
-      })
-    };
-
-    const here = edited(base, 4, 'here');
-    const there = edited(base, 5, 'there');
-    const first = conflictFromDocuments(here, there);
-    await expect(
-      resolveProjectConflict(first, 'use-remote', context, failing)
-    ).rejects.toThrow('the room moved');
-    expect(failing.writeRecoveryCopy).toHaveBeenCalledTimes(1);
-
-    // The same divergence, re-raised by the next inbound frame and retried:
-    // the local document is already preserved, so no second copy.
-    const retried = conflictFromDocuments(here, there);
-    await expect(
-      resolveProjectConflict(retried, 'use-remote', context, failing)
-    ).rejects.toThrow('the room moved');
-    expect(failing.writeRecoveryCopy).toHaveBeenCalledTimes(1);
-
-    // Switching to discard the OTHER side preserves that side once.
-    await resolveProjectConflict(retried, 'keep-mine', context, failing);
-    expect(failing.writeRecoveryCopy).toHaveBeenCalledTimes(2);
-    expect(failing.writeRecoveryCopy).toHaveBeenLastCalledWith(
-      expect.objectContaining({ version: 5 })
-    );
-
-    // A NEW divergence citing the SAME local document does not copy it again:
-    // the copy on disk is of this exact state, whatever the room moved to.
-    const moved = conflictFromDocuments(here, edited(base, 6, 'there'));
-    await expect(
-      resolveProjectConflict(moved, 'use-remote', context, failing)
-    ).rejects.toThrow('the room moved');
-    expect(failing.writeRecoveryCopy).toHaveBeenCalledTimes(2);
-
-    // A local document not yet preserved is.
-    const newer = conflictFromDocuments(
-      edited(base, 7, 'newer'),
-      edited(base, 6, 'there')
-    );
-    await expect(
-      resolveProjectConflict(newer, 'use-remote', context, failing)
-    ).rejects.toThrow('the room moved');
-    expect(failing.writeRecoveryCopy).toHaveBeenCalledTimes(3);
-    expect(failing.writeRecoveryCopy).toHaveBeenLastCalledWith(
-      expect.objectContaining({ version: 7 })
-    );
-  });
-
-  // The room and the account are separate version lines that raise the same
-  // divergence with the roles swapped — 9-vs-27 in one, 27-vs-9 in the other.
-  // A record scoped to the version pair copied the losing side again on every
-  // hop between them, which is how one project grew nine recovery projects in
-  // a minute.
-  it('copies a document once across both remotes and every version pair', async () => {
-    const base = createProjectDocument('Conflict', owner);
-    const context = {
-      role: 'owner' as const,
-      lease: null,
-      leasesEnforced: false
-    };
-    const device = edited(base, 27, 'device');
-    const account = edited(base, 9, 'account');
-
-    const room = handlers();
-    await resolveProjectConflict(
-      conflictFromDocuments(account, device, 'room'),
-      'use-remote',
-      context,
-      room
-    );
-    expect(room.writeRecoveryCopy).toHaveBeenCalledTimes(1);
-    expect(room.writeRecoveryCopy).toHaveBeenCalledWith(
-      expect.objectContaining({ version: 9 })
-    );
-
-    // The device now holds 27; the account still says 9 and raises the same
-    // two documents the other way round. Keeping 27 would copy 9 — which the
-    // room resolution above already preserved.
-    const viaAccount = handlers();
-    await resolveProjectConflict(
-      conflictFromDocuments(device, account, 'account'),
-      'keep-mine',
-      context,
-      viaAccount
-    );
-    expect(viaAccount.writeRecoveryCopy).not.toHaveBeenCalled();
-    expect(viaAccount.keepMyVersion).toHaveBeenCalledTimes(1);
-
-    // Clearing the marker — what a completed resolution does — does not
-    // forget which documents were preserved.
-    clearUnresolvedConflict(base.projectId, 'account');
-    clearUnresolvedConflict(base.projectId, 'room');
-    const again = handlers();
-    await resolveProjectConflict(
-      conflictFromDocuments(device, account, 'account'),
-      'keep-mine',
-      context,
-      again
-    );
-    expect(again.writeRecoveryCopy).not.toHaveBeenCalled();
-  });
-
-  // A keep-mine is a fenced write that mints a new version of the same model
-  // with a "Kept this device’s version" save point on top, and the room and
-  // the account each cite that resaved document in their next dialog. Keyed
-  // on anything that includes saved history, the same model came back under
-  // a fresh key on every hop, and every hop wrote another recovery project.
-  it('copies a model once however many versions and save points it is cited under', async () => {
-    const base = createProjectDocument('Conflict', owner);
-    const context = {
-      role: 'owner' as const,
-      lease: null,
-      leasesEnforced: false
-    };
-    const theirs = edited(base, 9, 'theirs');
-    const mine = edited(base, 27, 'mine');
-
-    const first = handlers();
-    await resolveProjectConflict(
-      conflictFromDocuments(mine, theirs, 'account'),
-      'use-remote',
-      context,
-      first
-    );
-    expect(first.writeRecoveryCopy).toHaveBeenCalledTimes(1);
-
-    // What every hop looks like: the same model as `mine`, resaved by a
-    // fenced write under a new version with a fresh revision and checkpoint.
-    const resaved = createSavedRevision(
-      version(mine, 28),
-      'Kept this device’s version'
-    );
-    for (const [local, remote, resolution] of [
-      [resaved, theirs, 'use-remote'],
-      [theirs, resaved, 'keep-mine'],
-      [version(resaved, 29), version(theirs, 10), 'use-remote']
-    ] as const) {
-      const hop = handlers();
-      const outcome = await resolveProjectConflict(
-        conflictFromDocuments(local, remote, 'room'),
-        resolution,
-        context,
-        hop
-      );
-      expect(hop.writeRecoveryCopy).not.toHaveBeenCalled();
-      expect(outcome.recoveryCopy).toBe('already-preserved');
-    }
-  });
-
-  // Two tabs (or devices) on one project, each answering "keep mine": every
-  // answer is a fenced write that stamps a "Kept this device’s version" save
-  // point on the kept model, so the other side's next dialog cites that model
-  // with history it has never seen. Two models diverged, so two recovery
-  // projects, however many times the dialogs come back.
-  it('writes one copy per model while two writers keep their own versions', async () => {
-    const base = createProjectDocument('Merry Llama', owner);
-    const context = {
-      role: 'owner' as const,
-      lease: null,
-      leasesEnforced: false
-    };
-    let left = edited(base, 27, 'left');
-    let right = edited(base, 27, 'right');
-    const keep = (document: ProjectDocument, over: ProjectDocument) =>
-      createSavedRevision(
-        version(document, over.version + 1),
-        'Kept this device’s version'
-      );
-    let written = 0;
-    for (let round = 0; round < 5; round += 1) {
-      const leftTab = handlers();
-      await resolveProjectConflict(
-        conflictFromDocuments(left, right, 'account'),
-        'keep-mine',
-        context,
-        leftTab
-      );
-      written += vi.mocked(leftTab.writeRecoveryCopy).mock.calls.length;
-      left = keep(left, right);
-
-      const rightTab = handlers();
-      await resolveProjectConflict(
-        conflictFromDocuments(right, left, 'account'),
-        'keep-mine',
-        context,
-        rightTab
-      );
-      written += vi.mocked(rightTab.writeRecoveryCopy).mock.calls.length;
-      right = keep(right, left);
-    }
-    expect(written).toBe(2);
-  });
-
-  // A recovery project is born with no save points of its own (its source's
-  // stay with the source), so a later save point on an already-copied model
-  // is not something another copy could preserve.
-  it('does not copy a model again for a save point a copy cannot carry', async () => {
-    const base = createProjectDocument('Saved history', owner);
-    const local = version(base, 8);
-    const checkpoint = {
-      checkpointId: 'cp_unique',
-      revisionId: base.revisions.at(-1)!.revisionId,
-      documentVersion: 8,
-      reason: 'Before drilling',
-      createdAt: '2026-10-05T05:00:00Z'
-    };
-    const remote = {
-      ...local,
-      checkpoints: [...local.checkpoints, checkpoint]
-    };
-    const context = {
-      role: 'owner' as const,
-      lease: null,
-      leasesEnforced: false
-    };
-    const first = handlers();
-    await resolveProjectConflict(
-      conflictFromDocuments(edited(base, 9, 'different'), local, 'account'),
-      'keep-mine',
-      context,
-      first
-    );
-    expect(first.writeRecoveryCopy).toHaveBeenCalledWith(local);
-    const keep = handlers();
-    const outcome = await resolveProjectConflict(
-      conflictFromDocuments(edited(base, 10, 'different'), remote, 'account'),
-      'keep-mine',
-      context,
-      keep
-    );
-    expect(outcome.recoveryCopy).toBe('already-preserved');
-    expect(keep.writeRecoveryCopy).not.toHaveBeenCalled();
-  });
-
-  it('writes nothing when the chosen copy already preserves the losing model and history', async () => {
-    const base = createProjectDocument('Conflict', owner);
-    const context = {
-      role: 'owner' as const,
-      lease: null,
-      leasesEnforced: false
-    };
-    // Only bookkeeping differs: a checkpoint-only save on one side.
-    const local = version(base, 4);
-    const remote = {
-      ...version(base, 5),
-      checkpoints: [
-        ...base.checkpoints,
-        {
-          checkpointId: 'cp_manual',
-          revisionId: base.revisions.at(-1)?.revisionId ?? 'rev_none',
-          documentVersion: 5,
-          reason: 'Manual save',
-          createdAt: '2026-09-04T16:21:00.000Z'
+    const host = handlers();
+    for (let version = 4; version < 10; version++) {
+      for (const source of ['room', 'account'] as const) {
+        for (const resolution of ['use-remote', 'keep-mine'] as const) {
+          await resolveProjectConflict(
+            conflictFromDocuments(
+              edited(base, version, 'here'),
+              edited(base, version + 1, 'there'),
+              source
+            ),
+            resolution,
+            { role: 'owner', lease: null, leasesEnforced: false },
+            host
+          );
         }
-      ]
-    } as ProjectDocument;
-
-    const useRemote = handlers();
-    const outcome = await resolveProjectConflict(
-      conflictFromDocuments(local, remote, 'account'),
-      'use-remote',
-      context,
-      useRemote
-    );
-    expect(useRemote.writeRecoveryCopy).not.toHaveBeenCalled();
-    expect(outcome.recoveryCopy).toBe('nothing-to-preserve');
-    expect(useRemote.useRemoteVersion).toHaveBeenCalledWith(
-      expect.objectContaining({ version: 5 }),
-      outcome
-    );
-
-    // An explicit request for a copy is still a request for a copy.
-    const asked = handlers();
-    const explicit = await resolveProjectConflict(
-      conflictFromDocuments(local, remote, 'account'),
-      'save-local-copy',
-      context,
-      asked
-    );
-    expect(asked.writeRecoveryCopy).toHaveBeenCalledTimes(1);
-    expect(explicit.recoveryCopy).toBe('written');
+      }
+    }
+    expect(host.saveLocalAsCopy).not.toHaveBeenCalled();
   });
 
-  it('never nests recovery labels in project names', () => {
-    expect(recoveryCopyName('Mellow Puffin', 'Recovery')).toBe(
-      'Mellow Puffin (Recovery)'
+  it('does not adopt remote when saving the requested copy fails', async () => {
+    const base = createProjectDocument('Conflict', owner);
+    const conflict = conflictFromDocuments(
+      edited(base, 4, 'here'),
+      edited(base, 5, 'there')
     );
-    expect(recoveryCopyName('Mellow Puffin (Recovery)', 'Recovery')).toBe(
-      'Mellow Puffin (Recovery)'
+    const host = handlers();
+    vi.mocked(host.saveLocalAsCopy).mockRejectedValueOnce(
+      new Error('disk full')
+    );
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    await expect(
+      resolveProjectConflict(conflict, 'save-local-copy', context, host)
+    ).rejects.toThrow('disk full');
+    expect(host.useRemoteVersion).not.toHaveBeenCalled();
+    await resolveProjectConflict(conflict, 'save-local-copy', context, host);
+    expect(host.saveLocalAsCopy).toHaveBeenCalledTimes(2);
+    expect(host.useRemoteVersion).toHaveBeenCalledOnce();
+  });
+
+  it('reuses the explicit copy after remote adoption fails, including a new remote fence', async () => {
+    const base = createProjectDocument('Conflict', owner);
+    const local = edited(base, 4, 'here');
+    const conflict = conflictFromDocuments(local, edited(base, 5, 'there'));
+    const host = handlers();
+    vi.mocked(host.useRemoteVersion).mockRejectedValueOnce(
+      new Error('remote moved')
+    );
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    await expect(
+      resolveProjectConflict(conflict, 'save-local-copy', context, host)
+    ).rejects.toThrow('remote moved');
+    const retried = conflictFromDocuments(
+      local,
+      edited(base, 6, 'there'),
+      'account'
     );
     expect(
-      recoveryCopyName('Mellow Puffin (Recovery) (Recovery)', 'Recovery')
-    ).toBe('Mellow Puffin (Recovery)');
-    expect(recoveryCopyName('Mellow Puffin (Local copy)', 'Recovery')).toBe(
-      'Mellow Puffin (Recovery)'
+      await resolveProjectConflict(retried, 'save-local-copy', context, host)
+    ).toEqual({ localCopy: 'already-saved' });
+    expect(host.localCopyExists).toHaveBeenCalledExactlyOnceWith(
+      'proj_local_copy'
     );
-    // A name that is nothing but the label survives rather than vanishing.
-    expect(recoveryCopyName('(Recovery)', 'Recovery')).toBe(
-      '(Recovery) (Recovery)'
+    expect(host.saveLocalAsCopy).toHaveBeenCalledOnce();
+    await resolveProjectConflict(
+      conflictFromDocuments(
+        edited(base, 7, 'new local edit'),
+        edited(base, 8, 'there')
+      ),
+      'save-local-copy',
+      context,
+      host
     );
+    expect(host.saveLocalAsCopy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['room', 'account'] as const)(
+    'replaces a deleted retry copy before adopting the %s version',
+    async (source) => {
+      const base = createProjectDocument('Conflict', owner);
+      const conflict = conflictFromDocuments(
+        edited(base, 4, 'here'),
+        edited(base, 5, 'there'),
+        source
+      );
+      const host = handlers();
+      const context = {
+        role: 'owner' as const,
+        lease: null,
+        leasesEnforced: false
+      };
+      vi.mocked(host.useRemoteVersion).mockRejectedValueOnce(
+        new Error('remote moved')
+      );
+      await expect(
+        resolveProjectConflict(conflict, 'save-local-copy', context, host)
+      ).rejects.toThrow('remote moved');
+
+      // Decide later, then delete the saved shelf project before retrying.
+      vi.mocked(host.localCopyExists).mockResolvedValue(false);
+      vi.mocked(host.saveLocalAsCopy).mockRejectedValueOnce(
+        new Error('disk full')
+      );
+      await expect(
+        resolveProjectConflict(conflict, 'save-local-copy', context, host)
+      ).rejects.toThrow('disk full');
+      expect(host.useRemoteVersion).toHaveBeenCalledOnce();
+      vi.mocked(host.saveLocalAsCopy).mockResolvedValueOnce(
+        'proj_local_replacement'
+      );
+      await expect(
+        resolveProjectConflict(conflict, 'save-local-copy', context, host)
+      ).resolves.toEqual({ localCopy: 'saved' });
+      expect(host.saveLocalAsCopy).toHaveBeenCalledTimes(3);
+      expect(host.useRemoteVersion).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it('does not adopt remote when the saved copy cannot be checked', async () => {
+    const base = createProjectDocument('Conflict', owner);
+    const conflict = conflictFromDocuments(
+      edited(base, 4, 'here'),
+      edited(base, 5, 'there')
+    );
+    const host = handlers();
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    vi.mocked(host.useRemoteVersion).mockRejectedValueOnce(
+      new Error('remote moved')
+    );
+    await expect(
+      resolveProjectConflict(conflict, 'save-local-copy', context, host)
+    ).rejects.toThrow('remote moved');
+    vi.mocked(host.localCopyExists).mockRejectedValueOnce(
+      new Error('storage unavailable')
+    );
+    await expect(
+      resolveProjectConflict(conflict, 'save-local-copy', context, host)
+    ).rejects.toThrow('storage unavailable');
+    expect(host.saveLocalAsCopy).toHaveBeenCalledOnce();
+    expect(host.useRemoteVersion).toHaveBeenCalledOnce();
+  });
+
+  it('honors a separate Keep both request after the previous one completed', async () => {
+    const base = createProjectDocument('Conflict', owner);
+    const conflict = conflictFromDocuments(
+      edited(base, 4, 'here'),
+      edited(base, 5, 'there')
+    );
+    const host = handlers();
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    await resolveProjectConflict(conflict, 'save-local-copy', context, host);
+    await resolveProjectConflict(conflict, 'save-local-copy', context, host);
+    expect(host.saveLocalAsCopy).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors Keep both even for matching models and legacy automatic recovery records', async () => {
+    const base = createProjectDocument('Conflict', owner);
+    const host = handlers();
+    localStorage.setItem(
+      `openzcad-recovery-copies:${encodeURIComponent(base.projectId)}`,
+      '["legacy automatic copy"]'
+    );
+    const local = version(base, 4);
+    const remote = createSavedRevision(version(base, 5), 'Before drilling');
+    await resolveProjectConflict(
+      conflictFromDocuments(local, remote),
+      'save-local-copy',
+      { role: 'viewer', lease: null },
+      host
+    );
+    expect(host.saveLocalAsCopy).toHaveBeenCalledExactlyOnceWith(local);
+    expect(host.useRemoteVersion).toHaveBeenCalledOnce();
   });
 
   it('requires the exact room version and an active lease before keep mine', async () => {
@@ -557,6 +404,6 @@ describe('collaboration conflict recovery', () => {
         recoveryHandlers
       )
     ).rejects.toMatchObject({ code: 'LEASE_REQUIRED' });
-    expect(recoveryHandlers.writeRecoveryCopy).not.toHaveBeenCalled();
+    expect(recoveryHandlers.saveLocalAsCopy).not.toHaveBeenCalled();
   });
 });

@@ -1811,7 +1811,7 @@ export async function purgeExpiredLocalProjects(
  * versions and then timestamps cannot tell a device that is behind from two
  * devices that both moved, and it settles the second case by discarding one
  * side on the authority of a device clock. Reporting the ambiguity instead lets
- * the caller write a recovery copy and ask.
+ * the caller ask which version to keep before replacing either side.
  */
 export type ProjectOpenChoice =
   | { choice: 'none' }

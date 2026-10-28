@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
-  clearRecoveryLedger,
   clearUnresolvedConflict,
   conflictFromDocuments,
   readUnresolvedConflict,
@@ -14,19 +13,13 @@ import {
 const owner = toUserId('user_owner');
 const base = createProjectDocument('Bracket', owner);
 
-/**
- * A distinct model per version: recovery copies are keyed on what a rebuild
- * reads, so two versions of unchanged content would leave nothing to copy.
- */
+/** Distinct model per version. */
 function at(version: number): ProjectDocument {
   return { ...base, version, name: `${base.name} v${version}` };
 }
 
 function handlers(order: string[] = []): ConflictResolutionHandlers {
   return {
-    writeRecoveryCopy: vi.fn(async () => {
-      order.push('recovery');
-    }),
     useRemoteVersion: vi.fn(async () => {
       order.push('remote');
     }),
@@ -35,13 +28,15 @@ function handlers(order: string[] = []): ConflictResolutionHandlers {
     }),
     saveLocalAsCopy: vi.fn(async () => {
       order.push('copy');
-    })
+      return 'proj_local_account_copy';
+    }),
+    localCopyExists: vi.fn(async () => true)
   };
 }
 
 function accountConflict(): ProjectConflict {
   clearUnresolvedConflict(base.projectId, 'account');
-  clearRecoveryLedger(base.projectId);
+  localStorage.clear();
   return conflictFromDocuments(at(7), at(9), 'account');
 }
 
@@ -72,10 +67,10 @@ describe('a conflict raised by the account rather than a room', () => {
       { role: 'owner', lease: null, leasesEnforced: false },
       recovery
     );
-    expect(order).toEqual(['recovery', 'mine']);
+    expect(order).toEqual(['mine']);
   });
 
-  it('writes the recovery copy before anything else, once per divergence', async () => {
+  it('only calls the copy writer for Keep both', async () => {
     for (const resolution of [
       'use-remote',
       'keep-mine',
@@ -88,7 +83,13 @@ describe('a conflict raised by the account rather than a room', () => {
         { role: 'owner', lease: null, leasesEnforced: false },
         handlers(order)
       );
-      expect(order[0]).toBe('recovery');
+      expect(order).toEqual(
+        resolution === 'keep-mine'
+          ? ['mine']
+          : resolution === 'use-remote'
+            ? ['remote']
+            : ['copy', 'remote']
+      );
     }
   });
 
@@ -100,7 +101,7 @@ describe('a conflict raised by the account rather than a room', () => {
       { role: 'owner', lease: null, leasesEnforced: false },
       handlers(order)
     );
-    expect(order).toEqual(['recovery', 'copy', 'remote']);
+    expect(order).toEqual(['copy', 'remote']);
   });
 
   it('passes the account version a keep-mine write must be fenced against', async () => {
@@ -113,7 +114,7 @@ describe('a conflict raised by the account rather than a room', () => {
     );
     expect(recovery.keepMyVersion).toHaveBeenCalledWith(
       expect.objectContaining({ expectedRemoteVersion: 9 }),
-      expect.objectContaining({ recoveryCopy: 'written' })
+      expect.objectContaining({ localCopy: 'not-requested' })
     );
   });
 
@@ -199,6 +200,6 @@ describe('a conflict raised by a room', () => {
       },
       handlers(order)
     );
-    expect(order).toEqual(['recovery', 'mine']);
+    expect(order).toEqual(['mine']);
   });
 });
