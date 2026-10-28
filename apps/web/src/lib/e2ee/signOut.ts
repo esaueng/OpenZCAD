@@ -106,6 +106,7 @@ export async function signOutAfterSaving(input: {
     } else {
       requireCurrentSession();
       await input.revokeSession();
+      if (input.userId) forgetShelfNames(input.userId);
       finishKeySessionTeardown(teardown.operation, true);
     }
   } catch (error) {

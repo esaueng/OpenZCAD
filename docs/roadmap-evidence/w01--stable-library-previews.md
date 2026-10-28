@@ -20,5 +20,8 @@ first; current signatures, authority, rollback checks and document loads remain
 authoritative. Name hints never change versions, thumbnail references or
 permissions, and clear at sign-out. Coverage includes 150 cached titles while
 the encryption account request is held, cache isolation, unavailable storage
-and newer device renames (`projectShelfNames.test.ts`). Target-hardware
+and newer device renames (`projectShelfNames.test.ts`). Account erasure,
+sign-out with or without a stored-device choice, and cross-tab key teardown
+also remove title hints (`accountErasure.test.ts`, `signOut.test.ts`,
+`encryption-session.spec.ts`). Target-hardware
 median/p95 qualification remains open.

@@ -5,6 +5,7 @@ import { lockAccount } from './unlockedKeys';
 import { confirmKeySessionEnded } from './keySession';
 import { shareWorkStore } from './shareWorkStore';
 import { projectAuthorityStore } from './projectAuthorityStore';
+import { forgetShelfNames } from '../projectShelfNames';
 
 /** Only the successful, explicitly requested erasure may reset local trust. */
 export async function eraseAccountWithKeyCleanup<
@@ -28,7 +29,10 @@ export async function eraseAccountWithKeyCleanup<
   if (result.signedOut) {
     // Synchronous: neither a failed IndexedDB write nor a failed library read
     // may leave the erased account's raw key in this page.
-    if (input.userId) lockAccount(input.userId);
+    if (input.userId) {
+      lockAccount(input.userId);
+      forgetShelfNames(input.userId);
+    }
     confirmKeySessionEnded();
     let cleanup: PromiseSettledResult<void>[] = [];
     try {

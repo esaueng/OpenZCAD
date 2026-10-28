@@ -52,6 +52,17 @@ for (const keepDevice of [true, false]) {
     const otherSettings = await openEncryptionSettings(other);
     for (const panel of [settings, otherSettings])
       await expect(panel.getByText('Unlocked', { exact: true })).toBeVisible();
+    const titleCache = `openzcad:shelf-names:v1:${encodeURIComponent(E2E_USER_ID)}`;
+    await page.evaluate(
+      (key) =>
+        localStorage.setItem(
+          key,
+          JSON.stringify([
+            ['proj_cached_name', 'Previously verified title', '2026-10-28']
+          ])
+        ),
+      titleCache
+    );
     await settings
       .getByRole('button', { name: 'Account', exact: true })
       .click();
@@ -70,5 +81,8 @@ for (const keepDevice of [true, false]) {
     await expect(
       otherSettings.getByText('Your fingerprint', { exact: true })
     ).toHaveCount(0);
+    await expect
+      .poll(() => page.evaluate((key) => localStorage.getItem(key), titleCache))
+      .toBeNull();
   });
 }

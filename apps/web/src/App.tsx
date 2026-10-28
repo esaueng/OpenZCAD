@@ -11919,6 +11919,8 @@ export function App() {
                 projectController?.closeProject();
               }
             });
+      if (scope === 'projects' && departingSession)
+        forgetShelfProjectNames(departingSession.userId, deleted.deletedProjectIds);
       if (deleted.signedOut) {
         if (sessionRef.current !== null) return;
         organizationBackground.confirmSignedOut();
