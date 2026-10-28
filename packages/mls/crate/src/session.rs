@@ -985,6 +985,7 @@ impl Session {
             .rejoin_backup
             .clone()
             .ok_or_else(|| Error::state("no rejoin is pending"))?;
+        crate::archive::check_budget(records.len(), std::iter::once(initial_group_info.len()).chain(records.iter().map(Vec::len)))?;
         // The anchor (initial GroupInfo or checkpoint) must precede the
         // rejoin's own epoch: the request is rechecked against the history
         // before it.

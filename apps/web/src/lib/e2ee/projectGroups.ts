@@ -1470,7 +1470,7 @@ const previousKeysOf = (
     .map(([keyEpoch, key]) => ({ keyEpoch, key }));
 
 /** Bind application generation numbering to independently authenticated roots. */
-async function authorityManifestForState(
+export async function authorityManifestForState(
   ctx: ProjectGroupContext,
   projectId: string,
   keyEpoch: number,
@@ -2915,10 +2915,9 @@ export async function removeMember(
   projectId: string,
   userId: string
 ): Promise<ProjectGroupState> {
-  let state: ProjectGroupState | null = null;
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < (ctx.attempts ?? DEFAULT_ATTEMPTS); round++) {
     let departing = false;
-    state = await commitLoop(
+    const state = await commitLoop(
       ctx,
       projectId,
       async (status, _group, departures) => {
@@ -2935,7 +2934,10 @@ export async function removeMember(
             'The owner cannot be removed from an encrypted project.'
           );
         }
-        if (!status.roles?.users.some((u) => u.userId === userId)) return null;
+        if (!status.roles?.users.some((u) => u.userId === userId)) {
+          departing = false;
+          return null;
+        }
         departing = departures.leaving.includes(userId);
         // Its own departure first; the drop follows in the next round.
         if (departing) return { request: {}, rotation: false };
@@ -2944,7 +2946,10 @@ export async function removeMember(
     );
     if (!departing) return state;
   }
-  return state!;
+  throw new ProjectGroupError(
+    'epoch-lost',
+    'The member kept departing while this device removed them. Try again.'
+  );
 }
 
 /**

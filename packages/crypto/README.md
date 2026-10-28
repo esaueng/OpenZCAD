@@ -17,12 +17,12 @@ before doing any cryptography. A new algorithm, such as a hybrid post-quantum
 seal, gets a new version byte; existing data never needs re-encrypting. Every
 failure is an `E2eeError` with a stable `code`.
 
-## Envelopes v1
+## Envelopes v1 and v2
 
 Both classes share one layout:
 
 ```
-"OZE" (4f 5a 45) | u8 version = 1 | u32 header length | header | chunk 0 | chunk 1 | …
+"OZE" (4f 5a 45) | u8 version (1 or 2) | u32 header length | header | chunk 0 | chunk 1 | …
 ```
 
 Every header starts with `u8 class | u8 kind | u8 compression | u32 chunk size | u64 plaintext length`:
@@ -42,6 +42,16 @@ project id | u16 count + blob ids (u8 length + id each)`. Ids are 1–128 bytes
 of printable ASCII. A project lists at most 4096 blob ids, without
 duplicates, in the order given. Kind codes are append-only: `project-info`
 (5) and `key-archive` (6) came after the first four, whose codes never move.
+
+Version 2 is restricted to document envelopes and appends a 32-byte
+`shareLinkSetHash` after the blob ids. It commits to the entire canonical
+share-link set, including an empty set and tombstones. Without that field,
+encoding remains version 1. The signed prefix authenticates the commitment;
+the application decoder (`decodeJobs.ts`) compares it with the decrypted
+body's set, and `encryptedProjectStore.ts` checks owner authority and refuses
+a v2-to-v1 downgrade in the authenticated history. The low-level envelope
+reader authenticates the header and bytes; it does not interpret document
+JSON or validate the link set on the caller's behalf.
 
 The epoch binding hash (`epochBindingHash`) occupies the 32 bytes Phase 2
 called the roster entry hash; only the name changed, not a byte of the
@@ -204,6 +214,12 @@ stolen device picks its own version numbers, so a version below a cutoff is
 trusted only once the caller also shows it is an ancestor of the cutoff
 head, for example with a version log that contains both.
 
+`VersionCutoff` also accepts `keyEpoch`, alone or alongside that exact head.
+An epoch cutoff is exclusive: only versions with `header.keyEpoch < keyEpoch`
+are eligible. When a head is present, both the epoch fence and head ancestry
+must hold. A signed revocation with no accepted head supplies only the epoch
+fence; it does not invent a document version or hash.
+
 ### Bodies
 
 Project envelope bodies are UTF-8 JSON with `version: 1` (2 for a document
@@ -236,6 +252,14 @@ carries a link set: the encoder refuses one (`invalid-argument`) and the
 decoder refuses a version 2 body under a share-snapshot header
 (`context-mismatch`), so link visitors never see the other links. The body
 codec checks structure only; `verifyShareLinkSet` checks the signatures.
+
+Key-archive bodies are version 2 when they carry `authorityManifest`, a
+`SignedStatement` encoded as base64url `statement` and `signature`. Version 1
+archives have no manifest and retain their original encoding. The decoder
+checks manifest structure; application admission verifies its signer,
+independent owner intent, immutable generation roots and replay endpoint.
+`previousKeys` remains sorted, unique, below the current key epoch and
+bounded to 8,192 entries.
 
 `revisionVersionHashes` lets a historical read prove that a retained
 revision belongs to this history through the signed head, instead of a chain
@@ -458,6 +482,13 @@ preserves version-1 bytes. Reset roots carry that signed proof and the
 previous GroupInfo; ordinary historical reads do not trust a retired
 device's unpinned record without the identity's explicit approval.
 
+Revocation-cutoffs version 2 adds a fixed head slot after each cutoff epoch:
+`u64 document version | 32-byte version hash`. A zero document version marks
+an absent head and requires zero hash bytes. Version 1 has no head slots and still
+decodes; an encoder uses v2 if any cutoff carries a head. `verifyRevocationCutoffs`
+authenticates these slots with the same identity signature and device-list
+entry checks as the epoch fence.
+
 ## Contacts lists
 
 A user's verified pins for other people's keys (ADR-024, Version integrity)
@@ -486,7 +517,42 @@ the identity key and, with a pin, refuses a rolled-back or forked list
 `contactDeviceListPin` turns a verified contact into the `DeviceListPin`
 their device list must extend.
 
+The optional `signaturesFrom` index skips signature work only for an earlier
+prefix the caller has already authenticated. The Worker uses this while
+checking an append to stored, previously verified entries. It still checks
+canonical entries, linkage and transitions across the full chain. A browser
+must use the default zero for a server-provided chain; a positive index does
+not authenticate an untrusted prefix.
+
+## MLS authority manifests and account trust
+
+`mls-authority.ts` encodes bounded canonical JSON (at most 768 KiB), refusing
+unknown fields, noncanonical encodings and malformed group/reset metadata.
+An owner device signs an `MlsAuthorityManifest` with the `mls authority manifest`
+statement label. It binds the project, verified owner identity hash, immutable
+generation roots (`generation`, `keyEpochBase`, `groupInfo`), optional reset
+proofs and terminal predecessor GroupInfos, optional owner checkpoint, and
+signer device id. `verifyMlsAuthorityManifest` authenticates the supplied
+signing key; callers must establish that key's owner/device certification and
+independent project-owner intent. `verifyMlsAuthorityReset` checks each
+identity-authorized generation transition.
+
+`MlsAuthorityTrust` additionally binds the account, monotonically increasing
+sequence, account-key generation/sequence and exact accepted terminal MLS
+state (`latestKeyEpoch`, `latestGroupInfo`). `signMlsAuthorityTrust` authenticates
+its canonical record with an account-key-derived HMAC and a device signature;
+`openMlsAuthorityTrust` verifies both, and `verifyMlsAuthorityTrustSigner`
+allows signer verification before opening the account key. Authenticating
+these records does not prove freshness: application compare-and-swap pins,
+independent roots and exact native MLS transcript/tree replay remain required.
+
 ## Share links
+
+`verifyShareAuthority` requires a delegation already authenticated by
+`verifyShareDelegation` against the independently verified owner's identity
+and the verifier's current time. Passing an unverified decoded delegation
+does not establish its authority; application/visitor callers enforce that
+ordering before using the authority's device keys.
 
 ADR-024, Sharing and collaboration. A link is
 `#share=<token>.<key>.<owner>`: `<key>` is the 32-byte share key and

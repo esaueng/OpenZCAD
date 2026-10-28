@@ -37,6 +37,36 @@ use crate::{
     session::{leaf_info, roles_info, EpochRecordV1, LeafInfo, RolesInfo},
 };
 
+pub const MAX_REPLAY_RECORDS: usize = 8192;
+pub const MAX_REPLAY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Bound untrusted history before decoding or replay. Count the supplied
+/// suffix, not the absolute epoch: certified checkpoints can start later.
+pub fn check_budget(count: usize, lengths: impl IntoIterator<Item = usize>) -> Res<()> {
+    if count > MAX_REPLAY_RECORDS {
+        return Err(Error::input("epoch archive exceeds its record budget"));
+    }
+    let mut total = 0usize;
+    for length in lengths {
+        total = total.checked_add(length).filter(|n| *n <= MAX_REPLAY_BYTES)
+            .ok_or_else(|| Error::input("epoch archive exceeds its byte budget"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn inclusive_limits_and_overflow() {
+        assert!(check_budget(MAX_REPLAY_RECORDS, [MAX_REPLAY_BYTES]).is_ok());
+        assert!(check_budget(MAX_REPLAY_RECORDS + 1, [0]).unwrap_err().message.contains("record budget"));
+        assert!(check_budget(0, [MAX_REPLAY_BYTES, 1]).unwrap_err().message.contains("byte budget"));
+        assert!(check_budget(0, [usize::MAX, 1]).unwrap_err().message.contains("byte budget"));
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpochAuthority {
@@ -204,6 +234,7 @@ fn replay_authority(
     directory: Arc<dyn DeviceListVerifier>,
     owner: &[u8],
 ) -> Res<ReplayResult> {
+    check_budget(records.len(), std::iter::once(anchor.len()).chain(records.iter().map(Vec::len)))?;
     let info = message(anchor)?
         .into_group_info()
         .ok_or_else(|| invalid("anchor is not a GroupInfo"))?;
@@ -375,6 +406,7 @@ pub fn verify_epoch_authority(
     owner: &[u8],
     directory: Arc<dyn DeviceListVerifier>,
 ) -> Res<EpochAuthority> {
+    check_budget(records.len(), [anchor.len(), target_record.len()].into_iter().chain(records.iter().map(Vec::len)))?;
     let mut input = target_record;
     let record = EpochRecordV1::mls_decode(&mut input).map_err(Error::codec)?;
     if !input.is_empty() || record.version != 1 {
@@ -402,6 +434,7 @@ pub fn verify_epoch_authority_bound(
     directory: crate::directory::DeviceDirectory,
     authenticated_group_info: &[u8],
 ) -> Res<EpochAuthority> {
+    check_budget(records.len(), [anchor.len(), target_record.len(), authenticated_group_info.len()].into_iter().chain(records.iter().map(Vec::len)))?;
     if authenticated_group_info.is_empty() {
         return verify_epoch_authority(project_id, anchor, records, target_record, owner, Arc::new(directory));
     }

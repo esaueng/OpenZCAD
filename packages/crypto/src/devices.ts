@@ -824,6 +824,27 @@ export async function verifyDeviceList(
   }
   const pin = options.pin;
   if (pin !== undefined) checkPin(pin);
+  // Capture before the first await, including sparse or ill-typed entries.
+  const captured = Array.from(
+    chain as readonly SignedDeviceListEntry[],
+    (signed) => {
+      if (
+        signed === null ||
+        typeof signed !== 'object' ||
+        !(signed.entry instanceof Uint8Array) ||
+        !(signed.signature instanceof Uint8Array)
+      ) {
+        throw new E2eeError(
+          'invalid-argument',
+          'Not a signed device-list entry'
+        );
+      }
+      return {
+        entry: copyBytes(signed.entry),
+        signature: copyBytes(signed.signature)
+      };
+    }
+  );
   const { key, raw: identityKey } = await verifyingKey(identityPublicKey);
   const identityKeyHash = await publicKeyHash(identityKey);
   if (pin && !equalBytes(pin.identityKeyHash, identityKeyHash)) {
@@ -832,14 +853,6 @@ export async function verifyDeviceList(
       'The identity key is not the one this browser pinned'
     );
   }
-  // Copy the chain before the first await below, so a caller editing it
-  // meanwhile cannot change what is verified.
-  const captured = (chain as readonly SignedDeviceListEntry[]).map(
-    (signed) => ({
-      entry: copyBytes(signed.entry),
-      signature: copyBytes(signed.signature)
-    })
-  );
   const entries: { entry: DeviceListEntry; hash: Bytes }[] = [];
   const certifiedAt = new Map<string, number>();
   const revoked: RevokedRecord[] = [];

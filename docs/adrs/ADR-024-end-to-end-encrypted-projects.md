@@ -239,8 +239,12 @@ certifying or revoking a device, rotating keys or replacing the recovery key,
 and is then discarded from memory.
 
 - **This device:** the device unlock key, whose private half is
-  non-extractable in IndexedDB on the web and in the macOS Keychain on
-  desktop, next to the existing refresh token. The account key is stored
+  a non-extractable WebCrypto key in IndexedDB on the web. Desktop stores
+  software key bytes as macOS Keychain generic-password items, next to the
+  existing refresh token; the native host reads those bytes to sign or derive.
+  They are not Secure Enclave keys. Private bytes never cross the renderer/IPC
+  boundary, but non-exportability is not enforced against the native host.
+  The account key is stored
   wrapped to its certified public half. That lets another browser wrap a new
   account key for this device while it is offline, without ever seeing a
   secret of the device.
@@ -249,6 +253,23 @@ and is then discarded from memory.
   the other methods.
 - **The recovery key:** a random 256-bit code the user must save and confirm
   during setup.
+
+On a fresh browser with no saved device-list pin, a recovery key authenticates
+the identity but cannot prove that the server supplied the latest device
+list. A consistently forked pre-removal list may still include a removed
+device when new wraps are issued. Pinned devices reject that fork when they
+see it, but that later detection does not undo disclosure. Settings therefore
+recommends approval from an already unlocked device when possible, so its
+verified head is transferred. Recovery remains available when no such device
+exists; it carries this first-sight freshness limitation.
+
+Keychain sign/derive commands and browser WebCrypto keys both let executing
+frontend code use the device key without a separate prompt for each operation.
+Bundled desktop code and CSP protect that boundary; the host's key-id and
+message-size checks are not a user-consent or purpose-authorization mechanism.
+Real Keychain ACL and signed-host behavior need macOS qualification in the
+existing manual Apple Silicon workflow; browser and in-memory Rust tests
+cannot establish those platform properties.
 
 The Phase 3 passkey follow-up uses discoverable credentials, required user
 verification, the exact browser hostname as the relying-party id, and

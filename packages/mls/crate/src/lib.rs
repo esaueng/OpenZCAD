@@ -37,6 +37,14 @@ fn json<T: Serialize>(value: &T) -> Result<String, JsValue> {
     serde_json::to_string(value).map_err(|e| to_js(Error::state(e.to_string())))
 }
 
+/// Refuse oversized inputs before copying JS arrays into native memory.
+fn bounded_records(anchor: &js_sys::Uint8Array, records: &[js_sys::Uint8Array], extra: &[&js_sys::Uint8Array]) -> Result<Vec<Vec<u8>>, JsValue> {
+    archive::check_budget(records.len(), std::iter::once(anchor.length() as usize)
+        .chain(extra.iter().map(|b| b.length() as usize))
+        .chain(records.iter().map(|r| r.length() as usize))).map_err(to_js)?;
+    Ok(records.iter().map(|r| r.to_vec()).collect())
+}
+
 /// Versions compiled into this module, for diagnostics and the review.
 #[wasm_bindgen(js_name = buildInfo)]
 pub fn build_info() -> String {
@@ -121,20 +129,15 @@ pub fn verify_epoch_authority(
     // A key archive carries at most 8192 previous project keys. Historical
     // D4 verification must be able to reach its authenticated terminal state
     // across that entire supported history; the 64 MiB byte cap still holds.
-    if encoded.len() > 8192 {
+    if encoded.len() > archive::MAX_REPLAY_RECORDS {
         return Err(to_js(Error::input("epoch authority proof exceeds its record budget")));
     }
+    archive::check_budget(encoded.len(), [anchor.len(), target_record.len(), authenticated_group_info.len()]
+        .into_iter().chain(encoded.iter().map(|value| value.len() / 2))).map_err(to_js)?;
     let records: Vec<Vec<u8>> = encoded
         .iter()
         .map(|value| hex::decode(value).map_err(|_| to_js(Error::input("epoch authority record is not hex"))))
         .collect::<Result<_, _>>()?;
-    let total = records.iter().map(Vec::len).sum::<usize>()
-        + anchor.len()
-        + target_record.len()
-        + authenticated_group_info.len();
-    if total > 64 * 1024 * 1024 {
-        return Err(to_js(Error::input("epoch authority proof exceeds its byte budget")));
-    }
     let directory = DeviceDirectory::from_json(directory_json).map_err(to_js)?;
     json(
         &archive::verify_epoch_authority_bound(
@@ -218,12 +221,12 @@ impl MlsSession {
 
     pub fn join(
         &mut self,
-        welcome: &[u8],
-        initial_group_info: &[u8],
+        welcome: &js_sys::Uint8Array,
+        initial_group_info: &js_sys::Uint8Array,
         records: Vec<js_sys::Uint8Array>,
     ) -> Result<String, JsValue> {
-        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
-        json(&self.inner.join(welcome, initial_group_info, &records).map_err(to_js)?)
+        let records = bounded_records(initial_group_info, &records, &[welcome])?;
+        json(&self.inner.join(&welcome.to_vec(), &initial_group_info.to_vec(), &records).map_err(to_js)?)
     }
 
     #[wasm_bindgen(js_name = beginJoin)]
@@ -234,11 +237,19 @@ impl MlsSession {
     #[wasm_bindgen(js_name = completeJoin)]
     pub fn complete_join(
         &mut self,
-        initial_group_info: &[u8],
+        initial_group_info: &js_sys::Uint8Array,
         records: Vec<js_sys::Uint8Array>,
     ) -> Result<String, JsValue> {
-        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
-        json(&self.inner.complete_join(initial_group_info, &records).map_err(to_js)?)
+        let records = match bounded_records(initial_group_info, &records, &[]) {
+            Ok(records) => records,
+            Err(error) => {
+                // Completion errors must roll back the provisional Welcome,
+                // including refusals before the native input copy.
+                self.inner.discard_join().map_err(to_js)?;
+                return Err(error);
+            }
+        };
+        json(&self.inner.complete_join(&initial_group_info.to_vec(), &records).map_err(to_js)?)
     }
 
     #[wasm_bindgen(js_name = discardJoin)]
@@ -301,18 +312,18 @@ impl MlsSession {
     /// `remove`: a stale leaf of this user to replace in the same Commit.
     pub fn rejoin(
         &mut self,
-        group_info: &[u8],
+        group_info: &js_sys::Uint8Array,
         psk_epoch: u64,
-        psk: &[u8],
+        psk: &js_sys::Uint8Array,
         remove: Option<u32>,
-        initial_group_info: &[u8],
+        initial_group_info: &js_sys::Uint8Array,
         records: Vec<js_sys::Uint8Array>,
     ) -> Result<String, JsValue> {
-        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
+        let records = bounded_records(initial_group_info, &records, &[group_info, psk])?;
         json(
             &self
                 .inner
-                .rejoin(group_info, psk_epoch, psk, remove, initial_group_info, &records)
+                .rejoin(&group_info.to_vec(), psk_epoch, &psk.to_vec(), remove, &initial_group_info.to_vec(), &records)
                 .map_err(to_js)?,
         )
     }
@@ -336,11 +347,11 @@ impl MlsSession {
     #[wasm_bindgen(js_name = completeRejoin)]
     pub fn complete_rejoin(
         &mut self,
-        initial_group_info: &[u8],
+        initial_group_info: &js_sys::Uint8Array,
         records: Vec<js_sys::Uint8Array>,
     ) -> Result<(), JsValue> {
-        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
-        self.inner.complete_rejoin(initial_group_info, &records).map_err(to_js)
+        let records = bounded_records(initial_group_info, &records, &[])?;
+        self.inner.complete_rejoin(&initial_group_info.to_vec(), &records).map_err(to_js)
     }
 
     /// The room accepted the external Commit.

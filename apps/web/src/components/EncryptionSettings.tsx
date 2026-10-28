@@ -925,7 +925,7 @@ function EnrollPanel({
       </SettingRow>
       <SettingRow
         title="Use your recovery key"
-        hint="Unlocks and certifies this device on its own."
+        hint="Unlocks and certifies this device on its own. Approve from another unlocked device when possible: it also confirms the latest device list. A recovery key alone cannot prove the list is up to date on a fresh browser."
       >
         <button
           className="secondary"

@@ -7,6 +7,7 @@
  * (`support/e2ee-members.ts`).
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { sqliteD1 } from './support/sqlite-d1';
 import { ownProjectRole } from '../apps/web/src/lib/e2ee/memberships';
 import {
   ProjectGroupError,
@@ -19,6 +20,8 @@ import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKe
 import {
   OTHER,
   OWNER,
+  createEncrypted,
+  newServer,
   device,
   edited,
   makeAccount,
@@ -103,6 +106,63 @@ async function membershipRefusal(promise: Promise<unknown>) {
 
 // Several MLS Commits and fresh browsers per case.
 describe('role changes (slice 5-4)', { timeout: 30_000 }, () => {
+  it.each([false, true])(
+    'handles 16 role changes plus 16 drops within D1 binds, preserving a stale-member fence (%s)',
+    async (race) => {
+      const members = await Promise.all(
+        Array.from({ length: 32 }, (_, i) =>
+          makeAccount(`user_bind_${String(i).padStart(2, '0')}`, [
+            `bind_device_${i}`
+          ])
+        )
+      );
+      const srv = newServer([owner, ...members]);
+      const laptop = device(srv, owner, 'owner_laptop', { members });
+      const {
+        document: { projectId }
+      } = await createEncrypted(laptop);
+      for (const member of members)
+        memberRow(srv, projectId, member.userId, 'editor');
+      for (const batch of [members.slice(0, 16), members.slice(16)]) {
+        await commitProjectGroup(laptop.groups, projectId, {
+          setRoles: batch.map((m) => ({ userId: m.userId, role: 'editor' }))
+        });
+      }
+      if (race) {
+        let moved = false;
+        srv.env.DB = sqliteD1(srv.db, {
+          onStatement(sql) {
+            if (!moved && /^\s*INSERT INTO e2ee_mls_commits/.test(sql)) {
+              moved = true;
+              srv.db
+                .prepare(
+                  'UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?'
+                )
+                .run('viewer', projectId, members[0]!.userId);
+            }
+          }
+        });
+      }
+      const work = commitProjectGroup(laptop.groups, projectId, {
+        setRoles: members
+          .slice(0, 16)
+          .map((m) => ({ userId: m.userId, role: 'viewer' })),
+        dropUsers: members.slice(16).map((m) => m.userId)
+      });
+      if (race) {
+        await expect(work).rejects.toBeInstanceOf(ProjectGroupApiError);
+        expect(serverKeyEpoch(srv, projectId)).toBe(2);
+        expect(mirrored(srv, projectId)).toHaveLength(32);
+      } else {
+        expect((await work).keyEpoch).toBe(3);
+        expect(mirrored(srv, projectId)).toEqual(
+          members
+            .slice(0, 16)
+            .map((m) => ({ user_id: m.userId, role: 'viewer' }))
+        );
+      }
+    }
+  );
   it('demotes an editor: the mirror moves with the Commit, its earlier versions verify, and its browser and the Worker refuse its next write', async () => {
     const { srv, laptop, member, projectId } = await sharedProject(
       accounts(),

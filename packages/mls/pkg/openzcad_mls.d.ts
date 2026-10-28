@@ -108,8 +108,8 @@ export interface InitOutput {
     readonly mlssession_certificationPayload: (a: number, b: number, c: bigint) => void;
     readonly mlssession_certify: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_commit: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly mlssession_completeJoin: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly mlssession_completeRejoin: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly mlssession_completeJoin: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly mlssession_completeRejoin: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly mlssession_confirmCommit: (a: number, b: number) => void;
     readonly mlssession_confirmRejoin: (a: number, b: number) => void;
     readonly mlssession_createGroup: (a: number, b: number, c: number) => void;
@@ -124,14 +124,14 @@ export interface InitOutput {
     readonly mlssession_insecureSkipSendChecksForTests: (a: number, b: number) => void;
     readonly mlssession_inspectGroupInfo: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_inspectWelcome: (a: number, b: number, c: number, d: number) => void;
-    readonly mlssession_join: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly mlssession_join: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly mlssession_keyPackage: (a: number, b: number) => void;
     readonly mlssession_process: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_projectKey: (a: number, b: number) => void;
     readonly mlssession_proposeAdd: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_proposeSelfRemove: (a: number, b: number) => void;
     readonly mlssession_proposeUpdate: (a: number, b: number) => void;
-    readonly mlssession_rejoin: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
+    readonly mlssession_rejoin: (a: number, b: number, c: number, d: bigint, e: number, f: number, g: number, h: number, i: number) => void;
     readonly mlssession_rejoinPsk: (a: number, b: number) => void;
     readonly mlssession_setDirectory: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_signatureKey: (a: number, b: number) => void;

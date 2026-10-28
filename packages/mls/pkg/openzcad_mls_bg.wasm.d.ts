@@ -11,8 +11,8 @@ export const mlssession_beginRejoin: (a: number, b: number, c: number, d: number
 export const mlssession_certificationPayload: (a: number, b: number, c: bigint) => void;
 export const mlssession_certify: (a: number, b: number, c: number, d: number) => void;
 export const mlssession_commit: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-export const mlssession_completeJoin: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-export const mlssession_completeRejoin: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const mlssession_completeJoin: (a: number, b: number, c: number, d: number, e: number) => void;
+export const mlssession_completeRejoin: (a: number, b: number, c: number, d: number, e: number) => void;
 export const mlssession_confirmCommit: (a: number, b: number) => void;
 export const mlssession_confirmRejoin: (a: number, b: number) => void;
 export const mlssession_createGroup: (a: number, b: number, c: number) => void;
@@ -27,14 +27,14 @@ export const mlssession_import: (a: number, b: number, c: number, d: number, e: 
 export const mlssession_insecureSkipSendChecksForTests: (a: number, b: number) => void;
 export const mlssession_inspectGroupInfo: (a: number, b: number, c: number, d: number) => void;
 export const mlssession_inspectWelcome: (a: number, b: number, c: number, d: number) => void;
-export const mlssession_join: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+export const mlssession_join: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const mlssession_keyPackage: (a: number, b: number) => void;
 export const mlssession_process: (a: number, b: number, c: number, d: number) => void;
 export const mlssession_projectKey: (a: number, b: number) => void;
 export const mlssession_proposeAdd: (a: number, b: number, c: number, d: number) => void;
 export const mlssession_proposeSelfRemove: (a: number, b: number) => void;
 export const mlssession_proposeUpdate: (a: number, b: number) => void;
-export const mlssession_rejoin: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
+export const mlssession_rejoin: (a: number, b: number, c: number, d: bigint, e: number, f: number, g: number, h: number, i: number) => void;
 export const mlssession_rejoinPsk: (a: number, b: number) => void;
 export const mlssession_setDirectory: (a: number, b: number, c: number, d: number) => void;
 export const mlssession_signatureKey: (a: number, b: number) => void;

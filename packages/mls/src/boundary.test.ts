@@ -1,7 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { loadWasm } from './test-support';
+import { loadWasm, wasmMemoryForTests } from './test-support';
 
 describe('raw MLS WASM boundaries', () => {
+  it('bounds join and rejoin inputs below the TypeScript and Worker wrappers', () => {
+    const wasm = loadWasm();
+    const session = wasm.MlsSession.generate('project', 'owner', 'device');
+    const empty = new Uint8Array();
+    const records = Array.from({ length: 8193 }, () => empty);
+    try {
+      expect(() => session.join(empty, empty, records)).toThrow(
+        /record budget/
+      );
+      expect(() =>
+        session.rejoin(empty, 0n, empty, undefined, empty, records)
+      ).toThrow(/record budget/);
+      expect(() => session.completeRejoin(empty, records)).toThrow(
+        /record budget/
+      );
+      const memory = wasmMemoryForTests();
+      const before = memory.buffer.byteLength;
+      expect(() =>
+        session.join(empty, new Uint8Array(64 * 1024 * 1024 + 1), [])
+      ).toThrow(/byte budget/);
+      expect(memory.buffer.byteLength - before).toBeLessThan(1024 * 1024);
+      expect(() =>
+        session.rejoin(
+          empty,
+          0n,
+          empty,
+          undefined,
+          new Uint8Array(64 * 1024 * 1024 + 1),
+          []
+        )
+      ).toThrow(/byte budget/);
+      expect(memory.buffer.byteLength - before).toBeLessThan(1024 * 1024);
+      const status: unknown = JSON.parse(session.status());
+      expect(status).toMatchObject({ inGroup: false });
+    } finally {
+      session.free();
+    }
+  });
   it('covers the full supported key archive while retaining authority proof budgets', () => {
     const wasm = loadWasm();
     const check = (count: number, anchor = new Uint8Array()) =>

@@ -25,6 +25,7 @@ import {
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import { createE2eeInvitationsApi } from '@openzcad/shared';
+import { PROJECT_INVITATION_RATE_LIMIT } from '@openzcad/persistence';
 import { handleE2eeRequest } from '../apps/web/worker/e2ee';
 import {
   invitationErasureStatements,
@@ -347,6 +348,58 @@ async function readyToAdd() {
 }
 
 describe('encrypted invitations (slice 5-3a)', () => {
+  it('charges the shared quota only for admitted invitations, including concurrent retries', async () => {
+    const { srv } = server();
+    const { projectId } = await encryptedProject(srv);
+    expect((await invite(srv, projectId)).response.status).toBe(201);
+    const used = () =>
+      rows<{ request_count: number }>(
+        srv,
+        'SELECT request_count FROM auth_rate_limits WHERE bucket = ?',
+        `project-invite-account:${OWNER}`
+      )[0]?.request_count ?? 0;
+    expect(used()).toBe(1);
+    const retry = await statement(projectId);
+    const responses = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        srv.call('POST', invitationsPath(projectId), { body: retry.body })
+      )
+    );
+    expect(responses.map((r) => r.status)).toEqual([409, 409, 409]);
+    expect(used()).toBe(1);
+    // A different, valid recipient still fits the remaining budget.
+    const next = await statement(projectId, {
+      inviteeEmailHash: await invitationEmailHash(THIRD_EMAIL)
+    });
+    next.body.email = THIRD_EMAIL;
+    expect(
+      (await srv.call('POST', invitationsPath(projectId), { body: next.body }))
+        .status
+    ).toBe(201);
+    expect(used()).toBe(2);
+    srv.db
+      .prepare('UPDATE auth_rate_limits SET request_count = ? WHERE bucket = ?')
+      .run(
+        PROJECT_INVITATION_RATE_LIMIT - 1,
+        `project-invite-account:${OWNER}`
+      );
+    const contenders = await Promise.all(
+      ['last-a@example.test', 'last-b@example.test'].map(async (email) => {
+        const signed = await statement(projectId, {
+          inviteeEmailHash: await invitationEmailHash(email)
+        });
+        signed.body.email = email;
+        return signed.body;
+      })
+    );
+    const last = await Promise.all(
+      contenders.map((body) =>
+        srv.call('POST', invitationsPath(projectId), { body })
+      )
+    );
+    expect(last.map((r) => r.status).sort()).toEqual([201, 429]);
+    expect(used()).toBe(PROJECT_INVITATION_RATE_LIMIT);
+  });
   it('stores an owner-signed invitation and emails the sender, not the project', async () => {
     const { srv, mailbox } = server();
     const { projectId } = await encryptedProject(srv);
