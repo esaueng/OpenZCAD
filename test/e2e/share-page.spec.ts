@@ -1,9 +1,82 @@
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import { ENCRYPTED_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/e2ee/encryptedInvitationLink';
 import { test, expect, stubAnonymousApi } from './openzcad-fixtures';
 
 const token = 'a'.repeat(43);
 const encrypted = `${token}.${'k'.repeat(43)}.${'o'.repeat(43)}`;
+
+for (const pending of [false, true]) {
+  test(`an encrypted invitation leaves ${pending ? 'a loading' : 'a failed'} share page and cancels the old load`, async ({
+    page
+  }) => {
+    await stubAnonymousApi(page);
+    const document = createProjectDocument(
+      'Superseded model',
+      toUserId('owner')
+    );
+    let release!: () => void;
+    let requested = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/share/*', async (route) => {
+      requested = true;
+      if (pending) await gate;
+      await route.fulfill(
+        pending
+          ? {
+              json: {
+                document,
+                project: { projectId: document.projectId, name: document.name },
+                mode: 'tweak'
+              }
+            }
+          : { status: 404, json: { error: 'Unavailable' } }
+      );
+    });
+    await page.goto(`/#share=${token}`);
+    await expect.poll(() => requested).toBe(true);
+    await expect(
+      page.getByRole('heading', {
+        name: pending
+          ? 'Opening shared model…'
+          : 'This share link is unavailable'
+      })
+    ).toBeVisible();
+    try {
+      const invitation = 'i'.repeat(43);
+      await page.evaluate((value) => {
+        window.location.hash = `encrypted-invite=${value}`;
+      }, invitation);
+      const settings = page.getByRole('dialog', { name: 'Settings' });
+      await expect(settings).toBeVisible();
+      await expect(
+        page.getByRole('main', { name: 'Shared model' })
+      ).toHaveCount(0);
+      expect(
+        await page.evaluate(
+          (key) => sessionStorage.getItem(key),
+          ENCRYPTED_INVITATION_SESSION_KEY
+        )
+      ).toBe(invitation);
+      if (pending) {
+        const response = page.waitForResponse(/\/api\/share\//);
+        release();
+        await response;
+        // The superseded request must get a chance to process its response.
+        await page.waitForTimeout(250);
+      }
+      await expect(settings).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toHaveCount(0);
+      expect(new URL(page.url()).hash).toBe('');
+    } finally {
+      release();
+    }
+  });
+}
 
 test('an incomplete link closes Settings and leaves the share actions keyboard accessible', async ({
   page

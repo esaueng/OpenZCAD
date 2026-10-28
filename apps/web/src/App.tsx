@@ -2234,19 +2234,22 @@ export function App() {
       setBusy(false);
     };
   }, []);
-  function beginProjectNavigation(clearShareFragment = true) {
-    cancelNavigationBusy();
-    if (clearShareFragment) clearProjectShareFragment();
-    const navigation = ++fragmentNavigationRef.current;
-    clearPendingProjectInvitation();
-    pendingInvitationAttemptRef.current = null;
-    setPendingInvitationToken(null);
-    setPendingInvitationError(null);
-    shareOpenAttemptRef.current = null;
-    setPendingShareToken(null);
-    setSharePage(null);
-    return () => fragmentNavigationRef.current === navigation;
-  }
+  const beginProjectNavigation = useCallback(
+    (clearShareFragment = true) => {
+      cancelNavigationBusy();
+      if (clearShareFragment) clearProjectShareFragment();
+      const navigation = ++fragmentNavigationRef.current;
+      clearPendingProjectInvitation();
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationToken(null);
+      setPendingInvitationError(null);
+      shareOpenAttemptRef.current = null;
+      setPendingShareToken(null);
+      setSharePage(null);
+      return () => fragmentNavigationRef.current === navigation;
+    },
+    [cancelNavigationBusy]
+  );
   const restoreShareSessionFragment = useCallback(() => {
     const active = shareSessionRef.current;
     if (!active) return;
@@ -2263,6 +2266,7 @@ export function App() {
     const openFragment = () => {
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
+          beginProjectNavigation(false);
           updateSettingsViewState({ open: true, activeSection: 'encryption' });
           setSettingsOpen(true);
         }
@@ -2319,7 +2323,7 @@ export function App() {
     };
     window.addEventListener('hashchange', openFragment);
     return () => window.removeEventListener('hashchange', openFragment);
-  }, [cancelNavigationBusy]);
+  }, [beginProjectNavigation, cancelNavigationBusy]);
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
