@@ -102,13 +102,21 @@ export interface OwnerWithLink {
  */
 export async function ownerWithShareLink(
   browser: Browser,
-  { content = 'box' }: { content?: 'box' | 'step' } = {}
+  {
+    content = 'box',
+    viewport,
+    hasTouch = false
+  }: {
+    content?: 'box' | 'step';
+    viewport?: { width: number; height: number };
+    hasTouch?: boolean;
+  } = {}
 ): Promise<OwnerWithLink> {
   const server = createE2eeServer({ projectsEnabled: true });
   server.db
     .prepare('UPDATE users SET email = ? WHERE id = ?')
     .run(ALICE_EMAIL, E2E_USER_ID);
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport, hasTouch });
   const alice = await signIn(context, server, E2E_USER_ID, ALICE_EMAIL);
   await installUploadRoutes(alice, server);
   const errors: string[] = [];
@@ -166,7 +174,14 @@ export async function ownerWithShareLink(
   await expect(
     links.getByRole('button', { name: 'Create link' })
   ).toBeDisabled();
-  await links.getByRole('button', { name: 'Confirm sharing…' }).click();
+  const confirmSharing = links.getByRole('button', {
+    name: 'Confirm sharing…'
+  });
+  // Opacity-zero controls still pass toBeVisible and click in Playwright.
+  // The owner must be able to discover confirmation without hover or focus.
+  await alice.mouse.move(0, 0);
+  await expect(confirmSharing).toHaveCSS('opacity', '1');
+  await confirmSharing.click();
   const confirm = links.getByRole('group', { name: 'Confirm sharing' });
   await confirm.getByLabel('Recovery key').fill(seeded.recoveryKey);
   await confirm
