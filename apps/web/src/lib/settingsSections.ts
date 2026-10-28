@@ -194,6 +194,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Replace recovery key',
       'Scan this code',
       'Compare these digits',
+      'Continue your approval request',
       'Approve from another device',
       'Use your recovery key',
       'Approval requests',
