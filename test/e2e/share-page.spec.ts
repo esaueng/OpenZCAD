@@ -1,10 +1,76 @@
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import { ENCRYPTED_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/e2ee/encryptedInvitationLink';
-import { test, expect, stubAnonymousApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubAnonymousApi,
+  stubApi,
+  stubAssistant,
+  openAssistant,
+  askAssistant
+} from './openzcad-fixtures';
 
 const token = 'a'.repeat(43);
 const encrypted = `${token}.${'k'.repeat(43)}.${'o'.repeat(43)}`;
+
+test('a failed replacement preserves the previous workspace and its pending assistant response', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await stubAssistant(page, gate);
+  let requested = false;
+  page.on('request', (request) => {
+    if (request.url().endsWith('/api/assistant/proposals')) requested = true;
+  });
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({ status: 404, json: { error: 'Unavailable' } })
+  );
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('My ongoing model');
+  await page
+    .getByRole('button', { name: 'Create project', exact: true })
+    .click();
+  await openAssistant(page);
+  await askAssistant(page, 'Add a 10 mm cube');
+  await expect.poll(() => requested).toBe(true);
+  const workspace = await page.locator('.workspace-reveal').elementHandle();
+  try {
+    await page.evaluate((link) => {
+      window.location.hash = `share=${link}`;
+    }, token);
+    await expect(
+      page.getByRole('heading', { name: 'This share link is unavailable' })
+    ).toBeVisible();
+    expect(await workspace.evaluate((element) => element.isConnected)).toBe(
+      true
+    );
+    await expect(page.locator('.workspace-reveal')).toHaveAttribute('inert');
+    await expect(
+      page.getByRole('button', { name: 'Rename project' })
+    ).toHaveCount(0);
+    const response = page.waitForResponse(/\/api\/assistant\/proposals/);
+    release();
+    await response;
+    await page
+      .getByRole('button', { name: 'Return to previous model' })
+      .click();
+    await expect(page.locator('.breadcrumb')).toContainText('My ongoing model');
+    await openAssistant(page);
+    await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+      'Add a 10 mm cube.'
+    );
+    expect(await workspace.evaluate((element) => element.isConnected)).toBe(
+      true
+    );
+  } finally {
+    release();
+  }
+});
 
 for (const pending of [false, true]) {
   test(`an encrypted invitation leaves ${pending ? 'a loading' : 'a failed'} share page and cancels the old load`, async ({
@@ -310,6 +376,7 @@ test('an incomplete share takes precedence over automatic project restore', asyn
     .click();
   await expect(page.locator('.breadcrumb')).toContainText('My existing part');
   await page.goto('/#share=');
+  await page.reload();
   await expect(
     page.getByRole('heading', { name: 'This share link is incomplete' })
   ).toBeVisible();

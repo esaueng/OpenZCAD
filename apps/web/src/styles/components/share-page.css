@@ -1,6 +1,7 @@
 .share-page {
   position: absolute;
   inset: 0;
+  z-index: var(--z-settings);
   display: flex;
   flex-direction: column;
   align-items: center;

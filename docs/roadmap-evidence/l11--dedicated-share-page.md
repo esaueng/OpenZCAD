@@ -12,3 +12,6 @@ encrypted unavailable links, malformed fragments, reload, network retry,
 cancellation, replacement races, encrypted-invitation navigation and retained
 local projects. Existing encrypted
 owner/visitor verification and publication contracts remain in force.
+An existing workspace stays mounted, hidden and inert beneath the destination;
+regressions verify that an in-flight assistant reply survives a failed share
+replacement and the return to the previous model.

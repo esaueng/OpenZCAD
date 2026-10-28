@@ -26299,35 +26299,34 @@ export function App() {
       .filter((projectId) => hasUnresolvedConflict(projectId))
   );
 
-  if (sharePage) {
-    return (
-      <SharePage
-        state={sharePage}
-        onRetry={
-          pendingShareToken !== null &&
-          shareLinkFromHash(`#share=${pendingShareToken}`)
-            ? () => {
-                shareOpenAttemptRef.current = null;
-                setSharePage({ phase: 'loading' });
-                setShareNavigation((current) => current + 1);
-              }
-            : undefined
-        }
-        onBack={() => {
-          const isCurrent = beginProjectNavigation();
-          void handleGoHome(isCurrent);
-        }}
-        onReturnToModel={
-          doc
-            ? () => {
-                beginProjectNavigation();
-                restoreShareSessionFragment();
-              }
-            : undefined
-        }
-      />
-    );
-  }
+  const shareDestination = sharePage ? (
+    <SharePage
+      state={sharePage}
+      onRetry={
+        pendingShareToken !== null &&
+        shareLinkFromHash(`#share=${pendingShareToken}`)
+          ? () => {
+              shareOpenAttemptRef.current = null;
+              setSharePage({ phase: 'loading' });
+              setShareNavigation((current) => current + 1);
+            }
+          : undefined
+      }
+      onBack={() => {
+        const isCurrent = beginProjectNavigation();
+        void handleGoHome(isCurrent);
+      }}
+      onReturnToModel={
+        doc
+          ? () => {
+              beginProjectNavigation();
+              restoreShareSessionFragment();
+            }
+          : undefined
+      }
+    />
+  ) : null;
+  if (shareDestination && !doc) return shareDestination;
 
   if (startupState === 'restoring') {
     return <StartupScreen />;
@@ -27741,8 +27740,9 @@ export function App() {
     onIsolate: isolateBody,
     onShowAll: showAllBodies
   };
-  return (
+  const workspace = (
     <WorkspaceAppShell
+      covered={sharePage !== null}
       projectId={doc.projectId}
       loadingReady={
         displayedGeometryComplete ||
@@ -30099,5 +30099,11 @@ export function App() {
         </>
       }
     />
+  );
+  return (
+    <>
+      {workspace}
+      {shareDestination}
+    </>
   );
 }

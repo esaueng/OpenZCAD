@@ -725,7 +725,7 @@ for (const status of [404, 503]) {
         : 'Replacement unavailable.'
     );
     expect(new URL(page.url()).hash).toBe(`#share=${'b'.repeat(43)}`);
-    await expect(page.locator('.breadcrumb')).toHaveCount(0);
+    await expect(page.locator('.breadcrumb')).toBeHidden();
     await page.getByRole('button', { name: 'Return to previous model' }).click();
     expect(new URL(page.url()).hash).toBe(`#share=${'a'.repeat(43)}`);
     await expect(page.locator('.breadcrumb')).toContainText(document.name);

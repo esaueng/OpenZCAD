@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Link2, Link2Off, LoaderCircle, RotateCw } from 'lucide-react';
 import { BrandMark } from './BrandMark';
+import { useModalFocus } from '../lib/useModalFocus';
 
 export type SharePageState =
   | { phase: 'loading' }
@@ -19,6 +20,8 @@ export function SharePage({
   onReturnToModel?: () => void;
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
+  const page = useRef<HTMLElement>(null);
+  useModalFocus(page, { enabled: Boolean(onReturnToModel) });
   useEffect(() => {
     const previousTitle = document.title;
     document.title = 'Shared model · OpenZCAD';
@@ -31,7 +34,7 @@ export function SharePage({
   }, [state]);
   const loading = state.phase === 'loading';
   return (
-    <main className="share-page" aria-label="Shared model">
+    <main ref={page} className="share-page" aria-label="Shared model">
       <header className="share-page-brand">
         <BrandMark compact />
         <span>OpenZCAD</span>
