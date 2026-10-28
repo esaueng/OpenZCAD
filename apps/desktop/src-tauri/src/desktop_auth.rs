@@ -31,6 +31,8 @@ const MAX_NATIVE_API_RESPONSE_BYTES: usize = 50 * 1024 * 1024;
 // or mesh payload (`maxCiphertextBytes`: 1.3 times the plaintext plus 1 MiB,
 // about 167.4 MiB), rounded up.
 const MAX_NATIVE_BLOB_STREAM_BYTES: u64 = 168 * 1024 * 1024;
+// Plaintext archived files use the project backup's existing 256 MiB ceiling.
+const MAX_NATIVE_ARTIFACT_STREAM_BYTES: u64 = 256 * 1024 * 1024;
 // Bytes one renderer read takes before it returns (plus one network chunk).
 const NATIVE_BLOB_READ_BYTES: usize = 1024 * 1024;
 // Network chunks a stream holds before it waits for the renderer to read.
@@ -290,6 +292,7 @@ fn renderer_api_destination(path: &str) -> Result<RendererApiDestination, String
 struct BlobStreamDestination {
     url: Url,
     public: bool,
+    max_bytes: u64,
 }
 
 fn blob_id_segment(segment: &str) -> bool {
@@ -299,11 +302,9 @@ fn blob_id_segment(segment: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The only routes `desktop_blob_stream_open` serves, each an encrypted
-/// content blob's ciphertext: a share link's anonymous read
-/// (`/api/e2ee/share/{token}/blobs/{blob_id}`, never with credentials) and a
-/// member's read (`/api/e2ee/projects/{project_id}/blobs/{blob_id}`, with
-/// them). The path must already be in its parsed form (no query, fragment,
+/// Stream only anonymous encrypted share blobs, authenticated project blobs,
+/// and authenticated archived artifacts. The path must already be in its
+/// parsed form (no query, fragment,
 /// escape or dot segment) and classify exactly as `desktop_api_request` would.
 fn blob_stream_destination(path: &str) -> Result<BlobStreamDestination, String> {
     let refused = || "The desktop download path is not allowed.".to_string();
@@ -311,16 +312,19 @@ fn blob_stream_destination(path: &str) -> Result<BlobStreamDestination, String> 
     if url.path() != path {
         return Err(refused());
     }
-    let public = match path.split('/').collect::<Vec<_>>().as_slice() {
+    let (public, max_bytes) = match path.split('/').collect::<Vec<_>>().as_slice() {
         ["", "api", "e2ee", "share", token, "blobs", blob_id]
             if plain_route_segment(token) && blob_id_segment(blob_id) =>
         {
-            true
+            (true, MAX_NATIVE_BLOB_STREAM_BYTES)
         }
         ["", "api", "e2ee", "projects", project_id, "blobs", blob_id]
             if plain_route_segment(project_id) && blob_id_segment(blob_id) =>
         {
-            false
+            (false, MAX_NATIVE_BLOB_STREAM_BYTES)
+        }
+        ["", "api", "artifacts", artifact_id, "download"] if plain_route_segment(artifact_id) => {
+            (false, MAX_NATIVE_ARTIFACT_STREAM_BYTES)
         }
         _ => return Err(refused()),
     };
@@ -328,7 +332,11 @@ fn blob_stream_destination(path: &str) -> Result<BlobStreamDestination, String> 
     if general.public != public || general.logout || general.url != url {
         return Err(refused());
     }
-    Ok(BlobStreamDestination { url, public })
+    Ok(BlobStreamDestination {
+        url,
+        public,
+        max_bytes,
+    })
 }
 
 fn collaboration_api_url(project_id: &str, ticket_endpoint: bool) -> Result<Url, String> {
@@ -1037,11 +1045,8 @@ async fn open_blob_stream(
             .lock()
             .map_err(|_| "Desktop auth state is unavailable.")?;
         admit_blob_stream(&mut streams, Instant::now())?;
-        let pump = tauri::async_runtime::spawn(pump_blob_stream(
-            response,
-            sender,
-            MAX_NATIVE_BLOB_STREAM_BYTES,
-        ));
+        let pump =
+            tauri::async_runtime::spawn(pump_blob_stream(response, sender, destination.max_bytes));
         let reader = BlobStreamReader {
             receiver,
             ended: false,
@@ -1410,7 +1415,7 @@ mod tests {
     const BLOB: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
-    fn streams_only_encrypted_blob_routes() {
+    fn streams_only_blob_and_authenticated_artifact_routes() {
         let share =
             blob_stream_destination(&format!("/api/e2ee/share/AbC-12_x/blobs/{BLOB}")).unwrap();
         assert!(share.public);
@@ -1425,7 +1430,21 @@ mod tests {
             member.url.as_str(),
             format!("https://zcad.app/api/e2ee/projects/proj_1/blobs/{BLOB}")
         );
+        assert_eq!(member.max_bytes, super::MAX_NATIVE_BLOB_STREAM_BYTES);
+        let artifact = blob_stream_destination("/api/artifacts/artifact_large/download").unwrap();
+        assert!(!artifact.public);
+        assert_eq!(
+            artifact.url.as_str(),
+            "https://zcad.app/api/artifacts/artifact_large/download"
+        );
+        assert_eq!(artifact.max_bytes, super::MAX_NATIVE_ARTIFACT_STREAM_BYTES);
         for path in [
+            "/api/artifacts/artifact_large/download?extra=1".to_string(),
+            "/api/artifacts/artifact_large/download#fragment".to_string(),
+            "/api/artifacts/%61rtifact_large/download".to_string(),
+            "/api/artifacts/artifact_large/../download".to_string(),
+            "/api/artifacts//download".to_string(),
+            "/api/artifacts/artifact_large/metadata".to_string(),
             format!("/api/e2ee/share/AbC-12_x/blobs/{BLOB}?download=1"),
             format!("/api/e2ee/share/AbC-12_x/blobs/{BLOB}#fragment"),
             format!("/api/e2ee/share/AbC-12_x/blobs/{}", BLOB.to_uppercase()),

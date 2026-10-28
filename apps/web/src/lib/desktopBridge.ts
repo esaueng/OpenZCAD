@@ -129,17 +129,22 @@ interface NativeBlobStreamStart {
 type NativeInvoke = typeof tauriInvoke;
 
 /**
- * The encrypted content blob reads Rust streams instead of buffering
+ * The download routes Rust streams instead of buffering
  * (`blob_stream_destination` in `desktop_auth.rs`, which has the final say):
- * a share link's anonymous read and a member's read of a project's blob. A
+ * a share link's anonymous read, a member's read of a project's blob, and
+ * authenticated archived artifact downloads. A
  * 128 MiB import source or mesh payload is larger than the buffered bridge's
  * 50 MiB response cap.
  */
 const NATIVE_BLOB_STREAM_PATH =
   /^\/api\/e2ee\/(?:share|projects)\/[A-Za-z0-9_-]{1,256}\/blobs\/[0-9a-f]{32}$/;
+const NATIVE_ARTIFACT_STREAM_PATH =
+  /^\/api\/artifacts\/[A-Za-z0-9_-]{1,256}\/download$/;
 
 function isNativeBlobStreamPath(path: string): boolean {
-  return NATIVE_BLOB_STREAM_PATH.test(path);
+  return (
+    NATIVE_BLOB_STREAM_PATH.test(path) || NATIVE_ARTIFACT_STREAM_PATH.test(path)
+  );
 }
 
 function abortError(): DOMException {

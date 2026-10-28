@@ -74,3 +74,55 @@ it('requires authentication, rejects cross-origin reads and prevents caching exp
     profile: { userId: 'user_beta_dev' }
   });
 });
+
+it('includes readable editor/viewer measurements while respecting Trash, removed members and disabled sharing', async () => {
+  db = migratedDatabase();
+  for (const user of ['reader', 'owner', 'disabled']) {
+    db.prepare(
+      'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)'
+    ).run(user, `${user}@example.com`, '2026-10-28');
+  }
+  db.prepare(
+    'INSERT INTO user_settings (user_id, settings_json, updated_at) VALUES (?, ?, ?)'
+  ).run('disabled', '{"collaboration":{"enabled":false}}', '2026-10-28');
+  const cases = [
+    ['owned_trash', 'reader', 'deleted', null],
+    ['shared_viewer', 'owner', 'active', 'viewer'],
+    ['shared_editor', 'owner', 'archived', 'editor'],
+    ['shared_trash', 'owner', 'deleted', 'viewer'],
+    ['sharing_disabled', 'disabled', 'active', 'editor'],
+    ['removed', 'owner', 'active', null]
+  ] as const;
+  for (const [id, owner, status, role] of cases) {
+    db.prepare(
+      'INSERT INTO projects (id, user_id, name, document_json, updated_at, status) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(id, owner, id, '{}', '2026-10-28', status);
+    db.prepare(
+      'INSERT INTO project_measurements (project_id, record_version, revision, payload_json, updated_at) VALUES (?, 1, 1, ?, ?)'
+    ).run(id, '{}', '2026-10-28');
+    if (role)
+      db.prepare(
+        'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1)'
+      ).run(id, 'reader', role, owner);
+  }
+  const session = {
+    userId: toUserId('reader'),
+    displayName: 'Reader',
+    mode: 'development' as const
+  };
+  const env = { DB: d1Database(db), PROJECT_SHARING_ENABLED: 'true' };
+  const exported = await exportAccountData(session, env);
+  const records = exported.records as Record<string, { project_id: string }[]>;
+  expect(
+    records.project_measurements?.map((row) => row.project_id).sort()
+  ).toEqual(['owned_trash', 'shared_editor', 'shared_viewer']);
+  const offline = await exportAccountData(session, {
+    ...env,
+    PROJECT_SHARING_ENABLED: 'false'
+  });
+  expect(
+    (offline.records as typeof records).project_measurements?.map(
+      (row) => row.project_id
+    )
+  ).toEqual(['owned_trash']);
+});

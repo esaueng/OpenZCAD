@@ -253,9 +253,11 @@ it('backs up a cloud mesh payload once as a source while keeping its original fi
     new NodeBlob([duplicated]).size - new NodeBlob([text]).size
   ).toBeGreaterThan(backup.sources![0]!.base64.length);
   expect(fetch).toHaveBeenCalledOnce();
+  const signal = vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
   expect(fetch).toHaveBeenCalledWith(
     '/api/artifacts/artifact_original/download',
-    { signal: expect.any(AbortSignal) }
+    { signal }
   );
 
   // A new device restores the payload even though it has no file entry, and
@@ -290,9 +292,11 @@ it('downloads a missing cloud mesh payload once into sources instead of files to
   expect(backup.sources![0]!.sha256).toBe(await checksum(bytes));
   expect(backup.sources![0]!.logicalBytes).toBe(ref.logicalBytes);
   expect(fetch).toHaveBeenCalledOnce();
+  const signal = vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
   expect(fetch).toHaveBeenCalledWith(
     '/api/artifacts/artifact_payload/download',
-    { signal: expect.any(AbortSignal) }
+    { signal }
   );
 });
 

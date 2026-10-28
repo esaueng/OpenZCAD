@@ -1,4 +1,12 @@
-import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import {
+  createPersistenceService,
+  projectCollaborationRollout,
+  type CloudflareEnv
+} from '@openzcad/cloudflare-adapters';
+import {
+  ProjectNotFoundError,
+  type PersistenceService
+} from '@openzcad/persistence';
 import type { AuthSession } from '@openzcad/shared';
 
 /** Explicit projections keep credentials, token hashes and other users' data
@@ -7,7 +15,16 @@ import type { AuthSession } from '@openzcad/shared';
  */
 export async function exportAccountData(
   session: AuthSession,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  persistence: Pick<
+    PersistenceService,
+    'requireProjectRead'
+  > = createPersistenceService({
+    ...env,
+    PROJECT_SHARING_ENABLED: String(
+      projectCollaborationRollout(env, session.email).sharingEnabled
+    )
+  })
 ): Promise<Record<string, unknown>> {
   if (!env.DB) return { profile: session, records: {} };
   const db = env.DB;
@@ -87,8 +104,8 @@ export async function exportAccountData(
     ],
     [
       'project_measurements',
-      `SELECT project_id, payload_json, revision, updated_at FROM project_measurements WHERE project_id IN (${owned})`,
-      [session.userId]
+      `SELECT project_id, payload_json, revision, updated_at FROM project_measurements WHERE project_id IN (${owned}) OR project_id IN (SELECT project_id FROM project_members WHERE user_id = ?)`,
+      [session.userId, session.userId]
     ],
     [
       'e2ee_contact_entries',
@@ -99,14 +116,30 @@ export async function exportAccountData(
   const records: Record<string, unknown[]> = {};
   // Sequential queries avoid holding many D1 response buffers at once.
   for (const [table, sql, bindings] of queries) {
-    if (tables.has(table))
-      records[table] =
-        (
-          await db
-            .prepare(sql)
-            .bind(...bindings)
-            .all()
-        ).results ?? [];
+    if (!tables.has(table)) continue;
+    const rows =
+      (
+        await db
+          .prepare(sql)
+          .bind(...bindings)
+          .all()
+      ).results ?? [];
+    if (table === 'project_measurements') {
+      const readable = [];
+      for (const row of rows) {
+        if (typeof row.project_id !== 'string')
+          throw new Error('Invalid measurement project ID.');
+        try {
+          // Reuse the same owner, membership, Trash and sharing-preference
+          // authorization as the project's measurement endpoint.
+          await persistence.requireProjectRead(session.userId, row.project_id);
+          readable.push(row);
+        } catch (error) {
+          if (!(error instanceof ProjectNotFoundError)) throw error;
+        }
+      }
+      records[table] = readable;
+    } else records[table] = rows;
   }
   return { profile: session, records };
 }
