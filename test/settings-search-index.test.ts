@@ -193,6 +193,17 @@ describe('encryption settings', () => {
 });
 
 describe('privacy settings', () => {
+  it('finds the data download by export and backup searches', () => {
+    for (const query of [
+      'download all data',
+      'export account',
+      'backup projects'
+    ]) {
+      expect(
+        visibleSettingsSections({ query }).map((section) => section.id)
+      ).toEqual(['privacy']);
+    }
+  });
   it('routes account and project deletion searches to Privacy & data', () => {
     for (const query of [
       'delete account',

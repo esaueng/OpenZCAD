@@ -112,6 +112,7 @@ import {
   assertAccountNotErasing,
   deleteAccountData
 } from './accountDeletion';
+import { exportAccountData } from './accountExport';
 import {
   assistantSafetyIdentifier,
   getAssistantStatus,
@@ -1725,6 +1726,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'GET' && pathname === '/api/account/storage') {
     return json(await persistence.getStorageUsage(userId));
+  }
+
+  if (request.method === 'GET' && pathname === '/api/account/export') {
+    assertSameOrigin(request);
+    await enforceApiRateLimit(env, `account-export:${userId}`, 6);
+    return json(await exportAccountData(session, env), 200, {
+      'cache-control': 'private, no-store',
+      vary: 'Cookie, Authorization'
+    });
   }
 
   if (

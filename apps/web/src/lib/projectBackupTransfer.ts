@@ -8,6 +8,7 @@ import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
 import { api, isEncryptedProject } from './api';
+import { desktopFetch } from './desktopBridge';
 import { encryptedBlobSource } from './e2ee/blobReferences';
 import {
   loadLastSyncedVersion,
@@ -76,7 +77,9 @@ async function archivedBytes(
     return new Uint8Array(bytes);
   }
   return readBackupResponse(
-    await fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/download`),
+    await desktopFetch(
+      `/api/artifacts/${encodeURIComponent(artifactId)}/download`
+    ),
     limit
   );
 }
@@ -84,7 +87,8 @@ async function archivedBytes(
 export async function createProjectBackup(
   document: ProjectDocument,
   cloudProject: boolean,
-  measurements?: StoredMeasurementRecord
+  measurements?: StoredMeasurementRecord | null,
+  options: { localOnly?: boolean; includeEncryptedFiles?: boolean } = {}
 ): Promise<string> {
   const snapshot = withoutDerivedProjection(structuredClone(document));
   const storedFiles = await loadProjectBackupFiles(snapshot.projectId);
@@ -105,19 +109,26 @@ export async function createProjectBackup(
     sources: [],
     saveStates: [],
     measurements:
-      measurements ?? (await loadProjectMeasurements(snapshot.projectId))
+      measurements === undefined
+        ? await loadProjectMeasurements(snapshot.projectId)
+        : measurements
   };
   const remote =
-    cloudProject || (await loadLastSyncedVersion(snapshot.projectId)) !== null;
+    !options.localOnly &&
+    (cloudProject ||
+      (await loadLastSyncedVersion(snapshot.projectId)) !== null);
   let bytesUsed = new Blob([JSON.stringify(backup)]).size;
   const reserve = (length: number) => {
     bytesUsed += length;
     if (bytesUsed > MAX_PROJECT_BACKUP_BYTES)
       throw new Error('Project backup exceeds the 256 MB limit.');
   };
-  // An encrypted project stores no listed files yet: its imports and
-  // pictures are blobs, reached through the document below.
-  if (remote && !isEncryptedProject(snapshot.projectId)) {
+  // Bulk data downloads also carry exports from encrypted project info.
+  // Their bytes are opened through the same verified blob reader as sources.
+  if (
+    remote &&
+    (!isEncryptedProject(snapshot.projectId) || options.includeEncryptedFiles)
+  ) {
     const archived = await api.listArtifacts(snapshot.projectId);
     for (const artifact of archived.artifacts) {
       if (
@@ -126,10 +137,8 @@ export async function createProjectBackup(
         files.some((file) => file.artifact.artifactId === artifact.artifactId)
       )
         continue;
-      const body = await readBackupResponse(
-        await fetch(
-          `/api/artifacts/${encodeURIComponent(artifact.artifactId)}/download`
-        ),
+      const body = await archivedBytes(
+        artifact.artifactId,
         Math.max(
           0,
           Math.floor(((MAX_PROJECT_BACKUP_BYTES - bytesUsed) * 3) / 4)
@@ -204,9 +213,12 @@ export async function createProjectBackup(
           files.find((file) => file.artifact.artifactId === artifactId);
         bytes = archived
           ? backupFileBytes(archived)
-          : await archivedBytes(artifactId);
+          : options.localOnly
+            ? null
+            : await archivedBytes(artifactId);
       }
       if (
+        !bytes ||
         bytes.length !== ref.logicalBytes ||
         (await checksum(bytes)) !== ref.checksumSha256
       )

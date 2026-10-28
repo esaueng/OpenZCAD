@@ -492,6 +492,47 @@ export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
   );
 }
 
+/** Read every project-store record, including Trash and recovery companions.
+ * The visitor is synchronous so all stores share one readonly IDB snapshot.
+ * Encryption private keys live in separate databases and never enter this path.
+ */
+export async function visitLocalProjectData(
+  visit: (store: string, key: IDBValidKey, value: unknown) => void
+): Promise<void> {
+  const database = await openDatabase();
+  try {
+    const names = Array.from(database.objectStoreNames);
+    const tx = database.transaction(names, 'readonly');
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = tx.onerror = () =>
+        reject(tx.error ?? new Error('Could not read local project data.'));
+      for (const name of names) {
+        const request = tx.objectStore(name).openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          try {
+            visit(name, cursor.key, cursor.value);
+            cursor.continue();
+          } catch (error) {
+            reject(
+              error instanceof Error
+                ? error
+                : new Error('Could not read local project data.', {
+                    cause: error
+                  })
+            );
+            tx.abort();
+          }
+        };
+      }
+    });
+  } finally {
+    database.close();
+  }
+}
+
 /** Settles when one request inside an open transaction has its result. */
 export function settled<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
