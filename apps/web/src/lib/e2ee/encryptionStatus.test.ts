@@ -23,6 +23,7 @@ import {
   useEncryptionStatus
 } from './encryptionStatus';
 import { reportingEncryptedProjectStore } from './encryptionStatusReports';
+import { KeySessionEndedError } from './blobReferences';
 import {
   allowKeySession,
   beginKeySessionTeardown,
@@ -412,6 +413,50 @@ describe('encryption status reports from the encrypted store', () => {
   it('classifies a locked key session as locked', () => {
     reportEncryptedFailure(null, lockedError());
     expect(encryptionStatusOf('proj_a').state).toBe('locked');
+  });
+
+  it('fences captured and pending plaintext results when the page supplies a lifetime guard', async () => {
+    const { store, room } = fakeStore();
+    Object.assign(store.info, {
+      read: vi.fn(async () => ({ name: 'Private project info' }))
+    });
+    Object.assign(store.replaced, {
+      open: vi.fn(async () => ({ body: { privateMeasurement: 12 } }))
+    });
+    let current = true;
+    const scoped = reportingEncryptedProjectStore(
+      store,
+      () => current,
+      () => {
+        if (!current) throw new KeySessionEndedError();
+      }
+    );
+    const access = scoped.roomAccess();
+    const reads = [
+      () => scoped.loadProject('proj_a'),
+      () => scoped.loadRevision('proj_a', 'revision_a'),
+      () => scoped.info.read('proj_a'),
+      () => scoped.replaced.open({} as never, 'measurements'),
+      () => access.openHead('proj_a', record, null)
+    ];
+    // The same operations still work while the page owns their key view.
+    await Promise.all(reads.map((read) => read()));
+    const pending = reads.map((read) => read());
+    current = false;
+    await Promise.all(
+      pending.map((result) =>
+        expect(result).rejects.toBeInstanceOf(KeySessionEndedError)
+      )
+    );
+    const backendCalls = vi.mocked(store.loadProject).mock.calls.length;
+    await Promise.all(
+      reads.map((read) =>
+        expect(read()).rejects.toBeInstanceOf(KeySessionEndedError)
+      )
+    );
+    expect(vi.mocked(store.loadProject).mock.calls).toHaveLength(backendCalls);
+    expect(() => access.currentHead('proj_a')).toThrow(KeySessionEndedError);
+    expect(vi.mocked(room.currentHead)).not.toHaveBeenCalled();
   });
 
   it('ignores room operations that only start after their project closed', async () => {

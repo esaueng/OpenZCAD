@@ -52,6 +52,7 @@ import {
 } from './collaborationProtocol';
 export { parseServerMessage } from './collaborationProtocol';
 import type { EncryptedRoomCodec } from './e2ee/encryptedRoomCodec';
+import { subscribeEncryptionState } from './e2ee/encryptionStateEvents';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -156,6 +157,7 @@ export function useCollaboration({
   const [lease, setLease] = useState<ProjectEditLease | null>(null);
   const [roomVersion, setRoomVersion] = useState<number | null>(null);
   const [conflict, setConflict] = useState<ProjectConflict | null>(null);
+  const [encryptionView, setEncryptionView] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const documentRef = useRef(document);
   const remoteHandlerRef = useRef(onRemoteDocument);
@@ -216,6 +218,14 @@ export function useCollaboration({
   const projectId = document?.projectId ?? null;
   const userId = session?.userId ?? null;
   const displayName = session?.displayName ?? null;
+  useEffect(() => {
+    if (!enabled || !encrypted || !userId) return;
+    // A connected codec captures the page's key view too. Reconnect with
+    // fresh clients after settings rechecks/rotation, keeping documentRef.
+    return subscribeEncryptionState(userId, () =>
+      setEncryptionView((version) => version + 1)
+    );
+  }, [enabled, encrypted, userId]);
   // Invalidate the committed room identity before passive socket cleanup.
   // A pending HTTP continuation must not act for the previous account or
   // enabled state while the old socket is still referenced.
@@ -226,7 +236,7 @@ export function useCollaboration({
       roomEpochRef.current += 1;
       checkpointRef.current?.abort(new Error(ROOM_CHANGED_MESSAGE));
     };
-  }, [displayName, enabled, encrypted, projectId, userId]);
+  }, [displayName, enabled, encrypted, encryptionView, projectId, userId]);
   const roomWanted = Boolean(enabled && projectId && userId && displayName);
   const stampRef = useRef({ projectId, wanted: roomWanted });
   stampRef.current = { projectId, wanted: roomWanted };
@@ -1230,6 +1240,7 @@ export function useCollaboration({
     displayName,
     enabled,
     encrypted,
+    encryptionView,
     projectId,
     userId,
     reconcileMatchingRoomDocument,

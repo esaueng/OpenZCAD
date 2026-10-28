@@ -27,9 +27,11 @@ import { ApiError } from '../api';
 import type { ArchiveArtifactInput } from '../archiveArtifact';
 import {
   createBlobReferenceRegistry,
+  KeySessionEndedError,
   pageBlobReferences,
   sessionBoundReferences,
-  setEncryptedBlobReader
+  setEncryptedBlobReader,
+  type BlobReferenceRegistry
 } from './blobReferences';
 import {
   createContentBlobsApi,
@@ -106,12 +108,15 @@ import type { ShareRemovalNotice } from './shareWorkStore';
 import { contactInvitationPeople, type InvitationContext } from './invitations';
 import { invitationStore } from './invitationStore';
 import { subscribeEncryptionState } from './encryptionStateEvents';
+import { unlockedAccount } from './unlockedKeys';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
 interface Opened {
   readonly userId: string;
   readonly revision: number;
+  readonly lifetime: { active: boolean };
+  readonly references: Promise<BlobReferenceRegistry>;
   readonly store: Promise<EncryptedProjectStore>;
   readonly blobs: Promise<EncryptedContentBlobs>;
   readonly measurements: Promise<EncryptedMeasurements>;
@@ -133,6 +138,7 @@ export interface PageShareLinks {
 }
 
 let opened: Opened | null = null;
+let accountViewRevision = 0;
 let stopEncryptionState: (() => void) | null = null;
 let decoder: E2eeDecoder | null = null;
 const warningListeners = new Set<(warning: EncryptedProjectWarning) => void>();
@@ -155,10 +161,46 @@ export function subscribeMemberRemovals(
   return () => removalListeners.delete(listener);
 }
 
-function forgetOpened(): void {
+function forgetOpened(keepStateSubscription = false): void {
+  if (opened) {
+    accountViewRevision += 1;
+    opened.lifetime.active = false;
+    // Rechecks and rotations preserve unlocked file references. A lock
+    // drops them before a newly opened reader can use them.
+    if (!unlockedAccount(opened.userId)) pageBlobReferences.clear();
+  }
   opened = null;
-  stopEncryptionState?.();
-  stopEncryptionState = null;
+  setEncryptedBlobReader(null);
+  if (!keepStateSubscription) {
+    stopEncryptionState?.();
+    stopEncryptionState = null;
+  }
+}
+
+/** Direct thumbnail/source/backup readers also reopen after an unlocked recheck. */
+function invalidateAccountClients(userId: string, revision: number): void {
+  if (!opened) accountViewRevision += 1;
+  forgetOpened(true);
+  if (!unlockedAccount(userId)) {
+    pageBlobReferences.clear();
+    return;
+  }
+  const viewRevision = accountViewRevision;
+  setEncryptedBlobReader(async (projectId, blobId, signal, onProgress) => {
+    const requireExpected = (sessionUserId = userId) => {
+      if (
+        sessionUserId !== userId ||
+        accountViewRevision !== viewRevision ||
+        !isCurrentKeySession(revision) ||
+        !unlockedAccount(userId)
+      ) {
+        throw new KeySessionEndedError();
+      }
+    };
+    requireExpected();
+    const session = await openedForSession(requireExpected);
+    return (await session.blobs).read(projectId, blobId, signal, onProgress);
+  });
 }
 
 subscribeKeySession(() => {
@@ -235,6 +277,7 @@ async function openStore(
   email: string | null,
   current: () => boolean
 ): Promise<{
+  references: BlobReferenceRegistry;
   store: EncryptedProjectStore;
   blobs: EncryptedContentBlobs;
   measurements: EncryptedMeasurements;
@@ -245,9 +288,16 @@ async function openStore(
   const e2ee: E2eeContext = {
     userId,
     api: createE2eeApi(),
-    store: deviceKeyStore()
+    store: deviceKeyStore(),
+    isCurrent: () => current() && getKeySessionRevision() === revision
   };
   const state = await loadEncryption(e2ee);
+  const requireCurrent = () => {
+    if (!current() || !isCurrentKeySession(revision)) {
+      throw new KeySessionEndedError();
+    }
+  };
+  requireCurrent();
   if (state.kind !== 'ready' || !state.account.unlocked) throw locked();
   const account = state.account;
   const device =
@@ -260,8 +310,12 @@ async function openStore(
       : null;
   decoder ??= createE2eeDecoder();
   const pageDecoder = decoder;
-  // Results finishing after this key session ends keep no keys.
-  const references = sessionBoundReferences(pageBlobReferences);
+  // Both the key session and this particular account view own these keys.
+  const references = sessionBoundReferences(pageBlobReferences, {
+    revision: () => revision,
+    isCurrent: (seen) =>
+      seen === revision && current() && isCurrentKeySession(revision)
+  });
   const cutoffsApi = createRevocationCutoffsApi();
   // A cutoff statement an earlier removal on this device could not store
   // goes first, so the directory and authorship below can read it.
@@ -325,21 +379,46 @@ async function openStore(
     // store again on a freshly loaded account view, whose Commit carries
     // the rotation a removal made due. The unlocked keys stay.
     onDeviceListChanged: () => {
-      if (current()) forgetOpened();
+      if (current()) invalidateAccountClients(userId, revision);
     }
   };
-  const blobs = createEncryptedContentBlobs({
+  const readingBlobs = createEncryptedContentBlobs({
     groups,
     references,
     // Decrypted in the decode worker, within its content-blob budget.
-    decode: (job) => pageDecoder.decodeContentBlob(job),
+    decode: async (job) => {
+      requireCurrent();
+      const result = await pageDecoder.decodeContentBlob(job);
+      try {
+        requireCurrent();
+      } catch (error) {
+        if ('chunks' in result) {
+          for (const chunk of result.chunks) chunk.fill(0);
+        }
+        throw error;
+      }
+      return result;
+    },
     // A lost blob is stored again from this device's source store.
     loadLocal: async (checksum) =>
       (await import('../localProjectStore')).loadSourceBlob(checksum)
   });
-  setEncryptedBlobReader((projectId, blobId, signal, onProgress) =>
-    blobs.read(projectId, blobId, signal, onProgress)
-  );
+  const blobs: EncryptedContentBlobs = {
+    ...readingBlobs,
+    async read(...args) {
+      requireCurrent();
+      const bytes = await readingBlobs.read(...args);
+      try {
+        requireCurrent();
+      } catch (error) {
+        bytes.fill(0);
+        throw error;
+      }
+      return bytes;
+    }
+  };
+  requireCurrent();
+  setEncryptedBlobReader((...args) => blobs.read(...args));
   const pins = versionPins();
   let shareCtx: ShareLinksContext | null = null;
   // The editor's encryption indicator hears what this key session verifies.
@@ -350,7 +429,20 @@ async function openStore(
     pins,
     blobReferences: references,
     restoreBlobs: (projectId, blobIds) => blobs.restore(projectId, blobIds),
-    open: (job) => pageDecoder.decodeProjectEnvelope(job),
+    open: async (job) => {
+      requireCurrent();
+      const result = await pageDecoder.decodeProjectEnvelope(job);
+      try {
+        requireCurrent();
+      } catch (error) {
+        if ('blobs' in result.value) {
+          for (const reference of result.value.blobs ?? [])
+            reference.key.fill(0);
+        }
+        throw error;
+      }
+      return result;
+    },
     seal: (job) => pageDecoder.sealDocument(job),
     // Share links (slice 5-10): every active link's snapshot follows the
     // save, and the owner's page renews statements that are due.
@@ -386,12 +478,16 @@ async function openStore(
       }
     }
   });
-  const store = reportingEncryptedProjectStore(verifying, sessionCurrent);
+  const store = reportingEncryptedProjectStore(
+    verifying,
+    sessionCurrent,
+    requireCurrent
+  );
   shareCtx = {
     groups,
     store,
     api: createE2eeShareLinksApi(desktopFetch),
-    blobReferences: pageBlobReferences
+    blobReferences: references
   };
   const sharingCtx = shareCtx;
   const sharing: PageShareLinks = {
@@ -405,6 +501,7 @@ async function openStore(
     }
   };
   return {
+    references,
     store,
     blobs,
     sharing,
@@ -546,15 +643,21 @@ export async function openMigrationStaging(expectedUserId?: string): Promise<{
   };
 }
 
-async function openedForSession(): Promise<Opened> {
+async function openedForSession(
+  checkSession?: (userId: string) => void
+): Promise<Opened> {
   const { userId, email } = await pageSession();
+  checkSession?.(userId);
   const revision = getKeySessionRevision();
   if (opened?.userId !== userId || opened.revision !== revision) {
     forgetOpened();
-    const both = openStore(userId, revision, email, () => opened === current);
+    const lifetime = { active: true };
+    const both = openStore(userId, revision, email, () => lifetime.active);
     const current: Opened = {
       userId,
       revision,
+      lifetime,
+      references: both.then(({ references }) => references),
       store: both.then(({ store }) => store),
       blobs: both.then(({ blobs }) => blobs),
       measurements: both.then(({ measurements }) => measurements),
@@ -566,9 +669,10 @@ async function openedForSession(): Promise<Opened> {
     // Settings can rotate this account's keys without ending its session.
     // Every client above captures the verified account view, so reopen them
     // after that change rather than pairing the old view with the new key.
-    // Keep the decoder and unlocked keys: this is not a sign-out or lock.
+    // Keep unlocked keys on rotations; a locked state drops blob access too.
     stopEncryptionState = subscribeEncryptionState(userId, () => {
-      if (opened === current) forgetOpened();
+      if (!opened || opened === current)
+        invalidateAccountClients(userId, revision);
     });
     both.then(
       () => {
@@ -586,6 +690,7 @@ async function openedForSession(): Promise<Opened> {
       }
     );
     current.store.catch(() => undefined);
+    current.references.catch(() => undefined);
     current.blobs.catch(() => undefined);
     current.measurements.catch(() => undefined);
     current.viewStates.catch(() => undefined);
@@ -603,11 +708,14 @@ export async function encryptedProjectStore(): Promise<EncryptedProjectStore> {
 /** The thumbnail and export paths' view of this page. */
 async function projectFiles(): Promise<ProjectFilesDeps> {
   const session = await openedForSession();
-  const [store, blobs] = await Promise.all([session.store, session.blobs]);
+  const [store, blobs, references] = await Promise.all([
+    session.store,
+    session.blobs,
+    session.references
+  ]);
   return {
     info: store.info,
-    // Bound to the session current now: a late thumbnail or export keeps no key.
-    references: sessionBoundReferences(pageBlobReferences),
+    references,
     archive: (projectId, input) => blobs.archive(projectId, input)
   };
 }

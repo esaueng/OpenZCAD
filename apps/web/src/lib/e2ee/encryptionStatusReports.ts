@@ -19,20 +19,30 @@ import {
 /**
  * `current` says whether the key session that opened the store is still
  * the page's: a result finishing after it ended reports nothing.
+ * A page may additionally fence operations/results with `assertActive`.
  */
 export function reportingEncryptedProjectStore(
   store: EncryptedProjectStore,
-  current: () => boolean
+  current: () => boolean,
+  assertActive?: () => void
 ): EncryptedProjectStore {
+  const active = async <R>(run: () => Promise<R>): Promise<R> => {
+    assertActive?.();
+    const result = await run();
+    assertActive?.();
+    return result;
+  };
   const verifiedHead = async <R>(
     run: () => Promise<R>,
     projectIdOf: (result: R) => string,
     projectId: string | null,
     retainedOnly = false
   ): Promise<R> => {
+    assertActive?.();
     const report = beginEncryptionStatusReport(projectId, retainedOnly);
     try {
       const result = await run();
+      assertActive?.();
       if (report() && current()) {
         const id = projectIdOf(result);
         reportHeadVerified(id, store.stateCode?.(id));
@@ -49,9 +59,11 @@ export function reportingEncryptedProjectStore(
     projectId: string,
     retainedOnly = false
   ): Promise<R> => {
+    assertActive?.();
     const report = beginEncryptionStatusReport(projectId, retainedOnly);
     try {
       const result = await run();
+      assertActive?.();
       report();
       return result;
     } catch (error) {
@@ -62,10 +74,14 @@ export function reportingEncryptedProjectStore(
 
   let room: EncryptedRoomAccess | null = null;
   const roomAccess = (): EncryptedRoomAccess => {
+    assertActive?.();
     if (room) return room;
     const access = store.roomAccess();
     room = {
-      currentHead: (projectId) => access.currentHead(projectId),
+      currentHead: (projectId) => {
+        assertActive?.();
+        return access.currentHead(projectId);
+      },
       seal: (projectId, document, base) =>
         checked(() => access.seal(projectId, document, base), projectId, true),
       openHead: (projectId, record, envelope) =>
@@ -91,7 +107,12 @@ export function reportingEncryptedProjectStore(
   };
 
   return {
-    stateCode: store.stateCode?.bind(store),
+    stateCode: store.stateCode
+      ? (projectId) => {
+          assertActive?.();
+          return store.stateCode!(projectId);
+        }
+      : undefined,
     createProject: (request) =>
       verifiedHead(
         () => store.createProject(request),
@@ -126,9 +147,26 @@ export function reportingEncryptedProjectStore(
       checked(() => store.loadRevision(projectId, revisionId), projectId),
     listRevisions: (projectId) =>
       checked(() => store.listRevisions(projectId), projectId),
-    projectName: (record) => store.projectName(record),
-    info: store.info,
-    replaced: store.replaced,
+    projectName: (record) => active(() => store.projectName(record)),
+    info: assertActive
+      ? {
+          verify: (record) => active(() => store.info.verify(record)),
+          read: (projectId) => active(() => store.info.read(projectId)),
+          update: (projectId, change) =>
+            active(() =>
+              store.info.update(projectId, (value) => {
+                assertActive();
+                return change(value);
+              })
+            )
+        }
+      : store.info,
+    replaced: assertActive
+      ? {
+          seal: (...args) => active(() => store.replaced.seal(...args)),
+          open: (...args) => active(() => store.replaced.open(...args))
+        }
+      : store.replaced,
     roomAccess,
     // Share links (slice 5-10): both read the verified head, and a change
     // writes a version, so both report like a load or save.
@@ -140,7 +178,11 @@ export function reportingEncryptedProjectStore(
       ),
     writeShareLinks: (projectId, change) =>
       verifiedHead(
-        () => store.writeShareLinks(projectId, change),
+        () =>
+          store.writeShareLinks(projectId, (...args) => {
+            assertActive?.();
+            return change(...args);
+          }),
         () => projectId,
         projectId
       ),
@@ -159,6 +201,7 @@ export function reportingEncryptedProjectStore(
         projectId
       ),
     // Forgetting a staging the account dropped verifies nothing.
-    forgetStagedProject: (projectId) => store.forgetStagedProject(projectId)
+    forgetStagedProject: (projectId) =>
+      active(() => store.forgetStagedProject(projectId))
   };
 }

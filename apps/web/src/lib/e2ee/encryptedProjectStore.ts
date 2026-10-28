@@ -512,7 +512,8 @@ function signingKeyOf(
  */
 async function groupCutoffs(
   groups: ProjectGroupContext,
-  projectId: string
+  projectId: string,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<ReadonlyMap<string, VersionCutoff>> {
   const out = new Map<string, VersionCutoff>();
   const add = (userId: string, cutoffs: ReadonlyMap<string, ProjectCutoff>) => {
@@ -538,7 +539,8 @@ async function groupCutoffs(
   if (groups.members) {
     for (const [memberId, cutoffs] of await memberRevocationCutoffs(
       groups,
-      projectId
+      projectId,
+      deviceLists
     )) {
       add(memberId, cutoffs);
     }
@@ -682,10 +684,13 @@ export function createEncryptedProjectStore(
   }
 
   const list = () => groups.account.list;
-  const cutoffsFor = async (projectId: string) =>
+  const cutoffsFor = async (
+    projectId: string,
+    deviceLists?: readonly VerifiedDeviceList[]
+  ) =>
     ctx.cutoffs
       ? await ctx.cutoffs(projectId)
-      : await groupCutoffs(groups, projectId);
+      : await groupCutoffs(groups, projectId, deviceLists);
 
   function writableDevice(): CertifyingDevice {
     const device = groups.device;
@@ -856,10 +861,10 @@ export function createEncryptedProjectStore(
   async function authorshipInputs(
     projectId: string
   ): Promise<AuthorshipInputs> {
-    const [deviceLists, cutoffs] = await Promise.all([
-      projectDeviceLists(groups, projectId),
-      cutoffsFor(projectId)
-    ]);
+    const deviceLists = await projectDeviceLists(groups, projectId);
+    // A removal can land between directory reads. Cutoffs must verify
+    // against the same lists used to decide whether a signer is live.
+    const cutoffs = await cutoffsFor(projectId, deviceLists);
     return { deviceLists, cutoffs };
   }
 
@@ -1910,7 +1915,7 @@ export function createEncryptedProjectStore(
         if (!removed) continue;
         let cutoff: VersionCutoff | undefined;
         try {
-          cutoff = (await cutoffsFor(record.projectId)).get(
+          cutoff = (await cutoffsFor(record.projectId, lists)).get(
             authorCutoffKey(candidate.userId, record.signerDeviceId)
           );
         } catch {
