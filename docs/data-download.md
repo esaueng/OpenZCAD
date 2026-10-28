@@ -41,10 +41,15 @@ before adding any of its files to the ZIP, so a failure leaves no incomplete
 project folder and spends no archive space. Portable project backups take
 priority over the optional raw device snapshot. If that snapshot cannot fit or
 be read, its entire section is omitted and reported.
-The raw snapshot's capacity check budgets both staged Blob bytes and their ZIP
-output alongside the existing archive, so it can be omitted even when its
-payload alone would fit. Staged input references are released as entries are
-written.
+Capacity checks budget both staged bytes and their ZIP output alongside the
+existing archive. Before each project or retained revision is built, its
+remaining byte budget also leaves conservative headroom for source/base64
+data, JSON serialization/validation and UTF-8 encoding. The builder checks
+source sizes before reading their bytes. Bulk downloads can therefore omit a
+project or raw snapshot even when its payload alone would fit the ZIP; an
+individual project export keeps its existing 256 MiB bound. Staged input
+references are released as entries are written, and completed backup strings
+and parsed history data do not remain in scope while the next revision builds.
 
 The completion screen lists every skipped project's name, ID, local/cloud copy
 and reason, with instructions to open the project and choose File → Export

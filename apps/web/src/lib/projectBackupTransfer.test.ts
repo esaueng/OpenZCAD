@@ -167,6 +167,33 @@ it('enforces streamed download limits even without content-length', async () => 
   ).rejects.toThrow('limit');
 });
 
+it('applies a smaller bulk-export budget before reading sources and preserves the normal individual-export limit', async () => {
+  const bytes = new Uint8Array(4096);
+  const ref = await putSourceBlob(bytes);
+  const document = importStepBody(
+    createProjectDocument('Budgeted source', toUserId('owner')),
+    {
+      name: 'STEP source',
+      sourceName: 'part.step',
+      artifactId: 'budget_source',
+      stepSourceRef: ref
+    }
+  ).document;
+  const source = vi.spyOn(localProjectStore, 'loadSourceBlob');
+  await expect(
+    createProjectBackup(document, false, undefined, {
+      localOnly: true,
+      maxBytes: 4096
+    })
+  ).rejects.toThrow('bulk-download memory budget');
+  expect(source).not.toHaveBeenCalled();
+  const backup = await parseProjectBackup(
+    await createProjectBackup(document, false)
+  );
+  expect(backup.sources).toHaveLength(1);
+  expect(source).toHaveBeenCalledOnce();
+});
+
 it('rolls back all companion data when a project import transaction fails', async () => {
   const document = createProjectDocument('Atomic', toUserId('owner'));
   const backup = importProjectCopy(

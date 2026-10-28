@@ -1,5 +1,9 @@
 import { Zip, ZipPassThrough, strToU8 } from 'fflate';
-import type { AppSettings, AuthSession } from '@openzcad/shared';
+import type {
+  AppSettings,
+  AuthSession,
+  ProjectDocument
+} from '@openzcad/shared';
 import { api, isEncryptedProject } from './api';
 import { parseStoredMeasurements } from './measurementStore';
 import type { StoredMeasurementRecord } from './measurementRecord';
@@ -46,7 +50,7 @@ export interface DataExportOptions {
 class ExportCapacityError extends Error {
   constructor() {
     super(
-      'Would exceed the remaining space in the 512 MB archive. Download this project separately.'
+      'Would exceed the space or browser-memory budget for the 512 MB download. Download this project separately.'
     );
   }
 }
@@ -88,7 +92,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
   };
   // Stage a complete project before touching the ZIP or its byte budget.
   // Blob sizes are checked before any of their bytes are read.
-  const batch = (bufferBlobs = false) => {
+  const batch = (budgetStaging = true) => {
     const pending: PendingEntry[] = [];
     let length = 0;
     const add = (path: string, data: Uint8Array | Blob) => {
@@ -97,9 +101,8 @@ async function buildDataExport(options: DataExportOptions): Promise<{
         (data instanceof Blob ? data.size : data.byteLength) +
         92 +
         strToU8(path).byteLength * 2;
-      // A raw snapshot is read atomically before output. Budget both its
-      // staged input and ZIP output, in addition to the existing archive.
-      checkSize((length + size) * (bufferBlobs ? 2 : 1));
+      // Budget staged inputs and ZIP output beside the existing archive.
+      checkSize((length + size) * (budgetStaging ? 2 : 1));
       length += size;
       pending.push({ path, data });
     };
@@ -107,8 +110,20 @@ async function buildDataExport(options: DataExportOptions): Promise<{
       add,
       json: (path: string, value: unknown) =>
         add(path, strToU8(JSON.stringify(value))),
+      backupBudget() {
+        check();
+        // Leave conservative headroom for the next backup's source/base64,
+        // JSON serialization/validation, UTF-8 encoding and ZIP output. The
+        // builder enforces this budget before reading its bulk source bytes.
+        return Math.max(
+          0,
+          Math.floor(
+            (MAX_DATA_EXPORT_BYTES - reportReserve - bytes - length * 2) / 6
+          )
+        );
+      },
       async commit() {
-        checkSize(length * (bufferBlobs ? 2 : 1));
+        checkSize(length * (budgetStaging ? 2 : 1));
         const ready: ({ path: string; data: Uint8Array } | undefined)[] = [];
         for (const entry of pending) {
           check();
@@ -240,7 +255,8 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           path,
           strToU8(
             await createProjectBackup(document, false, undefined, {
-              localOnly: true
+              localOnly: true,
+              maxBytes: pending.backupBudget()
             })
           )
         );
@@ -294,24 +310,36 @@ async function buildDataExport(options: DataExportOptions): Promise<{
                 JSON.parse(row.payload_json)
               );
           }
-          const backupText = await createProjectBackup(
-            document,
-            true,
-            measurements,
-            { includeEncryptedFiles: true }
-          );
-          pending.add(`${folder}/project.openzcad`, strToU8(backupText));
+          const stageBackup = async (
+            saved: ProjectDocument,
+            path: string,
+            coverHistory = false
+          ) => {
+            const backupText = await createProjectBackup(
+              saved,
+              true,
+              measurements,
+              { includeEncryptedFiles: true, maxBytes: pending.backupBudget() }
+            );
+            pending.add(path, strToU8(backupText));
+            if (!coverHistory) return new Set<string | undefined>();
+            const backup = JSON.parse(backupText) as {
+              saveStates?: {
+                document: { revisions: { revisionId: string }[] };
+              }[];
+            };
+            return new Set(
+              backup.saveStates?.map(
+                (state) => state.document.revisions.at(-1)?.revisionId
+              )
+            );
+          };
           // A retained revision need not still have a checkpoint in today's
           // document. Export those snapshots too, with their own source bytes.
-          const backup = JSON.parse(backupText) as {
-            saveStates?: {
-              document: { revisions: { revisionId: string }[] };
-            }[];
-          };
-          const covered = new Set(
-            backup.saveStates?.map(
-              (state) => state.document.revisions.at(-1)?.revisionId
-            )
+          const covered = await stageBackup(
+            document,
+            `${folder}/project.openzcad`,
+            true
           );
           const revisions = await api.listRevisions(project.projectId);
           pending.json(`${folder}/revisions.json`, revisions);
@@ -328,13 +356,9 @@ async function buildDataExport(options: DataExportOptions): Promise<{
               throw new Error(
                 'Saved history changed during the download. Try again.'
               );
-            pending.add(
-              `${folder}/revisions/${revisionIndex + 1}.openzcad`,
-              strToU8(
-                await createProjectBackup(saved, true, measurements, {
-                  includeEncryptedFiles: true
-                })
-              )
+            await stageBackup(
+              saved,
+              `${folder}/revisions/${revisionIndex + 1}.openzcad`
             );
           }
           await pending.commit();
@@ -358,7 +382,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
     // If the snapshot cannot fit/read, discard the entire section and report it.
     options.onProgress('Preparing the device database snapshot…');
     try {
-      const snapshot = batch(true);
+      const snapshot = batch();
       let recordNumber = 0;
       let binaryNumber = 0;
       await visitLocalProjectData((store, key, value) => {
@@ -412,7 +436,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
       omittedSections: manifest.omittedSections
     };
     reportReserve = 0;
-    const reports = batch();
+    const reports = batch(false);
     reports.json('manifest.json', manifest);
     reports.add(
       'NOT-INCLUDED.txt',
@@ -448,7 +472,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           cloud
             ? 'Cloud account data is included.'
             : 'Device data only. Sign in and enable cloud features to include account data.',
-          'Limits: 512 MB per archive and the existing 256 MB per project backup. Unavailable or oversized projects are skipped; NOT-INCLUDED.txt and manifest.json list every skipped copy and its reason. Each included project backup is complete. The optional raw device snapshot is included only if it fits. Account changes and ZIP failures still cancel the download.'
+          'Limits: 512 MB per archive and the existing 256 MB per individual project backup. Bulk downloads also reserve memory for staged history and backup preparation, so a project may need an individual export even if its files would fit the archive. Unavailable or oversized projects are skipped; NOT-INCLUDED.txt and manifest.json list every skipped copy and its reason. Each included project backup is complete. The optional raw device snapshot is included only if it fits. Account changes and ZIP failures still cancel the download.'
         ].join('\n\n')
       )
     );

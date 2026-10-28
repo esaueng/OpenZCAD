@@ -88,8 +88,23 @@ export async function createProjectBackup(
   document: ProjectDocument,
   cloudProject: boolean,
   measurements?: StoredMeasurementRecord | null,
-  options: { localOnly?: boolean; includeEncryptedFiles?: boolean } = {}
+  options: {
+    localOnly?: boolean;
+    includeEncryptedFiles?: boolean;
+    /** A bulk export can impose a smaller remaining staging budget. */
+    maxBytes?: number;
+  } = {}
 ): Promise<string> {
+  const maxBytes = Math.min(
+    MAX_PROJECT_BACKUP_BYTES,
+    Math.max(0, options.maxBytes ?? MAX_PROJECT_BACKUP_BYTES)
+  );
+  const capacityError = () =>
+    new Error(
+      maxBytes < MAX_PROJECT_BACKUP_BYTES
+        ? 'Project backup exceeds the remaining bulk-download memory budget. Download this project separately.'
+        : 'Project backup exceeds the 256 MB limit.'
+    );
   const snapshot = withoutDerivedProjection(structuredClone(document));
   const storedFiles = await loadProjectBackupFiles(snapshot.projectId);
   // Internal mesh payloads belong in sources, where their content key makes
@@ -118,11 +133,14 @@ export async function createProjectBackup(
     (cloudProject ||
       (await loadLastSyncedVersion(snapshot.projectId)) !== null);
   let bytesUsed = new Blob([JSON.stringify(backup)]).size;
-  const reserve = (length: number) => {
-    bytesUsed += length;
-    if (bytesUsed > MAX_PROJECT_BACKUP_BYTES)
-      throw new Error('Project backup exceeds the 256 MB limit.');
+  const ensureSpace = (length: number) => {
+    if (bytesUsed + length > maxBytes) throw capacityError();
   };
+  const reserve = (length: number) => {
+    ensureSpace(length);
+    bytesUsed += length;
+  };
+  ensureSpace(0);
   // Bulk data downloads also carry exports from encrypted project info.
   // Their bytes are opened through the same verified blob reader as sources.
   if (
@@ -137,12 +155,10 @@ export async function createProjectBackup(
         files.some((file) => file.artifact.artifactId === artifact.artifactId)
       )
         continue;
+      ensureSpace(4 * Math.ceil(artifact.bytes / 3));
       const body = await archivedBytes(
         artifact.artifactId,
-        Math.max(
-          0,
-          Math.floor(((MAX_PROJECT_BACKUP_BYTES - bytesUsed) * 3) / 4)
-        )
+        Math.max(0, Math.floor(((maxBytes - bytesUsed) * 3) / 4))
       );
       const file = await packBackupFile(artifact, body.buffer);
       reserve(new Blob([JSON.stringify(file)]).size);
@@ -206,6 +222,8 @@ export async function createProjectBackup(
         backup.sources!.some((source) => source.sha256 === ref.checksumSha256)
       )
         continue;
+      // Reject a source that cannot fit before reading or base64-encoding it.
+      ensureSpace(4 * Math.ceil(ref.logicalBytes / 3));
       let bytes = await loadSourceBlob(ref.checksumSha256);
       if (!bytes) {
         const archived =
@@ -215,7 +233,10 @@ export async function createProjectBackup(
           ? backupFileBytes(archived)
           : options.localOnly
             ? null
-            : await archivedBytes(artifactId);
+            : await archivedBytes(
+                artifactId,
+                Math.max(0, Math.floor(((maxBytes - bytesUsed) * 3) / 4))
+              );
       }
       if (
         !bytes ||
@@ -238,6 +259,7 @@ export async function createProjectBackup(
     }
   }
   const text = JSON.stringify(backup);
+  if (new Blob([text]).size > maxBytes) throw capacityError();
   await parseProjectBackup(text);
   return text;
 }

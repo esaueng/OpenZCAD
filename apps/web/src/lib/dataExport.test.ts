@@ -23,7 +23,10 @@ import {
   type DataExportOptions
 } from './dataExport';
 
-const encoding = vi.hoisted(() => ({ oversizedProjectId: '' }));
+const encoding = vi.hoisted(() => ({
+  oversizedProjectId: '',
+  stagedProjectId: ''
+}));
 vi.mock('fflate', async (importOriginal) => {
   const actual = await importOriginal<typeof Fflate>();
   return {
@@ -39,6 +42,12 @@ vi.mock('fflate', async (importOriginal) => {
         Object.defineProperty(bytes, 'byteLength', {
           value: 512 * 1024 * 1024
         });
+      else if (
+        encoding.stagedProjectId &&
+        text.includes('"format":"openzcad-project"') &&
+        text.includes(encoding.stagedProjectId)
+      )
+        Object.defineProperty(bytes, 'byteLength', { value: 64 * 1024 * 1024 });
       return bytes;
     }
   };
@@ -61,6 +70,7 @@ const entries = async (blob: Blob) =>
 
 beforeEach(() => {
   encoding.oversizedProjectId = '';
+  encoding.stagedProjectId = '';
   globalThis.indexedDB = new IDBFactory();
   vi.stubGlobal('Blob', NodeBlob);
   localStorage.clear();
@@ -366,6 +376,79 @@ it('does not spend the byte budget on an oversized project, so a later smaller o
     ).document.projectId
   ).toBe(small.projectId);
   expect(archive['NOT-INCLUDED.txt']).toBeDefined();
+});
+
+it('reduces the builder budget before retained history and refuses large sources before reading them', async () => {
+  const main = createProjectDocument('Large history', session.userId);
+  const good = createProjectDocument(
+    'Small project after history',
+    session.userId
+  );
+  const retained = importStepBody(structuredClone(main), {
+    name: 'Large retained source',
+    sourceName: 'retained.step',
+    artifactId: 'retained_source',
+    stepSourceRef: {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256: 'a'.repeat(64),
+      logicalBytes: 64 * 1024 * 1024
+    }
+  }).document;
+  vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
+  vi.spyOn(api, 'listProjects').mockResolvedValue({
+    projects: [main, good].map((doc) => ({
+      projectId: doc.projectId,
+      name: doc.name,
+      updatedAt: new Date().toISOString(),
+      revisionCount: 0
+    }))
+  });
+  vi.spyOn(api, 'loadProject').mockImplementation(async (id) =>
+    id === main.projectId ? main : good
+  );
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [] });
+  vi.spyOn(api, 'listRevisions').mockImplementation(async (id) => ({
+    revisions:
+      id === main.projectId
+        ? [
+            {
+              revisionId: toRevisionId('large_retained'),
+              projectId: main.projectId,
+              reason: 'Large history',
+              createdAt: new Date().toISOString(),
+              documentBytes: 1000
+            }
+          ]
+        : [],
+    maxRevisions: 50
+  }));
+  vi.spyOn(api, 'loadRevision').mockImplementation(
+    async (_projectId, revisionId) =>
+      revisionId === 'large_retained' ? retained : null
+  );
+  const source = vi.spyOn(localStore, 'loadSourceBlob');
+  const build = transfers.createProjectBackup;
+  const calls = vi
+    .spyOn(transfers, 'createProjectBackup')
+    .mockImplementation(build);
+  encoding.stagedProjectId = main.projectId;
+  const archive = await entries(await createDataExport(options(true)));
+  const firstBudget = calls.mock.calls[0]![3]!.maxBytes!;
+  const retainedBudget = calls.mock.calls[1]![3]!.maxBytes!;
+  const laterBudget = calls.mock.calls[2]![3]!.maxBytes!;
+  expect(retainedBudget).toBeLessThan(firstBudget);
+  expect(laterBudget).toBe(firstBudget);
+  expect(source).not.toHaveBeenCalled();
+  const manifest = JSON.parse(strFromU8(archive['manifest.json']!)) as {
+    skippedProjects: SkippedDataProject[];
+  };
+  expect(manifest.skippedProjects[0]?.reason).toContain(
+    'bulk-download memory budget'
+  );
+  expect(archive['projects/cloud/1/project.openzcad']).toBeUndefined();
+  expect(archive['projects/cloud/2/project.openzcad']).toBeDefined();
 });
 
 it('lists a failed local copy by name and continues with other local backups', async () => {
