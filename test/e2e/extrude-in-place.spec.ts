@@ -309,7 +309,7 @@ test('Extrude in place: the back arrow, Symmetric under Options, and Enter to fi
   expect(errors).toEqual([]);
 });
 
-test('Extrude in place: the arrow chip sets the distance, and Done keeps an open entry as typed', async ({
+test('Extrude in place: the arrow chip sets the distance, and Done keeps an open entry as typed', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(150_000);

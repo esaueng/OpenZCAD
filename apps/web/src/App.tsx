@@ -566,6 +566,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
+import { SharePage, type SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import {
   WorkspaceAppShell,
@@ -585,8 +586,9 @@ import {
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import {
-  captureProjectShareLink,
+  captureProjectShareRequest,
   isEncryptedShareLink,
+  shareLinkFromHash,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
@@ -2175,7 +2177,7 @@ export function App() {
   );
   const [pendingInvitationToken, setPendingInvitationToken] = useState(() => {
     // An explicit public link supersedes an invitation retained for sign-in.
-    if (captureProjectShareLink()) {
+    if (captureProjectShareRequest() !== null) {
       clearPendingProjectInvitation();
       return null;
     }
@@ -2199,7 +2201,10 @@ export function App() {
    * verified statement's mode: a view-only link pins the visitor to View.
    */
   const [pendingShareToken, setPendingShareToken] = useState(
-    captureProjectShareLink
+    captureProjectShareRequest
+  );
+  const [sharePage, setSharePage] = useState<SharePageState | null>(() =>
+    pendingShareToken === null ? null : { phase: 'loading' }
   );
   const [shareSession, setShareSession] = useState<{
     token: string;
@@ -2245,18 +2250,22 @@ export function App() {
       setBusy(false);
     };
   }, []);
-  function beginProjectNavigation(clearShareFragment = true) {
-    cancelNavigationBusy();
-    if (clearShareFragment) clearProjectShareFragment();
-    const navigation = ++fragmentNavigationRef.current;
-    clearPendingProjectInvitation();
-    pendingInvitationAttemptRef.current = null;
-    setPendingInvitationToken(null);
-    setPendingInvitationError(null);
-    shareOpenAttemptRef.current = null;
-    setPendingShareToken(null);
-    return () => fragmentNavigationRef.current === navigation;
-  }
+  const beginProjectNavigation = useCallback(
+    (clearShareFragment = true) => {
+      cancelNavigationBusy();
+      if (clearShareFragment) clearProjectShareFragment();
+      const navigation = ++fragmentNavigationRef.current;
+      clearPendingProjectInvitation();
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationToken(null);
+      setPendingInvitationError(null);
+      shareOpenAttemptRef.current = null;
+      setPendingShareToken(null);
+      setSharePage(null);
+      return () => fragmentNavigationRef.current === navigation;
+    },
+    [cancelNavigationBusy]
+  );
   const restoreShareSessionFragment = useCallback(() => {
     const active = shareSessionRef.current;
     if (!active) return;
@@ -2267,11 +2276,13 @@ export function App() {
     );
     shareOpenAttemptRef.current = active.token;
     setPendingShareToken(active.token);
+    setSharePage(null);
   }, []);
   useEffect(() => {
     const openFragment = () => {
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
+          beginProjectNavigation(false);
           updateSettingsViewState({ open: true, activeSection: 'encryption' });
           setSettingsOpen(true);
         }
@@ -2302,6 +2313,7 @@ export function App() {
           setPendingInvitationToken(token);
           setInvitationNavigation((current) => current + 1);
           setPendingShareToken(null);
+          setSharePage(null);
           updateSettingsViewState({ open: true, activeSection: 'account' });
           setSettingsOpen(true);
           return;
@@ -2311,10 +2323,11 @@ export function App() {
       pendingInvitationAttemptRef.current = null;
       setPendingInvitationToken(null);
       setPendingInvitationError(null);
-      const token = captureProjectShareLink();
+      const token = captureProjectShareRequest();
       shareOpenAttemptRef.current = null;
       setPendingShareToken(token);
-      if (!token) {
+      setSharePage(token === null ? null : { phase: 'loading' });
+      if (token === null) {
         if (shareSessionRef.current) {
           void leaveShareSessionRef.current(
             () => fragmentNavigationRef.current === navigation
@@ -2326,7 +2339,7 @@ export function App() {
     };
     window.addEventListener('hashchange', openFragment);
     return () => window.removeEventListener('hashchange', openFragment);
-  }, [cancelNavigationBusy]);
+  }, [beginProjectNavigation, cancelNavigationBusy]);
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
@@ -2389,7 +2402,7 @@ export function App() {
       startupPointer: pointer,
       startupProjectId:
         !pendingInvitationToken &&
-        !pendingShareToken &&
+        pendingShareToken === null &&
         appSettings.general.reopenLastProject
           ? pointer.activeProjectId
           : null
@@ -12622,26 +12635,31 @@ export function App() {
     if (
       startupState !== 'ready' ||
       foregroundBusy ||
-      !pendingShareToken ||
+      pendingShareToken === null ||
       shareOpenAttemptRef.current === pendingShareToken
     ) {
       return;
     }
     shareOpenAttemptRef.current = pendingShareToken;
+    updateSettingsViewState({ open: false });
+    setSettingsOpen(false);
+    setSharingOpen(false);
+    if (!shareLinkFromHash(`#share=${pendingShareToken}`)) {
+      setSharePage({
+        phase: 'error',
+        title: 'This share link is incomplete',
+        message:
+          'The link is incomplete or has been changed, so the shared model cannot be opened.',
+        guidance:
+          'Ask the owner to send the full link again. Copy everything, including the part after #share=.'
+      });
+      return;
+    }
     let cancelled = false;
     const navigation = fragmentNavigationRef.current;
     const isCurrent = () =>
       !cancelled && fragmentNavigationRef.current === navigation;
     const finishBusy = startNavigationBusy();
-    const restoreActiveShare = () => {
-      const active = shareSessionRef.current;
-      if (!active || active.token === pendingShareToken) return;
-      finishBusy();
-      restoreShareSessionFragment();
-    };
-    updateSettingsViewState({ open: false });
-    setSettingsOpen(false);
-    setSharingOpen(false);
     // An encrypted link's failures are worded by its loader (slice 5-11).
     let describeFailure: ((error: unknown) => string) | null = null;
     void (async () => {
@@ -12681,11 +12699,14 @@ export function App() {
         }
         if (!isCurrent()) return;
         if (!shared) {
-          restoreActiveShare();
-          setStatus(
-            'This share link is no longer available. It may have been revoked.',
-            { sticky: true }
-          );
+          setSharePage({
+            phase: 'error',
+            title: 'This share link is unavailable',
+            message:
+              'This share link is no longer available. It may have expired, been revoked, or the owner may have removed the model.',
+            guidance:
+              'Ask the owner to check sharing and send you a working link.'
+          });
           return;
         }
         await flushPendingLocalSaveRef.current();
@@ -12706,6 +12727,7 @@ export function App() {
           : { token: pendingShareToken };
         setShareSession(opened);
         shareSessionRef.current = opened;
+        setSharePage(null);
         hydrateSharedDocumentRef.current(shared.document, {
           rememberProject: false
         });
@@ -12716,13 +12738,15 @@ export function App() {
         );
       } catch (error) {
         if (isCurrent()) {
-          restoreActiveShare();
-          setStatus(
-            describeFailure
+          setSharePage({
+            phase: 'error',
+            title: 'We couldn’t open this shared model',
+            message: describeFailure
               ? describeFailure(error)
               : errorMessage(error, 'Could not open the share link.'),
-            { sticky: true }
-          );
+            guidance:
+              'Check your connection and try again. If it still won’t open, ask the owner to check the link and its sharing settings.'
+          });
         }
       } finally {
         finishBusy();
@@ -12737,8 +12761,7 @@ export function App() {
     startupState,
     foregroundBusy,
     startNavigationBusy,
-    setStatus,
-    restoreShareSessionFragment
+    setStatus
   ]);
 
   /**
@@ -25675,6 +25698,7 @@ export function App() {
   useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
       if (
+        sharePage !== null ||
         !workspaceInputEnabled ||
         workspaceRef.current?.closest('[inert]') ||
         modalHoldsKeyboard()
@@ -26377,6 +26401,35 @@ export function App() {
       />
     );
   }
+  const shareDestination = sharePage ? (
+    <SharePage
+      state={sharePage}
+      onRetry={
+        pendingShareToken !== null &&
+        shareLinkFromHash(`#share=${pendingShareToken}`)
+          ? () => {
+              shareOpenAttemptRef.current = null;
+              setSharePage({ phase: 'loading' });
+              setShareNavigation((current) => current + 1);
+            }
+          : undefined
+      }
+      onBack={() => {
+        const isCurrent = beginProjectNavigation();
+        void handleGoHome(isCurrent);
+      }}
+      onReturnToModel={
+        doc
+          ? () => {
+              beginProjectNavigation();
+              restoreShareSessionFragment();
+            }
+          : undefined
+      }
+    />
+  ) : null;
+  if (shareDestination && !doc) return shareDestination;
+
   if (startupState === 'restoring') {
     return <StartupScreen />;
   }
@@ -27789,8 +27842,9 @@ export function App() {
     onIsolate: isolateBody,
     onShowAll: showAllBodies
   };
-  return (
+  const workspace = (
     <WorkspaceAppShell
+      covered={sharePage !== null}
       projectId={doc.projectId}
       loadingReady={
         displayedGeometryComplete ||
@@ -30147,5 +30201,11 @@ export function App() {
         </>
       }
     />
+  );
+  return (
+    <>
+      {workspace}
+      {shareDestination}
+    </>
   );
 }

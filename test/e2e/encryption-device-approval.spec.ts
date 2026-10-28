@@ -122,7 +122,7 @@ for (const cancellation of ['stop', 'close', 'active'] as const) {
   });
 }
 
-test('certifies a new device approved by its full-hash scan code', async ({
+test('certifies a new device approved by its full-hash scan code', { tag: '@ci-smoke' }, async ({
   page,
   browser
 }) => {

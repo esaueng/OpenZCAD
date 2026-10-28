@@ -8,7 +8,7 @@ import {
   seedE2eeDevice
 } from './e2ee-fixtures';
 
-test('enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticator', async ({
+test('enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticator', { tag: '@ci-smoke' }, async ({
   page,
   context,
   baseURL

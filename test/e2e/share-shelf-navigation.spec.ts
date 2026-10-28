@@ -63,6 +63,8 @@ for (const action of ['create', 'demo', 'import'] as const) {
       window.location.hash = `share=${'s'.repeat(43)}`;
     });
     await expect.poll(() => requested).toBe(true);
+    await expect(page.getByRole('main', { name: 'Shared model' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
     const expected =
       action === 'demo'
         ? 'Demo · Mounting Bracket'

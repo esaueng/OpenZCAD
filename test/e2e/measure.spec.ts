@@ -253,7 +253,7 @@ test('a hover on an edge snaps to a named point', async ({ page }) => {
   await expect(glyph).toHaveText(/Endpoint|Midpoint|Center/);
 });
 
-test('a measurement survives a reload', async ({ page }) => {
+test('a measurement survives a reload', { tag: '@ci-smoke' }, async ({ page }) => {
   // The whole promise of persisting them. Measurements belong to the project,
   // not to the tab: someone who measures a part, closes the laptop and comes
   // back to check a figure should find it.

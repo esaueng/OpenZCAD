@@ -15,16 +15,19 @@ export function WorkspaceAppShell({
   projectId,
   loadingReady,
   onLoadingBack,
+  covered = false,
   ...props
 }: ComponentProps<typeof AppShell> & {
   projectId: string;
   loadingReady: boolean;
+  covered?: boolean;
   onLoadingBack(): void;
 }) {
   return (
     <WorkspaceLoading
       key={projectId}
       ready={loadingReady}
+      covered={covered}
       onBack={onLoadingBack}
     >
       <AppShell {...props} />
@@ -49,9 +52,11 @@ export function WorkspacePending() {
 export function WorkspaceLoading({
   ready,
   onBack,
+  covered = false,
   children
 }: {
   ready: boolean;
+  covered?: boolean;
   onBack(): void;
   children: ReactNode;
 }) {
@@ -76,12 +81,12 @@ export function WorkspaceLoading({
     <PendingWorkspace.Provider value={register}>
       <div
         className={`workspace-reveal${revealed ? ' is-ready' : ''}`}
-        inert={!revealed}
-        aria-hidden={!revealed}
+        inert={!revealed || covered}
+        aria-hidden={!revealed || covered}
       >
         {children}
       </div>
-      {!revealed && (
+      {!revealed && !covered && (
         <StartupScreen onBack={onBack} loadingChunks={pending > 0} />
       )}
     </PendingWorkspace.Provider>

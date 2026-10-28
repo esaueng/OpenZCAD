@@ -25,6 +25,7 @@
     "test:web": "pnpm --filter @openzcad/web test",
     "test:parity-corpus": "vitest run --config test/parity/vitest.corpus.config.ts",
     "test:e2e": "playwright test",
+    "test:e2e:full": "playwright test --config playwright.full.config.ts",
     "lint": "eslint apps packages test types --ext .ts,.tsx",
     "format": "prettier --write .",
     "selfhost:check": "node scripts/validate-deployment-config.mjs --config wrangler.selfhost.jsonc --target selfhost",

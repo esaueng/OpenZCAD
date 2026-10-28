@@ -145,7 +145,7 @@ function placementOf(document: ProjectDocument, name: string) {
 
 const round = (value: unknown) => Math.round(Number(value) * 10) / 10;
 
-test('a box is drawn corner to corner on the ground, then given its height', async ({
+test('a box is drawn corner to corner on the ground, then given its height', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(120_000);
@@ -272,7 +272,7 @@ test('a cone drawn on a side face turns to stand out of it', async ({
   expect(move?.rotationDeg).toEqual({ x: 90, y: 0, z: 0 });
 });
 
-test('Escape leaves nothing behind, and Enter alone makes the default box', async ({
+test('Escape leaves nothing behind, and Enter alone makes the default box', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await openProject(page, null);
