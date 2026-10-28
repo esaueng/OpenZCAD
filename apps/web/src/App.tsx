@@ -6020,6 +6020,7 @@ export function App() {
     void (async () => {
       try {
         const keySessionRevision = getKeySessionRevision();
+        const startupSettings = appSettingsRef.current;
         const isCurrent = () =>
           !cancelled && getKeySessionRevision() === keySessionRevision;
         const verifiedMetadata = new Map<string, ProjectSummary>();
@@ -6095,7 +6096,6 @@ export function App() {
             }, 50);
           }
         };
-        const startupSettings = appSettingsRef.current;
         const remoteSettingsPromise = activeSession
           ? api.getSettings().catch(() => null)
           : Promise.resolve(null);

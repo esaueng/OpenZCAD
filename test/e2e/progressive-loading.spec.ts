@@ -98,7 +98,12 @@ test('settings edited during startup survive a late account-settings response', 
   page
 }) => {
   await stubApi(page, { assistantEnabled: true });
+  const session = gate();
   const settings = gate();
+  await page.route('**/api/session', async (route) => {
+    await session.promise;
+    await route.fallback();
+  });
   await page.route('**/api/settings', async (route) => {
     if (route.request().method() === 'GET') await settings.promise;
     await route.fallback();
@@ -107,7 +112,7 @@ test('settings edited during startup survive a late account-settings response', 
     await page.goto('/');
     await expect(
       page.getByRole('button', { name: 'Create project', exact: true })
-    ).toBeEnabled();
+    ).toBeDisabled();
     await page
       .getByRole('button', { name: 'Open settings', exact: true })
       .click();
@@ -116,6 +121,7 @@ test('settings edited during startup survive a late account-settings response', 
       .getByRole('radiogroup', { name: 'Theme' })
       .getByRole('radio', { name: 'Light', exact: true })
       .click();
+    session.release();
     const response = page.waitForResponse(
       (response) =>
         response.url().endsWith('/api/settings') &&
@@ -125,6 +131,7 @@ test('settings edited during startup survive a late account-settings response', 
     await response;
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   } finally {
+    session.release();
     settings.release();
   }
 });
