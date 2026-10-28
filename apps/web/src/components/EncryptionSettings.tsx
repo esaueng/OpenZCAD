@@ -27,6 +27,7 @@ import {
   approveDevice,
   approverComparisonCode,
   beginCompareApproval,
+  canResumeCompareApproval,
   cancelApprovalRequest,
   confirmApprovalCode,
   defaultDeviceLabel,
@@ -1030,7 +1031,10 @@ function ApprovalsPanel({
                 className="secondary"
                 type="button"
                 disabled={
-                  busy || !approval.commitment || approval.state !== 'requested'
+                  busy ||
+                  !approval.commitment ||
+                  (approval.state !== 'requested' &&
+                    !canResumeCompareApproval(ctx, account, approval))
                 }
                 onClick={() =>
                   void run(async () => {
@@ -1047,7 +1051,9 @@ function ApprovalsPanel({
                   })
                 }
               >
-                Compare codes
+                {approval.state === 'requested'
+                  ? 'Compare codes'
+                  : 'Resume comparison'}
               </button>
               <button
                 className="secondary"

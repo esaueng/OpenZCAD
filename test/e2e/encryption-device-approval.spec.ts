@@ -271,6 +271,75 @@ test('two approval tabs retain one staged device and can both unlock it', async 
   }
 });
 
+test('resumes comparison after an accepted response is lost', async ({
+  page,
+  browser
+}) => {
+  const server = createE2eeServer();
+  const { settings } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  let responses = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/respond')) responses += 1;
+  });
+  try {
+    const phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    await expect(
+      phoneSettings.getByRole('img', { name: 'Device approval QR code' })
+    ).toBeVisible();
+    await page.evaluate(() => {
+      const fetch = window.fetch.bind(window);
+      let dropped = false;
+      window.fetch = async (...args) => {
+        const response = await fetch(...args);
+        const input = args[0];
+        const url = input instanceof Request ? input.url : input;
+        if (
+          !dropped &&
+          new URL(url, window.location.href).pathname.endsWith('/respond') &&
+          response.ok
+        ) {
+          dropped = true;
+          throw new TypeError('Simulated comparison response loss');
+        }
+        return response;
+      };
+    });
+    await settings
+      .getByRole('button', { name: 'Compare codes' })
+      .click({ timeout: 10_000 });
+    await expect(
+      settings.getByText(
+        'Encryption keys are unavailable right now. Check your connection and try again.'
+      )
+    ).toBeVisible();
+    const phoneCode = phoneSettings.getByLabel('Approval code');
+    await expect(phoneCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    const resume = settings.getByRole('button', { name: 'Resume comparison' });
+    await expect(resume).toBeEnabled();
+    await resume.click();
+    const laptopCode = settings.getByLabel('Approval code');
+    await expect(laptopCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    expect(await laptopCode.textContent()).toBe(await phoneCode.textContent());
+    await phoneSettings.getByRole('button', { name: 'Codes match' }).click();
+    await settings
+      .getByRole('button', { name: 'Codes match, approve' })
+      .click();
+    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(
+      phoneSettings.getByText('Unlocked', { exact: true })
+    ).toBeVisible();
+    expect(responses).toBe(1);
+  } finally {
+    await phone.context.close();
+  }
+});
+
 test('approves read-only after both devices show the same six digits', async ({
   page,
   browser

@@ -2586,7 +2586,45 @@ function requireCurrentComparison(
   }
 }
 
-/** Pins the request before sending this device's key and a fresh nonce. */
+function requireComparisonResponse(
+  approval: E2eeApprovalRecord,
+  exchange: CompareApproval
+): void {
+  if (
+    !approval.approverKey ||
+    !sameBytes(fromBase64Url(approval.approverKey, 65), exchange.approverKey) ||
+    !approval.approverNonce ||
+    !sameBytes(fromBase64Url(approval.approverNonce, 32), exchange.nonce)
+  ) {
+    throw new EncryptionFlowError(
+      'approval-gone',
+      'This comparison was started elsewhere. Start it again.'
+    );
+  }
+}
+
+/** Whether this page can resume the already-started comparison in the list. */
+export function canResumeCompareApproval(
+  ctx: E2eeContext,
+  account: AccountView,
+  approval: E2eeApprovalRecord
+): boolean {
+  if (approval.state !== 'responded' && approval.state !== 'revealed')
+    return false;
+  const exchange = compareApprovals.get(comparisonId(ctx, approval.id));
+  if (!exchange) return false;
+  try {
+    exchange.assertActive();
+    requireCurrentComparison(ctx, account, exchange);
+    requireApprovalBinding(approval, exchange);
+    requireComparisonResponse(approval, exchange);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Pins before nonce release, or resumes an unchanged local comparison. */
 export async function beginCompareApproval(
   ctx: E2eeContext,
   account: AccountView,
@@ -2603,7 +2641,13 @@ export async function beginCompareApproval(
   const key = comparisonId(ctx, approvalId);
   let exchange = compareApprovals.get(key);
   if (exchange) {
+    exchange.assertActive();
+    requireCurrentComparison(ctx, account, exchange);
     requireApprovalBinding(initial, exchange);
+    if (initial.state === 'responded' || initial.state === 'revealed') {
+      requireComparisonResponse(initial, exchange);
+      return initial;
+    }
   } else {
     exchange = {
       ...approvalBinding(initial),
@@ -2650,13 +2694,8 @@ export async function approverComparisonCode(
   requireCurrentComparison(ctx, account, exchange);
   requireApprovalBinding(approval, exchange);
   if (approval.state !== 'revealed') return null;
-  if (
-    !approval.approverKey ||
-    !sameBytes(fromBase64Url(approval.approverKey, 65), exchange.approverKey) ||
-    !approval.approverNonce ||
-    !sameBytes(fromBase64Url(approval.approverNonce, 32), exchange.nonce) ||
-    !approval.deviceNonce
-  ) {
+  requireComparisonResponse(approval, exchange);
+  if (!approval.deviceNonce) {
     throw new EncryptionFlowError(
       'approval-gone',
       'This comparison was started elsewhere. Start it again.'
