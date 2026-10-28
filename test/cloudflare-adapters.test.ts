@@ -6,6 +6,9 @@ import {
   E2eeRoomLedger,
   isCloudflareFeatureEnabled,
   isE2eeDefaultOn,
+  isE2eeKeysEnabled,
+  isE2eeProjectsEnabled,
+  isE2eeMigrationEnabled,
   isE2eeReverseEnabled,
   MAX_E2EE_ROOM_RETAINED,
   orderE2eeSubmission,
@@ -75,6 +78,48 @@ function firstQuery(prepare: { mock: { calls: unknown[][] } }): string {
 }
 
 describe('cloudflare adapters', () => {
+  it('matches E2EE canaries as complete normalized emails across dependent gates', () => {
+    const env = {
+      E2EE_KEYS_ENABLED: 'false',
+      E2EE_PROJECTS_ENABLED: 'true',
+      E2EE_MIGRATION_ENABLED: 'true',
+      E2EE_REVERSE_ENABLED: 'true',
+      E2EE_CANARY_EMAILS: ' canary@example.com, second@example.net '
+    };
+    const gates = [
+      isE2eeKeysEnabled,
+      isE2eeProjectsEnabled,
+      isE2eeMigrationEnabled,
+      isE2eeReverseEnabled
+    ];
+    for (const email of [
+      'canary@example.com',
+      ' CANARY@EXAMPLE.COM ',
+      'Second@Example.net'
+    ]) {
+      for (const gate of gates) expect(gate(env, email)).toBe(true);
+      expect(isE2eeDefaultOn({ ...env, E2EE_DEFAULT_ON: 'true' }, email)).toBe(
+        true
+      );
+    }
+    for (const email of [
+      undefined,
+      '',
+      'canary',
+      'xcanary@example.com',
+      'canary@example.com.evil',
+      'canary+tag@example.com',
+      'canary@sub.example.com',
+      'canary@example.net',
+      'second@example.net.evil'
+    ]) {
+      for (const gate of gates) expect(gate(env, email), email).toBe(false);
+      expect(
+        isE2eeDefaultOn({ ...env, E2EE_DEFAULT_ON: 'true' }, email),
+        email
+      ).toBe(false);
+    }
+  });
   it('keeps typed feature flags off unless explicitly enabled', () => {
     expect(CLOUDFLARE_BOOLEAN_FLAGS).toEqual([
       'AI_DEPLOYMENT_FREE_ENABLED',

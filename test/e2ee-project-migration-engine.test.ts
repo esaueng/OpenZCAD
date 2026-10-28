@@ -517,6 +517,11 @@ async function expectOpensWithHistory(
   for (const revisionId of plain.revisionIds) {
     const revision = await fresh.store.loadRevision(projectId, revisionId);
     expect(revision?.revisions.at(-1)?.revisionId).toBe(revisionId);
+    const checkpoint = opened.checkpoints.find(
+      (entry) => entry.revisionId === revisionId
+    );
+    expect(checkpoint).toBeDefined();
+    expect(revision?.version).toBe(checkpoint!.documentVersion);
   }
   // The STEP import names its blob, which decrypts to the same bytes.
   const blobIds = rows<{ blob_id: string; kind: string }>(

@@ -18,6 +18,14 @@ authorization.
 
 ## Use
 
+`build.sh` requires the crates.io `wasm-bindgen-cli` 0.2.126 installed with
+`cargo install wasm-bindgen-cli --version 0.2.126 --locked`. Git-built release
+CLIs include a commit suffix in the WASM producer metadata and are refused,
+even when their numeric version matches. The pinned Rust toolchain's
+installed `rust-src` paths are normalized to `/rustc/<compiler-commit>/library`,
+so installing that optional component does not change the package bytes.
+`build.sh --check` still compares every generated file byte for byte.
+
 ```ts
 const { loadMls, generateStateKey } = await import('@openzcad/mls');
 const mls = loadMls();
@@ -42,7 +50,7 @@ const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 | Incoming proposals and Commits          | `process`                                                                                |
 | Rejoin by external Commit               | `groupInfo`, `inspectGroupInfo`, `rejoin`, `confirmRejoin`, `discardRejoin`, `rejoinPsk` |
 | Keys and codes                          | `projectKey`, `epochAuthenticator`                                                       |
-| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`, `JoinArchive`                                           |
+| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`, `JoinArchive`                            |
 | Verify members before joining           | `inspectWelcome`, `leafCertificationPayload`                                             |
 | Persist                                 | `seal`, `Mls.open`                                                                       |
 
@@ -70,6 +78,25 @@ verified policy rejection or explicit discard restores the prior state. A
 solo recovery uses the account-key-wrapped historical project keys with
 `rejoin(..., { archive })`, or the ADR's recovery Add/reset path.
 
+All native transcript replay and raw WASM join/rejoin admission is bounded to
+8,192 supplied epoch records and 64 MiB of input. A checkpoint starts the
+count at its own epoch; a high absolute epoch is permitted with a short valid
+suffix. Oversized arrays are refused before copying them into WASM memory.
+Failed Welcome completion rolls back the provisional join, while a malformed
+or oversized rejoin archive preserves the accepted provisional rejoin for a
+retry. A newer certified owner checkpoint is required for longer histories.
+
+The public session and production Worker protocol expose no sender-check
+override. Receiver-policy scenarios use the internal test helper and a
+separate, explicitly enabled test Worker; production `worker.ts` refuses
+even a directly forged request for that method.
+
+Ownership transfer is unsupported by the application's encrypted-project
+routes. Although a raw MLS group can change its owner role, full-history
+admission across that transfer fails closed because replay requires the
+anchor and target to name the same trusted owner. Do not use a raw role
+change as a supported project transfer or recovery operation.
+
 ## Policy
 
 The rules run in `MlsRules::filter_proposals` (when sending and when
@@ -84,7 +111,9 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
 - **Any member** may Add a leaf for an identity already listed, with its
   existing role. Such a recovery Add, whoever commits it, needs a leaf key
   certified at or after the identity's latest leaf removal (`certifiedEpoch` in the
-  directory). A leaf key once removed from the group is never added back.
+  directory). A member Add never reuses a previously removed leaf key.
+  External rejoins instead enforce the same-device/key removal cutoff through
+  their PSK fence; they do not apply the member-Add key-reuse rule.
 - **The certified epoch is signed.** The leaf certification payload
   (`leafCertificationPayload`, `certificationPayload`) is the MLS encoding of
   the label `openzcad mls leaf certification v2`, project id, user id, device
@@ -116,9 +145,12 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
   the same device or key; inside the window; at most one Remove, of the
   joiner's own user.
 - **The last-leaf exception:** when every remaining leaf of a user carries a
-  revoked credential, the replacement the revocation named may rejoin with a PSK from
-  before that leaf's own revocation (never before a later revocation of
-  another device), if the same external Commit removes one of those leaves.
+  revoked credential and each revocation names this joiner as replacement,
+  it may rejoin with a PSK from before those stale leaves' revocations if the
+  same external Commit removes one of them. The exception waives the
+  revocation cutoffs of all those stale leaves, including ones not removed
+  by this Commit. Other revoked devices' cutoffs still apply, as do the
+  role-change, prior same-device/key removal and rejoin-window fences.
   An external Commit removes at most one leaf, so the replacement removes the
   rest in its next Commit; until then they can sign nothing anyone accepts.
 

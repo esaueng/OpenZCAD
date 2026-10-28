@@ -67,19 +67,32 @@ const METHODS = new Set<string>([
   'status',
   'projectKey',
   'epochAuthenticator',
-  'rejoinPsk',
-  'insecureSkipSendChecksForTests'
+  'rejoinPsk'
 ] satisfies EngineMethod[]);
 
+interface ProtocolOptions {
+  /** Only the separate test harness enables malicious-sender probes. */
+  insecureTestMethods?: boolean;
+}
+
+const methodAllowed = (method: string, options: ProtocolOptions) =>
+  METHODS.has(method) ||
+  (options.insecureTestMethods === true &&
+    method === 'insecureSkipSendChecksForTests');
+
 /** Serve an engine on a port, one request at a time. */
-export function serveEngine(port: Port, ready: Promise<MlsEngine>): void {
+export function serveEngine(
+  port: Port,
+  ready: Promise<MlsEngine>,
+  options: ProtocolOptions = {}
+): void {
   let queue: Promise<void> = Promise.resolve();
   port.addEventListener('message', (event: MessageEvent) => {
     const request = event.data as Request;
     queue = queue.then(async () => {
       let response: Response;
       try {
-        if (!METHODS.has(request.method)) {
+        if (!methodAllowed(request.method, options)) {
           throw new MlsError(
             'input',
             `unknown method ${String(request.method)}`
@@ -106,7 +119,10 @@ export interface EngineConnection {
 }
 
 /** A client for an engine served on `port`. */
-export function connectEngine(port: Port): EngineConnection {
+export function connectEngine(
+  port: Port,
+  options: ProtocolOptions = {}
+): EngineConnection {
   let nextId = 1;
   let failure: MlsError | null = null;
   const waiting = new Map<
@@ -130,7 +146,7 @@ export function connectEngine(port: Port): EngineConnection {
   });
   const api = new Proxy({} as AsyncEngineApi, {
     get(_, method: string) {
-      if (!METHODS.has(method)) return undefined;
+      if (!methodAllowed(method, options)) return undefined;
       return (...args: unknown[]) =>
         new Promise((resolve, reject) => {
           if (failure) {

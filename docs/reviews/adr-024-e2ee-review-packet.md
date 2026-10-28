@@ -20,12 +20,13 @@ describe what is built; please report any difference you find.
 
 <!-- TODO(review-freeze): the coordinator sets the frozen tag and commit when the review starts. -->
 
-| Item           | Value                                                 |
-| -------------- | ----------------------------------------------------- |
-| Repository     | `esaueng/OpenZCAD`                                    |
-| Review tag     | **TBD**: set when the review is scheduled             |
-| Review commit  | **TBD**: the full 40-character SHA of that tag        |
-| Packet refreshed | 2026-10-27: `main` at `88a33b21` plus historical MLS candidate [#959](https://github.com/esaueng/OpenZCAD/pull/959), not frozen |
+| Item                   | Value                                                                                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repository             | `esaueng/OpenZCAD`                                                                                                                                  |
+| Review tag             | **TBD**: set when the review is scheduled                                                                                                           |
+| Review commit          | **TBD**: the full 40-character SHA of that tag                                                                                                      |
+| Historical audit basis | `8b2f68d3eda33092eba97a062e58934c9deec1e3`, the merged [#959](https://github.com/esaueng/OpenZCAD/pull/959) tree                                    |
+| Packet refreshed       | 2026-10-27: audit follow-ups in held [#968](https://github.com/esaueng/OpenZCAD/pull/968); select its final qualified commit before freezing review |
 
 Review the frozen commit, not `main`. Phase 8 slices land behind
 off-by-default flags while the review runs; findings against later commits
@@ -88,7 +89,7 @@ are welcome but should name the commit.
 | `wasm-bindgen`             | `=0.2.126` (crate and CLI must match)                                                                                                                       | `Cargo.toml`, `build.sh`, `pkg/BUILD.json`                                                  |
 | Rust toolchain             | `1.96.0`, target `wasm32-unknown-unknown`, profile `minimal` (crate MSRV `rust-version = "1.88"`)                                                           | `packages/mls/crate/rust-toolchain.toml`                                                    |
 | Cipher suite               | `MLS_128_DHKEMP256_AES128GCM_SHA256_P256` (0x0002) and no other                                                                                             | `SUITE` in `packages/mls/crate/src/model.rs`; reported by `buildInfo` in `crate/src/lib.rs` |
-| Committed WASM             | `pkg/openzcad_mls_bg.wasm`, SHA-256 `48654a54302f5c667372ee85659bb19c4462deea27c91ae16f3552d0773955a6` (1,115,323 bytes)                                      | `packages/mls/pkg/BUILD.json`                                                               |
+| Committed WASM             | `pkg/openzcad_mls_bg.wasm`, SHA-256 `fb4709149d413113b71de97cb7acf0c5aaf672a010de8195b62fb22b80acdecc` (1,118,707 bytes)                                    | `packages/mls/pkg/BUILD.json`                                                               |
 
 `pkg/BUILD.json` also records the SHA-256 of every crate source,
 `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`. When this packet was
@@ -122,9 +123,10 @@ cargo test --locked --manifest-path apps/desktop/device-keys/Cargo.toml
 output should not depend on where the repository lives. Its own comment
 notes that a build under Git Bash, MSYS2 or Cygwin on Windows still embeds
 `\` path separators and differs from a macOS or Linux build; reproduce on
-macOS or Linux. The packet author's machine had no Rust toolchain, so
-neither `build.sh --check` nor the Rust tests were re-run for this packet;
-only the hash comparison above was. (The evidence for issue #817,
+macOS or Linux. The historical packet checked only hashes because its
+author had no Rust toolchain. The #968 follow-up runs the 19 native MLS
+crate tests and a fresh byte-identical `build.sh --check` with Rust 1.96.0
+and wasm-bindgen 0.2.126. This does not qualify native macOS Keychain ACLs. (The evidence for issue #817,
 `docs/roadmap-evidence/l11--mls-welcome-removal-archive.md`, records a
 byte-identical fresh Rust 1.96.0 build at that time.)
 
@@ -242,6 +244,11 @@ the browser side first, then the Worker's defense in depth.
   `openzcad-device-keys` with `p256` =0.14.0). Sign-out choice:
   `endKeySession` in `signOut.ts`, `forgetThisDevice` in `accountKeys.ts`;
   key-session teardown across tabs in `keySession.ts`.
+  Desktop Keychain items hold software private-key bytes readable by the
+  native host. They are not Secure Enclave keys; the non-exportability
+  guarantee is at the renderer/IPC boundary. Frontend code can invoke sign
+  and derive without an individual consent prompt, like browser WebCrypto.
+  Keychain ACL and signed-host behavior still require the manual macOS run.
 - Worker: `POST /api/e2ee/setup`, `/api/e2ee/device-list`,
   `/api/e2ee/identity`, `GET /api/e2ee/account` and
   `/api/e2ee/account-key-history` in `handleE2eeRequest`
@@ -615,8 +622,7 @@ leaf with a per-project leaf key, certified by the device signing key.
   list. Membership mirror and proposals: `prepareMembershipCommit`
   (`e2eeMembership.ts`), `postProposal`, `prepareProposalSettlement`
   (`e2eeProposals.ts`). It never sees a project key, PSK or MLS secret.
-- `/api/e2ee/projects/:id/authority` (`e2eeProjectAuthority.ts`, migration
-  0044) stores only the caller's signed opaque trust record with CAS,
+- `/api/e2ee/projects/:id/authority` (`e2eeProjectAuthority.ts`, migration 0044) stores only the caller's signed opaque trust record with CAS,
   membership/session/device-list fences and erasure cleanup. The browser
   verifies its account MAC; the Worker can verify only the public signature.
 
@@ -685,12 +691,31 @@ and on the scenario and archive tests.
   `mls-rs-crypto-webcrypto` provider failed every Commit in Safari and
   WKWebView (`KeyDerivationError`). Everything outside MLS stays on
   WebCrypto. The provider can be adopted once it passes the WebKit run.
-- **Checkpoint and historical authority bounds.** The candidate in #959
+- **Checkpoint and historical authority bounds.** The implementation from #959
   produces owner checkpoints, verifies old author membership with the
   native policy, and binds replay to independent owner intent and accepted
   terminal state (section 4.7). It permits at most 8,192 records and 64 MiB
   per replay; a longer history needs a newer certified owner checkpoint.
   Revoking the checkpoint signer requires full replay or a fresh checkpoint.
+  The held #968 follow-up applies those budgets to native join/rejoin replay
+  as well, with raw-WASM checks before copying archive arrays. Welcome
+  failures roll back; failed archive downloads during an accepted provisional
+  rejoin remain retryable. Cadence tests drive a real group through epoch 256
+  and exercise refresh after an owner-device revocation.
+- **Recovery enrollment without pins.** A recovery key authenticates the
+  identity, not the freshness of a device-list head supplied to a pin-less
+  browser. A consistent pre-removal fork may issue new wraps to a removed
+  device; later fork detection cannot undo disclosure. Prefer approval from
+  an existing unlocked device, whose verified head is transferred. The
+  recovery screen and ADR state this limitation explicitly.
+- **Cutoff head freshness.** A removal statement may bind a server-advertised
+  head newer than the browser's saved pin. This is the existing removal
+  tradeoff: a later post-rotation member write rejects the old epoch; the
+  signature alone does not establish an independently witnessed latest head.
+- **Authenticated config visibility.** `/api/e2ee/config` exposes the global
+  `plaintextFrozen` bit to authenticated accounts, including accounts outside
+  the canary. It carries no project/account state and supports legacy-write
+  refusal; it is not an account enrollment signal.
 - **Contacts on a fresh device.** Version-2 device approval grants carry
   the approver's contacts head and confirmation state. Durable main and
   pending pins reject older prefixes and conflicts transactionally. An

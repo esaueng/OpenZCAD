@@ -32,11 +32,11 @@ const run: NonNullable<Window['mlsRun']> = {
 window.mlsRun = run;
 
 try {
-  const [{ loadMls }, { runScenarios }] = await Promise.all([
-    import('../src/index'),
+  const [{ loadTestMls }, { runScenarios }] = await Promise.all([
+    import('./test-client'),
     import('../src/scenarios')
   ]);
-  const mls = loadMls();
+  const mls = loadTestMls();
   run.build = await mls.buildInfo();
   await runScenarios(mls, (result) => {
     run.results.push(result);

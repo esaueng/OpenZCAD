@@ -2,6 +2,7 @@
  * Typed handles over the engine, whether it runs in a Worker or in-process.
  */
 import { DEFAULT_REJOIN_WINDOW } from './constants';
+import { MlsError } from './errors';
 import type { AsyncEngineApi } from './engine';
 import type {
   BuildInfo,
@@ -22,6 +23,21 @@ import type {
   RejoinResult,
   SessionStatus
 } from './types';
+
+const testSendChecks = new WeakMap<
+  MlsSession,
+  (skip: boolean) => Promise<void>
+>();
+
+/** Internal test harness only; deliberately absent from the public entry. */
+export function insecureSkipSendChecksForTests(
+  session: MlsSession,
+  skip: boolean
+): Promise<void> {
+  const change = testSendChecks.get(session);
+  if (!change) return Promise.reject(new MlsError('state', 'no test session'));
+  return change(skip);
+}
 
 export class Mls {
   constructor(
@@ -106,7 +122,11 @@ export class MlsSession {
     private readonly api: AsyncEngineApi,
     readonly id: number,
     readonly projectId: string
-  ) {}
+  ) {
+    testSendChecks.set(this, (skip) =>
+      api.insecureSkipSendChecksForTests(id, skip)
+    );
+  }
 
   signatureKey(): Promise<Uint8Array> {
     return this.api.signatureKey(this.id);
@@ -272,14 +292,5 @@ export class MlsSession {
 
   free(): Promise<void> {
     return this.api.free(this.id);
-  }
-
-  /**
-   * Tests only: stop this client checking its own outgoing Commits, so a test
-   * can prove the receivers refuse them. It weakens nothing: receivers always
-   * check, and a malicious client could skip its own checks anyway.
-   */
-  insecureSkipSendChecksForTests(skip: boolean): Promise<void> {
-    return this.api.insecureSkipSendChecksForTests(this.id, skip);
   }
 }

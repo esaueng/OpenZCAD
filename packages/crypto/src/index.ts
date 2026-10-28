@@ -416,4 +416,23 @@ export {
   type InvitationRole,
   type ProjectInvitation
 } from './invitations';
-export * from './mls-authority';
+export {
+  MAX_MLS_AUTHORITY_BYTES,
+  MLS_AUTHORITY_MAC_INFO,
+  encodeMlsAuthorityManifest,
+  decodeMlsAuthorityManifest,
+  mlsAuthorityResetHash,
+  verifyMlsAuthorityReset,
+  signMlsAuthorityManifest,
+  verifyMlsAuthorityManifest,
+  encodeMlsAuthorityTrust,
+  decodeMlsAuthorityTrust,
+  signMlsAuthorityTrust,
+  openMlsAuthorityTrust,
+  verifyMlsAuthorityTrustSigner,
+  type MlsAuthorityRoot,
+  type MlsAuthorityCheckpoint,
+  type MlsAuthorityManifest,
+  type MlsAuthorityTrust,
+  type SignedMlsAuthorityTrust
+} from './mls-authority';

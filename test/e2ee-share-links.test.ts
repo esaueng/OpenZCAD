@@ -955,6 +955,49 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
     );
   });
 
+  it.each(['fresh', 'reload', 'room'] as const)(
+    'refuses a signed v2-to-v1 link-set downgrade on a %s read',
+    async (mode) => {
+      const { srv, laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      await createShareLink(laptop.shareLinks, projectId, 'view');
+      const base = await laptop.store.shareHead(projectId);
+      const reader = reload(srv, laptop, {
+        members: othersOf(owner),
+        ...(mode === 'fresh' ? { pins: memoryVersionPins() } : {})
+      });
+      if (mode === 'fresh') {
+        // An unpinned page normally receives an owner-authenticated head
+        // alone. If the server supplies the signed prefix as well, a v2
+        // commitment in that prefix must also prevent a downgrade.
+        const load = reader.documents.loadDocument;
+        reader.documents.loadDocument = (id, after) => load(id, after ?? 1);
+      }
+      if (mode !== 'fresh') await reader.store.loadProject(projectId);
+      const before = await reader.pins.read(OWNER, projectId);
+      await writeWithLinks(
+        srv,
+        laptop,
+        projectId,
+        base.document,
+        base.shareLinks!.set,
+        true
+      );
+      if (mode === 'room') {
+        const loaded = await laptop.documents.loadDocument(projectId);
+        await integrity(
+          reader.store
+            .roomAccess()
+            .openHead(projectId, loaded.metadata.head, loaded.envelope),
+          'share-links'
+        );
+      } else {
+        await integrity(reader.store.loadProject(projectId), 'share-links');
+      }
+      expect(await reader.pins.read(OWNER, projectId)).toEqual(before);
+    }
+  );
+
   it('refuses an editor’s change of the set, even one that only drops a link', async () => {
     const { srv, laptop, member, projectId } = await linkedProject();
     await delegate(laptop);

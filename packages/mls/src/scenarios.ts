@@ -5,7 +5,11 @@
  * in-process engine and through the Worker protocol, and `browser/` runs it
  * in a real module Worker. Steps in a suite run in order and share state.
  */
-import type { Mls, MlsSession } from './client';
+import {
+  insecureSkipSendChecksForTests,
+  type Mls,
+  type MlsSession
+} from './client';
 import { MlsError, type PolicyReasonCode } from './errors';
 import { generateStateKey, openState, sealState } from './sealed';
 import type {
@@ -451,7 +455,7 @@ async function tryRejoin(
   receivers: Device[],
   replaceLeaf?: number
 ): Promise<void> {
-  await joiner.session.insecureSkipSendChecksForTests(true);
+  await insecureSkipSendChecksForTests(joiner.session, true);
   const groupInfo = await groupInfoFrom.session.groupInfo();
   const result = await joiner.session.rejoin(groupInfo, {
     archive: joiner.archive,
@@ -467,13 +471,13 @@ async function tryCommit(
   request: CommitRequest,
   receivers: Device[]
 ): Promise<void> {
-  await committer.session.insecureSkipSendChecksForTests(true);
+  await insecureSkipSendChecksForTests(committer.session, true);
   const pending = await committer.session.commit(request);
   try {
     for (const r of receivers) await r.session.process(pending.commit);
   } finally {
     await committer.session.discardCommit();
-    await committer.session.insecureSkipSendChecksForTests(false);
+    await insecureSkipSendChecksForTests(committer.session, false);
   }
 }
 
@@ -1856,7 +1860,7 @@ const archiveVerification = suite<{ mls: Mls }>({
       );
       await malicious.setDirectory(world.snapshot());
       // The attacker can change its own policy; the joining receiver cannot.
-      await malicious.insecureSkipSendChecksForTests(true);
+      await insecureSkipSendChecksForTests(malicious, true);
       try {
         const pending = await malicious.commit({ add: [keyPackage] });
         const change = await malicious.confirmCommit();
@@ -2015,6 +2019,19 @@ const stagedArchives = suite({
           'failed verification rolled back the Welcome'
         );
         await fresh.session.beginJoin(welcome);
+        await failsWith(
+          () =>
+            fresh.session.completeJoin({
+              initialGroupInfo: world.archive.initialGroupInfo,
+              epochRecords: Array.from({ length: 8193 }, () => new Uint8Array())
+            }),
+          'input'
+        );
+        assert(
+          !(await fresh.session.status()).inGroup,
+          'over-budget verification rolled back the Welcome'
+        );
+        await fresh.session.beginJoin(welcome);
         await fresh.session.discardJoin();
         await fresh.session.beginJoin(welcome);
         const history = await decryptHistory(
@@ -2119,6 +2136,10 @@ const stagedArchives = suite({
         );
         for (const bad of [
           { initialGroupInfo: solo.archive.initialGroupInfo, epochRecords: [] },
+          {
+            initialGroupInfo: solo.archive.initialGroupInfo,
+            epochRecords: Array.from({ length: 8193 }, () => new Uint8Array())
+          },
           malformed
         ]) {
           await failsWith(() => fresh.session.completeRejoin(bad), 'input');
@@ -2155,7 +2176,7 @@ const stagedArchives = suite({
         const groupInfo = await owner.session.groupInfo();
         // Force a malicious client's provisional Commit. Completion must
         // independently recheck the genuine pre-Commit removal cutoffs.
-        await fresh.session.insecureSkipSendChecksForTests(true);
+        await insecureSkipSendChecksForTests(fresh.session, true);
         const result = await fresh.session.beginRejoin(groupInfo, {
           psk: stalePsk
         });
@@ -2188,7 +2209,7 @@ const stagedArchives = suite({
           'failed archive verification restored the original state'
         );
         await failsWith(() => fresh.session.archiveKey(), 'state');
-        await fresh.session.insecureSkipSendChecksForTests(false);
+        await insecureSkipSendChecksForTests(fresh.session, false);
         return rejoin(world, fresh, owner, world.newestPsk('A'), members);
       }
     }
