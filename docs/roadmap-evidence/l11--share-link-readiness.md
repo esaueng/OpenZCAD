@@ -4,6 +4,7 @@ row: L11
 Encrypted share-link creation now requires the owner's sharing confirmation.
 The sharing dialog refuses to present a newly created URL while its authority
 or model publication remains pending, and disables copying inactive links.
+The same readiness check withholds unfinished links recreated after migration.
 Regression coverage checks confirmation before creation, pending publication,
 and copying states. Publication failures retain their retry reason and are
 distinguished from missing confirmation; real Worker tests verify retry without

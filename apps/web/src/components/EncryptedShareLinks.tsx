@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link2 } from 'lucide-react';
 import { StableLabel } from './StableLabel';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
+import { shareLinkCreationProblem } from '../lib/projectShareLink';
 
 /**
  * Share links of an end-to-end encrypted project, in the sharing dialog's
@@ -136,13 +137,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       projectId,
       mode
     );
-    if (created.pending.length) {
-      throw new Error(
-        created.needsConfirmation
-          ? 'The link needs your confirmation before it can open. Confirm sharing, then copy it from the link list.'
-          : `The link could not be published yet. Reopen sharing to retry.${created.problem ? ` ${created.problem}` : ''}`
-      );
-    }
+    const problem = shareLinkCreationProblem(created);
+    if (problem) throw new Error(problem);
     return { url: created.url };
   },
   async revoke(projectId, shareId) {

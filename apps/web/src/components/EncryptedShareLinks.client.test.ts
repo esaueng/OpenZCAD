@@ -45,13 +45,13 @@ it.each([
     pending: ['snapshot'],
     needsConfirmation: false,
     problem: 'Model upload unavailable',
-    message: /Reopen sharing to retry.*Model upload unavailable/
+    message: /sharing dialog to retry.*Model upload unavailable/
   },
   {
     pending: ['authority'],
     needsConfirmation: false,
     problem: 'Authority publication unavailable',
-    message: /Reopen sharing to retry.*Authority publication unavailable/
+    message: /sharing dialog to retry.*Authority publication unavailable/
   },
   {
     pending: ['authority', 'snapshot'],

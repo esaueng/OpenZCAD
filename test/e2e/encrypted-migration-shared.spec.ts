@@ -293,6 +293,13 @@ test('encrypts a shared project once its member is ready, and the member opens i
   await expect(
     again.getByRole('button', { name: 'Create encrypted link' })
   ).toBeVisible();
+  await again.getByRole('button', { name: 'Create encrypted link' }).click();
+  const recreated = again.getByRole('list', { name: `New links of ${NAME}` });
+  await expect(recreated.getByText(/needs your confirmation/)).toBeVisible({
+    timeout: COMMIT_BUDGET_MS
+  });
+  await expect(recreated.getByRole('button', { name: 'Copy' })).toHaveCount(0);
+  await expect(recreated.locator('code')).toHaveCount(0);
 
   // Bob opens it from his shelf: his browser joins by the Welcome.
   await bob.reload();

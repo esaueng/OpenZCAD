@@ -27,6 +27,7 @@ import {
 } from '../lib/migrationStatus';
 import type * as MigrationMembersModule from '../lib/e2ee/migrationMembers';
 import type { MigrationMember } from '../lib/e2ee/migrationMembers';
+import { reissuePlaintextShareLinks } from '../lib/e2ee/migrationMembers';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
 
 const followUps = vi.hoisted(() => ({
@@ -991,6 +992,93 @@ describe('a shared project (slice 7-4)', () => {
     role,
     state,
     invitation: null
+  });
+
+  it('withholds unfinished migration links and distinguishes confirmation from publication failures', async () => {
+    const fake = fakeEngine(async (summary, report) => {
+      report({
+        phase: 'done',
+        ...(summary.projectId === 'proj_old'
+          ? {
+              revoked: {
+                shareLinks: [{ shareLinkId: 'old_link', mode: 'view' }],
+                invitations: []
+              }
+            }
+          : {})
+      });
+    });
+    const base = {
+      mode: 'view' as const,
+      fragment: {
+        token: 'a'.repeat(43),
+        shareKey: new Uint8Array(32),
+        ownerIdentityHash: new Uint8Array(32)
+      },
+      needsConfirmation: false,
+      problem: null
+    };
+    const created = [
+      {
+        ...base,
+        shareId: 'ready',
+        url: 'https://app.example/#share=ready',
+        pending: []
+      },
+      {
+        ...base,
+        shareId: 'confirmation',
+        url: 'https://app.example/#share=confirmation',
+        pending: ['authority'],
+        needsConfirmation: true
+      },
+      {
+        ...base,
+        shareId: 'authority',
+        url: 'https://app.example/#share=authority',
+        pending: ['authority'],
+        problem: 'Authority upload unavailable'
+      },
+      {
+        ...base,
+        shareId: 'snapshot',
+        url: 'https://app.example/#share=snapshot',
+        pending: ['snapshot'],
+        problem: 'Model upload unavailable'
+      }
+    ];
+    vi.mocked(reissuePlaintextShareLinks).mockResolvedValueOnce(created);
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controllerWith(fake)}
+        isOpen={async () => true}
+      />
+    );
+    await clickEncryptProjects();
+    const older = await screen.findByRole('listitem', {
+      name: 'Older bracket'
+    });
+    fireEvent.click(
+      await within(older).findByRole('button', {
+        name: 'Create encrypted link'
+      })
+    );
+    const links = await within(older).findByRole('list', {
+      name: 'New links of Older bracket'
+    });
+    expect(within(links).getAllByRole('button', { name: 'Copy' })).toHaveLength(
+      1
+    );
+    expect(within(links).getByText(created[0]!.url)).toBeVisible();
+    for (const pending of created.slice(1))
+      expect(within(links).queryByText(pending.url)).toBeNull();
+    expect(within(links).getByText(/needs your confirmation/)).toBeVisible();
+    expect(
+      within(links).getByText(/Authority upload unavailable/)
+    ).toBeVisible();
+    expect(within(links).getByText(/Model upload unavailable/)).toBeVisible();
   });
 
   it('lists who is not ready and what they need to do, then offers encrypted links and invitations', async () => {
