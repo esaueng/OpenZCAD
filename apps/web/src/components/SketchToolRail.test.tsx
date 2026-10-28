@@ -681,6 +681,9 @@ describe('SketchToolRail', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     // Escape closes the list from inside without reaching the canvas.
     await user.click(toggle);
+    within(screen.getByRole('group', { name: 'More modify tools' }))
+      .getByRole('button', { name: 'Mirror' })
+      .focus();
     await user.keyboard('{Escape}');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });

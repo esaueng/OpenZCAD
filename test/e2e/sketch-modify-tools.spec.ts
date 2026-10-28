@@ -93,7 +93,7 @@ async function modifyTool(page: Page, name: string) {
   });
   await fold.click();
   await expect(fold).toHaveAttribute('aria-expanded', 'true');
-  await rail
+  await page
     .getByRole('group', { name: 'More modify tools' })
     .getByRole('button', { name, exact: true })
     .click();

@@ -16,6 +16,8 @@ inspector headings, and retained suppression/rollback menu actions. The six
 states are rendered at 320 x 568, 390 x 844 and 1440 x 900; the rail and sketch
 flyout also cover 844 x 390 landscape. Screenshot inspection and a separate
 comfortable-density browser check confirm the phone layout. The focused
-SketchToolRail, ViewerToolbar and ShortcutsOverlay component suites pass
-(55 tests); lint, typecheck, the parity corpus and the root production build
-with bundle budgets pass. U03 remains Partial.
+SketchToolRail, ViewerToolbar, ShortcutsOverlay and sidebar contract suites
+pass (65 tests), as does the full web suite (4,482 tests). All seven existing
+`sketch-modify-tools.spec.ts` workflows still pass through the portalled menu,
+including their document and undo checks. Lint, typecheck, the parity corpus
+and the root production build with bundle budgets pass. U03 remains Partial.
