@@ -1219,24 +1219,28 @@
   white-space: nowrap;
 }
 
-/* Row actions reveal on hover; keyboard focus and coarse pointers
-   always see them. */
+/* Only actions inside list rows reveal on hover. Standalone confirmation
+   and recovery actions must stay discoverable without hover or focus. */
 .sharing-row-action {
   min-height: 24px;
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
+  opacity: 1;
+}
+
+.sharing-list > li .sharing-row-action {
   opacity: 0;
 }
 
 .sharing-list > li:hover .sharing-row-action,
-.sharing-row-action:focus-visible {
+.sharing-list > li .sharing-row-action:focus-visible {
   opacity: 1;
 }
 
 @media (hover: none) {
-  .sharing-row-action {
+  .sharing-list > li .sharing-row-action {
     opacity: 1;
   }
 }
