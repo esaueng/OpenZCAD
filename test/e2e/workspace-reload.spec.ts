@@ -69,3 +69,42 @@ for (const width of [1440, 390]) {
       });
   });
 }
+
+test('offline boot keeps restoring a saved local workspace without a connection demand', async ({
+  page,
+  context
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Offline local restore');
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/session', async (route) => {
+    await gate;
+    await route.fulfill({
+      json: { userId: 'user_e2e', displayName: 'E2E user', mode: 'development' }
+    });
+  });
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(
+      page.getByRole('status', { name: 'Restoring workspace' })
+    ).toBeVisible();
+    await context.setOffline(true);
+    await expect(
+      page.getByText('Preparing your model and workspace')
+    ).toBeVisible();
+    await expect(page.getByText(/Connect to finish/)).toHaveCount(0);
+    await expect(page.locator('.startup-card button')).toBeHidden();
+  } finally {
+    await context.setOffline(false);
+    release();
+  }
+  await expect(page.locator('.workspace-reveal')).toHaveClass(/is-ready/, {
+    timeout: 30_000
+  });
+  await expectBodyCount(page, 1);
+});

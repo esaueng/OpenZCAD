@@ -10,7 +10,13 @@ function subscribeOnline(changed: () => void) {
   };
 }
 
-export function StartupScreen({ onBack }: { onBack?(): void }) {
+export function StartupScreen({
+  onBack,
+  loadingChunks = false
+}: {
+  onBack?(): void;
+  loadingChunks?: boolean;
+}) {
   const online = useSyncExternalStore(
     subscribeOnline,
     () => navigator.onLine !== false
@@ -25,9 +31,9 @@ export function StartupScreen({ onBack }: { onBack?(): void }) {
           <span>Restoring workspace…</span>
         </div>
         <p>
-          {online
-            ? 'Preparing your model and workspace'
-            : 'You’re offline. Connect to finish loading the workspace.'}
+          {!online && loadingChunks
+            ? 'You’re offline. Connect to finish loading the workspace.'
+            : 'Preparing your model and workspace'}
         </p>
         <button type="button" onClick={onBack} disabled={!onBack}>
           Back to parts

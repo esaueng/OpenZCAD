@@ -81,7 +81,9 @@ export function WorkspaceLoading({
       >
         {children}
       </div>
-      {!revealed && <StartupScreen onBack={onBack} />}
+      {!revealed && (
+        <StartupScreen onBack={onBack} loadingChunks={pending > 0} />
+      )}
     </PendingWorkspace.Provider>
   );
 }

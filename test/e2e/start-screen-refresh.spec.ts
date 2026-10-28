@@ -247,3 +247,37 @@ for (const layout of ['grid', 'list']) {
     });
   }
 }
+
+for (const width of [1440, 390]) {
+  test(`reload keeps a known-empty library free of placeholder cards at ${width}px`, async ({
+    page
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await stubApi(page);
+    let release = () => {};
+    let gate = Promise.resolve();
+    await page.route('**/api/projects', async (route) => {
+      await gate;
+      await route.fulfill({ json: { projects: [] } });
+    });
+    await page.goto('/');
+    await expect(page.getByText('No parts yet', { exact: true })).toBeVisible();
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect(
+        page.getByRole('status', { name: 'Loading library' })
+      ).toBeVisible();
+      await expect(page.locator('.start-tile-placeholder')).toHaveCount(0);
+      await expect(page.getByText('No parts yet', { exact: true })).toHaveCount(
+        0
+      );
+    } finally {
+      release();
+    }
+    await expect(page.getByText('No parts yet', { exact: true })).toBeVisible();
+    await expect(page.locator('.start-tile-placeholder')).toHaveCount(0);
+  });
+}

@@ -454,6 +454,29 @@ describe('StartScreen shelf wording', () => {
 
 describe('StartScreen library discovery', () => {
   it.each(['grid', 'list'])(
+    'keeps a known-empty %s shelf empty while discovery is pending',
+    (layout) => {
+      sessionStorage.clear();
+      localStorage.setItem('openzcad.start.layout', layout);
+      const { unmount } = renderStartScreen({ projects: [] });
+      unmount();
+      const { container } = renderStartScreen({
+        projects: [],
+        loading: true,
+        busy: true
+      });
+      expect(
+        screen.getByRole('status', { name: 'Loading library' })
+      ).toBeVisible();
+      expect(
+        container.querySelectorAll('.start-tile-placeholder')
+      ).toHaveLength(0);
+      expect(screen.queryByText('No parts yet')).not.toBeInTheDocument();
+      localStorage.removeItem('openzcad.start.layout');
+      sessionStorage.clear();
+    }
+  );
+  it.each(['grid', 'list'])(
     'reserves pinned groups, recovery footers and toolbar in %s layout',
     (layout) => {
       sessionStorage.clear();

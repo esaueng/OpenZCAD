@@ -1205,7 +1205,7 @@ export function StartScreen({
       : [
           {
             label: null,
-            count: previousLayout?.all || LOADING_PROJECT_TILES,
+            count: previousLayout?.all ?? LOADING_PROJECT_TILES,
             offset: 0
           }
         ];

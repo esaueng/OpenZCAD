@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceLoading, WorkspacePending } from './WorkspaceLoading';
 import { createLazyPanel } from './LazyPanel';
+import { StartupScreen } from './StartupScreen';
 
 describe('coordinated workspace reveal', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -90,14 +91,46 @@ describe('coordinated workspace reveal', () => {
     frames();
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     const onBack = vi.fn();
+    const Pending = lazy(
+      () => new Promise<{ default: () => React.JSX.Element }>(() => {})
+    );
     render(
       <WorkspaceLoading ready={false} onBack={onBack}>
-        <p>Model</p>
+        <Suspense fallback={<WorkspacePending />}>
+          <Pending />
+        </Suspense>
       </WorkspaceLoading>
     );
     expect(screen.getByText(/You’re offline/)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Back to parts' }));
     expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it('does not require a connection during an offline local boot restore', () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    render(<StartupScreen />);
+    expect(
+      screen.getByRole('status', { name: 'Restoring workspace' })
+    ).toBeVisible();
+    expect(
+      screen.getByText('Preparing your model and workspace')
+    ).toBeVisible();
+    expect(screen.queryByText(/Connect to finish/)).toBeNull();
+  });
+
+  it('lets an offline cached workspace prepare without a connection notice', () => {
+    frames();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    render(
+      <WorkspaceLoading ready={false} onBack={vi.fn()}>
+        <p>Cached model</p>
+      </WorkspaceLoading>
+    );
+    expect(
+      screen.getByText('Preparing your model and workspace')
+    ).toBeVisible();
+    expect(screen.queryByText(/Connect to finish/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Back to parts' })).toBeEnabled();
   });
 
   it('releases a failed panel to its recovery UI instead of keeping the splash', async () => {
