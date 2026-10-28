@@ -6083,6 +6083,7 @@ export function App() {
               if (!isCurrent()) return;
               startTransition(() =>
                 setProjects((current) => {
+                  if (!isCurrent()) return current;
                   const next = current.map((entry) =>
                     withVerifiedShelfMetadata(entry, verifiedMetadata.get(entry.projectId))
                   );
