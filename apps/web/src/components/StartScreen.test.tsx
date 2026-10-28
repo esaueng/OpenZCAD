@@ -453,6 +453,56 @@ describe('StartScreen shelf wording', () => {
 });
 
 describe('StartScreen library discovery', () => {
+  it.each(['grid', 'list'])(
+    'reserves pinned groups, recovery footers and toolbar in %s layout',
+    (layout) => {
+      sessionStorage.clear();
+      localStorage.setItem('openzcad.start.layout', layout);
+      const pinned = {
+        ...localProject,
+        name: 'Pinned part',
+        organization: { status: 'active' as const, pinned: true, sortOrder: 0 }
+      };
+      const projects = [
+        pinned,
+        {
+          ...localProject,
+          projectId: toProjectId('regular'),
+          name: 'Regular part'
+        },
+        {
+          ...localProject,
+          projectId: toProjectId('recovery'),
+          name: 'Pinned part (Recovery)'
+        }
+      ];
+      const { unmount } = renderStartScreen({ projects });
+      unmount();
+      const { container } = renderStartScreen({
+        projects: [],
+        loading: true,
+        busy: true
+      });
+      expect(
+        [...container.querySelectorAll('.start-shelf-group')].map(
+          (heading) => heading.textContent
+        )
+      ).toEqual(['Pinned…', 'Parts…']);
+      expect(
+        container.querySelectorAll('.start-tile-placeholder')
+      ).toHaveLength(3);
+      expect(
+        container.querySelectorAll('.start-tile-placeholder .start-tile-copies')
+      ).toHaveLength(1);
+      expect(screen.getByRole('group', { name: 'Show parts' })).toBeVisible();
+      expect(screen.getByLabelText('Sort parts')).toBeDisabled();
+      expect(
+        container.querySelectorAll('.start-tile-grid.is-list')
+      ).toHaveLength(layout === 'list' ? 2 : 0);
+      localStorage.removeItem('openzcad.start.layout');
+      sessionStorage.clear();
+    }
+  );
   it('keeps unknown parts and account state out of the first-run layout', () => {
     const { container } = renderStartScreen({
       projects: [],

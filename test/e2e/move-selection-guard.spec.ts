@@ -202,7 +202,7 @@ test('a connected edge run settles the typed Move before replacing its target', 
   await setSelectionFilter(page, 'Edge');
   const status = page.getByRole('contentinfo');
   await expect(status).not.toContainText(
-    /Rebuilding|Waiting for exact geometry|Loading exact Remus kernel/i,
+    /Preparing model|Rebuilding|Waiting for exact geometry|Loading exact Remus kernel/i,
     { timeout: 30_000 }
   );
   const maxCards = await watchCardCount(page);

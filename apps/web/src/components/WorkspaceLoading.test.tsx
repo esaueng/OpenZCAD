@@ -1,0 +1,126 @@
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { lazy, Suspense } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { WorkspaceLoading, WorkspacePending } from './WorkspaceLoading';
+import { createLazyPanel } from './LazyPanel';
+
+describe('coordinated workspace reveal', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function frames() {
+    let next = 0;
+    const callbacks = new Map<number, FrameRequestCallback>();
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      callbacks.set(++next, callback);
+      return next;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+      callbacks.delete(id);
+    });
+    return () =>
+      act(() => {
+        const current = [...callbacks.values()];
+        callbacks.clear();
+        current.forEach((callback) => callback(0));
+      });
+  }
+
+  it('waits for the model and every initial lazy surface, then reveals once', async () => {
+    const frame = frames();
+    let finish!: (module: { default: () => React.JSX.Element }) => void;
+    const Panels = lazy(
+      () =>
+        new Promise<{ default: () => React.JSX.Element }>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const view = (ready: boolean) => (
+      <WorkspaceLoading ready={ready} onBack={vi.fn()}>
+        <button>Model control</button>
+        <Suspense fallback={<WorkspacePending />}>
+          <Panels />
+        </Suspense>
+      </WorkspaceLoading>
+    );
+    const { container, rerender } = render(view(false));
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(container.querySelector('.workspace-reveal')).toHaveAttribute(
+      'inert'
+    );
+    expect(screen.queryByRole('button', { name: 'Model control' })).toBeNull();
+    rerender(view(true));
+    frame();
+    frame();
+    expect(
+      screen.getByRole('status', { name: 'Restoring workspace' })
+    ).toBeVisible();
+    await act(async () =>
+      finish({ default: () => <p>Objects and history</p> })
+    );
+    frame();
+    frame();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByText('Objects and history')).toBeVisible();
+    expect(container.querySelector('.workspace-reveal')).not.toHaveAttribute(
+      'inert'
+    );
+    rerender(view(false));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('cancels an imminent reveal if geometry becomes pending again', () => {
+    const frame = frames();
+    const { rerender } = render(
+      <WorkspaceLoading ready onBack={vi.fn()}>
+        <p>Model</p>
+      </WorkspaceLoading>
+    );
+    frame();
+    rerender(
+      <WorkspaceLoading ready={false} onBack={vi.fn()}>
+        <p>Model</p>
+      </WorkspaceLoading>
+    );
+    frame();
+    frame();
+    expect(screen.getByRole('status')).toBeVisible();
+  });
+
+  it('keeps an escape and offline guidance available while waiting', () => {
+    frames();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const onBack = vi.fn();
+    render(
+      <WorkspaceLoading ready={false} onBack={onBack}>
+        <p>Model</p>
+      </WorkspaceLoading>
+    );
+    expect(screen.getByText(/You’re offline/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to parts' }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it('releases a failed panel to its recovery UI instead of keeping the splash', async () => {
+    const frame = frames();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const Failed = createLazyPanel<object>('History', () =>
+      Promise.reject(new Error('Failed to fetch dynamically imported module'))
+    );
+    await act(async () => {
+      render(
+        <WorkspaceLoading ready onBack={vi.fn()}>
+          <Failed />
+        </WorkspaceLoading>
+      );
+    });
+    frame();
+    frame();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'History could not be rendered.'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Reload workspace' })
+    ).toBeVisible();
+  });
+});

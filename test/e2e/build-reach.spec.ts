@@ -241,7 +241,7 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
     timeout: 60_000
   });
   await expect(page.getByRole('contentinfo')).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
     { timeout: 60_000 }
   );
 

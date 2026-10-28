@@ -44,6 +44,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { generateCutePartName } from '../lib/cutePartName';
+import { readLibraryLayout, saveLibraryLayout } from '../lib/libraryLayout';
 import {
   bucketProjectsByShelf,
   moveItem,
@@ -320,6 +321,7 @@ export function StartScreen({
   const [filter, setFilter] = useState<ShelfFilter>('all');
   const [sort, setSort] = useState<ShelfSort>('custom');
   const [layout, setLayout] = useState<ShelfLayout>(readShelfLayout);
+  const [previousLayout] = useState(readLibraryLayout);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [propertiesProject, setPropertiesProject] =
     useState<ProjectSummary | null>(null);
@@ -1119,7 +1121,9 @@ export function StartScreen({
     );
   }
 
-  const showFilters = filterable && !loading && shelfProjects.length > 0;
+  const layoutCounts =
+    loading && previousLayout ? previousLayout : filterCounts;
+  const showFilters = filterable && (loading || shelfProjects.length > 0);
   // Pinned parts head the shelf as their own group when the whole shelf is
   // on screen. Partitioned by the flag, not sliced by count: a part created
   // this session is prepended to the listing ahead of pinned ones. Each tile
@@ -1149,6 +1153,62 @@ export function StartScreen({
           }
         ]
       : [{ label: null, projects: matchingProjects }];
+
+  const { all, pinned, attention, local } = filterCounts;
+  const footerPositions = shelfGroups
+    .flatMap((group) => group.projects)
+    .flatMap((project, index) =>
+      recoveryCounts.has(project.name) ? [index] : []
+    )
+    .join(',');
+  useEffect(() => {
+    if (
+      loading ||
+      !filterable ||
+      activeFilter !== 'all' ||
+      search ||
+      sort !== 'custom'
+    )
+      return;
+    saveLibraryLayout({
+      all,
+      pinned,
+      attention,
+      local,
+      footers: footerPositions ? footerPositions.split(',').map(Number) : []
+    });
+  }, [
+    loading,
+    filterable,
+    activeFilter,
+    search,
+    sort,
+    all,
+    pinned,
+    attention,
+    local,
+    footerPositions
+  ]);
+
+  const loadingGroups =
+    previousLayout &&
+    previousLayout.pinned > 0 &&
+    previousLayout.pinned < previousLayout.all
+      ? [
+          { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
+          {
+            label: 'Parts',
+            count: previousLayout.all - previousLayout.pinned,
+            offset: previousLayout.pinned
+          }
+        ]
+      : [
+          {
+            label: null,
+            count: previousLayout?.all || LOADING_PROJECT_TILES,
+            offset: 0
+          }
+        ];
 
   const shelfLabel =
     SHELVES.find((entry) => entry.status === shelf) ?? SHELVES[0]!;
@@ -1501,11 +1561,12 @@ export function StartScreen({
                   (entry) =>
                     entry.id === 'all' ||
                     entry.id === activeFilter ||
-                    filterCounts[entry.id] > 0
+                    layoutCounts[entry.id] > 0
                 ).map((entry) => (
                   <button
                     key={entry.id}
                     type="button"
+                    disabled={loading}
                     aria-pressed={activeFilter === entry.id}
                     className={[
                       'start-filter',
@@ -1521,7 +1582,7 @@ export function StartScreen({
                   >
                     {entry.label}
                     <span className="start-filter-count">
-                      {filterCounts[entry.id]}
+                      {loading ? '…' : filterCounts[entry.id]}
                     </span>
                   </button>
                 ))}
@@ -1530,11 +1591,12 @@ export function StartScreen({
 
             {(loading || userProjects.length > 0) && (
               <div className="start-toolbar-tools">
-                {shelfProjects.length > 1 && (
+                {(layoutCounts.all > 1 || (loading && !previousLayout)) && (
                   <label className="start-sort">
                     <span className="visually-hidden">Sort parts</span>
                     <select
                       value={sort}
+                      disabled={loading}
                       onChange={(event) =>
                         setSort(event.target.value as ShelfSort)
                       }
@@ -1630,21 +1692,51 @@ export function StartScreen({
               >
                 Loading your parts and account…
               </div>
-              <div className="start-tile-grid" aria-hidden="true">
-                {Array.from({ length: LOADING_PROJECT_TILES }, (_, index) => (
+              {layout === 'list' && (
+                <div className="start-list-head" aria-hidden="true">
+                  <span>Name</span>
+                  <span>Status</span>
+                  <span>Edited</span>
+                  <span>Saves</span>
+                </div>
+              )}
+              {loadingGroups.map((group) => (
+                <Fragment key={group.label ?? 'all'}>
+                  {group.label && (
+                    <h3 className="start-shelf-group" aria-hidden="true">
+                      {group.label}
+                      <span>…</span>
+                    </h3>
+                  )}
                   <div
-                    className="start-tile start-tile-placeholder"
-                    key={index}
+                    className={`start-tile-grid${layout === 'list' ? ' is-list' : ''}`}
+                    aria-hidden="true"
                   >
-                    <span className="start-tile-thumb" />
-                    {/* One bar per line of a real tile: name, then meta. */}
-                    <span className="start-tile-body">
-                      <span />
-                      <span />
-                    </span>
+                    {Array.from({ length: group.count }, (_, index) => (
+                      <div
+                        className="start-tile start-tile-placeholder"
+                        key={index}
+                      >
+                        <div className="start-tile-open">
+                          <span className="start-tile-thumb" />
+                          {/* The real tile's text rows also own list sizing. */}
+                          <span className="start-tile-body">
+                            <strong className="start-tile-name">&nbsp;</strong>
+                            <small className="start-tile-meta">
+                              <time>&nbsp;</time>
+                              <span className="start-tile-rev">&nbsp;</span>
+                            </small>
+                          </span>
+                          <span className="start-tile-flags" />
+                        </div>
+                        {previousLayout?.footers.includes(
+                          group.offset + index
+                        ) && <div className="start-tile-copies" />}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </Fragment>
+              ))}
             </>
           )}
 
