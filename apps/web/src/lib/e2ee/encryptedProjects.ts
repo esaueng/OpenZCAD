@@ -651,7 +651,9 @@ async function openedForSession(
   checkSession?.(userId);
   const revision = getKeySessionRevision();
   if (opened?.userId !== userId || opened.revision !== revision) {
-    forgetOpened();
+    // An unlocked invalidation already installed a lazy reader. Keep it
+    // available while this shared opening is pending.
+    if (opened) forgetOpened();
     const lifetime = { active: true };
     const both = openStore(userId, revision, email, () => lifetime.active);
     const current: Opened = {
@@ -671,6 +673,7 @@ async function openedForSession(
     // Every client above captures the verified account view, so reopen them
     // after that change rather than pairing the old view with the new key.
     // Keep unlocked keys on rotations; a locked state drops blob access too.
+    stopEncryptionState?.();
     stopEncryptionState = subscribeEncryptionState(userId, () => {
       if (!opened || opened === current)
         invalidateAccountClients(userId, revision);

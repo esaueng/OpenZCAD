@@ -368,6 +368,38 @@ it('revokes a lazy source if Settings locks before any client reopens', async ()
   expect(f.download).not.toHaveBeenCalled();
 });
 
+it('keeps concurrent blob lookups encrypted while the fresh account view is opening', async () => {
+  const f = await blobFixture();
+  await f.source();
+  f.events.encryptionStateChanged(f.userId);
+  const realLoad = f.load.getMockImplementation()!;
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  f.load.mockImplementationOnce(async (ctx) => {
+    const state = await realLoad(ctx);
+    await gate;
+    return state;
+  });
+  const first = f.registry.encryptedBlobSource(f.blobId)!.read();
+  try {
+    await vi.waitFor(() => expect(f.load).toHaveBeenCalledTimes(2));
+    const concurrent = f.registry.encryptedBlobSource(f.blobId);
+    expect(concurrent).not.toBeNull();
+    const second = concurrent!.read();
+    finish();
+    expect(await Promise.all([first, second])).toEqual([
+      f.plaintext,
+      f.plaintext
+    ]);
+    expect(f.load).toHaveBeenCalledTimes(2);
+  } finally {
+    finish();
+    await first.catch(() => undefined);
+  }
+});
+
 it('refuses a lazy source if locking lands during its session check', async () => {
   const f = await blobFixture();
   await f.source();
