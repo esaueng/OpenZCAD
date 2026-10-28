@@ -292,10 +292,17 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           const document = await api.loadProject(project.projectId);
           if (!document)
             throw new Error('Project is no longer available. Try again.');
+          check();
+          // Catalogs must not predate this document: a concurrent save can
+          // add a retained checkpoint or file that the backup must include.
+          // Fetch them together; encrypted names reuse the verified head.
           const [revisions, catalog] = await Promise.all([
             api.listRevisions(project.projectId),
             api.listArtifacts(project.projectId)
           ]);
+          const retainedRevisionIds = new Set(
+            revisions.revisions.map((revision) => revision.revisionId as string)
+          );
           check();
           let measurements: StoredMeasurementRecord | null = null;
           if (isEncryptedProject(project.projectId)) {
@@ -338,6 +345,7 @@ async function buildDataExport(options: DataExportOptions): Promise<{
                 includeEncryptedFiles: true,
                 includeOriginalImports: options.includeOriginalImports,
                 artifacts: catalog.artifacts,
+                retainedRevisionIds,
                 onSaveState: coverHistory
                   ? (revisionId) => covered.add(revisionId)
                   : undefined,
