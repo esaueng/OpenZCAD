@@ -126,3 +126,44 @@ describe('the instrument rail island', () => {
     expect(css).not.toMatch(/\.viewer-rail\s*\+\s*\.viewer-rail/);
   });
 });
+
+describe('menus over the passive overlays (F013)', () => {
+  const css = sheet('quiet-stage.css');
+
+  it('stands the point-relations menu over the Panels hidden pill', () => {
+    // Both are absolute children of the instrument rail, and the pill comes
+    // later: at one level it covered the menu's Disconnect row.
+    const menu = rules(css, '.sketch-point-relations').join('\n');
+    expect(menu).toMatch(/position:\s*absolute/);
+    expect(Number(menu.match(/z-index:\s*(\d+)/)?.[1])).toBeGreaterThan(0);
+    expect(
+      rules(css, '.instrument-rail > .panels-hidden-pill').join('\n')
+    ).not.toMatch(/z-index/);
+  });
+
+  it('stands the first-run tour aside while a command shows its options', () => {
+    expect(
+      rules(
+        css,
+        '.viewer-area:has(.in-place-command-options[open]) .workspace-tour'
+      ).join('\n')
+    ).toMatch(/visibility:\s*hidden/);
+  });
+});
+
+describe('a refusal in the command strip (F014)', () => {
+  const css = sheet('quiet-stage.css');
+
+  it('wraps to three lines rather than clipping its recovery', () => {
+    const refused = rules(
+      css,
+      '.in-place-command.refused .in-place-command-hint'
+    ).join('\n');
+    expect(refused).toMatch(/white-space:\s*normal/);
+    expect(refused).toMatch(/-webkit-line-clamp:\s*3/);
+    // A plain hint stays one quiet line.
+    expect(rules(css, '.in-place-command-hint').join('\n')).toMatch(
+      /white-space:\s*nowrap/
+    );
+  });
+});

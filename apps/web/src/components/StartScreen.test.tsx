@@ -1119,4 +1119,32 @@ describe('StartScreen shelf filters, order and layout', () => {
     expect(document.querySelector('.start-tile-grid.is-list')).not.toBeNull();
     localStorage.removeItem('openzcad.start.layout');
   });
+
+  it('keeps each clipped name whole on hover', () => {
+    // F016: two parts sharing a long prefix clipped to the same visible
+    // "QA-20261028-Profil…"; the full name was only in the accessible name.
+    localStorage.setItem('openzcad.start.layout', 'list');
+    renderStartScreen({
+      projects: [
+        part('project_p', 'QA-20261028-Profiles', '2026-08-01T00:00:00.000Z'),
+        part(
+          'project_q',
+          'QA-20261028-Profiles copy',
+          '2026-08-02T00:00:00.000Z'
+        )
+      ]
+    });
+    expect(
+      Array.from(document.querySelectorAll('.start-tile-name')).map((element) =>
+        element.getAttribute('title')
+      )
+    ).toEqual(tileNames());
+    expect(tileNames()).toEqual(
+      expect.arrayContaining([
+        'QA-20261028-Profiles',
+        'QA-20261028-Profiles copy'
+      ])
+    );
+    localStorage.removeItem('openzcad.start.layout');
+  });
 });

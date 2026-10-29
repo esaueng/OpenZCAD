@@ -50,6 +50,17 @@ function toolReadout(session: SketchWorkflowProps['tool']): string {
           picks: session.pendingEdit.picks.length
         }
       : null;
+  // A dimension with all its picks still waits for a click that places its
+  // value: "Angle: 2/2 selected" read as done while the tool wanted one more
+  // click (F019).
+  if (
+    armed &&
+    'placement' in armed.spec &&
+    armed.spec.placement &&
+    armed.picks >= armed.spec.picks
+  ) {
+    return `${armed.spec.label}: click to place the value`;
+  }
   return armed
     ? `${armed.spec.label}: ${armed.picks}/${armed.spec.picks} selected`
     : sketchDrawToolLabel(

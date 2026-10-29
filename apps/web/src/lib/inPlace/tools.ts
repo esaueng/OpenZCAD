@@ -510,7 +510,7 @@ function resolveAxisOf(
 }
 
 /** A handle the viewport draws for one value. */
-export type HandleSpec =
+export type HandleSpec = (
   | {
       valueId: string;
       kind: 'angle';
@@ -534,7 +534,15 @@ export type HandleSpec =
       kind: 'chip';
       key: string;
       params: { anchor: Vector3 };
-    };
+    }
+) & {
+  /**
+   * The value's name on its chip and keypad when the picks decide it (a
+   * grid's "X count" and "Y spacing", along the axes chosen), in place of
+   * the value's fixed label.
+   */
+  label?: string;
+};
 
 export interface InPlaceToolSpec {
   id: InPlaceToolId;
@@ -3384,29 +3392,37 @@ const gridPattern: InPlaceToolSpec = {
     const first = axisOf(options.axis);
     const second = axisOf(options.axis2 ?? 'y');
     const origin = centre(body);
+    // Each chip names its direction by the axis chosen for it: "3 count 2"
+    // and "Spacing 2 20 mm" left which way the second ran to a guess (F019).
+    const along = (axis: string, what: string) =>
+      `${axis.toUpperCase()} ${what}`;
     return [
       {
         valueId: 'spacing',
         kind: 'linear',
         key: `${bodyKey(body)}:spacing:${first}`,
+        label: along(first, 'spacing'),
         params: { origin, direction: AXIS_VECTORS[first]! }
       },
       {
         valueId: 'spacing2',
         kind: 'linear',
         key: `${bodyKey(body)}:spacing2:${second}`,
+        label: along(second, 'spacing'),
         params: { origin, direction: AXIS_VECTORS[second]! }
       },
       {
         valueId: 'count',
         kind: 'chip',
         key: `${bodyKey(body)}:count`,
+        label: along(first, 'count'),
         params: { anchor: body.max }
       },
       {
         valueId: 'count2',
         kind: 'chip',
         key: `${bodyKey(body)}:count2`,
+        label: along(second, 'count'),
         params: { anchor: body.min }
       }
     ];

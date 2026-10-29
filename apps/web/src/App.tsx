@@ -21068,7 +21068,9 @@ export function App() {
     setKeypad({
       kind: 'command',
       commandValueId: valueId,
-      label: valueSpec.label,
+      label:
+        inPlace.handles.find((handle) => handle.valueId === valueId)?.label ??
+        valueSpec.label,
       // A parametric value opens as its expression, and comes back as one
       // if entry is canceled.
       initial: raw ?? keypadText(value),
@@ -21107,15 +21109,20 @@ export function App() {
             ? formatNumber(shown)
             : String(shown);
         };
+        // A handle that names its own direction ("Y count") reads it first,
+        // as a length's chip reads its label.
+        const label = handle.label ?? valueSpec?.label ?? '';
         const format =
           valueSpec?.unit === 'angle'
             ? (value: number) => `${round(value)}°`
             : valueSpec?.label === '×'
               ? (value: number) => `× ${round(value)}`
               : valueSpec?.unit === 'count'
-              ? (value: number) => `${round(value)} ${valueSpec.label.toLowerCase()}`
+              ? handle.label
+                ? (value: number) => `${label} ${round(value)}`
+                : (value: number) => `${round(value)} ${label.toLowerCase()}`
               : (value: number) =>
-                  `${valueSpec?.label ?? ''} ${round(value)} ${inPlaceUnits}`.trim();
+                  `${label} ${round(value)} ${inPlaceUnits}`.trim();
         return {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,

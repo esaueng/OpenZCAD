@@ -1,5 +1,5 @@
-import { Ellipsis } from 'lucide-react';
-import { Fragment } from 'react';
+import { ChevronDown, Ellipsis } from 'lucide-react';
+import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import {
   ALL_TOOL_GROUPS,
   commandContextFor,
@@ -85,6 +85,8 @@ export function CommandCard({
     ? foldGroups.reduce((count, group) => count + group.tools.length, 0)
     : remainingTools().length;
   const keymap = useKeymap();
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  const below = useGroupsBelowFold(flyoutRef, moreOpen);
   const button = (tool: ToolId, variant: 'rail' | 'tile') => {
     const meta = TOOL_META[tool];
     const shortcut = keymap.label(toolCommandId(tool));
@@ -178,20 +180,105 @@ export function CommandCard({
             // drops its description, and a tile's help opens beside the fold
             // rather than over the tiles below it.
             <div
-              className="command-flyout"
+              ref={flyoutRef}
+              className={`command-flyout${below.length > 0 ? ' has-more-below' : ''}`}
               data-rail-flyout=""
               data-tooltip-rail="vertical"
             >
               {foldGroups.map((group) => (
                 <Fragment key={group.label}>
-                  <span className="command-flyout-heading">{group.label}</span>
+                  <span
+                    className="command-flyout-heading"
+                    data-group={group.label}
+                  >
+                    {group.label}
+                  </span>
                   {group.tools.map((tool) => button(tool, 'tile'))}
                 </Fragment>
               ))}
+              {below.length > 0 && (
+                // A short window hides whole groups (Pattern, under Bodies)
+                // past a fold only a 10px shade marked (F017). This names
+                // them and scrolls the first into view. The keyboard needs no
+                // stop of its own: a focused tile already scrolls into view.
+                <button
+                  type="button"
+                  className="command-flyout-more"
+                  tabIndex={-1}
+                  aria-label={`Scroll to ${below.join(', ')}`}
+                  onClick={() => {
+                    const flyout = flyoutRef.current;
+                    const heading = Array.from(
+                      flyout?.querySelectorAll<HTMLElement>(
+                        '.command-flyout-heading'
+                      ) ?? []
+                    ).find((candidate) => candidate.dataset.group === below[0]);
+                    if (!flyout || !heading) return;
+                    flyout.scrollTo({
+                      top: heading.offsetTop - 4,
+                      behavior: 'smooth'
+                    });
+                  }}
+                >
+                  <span>
+                    More: {below.join(', ')}
+                    <ChevronDown size={12} aria-hidden="true" />
+                  </span>
+                </button>
+              )}
             </div>
           )}
         </section>
       )}
     </nav>
   );
+}
+
+/**
+ * The fold's groups whose heading is past the flyout's scrolled fold, in
+ * order: none in a window tall enough for the whole list. Measured on open,
+ * on scroll and on resize; a heading counts as hidden once the overflow cue
+ * itself would cover it.
+ */
+function useGroupsBelowFold(
+  flyoutRef: { readonly current: HTMLDivElement | null },
+  open: boolean
+): string[] {
+  const [below, setBelow] = useState<string[]>([]);
+  useLayoutEffect(() => {
+    const flyout = flyoutRef.current;
+    if (!open || !flyout) {
+      setBelow((current) => (current.length === 0 ? current : []));
+      return;
+    }
+    const measure = () => {
+      let hidden: string[] = [];
+      if (flyout.scrollHeight > flyout.clientHeight + 1) {
+        const cue =
+          flyout.querySelector<HTMLElement>('.command-flyout-more')
+            ?.offsetHeight ?? 0;
+        const fold = flyout.scrollTop + flyout.clientHeight - cue;
+        hidden = Array.from(
+          flyout.querySelectorAll<HTMLElement>('.command-flyout-heading')
+        )
+          .filter((heading) => heading.offsetTop + heading.offsetHeight > fold)
+          .map((heading) => heading.dataset.group ?? '');
+      }
+      setBelow((current) =>
+        current.join('|') === hidden.join('|') ? current : hidden
+      );
+    };
+    measure();
+    flyout.addEventListener('scroll', measure, { passive: true });
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(flyout);
+    return () => {
+      flyout.removeEventListener('scroll', measure);
+      observer?.disconnect();
+    };
+  }, [flyoutRef, open]);
+  return below;
 }
