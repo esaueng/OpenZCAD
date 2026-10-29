@@ -1110,6 +1110,9 @@ export function StartScreen({
         selecting &&
         !openMenu &&
         !folderMenu &&
+        // An open dialog takes its own Escape.
+        !propertiesProject &&
+        !coverFolderId &&
         !inField
       ) {
         event.stopPropagation();

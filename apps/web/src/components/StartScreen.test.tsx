@@ -1438,3 +1438,71 @@ describe('StartScreen selection edge cases', () => {
     ).toHaveAttribute('aria-checked', 'false');
   });
 });
+
+describe('StartScreen selection and dialogs', () => {
+  afterEach(() => localStorage.clear());
+
+  it('lets an open dialog take Escape without dropping the selection', async () => {
+    const loadProperties = vi.fn().mockResolvedValue(null);
+    renderStartScreen({ loadProperties });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: `Select ${localProject.name}` })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Project properties'
+    });
+    fireEvent.keyDown(
+      within(dialog).getByRole('button', { name: 'Close project properties' }),
+      { key: 'Escape' }
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+  });
+
+  it('offers each folder part as a cover button, the current one pressed', async () => {
+    const parts: ProjectSummary[] = ['Juliet', 'Kilo'].map((name) => ({
+      projectId: toProjectId(`project_${name.toLowerCase()}`),
+      name: `${name} plate`,
+      revisionCount: 1,
+      updatedAt: '2026-10-01T12:00:00.000Z'
+    }));
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'f1',
+            name: 'Plates',
+            projectIds: parts.map((part) => part.projectId),
+            pinned: false,
+            createdAt: ''
+          }
+        ]
+      })
+    );
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for folder Plates' })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Choose cover…' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Cover for Plates'
+    });
+    expect(within(dialog).queryByRole('radio')).toBeNull();
+    expect(
+      within(dialog).getByRole('button', {
+        name: 'Use Juliet plate as the cover'
+      })
+    ).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'Use Kilo plate as the cover'
+      })
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});

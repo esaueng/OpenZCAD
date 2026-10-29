@@ -70,9 +70,11 @@ export function FolderCoverDialog({
             This folder has no parts yet. Drop a part on it first.
           </p>
         ) : (
+          // Buttons, not radios: a choice is made and the dialog closes in
+          // one press, so there is no selection to arrow between.
           <div
             className="folder-cover-grid"
-            role="radiogroup"
+            role="group"
             aria-label="Folder cover"
           >
             {members.map((project) => {
@@ -81,8 +83,8 @@ export function FolderCoverDialog({
                 <button
                   key={project.projectId}
                   type="button"
-                  role="radio"
-                  aria-checked={chosen}
+                  aria-pressed={chosen}
+                  aria-label={`Use ${project.name} as the cover`}
                   className={
                     chosen
                       ? 'folder-cover-option is-chosen'
