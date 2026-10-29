@@ -211,6 +211,23 @@ describe('application settings', () => {
     ).toEqual(['coincident']);
   });
 
+  it('preserves Anthropic through account validation and local persistence', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.assistant.provider = 'anthropic';
+    settings.assistant.credentialSource = 'personal';
+    settings.assistant.model = 'claude-sonnet-5-5';
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 0, settings },
+      'beta'
+    );
+    expect(parsed.settings.assistant).toEqual(settings.assistant);
+    expect(normalizeAppSettings(settings).assistant).toEqual(
+      settings.assistant
+    );
+    saveLocalAppSettings(settings);
+    expect(loadLocalAppSettings().assistant).toEqual(settings.assistant);
+  });
+
   it('strictly validates account settings and compatible endpoints', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.assistant.credentialSource = 'personal';

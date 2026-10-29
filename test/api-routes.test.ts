@@ -845,6 +845,87 @@ describe('worker api routes', () => {
     ).toBe(true);
   });
 
+  it.each(['openai', 'openrouter'] as const)(
+    'removes the %s credential before switching to Anthropic',
+    async (provider) => {
+      let settings = structuredClone(DEFAULT_APP_SETTINGS);
+      settings.assistant.enabled = true;
+      settings.assistant.credentialSource = 'personal';
+      settings.assistant.provider = provider;
+      let revision = 1;
+      let credentialStored = true;
+      const writes: string[] = [];
+      const prepare = vi.fn((query: string) => {
+        let values: unknown[] = [];
+        const statement = {
+          bind(...next: unknown[]) {
+            values = next;
+            return statement;
+          },
+          async first() {
+            if (query.includes('FROM user_settings'))
+              return { settings_json: JSON.stringify(settings), revision };
+            if (query.includes('FROM user_ai_credentials'))
+              return credentialStored
+                ? {
+                    ciphertext: 'other-provider-secret',
+                    iv: 'iv',
+                    key_version: 1,
+                    token_hint: '••••test',
+                    updated_at: '2026-08-30T11:00:00.000Z',
+                    last_validated_at: '2026-08-30T12:00:00.000Z'
+                  }
+                : null;
+            return null;
+          },
+          async run() {
+            if (query.includes('DELETE FROM user_ai_credentials')) {
+              credentialStored = false;
+              writes.push('delete credential');
+            }
+            if (query.includes('UPDATE user_settings')) {
+              expect(credentialStored).toBe(false);
+              settings = JSON.parse(String(values[0])) as typeof settings;
+              revision = Number(values[1]);
+              writes.push('update route');
+            }
+            return { meta: { changes: 1 } };
+          }
+        };
+        return statement;
+      });
+      const changed = structuredClone(settings);
+      changed.assistant.provider = 'anthropic';
+      changed.assistant.model = 'claude-sonnet-5-5';
+      const workerEnv = {
+        ...env,
+        DB: { prepare },
+        SETTINGS_ENCRYPTION_KEY: settingsEncryptionSecret()
+      } as never;
+      const response = await worker.fetch(
+        patch('/api/settings', { settings: changed, expectedRevision: 1 }),
+        workerEnv
+      );
+      expect(response.status).toBe(200);
+      expect(writes).toEqual(['delete credential', 'update route']);
+      const payload = (await response.json()) as {
+        credential: Record<string, unknown>;
+        effectiveAssistant: { configured: boolean };
+      };
+      expect(payload.credential).toMatchObject({ stored: false });
+      expect(payload.credential).not.toHaveProperty('lastValidatedAt');
+      expect(payload.effectiveAssistant.configured).toBe(false);
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const testResponse = await worker.fetch(
+        post('/api/settings/assistant/test', {}),
+        workerEnv
+      );
+      expect(testResponse.status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
   it('invalidates a completed connection test when connection settings change', async () => {
     let storedSettings = structuredClone(DEFAULT_APP_SETTINGS);
     storedSettings.assistant.enabled = true;

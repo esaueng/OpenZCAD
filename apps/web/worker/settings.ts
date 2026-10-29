@@ -54,7 +54,12 @@ const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;
 const MIDDLE_DRAGS = ['pan', 'orbit', 'zoom'] as const;
 const POINTER_NAVIGATIONS = ['auto', 'mouse', 'trackpad'] as const;
 const RELATION_GLYPHS = ['always', 'selected', 'hidden'] as const;
-const PROVIDERS = ['openrouter', 'openai', 'responses-compatible'] as const;
+const PROVIDERS = [
+  'openrouter',
+  'openai',
+  'anthropic',
+  'responses-compatible'
+] as const;
 const CREDENTIAL_SOURCES = ['deployment', 'personal'] as const;
 const REASONING_EFFORTS = [
   'provider-default',
@@ -1028,6 +1033,15 @@ export async function updateAppSettings(
   const serialized = JSON.stringify(settings);
   const timestamp = nowIso();
   if (
+    current.settings.assistant.provider !== settings.assistant.provider ||
+    current.settings.assistant.baseUrl !== settings.assistant.baseUrl
+  ) {
+    // A single saved token must never follow a provider/endpoint change.
+    // Remove it before publishing the new route; failed saves fail closed.
+    await env.DB.prepare('DELETE FROM user_ai_credentials WHERE user_id = ?')
+      .bind(userId)
+      .run();
+  } else if (
     assistantConnectionFingerprint(current.settings) !==
     assistantConnectionFingerprint(settings)
   ) {
