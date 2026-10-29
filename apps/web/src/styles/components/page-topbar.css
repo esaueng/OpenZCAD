@@ -258,10 +258,13 @@ h1.brand {
   }
 
   /* Hung from the chip, the panel would start left of the window when the
-     chip sits mid-bar; here it spans the window under the first row. */
+     chip sits mid-bar; here it spans the window under both rows, clear of
+     the search. */
   .page-topbar .start-account-details {
     position: fixed;
-    top: calc(var(--island-gap) + var(--topbar-island-h) + var(--sp-2));
+    top: calc(
+      var(--island-gap) + var(--topbar-island-h) * 2 + var(--sp-1) + var(--sp-2)
+    );
     right: var(--island-gap);
     left: var(--island-gap);
     width: auto;
