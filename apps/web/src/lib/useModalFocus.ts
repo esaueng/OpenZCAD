@@ -301,6 +301,18 @@ export function modalHoldsKeyboard(): boolean {
 }
 
 /**
+ * Whether the dialog on top hands its keys to the workspace keymap.
+ *
+ * Such a dialog still inerts the workspace behind it like any modal, so a
+ * keymap that stands down for an inert workspace (one held behind its
+ * restoration screen) must not stand down for this one: the shortcut sheet
+ * closes through the map, and Escape left it open.
+ */
+export function modalLendsWorkspaceKeys(): boolean {
+  return activeModal?.workspaceKeys === true;
+}
+
+/**
  * Gives a modal dialog the focus behaviour its `aria-modal` promises: focus
  * starts inside, Tab cannot escape to the workspace behind it, and whatever was
  * focused before the dialog opened gets focus back on close.

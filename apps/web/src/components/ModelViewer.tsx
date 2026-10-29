@@ -377,6 +377,7 @@ import {
 } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import { traceFaceDrag } from '../lib/faceDragTrace';
+import { releaseFocusOutside } from '../lib/viewportFocus';
 import {
   IMAGE_UNSELECTED_STYLE,
   renderViewportImage,
@@ -9235,6 +9236,9 @@ export function ModelViewer({
         event.preventDefault();
         return;
       }
+      // Several paths below cancel this press, which keeps the browser from
+      // moving focus off a toolbar tile; release it here as a click would.
+      releaseFocusOutside(host);
       lastPickListPointer = event;
       if (!topologyPickList.contains(event.target)) {
         topologyPickList.hide();

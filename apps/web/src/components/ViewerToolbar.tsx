@@ -109,7 +109,7 @@ interface ViewerToolbarProps {
   units: string;
 }
 
-const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
+export const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
   XY: 'XY plane',
   XZ: 'XZ plane',
   YZ: 'YZ plane'

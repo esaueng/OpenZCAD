@@ -13,6 +13,7 @@
   "extrude-through-all.spec.ts": 8,
   "feature-history.spec.ts": 21,
   "in-place-primitives.spec.ts": 15,
+  "keyboard-focus-recovery.spec.ts": 8,
   "measure.spec.ts": 7,
   "modeling.spec.ts": 136,
   "panel-suspension.spec.ts": 13,

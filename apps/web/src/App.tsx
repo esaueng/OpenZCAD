@@ -477,7 +477,11 @@ import {
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
-import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
+import {
+  modalHoldsKeyboard,
+  modalLendsWorkspaceKeys,
+  useModalFocus
+} from './lib/useModalFocus';
 import {
   downloadText,
   evalParamValue,
@@ -25945,7 +25949,8 @@ export function App() {
       if (
         sharePage !== null ||
         !workspaceInputEnabled ||
-        workspaceRef.current?.closest('[inert]') ||
+        (workspaceRef.current?.closest('[inert]') &&
+          !modalLendsWorkspaceKeys()) ||
         modalHoldsKeyboard()
       ) {
         return;

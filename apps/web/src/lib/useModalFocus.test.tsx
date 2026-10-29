@@ -2,7 +2,11 @@ import { StrictMode, useRef, useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { modalHoldsKeyboard, useModalFocus } from './useModalFocus';
+import {
+  modalHoldsKeyboard,
+  modalLendsWorkspaceKeys,
+  useModalFocus
+} from './useModalFocus';
 
 function Modal({
   label = 'Test dialog',
@@ -423,6 +427,35 @@ describe('useModalFocus', () => {
     const passing = render(<Sheet workspaceKeys />);
     expect(modalHoldsKeyboard()).toBe(false);
     passing.unmount();
+  });
+
+  it('reports a dialog that lends its keys even though it inerts the workspace', () => {
+    function Sheet({ workspaceKeys }: { workspaceKeys: boolean }) {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, { workspaceKeys });
+      return <div ref={dialogRef} role="dialog" aria-label="Sheet" />;
+    }
+    function Page({ workspaceKeys }: { workspaceKeys: boolean }) {
+      return (
+        <>
+          <main data-testid="workspace" />
+          <Sheet workspaceKeys={workspaceKeys} />
+        </>
+      );
+    }
+    expect(modalLendsWorkspaceKeys()).toBe(false);
+
+    // The shortcut sheet: the workspace behind it is inert, and the keymap
+    // must still treat its keys as the sheet's to close.
+    const lending = render(<Page workspaceKeys />);
+    expect(screen.getByTestId('workspace')).toHaveAttribute('inert');
+    expect(modalLendsWorkspaceKeys()).toBe(true);
+    lending.unmount();
+    expect(modalLendsWorkspaceKeys()).toBe(false);
+
+    const holding = render(<Page workspaceKeys={false} />);
+    expect(modalLendsWorkspaceKeys()).toBe(false);
+    holding.unmount();
   });
 
   it('hands Escape to the dialog when a disabled button has dropped focus to the body', () => {
