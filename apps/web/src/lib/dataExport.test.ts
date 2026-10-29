@@ -35,11 +35,15 @@ const encoding = vi.hoisted(() => ({
   oversizedProjectId: '',
   stagedProjectId: ''
 }));
+const sidecarReads = vi.hoisted(() => ({
+  measurements: vi.fn(async (_projectId: string) => ({ record: null })),
+  sessions: vi.fn(async (_projectId: string) => ({ sessions: [] }))
+}));
 vi.mock('./e2ee/encryptedProjects', () => ({
   encryptedMeasurements: async () => ({
-    loadProjectMeasurements: async () => ({ record: null })
+    loadProjectMeasurements: sidecarReads.measurements
   }),
-  encryptedViewStates: async () => ({ load: async () => ({ sessions: [] }) })
+  encryptedViewStates: async () => ({ load: sidecarReads.sessions })
 }));
 vi.mock('fflate', async (importOriginal) => {
   const actual = await importOriginal<typeof Fflate>();
@@ -83,6 +87,8 @@ const entries = async (blob: Blob) =>
   unzipSync(new Uint8Array(await blob.arrayBuffer()));
 
 beforeEach(() => {
+  sidecarReads.measurements.mockReset().mockResolvedValue({ record: null });
+  sidecarReads.sessions.mockReset().mockResolvedValue({ sessions: [] });
   encoding.oversizedProjectId = '';
   encoding.stagedProjectId = '';
   globalThis.indexedDB = new IDBFactory();
@@ -722,6 +728,112 @@ it('reads catalogs together after the document and avoids requests for history a
   );
   expect(backup.document.projectId).toBe(document.projectId);
   expect(missing).not.toHaveBeenCalled();
+});
+
+it('reads encrypted metadata concurrently after the verified head without staging multiple projects', async () => {
+  const document = createProjectDocument('Concurrent metadata', session.userId);
+  rememberProjectFormats([{ projectId: document.projectId, storageFormat: 2 }]);
+  vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
+  vi.spyOn(api, 'listProjects').mockResolvedValue({
+    projects: [{
+      projectId: document.projectId,
+      name: document.name,
+      updatedAt: '2026-10-28T00:00:00.000Z',
+      revisionCount: 0
+    }]
+  });
+  let releaseHead!: (value: typeof document) => void;
+  const head = vi.spyOn(api, 'loadProject').mockImplementation(
+    () => new Promise((resolve) => { releaseHead = resolve; })
+  );
+  let releaseMetadata!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseMetadata = resolve; });
+  const revisions = vi.spyOn(api, 'listRevisions').mockImplementation(async () => {
+    await gate;
+    return { revisions: [], maxRevisions: 50 };
+  });
+  const artifacts = vi.spyOn(api, 'listArtifacts').mockImplementation(async () => {
+    await gate;
+    return { artifacts: [] };
+  });
+  sidecarReads.measurements.mockImplementation(async () => {
+    await gate;
+    return { record: null };
+  });
+  sidecarReads.sessions.mockImplementation(async () => {
+    await gate;
+    return { sessions: [] };
+  });
+  const pending = createDataExport(options(true));
+  await vi.waitFor(() => expect(head).toHaveBeenCalledOnce());
+  expect(revisions).not.toHaveBeenCalled();
+  expect(artifacts).not.toHaveBeenCalled();
+  expect(sidecarReads.measurements).not.toHaveBeenCalled();
+  expect(sidecarReads.sessions).not.toHaveBeenCalled();
+  releaseHead(document);
+  // Release even against the old serial implementation, so the assertion
+  // reports the scheduling defect instead of leaking an unfinished export.
+  const concurrent = await vi
+    .waitFor(() => {
+      expect(revisions).toHaveBeenCalledOnce();
+      expect(artifacts).toHaveBeenCalledOnce();
+      expect(sidecarReads.measurements).toHaveBeenCalledOnce();
+      expect(sidecarReads.sessions).toHaveBeenCalledOnce();
+    })
+    .then(() => true, () => false);
+  releaseMetadata();
+  const archive = await entries(await pending);
+  expect(concurrent).toBe(true);
+  expect(JSON.parse(strFromU8(archive['manifest.json']!))).toMatchObject({
+    skippedProjects: [],
+    omittedSections: []
+  });
+  expect(
+    JSON.parse(strFromU8(archive['projects/cloud/1/workspace-sessions.json']!))
+  ).toEqual({ sessions: [] });
+});
+
+it('discards a failed encrypted metadata batch and still exports the next project', async () => {
+  const broken = createProjectDocument('Unreadable metadata', session.userId);
+  const good = createProjectDocument('Complete metadata', session.userId);
+  rememberProjectFormats(
+    [broken, good].map((document) => ({
+      projectId: document.projectId,
+      storageFormat: 2
+    }))
+  );
+  vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
+  vi.spyOn(api, 'listProjects').mockResolvedValue({
+    projects: [broken, good].map((document) => ({
+      projectId: document.projectId,
+      name: document.name,
+      updatedAt: '2026-10-28T00:00:00.000Z',
+      revisionCount: 0
+    }))
+  });
+  vi.spyOn(api, 'loadProject').mockImplementation(async (id) =>
+    id === broken.projectId ? broken : good
+  );
+  vi.spyOn(api, 'listRevisions').mockResolvedValue({
+    revisions: [], maxRevisions: 50
+  });
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [] });
+  sidecarReads.measurements.mockImplementation(async (id) => {
+    if (id === broken.projectId) throw new Error('Measurements unavailable');
+    return { record: null };
+  });
+  const archive = await entries(await createDataExport(options(true)));
+  expect(
+    Object.keys(archive).some((path) => path.startsWith('projects/cloud/1/'))
+  ).toBe(false);
+  expect(archive['projects/cloud/2/project.openzcad']).toBeDefined();
+  expect(JSON.parse(strFromU8(archive['manifest.json']!))).toMatchObject({
+    cloudProjects: [{ projectId: good.projectId }],
+    skippedProjects: [{
+      projectId: broken.projectId,
+      reason: 'Measurements unavailable'
+    }]
+  });
 });
 
 it('can skip the extra device snapshot without reading its stores, while keeping portable project backups', async () => {

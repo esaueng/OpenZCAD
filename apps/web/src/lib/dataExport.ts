@@ -295,28 +295,36 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           check();
           // Catalogs must not predate this document: a concurrent save can
           // add a retained checkpoint or file that the backup must include.
-          // Fetch them together; encrypted names reuse the verified head.
-          const [revisions, catalog] = await Promise.all([
+          // Independent catalogs and encrypted sidecars can share this wait.
+          // Keep complete project staging sequential so its memory budget and
+          // all-or-nothing ZIP commit retain the same bounds.
+          const [revisions, catalog, sidecars] = await Promise.all([
             api.listRevisions(project.projectId),
-            api.listArtifacts(project.projectId)
+            api.listArtifacts(project.projectId),
+            isEncryptedProject(project.projectId)
+              ? import('./e2ee/encryptedProjects').then(async (encrypted) => {
+                  const [measurement, sessions] = await Promise.all([
+                    encrypted.encryptedMeasurements().then((client) =>
+                      client.loadProjectMeasurements(project.projectId)
+                    ),
+                    encrypted.encryptedViewStates().then((client) =>
+                      client.load(project.projectId)
+                    )
+                  ]);
+                  return { measurements: measurement.record, sessions };
+                })
+              : null
           ]);
           const retainedRevisionIds = new Set(
             revisions.revisions.map((revision) => revision.revisionId as string)
           );
           check();
           let measurements: StoredMeasurementRecord | null = null;
-          if (isEncryptedProject(project.projectId)) {
-            const encrypted = await import('./e2ee/encryptedProjects');
-            measurements = (
-              await (
-                await encrypted.encryptedMeasurements()
-              ).loadProjectMeasurements(project.projectId)
-            ).record;
+          if (sidecars) {
+            measurements = sidecars.measurements;
             pending.json(
               `${folder}/workspace-sessions.json`,
-              await (
-                await encrypted.encryptedViewStates()
-              ).load(project.projectId)
+              sidecars.sessions
             );
           } else {
             const records = account.records as

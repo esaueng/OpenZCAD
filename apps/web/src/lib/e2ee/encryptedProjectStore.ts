@@ -717,27 +717,35 @@ export function createEncryptedProjectStore(
     projectId
   });
 
-  async function authenticatorOf(projectId: string, keyEpoch: number) {
+  async function authenticatorOf(
+    projectId: string,
+    keyEpoch: number,
+    deviceLists?: readonly VerifiedDeviceList[]
+  ) {
     const id = `${projectId} ${keyEpoch}`;
     const cached = authenticators.get(id);
     if (cached) return cached;
     const authenticator = await epochAuthenticatorForEpoch(
       groups,
       projectId,
-      keyEpoch
+      keyEpoch,
+      deviceLists
     );
     authenticators.set(id, authenticator);
     return authenticator;
   }
 
   /** The epoch binding a header must carry for its key epoch. */
-  async function requireBinding(header: ProjectEnvelopeHeader) {
+  async function requireBinding(
+    header: ProjectEnvelopeHeader,
+    deviceLists?: readonly VerifiedDeviceList[]
+  ) {
     let expected: Uint8Array;
     try {
       expected = await epochBinding(
         header.projectId,
         header.keyEpoch,
-        await authenticatorOf(header.projectId, header.keyEpoch)
+        await authenticatorOf(header.projectId, header.keyEpoch, deviceLists)
       );
     } catch {
       throw integrity(
@@ -763,7 +771,8 @@ export function createEncryptedProjectStore(
    */
   async function requireAuthority(
     projectId: string,
-    author: VerifiedAuthor
+    author: VerifiedAuthor,
+    deviceLists?: readonly VerifiedDeviceList[]
   ): Promise<void> {
     const refuse = (): never => {
       throw integrity(
@@ -776,7 +785,9 @@ export function createEncryptedProjectStore(
         projectId,
         author.userId,
         author.deviceId,
-        author.header.keyEpoch
+        author.header.keyEpoch,
+        false,
+        deviceLists
       ))
     )
       refuse();
@@ -787,9 +798,16 @@ export function createEncryptedProjectStore(
     authorId: string,
     deviceId: string,
     keyEpoch: number,
-    readOnly = false
+    readOnly = false,
+    deviceLists?: readonly VerifiedDeviceList[]
   ): Promise<boolean> {
-    const authority = await epochAuthority(groups, projectId, keyEpoch).catch(
+    const authority = await epochAuthority(
+      groups,
+      projectId,
+      keyEpoch,
+      undefined,
+      deviceLists
+    ).catch(
       (error: unknown) => {
         if (
           error instanceof ProjectGroupError &&
@@ -865,6 +883,8 @@ export function createEncryptedProjectStore(
     // A removal can land between directory reads. Cutoffs must verify
     // against the same lists used to decide whether a signer is live.
     const cutoffs = await cutoffsFor(projectId, deviceLists);
+    // The rest of this one read uses the same verified directory. A later
+    // read starts here again, including after a contact/device removal.
     return { deviceLists, cutoffs };
   }
 
@@ -1253,7 +1273,8 @@ export function createEncryptedProjectStore(
     projectId: string,
     header: ProjectEnvelopeHeader,
     authorUserId: string,
-    set: ShareLinkSet | undefined
+    set: ShareLinkSet | undefined,
+    authorship?: AuthorshipInputs
   ): Promise<VerifiedShareLinkSet | null> {
     const known = heads.get(projectId);
     const direct =
@@ -1269,7 +1290,8 @@ export function createEncryptedProjectStore(
         ...(known && known.version < header.documentVersion
           ? { previous: { set: known.shareLinks, direct } }
           : {}),
-        cutoffs: await cutoffsFor(projectId)
+        cutoffs: authorship?.cutoffs ?? (await cutoffsFor(projectId)),
+        deviceLists: authorship?.deviceLists
       });
     } catch (error) {
       if (error instanceof ShareLinkError) {
@@ -1360,8 +1382,8 @@ export function createEncryptedProjectStore(
           'The head was written under an older key epoch than this browser already accepted.'
         );
       }
-      await requireAuthority(projectId, author);
-      await requireBinding(header);
+      await requireAuthority(projectId, author, authorship.deviceLists);
+      await requireBinding(header, authorship.deviceLists);
       const { body, document } = await openDocument(
         projectId,
         header,
@@ -1373,7 +1395,8 @@ export function createEncryptedProjectStore(
         projectId,
         header,
         author.userId,
-        body.shareLinks
+        body.shareLinks,
+        authorship
       );
       const updatedAt = Date.parse(metadata.project.updatedAt);
       if (
@@ -1918,7 +1941,11 @@ export function createEncryptedProjectStore(
     record: E2eeProjectEnvelopeRecord,
     kind: E2eeReplacedEnvelopeKind,
     envelope: Uint8Array
-  ): Promise<{ userId: string; signedAt: number }> {
+  ): Promise<{
+    userId: string;
+    signedAt: number;
+    deviceLists?: readonly VerifiedDeviceList[];
+  }> {
     const lists =
       kind === 'view-state'
         ? [list()]
@@ -1966,7 +1993,8 @@ export function createEncryptedProjectStore(
             candidate.userId,
             record.signerDeviceId,
             record.keyEpoch,
-            kind === 'view-state'
+            kind === 'view-state',
+            kind === 'view-state' ? undefined : lists
           ))
         ) {
           throw integrity(
@@ -1975,7 +2003,11 @@ export function createEncryptedProjectStore(
           );
         }
       }
-      return { userId: candidate.userId, signedAt: signed.signedAt };
+      return {
+        userId: candidate.userId,
+        signedAt: signed.signedAt,
+        ...(kind === 'view-state' ? {} : { deviceLists: lists })
+      };
     }
     throw integrity('author', refusal);
   }
@@ -2012,7 +2044,7 @@ export function createEncryptedProjectStore(
         'This envelope is not the one the account named.'
       );
     }
-    await requireBinding(header);
+    await requireBinding(header, signed.deviceLists);
     const hash = toHex(await versionHash(envelope));
     const versionKey = await versionKeyOf(
       record.projectId,
@@ -2243,8 +2275,8 @@ export function createEncryptedProjectStore(
           'The room’s head was written under an older key epoch than this browser already accepted.'
         );
       }
-      await requireAuthority(projectId, author);
-      await requireBinding(header);
+      await requireAuthority(projectId, author, authorship.deviceLists);
+      await requireBinding(header, authorship.deviceLists);
       const { body, document } = await openDocument(
         projectId,
         header,
@@ -2256,7 +2288,8 @@ export function createEncryptedProjectStore(
         projectId,
         header,
         author.userId,
-        body.shareLinks
+        body.shareLinks,
+        authorship
       );
       const stateCode = (
         await computeProjectStateCode({
@@ -2794,10 +2827,12 @@ export function createEncryptedProjectStore(
           'This saved version is not part of the history this browser trusts.'
         );
       }
+      const authorship = await authorshipInputs(projectId);
       const author = await authorOf(
         projectId,
         envelope,
-        bytes(metadata.version.signature)
+        bytes(metadata.version.signature),
+        authorship
       );
       const hash = toHex(author.versionHash);
       if (hash !== claimed || author.header.kind !== 'document') {
@@ -2806,8 +2841,8 @@ export function createEncryptedProjectStore(
           'The saved version the account sent is not the one its history names.'
         );
       }
-      await requireAuthority(projectId, author);
-      await requireBinding(author.header);
+      await requireAuthority(projectId, author, authorship.deviceLists);
+      await requireBinding(author.header, authorship.deviceLists);
       const { document } = await openDocument(
         projectId,
         author.header,
