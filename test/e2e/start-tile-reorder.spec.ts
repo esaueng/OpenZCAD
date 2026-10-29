@@ -137,9 +137,27 @@ test.describe('with a pinned part', () => {
     for (const name of names) {
       await expect(unpin(name)).toBeAttached();
     }
+  });
+
+  test('unpins a part dragged out of a fully pinned shelf', async ({
+    page
+  }) => {
+    // The account stub never takes writes, so a fully pinned shelf is
+    // seeded rather than built by drops and a reload.
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await stubApi(page);
+    const allPinned = projects.map((project) => ({
+      ...project,
+      organization: { ...project.organization, pinned: true }
+    }));
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({ json: { projects: allPinned } })
+    );
     await page.reload();
     for (const name of names) {
-      await expect(unpin(name)).toBeAttached();
+      await expect(
+        page.getByRole('button', { name: `Unpin ${name}`, exact: true })
+      ).toBeAttached();
     }
     // With every part pinned, Parts is still there to drag one back into.
     // (Its heading and drop target appear only mid-drag.)

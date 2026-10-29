@@ -39,7 +39,8 @@ interface DragSession {
   initial: string[];
   /** The dropped order still waiting on its save when this drag began. */
   seed: string[] | null;
-  seedMoved: TileGroupMove | null;
+  /** Tiles shown in another group than their stored one at drag start. */
+  seedMoved: TileMoves;
   order: string[];
   /** The group the tile started in, and the one it would drop into. */
   initialGroup: string;
@@ -47,6 +48,14 @@ interface DragSession {
   scroller: HTMLElement | null;
   frame: number;
 }
+
+/**
+ * Tiles shown in another group than they are stored in, by id: drops whose
+ * saves have not landed yet, and the tile being dragged.
+ */
+export type TileMoves = ReadonlyMap<string, string>;
+
+const NO_MOVES: TileMoves = new Map();
 
 /** A tile dropped into another group than its own. */
 export interface TileGroupMove {
@@ -89,7 +98,7 @@ export function useTileReorder({
   onCommit
 }: TileReorderOptions) {
   const [order, setOrder] = useState<string[] | null>(null);
-  const [moved, setMoved] = useState<TileGroupMove | null>(null);
+  const [moved, setMoved] = useState<TileMoves>(NO_MOVES);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const session = useRef<DragSession | null>(null);
   const settleTimer = useRef<number | null>(null);
@@ -100,13 +109,13 @@ export function useTileReorder({
   const stop = useRef<(() => void) | null>(null);
 
   const idsKey = ids.join('\n');
-  const movedLanded = moved ? groupOf(moved.id) === moved.group : true;
+  const movedLanded = [...moved].every(([id, group]) => groupOf(id) === group);
   // A dropped order stands in for the stored one until the save lands.
   useEffect(() => {
     if (!draggingId && order && order.join('\n') === idsKey && movedLanded) {
       clearTimer(settleTimer);
       setOrder(null);
-      setMoved(null);
+      setMoved(NO_MOVES);
     }
   }, [draggingId, idsKey, order, movedLanded]);
 
@@ -167,7 +176,7 @@ export function useTileReorder({
     settleTimer.current = window.setTimeout(() => {
       settleTimer.current = null;
       setOrder(null);
-      setMoved(null);
+      setMoved(NO_MOVES);
     }, SETTLE_TIMEOUT_MS);
   }
 
@@ -185,24 +194,30 @@ export function useTileReorder({
     const hit = document.elementFromPoint(current.x, current.y);
     const under = hit?.closest<HTMLElement>('[data-tile-id]');
     // A tile still easing out of the slot it just gave up is hit where it
-    // was, not where it is going; taking it would swap straight back.
-    if (
-      under
-        ?.getAnimations?.()
-        .some(
-          (animation) =>
-            animation.id === REFLOW_ANIMATION_ID &&
-            animation.playState === 'running'
-        )
-    ) {
+    // was, not where it is going; taking it would swap straight back. Look
+    // again once it settles, in case the pointer has come to rest there.
+    const easing = under
+      ?.getAnimations?.()
+      .find(
+        (animation) =>
+          animation.id === REFLOW_ANIMATION_ID &&
+          animation.playState === 'running'
+      );
+    if (easing) {
+      void easing.finished.then(
+        () => {
+          if (session.current === current && current.active) {
+            retarget(current);
+          }
+        },
+        () => undefined
+      );
       return;
     }
     const groupOf = (id: string) =>
       id === current.id
         ? current.group
-        : current.seedMoved?.id === id
-          ? current.seedMoved.group
-          : latest.current.groupOf(id);
+        : (current.seedMoved.get(id) ?? latest.current.groupOf(id));
     const target = under?.dataset.tileId;
     const next = current.order.filter((id) => id !== current.id);
     let group: string;
@@ -249,11 +264,14 @@ export function useTileReorder({
     current.group = group;
     snapshot();
     setOrder(next);
-    setMoved(
-      group === current.initialGroup
-        ? current.seedMoved
-        : { id: current.id, group }
-    );
+    // Every earlier drop still waiting on its save keeps its group too.
+    const moves = new Map(current.seedMoved);
+    if (group === latest.current.groupOf(current.id)) {
+      moves.delete(current.id);
+    } else {
+      moves.set(current.id, group);
+    }
+    setMoved(moves);
   }
 
   function autoScroll(current: DragSession) {
@@ -302,7 +320,7 @@ export function useTileReorder({
     const box = tile.getBoundingClientRect();
     const pending = latest.current.moved;
     const shownGroup = (tileId: string) =>
-      pending?.id === tileId ? pending.group : latest.current.groupOf(tileId);
+      pending.get(tileId) ?? latest.current.groupOf(tileId);
     const current: DragSession = {
       id,
       pointerId: event.pointerId,

@@ -655,9 +655,8 @@ export function StartScreen({
   });
   /** Pinned as stored, or as a drag would leave it. */
   function shownPinned(project: ProjectSummary): boolean {
-    return canReorder && reorder.moved?.id === project.projectId
-      ? reorder.moved.group === 'pinned'
-      : projectOrganization(project).pinned;
+    const group = canReorder ? reorder.moved.get(project.projectId) : undefined;
+    return group ? group === 'pinned' : projectOrganization(project).pinned;
   }
 
   function moveProject(projectId: string, toIndex: number) {
@@ -917,6 +916,9 @@ export function StartScreen({
     );
 
     const dragging = reorder.draggingId === project.projectId;
+    // As the shelf shows it: a drop into or out of Pinned counts before its
+    // save lands, so the pin button never offers the opposite action.
+    const pinnedNow = shownPinned(project);
     return (
       <div
         key={project.projectId}
@@ -931,7 +933,7 @@ export function StartScreen({
         className={[
           'start-tile',
           'start-tile-project',
-          shownPinned(project) ? 'is-pinned' : '',
+          pinnedNow ? 'is-pinned' : '',
           recoveryOf !== null ? 'is-recovery' : '',
           canReorder ? 'is-reorderable' : '',
           dragging ? 'is-dragging' : ''
@@ -983,13 +985,13 @@ export function StartScreen({
             <button
               type="button"
               className="start-tile-action start-tile-pin"
-              aria-pressed={organization.pinned}
+              aria-pressed={pinnedNow}
               aria-label={
-                organization.pinned
+                pinnedNow
                   ? `Unpin ${project.name}`
                   : `Pin ${project.name}`
               }
-              title={organization.pinned ? 'Unpin' : 'Pin to the front'}
+              title={pinnedNow ? 'Unpin' : 'Pin to the front'}
               disabled={busy}
               onClick={() => onTogglePin(project)}
             >
@@ -997,7 +999,7 @@ export function StartScreen({
                   slashed pin there read as "not pinned". */}
               <Pin
                 size={12}
-                fill={organization.pinned ? 'currentColor' : 'none'}
+                fill={pinnedNow ? 'currentColor' : 'none'}
                 aria-hidden="true"
               />
             </button>
