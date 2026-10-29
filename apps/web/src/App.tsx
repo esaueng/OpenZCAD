@@ -22539,7 +22539,13 @@ export function App() {
     // kernel to rebuild it there is refused ("must differ from its current
     // diameter"), which flagged a drag that merely passed its start as
     // Failed, turned the chip amber and left the refusal in the status line.
-    if (isUnchangedCylinderRadius(radius, current.target.radius)) {
+    if (
+      isUnchangedCylinderRadius(
+        radius,
+        current.target.radius,
+        current.target.featureType
+      )
+    ) {
       cylinderRadiusPreview.clear();
       setLastValidPreview(null);
       recoverPreviewInteraction();
@@ -22584,7 +22590,11 @@ export function App() {
     if (
       exact === undefined &&
       sourceRadius !== undefined &&
-      isUnchangedCylinderRadius(radius, sourceRadius)
+      isUnchangedCylinderRadius(
+        radius,
+        sourceRadius,
+        current.target.featureType
+      )
     ) {
       handleCylinderRadiusCancel();
       return true;

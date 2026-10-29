@@ -263,11 +263,20 @@ describe('hole diameter drag', () => {
     expect(snapCylinderRadius(5.16, 1 / 10, 'diameter') * 2).toBe(10);
   });
 
-  it('treats a value back at the start as no edit', () => {
-    expect(isUnchangedCylinderRadius(3, 3)).toBe(true);
-    expect(isUnchangedCylinderRadius(3 + 1e-7, 3)).toBe(true);
-    expect(isUnchangedCylinderRadius(3.01, 3)).toBe(false);
-    expect(isUnchangedCylinderRadius(2_000_000.5, 2_000_000)).toBe(true);
+  it('treats a value back at the start as no edit, by each edit gate', () => {
+    // Through-hole resize: 1e-6, or a millionth of the radius.
+    expect(isUnchangedCylinderRadius(3, 3, 'through-hole')).toBe(true);
+    expect(isUnchangedCylinderRadius(3 + 1e-7, 3, 'through-hole')).toBe(true);
+    expect(isUnchangedCylinderRadius(3.01, 3, 'through-hole')).toBe(false);
+    expect(isUnchangedCylinderRadius(100.0005, 100, 'through-hole')).toBe(
+      false
+    );
+    // Generic cylindrical face: 1e-5 of the radius, so 100 → 100.0005 is
+    // refused by the kernel and must not be sent.
+    expect(isUnchangedCylinderRadius(100.0005, 100)).toBe(true);
+    expect(isUnchangedCylinderRadius(100.002, 100)).toBe(false);
+    expect(isUnchangedCylinderRadius(1e-4 + 5e-10, 1e-4)).toBe(true);
+    expect(isUnchangedCylinderRadius(1e-4 + 1e-8, 1e-4)).toBe(false);
   });
 
   it('finds the resized bore on the same axis to keep it selected', () => {

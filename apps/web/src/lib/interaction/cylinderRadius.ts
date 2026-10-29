@@ -253,17 +253,23 @@ export function cylinderRadiusTolerance(scale: number): number {
 }
 
 /**
- * A radius the exact edit would refuse as unchanged: within the kernel's
- * direct-edit tolerance (1e-6, or a millionth of the radius) of the source.
+ * A radius the exact edit would refuse as unchanged. Each edit has its own
+ * gate: a through-hole resize refuses within 1e-6 (or a millionth of the
+ * radius), a generic cylindrical-face resize within 1e-5 of the radius
+ * (floored at 1e-9). A guard looser than the edit's suppresses a real
+ * change; a tighter one sends a value the kernel then refuses as Failed.
  */
 export function isUnchangedCylinderRadius(
   radius: number,
-  sourceRadius: number
+  sourceRadius: number,
+  featureType?: 'through-hole' | 'blend'
 ): boolean {
-  return (
-    Math.abs(radius - sourceRadius) <=
-    Math.max(1e-6, Math.abs(sourceRadius) * 1e-6)
-  );
+  const scale = Math.abs(sourceRadius);
+  const tolerance =
+    featureType === 'through-hole'
+      ? Math.max(1e-6, scale * 1e-6)
+      : Math.max(1e-9, scale * 1e-5);
+  return Math.abs(radius - sourceRadius) <= tolerance;
 }
 
 /**
