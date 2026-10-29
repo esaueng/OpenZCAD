@@ -1234,6 +1234,114 @@ describe('StartScreen folders and selection', () => {
     ).toBeInTheDocument();
   });
 
+  it.each(['Archive', 'Trash'])(
+    'reveals a new folder created from %s',
+    (shelf) => {
+      renderStartScreen({ projects: parts });
+      fireEvent.click(
+        screen.getByRole('tab', { name: new RegExp(`^${shelf}`) })
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+      expect(screen.getByRole('tab', { name: /^Parts/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      expect(
+        screen.getByRole('textbox', { name: 'Folder name' })
+      ).toHaveFocus();
+    }
+  );
+
+  it.each(['search', 'filter'])(
+    'reveals a folder created from a selection with an active %s',
+    (view) => {
+      const pinnedParts = parts.map((part) => ({
+        ...part,
+        organization: {
+          ...part.organization!,
+          pinned: true
+        }
+      }));
+      renderStartScreen({ projects: pinnedParts });
+      if (view === 'search') {
+        fireEvent.change(
+          screen.getByRole('textbox', { name: 'Search parts' }),
+          {
+            target: { value: 'Alpha' }
+          }
+        );
+      } else {
+        fireEvent.click(
+          within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+            'button',
+            { name: /^Pinned/ }
+          )
+        );
+      }
+      fireEvent.click(
+        screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Move to' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+      expect(
+        screen.getByRole('textbox', { name: 'Folder name' })
+      ).toHaveFocus();
+      expect(screen.getByRole('textbox', { name: 'Search parts' })).toHaveValue(
+        ''
+      );
+      expect(
+        within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+          'button',
+          { name: /^All/ }
+        )
+      ).toHaveAttribute('aria-pressed', 'true');
+    }
+  );
+
+  it('skips disabled cover selection when navigating an empty folder menu', () => {
+    seedFolder([]);
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for folder Fixtures' })
+    );
+    expect(
+      screen.getByRole('menuitem', { name: 'Choose cover…' })
+    ).toBeDisabled();
+    const rename = screen.getByRole('menuitem', { name: 'Rename' });
+    const ungroup = screen.getByRole('menuitem', { name: 'Ungroup' });
+    rename.focus();
+    fireEvent.keyDown(rename, { key: 'ArrowDown' });
+    expect(ungroup).toHaveFocus();
+    fireEvent.keyDown(ungroup, { key: 'ArrowUp' });
+    expect(rename).toHaveFocus();
+  });
+
+  it.each(['Archive', 'Trash'])(
+    'keeps folder navigation counts tied to Parts on %s',
+    (shelf) => {
+      seedFolder(parts.map((part) => part.projectId));
+      renderStartScreen({
+        projects: parts.map((part, index) => ({
+          ...part,
+          organization: {
+            ...part.organization!,
+            status: index < 2 ? 'active' : index === 3 ? 'deleted' : 'archived'
+          }
+        }))
+      });
+      fireEvent.click(
+        screen.getByRole('tab', { name: new RegExp(`^${shelf}`) })
+      );
+      expect(
+        document.querySelector('.start-folder-link .start-shelf-count')
+      ).toHaveTextContent('2');
+      fireEvent.click(
+        document.querySelector<HTMLButtonElement>('.start-folder-link')!
+      );
+      expect(names()).toEqual(['Alpha plate', 'Bravo plate']);
+    }
+  );
+
   it('clears the selection with Escape', () => {
     renderStartScreen({ projects: parts });
     fireEvent.click(

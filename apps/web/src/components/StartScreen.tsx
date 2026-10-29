@@ -577,6 +577,9 @@ export function StartScreen({
   );
   const shelves = bucketProjectsByShelf(userProjects);
   const shelfProjects = shelves[shelf];
+  const activeProjectIds = new Set<string>(
+    shelves.active.map((project) => project.projectId)
+  );
 
   // Demos are rebuilt from their definitions on any device, so they are not
   // work to rescue and would only pad the offer. Trashed projects are excluded
@@ -855,9 +858,10 @@ export function StartScreen({
   function makeFolder(projectIds: string[], pinned = false) {
     const id = newFolderId();
     updateFolders((state) => createFolder(state, { id, projectIds, pinned }));
-    setSelected(new Set());
+    showFolder(null);
+    setFilter('all');
+    setQuery('');
     setMoveMenuOpen(false);
-    setOpenFolderId(null);
     setRenamingFolderId(id);
     return id;
   }
@@ -1358,7 +1362,7 @@ export function StartScreen({
             onKeyDown={(event) => {
               const items = Array.from(
                 event.currentTarget.querySelectorAll<HTMLElement>(
-                  '[role="menuitem"]'
+                  '[role="menuitem"]:not(:disabled)'
                 )
               );
               const at = items.indexOf(
@@ -2511,7 +2515,11 @@ export function StartScreen({
                           />
                         )}
                         <span className="start-shelf-count">
-                          {folderMembers(folder).length}
+                          {
+                            folder.projectIds.filter((projectId) =>
+                              activeProjectIds.has(projectId)
+                            ).length
+                          }
                         </span>
                       </button>
                     </li>

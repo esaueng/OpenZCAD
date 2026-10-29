@@ -23,3 +23,6 @@ account isolation during visit-only folder edits. A CI smoke browser case in
 `start-screen-sync-failures.spec.ts` resets an account-saved sample, rebuilds
 it and saves it through account adoption again. Both regressions fail before
 the corresponding fixes. Folder tests are included in the unit smoke manifest.
+Folder navigation regressions also cover revealing new folders for naming
+from Archive, Trash, search and filters, skipping disabled menu items with
+arrow keys, and keeping folder-link counts tied to their Parts destination.
