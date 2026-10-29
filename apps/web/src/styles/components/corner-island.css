@@ -1,0 +1,45 @@
+/* The library's Settings and Settings' way back: one island in the corner
+   the workspace's top bar ends in. The frame is the quiet stage's
+   `.topbar-island`; this only places it and sizes the one action inside,
+   so the button sits on the workspace Settings button's exact pixels
+   (12px down, an island gap in, 36px tall, a 28px action). */
+.corner-island {
+  --corner-island-top: 12px;
+  position: absolute;
+  top: var(--corner-island-top);
+  right: var(--island-gap);
+  z-index: 2;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
+  display: flex;
+  align-items: center;
+  padding: 3px var(--sp-1);
+}
+
+/* The width pages hold clear for it beside their headings. */
+:root {
+  --corner-island-w: 96px;
+}
+
+.corner-action {
+  height: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.corner-action:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}

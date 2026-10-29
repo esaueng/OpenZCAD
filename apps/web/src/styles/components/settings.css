@@ -82,12 +82,17 @@
    the window's full height, the logo at its head where the workspace's top
    bar puts it, and the way back under it. */
 .settings-layout {
+  --settings-inline: clamp(var(--sp-4), 4vw, 48px);
+  position: relative;
   min-height: 0;
   display: grid;
   grid-template-columns: calc(var(--island-gap) + 256px) minmax(0, 1fr);
+  /* The head, then the page that scrolls under it; the column spans both. */
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .settings-nav {
+  grid-row: 1 / -1;
   min-height: 0;
   box-sizing: border-box;
   display: flex;
@@ -233,12 +238,13 @@
 }
 
 .settings-content {
+  grid-column: 2;
   min-width: 0;
   overflow-y: auto;
   /* A page long enough to scroll would otherwise lose the scrollbar's width
      and shift its centred column sideways against the pages that do not. */
   scrollbar-gutter: stable;
-  padding: var(--island-gap) clamp(var(--sp-4), 4vw, 48px) 64px;
+  padding: var(--sp-5) var(--settings-inline) 64px;
 }
 
 /* Every page starts at the same left edge, beside the sections, whichever
@@ -1125,6 +1131,7 @@
 
 @media (max-width: 860px) {
   .settings-layout {
+    --settings-inline: var(--sp-4);
     grid-template-columns: calc(var(--island-gap) + 190px) minmax(0, 1fr);
   }
 
@@ -1133,7 +1140,7 @@
   }
 
   .settings-content {
-    padding: var(--sp-4);
+    padding: var(--sp-4) var(--settings-inline);
   }
 
   .setting-row {
@@ -1175,6 +1182,7 @@
 
 @media (max-width: 580px) {
   .settings-layout {
+    --settings-inline: var(--sp-3);
     grid-template-columns: calc(var(--island-gap) + 56px) minmax(0, 1fr);
   }
 
@@ -1209,7 +1217,7 @@
   }
 
   .settings-content {
-    padding: var(--sp-3);
+    padding: var(--sp-3) var(--settings-inline);
   }
 
   /* Build identifiers can be wider than their labels. Compact readouts need
@@ -1287,37 +1295,22 @@
   margin: 0;
 }
 
-.settings-close {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  margin: var(--sp-2) 0;
-  padding: 0 8px;
-  color: var(--color-text-muted);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-sm);
-  text-align: left;
-}
-
-.settings-close:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
 /* The page's head: its name, the save note and the search, on one ruled
-   line like the library's shelf toolbar. */
+   line like the library's shelf toolbar, across the page's whole width so
+   the way back floats on the rule's end in the corner island
+   (corner-island.css). Outside the scrolling page, neither moves when a
+   long section scrolls. */
 .settings-head {
+  --settings-back-w: 168px;
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2) var(--sp-4);
-  width: min(1040px, 100%);
   min-height: 40px;
-  margin-bottom: var(--sp-5);
-  padding-bottom: var(--sp-2);
+  margin: var(--island-gap) var(--island-gap) 0 var(--settings-inline);
+  padding-right: calc(var(--settings-back-w) + var(--sp-3));
   border-bottom: var(--border-thin);
 }
 
@@ -1354,10 +1347,16 @@
     display: none;
   }
 
+  /* The way back keeps its arrow; its label would crowd out the title. */
   .settings-close {
     justify-content: center;
+    width: 28px;
     padding: 0;
     font-size: 0;
     gap: 0;
+  }
+
+  .settings-head {
+    --settings-back-w: 38px;
   }
 }

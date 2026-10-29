@@ -688,6 +688,21 @@ describe('StartScreen library shell', () => {
     void rerender;
   });
 
+  it('keeps Settings in the workspace’s top-right island, not the column', () => {
+    const onOpenSettings = vi.fn();
+    const { container } = renderStartScreen({ onOpenSettings });
+
+    const settings = screen.getByRole('button', { name: 'Open settings' });
+    // The same island and pixels as the workspace's Settings button, and
+    // Settings puts its way back there.
+    expect(settings.closest('.topbar-island.corner-island')).not.toBeNull();
+    expect(
+      container.querySelector('.start-column-foot .start-settings-button')
+    ).toBeNull();
+    fireEvent.click(settings);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
   it('names each shelf with its count in the column', () => {
     renderStartScreen();
 

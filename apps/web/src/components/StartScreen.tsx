@@ -2350,6 +2350,20 @@ export function StartScreen({
           OpenZCAD <span className="beta-tag">Beta</span>
         </h1>
       </header>
+      {/* Settings keeps the workspace's corner: the same island at the same
+          pixels, and Settings puts its way back there too. */}
+      <div className="topbar-island corner-island">
+        <button
+          className="corner-action start-settings-button"
+          type="button"
+          aria-label="Open settings"
+          title={labelWithKey('Settings', settingsKey)}
+          onClick={onOpenSettings}
+        >
+          <Settings size={14} aria-hidden="true" />
+          Settings
+        </button>
+      </div>
 
       <section className="start-launch" aria-labelledby="start-launch-title">
         <form
@@ -3178,26 +3192,16 @@ export function StartScreen({
             )}
           </div>
         </aside>
-        <div className="start-column-foot-actions">
-          {onImportProject && (
+        {onImportProject && (
+          <div className="start-column-foot-actions">
             <ProjectImportButton
               onImport={onImportProject}
               disabled={busy}
               className="start-column-action start-import"
               title="Import project…"
             />
-          )}
-          <button
-            className="start-column-action start-settings-button"
-            type="button"
-            aria-label="Open settings"
-            title={labelWithKey('Settings', settingsKey)}
-            onClick={onOpenSettings}
-          >
-            <Settings size={14} aria-hidden="true" />
-            Settings
-          </button>
-        </div>
+          </div>
+        )}
       </section>
 
       {coverFolderId && folderById.get(coverFolderId) && (

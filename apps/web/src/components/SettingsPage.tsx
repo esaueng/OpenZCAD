@@ -906,7 +906,8 @@ export function SettingsPage({
       <div className="settings-layout">
         <aside className="settings-nav" aria-label="Settings sections">
           {/* Column first, as the library: the logo heads the column (and
-              goes back, as it does from every page), then the way out. */}
+              goes back, as it does from every page). The labelled way out is
+              in the head's corner, where Settings was opened from. */}
           <div className="settings-nav-head">
             <button
               ref={brandRef}
@@ -919,16 +920,6 @@ export function SettingsPage({
               OpenZCAD <span className="beta-tag">Beta</span>
             </button>
           </div>
-          <button
-            className="settings-close"
-            type="button"
-            aria-label={`Close settings and go ${backLabel.toLowerCase()}`}
-            title={`${backLabel} (Esc)`}
-            onClick={onClose}
-          >
-            <ArrowLeft size={14} aria-hidden="true" />
-            {backLabel}
-          </button>
           {/* The narrow layout has no room for the field, so while a filter
               is narrowing the sections it shows this way out of it instead;
               without it a filter typed in a wider window stranded the rail on
@@ -1005,6 +996,46 @@ export function SettingsPage({
           </div>
         </aside>
 
+        {/* The head stays put while a long page scrolls under it, as the
+            workspace's top bar does. */}
+        <header className="settings-head">
+          <h1 className="settings-head-title">Settings</h1>
+          <span className="settings-save-message" aria-live="polite">
+            {message}
+          </span>
+          <label className="settings-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              value={query}
+              placeholder="Find a setting"
+              aria-label="Find a setting"
+              onChange={(event) => changeQuery(event.target.value)}
+              onKeyDown={(event) => {
+                // Escape clears a search before it closes Settings, as it
+                // does in any search field; otherwise the filter outlived
+                // the close and greeted the next visit.
+                if (event.key === 'Escape' && query) {
+                  event.stopPropagation();
+                  changeQuery('');
+                }
+              }}
+            />
+          </label>
+          {/* The library's and the workspace's Settings button sits in this
+              corner; the way back takes its place. */}
+          <div className="topbar-island corner-island">
+            <button
+              className="corner-action settings-close"
+              type="button"
+              aria-label={`Close settings and go ${backLabel.toLowerCase()}`}
+              title={`${backLabel} (Esc)`}
+              onClick={onClose}
+            >
+              <ArrowLeft size={14} aria-hidden="true" />
+              {backLabel}
+            </button>
+          </div>
+        </header>
         <main
           className="settings-content"
           ref={contentRef}
@@ -1012,30 +1043,6 @@ export function SettingsPage({
             scrollTopRef.current = event.currentTarget.scrollTop;
           }}
         >
-          <header className="settings-head">
-            <h1 className="settings-head-title">Settings</h1>
-            <span className="settings-save-message" aria-live="polite">
-              {message}
-            </span>
-            <label className="settings-search">
-              <Search size={14} aria-hidden="true" />
-              <input
-                value={query}
-                placeholder="Find a setting"
-                aria-label="Find a setting"
-                onChange={(event) => changeQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  // Escape clears a search before it closes Settings, as it
-                  // does in any search field; otherwise the filter outlived
-                  // the close and greeted the next visit.
-                  if (event.key === 'Escape' && query) {
-                    event.stopPropagation();
-                    changeQuery('');
-                  }
-                }}
-              />
-            </label>
-          </header>
           {!anyMatch && (
             <p className="settings-empty">
               No settings match “{query.trim()}”. Clear the search to see every

@@ -502,6 +502,20 @@ describe('settings navigation', () => {
     ).toBeVisible();
   });
 
+  it('puts the way back in the head’s corner, outside the scrolling page', () => {
+    window.localStorage.clear();
+    renderSettings(null, { initialSection: 'viewport' });
+    const back = screen.getByRole('button', {
+      name: 'Close settings and go back to workspace'
+    });
+    // Where the library's and the workspace's Settings button sits.
+    expect(back.closest('.topbar-island.corner-island')).not.toBeNull();
+    expect(back.closest('.settings-head')).not.toBeNull();
+    // The head is not inside the page that scrolls, so neither moves.
+    expect(back.closest('.settings-content')).toBeNull();
+    expect(back.closest('.settings-nav')).toBeNull();
+  });
+
   it('names the way back after what is behind Settings', () => {
     window.localStorage.clear();
     const view = renderSettings(null, { initialSection: 'viewport' });
