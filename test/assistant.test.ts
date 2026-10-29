@@ -2321,6 +2321,24 @@ describe('Anthropic Messages provider', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('tests a legacy Claude model with a budget that leaves room for its reply', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      nativeStream()
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      testAssistantConnection({ ...runtime, model: 'claude-sonnet-4-5' }, {})
+    ).resolves.toMatchObject({ ok: true });
+    const body = JSON.parse(
+      fetchMock.mock.calls[0]?.[1]?.body as string
+    ) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      max_tokens: 4096,
+      thinking: { type: 'enabled', budget_tokens: 3072 }
+    });
+    expect(body).not.toHaveProperty('output_config');
+  });
+
   it('uses the same official endpoint in encrypted-project consent routes', () => {
     expect(assistantEndpointIdentity({}, 'anthropic')).toBe(
       'https://api.anthropic.com/v1/messages'

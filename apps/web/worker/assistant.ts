@@ -1150,7 +1150,7 @@ async function requestAnthropic(
         ...(safetyIdentifier
           ? { metadata: { user_id: safetyIdentifier } }
           : {}),
-        ...anthropicOutputOptions(effort, model)
+        ...anthropicOutputOptions(effort, model, maxTokens)
       })
     }),
     jsonReplyValidator(env, digest)

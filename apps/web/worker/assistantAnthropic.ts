@@ -1,5 +1,6 @@
 import {
   anthropicThinkingOffType,
+  anthropicUsesLegacyThinking,
   type AssistantReasoningEffort
 } from '@openzcad/shared';
 
@@ -13,7 +14,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 export function anthropicOutputOptions(
   effort: AssistantReasoningEffort,
-  model: string
+  model: string,
+  maxTokens = 32_000
 ) {
   const offType = anthropicThinkingOffType(model);
   if (effort === 'off' && !offType) {
@@ -21,12 +23,34 @@ export function anthropicOutputOptions(
       'Reasoning Off is unavailable for this Anthropic model. Choose Provider default or a reasoning level.'
     );
   }
+  if (anthropicUsesLegacyThinking(model)) {
+    if (effort === 'provider-default') return {};
+    if (effort === 'off') return { thinking: { type: 'disabled' } };
+    if (maxTokens < 2_048) {
+      throw new AnthropicModelConfigurationError(
+        'Extended thinking needs an output budget of at least 2048 tokens. Increase Output budget or choose Off.'
+      );
+    }
+    const budgets = { low: 1_024, medium: 4_096, high: 8_192, xhigh: 16_384 };
+    return {
+      thinking: {
+        type: 'enabled',
+        // Reserve room for the JSON reply, including the 4096-token connection test.
+        budget_tokens: Math.min(budgets[effort], maxTokens - 1_024)
+      }
+    };
+  }
+  // The 4.6 models support max but not xhigh; Extra high uses their highest level.
+  const nativeEffort =
+    effort === 'xhigh' && /^claude-(?:opus|sonnet)-4-6(?:-\d{8})?$/.test(model)
+      ? 'max'
+      : effort;
   return {
     output_config: {
       ...(effort === 'off'
         ? { effort: 'low' }
         : effort !== 'provider-default'
-          ? { effort }
+          ? { effort: nativeEffort }
           : {})
     },
     ...(effort === 'off'

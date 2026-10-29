@@ -23,8 +23,8 @@ describe('Anthropic protocol adapter', () => {
     }
     expect(unionCount(assistantReplySchemaFor({}))).toBeGreaterThan(16);
     expect(
-      anthropicOutputOptions('high', 'claude-sonnet-5-5').output_config
-    ).not.toHaveProperty('format');
+      anthropicOutputOptions('high', 'claude-sonnet-5-5')
+    ).not.toHaveProperty('output_config.format');
   });
 
   it('lets the provider choose defaults and maps Off to Sonnet 5.5 without up-front thinking', () => {
@@ -67,6 +67,52 @@ describe('Anthropic protocol adapter', () => {
           output_config: { effort }
         }
       );
+    }
+  );
+
+  it.each(['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5'])(
+    'uses budgeted extended thinking on %s without unsupported effort fields',
+    (model) => {
+      expect(anthropicOutputOptions('high', model, 4096)).toEqual({
+        thinking: { type: 'enabled', budget_tokens: 3072 }
+      });
+      expect(anthropicOutputOptions('off', model)).toEqual({
+        thinking: { type: 'disabled' }
+      });
+      expect(anthropicOutputOptions('provider-default', model)).toEqual({});
+    }
+  );
+
+  it.each([
+    ['low', 1024],
+    ['medium', 4096],
+    ['high', 8192],
+    ['xhigh', 16384]
+  ] as const)(
+    'maps legacy %s to a bounded %i-token thinking budget',
+    (effort, budget) => {
+      expect(
+        anthropicOutputOptions(effort, 'claude-sonnet-4-5', 32000)
+      ).toEqual({ thinking: { type: 'enabled', budget_tokens: budget } });
+    }
+  );
+
+  it('rejects a legacy thinking budget that cannot leave room for a reply', () => {
+    expect(() =>
+      anthropicOutputOptions('high', 'claude-sonnet-4-5', 1024)
+    ).toThrow('at least 2048');
+    expect(anthropicOutputOptions('high', 'claude-sonnet-4-5', 2048)).toEqual({
+      thinking: { type: 'enabled', budget_tokens: 1024 }
+    });
+  });
+
+  it.each(['claude-opus-4-6', 'claude-sonnet-4-6'])(
+    'maps Extra high to supported max effort on %s',
+    (model) => {
+      expect(anthropicOutputOptions('xhigh', model)).toMatchObject({
+        output_config: { effort: 'max' },
+        thinking: { type: 'adaptive' }
+      });
     }
   );
 
