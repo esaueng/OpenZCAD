@@ -268,23 +268,30 @@ export function cylinderRadiusTolerance(scale: number): number {
   return Number.isFinite(scale) ? geometryTolerance(Math.abs(scale)) : Infinity;
 }
 
+/** Which edit a cylinder radius drag produces; each has its own no-op gate. */
+export type CylinderRadiusEdit =
+  'through-hole' | 'cylindrical-face' | 'primitive-parameter';
+
 /**
- * A radius the exact edit would refuse as unchanged. Each edit has its own
- * gate: a through-hole resize refuses within 1e-6 (or a millionth of the
- * radius), a generic cylindrical-face resize within 1e-5 of the radius
- * (floored at 1e-9). A guard looser than the edit's suppresses a real
- * change; a tighter one sends a value the kernel then refuses as Failed.
+ * A radius that would make no edit. A through-hole resize refuses within
+ * 1e-6 (or a millionth of the radius) and a direct cylindrical-face resize
+ * within 1e-5 of the radius (floored at 1e-9); a guard tighter than those
+ * sends a value the kernel refuses as Failed. A primitive's radius parameter
+ * has no such gate and rebuilds any change, so only an equal value (to
+ * rounding) is no edit there; a looser guard would swallow a real change.
  */
 export function isUnchangedCylinderRadius(
   radius: number,
   sourceRadius: number,
-  featureType?: 'through-hole' | 'blend'
+  edit: CylinderRadiusEdit
 ): boolean {
   const scale = Math.abs(sourceRadius);
   const tolerance =
-    featureType === 'through-hole'
+    edit === 'through-hole'
       ? Math.max(1e-6, scale * 1e-6)
-      : Math.max(1e-9, scale * 1e-5);
+      : edit === 'cylindrical-face'
+        ? Math.max(1e-9, scale * 1e-5)
+        : Math.max(1e-12, scale * 1e-12);
   return Math.abs(radius - sourceRadius) <= tolerance;
 }
 

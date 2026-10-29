@@ -681,6 +681,7 @@ import {
 } from './lib/selectionFeature';
 import {
   cylinderRadialFrame,
+  type CylinderRadiusEdit,
   findResizedCylinderFace,
   isUnchangedCylinderRadius,
   isValidCylinderRadius,
@@ -22425,9 +22426,11 @@ export function App() {
     );
   }, [cylinderSelectionKey, cylinderRadiusPreview]);
 
-  function buildCylinderRadiusCommand(
-    radius: ParamValue
-  ): { command: AnyCommand; sourceFeatureId?: FeatureId } | null {
+  function buildCylinderRadiusCommand(radius: ParamValue): {
+    command: AnyCommand;
+    edit: CylinderRadiusEdit;
+    sourceFeatureId?: FeatureId;
+  } | null {
     const current = interactionRef.current;
     const base = managerRef.current?.document;
     if (
@@ -22455,6 +22458,7 @@ export function App() {
       const diameter: ParamValue =
         typeof radius === 'number' ? radius * 2 : `(${radius}) * 2`;
       return {
+        edit: 'through-hole',
         command: commandFactories.directEditBody({
           name: 'Resize Through Hole',
           targetBodyId: target.bodyId as BodyId,
@@ -22496,6 +22500,7 @@ export function App() {
             ? radius
             : `(${radius}) / ${scale}`;
       return {
+        edit: 'primitive-parameter',
         command: commandFactories.updateFeature(
           {
             featureId: primitive.featureId,
@@ -22513,6 +22518,7 @@ export function App() {
     }
 
     return {
+      edit: 'cylindrical-face',
       command: commandFactories.directEditBody({
         // The history row and the command card read the same name, so a
         // feature is called the same thing while it runs and afterwards.
@@ -22555,12 +22561,10 @@ export function App() {
     // kernel to rebuild it there is refused ("must differ from its current
     // diameter"), which flagged a drag that merely passed its start as
     // Failed, turned the chip amber and left the refusal in the status line.
+    const edit = buildCylinderRadiusCommand(radius)?.edit;
     if (
-      isUnchangedCylinderRadius(
-        radius,
-        current.target.radius,
-        current.target.featureType
-      )
+      edit &&
+      isUnchangedCylinderRadius(radius, current.target.radius, edit)
     ) {
       cylinderRadiusPreview.clear();
       setLastValidPreview(null);
@@ -22601,21 +22605,18 @@ export function App() {
       return false;
     }
     const sourceRadius = current.target.radius;
+    const plan = buildCylinderRadiusCommand(exact ?? radius);
     // Entering the size it already has is no edit: close quietly, as a
     // release at the starting size does, rather than show a refusal.
     if (
       exact === undefined &&
       sourceRadius !== undefined &&
-      isUnchangedCylinderRadius(
-        radius,
-        sourceRadius,
-        current.target.featureType
-      )
+      plan &&
+      isUnchangedCylinderRadius(radius, sourceRadius, plan.edit)
     ) {
       handleCylinderRadiusCancel();
       return true;
     }
-    const plan = buildCylinderRadiusCommand(exact ?? radius);
     if (
       sourceRadius === undefined ||
       !isValidCylinderRadius(radius, sourceRadius) ||

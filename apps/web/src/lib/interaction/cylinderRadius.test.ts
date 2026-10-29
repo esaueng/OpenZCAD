@@ -271,12 +271,25 @@ describe('hole diameter drag', () => {
     expect(isUnchangedCylinderRadius(100.0005, 100, 'through-hole')).toBe(
       false
     );
-    // Generic cylindrical face: 1e-5 of the radius, so 100 → 100.0005 is
-    // refused by the kernel and must not be sent.
-    expect(isUnchangedCylinderRadius(100.0005, 100)).toBe(true);
-    expect(isUnchangedCylinderRadius(100.002, 100)).toBe(false);
-    expect(isUnchangedCylinderRadius(1e-4 + 5e-10, 1e-4)).toBe(true);
-    expect(isUnchangedCylinderRadius(1e-4 + 1e-8, 1e-4)).toBe(false);
+    // Direct cylindrical-face resize: 1e-5 of the radius, so 100 → 100.0005
+    // is refused by the kernel and must not be sent.
+    expect(isUnchangedCylinderRadius(100.0005, 100, 'cylindrical-face')).toBe(
+      true
+    );
+    expect(isUnchangedCylinderRadius(100.002, 100, 'cylindrical-face')).toBe(
+      false
+    );
+    expect(
+      isUnchangedCylinderRadius(1e-4 + 5e-10, 1e-4, 'cylindrical-face')
+    ).toBe(true);
+    // A primitive's radius parameter rebuilds any change: 100 → 100.0005
+    // is a real edit there, and only rounding noise is none.
+    expect(
+      isUnchangedCylinderRadius(100.0005, 100, 'primitive-parameter')
+    ).toBe(false);
+    expect(
+      isUnchangedCylinderRadius(0.1 + 0.2, 0.3, 'primitive-parameter')
+    ).toBe(true);
   });
 
   it('finds the resized bore on the same axis to keep it selected', () => {
