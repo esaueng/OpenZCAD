@@ -8,11 +8,10 @@
 /* Docked at the left of the bar, between the brand and the project name:
    the workspace you are in reads before the document you are in it with.
 
-   Four equal segments and one accent-tinted thumb that slides to the
-   segment you chose. There is no track and no outline: the island has no
-   border or padding, so the thumb fills its segment edge to edge and the
-   control reads as one seamless surface, not a box inside a box. The Beta
-   tag sits in its own island, so the tint no longer crowds it. */
+   Four equal segments and one tinted thumb that slides to the segment you
+   chose. The thumb has no outline: it is the same selected fill as the
+   armed tool and the switched-on rail buttons, set in by the island's
+   padding so all three read as one kind of selection. */
 .mode-switch {
   --mode-switch-index: 0;
   position: relative;
@@ -42,11 +41,11 @@
   content: '';
   position: absolute;
   z-index: -1;
-  inset: 0 auto 0 0;
-  width: calc(100% / 4);
-  background: var(--color-accent-dim);
-  /* The island's radius, so the flush thumb's outer corners follow it. */
-  border-radius: var(--radius-lg);
+  inset: var(--mode-switch-inset, 0) auto var(--mode-switch-inset, 0)
+    var(--mode-switch-inset, 0);
+  width: calc((100% - var(--mode-switch-inset, 0px) * 2) / 4);
+  background: var(--color-selected-fill);
+  border-radius: var(--radius-md);
   transform: translateX(calc(var(--mode-switch-index) * 100%));
   transition: transform var(--dur-base) var(--ease-out);
 }
@@ -87,7 +86,7 @@
 }
 
 .mode-switch-option.active {
-  color: var(--color-accent);
+  color: var(--color-selected-text);
   font-weight: var(--fw-medium);
   cursor: default;
 }

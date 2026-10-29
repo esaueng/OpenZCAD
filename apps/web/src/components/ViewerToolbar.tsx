@@ -83,6 +83,13 @@ interface ViewerToolbarProps {
   onToggleProjection(): void;
   /** Switches the section view on (at the last plane used) or off. */
   onToggleSection(): void;
+  /**
+   * Whether the section controls show while the cut is on. Owned by the
+   * workspace so hiding them survives this bar remounting (a workspace mode
+   * or dock layout change); uncontrolled when omitted.
+   */
+  sectionPanelOpen?: boolean;
+  onSectionPanelOpenChange?(open: boolean): void;
   /** Cuts on another plane; chosen inside the section panel. */
   onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
@@ -139,6 +146,8 @@ export function ViewerToolbar({
   onCycleDisplayMode,
   onToggleProjection,
   onToggleSection,
+  sectionPanelOpen: sectionPanelOpenProp,
+  onSectionPanelOpenChange,
   onSectionPlane,
   onSectionOffset,
   onSectionCommit,
@@ -154,21 +163,58 @@ export function ViewerToolbar({
   const sectionAnchorRef = useRef<HTMLDivElement | null>(null);
   const sectionTriggerRef = useRef<HTMLButtonElement | null>(null);
   // The cut and its panel are two things: the cut stays on while the panel
-  // is put away (Escape, or the views flyout taking its place), so a look
-  // from a standard view can still be a sectioned one. The panel opens
-  // whenever the cut is switched on, from the rail or the palette alike.
+  // is hidden (the section button or Escape), so a look from a standard view
+  // can still be a sectioned one. Hiding is remembered by the workspace,
+  // which opens the panel again whenever the cut is switched on. The panel's
+  // switch ends the cut and leaves the panel up, showing the last cut so the
+  // switch or a plane brings it straight back. The views flyout only covers
+  // the panel (one rail popover at a time) until the section button brings
+  // it back, and covering it is not remembered.
   const sectionOn = settings.sectionView !== undefined;
-  const [sectionPanelOpen, setSectionPanelOpen] = useState(sectionOn);
+  const [localSectionPanelOpen, setLocalSectionPanelOpen] = useState(true);
+  const sectionPanelOpen = sectionPanelOpenProp ?? localSectionPanelOpen;
+  const setSectionPanelOpen =
+    onSectionPanelOpenChange ?? setLocalSectionPanelOpen;
+  const [sectionCovered, setSectionCovered] = useState(false);
+  // Held up by the panel's own switch: switched off anywhere else (the
+  // palette, a reload), the cut takes its panel with it.
+  const [heldOff, setHeldOff] = useState(false);
+  const [lastCut, setLastCut] = useState(
+    settings.sectionView && sectionRange
+      ? { section: settings.sectionView, range: sectionRange }
+      : null
+  );
+  if (
+    settings.sectionView &&
+    sectionRange &&
+    (lastCut?.section !== settings.sectionView ||
+      lastCut.range.min !== sectionRange.min ||
+      lastCut.range.max !== sectionRange.max)
+  ) {
+    setLastCut({ section: settings.sectionView, range: sectionRange });
+  }
   const [sectionWasOn, setSectionWasOn] = useState(sectionOn);
   if (sectionWasOn !== sectionOn) {
     setSectionWasOn(sectionOn);
-    setSectionPanelOpen(sectionOn);
-    // One rail popover at a time: they open into the same space.
     if (sectionOn) {
       setViewsOpen(false);
+      setSectionCovered(false);
+      setHeldOff(false);
+      if (sectionPanelOpenProp === undefined) setLocalSectionPanelOpen(true);
     }
   }
-  const sectionPanelShown = sectionPanelOpen && sectionOn;
+  // On, the panel drives the live cut and needs the model's current bounds:
+  // with no bodies on screen there is nothing to place it against. Only the
+  // held-off panel falls back to the last cut, which it shows dimmed.
+  const shownCut = sectionOn
+    ? settings.sectionView && sectionRange
+      ? { section: settings.sectionView, range: sectionRange }
+      : null
+    : lastCut;
+  const sectionPanelShown =
+    shownCut !== null &&
+    !sectionCovered &&
+    (sectionOn ? sectionPanelOpen : heldOff);
   const panelId = useId();
   // X-ray rides over the display mode, so the mode button says when it is
   // on. It has no rail button of its own: the rail is sized to centre on the
@@ -243,12 +289,13 @@ export function ViewerToolbar({
       }
       event.stopPropagation();
       event.preventDefault();
-      setSectionPanelOpen(false);
+      if (sectionOn) setSectionPanelOpen(false);
+      setHeldOff(false);
       sectionTriggerRef.current?.focus();
     }
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [sectionPanelShown]);
+  }, [sectionPanelShown, sectionOn, setSectionPanelOpen]);
 
   function selectView(view: StandardView) {
     onView(view);
@@ -262,23 +309,33 @@ export function ViewerToolbar({
     const next = !viewsOpen;
     setViewsOpen(next);
     if (next) {
-      setSectionPanelOpen(false);
+      setSectionCovered(true);
     }
   }
 
   /**
-   * On and off, one click each. A cut whose panel was put away comes back
-   * to the panel first, so its plane and slider are never out of reach.
+   * Switches the cut on with its panel; after that the button shows and
+   * hides the panel, like the views flyout's, and never ends the cut. The
+   * panel's own switch is what turns it off, so putting the controls away is
+   * always safe. A cut left on with no bounds to show its panel against (the
+   * last body hidden or deleted) has no switch on screen, so the button
+   * turns that one off itself.
    */
   function pressSection(button: HTMLButtonElement) {
     // Safari does not focus a clicked button; Escape reads the focus.
     button.focus();
-    if (sectionOn && !sectionPanelOpen) {
-      setSectionPanelOpen(true);
-      setViewsOpen(false);
+    if (sectionPanelShown) {
+      if (sectionOn) setSectionPanelOpen(false);
+      setHeldOff(false);
       return;
     }
-    onToggleSection();
+    if (!sectionOn || !shownCut) {
+      onToggleSection();
+      return;
+    }
+    setSectionPanelOpen(true);
+    setSectionCovered(false);
+    setViewsOpen(false);
   }
 
   return (
@@ -378,12 +435,22 @@ export function ViewerToolbar({
           label="Section view"
           // Short enough to show whole: the state is the part that matters,
           // and the 320px tooltip cut the old sentence off before it.
-          description={`Now: ${sectionLabel} · cuts the display only`}
+          description={`Now: ${sectionLabel} · ${
+            !sectionOn
+              ? 'cuts the display only'
+              : !shownCut
+                ? 'click to turn off'
+                : sectionPanelShown
+                  ? 'click to hide controls'
+                  : 'click for controls'
+          }`}
         >
           <button
             type="button"
             ref={sectionTriggerRef}
-            className={`rail-button ${settings.sectionView ? 'active' : ''}`}
+            className={`rail-button ${settings.sectionView ? 'active' : ''} ${
+              sectionPanelShown ? 'open' : ''
+            }`}
             onClick={(event) => pressSection(event.currentTarget)}
             aria-label={`Section view — now: ${sectionLabel}`}
             aria-pressed={sectionOn}
@@ -392,16 +459,17 @@ export function ViewerToolbar({
             <Slice size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        {settings.sectionView && sectionRange && sectionPanelShown && (
+        {sectionPanelShown && shownCut && (
           <SectionToolbox
-            key={settings.sectionView.plane}
-            section={settings.sectionView}
-            range={sectionRange}
+            key={shownCut.section.plane}
+            section={shownCut.section}
+            range={shownCut.range}
+            active={sectionOn}
             outline={sectionOutline}
             units={units}
-            onClose={() => {
-              setSectionPanelOpen(false);
-              sectionTriggerRef.current?.focus();
+            onSwitch={() => {
+              if (sectionOn) setHeldOff(true);
+              onToggleSection();
             }}
             onPlane={onSectionPlane}
             onOffset={onSectionOffset}

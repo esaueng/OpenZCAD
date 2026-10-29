@@ -183,9 +183,16 @@
 }
 
 .rail-button.active {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+}
+
+/* An active button whose panel is out: solid while the controls show,
+   tinted while they are put away and the cut stays on. */
+.rail-button.active.open {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .rail-divider {
@@ -198,7 +205,10 @@
   position: relative;
 }
 
-/* Compact section controls share the rail's popover placement. */
+/* Compact section controls share the rail's popover placement. Read top to
+   bottom: what the cut is (and whether it is exact), which plane, where on
+   it, and what the cut measures. The header keeps hiding the controls apart
+   from switching the cut off: hiding leaves the cut on. */
 .rail-section-panel {
   position: absolute;
   left: 50%;
@@ -206,78 +216,229 @@
   bottom: calc(100% + 7px);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   box-sizing: border-box;
-  width: 296px;
-  padding: 12px;
+  width: 300px;
+  padding: 10px 12px 12px;
   color: var(--color-text);
   background: var(--color-surface);
   border: var(--border-thin);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
 }
 
 .rail-section-heading,
+.rail-section-planes-row,
 .rail-section-position,
 .rail-section-footer {
   display: flex;
   align-items: center;
 }
 
-.rail-section-heading,
-.rail-section-position {
-  justify-content: space-between;
-  gap: 12px;
+.rail-section-heading {
+  gap: 6px;
   font-size: var(--fs-base);
 }
 
-.rail-section-heading .rail-section-icon {
-  min-height: 20px;
-  height: 20px;
+.rail-section-glyph {
+  flex-shrink: 0;
+  color: var(--color-accent);
 }
 
 .rail-section-heading strong {
+  margin-right: auto;
   font-weight: var(--fw-semibold);
 }
 
-.rail-section-planes {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+/* The cut's on/off switch. Off, the panel stays up on the last cut with its
+   position controls dimmed; the switch or a plane brings the cut back. */
+.rail-section-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 18px;
+  min-height: 0;
+  margin-left: 4px;
+  padding: 0;
+  background: var(--color-accent);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.rail-section-switch > span {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-on-accent);
+}
+
+.rail-section-switch:hover {
+  background: var(--color-accent-hi);
+}
+
+.rail-section-switch[aria-checked='false'] {
+  background: var(--color-border-strong);
+}
+
+.rail-section-switch[aria-checked='false'] > span {
+  right: auto;
+  left: 3px;
+  background: var(--color-text-muted);
+}
+
+.rail-section-switch[aria-checked='false']:hover {
+  background: var(--color-surface-hover);
+}
+
+.rail-section-state.is-off {
+  color: var(--color-text-muted);
+}
+
+.rail-section-panel.is-off :is(.rail-section-position, .rail-section-track) {
+  opacity: var(--opacity-disabled);
+}
+
+.rail-section-switch:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The state reads as a pill beside the title: which geometry is on screen
+   is the first thing the panel answers. */
+.rail-section-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  color: var(--color-warning);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.rail-section-state-kind::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.rail-section-state.is-exact {
+  color: var(--color-success);
+}
+
+.rail-section-state.is-computing {
+  color: var(--color-text-muted);
+}
+
+/* One segmented control for the plane; each segment's swatch is the colour
+   of the axis the plane cuts across, as the move handles draw it. */
+.rail-section-planes-row {
   gap: 6px;
 }
 
+.rail-section-planes {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
 .rail-section-plane {
+  --axis-color: var(--color-handle-z);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  min-height: 42px;
-  padding: 4px 6px;
-  color: var(--color-text);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
+  gap: 5px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 4px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-base);
+  font-size: var(--fs-sm);
+}
+
+.rail-section-plane[data-axis='y'] {
+  --axis-color: var(--color-handle-y);
+}
+
+.rail-section-plane[data-axis='x'] {
+  --axis-color: var(--color-handle-x);
+}
+
+.rail-section-swatch {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--axis-color);
+  opacity: 0.55;
 }
 
 .rail-section-plane small {
-  color: var(--color-text-muted);
+  color: var(--color-text-dim);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
 
 .rail-section-plane[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-1);
+}
+
+.rail-section-plane[aria-pressed='true'] .rail-section-swatch {
+  opacity: 1;
+}
+
+.rail-section-plane[aria-pressed='true'] small {
+  color: var(--color-text-muted);
+}
+
+.rail-section-flip {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.rail-section-flip[aria-pressed='true'] {
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
-.rail-section-plane[aria-pressed='true'] small {
-  color: inherit;
+.rail-section-position {
+  gap: 4px;
+  font-size: var(--fs-sm);
 }
 
 .rail-section-position label {
+  margin-right: auto;
   color: var(--color-text-muted);
 }
 
@@ -285,9 +446,9 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  width: 128px;
+  width: 116px;
   min-height: 28px;
-  padding: 0 6px;
+  padding: 0 8px;
   box-sizing: border-box;
   background: var(--color-bg);
   border: var(--border-thin);
@@ -311,6 +472,7 @@
   border: 0;
   border-radius: 0;
   font: inherit;
+  text-align: right;
   outline: none;
   box-shadow: none;
 }
@@ -320,31 +482,118 @@
   font-size: var(--fs-xs);
 }
 
+.rail-section-track {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A filled track: the part of the model's span that is behind the cut. */
 .rail-section-slider {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   min-height: 20px;
   height: 20px;
   padding: 0;
   margin: 0;
-  accent-color: var(--color-accent);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
 
+.rail-section-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--color-accent) var(--section-fill, 50%),
+    var(--color-border-strong) var(--section-fill, 50%)
+  );
+}
+
+.rail-section-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--color-text);
+  border: 3px solid var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-surface);
+}
+
+.rail-section-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.rail-section-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.rail-section-slider::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text);
+  border: 3px solid var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-surface);
+}
+
+.rail-section-slider:focus-visible {
+  outline: none;
+}
+
+.rail-section-slider:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.rail-section-slider:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.rail-section-ends {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+/* What the cut measures, always in view: it used to sit behind an info
+   button, so "Preview" never said why. */
 .rail-section-footer {
-  gap: 3px;
-  padding-top: 8px;
+  align-items: flex-start;
+  gap: 10px;
+  padding-top: 10px;
   border-top: var(--border-thin);
 }
 
-.rail-section-action,
+.rail-section-state-detail {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
 .rail-section-icon,
 .rail-section-export {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   flex-shrink: 0;
   min-height: 26px;
-  padding: 2px 4px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -353,57 +602,26 @@
 }
 
 .rail-section-icon {
-  width: 24px;
+  width: 26px;
   padding: 0;
 }
 
-.rail-section-action:hover:not(:disabled),
+.rail-section-export {
+  padding: 2px 10px;
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
 .rail-section-icon:hover,
+.rail-section-flip:hover:not(:disabled):not([aria-pressed='true']),
 .rail-section-export:hover:not(:disabled),
 .rail-section-plane:hover:not([aria-pressed='true']) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
-.rail-section-action[aria-pressed='true'] {
-  color: var(--color-accent);
-}
-
-.rail-section-state {
-  margin-left: auto;
-  font-size: var(--fs-xs);
-  color: var(--color-warning);
-  white-space: nowrap;
-}
-
-.rail-section-state-kind::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 5px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.rail-section-state.is-exact {
-  color: var(--color-accent);
-}
-
-.rail-section-state.is-computing {
-  color: var(--color-text-muted);
-}
-
-.rail-section-state-detail {
-  margin: 0;
-  font-size: var(--fs-sm);
-  line-height: var(--lh-normal);
-  color: var(--color-text-muted);
-  overflow-wrap: anywhere;
-}
-
 .rail-section-export:disabled,
-.rail-section-action:disabled {
+.rail-section-flip:disabled {
   opacity: var(--opacity-disabled);
 }
 

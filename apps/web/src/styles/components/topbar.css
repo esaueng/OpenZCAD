@@ -31,16 +31,15 @@
   color: var(--color-accent);
 }
 
+/* A word in the accent, not a chip: an outlined tag inside the identity
+   island was one more box inside a box. */
 .beta-tag {
   display: inline-flex;
   align-items: center;
   min-height: 16px;
-  padding: 0 5px;
   color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
+  letter-spacing: 0.08em;
   font-size: var(--fs-mini);
   line-height: 1;
   text-transform: uppercase;

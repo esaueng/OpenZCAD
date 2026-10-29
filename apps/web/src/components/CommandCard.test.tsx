@@ -143,9 +143,10 @@ describe('CommandCard', () => {
     ).toHaveLength(1);
   });
 
-  it('draws the primary hint lighter than the armed outline', () => {
+  it('draws the primary hint without any selected treatment', () => {
     // The hint once carried the accent fill, the same weight as an armed
-    // tool's outline, so two rail buttons read as active.
+    // tool's outline, so two rail buttons read as active; later an accent
+    // icon and edge bar still read as selected while nothing was armed.
     const css = readFileSync(
       resolve(__dirname, '../styles/components/quiet-stage.css'),
       'utf8'
@@ -156,8 +157,10 @@ describe('CommandCard', () => {
     ).filter((rule) => /\.command-rail\.is-primary\b/.test(rule.selector));
     expect(rules.length).toBeGreaterThan(0);
     for (const rule of rules) {
-      if (rule.selector.endsWith('::before')) continue;
-      expect(rule.body).not.toMatch(/background|border|outline|box-shadow/);
+      expect(rule.selector).not.toMatch(/::(before|after)/);
+      expect(rule.body).not.toMatch(
+        /background|border|outline|box-shadow|accent|selected/
+      );
     }
   });
 

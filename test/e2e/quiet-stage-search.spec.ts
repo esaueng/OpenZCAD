@@ -111,6 +111,9 @@ test('a question typed into the prompt goes to the stream standing on it', async
   await page.getByRole('button', { name: 'Hide the assistant' }).click();
   await expect(panel).toHaveCount(0);
   await expect(search).toBeVisible();
+  // The hint is the idle bar's resting line: it reads in the field once the
+  // bar lets go of focus, where the placeholder stands while it has it.
+  await search.blur();
   await expect(hint).toBeVisible();
 });
 
