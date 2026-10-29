@@ -474,17 +474,21 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   // document pose, which proves the refusal is recoverable.
   const sectionButton = page.getByRole('button', { name: /^Section view/ });
   const cutSwitch = page.getByRole('switch', { name: 'Section cut' });
+  const sectionPanel = page.locator('.rail-section-panel');
   // Cancellation can render one frame before the section-view state is
-  // cleared. Observe the switch and turn it off only when it is still on;
-  // either settled state must recover to the same explicit off state.
-  for (let click = 0; click < 4; click += 1) {
-    if ((await cutSwitch.getAttribute('aria-checked')) !== 'true') break;
-    await cutSwitch.click();
+  // cleared. Read the rail button, which is always there, and switch the cut
+  // off only while it is still on. A clear that lands first takes the panel
+  // (and its switch) with it, so the click gives up quickly and the loop
+  // reads the button again; either settled state is the same explicit off.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if ((await sectionButton.getAttribute('aria-pressed')) !== 'true') break;
+    await cutSwitch.click({ timeout: 2_000 }).catch(() => undefined);
   }
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
-  // The switch leaves its panel up; the section button puts it away.
-  await sectionButton.click();
-  await expect(page.locator('.rail-section-panel')).toHaveCount(0);
+  // Only the switch leaves its panel up; the section button puts it away.
+  // With the cut already off, that press can only hide the panel.
+  if ((await sectionPanel.count()) > 0) await sectionButton.click();
+  await expect(sectionPanel).toHaveCount(0);
   await openExactSection(page);
   await expect(exportButton).toBeEnabled();
 });
