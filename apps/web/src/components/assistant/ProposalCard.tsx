@@ -88,6 +88,11 @@ export function ProposalCard({
   useEffect(() => {
     const was = previousStatus.current;
     previousStatus.current = entry.status;
+    if (was === 'open' && entry.status !== 'open') {
+      // A decided proposal is reference material: its list folds away as
+      // one rendered decided does.
+      setShowOperations(false);
+    }
     const card = cardRef.current;
     if (was !== 'open' || entry.status === 'open' || !card) {
       return;

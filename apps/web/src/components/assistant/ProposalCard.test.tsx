@@ -79,6 +79,28 @@ describe('the operation list', () => {
     expect(screen.queryByRole('listitem')).toBeNull();
   });
 
+  it('folds a short list away once its proposal is decided', () => {
+    const open = entry([plate]);
+    const props = {
+      previewing: false,
+      busy: false,
+      onPreview: vi.fn(),
+      onApply: vi.fn(),
+      onReject: vi.fn()
+    };
+    const { rerender } = render(<ProposalCard entry={open} {...props} />);
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    // The reducer keeps the entry's id, so the card stays mounted.
+    rerender(
+      <ProposalCard entry={{ ...open, status: 'rejected' }} {...props} />
+    );
+    expect(screen.queryByRole('listitem')).toBeNull();
+    expect(screen.getByRole('button', { name: /operation/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  });
+
   it('keeps a decided patch behind the disclosure', () => {
     renderCard({ ...entry([plate]), status: 'applied' });
     expect(screen.getByText('Applied')).toBeTruthy();

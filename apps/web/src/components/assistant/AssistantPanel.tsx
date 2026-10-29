@@ -122,6 +122,11 @@ export interface AssistantActivity {
    * status could not be read. The prompt line stops offering to ask.
    */
   unavailable: boolean;
+  /**
+   * The drawing tray holds all it can: the prompt line stops offering to
+   * pick another, which would only be turned away.
+   */
+  attachmentsFull: boolean;
 }
 
 interface AssistantPanelProps {
@@ -617,14 +622,23 @@ export function AssistantPanel({
     }
   }, []);
 
+  const attachmentsFull = pending.length >= MAX_ASSISTANT_ATTACHMENTS;
   useEffect(() => {
     onActivity?.({
       thinking,
       unread,
       context: selectionSummary,
-      unavailable
+      unavailable,
+      attachmentsFull
     });
-  }, [onActivity, thinking, unread, selectionSummary, unavailable]);
+  }, [
+    onActivity,
+    thinking,
+    unread,
+    selectionSummary,
+    unavailable,
+    attachmentsFull
+  ]);
 
   useEffect(() => {
     if (collapsed) {

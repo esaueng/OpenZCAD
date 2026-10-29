@@ -350,3 +350,32 @@ describe('focus in the drawing tray', () => {
     expect(window.document.activeElement).toBe(prompt);
   });
 });
+
+describe('a full drawing tray', () => {
+  it('tells the prompt line, which then offers no pick it would turn away', async () => {
+    const onActivity = vi.fn();
+    render(<AssistantPanel {...panelProps({ onActivity })} />);
+    await act(async () => {});
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ attachmentsFull: false })
+    );
+    await act(async () => {
+      sendAssistantPromptFiles(
+        ['a', 'b', 'c', 'd'].map(
+          (name) => new File([name], `${name}.png`, { type: 'image/png' })
+        )
+      );
+    });
+    await waitFor(() =>
+      expect(onActivity).toHaveBeenLastCalledWith(
+        expect.objectContaining({ attachmentsFull: true })
+      )
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: 'Remove a.png' }));
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ attachmentsFull: false })
+    );
+  });
+});

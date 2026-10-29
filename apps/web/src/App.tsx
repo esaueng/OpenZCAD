@@ -3412,7 +3412,8 @@ export function App() {
       thinking: false,
       unread: 0,
       context: null,
-      unavailable: false
+      unavailable: false,
+      attachmentsFull: false
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -29840,6 +29841,7 @@ export function App() {
                 }
                 searchKey={commandPaletteKey}
                 askUnavailable={assistantActivity.unavailable}
+                attachmentsFull={assistantActivity.attachmentsFull}
                 busy={assistantAvailable && assistantActivity.thinking}
                 unread={
                   assistantAvailable &&

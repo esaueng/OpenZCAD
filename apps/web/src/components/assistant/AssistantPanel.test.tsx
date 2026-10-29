@@ -478,7 +478,8 @@ describe('asking from the prompt line', () => {
       thinking: false,
       unread: 0,
       context: '2 selected edges',
-      unavailable: false
+      unavailable: false,
+      attachmentsFull: false
     });
   });
 });

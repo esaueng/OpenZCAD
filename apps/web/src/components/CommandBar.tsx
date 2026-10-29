@@ -71,6 +71,8 @@ interface CommandBarProps {
    * only answer with "Unavailable".
    */
   askUnavailable?: boolean;
+  /** The conversation holds all the drawings it can take for one ask. */
+  attachmentsFull?: boolean;
   /** The platform's shortcut for the bar: ⌘K or Ctrl+K. */
   /** Null when the user unbound the shortcut. */
   searchKey: PlatformShortcutCopy | null;
@@ -131,6 +133,7 @@ export function CommandBar({
   onOpenChange,
   onAsk,
   askUnavailable = false,
+  attachmentsFull = false,
   searchKey,
   busy = false,
   unread = false,
@@ -600,8 +603,9 @@ export function CommandBar({
               className="command-bar-attach"
               title="Attach a drawing (PNG, JPEG, WebP, or PDF)"
               aria-label="Attach a drawing"
-              // Without a provider a drawing could only wait in the tray.
-              disabled={askUnavailable || busy}
+              // Without a provider a drawing could only wait in the tray,
+              // and a full tray would turn it away.
+              disabled={askUnavailable || busy || attachmentsFull}
               // A press leaves focus in the field rather than closing the
               // bar on the way to the picker.
               onMouseDown={(event) => event.preventDefault()}
