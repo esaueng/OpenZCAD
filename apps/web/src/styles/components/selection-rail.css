@@ -85,6 +85,25 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   gap: 8px;
 }
 
+/* With the assistant docked, its stream stands on the bar and the guidance
+   makes way for the prompt (quiet-stage.css), but the pick still reads: at
+   the bar's far end, clear of "Ask about…" and the attach key, until a
+   question is typed. Nothing else names the pick then. */
+.workspace.with-assistant .workspace-hint:has(> .selection-readout) {
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 64px;
+}
+
+.workspace.with-assistant .workspace-hint > .workspace-hint-text {
+  display: none;
+}
+
+.command-bar-lane:has(.command-bar-input:not(:placeholder-shown))
+  > .workspace-hint {
+  display: none;
+}
+
 /* The guidance gives way first: the pick is what the line is about. */
 .workspace-hint-text {
   flex: 1 1 0;
