@@ -35,10 +35,13 @@ import { projectView } from '../apps/web/src/lib/drawing/projectView';
 import {
   composeSheetPage,
   fitText,
+  fitViewsToSheet,
   sheetSafeText,
+  sheetUnprintableCharacters,
   textWidthMm,
   titleBlockBox,
-  viewPageBox
+  viewPageBox,
+  viewPlacementIssue
 } from '../apps/web/src/lib/drawing/sheetPage';
 import {
   drawingExportFileName,
@@ -1017,7 +1020,11 @@ describe('D01 sheet page and export', () => {
   });
 
   it('keeps sheet text inside the PDF font and the title block cells', () => {
-    expect(sheetSafeText('Ø12 bore — 30°')).toBe('Ø12 bore ? 30°');
+    // Engineering symbols outside Latin-1 print as their stand-ins (U+2300
+    // as Ø, the em dash and minus sign as a hyphen); anything else is "?".
+    expect(sheetSafeText('⌀12 bore — 30° −0.1')).toBe('Ø12 bore - 30° -0.1');
+    expect(sheetSafeText('Ø12 bore ★ 30°')).toBe('Ø12 bore ? 30°');
+    expect(sheetUnprintableCharacters('⌀ ★ ok ✓ ★')).toEqual(['★', '✓']);
     const page = composeSheetPage(
       {
         ...sheet([]),
@@ -1058,9 +1065,137 @@ describe('D01 sheet page and export', () => {
           text.sizeMm) /
         0.718 /
         1000;
-      const available = text.bold ? box.width - 4 : box.width * 0.34 - 3;
+      const available = text.bold ? box.width - 4 : box.width * 0.3 - 3;
       expect(advance).toBeLessThanOrEqual(available);
       expect(text.text.endsWith('...')).toBe(true);
     }
+  });
+
+  it('prints a full ISO date and revision in the title block on every paper', () => {
+    // QA F007: the DATE cell used to cut "2026-10-28" to "2026-10-...".
+    for (const paper of [
+      { size: 'A4', orientation: 'portrait' },
+      { size: 'A4', orientation: 'landscape' },
+      { size: 'A3', orientation: 'landscape' },
+      { size: 'ANSI-A', orientation: 'portrait' }
+    ] as const) {
+      const page = composeSheetPage(
+        {
+          ...sheet([]),
+          paper,
+          views: [],
+          titleBlock: { date: '2026-10-28', revision: '2026-10-28' }
+        },
+        [],
+        { projectName: 'Bracket', units: 'mm' }
+      );
+      expect(
+        page.texts.filter((text) => text.text === '2026-10-28'),
+        `${paper.size} ${paper.orientation}`
+      ).toHaveLength(2);
+      const pdf = new TextDecoder('latin1').decode(
+        sheetPageToPdf(page, 'Sheet')
+      );
+      expect(pdf).toContain('(2026-10-28) Tj');
+      expect(sheetPageToSvg(page, 'Sheet')).toContain('>2026-10-28</text>');
+    }
+  });
+
+  it('flags a view by its whole footprint, not its centre', () => {
+    const drawing = {
+      ...sheet([]),
+      paper: { size: 'A4', orientation: 'landscape' }
+    } as const;
+    const box = (x: number, y: number, width = 40, height = 30) => ({
+      x,
+      y,
+      width,
+      height
+    });
+    // A4 landscape: 297 × 210, a 10 mm border and the title block at
+    // bottom right, 170 × 32 mm.
+    expect(viewPlacementIssue(box(50, 100), drawing)).toBeNull();
+    expect(viewPlacementIssue(box(400, 100), drawing)).toBe('off-page');
+    // Centre on the paper, footprint past its right edge.
+    expect(viewPlacementIssue(box(270, 100), drawing)).toBe('partly-off-page');
+    expect(viewPlacementIssue(box(-20, 100), drawing)).toBe('partly-off-page');
+    expect(viewPlacementIssue(box(250, 100), drawing)).toBe('past-border');
+    expect(viewPlacementIssue(box(200, 20), drawing)).toBe('over-title-block');
+  });
+
+  it('never draws past the paper, and fits views back onto a smaller one', async () => {
+    // QA F006: the A3 starter at its scale, switched to A4, runs off the
+    // paper. The page and its PDF keep every point on the paper, the views
+    // say so, and "Fit views to sheet" lays them out on A4 again.
+    const { created, projections } = await starter('mm', 'third');
+    const a4: DrawingSheet = {
+      ...created,
+      paper: { size: 'A4', orientation: 'landscape' }
+    };
+    const paper = drawingPaperMm(a4.paper);
+    const extents = new Map(
+      projections.map(({ view: entry, projection }) => [
+        entry.viewId,
+        projection.bounds!
+      ])
+    );
+    const issues = (layout: DrawingSheet) =>
+      layout.views.map((entry) =>
+        viewPlacementIssue(
+          viewPageBox(entry, extents.get(entry.viewId)!, layout, 'mm'),
+          layout
+        )
+      );
+    expect(issues(a4)).toContain('partly-off-page');
+
+    const page = composeSheetPage(
+      a4,
+      projections.map(({ view: entry, projection }) => ({
+        view: a4.views.find((v) => v.viewId === entry.viewId)!,
+        projection
+      })),
+      { projectName: 'Bracket', units: 'mm' }
+    );
+    for (const stroke of page.strokes)
+      for (let i = 0; i + 1 < stroke.points.length; i += 2) {
+        expect(stroke.points[i]!).toBeGreaterThanOrEqual(0);
+        expect(stroke.points[i]!).toBeLessThanOrEqual(paper.width);
+        expect(stroke.points[i + 1]!).toBeGreaterThanOrEqual(0);
+        expect(stroke.points[i + 1]!).toBeLessThanOrEqual(paper.height);
+      }
+    // The PDF: every path point inside the MediaBox, and the page clipped.
+    const pdf = new TextDecoder('latin1').decode(sheetPageToPdf(page, 'A4'));
+    const [, mediaWidth, mediaHeight] = pdf.match(
+      /\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/
+    )!;
+    expect(pdf).toContain(`0 0 ${mediaWidth} ${mediaHeight} re W n`);
+    const points = [...pdf.matchAll(/(-?[\d.]+) (-?[\d.]+) [ml]\b/g)];
+    expect(points.length).toBeGreaterThan(20);
+    for (const [, x, y] of points) {
+      expect(Number(x)).toBeGreaterThanOrEqual(0);
+      expect(Number(x)).toBeLessThanOrEqual(Number(mediaWidth));
+      expect(Number(y)).toBeGreaterThanOrEqual(0);
+      expect(Number(y)).toBeLessThanOrEqual(Number(mediaHeight));
+    }
+
+    const fitted = fitViewsToSheet(a4, extents, 'mm')!;
+    // 5:1 no longer fits A4; the next preset that does is 2:1.
+    expect(fitted.scale).toEqual({ numerator: 2, denominator: 1 });
+    const laidOut: DrawingSheet = {
+      ...a4,
+      scale: fitted.scale,
+      views: a4.views.map((entry) => ({
+        ...entry,
+        centerMm: fitted.centers.find((c) => c.viewId === entry.viewId)!
+          .centerMm
+      }))
+    };
+    expect(issues(laidOut)).toEqual([null, null, null, null]);
+    const [front, top, right] = laidOut.views;
+    expect(top!.centerMm.x).toBe(front!.centerMm.x);
+    expect(right!.centerMm.y).toBe(front!.centerMm.y);
+    // Already on the sheet: fitting keeps the scale and only centres.
+    const again = fitViewsToSheet(created, extents, 'mm')!;
+    expect(again.scale).toEqual(created.scale);
   });
 });

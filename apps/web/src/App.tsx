@@ -170,7 +170,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
-  isDrawingCommandKind,
+  isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
   type AnyCommand
@@ -5334,7 +5334,7 @@ export function App() {
     // passes in the Draw workspace on the project's own locks alone.
     if (
       commands.length > 0 &&
-      commands.every((command) => isDrawingCommandKind(command.kind))
+      commands.every(isDrawingCommand)
     ) {
       return ensureCanEditDrawings(action);
     }
@@ -8424,7 +8424,7 @@ export function App() {
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
       // Drawings, images and folders edit presentation without rebuilding.
       if (
-        isDrawingCommandKind(command.kind) ||
+        isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind)
       )
