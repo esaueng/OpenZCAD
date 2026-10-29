@@ -44,6 +44,11 @@ export interface DragRig {
    */
   chipLine?(): { start: THREE.Vector3; end: THREE.Vector3 } | null;
   /**
+   * What a radial rig's dimension line measures: rim to rim through the axis
+   * for a diameter, axis to rim for a radius. Rigs without one omit it.
+   */
+  setSpanMode?(mode: 'diameter' | 'radius'): void;
+  /**
    * The value a pointer ray names, for rigs whose value is not a distance
    * along `direction` (an angle swept about an axis). `previous` is the
    * value before this move, so a rig can stay continuous across a wrap.

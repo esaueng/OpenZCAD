@@ -1,4 +1,8 @@
-import type { BodyRepresentation, Vector3 } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  FaceTopology,
+  Vector3
+} from '@openzcad/shared';
 import type { CylinderPreviewProfile } from '@openzcad/viewport';
 import { geometryTolerance } from '@openzcad/geometry';
 
@@ -66,6 +70,65 @@ export function sameCylinderAxis(
     pointDistance(firstStart, secondEnd) <= tolerance &&
     pointDistance(firstEnd, secondStart) <= tolerance;
   return aligned || reversed;
+}
+
+/**
+ * The cylindrical face a committed radius edit left on the same axis at the
+ * new radius: what stays selected once a drag applies, so the bore keeps its
+ * handle instead of the selection falling back to the whole body. Null when
+ * no face, or more than one, fits.
+ */
+export function findResizedCylinderFace(
+  faces: readonly FaceTopology[],
+  axisStart: Vector3,
+  axisEnd: Vector3,
+  radius: number
+): FaceTopology | null {
+  const axis = normalized({
+    x: axisEnd.x - axisStart.x,
+    y: axisEnd.y - axisStart.y,
+    z: axisEnd.z - axisStart.z
+  });
+  if (!axis) return null;
+  const scale = Math.max(1, radius, pointDistance(axisStart, axisEnd));
+  const tolerance = scale * 1e-6;
+  const offAxis = (point: Vector3) => {
+    const relative = {
+      x: point.x - axisStart.x,
+      y: point.y - axisStart.y,
+      z: point.z - axisStart.z
+    };
+    const along = dot(relative, axis);
+    return Math.hypot(
+      relative.x - axis.x * along,
+      relative.y - axis.y * along,
+      relative.z - axis.z * along
+    );
+  };
+  const matches = faces.filter((face) => {
+    const geometry = face.geometry;
+    if (
+      geometry?.surfaceType !== 'cylinder' ||
+      geometry.radius === undefined ||
+      !geometry.axisStart ||
+      !geometry.axisEnd ||
+      Math.abs(geometry.radius - radius) > tolerance
+    ) {
+      return false;
+    }
+    const direction = normalized({
+      x: geometry.axisEnd.x - geometry.axisStart.x,
+      y: geometry.axisEnd.y - geometry.axisStart.y,
+      z: geometry.axisEnd.z - geometry.axisStart.z
+    });
+    return (
+      direction !== null &&
+      1 - Math.abs(dot(direction, axis)) <= 1e-9 &&
+      offAxis(geometry.axisStart) <= tolerance &&
+      offAxis(geometry.axisEnd) <= tolerance
+    );
+  });
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /**
@@ -190,6 +253,20 @@ export function cylinderRadiusTolerance(scale: number): number {
 }
 
 /**
+ * A radius the exact edit would refuse as unchanged: within the kernel's
+ * direct-edit tolerance (1e-6, or a millionth of the radius) of the source.
+ */
+export function isUnchangedCylinderRadius(
+  radius: number,
+  sourceRadius: number
+): boolean {
+  return (
+    Math.abs(radius - sourceRadius) <=
+    Math.max(1e-6, Math.abs(sourceRadius) * 1e-6)
+  );
+}
+
+/**
  * Reject radii that are non-finite, inverted, or indistinguishable from zero
  * at the scale of the edit. There is deliberately no model-size ceiling:
  * exact-kernel validation decides whether a finite positive radius produces a
@@ -244,6 +321,22 @@ export function cylinderRadiusSnapStep(worldPerPixel: number): number {
       (candidate) => candidate >= minimumStep
     ) ?? magnitude * 10
   );
+}
+
+/**
+ * Snap the dimension the chip shows, not the radius underneath it. Snapping
+ * the radius to 0.02 lands a diameter drag on Ø 10.32; in diameter mode the
+ * same zoom-adaptive step is taken in diameter units, so the value reads
+ * Ø 10.3 rather than an odd hundredth.
+ */
+export function snapCylinderRadius(
+  radius: number,
+  worldPerPixel: number,
+  mode: 'diameter' | 'radius'
+): number {
+  const factor = mode === 'diameter' ? 2 : 1;
+  const step = cylinderRadiusSnapStep(worldPerPixel);
+  return (Math.round((radius * factor) / step) * step) / factor;
 }
 
 /** Recognized round-rim profile; history eligibility is checked by the caller. */

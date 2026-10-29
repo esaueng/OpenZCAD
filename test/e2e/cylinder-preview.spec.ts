@@ -205,18 +205,13 @@ test('rounded cylinder rapid bottom, top, and radius edits survive reload', asyn
       .toBeCloseTo(radius, 2);
     await expect(page.locator('.feature-row')).toHaveCount(3);
     await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
-    // A committed cap offset leaves the moved cap selected and armed; a
-    // radius edit hands the body back.
-    if (surface === 'wall')
-      await expect(canvas).not.toHaveAttribute(
-        'data-e2e-chip-anchor-rig',
-        /.+/
-      );
-    else
-      await expect(canvas).toHaveAttribute(
-        'data-e2e-chip-anchor-rig',
-        'offset-face'
-      );
+    // A committed edit leaves what it moved selected and armed: the moved
+    // cap, or the resized wall (handing the body back swapped the wall's
+    // card for the body's the moment a radius drag applied).
+    await expect(canvas).toHaveAttribute(
+      'data-e2e-chip-anchor-rig',
+      surface === 'wall' ? 'cylinder-radius' : 'offset-face'
+    );
   }
   await page.getByTitle('Back to projects').click();
   await page

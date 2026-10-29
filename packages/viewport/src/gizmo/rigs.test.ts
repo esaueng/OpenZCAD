@@ -385,17 +385,37 @@ describe('the cylinder-radius rig', () => {
     rig.dispose();
   });
 
-  it('anchors the value chip on the dimension line inside the cylinder', () => {
+  it('anchors the label at the pin and rides no line', () => {
     const rig = buildCylinderRadiusHandle({
       origin: { x: 14, y: 0, z: 8 },
       direction: { x: 1, y: 0, z: 0 },
       originalRadius: 14
     });
-    // Axis centre is at x = 0; the chip rides partway back out to the wall.
-    const anchor = rig.chipAnchor(1);
-    expect(anchor.x).toBeCloseTo(14 * 0.45, 6);
-    expect(anchor.y).toBeCloseTo(0, 6);
-    expect(anchor.z).toBeCloseTo(8, 6);
+    // The viewer hangs the label beside the pin; a line to ride would flip
+    // it between two layouts as the bore grew on screen.
+    rig.setValue(16);
+    expect(rig.chipAnchor(1)).toMatchObject({ x: 16, y: 0, z: 8 });
+    expect(rig.chipLine).toBeUndefined();
+  });
+
+  it('draws the dimension it names: rim to rim for Ø, axis to rim for R', () => {
+    const rig = buildCylinderRadiusHandle({
+      origin: { x: 14, y: 0, z: 8 },
+      direction: { x: 1, y: 0, z: 0 },
+      originalRadius: 14
+    });
+    const [, startHead, endHead] = rig.worldGroup.children[0]!.children;
+    const span = () => endHead!.position.x - startHead!.position.x;
+    rig.setValue(10);
+    // Diameter is the default: the far tip sits on the opposite wall.
+    expect(startHead!.position.x).toBeLessThan(-9);
+    expect(span()).toBeGreaterThan(18);
+    rig.setSpanMode?.('radius');
+    expect(startHead!.position.x).toBeGreaterThan(-1);
+    expect(span()).toBeLessThan(10);
+    rig.setSpanMode?.('diameter');
+    expect(startHead!.position.x).toBeLessThan(-9);
+    rig.dispose();
   });
 });
 
