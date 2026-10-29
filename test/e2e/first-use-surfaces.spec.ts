@@ -41,7 +41,7 @@ test('Settings and Move open complete the first time', async ({ page }) => {
         tally.settingsBlank += 1;
       if (
         tally.moving &&
-        !document.querySelector('.selection-card') &&
+        !document.querySelector('.selection-rail') &&
         !document.querySelector('form[aria-label="Move controls"]')
       )
         tally.moveGap += 1;
@@ -142,7 +142,7 @@ test('Move launched before its panel loads keeps the selection card up', async (
     window.__firstUse = { settingsBlank: 0, moveGap: 0, moving: true };
     const sample = () => {
       if (
-        !document.querySelector('.selection-card') &&
+        !document.querySelector('.selection-rail') &&
         !document.querySelector('form[aria-label="Move controls"]')
       )
         window.__firstUse!.moveGap += 1;
@@ -179,7 +179,7 @@ test('a Move held for its panel is dropped when its selection is cleared', async
     .getByRole('button', { name: 'Selection: Move', exact: true })
     .click();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.selection-card')).toHaveCount(0);
+  await expect(page.locator('.selection-rail')).toHaveCount(0);
   release();
   await page.waitForTimeout(1_000);
   await expect(page.locator('form[aria-label="Move controls"]')).toHaveCount(0);
@@ -237,7 +237,7 @@ test('a Move held for its panel is dropped when the project is replaced', async 
     await page.getByRole('button', { name: 'Create project' }).click();
     await createPrimitiveInPlace(page, 'box');
     await page.keyboard.press('Escape');
-    await expect(page.locator('.selection-card')).toHaveCount(0);
+    await expect(page.locator('.selection-rail')).toHaveCount(0);
   };
   await page.goto('/');
   await createBoxProject('First held');
@@ -272,7 +272,7 @@ test('a Move held for its panel is dropped when Measure takes the lane', async (
   await page.getByRole('button', { name: 'Create project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await page.keyboard.press('Escape');
-  await expect(page.locator('.selection-card')).toHaveCount(0);
+  await expect(page.locator('.selection-rail')).toHaveCount(0);
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   // Measure launches no tool and leaves the (empty) selection as it was.
   await page

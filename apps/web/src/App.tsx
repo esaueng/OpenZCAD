@@ -681,6 +681,9 @@ import {
 } from './lib/selectionFeature';
 import {
   cylinderRadialFrame,
+  type CylinderRadiusEdit,
+  findResizedCylinderFace,
+  isUnchangedCylinderRadius,
   isValidCylinderRadius,
   sameCylinderAxis,
   supportsRadialCylinderPreview,
@@ -1116,15 +1119,15 @@ const LazyCommandCard = lazyWithStaleChunkNotice(() =>
     default: module.CommandCard
   }))
 );
-// The pick's verbs and its refusal: drawn on every selection, but only once
+// The pick's name and its refusal: drawn on every selection, but only once
 // a model is open, so they wait with the workspace rather than the launcher.
-const LazySelectionCard = lazyWithStaleChunkNotice(() =>
-  import('./components/SelectionCard').then((module) => ({
-    default: module.SelectionCard
+const LazySelectionReadout = lazyWithStaleChunkNotice(() =>
+  import('./components/SelectionRail').then((module) => ({
+    default: module.SelectionReadout
   }))
 );
 const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
-  import('./components/SelectionCard').then((module) => ({
+  import('./components/SelectionRail').then((module) => ({
     default: module.SelectionRefusal
   }))
 );
@@ -1319,7 +1322,7 @@ const MeasurementDock = withSuspense(LazyMeasurementDock);
 
 const CommandCard = withSuspense(LazyCommandCard);
 
-const SelectionCard = withSuspense(LazySelectionCard);
+const SelectionReadout = withSuspense(LazySelectionReadout);
 
 const SelectionRefusal = withSuspense(LazySelectionRefusal);
 
@@ -2603,6 +2606,28 @@ export function App() {
     useState(false);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  // Shelf writes (pin, reorder, shelf moves) run one at a time, each built
+  // from the rows the writes before it left, so two quick drags (or a drag
+  // right after a pin) cannot rebuild a row from a stale snapshot and undo
+  // the first change. A finished write's rows stay here until `projects`
+  // has them, and the latest `projects` is read through a ref because a
+  // queued write outlives the render that queued it.
+  const shelfWrites = useRef<Promise<unknown>>(Promise.resolve());
+  const latestProjects = useRef(projects);
+  latestProjects.current = projects;
+  const pendingOrganizations = useRef(
+    new Map<string, ProjectOrganization>()
+  );
+  useEffect(() => {
+    for (const project of projects) {
+      if (
+        pendingOrganizations.current.get(project.projectId) ===
+        project.organization
+      ) {
+        pendingOrganizations.current.delete(project.projectId);
+      }
+    }
+  }, [projects]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   /**
    * Which of the open project's save points can actually be opened. Empty
@@ -6973,11 +6998,13 @@ export function App() {
   // End the session permanently when its view changes. Merely hiding the
   // indicator would let an old snapshot revive if the same set returns later.
   if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
-  // Only whether a face offset is in progress matters to the bodies: keyed on
+  // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
-  const faceOffsetInteraction =
-    interaction.mode === 'face' && interaction.op === 'offset-face';
+  const faceDragInteraction =
+    interaction.mode === 'face' &&
+    (interaction.op === 'offset-face' ||
+      interaction.op === 'resize-cylinder-radius');
   const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
     const bodies = (
       currentFaceGeometryPreview
@@ -6988,12 +7015,13 @@ export function App() {
     ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
     // G2: what a command preview would make is drawn in the preview hue
     // until it is applied, including edits that retain an existing body ID.
-    // A face offset is the exception: the viewer draws its result solid over
-    // a ghost of the part as it was, and a hue change mid-drag would read as
-    // a different part.
-    const faceOffsetPreview =
-      currentFaceGeometryPreview && faceOffsetInteraction;
-    return !faceOffsetPreview &&
+    // A face drag is the exception: an offset draws its result solid over a
+    // ghost of the part as it was, a bore's handle and dimension line say
+    // what is changing, and a whole flange flashing mint the moment a hole
+    // starts to grow read as a different part.
+    const faceDragPreview =
+      currentFaceGeometryPreview && faceDragInteraction;
+    return !faceDragPreview &&
       (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
       ? tintPreviewResultBodies(bodies, representations)
       : bodies;
@@ -7002,7 +7030,7 @@ export function App() {
     hiddenBodyIds,
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
-    faceOffsetInteraction,
+    faceDragInteraction,
     previewDoc,
     representations
   ]);
@@ -7425,6 +7453,8 @@ export function App() {
   // the card's label rewritten) on every interaction step of a drag.
   const offsettingFace =
     interaction.mode === 'face' && interaction.op === 'offset-face';
+  const resizingCylinder =
+    interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius';
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
@@ -7490,12 +7520,13 @@ export function App() {
       // face on screen, since an offset can change a face's boundary (a
       // tapered or imported part); while the preview has none to give, the
       // line holds a placeholder rather than leaving and shifting the card.
-      // Other edits (a cylinder's radius, a fillet's) name and measure from
-      // the preview: their figure is the dragged value, which the viewer
-      // writes into the label live.
+      // A cylinder's radius drag names from the committed face too: the
+      // preview's bore carries no feature type, so mid-drag the card swapped
+      // "Through hole · Ø 6" for "Pipe Flange · Face". It measures from the
+      // preview, whose figure is the dragged value.
       const sourceBody =
         currentFaceGeometryPreview &&
-        offsettingFace &&
+        (offsettingFace || resizingCylinder) &&
         selectedTopology?.kind === 'face' &&
         selectedTopology.bodyId === renderedSelectedTopology.bodyId
           ? representations[selectedTopology.bodyId]
@@ -7521,10 +7552,16 @@ export function App() {
       // tape is simultaneously refusing as ambiguous.
       const resolved = resolveFace(measuredBody, renderedSelectedTopology);
       const geometry = resolved.ok ? resolved.entry.geometry : undefined;
-      if (
-        geometry?.featureType === 'through-hole' &&
-        geometry.diameter !== undefined
-      ) {
+      const sourceResolved =
+        fromSource && selectedTopology
+          ? resolveFace(sourceBody, selectedTopology)
+          : null;
+      const isThroughHole =
+        geometry?.featureType === 'through-hole' ||
+        (resizingCylinder &&
+          sourceResolved?.ok === true &&
+          sourceResolved.entry.geometry?.featureType === 'through-hole');
+      if (isThroughHole && geometry?.diameter !== undefined) {
         const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: textLabelSegments('Through hole'),
@@ -7580,7 +7617,8 @@ export function App() {
     currentFaceGeometryPreview,
     selectedTopology,
     representations,
-    offsettingFace
+    offsettingFace,
+    resizingCylinder
   ]);
 
   const {
@@ -7799,7 +7837,7 @@ export function App() {
     exactGeometryReady: displayedGeometryComplete,
     hasEdgeSelected: selectedEdges.length > 0
   };
-  // What the palette, the selection card and the command bar show. Launching
+  // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
   // model cannot open from the one a short rebuild is replacing; it only
   // stops the buttons greying out and back for that rebuild's length.
@@ -7854,7 +7892,7 @@ export function App() {
 
   /**
    * The imported face whose own card (resize a hole, remove a blend) the
-   * Selection card's Edit face opened. Keyed by the pick, so any other pick
+   * rail's Edit face opened. Keyed by the pick, so any other pick
    * closes it: a direct pick otherwise gets no card at all.
    */
   const [editFaceKey, setEditFaceKey] = useState<string | null>(null);
@@ -8806,7 +8844,7 @@ export function App() {
     panelLoadSettled = false
   ) {
     const launch = ++toolLaunchRef.current;
-    // Move's panel takes the selection card's place. Before its chunk has
+    // Move's panel takes the selection verbs' place. Before its chunk has
     // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
     // it) the swap left neither on screen, so the card stays up until the
     // panel can render. A failed load launches anyway, to report it.
@@ -8862,7 +8900,7 @@ export function App() {
       const pick = inPlaceProfilePick(region);
       return pick ? [pick] : [];
     });
-    // A face selected first (the selection card's Hole, Shell…) is the
+    // A face selected first (the rail's Hole, Shell…) is the
     // command's first face, clicked where it was clicked.
     const current = interactionRef.current;
     const selectedFace =
@@ -8906,7 +8944,7 @@ export function App() {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
-    // Edges selected first (the selection card's Fillet, the edge's own
+    // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
       ? (current.mode === 'edges' ? current.edges : selectedEdges).flatMap(
@@ -8921,7 +8959,7 @@ export function App() {
         )
       : [];
     // A solid offset takes a body, named by any of its faces: a body picked
-    // first (its Selection card's Solid offset) is that body, its handle on
+    // first (its rail's Solid offset) is that body, its handle on
     // a flat face where it has one.
     const bodyFace =
       tool === 'solid-offset' && !selectedFace && initialBodies[0]
@@ -13048,33 +13086,74 @@ export function App() {
    */
   async function persistOrganization(
     projectId: string,
-    organization: ProjectOrganization
-  ): Promise<void> {
-    // Durable locally first, flagged as not yet mirrored: the listing's
-    // reconcile pushes a flagged row and adopts the account's otherwise, so
-    // the flag is what keeps a change alive across a failed mirror without
-    // letting this device overrule every other one forever.
-    await saveLocalProjectOrganization(projectId, organization, {
-      mirrorPending: true
+    update: (current: ProjectOrganization) => ProjectOrganization
+  ): Promise<ProjectOrganization> {
+    const organization = await queueShelfWrite(async () => {
+      const project = latestProjects.current.find(
+        (entry) => entry.projectId === projectId
+      );
+      const next = update(
+        pendingOrganizations.current.get(projectId) ??
+          projectOrganization(project ?? {})
+      );
+      // Durable locally first, flagged as not yet mirrored: the listing's
+      // reconcile pushes a flagged row and adopts the account's otherwise,
+      // so the flag is what keeps a change alive across a failed mirror
+      // without letting this device overrule every other one forever.
+      await saveShelfRows(new Map([[projectId, next]]));
+      return next;
     });
+    if (session) {
+      await mirrorPendingOrganization(
+        projectId,
+        organizationMirrorHost,
+        undefined,
+        organizationBackground.scopeFor(session.userId)
+      ).catch(() => undefined);
+    }
+    return organization;
+  }
+
+  /** Runs a shelf write after every one queued before it has finished. */
+  function queueShelfWrite<T>(write: () => Promise<T>): Promise<T> {
+    const run = shelfWrites.current.then(write);
+    shelfWrites.current = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Saves shelf rows locally and shows them. Called only from a queued
+   * write, so no other shelf write is in flight: a failure drops just these
+   * rows, and the rows before them are already on the shelf.
+   */
+  async function saveShelfRows(rows: Map<string, ProjectOrganization>) {
+    for (const [projectId, organization] of rows) {
+      pendingOrganizations.current.set(projectId, organization);
+    }
+    try {
+      await Promise.all(
+        [...rows].map(([projectId, organization]) =>
+          saveLocalProjectOrganization(projectId, organization, {
+            mirrorPending: true
+          })
+        )
+      );
+    } catch (error) {
+      for (const [projectId, organization] of rows) {
+        if (pendingOrganizations.current.get(projectId) === organization) {
+          pendingOrganizations.current.delete(projectId);
+        }
+      }
+      throw error;
+    }
     setProjects((current) =>
       current
-        .map((project) =>
-          project.projectId === projectId
-            ? { ...project, organization }
-            : project
-        )
+        .map((project) => {
+          const organization = rows.get(project.projectId);
+          return organization ? { ...project, organization } : project;
+        })
         .sort(compareProjectSummaries)
     );
-    if (!session) {
-      return;
-    }
-    await mirrorPendingOrganization(
-      projectId,
-      organizationMirrorHost,
-      undefined,
-      organizationBackground.scopeFor(session.userId)
-    ).catch(() => undefined);
   }
 
   async function handleMoveProjectToShelf(
@@ -13082,11 +13161,9 @@ export function App() {
     status: ProjectStatus
   ) {
     try {
-      const organization = applyOrganizationUpdate(
-        projectOrganization(project),
-        { status }
+      await persistOrganization(project.projectId, (current) =>
+        applyOrganizationUpdate(current, { status })
       );
-      await persistOrganization(project.projectId, organization);
       setStatus(
         status === 'deleted'
           ? `Moved ${project.name} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
@@ -13101,68 +13178,86 @@ export function App() {
 
   async function handleTogglePin(project: ProjectSummary) {
     try {
-      const current = projectOrganization(project);
-      await persistOrganization(
+      const { pinned } = await persistOrganization(
         project.projectId,
-        applyOrganizationUpdate(current, { pinned: !current.pinned })
+        (current) =>
+          applyOrganizationUpdate(current, { pinned: !current.pinned })
       );
       setStatus(
-        current.pinned ? `Unpinned ${project.name}.` : `Pinned ${project.name}.`
+        pinned ? `Pinned ${project.name}.` : `Unpinned ${project.name}.`
       );
     } catch (error) {
       setStatus(errorMessage(error, `Could not update ${project.name}.`));
     }
   }
 
-  async function handleReorderProjects(projectIds: string[]) {
+  /**
+   * Saves a new shelf order. A part dragged into or out of the pinned group
+   * changes its pin in the same write, so neither change can overwrite the
+   * other.
+   */
+  async function handleReorderProjects(
+    projectIds: string[],
+    pin?: { projectId: string; pinned: boolean }
+  ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
-    const organizations = new Map(
-      projects
-        .filter((project) => positions.has(project.projectId))
-        .map((project) => [
-          project.projectId,
-          {
-            ...projectOrganization(project),
-            sortOrder: positions.get(project.projectId)!
-          }
-        ])
-    );
+    let pinnedName: string | undefined;
     try {
-      await Promise.all(
-        [...organizations].map(([projectId, organization]) =>
-          saveLocalProjectOrganization(projectId, organization, {
-            mirrorPending: true
-          })
-        )
-      );
-      setProjects((current) =>
-        current
-          .map((project) => {
-            const organization = organizations.get(project.projectId);
-            return organization ? { ...project, organization } : project;
-          })
-          .sort(compareProjectSummaries)
-      );
-      if (session) {
-        const organizationScope = organizationBackground.scopeFor(
-          session.userId
+      pinnedName = await queueShelfWrite(async () => {
+        const rows = new Map(
+          latestProjects.current
+            .filter((project) => positions.has(project.projectId))
+            .map((project) => {
+              const current =
+                pendingOrganizations.current.get(project.projectId) ??
+                projectOrganization(project);
+              return [
+                project.projectId,
+                {
+                  ...(pin?.projectId === project.projectId
+                    ? applyOrganizationUpdate(current, { pinned: pin.pinned })
+                    : current),
+                  sortOrder: positions.get(project.projectId)!
+                }
+              ];
+            })
         );
-        await mirrorPendingReorder(
-          projectIds,
-          organizationMirrorHost,
-          async (ids) =>
-            (
-              await api.reorderProjects(
-                { projectIds: ids.map(toProjectId) },
-                organizationScope.signal
-              )
-            ).projects,
-          undefined,
-          organizationScope
-        ).catch(() => undefined);
-      }
+        await saveShelfRows(rows);
+        return pin
+          ? latestProjects.current.find(
+              (project) => project.projectId === pin.projectId
+            )?.name
+          : undefined;
+      });
     } catch (error) {
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
+      return;
+    }
+    if (pin && pinnedName !== undefined) {
+      setStatus(
+        pin.pinned ? `Pinned ${pinnedName}.` : `Unpinned ${pinnedName}.`
+      );
+    }
+    // Resolves once the device has the new order; the account catches up
+    // in the background, so a slow network never holds the shelf's drag
+    // preview (and its Pin/Unpin state) past the local save.
+    if (session) {
+      const organizationScope = organizationBackground.scopeFor(
+        session.userId
+      );
+      void mirrorPendingReorder(
+        projectIds,
+        organizationMirrorHost,
+        async (ids) =>
+          (
+            await api.reorderProjects(
+              { projectIds: ids.map(toProjectId) },
+              organizationScope.signal
+            )
+          ).projects,
+        undefined,
+        organizationScope
+      ).catch(() => undefined);
     }
   }
 
@@ -22397,14 +22492,32 @@ export function App() {
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
       ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
       : null;
+  /**
+   * The Ø/R choice carried onto the wall an applied radius edit regenerated.
+   * That wall has a new topology id, so without this the reset below read it
+   * as a fresh pick and flipped Radius back to Diameter after every edit.
+   */
+  const carriedCylinderModeRef = useRef<{
+    key: string;
+    mode: DimensionMode;
+  } | null>(null);
   useEffect(() => {
-    setCylinderDimensionMode('diameter');
     cylinderRadiusPreview.clear();
+    const carried = carriedCylinderModeRef.current;
+    // Between the commit handing the body back and the wall being picked
+    // again there is no wall: keep the carried mode for it.
+    if (carried && cylinderSelectionKey === null) return;
+    carriedCylinderModeRef.current = null;
+    setCylinderDimensionMode(
+      carried?.key === cylinderSelectionKey ? carried.mode : 'diameter'
+    );
   }, [cylinderSelectionKey, cylinderRadiusPreview]);
 
-  function buildCylinderRadiusCommand(
-    radius: ParamValue
-  ): { command: AnyCommand; sourceFeatureId?: FeatureId } | null {
+  function buildCylinderRadiusCommand(radius: ParamValue): {
+    command: AnyCommand;
+    edit: CylinderRadiusEdit;
+    sourceFeatureId?: FeatureId;
+  } | null {
     const current = interactionRef.current;
     const base = managerRef.current?.document;
     if (
@@ -22432,6 +22545,7 @@ export function App() {
       const diameter: ParamValue =
         typeof radius === 'number' ? radius * 2 : `(${radius}) * 2`;
       return {
+        edit: 'through-hole',
         command: commandFactories.directEditBody({
           name: 'Resize Through Hole',
           targetBodyId: target.bodyId as BodyId,
@@ -22473,6 +22587,7 @@ export function App() {
             ? radius
             : `(${radius}) / ${scale}`;
       return {
+        edit: 'primitive-parameter',
         command: commandFactories.updateFeature(
           {
             featureId: primitive.featureId,
@@ -22490,6 +22605,7 @@ export function App() {
     }
 
     return {
+      edit: 'cylindrical-face',
       command: commandFactories.directEditBody({
         // The history row and the command card read the same name, so a
         // feature is called the same thing while it runs and afterwards.
@@ -22528,6 +22644,20 @@ export function App() {
     ) {
       return;
     }
+    // Back at the starting size the part is simply itself again. Asking the
+    // kernel to rebuild it there is refused ("must differ from its current
+    // diameter"), which flagged a drag that merely passed its start as
+    // Failed, turned the chip amber and left the refusal in the status line.
+    const edit = buildCylinderRadiusCommand(radius)?.edit;
+    if (
+      edit &&
+      isUnchangedCylinderRadius(radius, current.target.radius, edit)
+    ) {
+      cylinderRadiusPreview.clear();
+      setLastValidPreview(null);
+      recoverPreviewInteraction();
+      return;
+    }
     if (exactGeometry) {
       cylinderRadiusPreview.request(radius);
     } else {
@@ -22563,6 +22693,17 @@ export function App() {
     }
     const sourceRadius = current.target.radius;
     const plan = buildCylinderRadiusCommand(exact ?? radius);
+    // Entering the size it already has is no edit: close quietly, as a
+    // release at the starting size does, rather than show a refusal.
+    if (
+      exact === undefined &&
+      sourceRadius !== undefined &&
+      plan &&
+      isUnchangedCylinderRadius(radius, sourceRadius, plan.edit)
+    ) {
+      handleCylinderRadiusCancel();
+      return true;
+    }
     if (
       sourceRadius === undefined ||
       !isValidCylinderRadius(radius, sourceRadius) ||
@@ -22583,12 +22724,77 @@ export function App() {
       previewSelectionIsCurrent(candidate)
         ? candidate
         : null;
+    const target = current.target;
     void executeValidatedDirectEdit(
       reuse?.command ?? plan.command,
-      current.target.bodyId as BodyId,
+      target.bodyId as BodyId,
       `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
       radius,
-      undefined,
+      // The resized wall stays picked with its handle armed at the new size,
+      // as a moved face does: falling back to the whole body swapped the
+      // hole's card for the body's Move/Rotate card the moment it applied.
+      () => {
+        if (!target.axisStart || !target.axisEnd) return;
+        const vector = (value: readonly [number, number, number]) => ({
+          x: value[0],
+          y: value[1],
+          z: value[2]
+        });
+        const bodyId = target.bodyId as BodyId;
+        const faces =
+          managerRef.current?.document.derived.bodyRepresentations[bodyId]
+            ?.topology?.faces;
+        const wall = faces
+          ? findResizedCylinderFace(
+              faces,
+              vector(target.axisStart),
+              vector(target.axisEnd),
+              radius
+            )
+          : null;
+        const geometry = wall?.geometry;
+        if (!wall || !geometry?.axisStart || !geometry.axisEnd) return;
+        const radial = target.radialDirection ?? target.normal;
+        const delta = radius - sourceRadius;
+        const { reference: _staleReference, ...stableTarget } = target;
+        const triple = (value: {
+          x: number;
+          y: number;
+          z: number;
+        }): [number, number, number] => [value.x, value.y, value.z];
+        const nextTarget: FaceTarget = {
+          ...stableTarget,
+          topologyId: wall.topologyId,
+          hash: wall.hash,
+          ...(wall.reference ? { reference: wall.reference } : {}),
+          point: target.point.map(
+            (component, axis) => component + radial[axis]! * delta
+          ) as [number, number, number],
+          surfaceCenter: triple(geometry.center),
+          radius,
+          axisStart: triple(geometry.axisStart),
+          axisEnd: triple(geometry.axisEnd),
+          ...(geometry.axialLength !== undefined
+            ? { axialLength: geometry.axialLength }
+            : {}),
+          ...(geometry.diameter !== undefined
+            ? { diameter: geometry.diameter }
+            : {})
+        };
+        setSelectedTopology({
+          bodyId,
+          kind: 'face',
+          topologyId: wall.topologyId,
+          hash: wall.hash,
+          ...(wall.reference ? { reference: wall.reference } : {})
+        });
+        setSelectedBodyIds([bodyId]);
+        carriedCylinderModeRef.current = {
+          key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
+          mode: cylinderDimensionMode
+        };
+        dispatchInteraction({ type: 'select-face', target: nextTarget });
+      },
       plan.sourceFeatureId
         ? affectedFeatureTargets(
             managerRef.current!.document,
@@ -26583,7 +26789,9 @@ export function App() {
             void handleMoveProjectToShelf(project, shelf)
           }
           onTogglePin={(project) => void handleTogglePin(project)}
-          onReorder={(projectIds) => void handleReorderProjects(projectIds)}
+          onReorder={(projectIds, pin) =>
+            handleReorderProjects(projectIds, pin)
+          }
           onDeleteForever={(project) =>
             void handleDeleteProjectForever(project)
           }
@@ -27306,8 +27514,21 @@ export function App() {
   const measureKey = keymap.label('view-measure')
     ? platformShortcutLabel(keymap.label('view-measure')!)
     : null;
+  // The pick the rail and the bar's readout carry. A History row's own card
+  // names the feature it opened, so they would only repeat it, behind that
+  // card: whether the row's result is consumed (a focus) or a live body the
+  // row selected. A face or edge picked since is a pick of its own, and its
+  // verbs show.
+  const railPick =
+    calloutWithOperation &&
+    !historyFocus &&
+    !historyRowSelection &&
+    interaction.mode !== 'sketch'
+      ? calloutWithOperation
+      : null;
+  // The readout at the head of the line already names the face.
   const faceSelectedHint = [
-    'Face selected',
+    railPick ? null : 'Face selected',
     keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
   ]
     .filter(Boolean)
@@ -27863,6 +28084,8 @@ export function App() {
         activeTool={tool ?? inPlace.tool}
         availability={shownAvailability}
         onLaunchTool={launchTool}
+        pick={railPick}
+        pickSummary={commandContextLabel(commandSelection) ?? ''}
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
@@ -28102,19 +28325,6 @@ export function App() {
             header={columnHeader}
             tools={columnTools}
             footer={columnFooter}
-            selection={
-              // A History row's own card names the feature it opened, so
-              // the Selection card would only repeat it, behind that card:
-              // whether the row's result is consumed (a focus) or a live
-              // body the row selected. A face or edge picked since is a
-              // pick of its own, and its verbs show.
-              calloutWithOperation &&
-              !historyFocus &&
-              !historyRowSelection &&
-              interaction.mode !== 'sketch' ? (
-                <SelectionCard content={calloutWithOperation} />
-              ) : null
-            }
           />
         )
       }
@@ -28302,7 +28512,7 @@ export function App() {
             viewMode={modelingLocked}
             selectionCallout={calloutWithOperation}
             selectionFilterAutomatic={manualSelectionFilter === null}
-            // The Selection card names the pick and carries its verbs; the
+            // The bar names the pick and the rail carries its verbs; the
             // model keeps only the handle and its value. Where there is no
             // card (View, Tweak, a running tool) the pick keeps its name.
             pickLabel={calloutWithOperation === null}
@@ -29553,6 +29763,14 @@ export function App() {
             logOpen={activityLogOpen}
             onToggleLog={() => setActivityLogOpen((open) => !open)}
             prompt={workspacePrompt}
+            pick={
+              railPick ? (
+                <SelectionReadout
+                  label={railPick.label}
+                  detail={railPick.detail}
+                />
+              ) : null
+            }
             commandRow={
               inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar

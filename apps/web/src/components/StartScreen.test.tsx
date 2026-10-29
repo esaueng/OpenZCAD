@@ -10,7 +10,7 @@ import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
 import type { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
 import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
 
@@ -61,6 +61,12 @@ function renderStartScreen(
 ) {
   return render(<StartScreen {...startScreenProps(overrides)} />);
 }
+
+// The library keeps its view and scroll per tab; each test starts afresh.
+afterEach(() => {
+  sessionStorage.removeItem('openzcad.start.view');
+  sessionStorage.removeItem('openzcad.start.scroll');
+});
 
 describe('StartScreen properties', () => {
   it('loads details only on demand and returns focus to the card action button', async () => {
@@ -942,6 +948,23 @@ describe('StartScreen shelf filters, order and layout', () => {
       'project_r',
       'project_c'
     ]);
+  });
+
+  it('comes back to the same shelf, sort and search in this tab', () => {
+    const { unmount } = renderStartScreen({ projects });
+    fireEvent.click(screen.getByRole('tab', { name: /^Archive/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^Parts/ }));
+    fireEvent.change(screen.getByLabelText('Sort parts'), {
+      target: { value: 'name' }
+    });
+    fireEvent.change(screen.getByLabelText('Search parts'), {
+      target: { value: 'Bra' }
+    });
+    unmount();
+    renderStartScreen({ projects });
+    expect(screen.getByLabelText('Sort parts')).toHaveValue('name');
+    expect(screen.getByLabelText('Search parts')).toHaveValue('Bra');
+    expect(tileNames()).toEqual(['Bracket', 'Bracket (Recovery)']);
   });
 
   it('lets the keyboard move a card this build cannot open', () => {

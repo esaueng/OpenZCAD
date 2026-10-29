@@ -241,15 +241,14 @@ test('a face card keeps its four verbs and folds the rest behind More', async ({
   await stubApi(page, { panelLayout: MODEL_ONLY });
   await openBox(page, 'Face card verbs');
   await expect.poll(() => pickPlanarFace(page, TOP)).not.toBeNull();
-  const card = page.locator('.selection-card');
+  // Every verb is on the rail: there is no fold to open.
+  const card = page.locator('.selection-rail');
   for (const verb of ['Resize', 'Offset', 'Sketch', 'Hole']) {
     await expect(
       card.getByRole('button', { name: `Selection: ${verb}` })
     ).toBeVisible();
   }
-  await expect(card.getByRole('button', { name: 'Selection: Shell' })).toHaveCount(0);
-  await card.getByRole('button', { name: 'More selection verbs' }).click();
-  for (const verb of ['Draft', 'Thicken', 'Plane']) {
+  for (const verb of ['Shell', 'Draft', 'Thicken', 'Plane']) {
     await expect(
       card.getByRole('button', { name: `Selection: ${verb}` })
     ).toBeEnabled();
@@ -274,8 +273,7 @@ test("a body card's Solid offset takes that body", async ({ page }) => {
     .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Block/ })
     .click();
-  const card = page.locator('.selection-card');
-  await card.getByRole('button', { name: 'More selection verbs' }).click();
+  const card = page.locator('.selection-rail');
   await card.getByRole('button', { name: 'Selection: Solid offset' }).click();
   const bar = page.getByRole('group', { name: 'Solid offset command' });
   // The body is in hand: no face to click first.

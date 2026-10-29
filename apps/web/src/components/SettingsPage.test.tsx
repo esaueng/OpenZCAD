@@ -506,7 +506,9 @@ describe('settings navigation', () => {
     window.localStorage.clear();
     const view = renderSettings(null, { initialSection: 'viewport' });
     expect(
-      screen.getByRole('button', { name: 'Back to workspace' })
+      screen.getByRole('button', {
+        name: 'Close settings and go back to workspace'
+      })
     ).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Apply defaults to current view' })
@@ -515,7 +517,9 @@ describe('settings navigation', () => {
 
     renderSettings(null, { initialSection: 'viewport', workspaceOpen: false });
     expect(
-      screen.getByRole('button', { name: 'Back to projects' })
+      screen.getByRole('button', {
+        name: 'Close settings and go back to projects'
+      })
     ).toBeVisible();
     // No project is open, so there is no view to apply the defaults to.
     expect(

@@ -516,26 +516,6 @@
   border-color: var(--hud-warning);
 }
 
-/* Dimension-line variant: a light pill centred on the radius callout line,
-   styled like a drawing annotation rather than a dark tooltip. */
-.handle-value-chip[data-variant='dimension'] {
-  color: #1c2026;
-  background: rgba(250, 252, 255, 0.97);
-  border: 1.5px solid var(--color-preselect);
-  border-radius: var(--radius-md);
-  font-weight: 600;
-  transform: translate(4px, -50%);
-}
-
-.handle-value-chip[data-variant='dimension']:hover {
-  background: #ffffff;
-}
-
-.handle-value-chip[data-variant='dimension'] small {
-  font-size: 0.78em;
-  vertical-align: 0.08em;
-}
-
 .handle-dimension-prefix {
   padding: 0;
   color: inherit;
@@ -551,9 +531,9 @@
   color: var(--color-preselect);
 }
 
-/* The periwinkle reads 2.6:1 on the white line and dimension pills; a deeper
-   blue carries the cue there. */
-.handle-value-chip:is([data-variant='line'], [data-variant='dimension'])
+/* The periwinkle reads 2.6:1 on the white line pill; a deeper blue carries
+   the cue there. */
+.handle-value-chip[data-variant='line']
   .handle-dimension-prefix:is(:hover, :focus-visible) {
   color: #1c64c2;
 }
@@ -566,7 +546,7 @@
   border-radius: 2px;
 }
 
-/* "Radius" name tag sitting flush against the dimension value pill. */
+/* Name tag (Diameter/Radius, Total/Offset) flush against the value pill. */
 .handle-label-chip {
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);

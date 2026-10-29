@@ -50,7 +50,7 @@ async function armedBox(page: Page) {
   const canvas = page.locator('.viewer-host canvas');
   await selectFace(canvas, { x: 0, y: -1, z: 0 });
   await page
-    .locator('.selection-card')
+    .locator('.selection-rail')
     .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   const card = page.getByRole('region', { name: 'Offset Face operation' });
@@ -59,18 +59,21 @@ async function armedBox(page: Page) {
   return { canvas, card };
 }
 
-/** Records the card's visible text on every frame from now on. */
-async function sampleCard(page: Page) {
-  await page.evaluate(() => {
+/**
+ * Records the visible text of the pick's rail (or, given its selector, the
+ * bar's readout of the pick) on every frame from now on.
+ */
+async function sampleCard(page: Page, selector = '.selection-rail') {
+  await page.evaluate((selector) => {
     const frames: string[] = [];
     window.__cardFrames = frames;
     const sample = () => {
-      const card = document.querySelector<HTMLElement>('.selection-card');
+      const card = document.querySelector<HTMLElement>(selector);
       frames.push(card ? card.innerText.replace(/\s+/g, ' ') : '');
       requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
-  });
+  }, selector);
 }
 
 const frames = (page: Page) => page.evaluate(() => window.__cardFrames ?? []);
@@ -113,9 +116,11 @@ test('a typed offset keeps naming the face while its exact preview is up', async
   page
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
-  const { card } = await armedBox(page);
-  await expect(card).toContainText('Box 1 · Front face');
-  await sampleCard(page);
+  await armedBox(page);
+  await expect(page.locator('.selection-readout')).toContainText(
+    'Box 1 · Front face'
+  );
+  await sampleCard(page, '.selection-readout');
   await page.getByTestId('direct-manipulation-value').click();
   // The box side reads its whole span (Total, 18 mm deep): 21 is a 3 mm pull.
   const keypad = page.getByRole('dialog', { name: 'Total value' });

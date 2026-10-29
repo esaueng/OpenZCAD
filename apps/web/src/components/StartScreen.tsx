@@ -10,6 +10,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
+import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useTileReorder } from '../hooks/useTileReorder';
 import {
   Archive,
@@ -64,6 +65,7 @@ import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
+import { PageTopBar } from './PageTopBar';
 import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
@@ -126,8 +128,14 @@ interface StartScreenProps {
   onDismissSyncRun(): void;
   onMoveToShelf(project: ProjectSummary, status: ProjectStatus): void;
   onTogglePin(project: ProjectSummary): void;
-  /** The shelf's projects in their new order, front to back. */
-  onReorder(projectIds: string[]): void;
+  /**
+   * The shelf's projects in their new order, front to back, and the part a
+   * drag took into or out of the pinned group, if any.
+   */
+  onReorder(
+    projectIds: string[],
+    pin?: { projectId: string; pinned: boolean }
+  ): void | Promise<void>;
   /** Irreversible: destroys the project outright. */
   onDeleteForever(project: ProjectSummary): void;
   onEmptyTrash(projects: ProjectSummary[]): void;
@@ -177,6 +185,69 @@ function writeShelfLayout(layout: ShelfLayout) {
     globalThis.localStorage?.setItem(SHELF_LAYOUT_STORAGE_KEY, layout);
   } catch {
     // Private windows and blocked storage keep the choice for this visit.
+  }
+}
+
+const LIBRARY_VIEW_KEY = 'openzcad.start.view';
+
+interface LibraryView {
+  shelf: ProjectStatus;
+  filter: ShelfFilter;
+  sort: ShelfSort;
+  query: string;
+}
+
+/**
+ * The shelf, filter, sort and search this tab last showed, so a reload (or a
+ * trip into a part and back) returns to the same view, and its scroll
+ * position with it. Per tab: a new tab starts on Parts. Anything unreadable
+ * falls back to the defaults.
+ */
+function readLibraryView(): LibraryView {
+  const view: LibraryView = {
+    shelf: 'active',
+    filter: 'all',
+    sort: 'custom',
+    query: ''
+  };
+  try {
+    const stored = JSON.parse(
+      globalThis.sessionStorage?.getItem(LIBRARY_VIEW_KEY) ?? 'null'
+    ) as Partial<Record<keyof LibraryView, unknown>> | null;
+    if (!stored) {
+      return view;
+    }
+    if (
+      stored.shelf === 'active' ||
+      stored.shelf === 'archived' ||
+      stored.shelf === 'deleted'
+    ) {
+      view.shelf = stored.shelf;
+    }
+    if (
+      stored.filter === 'pinned' ||
+      stored.filter === 'attention' ||
+      stored.filter === 'local'
+    ) {
+      view.filter = stored.filter;
+    }
+    if (stored.sort === 'edited' || stored.sort === 'name') {
+      view.sort = stored.sort;
+    }
+    if (typeof stored.query === 'string') {
+      view.query = stored.query;
+    }
+  } catch {
+    // An unreadable store starts on the default view.
+  }
+  return view;
+}
+
+function writeLibraryView(view: LibraryView) {
+  try {
+    globalThis.sessionStorage?.setItem(LIBRARY_VIEW_KEY, JSON.stringify(view));
+  } catch {
+    // Forgetting the view is the whole failure mode.
   }
 }
 
@@ -245,6 +316,8 @@ const SHELVES: ReadonlyArray<{
 ];
 
 /** The tile's actions button, which a closing menu hands focus back to. */
+const LIBRARY_SCROLL_KEY = 'openzcad.start.scroll';
+const LIBRARY_SCROLLERS = ['.start-body'] as const;
 const REORDER_KEYS = 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown';
 
 function tileMenuOpener(tile: HTMLElement | undefined) {
@@ -329,10 +402,14 @@ export function StartScreen({
   const settingsKey = useKeymap().label('app-settings');
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
-  const [query, setQuery] = useState('');
-  const [shelf, setShelf] = useState<ProjectStatus>('active');
-  const [filter, setFilter] = useState<ShelfFilter>('all');
-  const [sort, setSort] = useState<ShelfSort>('custom');
+  const [initialView] = useState(readLibraryView);
+  const [query, setQuery] = useState(initialView.query);
+  const [shelf, setShelf] = useState<ProjectStatus>(initialView.shelf);
+  const [filter, setFilter] = useState<ShelfFilter>(initialView.filter);
+  const [sort, setSort] = useState<ShelfSort>(initialView.sort);
+  useEffect(() => {
+    writeLibraryView({ shelf, filter, sort, query });
+  }, [shelf, filter, sort, query]);
   const [layout, setLayout] = useState<ShelfLayout>(readShelfLayout);
   const [previousLayout] = useState(readLibraryLayout);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -347,6 +424,15 @@ export function StartScreen({
   const screenRef = useRef<HTMLDivElement | null>(null);
   // Opening a part crossfades into the workspace instead of cutting to it.
   useDissolveOnUnmount(screenRef, START_SCREEN_DISSOLVE_MS);
+  // A reload, or a trip to a part and back, returns to the same place in the
+  // library. The page shell scrolls on narrow screens, the body on wide ones.
+  useScrollMemory(
+    screenRef,
+    LIBRARY_SCROLL_KEY,
+    LIBRARY_SCROLLERS,
+    [shelf, filter, query, sort, layout].join('|'),
+    !loading
+  );
 
   // The server measures the trimmed name, so the form has to agree exactly or
   // it would block names the API accepts (or vice versa).
@@ -559,11 +645,20 @@ export function StartScreen({
     ids: shelfProjects.map((project) => project.projectId),
     enabled: canReorder,
     tileRefs,
-    // Pinned parts head the shelf as their own group, so a drag stays in it.
-    canSwap: (dragged, target) =>
-      pinnedIds.has(dragged) === pinnedIds.has(target),
-    onCommit: onReorder
+    // Pinned parts head the shelf as their own group: dragging a part into
+    // it pins the part, and dragging one out unpins it.
+    groupOf: (id) => (pinnedIds.has(id) ? 'pinned' : 'parts'),
+    onCommit: (ids, moved) =>
+      onReorder(
+        ids,
+        moved && { projectId: moved.id, pinned: moved.group === 'pinned' }
+      )
   });
+  /** Pinned as stored, or as a drag would leave it. */
+  function shownPinned(project: ProjectSummary): boolean {
+    const group = canReorder ? reorder.moved.get(project.projectId) : undefined;
+    return group ? group === 'pinned' : projectOrganization(project).pinned;
+  }
 
   function moveProject(projectId: string, toIndex: number) {
     const from = shelfProjects.findIndex(
@@ -571,7 +666,7 @@ export function StartScreen({
     );
     const reordered = moveItem(shelfProjects, from, toIndex);
     if (reordered !== shelfProjects) {
-      onReorder(reordered.map((project) => project.projectId));
+      void onReorder(reordered.map((project) => project.projectId));
     }
   }
 
@@ -826,6 +921,9 @@ export function StartScreen({
     );
 
     const dragging = reorder.draggingId === project.projectId;
+    // As the shelf shows it: a drop into or out of Pinned counts before its
+    // save lands, so the pin button never offers the opposite action.
+    const pinnedNow = shownPinned(project);
     return (
       <div
         key={project.projectId}
@@ -840,7 +938,7 @@ export function StartScreen({
         className={[
           'start-tile',
           'start-tile-project',
-          organization.pinned ? 'is-pinned' : '',
+          pinnedNow ? 'is-pinned' : '',
           recoveryOf !== null ? 'is-recovery' : '',
           canReorder ? 'is-reorderable' : '',
           dragging ? 'is-dragging' : ''
@@ -892,13 +990,11 @@ export function StartScreen({
             <button
               type="button"
               className="start-tile-action start-tile-pin"
-              aria-pressed={organization.pinned}
+              aria-pressed={pinnedNow}
               aria-label={
-                organization.pinned
-                  ? `Unpin ${project.name}`
-                  : `Pin ${project.name}`
+                pinnedNow ? `Unpin ${project.name}` : `Pin ${project.name}`
               }
-              title={organization.pinned ? 'Unpin' : 'Pin to the front'}
+              title={pinnedNow ? 'Unpin' : 'Pin to the front'}
               disabled={busy}
               onClick={() => onTogglePin(project)}
             >
@@ -906,7 +1002,7 @@ export function StartScreen({
                   slashed pin there read as "not pinned". */}
               <Pin
                 size={12}
-                fill={organization.pinned ? 'currentColor' : 'none'}
+                fill={pinnedNow ? 'currentColor' : 'none'}
                 aria-hidden="true"
               />
             </button>
@@ -1169,25 +1265,33 @@ export function StartScreen({
           (dragPositions.get(b.projectId) ?? 0)
       )
     : matchingProjects;
-  const pinnedProjects = orderedProjects.filter(
+  // Grouped by the stored flags, so a drag that empties a group keeps its
+  // grid on screen to drop back into.
+  const storedPinned = matchingProjects.filter(
     (project) => projectOrganization(project).pinned
-  );
+  ).length;
   const shelfGroups: Array<{
     label: string | null;
+    group?: 'pinned' | 'parts';
     projects: ProjectSummary[];
   }> =
     shelf === 'active' &&
     activeFilter === 'all' &&
     !search &&
-    pinnedProjects.length > 0 &&
-    pinnedProjects.length < matchingProjects.length
+    storedPinned > 0 &&
+    // With every part pinned the Parts group stays, empty, while the shelf
+    // can be reordered: it is where a card is dragged to unpin it.
+    (storedPinned < matchingProjects.length || canReorder)
       ? [
-          { label: 'Pinned', projects: pinnedProjects },
+          {
+            label: 'Pinned',
+            group: 'pinned',
+            projects: orderedProjects.filter(shownPinned)
+          },
           {
             label: 'Parts',
-            projects: orderedProjects.filter(
-              (project) => !projectOrganization(project).pinned
-            )
+            group: 'parts',
+            projects: orderedProjects.filter((project) => !shownPinned(project))
           }
         ]
       : [{ label: null, projects: orderedProjects }];
@@ -1228,10 +1332,10 @@ export function StartScreen({
     footerPositions
   ]);
 
+  // Matches the loaded shelf: an all-pinned shelf still heads its cards
+  // with Pinned, and its empty Parts group shows only mid-drag.
   const loadingGroups =
-    previousLayout &&
-    previousLayout.pinned > 0 &&
-    previousLayout.pinned < previousLayout.all
+    previousLayout && previousLayout.pinned > 0
       ? [
           { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
           {
@@ -1239,7 +1343,7 @@ export function StartScreen({
             count: previousLayout.all - previousLayout.pinned,
             offset: previousLayout.pinned
           }
-        ]
+        ].filter((group) => group.count > 0)
       : [
           {
             label: null,
@@ -1399,35 +1503,181 @@ export function StartScreen({
       ref={screenRef}
       className={fresh ? 'start-screen is-fresh' : 'start-screen'}
     >
-      <header className="start-header">
-        <div className="start-brand">
-          <BrandMark />
-          <h1 className="start-header-name">OpenZCAD</h1>
-          <span className="start-beta">beta</span>
-        </div>
-        {/* Import sits with Settings as a header action: beside the launch
-            card it competed with Create project and pushed the shelf down. */}
-        <div className="start-header-actions">
-          {onImportProject && (
-            <ProjectImportButton
-              onImport={onImportProject}
-              disabled={busy}
-              className="icon-button start-import"
-              title="Import project…"
-            />
-          )}
-          <button
-            className="start-settings-button icon-button"
-            type="button"
-            aria-label="Open settings"
-            title={labelWithKey('Settings', settingsKey)}
-            onClick={onOpenSettings}
-          >
-            <Settings size={16} aria-hidden="true" />
-          </button>
-        </div>
-        <span className="start-tagline">Parametric CAD in the browser</span>
-      </header>
+      <PageTopBar
+        className="start-header"
+        title="Parts"
+        center={
+          (loading || userProjects.length > 0) && (
+            <div className="start-search">
+              <Search size={13} aria-hidden="true" />
+              <input
+                value={query}
+                type="text"
+                aria-label="Search parts"
+                placeholder="Search parts…"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && query) {
+                    // Escape belongs to the field while it has a query;
+                    // swallowing it stops the app's Escape ladder from also
+                    // reacting to a keystroke the user aimed here.
+                    event.stopPropagation();
+                    setQuery('');
+                  }
+                }}
+              />
+              {query && (
+                <button
+                  type="button"
+                  className="start-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => setQuery('')}
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )
+        }
+        actionsLabel="Library actions"
+        actions={
+          <>
+            {/* Where the parts are kept, said once: one sentence, its one action,
+                and a hairline of progress. A save-all run takes the sentence over
+                while it is on screen, and the status line speaks only with news
+                the sentence does not already carry. */}
+            <aside className="start-cloud" aria-label="Cloud sync">
+              {onReloadForUpdate || onReloadForLoadFailure ? (
+                // Module failures can stay cached until navigation. This action
+                // outlives the toast, whether or not an update was confirmed.
+                <span
+                  className={`start-update ${onReloadForUpdate ? 'is-update' : 'is-failure'}`}
+                  role="alert"
+                >
+                  <span className="start-update-dot" aria-hidden="true" />
+                  <span
+                    className="start-update-text"
+                    // The bar clips a long sentence; the tooltip keeps it whole.
+                    title={onReloadForUpdate ? undefined : STALE_CHUNK_MESSAGE}
+                  >
+                    {onReloadForUpdate
+                      ? 'New version ready'
+                      : STALE_CHUNK_MESSAGE}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onReloadForUpdate ?? onReloadForLoadFailure}
+                  >
+                    Reload
+                    <RotateCw size={13} aria-hidden="true" />
+                  </button>
+                </span>
+              ) : null}
+              <div
+                className={`start-account is-${cloud.tone}`}
+                role="status"
+                aria-live="polite"
+              >
+                <div className="start-account-row">
+                  <cloud.Icon
+                    size={14}
+                    aria-hidden="true"
+                    className={cloud.spin ? 'spin' : undefined}
+                  />
+                  <span className="start-account-text" title={cloud.title}>
+                    {cloud.text}
+                  </span>
+                  {cloud.action && (
+                    <button
+                      type="button"
+                      className="start-account-action"
+                      aria-label={cloud.action.label}
+                      title={cloud.action.label}
+                      disabled={cloud.action.needsIdle && busy}
+                      onClick={cloud.action.run}
+                    >
+                      {cloud.action.text}
+                    </button>
+                  )}
+                  {syncTotals && !syncTotals.active && (
+                    <button
+                      type="button"
+                      className="start-account-dismiss"
+                      aria-label="Dismiss sync results"
+                      onClick={onDismissSyncRun}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+                {cloud.progress && (
+                  <div className="start-account-track" aria-hidden="true">
+                    <span
+                      className="start-account-fill"
+                      style={{ width: `${cloud.progress.saved * 100}%` }}
+                    />
+                    <span
+                      className="start-account-fill is-failed"
+                      style={{ width: `${cloud.progress.failed * 100}%` }}
+                    />
+                  </div>
+                )}
+                {/* What the one-line readout cannot hold hangs below it. */}
+                {(syncFailures.length > 0 || statusLine) && (
+                  <div className="start-account-details">
+                    {syncFailures.length > 0 && (
+                      <ul className="start-sync-failures">
+                        {syncFailures.map((entry) => (
+                          <li
+                            key={entry.projectId}
+                            className="start-sync-failure"
+                          >
+                            <span
+                              className="start-sync-failure-name"
+                              title={entry.detail ?? 'Could not be saved.'}
+                            >
+                              {entry.name}
+                            </span>
+                            <button
+                              type="button"
+                              className="start-account-action"
+                              aria-label={`Retry ${entry.name}`}
+                              title={entry.detail ?? 'Could not be saved.'}
+                              disabled={busy}
+                              onClick={() => onRetrySync(entry.projectId)}
+                            >
+                              Retry
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {statusLine && <p className="start-status">{statusLine}</p>}
+                  </div>
+                )}
+              </div>
+            </aside>
+            {onImportProject && (
+              <ProjectImportButton
+                onImport={onImportProject}
+                disabled={busy}
+                className="secondary topbar-action start-import"
+                title="Import project…"
+              />
+            )}
+            <button
+              className="secondary topbar-action settings-action start-settings-button"
+              type="button"
+              aria-label="Open settings"
+              title={labelWithKey('Settings', settingsKey)}
+              onClick={onOpenSettings}
+            >
+              <Settings size={14} aria-hidden="true" />
+              Settings
+            </button>
+          </>
+        }
+      />
 
       <section className="start-launch" aria-labelledby="start-launch-title">
         <form
@@ -1645,35 +1895,6 @@ export function StartScreen({
                     </select>
                   </label>
                 )}
-                <div className="start-search">
-                  <Search size={13} aria-hidden="true" />
-                  <input
-                    value={query}
-                    type="text"
-                    aria-label="Search parts"
-                    placeholder="Search parts…"
-                    onChange={(event) => setQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape' && query) {
-                        // Escape belongs to the field while it has a query;
-                        // swallowing it stops the app's Escape ladder from also
-                        // reacting to a keystroke the user aimed here.
-                        event.stopPropagation();
-                        setQuery('');
-                      }
-                    }}
-                  />
-                  {query && (
-                    <button
-                      type="button"
-                      className="start-search-clear"
-                      aria-label="Clear search"
-                      onClick={() => setQuery('')}
-                    >
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  )}
-                </div>
                 <div className="start-layout" role="group" aria-label="Layout">
                   <button
                     type="button"
@@ -1795,27 +2016,38 @@ export function StartScreen({
                   <span>Saves</span>
                 </div>
               )}
-              {shelfGroups.map((group) => (
-                <Fragment key={group.label ?? 'all'}>
-                  {group.label && (
-                    <h3 className="start-shelf-group">
-                      {group.label}
-                      <span>{group.projects.length}</span>
-                    </h3>
-                  )}
-                  <div
-                    className={
-                      layout === 'list'
-                        ? 'start-tile-grid is-list'
-                        : 'start-tile-grid'
-                    }
-                  >
-                    {group.projects.map((project) =>
-                      renderProjectTile(project)
+              {shelfGroups.map((group) =>
+                // An empty group only shows as a drop target mid-drag.
+                group.projects.length === 0 && !reorder.draggingId ? null : (
+                  <Fragment key={group.label ?? 'all'}>
+                    {group.label && (
+                      <h3 className="start-shelf-group">
+                        {group.label}
+                        <span>{group.projects.length}</span>
+                      </h3>
                     )}
-                  </div>
-                </Fragment>
-              ))}
+                    <div
+                      className={
+                        layout === 'list'
+                          ? 'start-tile-grid is-list'
+                          : 'start-tile-grid'
+                      }
+                      data-tile-group={canReorder ? group.group : undefined}
+                    >
+                      {group.projects.map((project) =>
+                        renderProjectTile(project)
+                      )}
+                      {group.projects.length === 0 && (
+                        <p className="start-drop-zone">
+                          {group.group === 'pinned'
+                            ? 'Drop here to pin'
+                            : 'Drop here to unpin'}
+                        </p>
+                      )}
+                    </div>
+                  </Fragment>
+                )
+              )}
             </>
           )}
 
@@ -1936,107 +2168,6 @@ export function StartScreen({
         </div>
       </section>
 
-      {/* Where the parts are kept, said once: one sentence, its one action,
-          and a hairline of progress. A save-all run takes the sentence over
-          while it is on screen, and the status line speaks only with news
-          the sentence does not already carry. */}
-      <aside className="start-cloud" aria-label="Cloud sync">
-        {onReloadForUpdate || onReloadForLoadFailure ? (
-          // Module failures can stay cached until navigation. This action
-          // outlives the toast, whether or not an update was confirmed.
-          <span
-            className={`start-update ${onReloadForUpdate ? 'is-update' : 'is-failure'}`}
-            role="alert"
-          >
-            <span className="start-update-dot" aria-hidden="true" />
-            <span className="start-update-text">
-              {onReloadForUpdate ? 'New version ready' : STALE_CHUNK_MESSAGE}
-            </span>
-            <button
-              type="button"
-              onClick={onReloadForUpdate ?? onReloadForLoadFailure}
-            >
-              Reload
-              <RotateCw size={13} aria-hidden="true" />
-            </button>
-          </span>
-        ) : null}
-        <div
-          className={`start-account is-${cloud.tone}`}
-          role="status"
-          aria-live="polite"
-        >
-          <div className="start-account-row">
-            <cloud.Icon
-              size={14}
-              aria-hidden="true"
-              className={cloud.spin ? 'spin' : undefined}
-            />
-            <span className="start-account-text" title={cloud.title}>
-              {cloud.text}
-            </span>
-            {cloud.action && (
-              <button
-                type="button"
-                className="start-account-action"
-                aria-label={cloud.action.label}
-                title={cloud.action.label}
-                disabled={cloud.action.needsIdle && busy}
-                onClick={cloud.action.run}
-              >
-                {cloud.action.text}
-              </button>
-            )}
-            {syncTotals && !syncTotals.active && (
-              <button
-                type="button"
-                className="start-account-dismiss"
-                aria-label="Dismiss sync results"
-                onClick={onDismissSyncRun}
-              >
-                <X size={12} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-          {cloud.progress && (
-            <div className="start-account-track" aria-hidden="true">
-              <span
-                className="start-account-fill"
-                style={{ width: `${cloud.progress.saved * 100}%` }}
-              />
-              <span
-                className="start-account-fill is-failed"
-                style={{ width: `${cloud.progress.failed * 100}%` }}
-              />
-            </div>
-          )}
-          {syncFailures.length > 0 && (
-            <ul className="start-sync-failures">
-              {syncFailures.map((entry) => (
-                <li key={entry.projectId} className="start-sync-failure">
-                  <span
-                    className="start-sync-failure-name"
-                    title={entry.detail ?? 'Could not be saved.'}
-                  >
-                    {entry.name}
-                  </span>
-                  <button
-                    type="button"
-                    className="start-account-action"
-                    aria-label={`Retry ${entry.name}`}
-                    title={entry.detail ?? 'Could not be saved.'}
-                    disabled={busy}
-                    onClick={() => onRetrySync(entry.projectId)}
-                  >
-                    Retry
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {statusLine && <p className="start-status">{statusLine}</p>}
-        </div>
-      </aside>
       {propertiesProject && (
         <Suspense fallback={null}>
           <ProjectPropertiesDialog

@@ -262,7 +262,7 @@ import {
   type RegionPickData
 } from './viewer/regionOverlay';
 import {
-  cylinderRadiusSnapStep,
+  snapCylinderRadius,
   radiusFromRadialDelta
 } from '../lib/interaction/cylinderRadius';
 import {
@@ -859,8 +859,8 @@ export interface ModelViewerProps {
   selectionCallout?: SelectionCalloutContent | null;
   /**
    * Whether the pick wears a label in the viewport at all. Off while the
-   * workspace's Selection card names the pick and carries its verbs, so the
-   * model shows only the handle and its value. Several picked bodies still
+   * workspace names the pick in its bar and carries its verbs on the rail,
+   * so the model shows only the handle and its value. Several picked bodies still
    * wear their pick numbers: those say which body is which, not what to do.
    */
   pickLabel?: boolean;
@@ -1947,13 +1947,6 @@ const LINE_LABEL_MIN_PX = 150;
 /** Air between the mode tag and the value pill along the line. */
 const LINE_LABEL_GAP_PX = 6;
 /**
- * The cylinder chip rides its radius line, but leaves it for the pin's side
- * once the pill would reach the pin. This is the pin's half-extent plus a
- * little air, added to the pill's own width when deciding.
- */
-const DIMENSION_CHIP_PIN_CLEARANCE_PX = 36;
-
-/**
  * Splits a chip's text into prefix, number and units so the number can carry
  * the weight and the rest can recede. The concatenated text is unchanged:
  * "Total 25.59 mm" reads back exactly as written.
@@ -2663,8 +2656,6 @@ export function ModelViewer({
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
   const offsetChipModeRef = useRef<OffsetChipMode>('offset');
-  /** Last frame's cylinder chip layout, for hysteresis at the threshold. */
-  const dimensionChipBesidePinRef = useRef(false);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
@@ -3407,10 +3398,13 @@ export function ModelViewer({
         labelRenderer.domElement,
         radius === null ? null : radius * 2
       );
-      // The workspace's Selection card names the pick outside the viewer.
-      const card =
-        labelRenderer.domElement.ownerDocument.querySelector('.selection-card');
-      if (card) setLiveDiameter(card, radius === null ? null : radius * 2);
+      // The workspace's bar names the pick outside the viewer.
+      const readout =
+        labelRenderer.domElement.ownerDocument.querySelector(
+          '.selection-readout'
+        );
+      if (readout)
+        setLiveDiameter(readout, radius === null ? null : radius * 2);
     }
 
     function restoreCylinderRadiusProxy() {
@@ -6943,42 +6937,15 @@ export function ModelViewer({
         }
         return;
       }
-      // The cylinder chip rides its radius line, but a line seen nearly
-      // end-on has no room on it: the chip would land on the pin. It then
-      // hangs beside the pin like the offset chip does.
-      let dimensionChipBesidePin = false;
+      // The cylinder label always hangs beside its pin, as the offset
+      // label does when it has no line to ride. It used to ride the radius
+      // line once that was 150 px on screen and fall back beside the pin
+      // below it, so a hole growing under the hand swapped between dark
+      // chips over the handle and white tags laid along the bore mid-drag.
+      // One layout, placed clear of the pin, keeps the grab target bare.
+      const dimensionChipBesidePin = rig?.kind === 'cylinder-radius';
       if (rig?.kind === 'cylinder-radius') {
-        const pinScreen = projectToScreen(
-          rig.group.position,
-          context.activeCamera,
-          canvasWidth(),
-          canvasHeight()
-        );
-        // The pill starts at the anchor and runs toward the pin, so it
-        // reaches the pin once the gap between them is shorter than the
-        // pill itself (last frame's width) plus the pin's half-extent.
-        const gapToPin = pinScreen
-          ? Math.hypot(pinScreen.x - screen.x, pinScreen.y - screen.y)
-          : 0;
-        // Hysteresis: the pill is wider in one layout than the other, and
-        // measuring last frame's width would otherwise flip the decision
-        // every frame right at the threshold, so the chip never settles.
-        const pillReach =
-          chipWidth +
-          DIMENSION_CHIP_PIN_CLEARANCE_PX +
-          (dimensionChipBesidePinRef.current ? 24 : 0);
-        // Zoomed in on the wall, the 45% point of the radius is off the
-        // canvas while the pin is still in view: the value follows the pin.
-        const anchorOffCanvas =
-          screen.x < 0 ||
-          screen.y < 0 ||
-          screen.x > canvasWidth() ||
-          screen.y > canvasHeight();
-        if (pinScreen && (gapToPin < pillReach || anchorOffCanvas)) {
-          dimensionChipBesidePin = true;
-          screen = pinScreen;
-        }
-        dimensionChipBesidePinRef.current = dimensionChipBesidePin;
+        rig.setSpanMode?.(cylinderDimensionModeRef.current);
       }
       // A rig with a dimension line lays its label along the line, rotated
       // to read with it, once the line is long enough on screen to carry
@@ -7159,13 +7126,9 @@ export function ModelViewer({
       chip.dataset.variant =
         lineAngle !== null
           ? 'line'
-          : rig?.kind === 'cylinder-radius'
-            ? dimensionChipBesidePin
-              ? 'pin'
-              : 'dimension'
-            : rig?.kind === 'offset-face'
-              ? 'pin'
-              : 'default';
+          : rig?.kind === 'offset-face' || dimensionChipBesidePin
+            ? 'pin'
+            : 'default';
       // A chip at its starting value, with no hand on it, is a tap target
       // for exact entry and nothing more: it recedes until something moves.
       const engaged =
@@ -7251,11 +7214,7 @@ export function ModelViewer({
         );
         const offsetSpan =
           offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
-        if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {
-          radiusLabelChip.textContent = tagText ?? '';
-          // Same anchor; CSS shifts it to sit flush against the value pill.
-          place(radiusLabelChip, screen.x, screen.y);
-        } else if (
+        if (
           rig?.kind === 'cylinder-radius' ||
           (rig?.kind === 'offset-face' &&
             offsetSpan !== null &&
@@ -7270,7 +7229,7 @@ export function ModelViewer({
               : offsetChipModeRef.current === 'total'
                 ? 'Total ▾'
                 : 'Offset ▾';
-          if (rig.kind === 'offset-face' && pinScreenAt) {
+          if (pinScreenAt) {
             // The pair reads tag then value and stays clear of the pin: on
             // the pin's right it starts just past the pin, on its left it
             // ends there. Centred on the anchor instead, the tag reached
@@ -8922,10 +8881,13 @@ export function ModelViewer({
             renderer.domElement.style.cursor = 'grabbing';
             return;
           }
-          const snap = cylinderRadiusSnapStep(
-            1 / cylinderRadiusDrag.pixelsPerUnit
-          );
-          const snapped = event.shiftKey ? raw : Math.round(raw / snap) * snap;
+          const snapped = event.shiftKey
+            ? raw
+            : snapCylinderRadius(
+                raw,
+                1 / cylinderRadiusDrag.pixelsPerUnit,
+                cylinderDimensionModeRef.current
+              );
           const value = radiusFromRadialDelta(
             cylinderRadiusDrag.originalRadius,
             snapped - cylinderRadiusDrag.originalRadius

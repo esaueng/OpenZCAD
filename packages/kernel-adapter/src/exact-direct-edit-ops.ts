@@ -459,20 +459,39 @@ export function resizeThroughHole(
     geometry.axialLength * 1e-5,
     geometry.radius * 1e-5
   );
-  const coaxialRadii = coaxialCylinderRadii(
-    kernel,
-    output,
-    geometry.axisStart,
-    axis,
-    axisTolerance
-  );
-  const atRadius = (candidate: number): boolean =>
-    coaxialRadii.some(
-      (measured) => Math.abs(measured - candidate) <= radiusTolerance
+  const radiiOf = (candidate: number) =>
+    coaxialCylinderRadii(
+      kernel,
+      candidate,
+      geometry.axisStart,
+      axis,
+      axisTolerance
     );
-  if (!atRadius(radius)) {
+  const hasRadius = (radii: number[], candidate: number): boolean =>
+    radii.some((measured) => Math.abs(measured - candidate) <= radiusTolerance);
+  let coaxialRadii = radiiOf(output);
+  // The annulus fuse meets the bore wall exactly, and on some bodies (the
+  // demo flange's patterned bolt holes) Remus answers that coincident fuse
+  // with the untouched body, so every shrink was refused. The kernel's own
+  // cylindrical-face resize narrows the wall in place; take it only when the
+  // boolean demonstrably kept the old bore, and hold it to the same gates.
+  if (
+    radius < geometry.radius &&
+    !hasRadius(coaxialRadii, radius) &&
+    hasRadius(coaxialRadii, geometry.radius)
+  ) {
+    const resized = kernel.resizeCylindricalFace(solid, face, radius);
+    if (kernel.validateSolidRelaxed(resized) === 0) {
+      const resizedRadii = radiiOf(resized);
+      if (hasRadius(resizedRadii, radius)) {
+        output = resized;
+        coaxialRadii = resizedRadii;
+      }
+    }
+  }
+  if (!hasRadius(coaxialRadii, radius)) {
     throw new Error(
-      atRadius(geometry.radius)
+      hasRadius(coaxialRadii, geometry.radius)
         ? `The hole kept its original diameter instead of resizing to Ø${diameter}.`
         : `The hole could not be resized to Ø${diameter} exactly; its wall would become an approximation.`
     );

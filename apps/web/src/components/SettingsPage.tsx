@@ -19,7 +19,6 @@ import {
 import {
   Bot,
   ChevronDown,
-  ChevronLeft,
   CloudOff,
   Cpu,
   Database,
@@ -38,6 +37,7 @@ import {
   RefreshCcw,
   Search,
   SearchX,
+  Settings,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -59,6 +59,7 @@ import { countLabel } from '../lib/toasts';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
+import { PageTopBar } from './PageTopBar';
 import { ExternalAnchor } from './ExternalAnchor';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
@@ -86,7 +87,6 @@ import { KeymapEditor } from './KeymapEditor';
 import { RelationGlyphFilter } from './RelationGlyphFilter';
 import { resolveKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { BrandMark } from './BrandMark';
 import {
   Group,
   Meter,
@@ -899,34 +899,12 @@ export function SettingsPage({
       className={`settings-page density-${settings.appearance.density}`}
       data-reduced-motion={settings.appearance.reducedMotion ? 'true' : 'false'}
     >
-      <header className="settings-topbar">
-        <button
-          ref={brandRef}
-          className="brand"
-          type="button"
-          onClick={onClose}
-        >
-          <BrandMark compact />
-          OpenZCAD <span className="beta-tag">Beta</span>
-        </button>
-        <h1 className="settings-topbar-title">Settings</h1>
-        <span className="settings-save-message" aria-live="polite">
-          {message}
-        </span>
-        <button
-          className="settings-back-action"
-          type="button"
-          aria-label={backLabel}
-          title={backLabel}
-          onClick={onClose}
-        >
-          <ChevronLeft size={14} aria-hidden="true" />
-          Back
-        </button>
-      </header>
-
-      <div className="settings-layout">
-        <aside className="settings-nav" aria-label="Settings sections">
+      <PageTopBar
+        className="settings-topbar"
+        title="Settings"
+        brandRef={brandRef}
+        onBrand={onClose}
+        center={
           <label className="settings-search">
             <Search size={14} aria-hidden="true" />
             <input
@@ -945,6 +923,31 @@ export function SettingsPage({
               }}
             />
           </label>
+        }
+        actionsLabel="Settings actions"
+        actions={
+          <>
+            <span className="settings-save-message" aria-live="polite">
+              {message}
+            </span>
+            {/* The button that opened Settings, in the same place, pressed:
+                pressing it again goes back. */}
+            <button
+              className="secondary topbar-action settings-action settings-close is-active"
+              type="button"
+              aria-label={`Close settings and go ${backLabel.toLowerCase()}`}
+              title={`${backLabel} (Esc)`}
+              onClick={onClose}
+            >
+              <Settings size={14} aria-hidden="true" />
+              Settings
+            </button>
+          </>
+        }
+      />
+
+      <div className="settings-layout">
+        <aside className="settings-nav" aria-label="Settings sections">
           {/* The narrow layout has no room for the field, so while a filter
               is narrowing the sections it shows this way out of it instead;
               without it a filter typed in a wider window stranded the rail on

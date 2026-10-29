@@ -14,21 +14,18 @@ import {
 import { activeKeymap, toolCommandId } from './keymap';
 
 /**
- * The one surface that answers "what did I pick, and what can I do with it":
- * a compact chip anchored to the pick in the viewport. It names the entity,
- * gives its key measurement, and offers the two or three verbs that act on
- * that kind of pick. It replaced three surfaces that each said part of this
- * — a name-only viewport label, a bottom-lane chip with the measurement,
- * and an inspector fallback that only said nothing could be edited.
+ * What answers "what did I pick, and what can I do with it": the pick's
+ * name and key measurement, read at the head of the bar's guidance line,
+ * and the verbs that act on that kind of pick, which take over the verb
+ * rail while it is picked (components/SelectionRail).
  *
  * A pick that arms an operation (a face's offset or resize, an edge's
- * fillet) also carries that operation here: its phase, its refusal and the
- * way out of it. That used to be a second chip at the top of the column,
- * one more surface lit for the same pick (design review F11).
+ * fillet) also carries that operation: its phase on the rail, its refusal
+ * in the notice lane (design review F11).
  *
- * This module chooses what the chip says; `selectionCalloutView` builds it
- * (it is a CSS2D label the viewer positions every frame), so the markup is
- * testable without a WebGL context and stays out of the entry chunk.
+ * This module chooses what is said; `selectionCalloutView` builds the
+ * viewport's own name label where a pick has no rail (it is a CSS2D label
+ * the viewer positions every frame).
  */
 
 /**
@@ -166,13 +163,6 @@ export interface SelectionCalloutVerbInput {
   availability: ToolAvailability;
 }
 
-/**
- * The verbs the card shows as buttons: enough to act on the pick without
- * turning it into a toolbar. The rest of the pick's verbs (U09 §5) wait
- * behind its More disclosure, in the same order.
- */
-export const MAX_SELECTION_VERBS = 4;
-
 /** Shorter names for actions whose tool-card label repeats the pick. */
 const ACTION_LABELS: Partial<Record<SelectionActionId, string>> = {
   'resize-body': 'Resize',
@@ -243,8 +233,7 @@ function edgeVerb(
  * several faces (a box sweep) Shell and Draft; edges Fillet, Chamfer and
  * Axis; a body Move, Rotate, Scale, Mirror, Split, Pattern and Solid
  * offset; several bodies the booleans and Move; a sketch region Extrude,
- * Revolve, Sweep and Loft. The card shows the first
- * {@link MAX_SELECTION_VERBS} and keeps the rest behind More.
+ * Revolve, Sweep and Loft. The verb rail shows them all, in this order.
  */
 export function selectionCalloutVerbs(
   input: SelectionCalloutVerbInput

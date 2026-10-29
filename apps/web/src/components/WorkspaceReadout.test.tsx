@@ -39,7 +39,10 @@ describe('WorkspaceReadout', () => {
     // Drawn for sighted users only: the summary already speaks the prompt.
     const hint = container.querySelector('.workspace-hint');
     expect(hint).toHaveTextContent('Click a body, face, or edge');
-    expect(hint).toHaveAttribute('aria-hidden', 'true');
+    expect(hint?.querySelector('.workspace-hint-text')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
     // The lane stacks the guidance over the bar the host hands in.
     const bar = screen.getByRole('combobox', { name: 'Search commands' });
     expect(hint?.parentElement).toBe(
@@ -58,6 +61,37 @@ describe('WorkspaceReadout', () => {
       />
     );
     expect(container.querySelector('.workspace-hint')).toBeNull();
+  });
+
+  it('leads the guidance with the pick, which outlasts a live message', () => {
+    const pick = <span className="selection-readout">Bracket · Top face</span>;
+    const { container, rerender } = render(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+        pick={pick}
+      />
+    );
+    const hint = container.querySelector('.workspace-hint');
+    expect(hint?.firstElementChild).toHaveClass('selection-readout');
+    expect(hint).toHaveTextContent('Click a body, face, or edge');
+    rerender(
+      <WorkspaceReadout
+        status="Fillet added"
+        statusAt={Date.now()}
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+        pick={pick}
+      />
+    );
+    const shown = container.querySelector('.workspace-hint');
+    expect(shown).toHaveTextContent('Bracket · Top face');
+    expect(shown).not.toHaveTextContent('Click a body, face, or edge');
   });
 
   it('shows the live status as a toast that opens the activity log', async () => {

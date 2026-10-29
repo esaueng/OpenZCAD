@@ -4,7 +4,6 @@ import { LIVE_DIAMETER_ATTRIBUTE } from './liveLabels';
 import {
   editFaceVerb,
   faceDetailsVerb,
-  MAX_SELECTION_VERBS,
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutOperation
@@ -230,9 +229,9 @@ describe('selectionCalloutVerbs', () => {
     ).toEqual(['tool:extrude']);
   });
 
-  it('keeps the verbs a primitive face had before More', () => {
-    // The card's buttons are the first MAX_SELECTION_VERBS: the four the
-    // card always showed, so the extra tools never push one behind More.
+  it('leads a primitive face with its own edits', () => {
+    // The rail reads top down: the face's own edits come before the tools
+    // that take it as a start.
     expect(
       selectionCalloutVerbs({
         kind: 'face',
@@ -240,7 +239,7 @@ describe('selectionCalloutVerbs', () => {
         resizeBody: true,
         availability: READY
       })
-        .slice(0, MAX_SELECTION_VERBS)
+        .slice(0, 4)
         .map((verb) => verb.label)
     ).toEqual(['Resize', 'Offset', 'Sketch', 'Hole']);
   });
