@@ -82,9 +82,9 @@ describe('keycaps', () => {
 });
 
 describe('settings pages', () => {
-  it('centres every page in one frame, so each starts at the same left edge', () => {
+  it('starts every page at one left edge, beside the sections', () => {
     const css = sheet('settings.css');
-    expect(rule(css, '.settings-section')).toMatch(/margin:\s*0 auto/);
+    expect(rule(css, '.settings-section')).toMatch(/margin:\s*0;/);
     // A wide page used to centre itself at its own width.
     expect(css).not.toMatch(/\.settings-section\.settings-section-wide\s*{/);
     expect(rule(css, '.settings-content')).toMatch(

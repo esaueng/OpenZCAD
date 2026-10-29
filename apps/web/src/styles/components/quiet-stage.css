@@ -564,7 +564,8 @@
    placeholder alone is some 290px. The badge is a hint, not a control; ⌘K
    still works without it. */
 @container (max-width: 359px) {
-  .command-bar > kbd {
+  .command-bar > kbd,
+  .command-bar-stream-keys > kbd {
     display: none;
   }
 }
@@ -831,6 +832,55 @@
   border: 0;
 }
 
+/* The conversation's end of the bar: attach and the Enter key take the
+   search key's place while the stream stands on the bar. While the command
+   list stands there instead, the bar is search again. */
+.command-bar-stream-keys {
+  display: none;
+}
+
+.workspace.with-assistant
+  .command-bar:not(.listing)
+  > .command-bar-stream-keys {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workspace.with-assistant .command-bar:not(.listing) > kbd {
+  display: none;
+}
+
+.command-bar-stream-keys > kbd {
+  background: var(--color-surface-hover);
+  border: 0;
+}
+
+.command-bar-attach {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.command-bar-attach:hover:not(:disabled),
+.command-bar-attach:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.command-bar-attach:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
 /* The list, standing on the bar where the conversation also stands. */
 .command-bar-float {
   position: absolute;
@@ -1018,8 +1068,8 @@
   color: transparent;
 }
 
-/* The assistant stream stands on the bar where the hint would be, and its
-   foot line reads there; the hint would sit on top of it. */
+/* While the assistant stream stands on the bar, the bar is its composer
+   and the hint has no place in it. */
 .workspace.with-assistant .workspace-hint {
   display: none;
 }

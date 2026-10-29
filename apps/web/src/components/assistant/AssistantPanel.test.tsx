@@ -323,6 +323,43 @@ describe('assistant model settings', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('offers the prompt line no drawing pick until its status has loaded', async () => {
+    let resolveStatus!: (response: Response) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveStatus = resolve;
+          })
+      )
+    );
+    const onActivity = vi.fn();
+    await renderPanel({ onActivity });
+    // Loading is not "unavailable", but a drawing picked now is refused.
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ unavailable: false, canAttach: false })
+    );
+    await act(async () => {
+      resolveStatus(
+        new Response(
+          JSON.stringify({
+            configured: true,
+            provider: 'test',
+            model: 'status-test',
+            reasoningEffort: 'high'
+          }),
+          { headers: { 'content-type': 'application/json' } }
+        )
+      );
+    });
+    await waitFor(() =>
+      expect(onActivity).toHaveBeenLastCalledWith(
+        expect.objectContaining({ canAttach: true })
+      )
+    );
+  });
+
   it('ignores a stale initial status request after account settings arrive', async () => {
     let resolveStatus!: (response: Response) => void;
     vi.stubGlobal(
@@ -478,7 +515,8 @@ describe('asking from the prompt line', () => {
       thinking: false,
       unread: 0,
       context: '2 selected edges',
-      unavailable: false
+      unavailable: false,
+      canAttach: false
     });
   });
 });
@@ -993,9 +1031,6 @@ describe('an assistant with no provider', () => {
   */
   it('takes no drawing it could never send', async () => {
     await renderPanel({ effectiveAssistant: unconfigured });
-    expect(
-      screen.getByRole('button', { name: 'Attach a drawing' })
-    ).toBeDisabled();
 
     const drawing = new File(['png'], 'drawing.png', { type: 'image/png' });
     let taken = true;
@@ -1262,15 +1297,23 @@ describe('the stream as a record', () => {
     ).toBeInTheDocument();
   });
 
-  it('names its foot actions by their visible words', async () => {
+  it('holds its own actions in the header, beside the model', async () => {
     await renderPanel();
-    expect(
+    const header = window.document.querySelector('.assistant-head');
+    expect(header).toHaveTextContent(/^Assistant/);
+    expect(header).toContainElement(
       screen.getByRole('button', { name: 'Hide the assistant' })
-    ).toHaveTextContent('hide');
-    const history = screen.getByRole('button', { name: 'history' });
+    );
+    // Attach belongs to the prompt line now, which carries it while the
+    // stream stands there.
+    expect(
+      screen.queryByRole('button', { name: 'Attach a drawing' })
+    ).toBeNull();
+    const history = screen.getByRole('button', { name: 'History' });
+    expect(header).toContainElement(history);
     expect(history).toHaveAttribute('aria-pressed', 'false');
     await userEvent.setup().click(history);
-    expect(screen.getByRole('button', { name: 'history' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'History' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );

@@ -39,15 +39,22 @@ const CONFIDENCE_LABEL = {
   unreadable: 'unreadable'
 } as const;
 
+/**
+ * Up to this many operations list under the summary while the proposal
+ * waits; a longer patch keeps them behind the disclosure.
+ */
+const SHORT_OPERATION_LIST = 6;
+
 function count(value: number, noun: string): string {
   return `${value} ${noun}${value === 1 ? '' : 's'}`;
 }
 
 /**
- * A proposal as a block in the stream: its state as a label, the summary,
- * what was read from a drawing, the operations behind a disclosure, and
- * three text actions. The same preview, apply and reject path as before;
- * only the chrome is gone.
+ * A proposal as a block in the stream: the summary as its title with the
+ * operation count beside it, what was read from a drawing, the operations as
+ * a short numbered list, and Apply in the selected tint beside two text
+ * actions. A decided proposal says so in a label above. The same preview,
+ * apply and reject path as before.
  */
 export function ProposalCard({
   entry,
@@ -59,7 +66,11 @@ export function ProposalCard({
   onApply,
   onReject
 }: ProposalCardProps) {
-  const [showOperations, setShowOperations] = useState(false);
+  const [showOperations, setShowOperations] = useState(
+    () =>
+      entry.status === 'open' &&
+      entry.proposal.operations.length <= SHORT_OPERATION_LIST
+  );
   const [showReadings, setShowReadings] = useState(true);
   const totals = summarizeOperations(entry.proposal.operations);
   const totalParts = [
@@ -77,6 +88,11 @@ export function ProposalCard({
   useEffect(() => {
     const was = previousStatus.current;
     previousStatus.current = entry.status;
+    if (was === 'open' && entry.status !== 'open') {
+      // A decided proposal is reference material: its list folds away as
+      // one rendered decided does.
+      setShowOperations(false);
+    }
     const card = cardRef.current;
     if (was !== 'open' || entry.status === 'open' || !card) {
       return;
@@ -99,25 +115,62 @@ export function ProposalCard({
         previewing ? ' previewing' : ''
       }`}
     >
-      <span className="assistant-card-label">
-        {entry.status === 'applied' ? (
-          <Check size={12} aria-hidden="true" />
-        ) : entry.status === 'rejected' ? (
-          <X size={12} aria-hidden="true" />
-        ) : null}
-        {entry.status === 'applied'
-          ? 'Applied'
-          : entry.status === 'rejected'
-            ? 'Rejected'
-            : 'Proposal'}
-        {previewing && (
-          <span className="assistant-live-pill">
-            <Eye size={12} aria-hidden="true" />
-            in the viewport
-          </span>
-        )}
-      </span>
-      <RichText text={entry.proposal.summary} className="assistant-card-copy" />
+      {(resolved || previewing) && (
+        <span className="assistant-card-label">
+          {entry.status === 'applied' ? (
+            <Check size={12} aria-hidden="true" />
+          ) : entry.status === 'rejected' ? (
+            <X size={12} aria-hidden="true" />
+          ) : null}
+          {entry.status === 'applied'
+            ? 'Applied'
+            : entry.status === 'rejected'
+              ? 'Rejected'
+              : null}
+          {previewing && (
+            <span className="assistant-live-pill">
+              <Eye size={12} aria-hidden="true" />
+              in the viewport
+            </span>
+          )}
+        </span>
+      )}
+      <div className="assistant-card-head">
+        <RichText
+          text={entry.proposal.summary}
+          className="assistant-card-copy assistant-card-title"
+        />
+        <button
+          type="button"
+          className="assistant-disclosure"
+          aria-expanded={showOperations}
+          onClick={() => setShowOperations((open) => !open)}
+        >
+          {count(entry.proposal.operations.length, 'operation')}
+          {totalParts.length > 0 && (
+            // The leading space reads in the accessible name; the flex gap
+            // draws the visible one.
+            <span className="assistant-op-totals">
+              {` · ${totalParts.join(' · ')}`}
+            </span>
+          )}
+          <ChevronRight
+            size={12}
+            className="disclosure-chevron"
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+      {showOperations && (
+        <ol className="assistant-operations">
+          {entry.proposal.operations.map((operation, index) => (
+            <li key={`${operation.kind}-${index}`}>
+              {describeOperation(operation)}
+            </li>
+          ))}
+        </ol>
+      )}
+
       {resolved && (
         // Once a proposal is decided, its detail is reference material rather
         // than a decision to make — the reading table stays reachable, but the
@@ -195,36 +248,6 @@ export function ProposalCard({
         </ul>
       )}
 
-      <button
-        type="button"
-        className="assistant-disclosure"
-        aria-expanded={showOperations}
-        onClick={() => setShowOperations((open) => !open)}
-      >
-        <ChevronRight
-          size={12}
-          className="disclosure-chevron"
-          aria-hidden="true"
-        />
-        {count(entry.proposal.operations.length, 'operation')}
-        {totalParts.length > 0 && (
-          // The leading space reads in the accessible name; the flex gap
-          // draws the visible one.
-          <span className="assistant-op-totals">
-            {` · ${totalParts.join(' · ')}`}
-          </span>
-        )}
-      </button>
-      {showOperations && (
-        <ol className="assistant-operations">
-          {entry.proposal.operations.map((operation, index) => (
-            <li key={`${operation.kind}-${index}`}>
-              {describeOperation(operation)}
-            </li>
-          ))}
-        </ol>
-      )}
-
       {!resolved && (
         <div className="assistant-card-actions">
           <button
@@ -261,7 +284,6 @@ export function ProposalCard({
           </button>
           <button type="button" disabled={busy} onClick={onReject}>
             {keyed && <kbd aria-hidden="true">esc</kbd>}
-            <X size={13} aria-hidden="true" />
             Reject
           </button>
         </div>

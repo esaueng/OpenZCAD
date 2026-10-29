@@ -114,9 +114,10 @@
 
 /* ── StartScreen ─────────────────────────────────────────── */
 
-/* A library shell: a fixed column on the left (identity, the launch form, the
-   shelves, the demos, the cloud card), the shelf you are looking at filling
-   the rest. Every block is a direct grid item
+/* A library shell: the workspace's floating top bar across the top (identity,
+   search, the cloud readout, Import and Settings), a floating column on the
+   left (the launch form, the shelves, the demos), the shelf you are looking
+   at filling the rest. Every block is a direct grid item
    placed by name, so the same markup re-flows for the three layouts below —
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
@@ -129,14 +130,18 @@
   /* minmax(0, …) so the body can shrink below its content's natural width:
      a grid track defaults to min-content, which on a phone let the toolbar
      hold the whole page wider than the screen. */
-  grid-template-columns: var(--start-column-w) minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns:
+    calc(var(--island-gap) + var(--start-column-w))
+    minmax(0, 1fr);
+  /* The column hugs its blocks; the demos give way first and scroll when
+     the window is too short for all of it. */
+  grid-template-rows: auto auto auto minmax(0, max-content) minmax(0, 1fr);
   grid-template-areas:
-    'header  body'
+    'header  header'
     'launch  body'
     'library body'
     'learn   body'
-    'cloud   body';
+    '.       body';
   background: var(--color-bg);
   overflow: hidden;
 }
@@ -146,17 +151,18 @@
   z-index: calc(var(--z-start-screen) + 1);
 }
 
-/* The column's surface, drawn once behind its blocks so each block can be a
-   separate grid item. */
+/* The column's island, drawn once behind its blocks so each block can be a
+   separate grid item: a grid item itself, spanning their rows, so it ends
+   where they do. On the workspace tool rail's edge, 10px under the top bar. */
 .start-screen::before {
   content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: var(--start-column-w);
+  grid-column: 1;
+  grid-row: 2 / 5;
+  margin: var(--island-gap) 0 0 var(--island-gap);
   background: var(--color-surface);
-  border-right: var(--border-thin);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
   pointer-events: none;
 }
 
@@ -165,81 +171,11 @@
   min-width: 0;
 }
 
-/* ── Column: identity ────────────────────────────────────── */
+/* ── Top bar ─────────────────────────────────────────────── */
 
+/* PageTopBar draws it (page-topbar.css); the grid only places it. */
 .start-header {
   grid-area: header;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px var(--sp-2);
-  padding: 12px 12px 10px 18px;
-}
-
-.start-tagline {
-  grid-column: 1 / -1;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-}
-
-/* Mirrors the workspace top bar's identity cluster so leaving a part and
-   arriving here reads as the same application, not a different site. */
-.start-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.start-brand > svg {
-  width: 20px;
-  height: 20px;
-  flex: none;
-  color: var(--color-accent);
-}
-
-.start-header-name {
-  margin: 0;
-  font-size: var(--fs-md);
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.01em;
-}
-
-.start-beta {
-  display: inline-flex;
-  align-items: center;
-  min-height: 16px;
-  padding: 0 5px;
-  color: var(--color-accent-hi);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.start-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.start-settings-button {
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-}
-
-/* The import is an icon button beside Settings; it gains its label only in
-   the narrow layout's header bar, which has the room the column does not. */
-.start-import > span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 /* Section labels in the column: the same mono eyebrow the workspace uses. */
@@ -261,7 +197,8 @@
   grid-area: launch;
   display: grid;
   gap: var(--sp-2);
-  padding: 0 12px 14px;
+  padding: calc(var(--island-gap) + 10px) 10px 12px
+    calc(var(--island-gap) + 10px);
 }
 
 .start-launch-form {
@@ -354,7 +291,7 @@
 
 .start-library {
   grid-area: library;
-  padding: 0 12px 14px;
+  padding: 0 10px 12px calc(var(--island-gap) + 10px);
 }
 
 /* The shelves are the column's navigation: icon, name, count. */
@@ -422,7 +359,7 @@
   align-content: start;
   gap: 2px;
   min-height: 0;
-  padding: 0 12px 18px;
+  padding: 0 10px 10px calc(var(--island-gap) + 10px);
   overflow-y: auto;
 }
 
@@ -463,18 +400,16 @@
   }
 }
 
-/* ── Column: cloud card ──────────────────────────────────── */
+/* ── Top bar: cloud readout ──────────────────────────────── */
 
-/* Where the parts are kept, closing the column, said as one sentence with at
-   most one action beside it. The icon carries the tone (saved, not saved,
-   failed) so the words can stay short; the full account is in the tooltip. */
+/* Where the parts are kept, said as one sentence with at most one action
+   beside it, in the top bar where the workspace says Saved. The icon carries
+   the tone (saved, not saved, failed) so the words can stay short; the full
+   account is in the tooltip. page-topbar.css lays it out in the island. */
 .start-cloud {
-  grid-area: cloud;
-  align-self: end;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
-  margin: 0 12px 12px;
 }
 
 .start-account {
@@ -652,7 +587,7 @@
   display: grid;
   align-content: start;
   gap: var(--sp-3);
-  padding: 18px var(--sp-4) var(--sp-4);
+  padding: var(--island-gap) var(--island-gap) var(--sp-4);
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -952,7 +887,7 @@
    stretching one tile across the whole stage. (A partial last row is the
    same either way; only a shelf shorter than one row differs.) */
 .start-tile-grid {
-  --start-tile-min: 220px;
+  --start-tile-min: 180px;
   display: grid;
   grid-template-columns: repeat(
     auto-fill,
@@ -1032,6 +967,18 @@
 /* A recovery copy reads as secondary to the part it was made from. */
 .start-tile-project.is-recovery .start-tile-name {
   color: var(--color-text-muted);
+}
+
+/* A group a drag has emptied keeps a target to drop back into. */
+.start-drop-zone {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
 }
 
 /* The preview is the tile: a pane at a fixed aspect so a row of parts lines
@@ -1453,11 +1400,6 @@
     margin-left: 0;
     width: 100%;
   }
-
-  .start-toolbar-tools .start-search {
-    flex: 1;
-    width: auto;
-  }
 }
 
 @media (max-width: 680px) {
@@ -1726,12 +1668,18 @@
 
 @media (min-width: 901px) {
   .start-screen.is-fresh {
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'header  body'
+      'header  header'
       'launch  body'
       'library body'
-      'cloud   learn';
+      '.       body'
+      '.       learn';
+  }
+
+  /* The demos left the column for the stage; it hugs the two blocks left. */
+  .start-screen.is-fresh::before {
+    grid-row: 2 / 4;
   }
 
   .start-screen.is-fresh .start-library {
@@ -1742,19 +1690,18 @@
     padding-bottom: 0;
   }
 
-  /* The shelf's own inset and the cloud card's bottom margin, so the cards
-     line up with the shelf above and the card beside them. */
+  /* The shelf's own inset, so the cards line up with the shelf above. */
   .start-screen.is-fresh .start-learn {
     gap: var(--sp-3);
-    padding: var(--sp-4) var(--sp-4) 12px;
+    padding: var(--sp-4) var(--island-gap) var(--island-gap);
     overflow: visible;
   }
 }
 
 /* ── Narrow layouts ──────────────────────────────────────── */
 
-/* One column that scrolls as a page: identity, the launch card, the shelves
-   as a tab strip, the shelf itself, the demos as cards, the cloud card. */
+/* One column that scrolls as a page: the top bar, the launch card, the
+   shelves as a tab strip, the shelf itself, the demos as cards. */
 @media (max-width: 900px) {
   .start-screen,
   .start-screen.is-fresh {
@@ -1762,54 +1709,19 @@
     /* The shelf never shrinks below its content here: the page scrolls as
        a whole, and a track that could collapse would let the shelf spill
        over the demos beneath it. */
-    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto;
+    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto;
     grid-template-areas:
       'header'
       'launch'
       'library'
       'body'
-      'learn'
-      'cloud';
+      'learn';
     overflow-x: hidden;
     overflow-y: auto;
   }
 
   .start-screen::before {
     display: none;
-  }
-
-  .start-header {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    padding: 10px var(--sp-3);
-    background: var(--color-surface);
-    border-bottom: var(--border-thin);
-  }
-
-  /* One row: brand, tagline, settings. */
-  .start-tagline {
-    grid-column: auto;
-    padding-left: var(--sp-3);
-    border-left: var(--border-thin);
-  }
-
-  .start-header-actions {
-    order: 1;
-  }
-
-  .start-import {
-    display: inline-flex;
-    gap: 6px;
-    width: auto;
-    padding: 0 10px;
-  }
-
-  .start-import > span {
-    position: static;
-    width: auto;
-    height: auto;
-    overflow: visible;
-    clip-path: none;
-    font-size: var(--fs-sm);
   }
 
   /* The launch card is one row — heading, name, units, create — so it costs
@@ -1888,11 +1800,6 @@
     padding: 0 var(--sp-3) var(--sp-3);
     overflow: visible;
   }
-
-  .start-cloud {
-    align-self: start;
-    margin: 0 var(--sp-3) var(--sp-3);
-  }
 }
 
 /* Too narrow for the heading beside the fields: it still names the card
@@ -1911,36 +1818,6 @@
 
   .start-field-name {
     grid-column: 1 / -1;
-  }
-
-  /* Back to the icon alone; clipped rather than display: none, so the label
-     still names the button. */
-  .start-import {
-    width: 28px;
-    padding: 0;
-  }
-
-  .start-import > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  .start-tagline {
-    display: none;
-  }
-
-  /* With the tagline gone the actions land in its track; keep them at the
-     end of the bar. */
-  .start-header-actions {
-    justify-self: end;
-  }
-
-  .start-search {
-    margin-left: 0;
-    width: 100%;
   }
 }
 

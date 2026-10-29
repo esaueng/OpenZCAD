@@ -35,8 +35,9 @@ export function sendAssistantPromptKey(key: AssistantPromptKey): boolean {
 }
 
 /**
- * Files pasted into the prompt line: a screenshot or a copied drawing. The
- * stream attaches them to the next ask the way a drop on it does.
+ * Files pasted into the prompt line (a screenshot or a copied drawing), or
+ * picked with its attach button. The stream attaches them to the next ask
+ * the way a drop on it does.
  */
 export const ASSISTANT_PROMPT_FILES_EVENT = 'openzcad:assistant-prompt-files';
 
@@ -44,7 +45,15 @@ export interface AssistantPromptFilesDetail {
   files: File[];
 }
 
-/** Hands pasted files to the stream; true when it took them. */
+/**
+ * The drawings the stream reads, for the prompt line's file picker. Kept
+ * beside the channel the bar hands files through, so the bar does not
+ * import the rasterizer.
+ */
+export const ACCEPTED_ATTACHMENT_TYPES =
+  'image/png,image/jpeg,image/webp,application/pdf';
+
+/** Hands pasted or picked files to the stream; true when it took them. */
 export function sendAssistantPromptFiles(files: File[]): boolean {
   const event = new CustomEvent<AssistantPromptFilesDetail>(
     ASSISTANT_PROMPT_FILES_EVENT,

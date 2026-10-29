@@ -22,8 +22,7 @@ const PDF_RENDER_SCALE = 2.4;
 const JPEG_QUALITY = 0.92;
 let pdfWorkerPortPromise: Promise<Worker> | null = null;
 
-export const ACCEPTED_ATTACHMENT_TYPES =
-  'image/png,image/jpeg,image/webp,application/pdf';
+export { ACCEPTED_ATTACHMENT_TYPES } from './promptKeys';
 
 export class AttachmentError extends Error {}
 

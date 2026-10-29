@@ -2603,6 +2603,28 @@ export function App() {
     useState(false);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  // Shelf writes (pin, reorder, shelf moves) run one at a time, each built
+  // from the rows the writes before it left, so two quick drags (or a drag
+  // right after a pin) cannot rebuild a row from a stale snapshot and undo
+  // the first change. A finished write's rows stay here until `projects`
+  // has them, and the latest `projects` is read through a ref because a
+  // queued write outlives the render that queued it.
+  const shelfWrites = useRef<Promise<unknown>>(Promise.resolve());
+  const latestProjects = useRef(projects);
+  latestProjects.current = projects;
+  const pendingOrganizations = useRef(
+    new Map<string, ProjectOrganization>()
+  );
+  useEffect(() => {
+    for (const project of projects) {
+      if (
+        pendingOrganizations.current.get(project.projectId) ===
+        project.organization
+      ) {
+        pendingOrganizations.current.delete(project.projectId);
+      }
+    }
+  }, [projects]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   /**
    * Which of the open project's save points can actually be opened. Empty
@@ -3412,7 +3434,8 @@ export function App() {
       thinking: false,
       unread: 0,
       context: null,
-      unavailable: false
+      unavailable: false,
+      canAttach: false
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -13047,33 +13070,74 @@ export function App() {
    */
   async function persistOrganization(
     projectId: string,
-    organization: ProjectOrganization
-  ): Promise<void> {
-    // Durable locally first, flagged as not yet mirrored: the listing's
-    // reconcile pushes a flagged row and adopts the account's otherwise, so
-    // the flag is what keeps a change alive across a failed mirror without
-    // letting this device overrule every other one forever.
-    await saveLocalProjectOrganization(projectId, organization, {
-      mirrorPending: true
+    update: (current: ProjectOrganization) => ProjectOrganization
+  ): Promise<ProjectOrganization> {
+    const organization = await queueShelfWrite(async () => {
+      const project = latestProjects.current.find(
+        (entry) => entry.projectId === projectId
+      );
+      const next = update(
+        pendingOrganizations.current.get(projectId) ??
+          projectOrganization(project ?? {})
+      );
+      // Durable locally first, flagged as not yet mirrored: the listing's
+      // reconcile pushes a flagged row and adopts the account's otherwise,
+      // so the flag is what keeps a change alive across a failed mirror
+      // without letting this device overrule every other one forever.
+      await saveShelfRows(new Map([[projectId, next]]));
+      return next;
     });
+    if (session) {
+      await mirrorPendingOrganization(
+        projectId,
+        organizationMirrorHost,
+        undefined,
+        organizationBackground.scopeFor(session.userId)
+      ).catch(() => undefined);
+    }
+    return organization;
+  }
+
+  /** Runs a shelf write after every one queued before it has finished. */
+  function queueShelfWrite<T>(write: () => Promise<T>): Promise<T> {
+    const run = shelfWrites.current.then(write);
+    shelfWrites.current = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Saves shelf rows locally and shows them. Called only from a queued
+   * write, so no other shelf write is in flight: a failure drops just these
+   * rows, and the rows before them are already on the shelf.
+   */
+  async function saveShelfRows(rows: Map<string, ProjectOrganization>) {
+    for (const [projectId, organization] of rows) {
+      pendingOrganizations.current.set(projectId, organization);
+    }
+    try {
+      await Promise.all(
+        [...rows].map(([projectId, organization]) =>
+          saveLocalProjectOrganization(projectId, organization, {
+            mirrorPending: true
+          })
+        )
+      );
+    } catch (error) {
+      for (const [projectId, organization] of rows) {
+        if (pendingOrganizations.current.get(projectId) === organization) {
+          pendingOrganizations.current.delete(projectId);
+        }
+      }
+      throw error;
+    }
     setProjects((current) =>
       current
-        .map((project) =>
-          project.projectId === projectId
-            ? { ...project, organization }
-            : project
-        )
+        .map((project) => {
+          const organization = rows.get(project.projectId);
+          return organization ? { ...project, organization } : project;
+        })
         .sort(compareProjectSummaries)
     );
-    if (!session) {
-      return;
-    }
-    await mirrorPendingOrganization(
-      projectId,
-      organizationMirrorHost,
-      undefined,
-      organizationBackground.scopeFor(session.userId)
-    ).catch(() => undefined);
   }
 
   async function handleMoveProjectToShelf(
@@ -13081,11 +13145,9 @@ export function App() {
     status: ProjectStatus
   ) {
     try {
-      const organization = applyOrganizationUpdate(
-        projectOrganization(project),
-        { status }
+      await persistOrganization(project.projectId, (current) =>
+        applyOrganizationUpdate(current, { status })
       );
-      await persistOrganization(project.projectId, organization);
       setStatus(
         status === 'deleted'
           ? `Moved ${project.name} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
@@ -13100,68 +13162,86 @@ export function App() {
 
   async function handleTogglePin(project: ProjectSummary) {
     try {
-      const current = projectOrganization(project);
-      await persistOrganization(
+      const { pinned } = await persistOrganization(
         project.projectId,
-        applyOrganizationUpdate(current, { pinned: !current.pinned })
+        (current) =>
+          applyOrganizationUpdate(current, { pinned: !current.pinned })
       );
       setStatus(
-        current.pinned ? `Unpinned ${project.name}.` : `Pinned ${project.name}.`
+        pinned ? `Pinned ${project.name}.` : `Unpinned ${project.name}.`
       );
     } catch (error) {
       setStatus(errorMessage(error, `Could not update ${project.name}.`));
     }
   }
 
-  async function handleReorderProjects(projectIds: string[]) {
+  /**
+   * Saves a new shelf order. A part dragged into or out of the pinned group
+   * changes its pin in the same write, so neither change can overwrite the
+   * other.
+   */
+  async function handleReorderProjects(
+    projectIds: string[],
+    pin?: { projectId: string; pinned: boolean }
+  ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
-    const organizations = new Map(
-      projects
-        .filter((project) => positions.has(project.projectId))
-        .map((project) => [
-          project.projectId,
-          {
-            ...projectOrganization(project),
-            sortOrder: positions.get(project.projectId)!
-          }
-        ])
-    );
+    let pinnedName: string | undefined;
     try {
-      await Promise.all(
-        [...organizations].map(([projectId, organization]) =>
-          saveLocalProjectOrganization(projectId, organization, {
-            mirrorPending: true
-          })
-        )
-      );
-      setProjects((current) =>
-        current
-          .map((project) => {
-            const organization = organizations.get(project.projectId);
-            return organization ? { ...project, organization } : project;
-          })
-          .sort(compareProjectSummaries)
-      );
-      if (session) {
-        const organizationScope = organizationBackground.scopeFor(
-          session.userId
+      pinnedName = await queueShelfWrite(async () => {
+        const rows = new Map(
+          latestProjects.current
+            .filter((project) => positions.has(project.projectId))
+            .map((project) => {
+              const current =
+                pendingOrganizations.current.get(project.projectId) ??
+                projectOrganization(project);
+              return [
+                project.projectId,
+                {
+                  ...(pin?.projectId === project.projectId
+                    ? applyOrganizationUpdate(current, { pinned: pin.pinned })
+                    : current),
+                  sortOrder: positions.get(project.projectId)!
+                }
+              ];
+            })
         );
-        await mirrorPendingReorder(
-          projectIds,
-          organizationMirrorHost,
-          async (ids) =>
-            (
-              await api.reorderProjects(
-                { projectIds: ids.map(toProjectId) },
-                organizationScope.signal
-              )
-            ).projects,
-          undefined,
-          organizationScope
-        ).catch(() => undefined);
-      }
+        await saveShelfRows(rows);
+        return pin
+          ? latestProjects.current.find(
+              (project) => project.projectId === pin.projectId
+            )?.name
+          : undefined;
+      });
     } catch (error) {
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
+      return;
+    }
+    if (pin && pinnedName !== undefined) {
+      setStatus(
+        pin.pinned ? `Pinned ${pinnedName}.` : `Unpinned ${pinnedName}.`
+      );
+    }
+    // Resolves once the device has the new order; the account catches up
+    // in the background, so a slow network never holds the shelf's drag
+    // preview (and its Pin/Unpin state) past the local save.
+    if (session) {
+      const organizationScope = organizationBackground.scopeFor(
+        session.userId
+      );
+      void mirrorPendingReorder(
+        projectIds,
+        organizationMirrorHost,
+        async (ids) =>
+          (
+            await api.reorderProjects(
+              { projectIds: ids.map(toProjectId) },
+              organizationScope.signal
+            )
+          ).projects,
+        undefined,
+        organizationScope
+      ).catch(() => undefined);
     }
   }
 
@@ -26575,7 +26655,9 @@ export function App() {
             void handleMoveProjectToShelf(project, shelf)
           }
           onTogglePin={(project) => void handleTogglePin(project)}
-          onReorder={(projectIds) => void handleReorderProjects(projectIds)}
+          onReorder={(projectIds, pin) =>
+            handleReorderProjects(projectIds, pin)
+          }
           onDeleteForever={(project) =>
             void handleDeleteProjectForever(project)
           }
@@ -29865,6 +29947,7 @@ export function App() {
                 }
                 searchKey={commandPaletteKey}
                 askUnavailable={assistantActivity.unavailable}
+                attachUnavailable={!assistantActivity.canAttach}
                 busy={assistantAvailable && assistantActivity.thinking}
                 unread={
                   assistantAvailable &&
