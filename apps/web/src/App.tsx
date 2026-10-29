@@ -13188,8 +13188,10 @@ export function App() {
   ) {
     try {
       const { copyLocalSaveStates } = await import('./lib/duplicateSaveStates');
+      // One import shared by many saves is loaded and hashed once.
+      const verified = new Set<string>();
       await copyLocalSaveStates(sourceProjectId, copy, (snapshot) =>
-        cacheCopySources(snapshot, loadSourceBlob, sha256Hex)
+        cacheCopySources(snapshot, loadSourceBlob, sha256Hex, verified)
       );
     } catch {
       // The copy itself is saved; its inherited saves stay records.

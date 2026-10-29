@@ -248,3 +248,22 @@ it('refuses damaged cached content even when its declared length matches', async
     cacheCopySources(source, async () => damaged, sha256Hex)
   ).rejects.toThrow('integrity check');
 });
+
+it('loads and hashes a shared import once across copies given one verified set', async () => {
+  // A duplicate prepares every inherited save state, and they usually carry
+  // the same import: without a shared set each save reloaded and rehashed it.
+  const { bytes, source } = await fixture('step');
+  await putSourceBlob(bytes);
+  const load = vi.fn(loadSourceBlob);
+  const hash = vi.fn(sha256Hex);
+  const verified = new Set<string>();
+  for (let save = 0; save < 3; save += 1) {
+    await cacheCopySources(source, load, hash, verified);
+  }
+  expect(load).toHaveBeenCalledTimes(1);
+  expect(hash).toHaveBeenCalledTimes(1);
+
+  // Without the set every call checks the bytes again, as before.
+  await cacheCopySources(source, load, hash);
+  expect(load).toHaveBeenCalledTimes(2);
+});

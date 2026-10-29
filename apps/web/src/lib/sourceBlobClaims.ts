@@ -31,13 +31,18 @@ export function importSourceChecksums(document: ProjectDocument): Set<string> {
 /**
  * Preserve rebuild bytes — and reference-image pictures — before a copy drops
  * cloud artifact identities.
+ *
+ * `verified` carries the content already checked across calls: a duplicate
+ * prepares every inherited save state, and those usually share one import,
+ * which would otherwise be reloaded and hashed once per save.
  */
 export async function cacheCopySources(
   document: ProjectDocument,
   load: (checksum: string) => Promise<Uint8Array | null>,
-  hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>
+  hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>,
+  verified: Set<string> = new Set()
 ): Promise<void> {
-  const seen = new Set<string>();
+  const seen = verified;
   for (const node of documentNodesWithHistory(document)) {
     if (
       node.kind !== 'feature' ||
@@ -63,7 +68,7 @@ export async function cacheCopySources(
       );
     seen.add(key);
   }
-  await cacheCopyPictures(document, load, hash);
+  await cacheCopyPictures(document, load, hash, verified);
 }
 
 /**
@@ -77,7 +82,8 @@ export async function cacheCopySources(
 export async function cacheCopyPictures(
   document: ProjectDocument,
   load: (checksum: string) => Promise<Uint8Array | null>,
-  hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>
+  hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>,
+  verified: Set<string> = new Set()
 ): Promise<void> {
   // One picture may be placed several times, each record with its own
   // artifact: any record that can produce the bytes will do, so a
@@ -87,7 +93,9 @@ export async function cacheCopyPictures(
     const key = `${image.source.checksumSha256}:${image.source.logicalBytes}`;
     byContent.set(key, [...(byContent.get(key) ?? []), image]);
   }
-  for (const images of byContent.values()) {
+  for (const [content, images] of byContent) {
+    const key = `picture:${content}`;
+    if (verified.has(key)) continue;
     const [first] = images as [ReferenceImage, ...ReferenceImage[]];
     const ref = first.source;
     let bytes = await load(ref.checksumSha256);
@@ -117,6 +125,7 @@ export async function cacheCopyPictures(
       throw new Error(
         `The picture for image "${first.name}" failed its integrity check. The copy was not created.`
       );
+    verified.add(key);
   }
 }
 
