@@ -1506,3 +1506,81 @@ describe('StartScreen selection and dialogs', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
+
+describe('StartScreen permanent deletion', () => {
+  it('keeps the selection when deleting forever is not carried out', () => {
+    const trashed: ProjectSummary[] = ['Lima', 'Mike'].map((name) => ({
+      projectId: toProjectId(`project_${name.toLowerCase()}`),
+      name: `${name} part`,
+      revisionCount: 1,
+      updatedAt: '2026-10-01T12:00:00.000Z',
+      organization: {
+        status: 'deleted',
+        pinned: false,
+        sortOrder: 0,
+        deletedAt: '2026-10-20T12:00:00.000Z'
+      }
+    }));
+    // A cancelled confirm: the handler is called and nothing is destroyed.
+    const onDeleteManyForever = vi.fn();
+    renderStartScreen({ projects: trashed, onDeleteManyForever });
+    fireEvent.click(screen.getByRole('tab', { name: /Trash/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Lima part' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Mike part' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete forever' }));
+    expect(onDeleteManyForever).toHaveBeenCalledWith(trashed);
+    expect(
+      screen.getByRole('toolbar', { name: '2 parts selected' })
+    ).toBeInTheDocument();
+  });
+});
+
+describe('StartScreen sample reset and folders', () => {
+  afterEach(() => localStorage.clear());
+
+  it('takes a reset sample out of any folder that still lists it', () => {
+    const demo = {
+      key: 'flange',
+      projectId: toProjectId('proj_demo_pipe_flange'),
+      name: 'Demo · Pipe Flange',
+      tagline: 'Revolve, bolt circle, chamfer',
+      revisions: ['A — one', 'B — two', 'C — three'] as [string, string, string]
+    };
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'f1',
+            name: 'Old',
+            projectIds: [demo.projectId, localProject.projectId],
+            coverProjectId: demo.projectId,
+            pinned: false,
+            createdAt: ''
+          }
+        ]
+      })
+    );
+    renderStartScreen({
+      demos: [demo],
+      projects: [
+        localProject,
+        {
+          projectId: demo.projectId,
+          name: demo.name,
+          revisionCount: 4,
+          updatedAt: '2026-10-29T12:00:00.000Z'
+        }
+      ],
+      onResetDemo: vi.fn()
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reset Pipe Flange to the original' })
+    );
+    const stored = JSON.parse(
+      localStorage.getItem('openzcad.library.folders.v1:device')!
+    ) as { folders: Array<{ projectIds: string[]; coverProjectId?: string }> };
+    expect(stored.folders[0]!.projectIds).toEqual([localProject.projectId]);
+    expect(stored.folders[0]!.coverProjectId).toBeUndefined();
+  });
+});

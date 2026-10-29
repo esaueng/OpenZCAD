@@ -67,6 +67,7 @@ import {
   createFolder,
   deleteFolder,
   folderCover,
+  forgetProjects,
   moveProjectsToFolder,
   newFolderId,
   renameFolder,
@@ -1088,7 +1089,9 @@ export function StartScreen({
 
   function deleteSelectedForever() {
     const chosen = selectedOnScreen();
-    clearSelection();
+    // The selection stays: a cancelled confirm must not cost the pick, and
+    // destroyed parts leave the screen (and so the selection) on their own.
+    setMoveMenuOpen(false);
     if (chosen.length === 0) return;
     if (onDeleteManyForever) onDeleteManyForever(chosen);
     else if (chosen.length === 1) onDeleteForever(chosen[0]!);
@@ -3036,7 +3039,14 @@ export function StartScreen({
                         aria-label={`Reset ${title} to the original`}
                         title="Reset to the original"
                         disabled={busy}
-                        onClick={() => onResetDemo(demo, opened)}
+                        onClick={() => {
+                          // A reset sample comes back under the same id; it
+                          // must not come back filed where the old one was.
+                          updateFolders((state) =>
+                            forgetProjects(state, [demo.projectId])
+                          );
+                          onResetDemo(demo, opened);
+                        }}
                       >
                         <RotateCcw size={12} aria-hidden="true" />
                       </button>
