@@ -1387,14 +1387,14 @@ for (const resolution of [
           resolution === 'save-local-copy' ? 2 : 1
         );
         await expect(
-          pageB.getByText('Recovery copy', { exact: true })
+          pageB.getByRole('img', { name: 'Recovery copy', exact: true })
         ).toHaveCount(0);
         if (resolution === 'save-local-copy') {
           const copy = pageB.locator('.start-tile-open', {
             hasText: 'Device B unsent edit (copy)'
           });
           await expect(copy).toBeVisible();
-          await expect(copy.locator('.start-tile-rev')).toHaveText('1 save');
+          await expect(copy.locator('time')).toHaveAttribute('title', / · 1 save$/);
           await copy.click();
           await expect(
             pageB.getByRole('button', { name: 'Undo', exact: true })
