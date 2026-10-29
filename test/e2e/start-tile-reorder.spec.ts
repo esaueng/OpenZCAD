@@ -141,6 +141,25 @@ test.describe('with a pinned part', () => {
     for (const name of names) {
       await expect(unpin(name)).toBeAttached();
     }
+    // With every part pinned, Parts is still there to drag one back into.
+    // (Its heading and drop target appear only mid-drag.)
+    await expect(
+      page.locator('.start-shelf-group', { hasText: /^Parts/ })
+    ).toHaveCount(0);
+    await dragCard(page, names[0]!, names[2]!);
+    const partsZone = page.locator('[data-tile-group="parts"]');
+    await expect(partsZone).toContainText('Drop here to unpin');
+    const zone = await partsZone.boundingBox();
+    if (!zone) {
+      throw new Error('Parts drop zone has no layout box');
+    }
+    await page.mouse.move(zone.x + zone.width / 2, zone.y + zone.height / 2, {
+      steps: 10
+    });
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Pin ${names[0]}`, exact: true })
+    ).toBeAttached();
   });
 
   test('pins a part dropped into the pinned row’s empty space', async ({

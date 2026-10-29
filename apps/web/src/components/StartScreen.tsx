@@ -1207,7 +1207,9 @@ export function StartScreen({
     activeFilter === 'all' &&
     !search &&
     storedPinned > 0 &&
-    storedPinned < matchingProjects.length
+    // With every part pinned the Parts group stays, empty, while the shelf
+    // can be reordered: it is where a card is dragged to unpin it.
+    (storedPinned < matchingProjects.length || canReorder)
       ? [
           {
             label: 'Pinned',
@@ -1258,10 +1260,10 @@ export function StartScreen({
     footerPositions
   ]);
 
+  // Matches the loaded shelf: an all-pinned shelf still heads its cards
+  // with Pinned, and its empty Parts group shows only mid-drag.
   const loadingGroups =
-    previousLayout &&
-    previousLayout.pinned > 0 &&
-    previousLayout.pinned < previousLayout.all
+    previousLayout && previousLayout.pinned > 0
       ? [
           { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
           {
@@ -1269,7 +1271,7 @@ export function StartScreen({
             count: previousLayout.all - previousLayout.pinned,
             offset: previousLayout.pinned
           }
-        ]
+        ].filter((group) => group.count > 0)
       : [
           {
             label: null,
@@ -1825,35 +1827,38 @@ export function StartScreen({
                   <span>Saves</span>
                 </div>
               )}
-              {shelfGroups.map((group) => (
-                <Fragment key={group.label ?? 'all'}>
-                  {group.label && (
-                    <h3 className="start-shelf-group">
-                      {group.label}
-                      <span>{group.projects.length}</span>
-                    </h3>
-                  )}
-                  <div
-                    className={
-                      layout === 'list'
-                        ? 'start-tile-grid is-list'
-                        : 'start-tile-grid'
-                    }
-                    data-tile-group={canReorder ? group.group : undefined}
-                  >
-                    {group.projects.map((project) =>
-                      renderProjectTile(project)
+              {shelfGroups.map((group) =>
+                // An empty group only shows as a drop target mid-drag.
+                group.projects.length === 0 && !reorder.draggingId ? null : (
+                  <Fragment key={group.label ?? 'all'}>
+                    {group.label && (
+                      <h3 className="start-shelf-group">
+                        {group.label}
+                        <span>{group.projects.length}</span>
+                      </h3>
                     )}
-                    {group.projects.length === 0 && (
-                      <p className="start-drop-zone">
-                        {group.group === 'pinned'
-                          ? 'Drop here to pin'
-                          : 'Drop here to unpin'}
-                      </p>
-                    )}
-                  </div>
-                </Fragment>
-              ))}
+                    <div
+                      className={
+                        layout === 'list'
+                          ? 'start-tile-grid is-list'
+                          : 'start-tile-grid'
+                      }
+                      data-tile-group={canReorder ? group.group : undefined}
+                    >
+                      {group.projects.map((project) =>
+                        renderProjectTile(project)
+                      )}
+                      {group.projects.length === 0 && (
+                        <p className="start-drop-zone">
+                          {group.group === 'pinned'
+                            ? 'Drop here to pin'
+                            : 'Drop here to unpin'}
+                        </p>
+                      )}
+                    </div>
+                  </Fragment>
+                )
+              )}
             </>
           )}
 
