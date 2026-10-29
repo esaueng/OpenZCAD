@@ -28,7 +28,7 @@
 .settings-page {
   height: 100%;
   display: grid;
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   color: var(--color-text);
   background: var(--color-bg);
 }
@@ -39,26 +39,6 @@
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
-}
-
-.settings-topbar {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  background: var(--color-surface);
-  border-bottom: var(--border-thin);
-}
-
-.settings-topbar-title {
-  /* An h1 for document structure; sized to the topbar, not to browser default. */
-  margin: 0;
-  padding-left: var(--sp-3);
-  border-left: var(--border-thin);
-  color: var(--color-text-muted);
-  font-size: var(--fs-base);
-  font-weight: var(--fw-medium);
 }
 
 .settings-save-message {
@@ -73,36 +53,6 @@
   white-space: nowrap;
 }
 
-/* Mirrors `.topbar-actions .settings-action` in topbar.css so the way out
-   of Settings is the same control as the way in. */
-.settings-back-action {
-  width: auto;
-  min-width: 0;
-  height: 24px;
-  min-height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 7px;
-  color: var(--color-text);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-ui);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.settings-back-action:hover,
-.settings-back-action:focus-visible {
-  background: var(--color-surface-2);
-  border-color: var(--color-border);
-}
-
-.settings-topbar .secondary,
 .setting-control .secondary,
 .settings-token-control .secondary,
 .danger-ghost {
@@ -128,26 +78,34 @@
   border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
 }
 
+/* The sections are the library's column: a floating island on the
+   workspace tool rail's edge, 10px under the top bar, ending where its list
+   does. */
 .settings-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: calc(var(--island-gap) + 256px) minmax(0, 1fr);
 }
 
 .settings-nav {
+  align-self: start;
   min-height: 0;
+  max-height: calc(100% - var(--island-gap) * 2);
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  padding: var(--sp-3);
+  margin: var(--island-gap) 0 0 var(--island-gap);
+  padding: var(--sp-2);
   background: var(--color-surface);
-  border-right: var(--border-thin);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 
 .settings-search {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin-bottom: var(--sp-3);
   padding-inline: var(--sp-2);
   color: var(--color-text-subtle);
   background: var(--color-bg);
@@ -282,16 +240,16 @@
   /* A page long enough to scroll would otherwise lose the scrollbar's width
      and shift its centred column sideways against the pages that do not. */
   scrollbar-gutter: stable;
-  padding: var(--sp-6) clamp(var(--sp-4), 5vw, 72px) 64px;
+  padding: var(--island-gap) clamp(var(--sp-4), 4vw, 48px) 64px;
 }
 
-/* Every page sits in the same centred frame, so its left edge is the same
-   whichever page is open. A page's groups keep a reading width inside it;
-   the controls reference alone runs the full frame. Centring each page at
-   its own width put the reference's left edge 140px left of the others. */
+/* Every page starts at the same left edge, beside the sections, whichever
+   page is open. A page's groups keep a reading width inside it; the
+   controls reference alone runs the full frame. Centring each page at its
+   own width put the reference's left edge 140px left of the others. */
 .settings-section {
   width: min(1040px, 100%);
-  margin: 0 auto;
+  margin: 0;
   display: grid;
   gap: var(--sp-5);
 }
@@ -1168,17 +1126,8 @@
 }
 
 @media (max-width: 860px) {
-  .settings-topbar-title,
-  .settings-save-message {
-    display: none;
-  }
-
-  .settings-back-action {
-    margin-left: auto;
-  }
-
   .settings-layout {
-    grid-template-columns: 190px minmax(0, 1fr);
+    grid-template-columns: calc(var(--island-gap) + 190px) minmax(0, 1fr);
   }
 
   .settings-nav-status {
@@ -1228,7 +1177,7 @@
 
 @media (max-width: 580px) {
   .settings-layout {
-    grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-columns: calc(var(--island-gap) + 56px) minmax(0, 1fr);
   }
 
   .settings-nav {
@@ -1326,9 +1275,5 @@
 
   .settings-unit-input input {
     flex: 1;
-  }
-
-  .settings-back-action {
-    font-size: 0;
   }
 }

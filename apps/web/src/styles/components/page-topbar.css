@@ -1,0 +1,287 @@
+/* ── Page top bar ──
+   PageTopBar: the workspace's floating top bar on the pages around it, the
+   parts library and Settings. The same inset, bar height and island height
+   as `.app-shell > .topbar` in quiet-stage.css, so the logo and Settings sit
+   on the same pixels on every page. Imported after the page sheets: it turns
+   their search fields into the bar's middle island. ── */
+
+.page-topbar {
+  box-sizing: border-box;
+  height: var(--topbar-h);
+  min-width: 0;
+  margin: var(--island-gap) var(--island-gap) 0;
+  display: grid;
+  /* Equal flanks keep the middle island on the window's centre line; they
+     never give up their islands' width, so the middle one shrinks first. */
+  grid-template-columns:
+    minmax(max-content, 1fr) minmax(0, 380px)
+    minmax(max-content, 1fr);
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+}
+
+h1.brand {
+  margin: 0;
+}
+
+.page-topbar-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-topbar-center {
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+
+/* 28px actions + 2 × 3px padding + 2 × 1px border = the island height. */
+.page-topbar > .topbar-actions-island {
+  justify-self: end;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
+  display: flex;
+  align-items: center;
+  padding: 3px var(--sp-1);
+}
+
+.page-topbar .topbar-actions {
+  margin-left: 0;
+}
+
+/* The import is a command beside Settings, drawn as the same borderless
+   chip (topbar.css styles `.topbar-actions .settings-action`). */
+.topbar-actions .start-import {
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.topbar-actions .start-import:hover:not(:disabled) {
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
+/* Inside Settings its own button stays lit: pressing it again goes back. */
+.topbar-actions .settings-action.is-active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+/* ── The middle island: the page's search ─────────────────── */
+
+.page-topbar-center > .start-search,
+.page-topbar-center > .settings-search {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--topbar-island-h);
+  margin: 0;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.page-topbar-center > .start-search:focus-within {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 2px var(--color-accent-dim),
+    var(--shadow-1);
+}
+
+.page-topbar-center > .start-search input {
+  height: 100%;
+  min-height: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* ── Settings: the save note ──────────────────────────────── */
+
+.page-topbar .settings-save-message {
+  flex: none;
+  max-width: 240px;
+  padding: 0 7px;
+  text-align: left;
+}
+
+.page-topbar .settings-save-message:empty {
+  display: none;
+}
+
+/* ── Library: where the parts are kept ────────────────────── */
+
+/* The cloud sentence is the bar's save readout, as Saved is in the
+   workspace. What it cannot hold on one line, a run's failures and any news,
+   hangs below the island. */
+.page-topbar .start-cloud {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+}
+
+.page-topbar .start-account {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 7px;
+  background: transparent;
+  border: 0;
+}
+
+.page-topbar .start-account-row {
+  gap: 6px;
+  min-height: 28px;
+}
+
+.page-topbar .start-account-text {
+  max-width: 260px;
+  color: var(--color-text-muted);
+  font-weight: var(--fw-medium);
+}
+
+.page-topbar .start-account-track {
+  position: absolute;
+  right: 7px;
+  bottom: 1px;
+  left: 7px;
+}
+
+.page-topbar .start-account-details {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  right: 0;
+  z-index: 1;
+  width: 300px;
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.page-topbar .start-sync-failure {
+  padding-left: 0;
+}
+
+.page-topbar .start-update {
+  min-height: 28px;
+  padding-left: 7px;
+  white-space: nowrap;
+}
+
+.page-topbar .start-update-text {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-topbar .start-update.is-failure .start-update-dot {
+  align-self: center;
+  margin-top: 0;
+}
+
+.page-topbar .start-update button {
+  align-self: center;
+}
+
+/* ── Narrow windows ───────────────────────────────────────── */
+
+@media (max-width: 1120px) {
+  /* With the workspace's actions (responsive.css): icon squares, the
+     label kept in the accessible name. */
+  .topbar-actions .start-import {
+    width: 28px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+    background: var(--color-surface-2);
+    border-color: var(--color-border);
+  }
+}
+
+/* The middle island takes a second row, as the mode switch does. */
+@media (max-width: 760px) {
+  .page-topbar {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: repeat(2, var(--topbar-island-h));
+    row-gap: var(--sp-1);
+  }
+
+  .page-topbar > .topbar-identity {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .page-topbar > .topbar-actions-island {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .page-topbar-center {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .page-topbar .start-account-text,
+  .page-topbar .start-update-text {
+    max-width: 140px;
+  }
+}
+
+/* On a phone the cloud sentence gives the page name its room back: the icon
+   keeps the tone, the action stays, and the words stay in the live region
+   (clipped, not removed) and the tooltip. */
+@media (max-width: 560px) {
+  .page-topbar .start-account-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* The Settings rail keeps its own way out of a filter (settings.css), so
+   the bar goes back to one row. */
+@media (max-width: 580px) {
+  .settings-topbar {
+    height: var(--topbar-h);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .settings-topbar .page-topbar-center,
+  .page-topbar .settings-save-message {
+    display: none;
+  }
+}

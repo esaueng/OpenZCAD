@@ -2043,8 +2043,8 @@ test('signs in with an email code only when cloud profile access is requested', 
     page.getByRole('button', { name: 'Save to account' })
   ).toHaveCount(0);
   await expect(
-    page.locator('.settings-topbar > :last-child')
-  ).toHaveAccessibleName('Back to projects');
+    page.locator('.settings-close')
+  ).toHaveAccessibleName('Close settings and go back to projects');
   await page.getByRole('button', { name: 'General', exact: true }).click();
   await page
     .getByRole('checkbox', { name: 'Reopen the last project' })
