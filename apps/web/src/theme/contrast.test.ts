@@ -154,6 +154,49 @@ describe.each([
   });
 });
 
+describe.each([
+  ['dark', ':root {'],
+  ['light', ":root[data-theme='light'] {"]
+])('%s selected fill', (_name, selector) => {
+  // The selected fill is translucent, so the label is measured against the
+  // fill laid over each surface a rail, the mode switch or a panel puts it
+  // on.
+  const block = tokens.slice(tokens.indexOf(selector));
+  const palette = tokenBlock(selector);
+  const fill =
+    /--color-selected-fill:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/.exec(
+      block
+    );
+
+  it('labels the selection at WCAG AA on every surface', () => {
+    expect(fill).not.toBeNull();
+    const [r, g, b, alpha] = fill!.slice(1).map(Number) as [
+      number,
+      number,
+      number,
+      number
+    ];
+    for (const surface of SURFACES) {
+      const ground = palette[surface]!;
+      const over = [r, g, b]
+        .map((channel, index) => {
+          const base = Number.parseInt(
+            ground.slice(1 + index * 2, 3 + index * 2),
+            16
+          );
+          return Math.round(channel * alpha + base * (1 - alpha))
+            .toString(16)
+            .padStart(2, '0');
+        })
+        .join('');
+      expect(
+        contrastRatio(palette['--color-selected-text']!, `#${over}`),
+        surface
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 describe('destructive confirm', () => {
   it('labels the danger fill at WCAG AA in both themes', () => {
     // Defined once on :root and not re-themed. White on the error red was

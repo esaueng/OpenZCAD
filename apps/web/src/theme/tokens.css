@@ -61,6 +61,11 @@
   --color-accent-hi: #81a9ff;
   --color-accent-dim: rgba(103, 152, 255, 0.14);
   --color-accent-border: rgba(103, 152, 255, 0.45);
+  /* A selected or switched-on control: the active mode, the armed tool, a
+     rail toggle that is on. One tinted fill and a pale label, never an
+     outline, so a selection never reads as a box inside its island. */
+  --color-selected-fill: rgba(103, 152, 255, 0.3);
+  --color-selected-text: #c6d6ff;
   --color-on-accent: #0e1830;
   --color-warning: #f59e0b;
   --color-error: #ef4444;
@@ -222,7 +227,7 @@
   /* Width of the instrument rail on the right edge. */
   --rail-w: 40px;
   /* Height of the command bar at the foot of the stage. */
-  --command-bar-h: 38px;
+  --command-bar-h: 34px;
   --toolbar-h: 48px;
   --statusbar-h: 30px;
   /* Starting widths for the two resizable panels. The workspace republishes
@@ -314,6 +319,8 @@
   --color-accent-hi: #1858ad;
   --color-accent-dim: rgba(31, 111, 214, 0.1);
   --color-accent-border: rgba(31, 111, 214, 0.45);
+  --color-selected-fill: rgba(31, 111, 214, 0.16);
+  --color-selected-text: #1858ad;
   --color-on-accent: #ffffff;
   --color-warning: #a64c08;
   --color-error: #dc2626;
@@ -358,6 +365,8 @@
     --color-accent-hi: #1858ad;
     --color-accent-dim: rgba(31, 111, 214, 0.1);
     --color-accent-border: rgba(31, 111, 214, 0.45);
+    --color-selected-fill: rgba(31, 111, 214, 0.16);
+    --color-selected-text: #1858ad;
     --color-on-accent: #ffffff;
     --color-warning: #a64c08;
     --color-error: #dc2626;

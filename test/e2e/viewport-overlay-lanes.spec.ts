@@ -228,8 +228,7 @@ for (const { width, compact, minLane, phoneBar } of [
 
 // The prompt line is a share of the window, 38vw between 520px and 760px,
 // not the fixed 520px that read as a sliver on a wide monitor. From 1600px
-// it also stands taller with larger type, and the hint above it keeps to the
-// bar's column; every lane offset reads the bar's height, so the stack
+// it also stands taller with larger type, and the hint reads inside it; every lane offset reads the bar's height, so the stack
 // follows it. The bar is centred between the docks (here one right column,
 // which runs the window's full height), and where they leave little room it
 // gives way before anything else: it shrinks (to 292px at 1024px, dropping
@@ -237,11 +236,11 @@ for (const { width, compact, minLane, phoneBar } of [
 // standing on it, and only from 1011px down, where the cube steps up above
 // the search row, does the bar have the lane again (to the dock's edge).
 for (const { width, bar, height, type, key } of [
-  { width: 900, bar: 474, height: 38, type: '13px', key: true },
-  { width: 1024, bar: 292, height: 38, type: '13px', key: false },
-  { width: 1280, bar: 520, height: 38, type: '13px', key: true },
-  { width: 1920, bar: 730, height: 42, type: '14px', key: true },
-  { width: 2560, bar: 760, height: 42, type: '14px', key: true }
+  { width: 900, bar: 474, height: 34, type: '13px', key: true },
+  { width: 1024, bar: 292, height: 34, type: '13px', key: false },
+  { width: 1280, bar: 520, height: 34, type: '13px', key: true },
+  { width: 1920, bar: 730, height: 38, type: '14px', key: true },
+  { width: 2560, bar: 760, height: 38, type: '14px', key: true }
 ]) {
   test(`search bar scales with the window at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -267,8 +266,9 @@ for (const { width, bar, height, type, key } of [
     const laneMid = laneBox!.x + laneBox!.width / 2;
     expect(Math.abs(barMid - laneMid)).toBeLessThan(1);
 
-    // The status row above the bar (the hint, or the status toast that
-    // takes its place while a message is live) keeps to the bar's column.
+    // The guidance reads inside the idle bar, on its line; the status toast
+    // that takes its place while a message is live stands above the bar and
+    // keeps to its column.
     const row = page
       .locator(
         '.workspace-hint, .workspace-toast:not(.hidden) .workspace-toast-body'
@@ -278,7 +278,15 @@ for (const { width, bar, height, type, key } of [
     const rowBox = await row.boundingBox();
     expect(rowBox).not.toBeNull();
     expect(rowBox!.width).toBeLessThanOrEqual(Math.max(bar + 40, 440));
-    expect(rowBox!.y + rowBox!.height).toBeLessThanOrEqual(barBox!.y);
+    if (await row.evaluate((el) => el.classList.contains('workspace-hint'))) {
+      expect(Math.abs(rowBox!.y - barBox!.y)).toBeLessThan(2);
+      expect(rowBox!.x).toBeGreaterThanOrEqual(barBox!.x - 1);
+      expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(
+        barBox!.x + barBox!.width + 1
+      );
+    } else {
+      expect(rowBox!.y + rowBox!.height).toBeLessThanOrEqual(barBox!.y);
+    }
 
     const searchKey = page.locator('.command-bar > kbd');
     await (key

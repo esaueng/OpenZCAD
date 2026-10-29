@@ -77,7 +77,7 @@
    offset in the bottom lanes reads --command-bar-h, so the stack follows. */
 @media (min-width: 1600px) {
   .workspace.column-layout {
-    --command-bar-h: 42px;
+    --command-bar-h: 38px;
     --command-bar-fs: var(--fs-md);
   }
 }
@@ -151,16 +151,26 @@
 }
 
 .topbar > .mode-switch.topbar-island {
+  --mode-switch-inset: 3px;
   justify-self: center;
   align-self: center;
-  /* No border or padding: the thumb meets the island's edge, so there is no
-     inset box around the selection. */
-  border: 0;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
+  padding: var(--mode-switch-inset);
 }
 
-/* The island has no border or padding, so the options are its height. */
+/* The island's height less its border and the thumb's inset. */
 .topbar > .mode-switch.topbar-island .mode-switch-option {
-  min-height: var(--topbar-island-h);
+  min-height: calc(var(--topbar-island-h) - 2px - var(--mode-switch-inset) * 2);
+}
+
+/* A pixel less padding a side gives back the inset and border's 8px: the
+   bar has no width to spare at a laptop's width. (A phone's icon-only
+   options keep their own padding, view-mode.css.) */
+@media (min-width: 621px) {
+  .topbar .mode-switch-option {
+    padding-inline: 10px;
+  }
 }
 
 /* 28px actions + 2 × 3px padding + 2 × 1px border = the island height. */
@@ -813,23 +823,30 @@
   opacity: 1;
 }
 
+/* A soft key, not an outlined one: the bordered badge was a box inside the
+   bar's box. */
 .command-bar > kbd {
   flex: 0 0 auto;
+  background: var(--color-surface-hover);
+  border: 0;
 }
 
-/* The list, standing on the bar where the conversation also stands. It
-   covers the guidance line above the bar and nothing else of the model. */
+/* The list, standing on the bar where the conversation also stands. */
 .command-bar-float {
   position: absolute;
   left: -1px;
   right: -1px;
-  bottom: calc(100% + 8px);
+  /* On the bar's outer edge, so its 1px top border is the one line between
+     the list and the field: bar and list read as one surface, as the bar
+     and the stream do. */
+  bottom: calc(100% + 1px);
   display: flex;
   flex-direction: column;
   max-height: min(360px, 55vh);
   background: var(--color-surface);
   border: var(--border-strong);
-  border-radius: var(--radius-lg);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   box-shadow: var(--shadow-3);
   /* The shadow stops at the float's foot: it fell on the field below, a
      child's shadow painting over its parent, and in light the open bar
@@ -862,9 +879,22 @@
    edges; on a phone the bar is the lane and the list stays its width. */
 @media (min-width: 1012px) {
   @container (max-width: 519px) {
+    /* Wider than the bar, the list cannot be its top edge: it stands clear
+       of it as a popover, and the bar keeps its own corners and focus. */
     .command-bar-float {
       left: calc(50% - 260px);
       right: calc(50% - 260px);
+      bottom: calc(100% + 8px);
+      border-bottom: var(--border-strong);
+      border-radius: var(--radius-lg);
+    }
+
+    .command-bar-row .command-bar.open:has(> .command-bar-float) {
+      border-color: var(--color-accent-border);
+      border-radius: var(--radius-lg);
+      box-shadow:
+        var(--shadow-2),
+        0 0 0 3px var(--color-accent-dim);
     }
   }
 }
@@ -939,30 +969,53 @@
   pointer-events: none;
 }
 
-.workspace.with-assistant .command-bar-float {
-  /* On the bar's outer edge, so its 1px top border is the one line
-     between the list and the field, as it is under the stream. */
-  bottom: calc(100% + 1px);
-  border-bottom: 0;
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+/* With a list or the ask line standing on it, the bar is that surface's
+   foot: square where they meet, the surface's border and no focus halo
+   around the field alone. */
+.command-bar.open:has(> .command-bar-float) {
+  border-color: var(--color-border-strong);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow: var(--shadow-3);
 }
 
-/* The hint and the notice rows above the bar read 40px wider than it, so
-   the stack tapers to the line at its foot; 440px at least, since a bar
-   narrowed for the ruler is no reason to cut the guidance short, and the
-   rows stand above the ruler, never beside it. */
+/* The guidance is the bar's resting line: drawn in the field, where the
+   placeholder would be, while the bar is idle, rather than as a second row
+   on a box of its own above it. Pressing the bar puts the placeholder back.
+   It stays out of the tree (the summary carries it) and never takes the
+   pointer, so a press on it lands on the field. Clear of the glyph on the
+   left and the key on the right. */
 .workspace-hint {
-  max-width: min(max(calc(var(--command-bar-w) + 40px), 440px), 100%);
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  z-index: 1;
+  box-sizing: border-box;
+  width: min(var(--command-bar-w), 100%);
+  height: var(--command-bar-h);
   margin: 0;
-  padding: 4px 10px;
+  padding: 0 56px 0 37px;
   overflow: hidden;
-  color: var(--color-text-muted);
-  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-xs);
+  color: var(--color-text-subtle);
+  font-size: var(--command-bar-fs);
+  line-height: var(--command-bar-h);
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.command-bar-lane:has(.command-bar.open) > .workspace-hint {
+  display: none;
+}
+
+/* While the guidance shows, the placeholder makes way for it. */
+:where(.workspace:not(.with-assistant))
+  .viewer-area:not(:has(.activity-pill))
+  .command-bar-lane:has(> .workspace-hint)
+  .command-bar:not(.open)
+  .command-bar-input::placeholder {
+  color: transparent;
 }
 
 /* The assistant stream stands on the bar where the hint would be, and its
@@ -973,8 +1026,9 @@
 
 /* ── The notice lane ──
    Everything that talks above the search bar shares one centred lane,
-   stacked from the bar up: the status row (the status toast, the activity
-   pill or, failing both, the guidance hint), then the action toast (Undo).
+   stacked from the bar up: the status row (the status toast or the
+   activity pill; the guidance reads inside the bar), then the action toast
+   (Undo).
    Each row that is showing lifts the rows above it. The rows used to carry
    fixed offsets of their own, so the Undo toast and the status toast landed
    on the same pixels whenever both were up at once. The selection is named
@@ -1000,10 +1054,9 @@
   --lane-status: 0px;
 }
 
-/* The status row holds a 28px toast, the 58px activity pill or the
-   one-line hint. The hint only draws while no status is live. */
-.viewer-area:has(.workspace-toast:not(.hidden)),
-:where(.workspace:not(.with-assistant)) .viewer-area:has(.workspace-hint) {
+/* The status row holds a 28px toast or the 58px activity pill. The hint
+   reads inside the bar and takes no row. */
+.viewer-area:has(.workspace-toast:not(.hidden)) {
   --lane-status: 40px;
 }
 
@@ -1744,35 +1797,21 @@ button.command-rail:hover:not(:disabled):not(.active) {
   background: var(--color-surface-hover);
 }
 
-/* The context's primary verb is a hint, lighter than the armed state: an
-   accent icon and a 2px accent bar at the rail's edge, with no fill and no
-   outline. The armed tool is filled and outlined like the selected button
-   on every other rail, and while a tool is armed the hint is not drawn at
-   all (CommandCard drops the class), so one button is lit. */
+/* The context's primary verb is a hint, and only a hint: full-strength
+   text where the other tools are muted. An accent icon with an edge bar
+   read as selected while nothing was armed, so the only accent on the rail
+   is now the armed tool, filled like the selected button on every other
+   rail. While a tool is armed CommandCard drops the class. */
 /* `is-primary`, not `primary`: the base button style claims that word. */
 button.command-rail.is-primary {
-  position: relative;
-  color: var(--color-accent);
-}
-
-button.command-rail.is-primary::before {
-  position: absolute;
-  top: 50%;
-  left: -4px;
-  width: 2px;
-  height: 14px;
-  content: '';
-  background: var(--color-accent);
-  border-radius: 1px;
-  transform: translateY(-50%);
+  color: var(--color-text);
 }
 
 /* Hover rules on the rails skip `.active`: they out-ranked it, so pointing
    at the selected tool used to wash its fill out and read as deselecting. */
 button.command-rail.active {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
 }
 
 /* A tool that does not act on the current pick is dimmed in place, never
@@ -2020,6 +2059,35 @@ button.command-rail:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* In one column the two are one island: a shared surface with a hairline
+   between the viewer bar and the panels' buttons, where two boxes stacked
+   8px apart read as boxes inside boxes. A window too short for one column
+   stands them side by side (above), and there they stay two islands: one
+   surface would fill the corner under the shorter island and take the
+   clicks on the cube beneath it. */
+@media (min-height: 541px) {
+  .instrument-rail:has(> .viewer-rail) {
+    gap: 0;
+    background: var(--color-surface);
+    border: var(--border-thin);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+  }
+
+  .instrument-rail > .viewer-rail {
+    /* The island's border is the rail's width, as each rail's own was. */
+    width: calc(var(--rail-w) - 2px);
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .instrument-rail > .viewer-rail + .viewer-rail {
+    border-top: var(--border-thin);
+  }
 }
 
 /* Revisions and Diagnostics made one column of both islands 522px tall,
@@ -2534,9 +2602,10 @@ button.model-panel-grip[aria-expanded='true'] {
   border-radius: 0;
 }
 
+/* Pinned reads in the icon alone: a filled pin in every docked header was a
+   row of small boxes inside the panels' boxes. */
 .model-panel-pin.is-pinned {
   color: var(--color-accent-hi);
-  background: var(--color-accent-dim);
 }
 
 .model-panel-body {

@@ -183,9 +183,8 @@
 }
 
 .rail-button.active {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
 }
 
 .rail-divider {
