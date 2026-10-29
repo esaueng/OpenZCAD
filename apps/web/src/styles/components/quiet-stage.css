@@ -1184,6 +1184,14 @@
   z-index: calc(var(--z-inspector-float) + 2);
 }
 
+/* A command's Options open up from the bar's left edge, the corner the
+   tour card stands over: Box's Corner X/Y/Z covered the card's text and the
+   card the options' edge (first-run, 1050px). The card stands aside while
+   the user has the options open, and comes back when they close. */
+.viewer-area:has(.in-place-command-options[open]) .workspace-tour {
+  visibility: hidden;
+}
+
 /* The Move instruction shares the viewport's overlay slot with the
    revert-sketch pill and starts where it does, under the top islands. At
    the focused sketch's 14px it sat beneath the mode switch, which covered
@@ -1935,6 +1943,44 @@ button.command-rail:disabled {
 
 .command-flyout-heading:first-child {
   padding-top: 2px;
+}
+
+/* Whole groups past the fold (Pattern, under Bodies, at a laptop height)
+   are named at the flyout's foot over a fade, not left to a 10px shade:
+   the commands were there, but read as missing. It goes once they are in
+   view. */
+.command-flyout-more {
+  position: sticky;
+  bottom: 0;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 26px;
+  margin-top: 2px;
+  padding: 10px 7px 3px;
+  color: var(--color-text);
+  background: linear-gradient(transparent, var(--color-surface) 45%);
+  border: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.command-flyout-more > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: 999px;
+}
+
+.command-flyout-more:hover > span {
+  background: var(--color-surface-hover);
 }
 
 .command-tile {
@@ -3252,6 +3298,10 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .sketch-point-relations {
   position: absolute;
+  /* An open menu stands over the rail's passive notes. The "Panels hidden ·
+     Show" pill is the rail's later child, so at the same level it painted
+     over this menu's last row (Disconnect) at a full desktop size. */
+  z-index: 1;
   top: 0;
   right: calc(100% + var(--island-gap));
   display: grid;
@@ -3495,6 +3545,46 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .in-place-command.refused .in-place-command-hint {
   color: var(--color-warning);
+}
+
+/* A refusal's recovery is at its end ("… Try a smaller radius: radius 11.8
+   builds here."), where one clipped line cut it off and left it to a
+   tooltip. It wraps to three lines instead, the bar growing with it (the
+   lane measures the bar), and More opens the rest of a longer one. */
+.in-place-command.refused .in-place-command-hint {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.in-place-command.refused .in-place-command-hint.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  max-height: 16em;
+  overflow-y: auto;
+}
+
+.in-place-command-more {
+  flex: none;
+  align-self: center;
+  min-height: 28px;
+  padding: 0 6px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.in-place-command-more:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .in-place-command-cancel,

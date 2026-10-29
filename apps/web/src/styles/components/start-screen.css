@@ -1296,10 +1296,15 @@
 /* ── List layout ─────────────────────────────────────────── */
 
 /* The same tiles, laid out as rows: the body and its meta dissolve into the
-   row's columns, so every action and menu keeps working. */
+   row's columns, so every action and menu keeps working. The name is what
+   tells two rows apart, so it has the room: Status and Edited give way on a
+   narrower window (they were a fixed 330px together, and at 1050px left the
+   name 135px, "QA-20261028-Profil…" on two different parts). */
 .start-list-head,
 .start-tile-grid.is-list .start-tile-open {
-  grid-template-columns: 52px minmax(0, 1fr) 170px 160px 56px 88px;
+  grid-template-columns:
+    52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
+    56px 88px;
 }
 
 .start-list-head {
@@ -1366,8 +1371,20 @@
   display: none;
 }
 
+/* Two lines before an ellipsis, broken anywhere: a long name's end, which
+   is usually what tells it from its neighbour, stays in sight. A keyboard
+   focus on the row shows it whole; the title has it on hover. */
 .start-tile-grid.is-list .start-tile-name {
   order: 1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.start-tile-grid.is-list .start-tile-open:focus-visible .start-tile-name {
+  -webkit-line-clamp: unset;
 }
 
 .start-tile-grid.is-list .start-tile-flags {
@@ -1465,8 +1482,11 @@
     display: none;
   }
 
+  /* The name takes the row's whole width and the date drops under it: a
+     date column beside it left a phone about 70px of name, the same
+     "QA-2026…" on every row. */
   .start-tile-grid.is-list .start-tile-open {
-    grid-template-columns: 44px minmax(0, 1fr) auto;
+    grid-template-columns: 44px minmax(0, 1fr);
     /* Touch screens keep all three row actions in sight. */
     padding-right: 112px;
   }
@@ -1479,6 +1499,10 @@
   .start-tile-grid.is-list .start-tile-flags {
     grid-column: 2 / -1;
     order: 5;
+  }
+
+  .start-tile-grid.is-list .start-tile-flags:empty {
+    display: none;
   }
 
   .start-tile-grid.is-list .start-tile-rev {

@@ -271,4 +271,91 @@ describe('CommandCard', () => {
     expect(glyphs).toHaveLength(Object.keys(TOOL_META).length);
     expect(new Set(glyphs).size).toBe(glyphs.length);
   });
+
+  it('names the groups a short flyout hides below its fold', () => {
+    // F017: at a laptop height Pattern sat wholly under the fold, marked
+    // only by a 10px shade, and read as missing. happy-dom lays nothing
+    // out, so the flyout is given a 300px window onto 120px groups.
+    const proto = HTMLElement.prototype;
+    const names = [
+      'scrollHeight',
+      'clientHeight',
+      'scrollTop',
+      'offsetTop',
+      'offsetHeight'
+    ] as const;
+    const saved = names.map(
+      (name) => [name, Object.getOwnPropertyDescriptor(proto, name)] as const
+    );
+    let scrolled = 0;
+    const flyoutOf = (element: HTMLElement) =>
+      element.classList.contains('command-flyout');
+    const define = (name: string, get: (this: HTMLElement) => number) =>
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        get
+      });
+    define('scrollHeight', function () {
+      return flyoutOf(this) ? FOLD_GROUPS.length * 120 : 0;
+    });
+    define('clientHeight', function () {
+      return flyoutOf(this) ? 300 : 0;
+    });
+    define('scrollTop', function () {
+      return flyoutOf(this) ? scrolled : 0;
+    });
+    define('offsetTop', function () {
+      const index = FOLD_GROUPS.findIndex(
+        (group) => group.label === this.dataset.group
+      );
+      return index < 0 ? 0 : index * 120;
+    });
+    define('offsetHeight', () => 20);
+    const scrollTo = vi.fn();
+    const originalScrollTo = proto.scrollTo;
+    proto.scrollTo = scrollTo as typeof proto.scrollTo;
+    try {
+      const { container } = renderCard();
+      fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
+      // Headings whose foot is past 300px are out of sight.
+      const hidden = FOLD_GROUPS.filter(
+        (_group, index) => index * 120 + 20 > 300
+      ).map((group) => group.label);
+      expect(hidden.length).toBeGreaterThan(0);
+      expect(hidden).toContain('Pattern');
+      const cue = screen.getByRole('button', {
+        name: `Scroll to ${hidden.join(', ')}`
+      });
+      expect(cue).toHaveTextContent(`More: ${hidden.join(', ')}`);
+      expect(container.querySelector('.command-flyout')).toHaveClass(
+        'has-more-below'
+      );
+      fireEvent.click(cue);
+      const first = FOLD_GROUPS.findIndex((group) => group.label === hidden[0]);
+      expect(scrollTo).toHaveBeenCalledWith({
+        top: first * 120 - 4,
+        behavior: 'smooth'
+      });
+      // Scrolled to the end, nothing is hidden and the cue goes.
+      scrolled = FOLD_GROUPS.length * 120;
+      fireEvent.scroll(container.querySelector('.command-flyout')!);
+      expect(
+        screen.queryByRole('button', { name: /^Scroll to/ })
+      ).not.toBeInTheDocument();
+    } finally {
+      proto.scrollTo = originalScrollTo;
+      for (const [name, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(proto, name, descriptor);
+        else Reflect.deleteProperty(proto, name);
+      }
+    }
+  });
+
+  it('shows no fold cue when every group fits', () => {
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
+    expect(
+      screen.queryByRole('button', { name: /^Scroll to/ })
+    ).not.toBeInTheDocument();
+  });
 });

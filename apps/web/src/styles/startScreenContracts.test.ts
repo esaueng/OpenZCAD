@@ -34,6 +34,39 @@ describe('start screen sync failures', () => {
   });
 });
 
+describe('start screen list names', () => {
+  // F016 (production QA, 29 Oct 2026): fixed 170px and 160px Status and
+  // Edited columns left the name 135px at a 1050px window, so parts that
+  // differ only in their ends read as the same "QA-20261028-Profil…".
+  it('lets the secondary columns give way to the name', () => {
+    const columns = rule(
+      css,
+      '.start-tile-grid.is-list .start-tile-open'
+    ).match(/grid-template-columns:\s*([^;]*);/)?.[1];
+    expect(columns).toBeDefined();
+    expect(columns).toMatch(/minmax\(0,\s*1fr\)/);
+    expect(columns).not.toMatch(/\b170px\s+160px\b/);
+    expect(columns!.match(/clamp\(/g)).toHaveLength(2);
+  });
+
+  it('wraps a long name to two lines instead of one clipped line', () => {
+    const name = rule(css, '.start-tile-grid.is-list .start-tile-name');
+    expect(name).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(name).toMatch(/white-space:\s*normal/);
+    expect(name).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('gives a phone row the whole width for the name', () => {
+    const block = /@media\s*\(max-width:\s*680px\)\s*\{([\s\S]*?\})\s*\}/.exec(
+      css
+    )?.[1];
+    expect(block).toBeDefined();
+    expect(rule(block!, '.start-tile-grid.is-list .start-tile-open')).toMatch(
+      /grid-template-columns:\s*44px\s+minmax\(0,\s*1fr\);/
+    );
+  });
+});
+
 describe('start screen tile actions', () => {
   it('shows the tile actions where there is no hover to reveal them', () => {
     // On a phone the pin and ••• buttons stayed at opacity 0, and a tap on

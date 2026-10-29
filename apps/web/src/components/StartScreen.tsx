@@ -680,7 +680,11 @@ export function StartScreen({
           )}
         </span>
         <span className="start-tile-body">
-          <strong className="start-tile-name">{project.name}</strong>
+          {/* Clipped names differ only in their ends ("…-Profiles" and
+              "…-Profiles copy"), so the whole name is a hover away. */}
+          <strong className="start-tile-name" title={project.name}>
+            {project.name}
+          </strong>
           <small className="start-tile-meta">
             {/* Quiet marks for the part's standing traits, ahead of the date
                 they qualify: how it is stored, where it lives, what it is. */}
