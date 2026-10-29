@@ -114,9 +114,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
             exact: true
           })
           .click();
-        await expect(page.locator('.settings-topbar')).toHaveCSS(
-          'height',
-          '40px'
+        // Column first: the way back heads the sections rail at any width.
+        await reachable(
+          page.getByRole('button', { name: /^Close settings and go back/ })
         );
         await page.getByRole('button', { name: 'Back to workspace' }).click();
         await reachable(page.getByRole('button', { name: /OpenZCAD/ }));

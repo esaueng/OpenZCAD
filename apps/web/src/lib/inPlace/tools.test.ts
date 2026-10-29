@@ -696,6 +696,28 @@ describe('patterns', () => {
       )
     ).toMatchObject({ axis: 'x', axis2: 'z', spacing2: 15, count2: 3 });
   });
+
+  it('grid: each chip names the axis it runs along', () => {
+    // F019: the second direction's chips read "3 count 2" and "Spacing 2
+    // 20 mm", which left the user to guess which way they ran.
+    const spec = IN_PLACE_TOOL_SPECS['grid-pattern'];
+    const labels = (axis: string, axis2: string) =>
+      Object.fromEntries(
+        spec
+          .handles({ ...EMPTY, bodies: [BODY] }, {}, CTX, { axis, axis2 })
+          .map((handle) => [handle.valueId, handle.label])
+      );
+    expect(labels('y', 'x')).toEqual({
+      spacing: 'Y spacing',
+      count: 'Y count',
+      spacing2: 'X spacing',
+      count2: 'X count'
+    });
+    expect(labels('x', 'z')).toMatchObject({
+      count: 'X count',
+      count2: 'Z count'
+    });
+  });
 });
 
 describe('review: values the cards accepted stay expressible', () => {

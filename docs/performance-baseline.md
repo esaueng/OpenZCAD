@@ -23,6 +23,120 @@ prefix, so the same phases are visible in the DevTools performance panel, in
 currently marked: `worker.create`, `document.hydrate`, `viewer.init`,
 `viewer.renderer`, `viewer.environment`, `viewer.firstFrame`, `viewer.bodies`.
 
+### Readiness marks
+
+**LCP is not a readiness metric for the workspace.** The model is drawn
+into a WebGL `<canvas>`, and canvas paints are not Largest Contentful Paint
+candidates, so LCP picks whichever text is largest. LCP also keeps updating
+until the first input. On a reload with no input, that is the one-line
+workspace hint that replaces the startup status toast when the toast
+expires. The 2026-10-29 production QA measured LCP at 8.8–9.5 s on a Heat
+Sink reload whose model was on screen in about 2.3 s. Do not set budgets or
+alerts on LCP for workspace pages, and do not reshape the hint to move the
+number.
+
+Two User Timing marks are the readiness signals instead
+(`apps/web/src/lib/startupReadiness.ts`, emitted from the viewer's render
+loop):
+
+| Mark               | Meaning                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `oz:model-visible` | First rendered frame showing the opened project's exact geometry for its current version (analysis may be pending). |
+| `oz:input-ready`   | First rendered frame after topology analysis is complete, when picking, selection and every modeling tool work.     |
+
+Each mark fires once per opened project. A page load records the startup
+project's pair first, and its `startTime` is milliseconds since navigation.
+Stored meshes drawn while the kernel rebuilds do not count. Neither does a
+project without bodies, which has no model to show. Read them in the field
+with `performance.getEntriesByName('oz:input-ready')[0]` or a `mark`
+`PerformanceObserver`. The lazy-chunk prefetch waits for `oz:model-visible`,
+or for 15 s when no model is coming, before it starts fetching.
+
+`scripts/measure-startup.mjs` reports both marks, the app's own startup
+phases, long tasks, LCP and the network, over N runs of a production build
+(`pnpm build` first):
+
+```bash
+# Returning user: open the demo once, then reload it N times (warm cache).
+node scripts/measure-startup.mjs --runs 5 --headed
+# First visit: a fresh profile per run, cache enabled, network-throttled.
+node scripts/measure-startup.mjs --mode cold --runs 5 --network fast4g --headed
+# Also record a Chrome trace per run (no sampling profiler) and attribute
+# every main-thread task of 50 ms or more to the trace events inside it.
+node scripts/measure-startup.mjs --runs 5 --headed --trace /tmp/oz-traces
+```
+
+`--cpu 4` adds CPU throttling and `--channel chrome` uses installed Chrome.
+Headless Chromium renders WebGL with SwiftShader, so run `--headed` for GPU
+numbers. The report names the WebGL renderer it measured.
+
+### The startup long tasks (2026-10-29)
+
+The QA trace's unattributed 618 ms task (F021) was captured with the CPU
+profiler and screenshots on. The probe above, without the profiler, on a
+Windows laptop (Intel UHD Graphics, ANGLE D3D11, headed Chromium, warm Heat
+Sink reload, 5 runs per build) finds two long tasks per reload, both in the
+viewer's start-up and neither WASM:
+
+| Task                                   |   Duration | What is inside                                                                                                                                          |
+| -------------------------------------- | ---------: | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| React commit that mounts the workspace | 136–223 ms | `viewer.init` 113–169 ms: the PMREM studio environment (`viewer.environment`, 69–106 ms) and renderer creation (21–34 ms); 64–97 ms is GPU round-trips. |
+| The viewer's first animation frame     | 130–208 ms | `viewer.firstFrame` 123–169 ms, the first `renderer.render` of the empty stage; 115–163 ms is waiting on the GPU process for shader program links.      |
+
+The kernel's WASM compiles and instantiates in the geometry worker
+(`worker.firstReady` 537–1,071 ms), off the main thread. On this machine both
+tasks finish before the worker delivers the model, so neither delays
+`oz:model-visible` (median 911 ms, range 687–1,129 ms) or `oz:input-ready`
+(median 980 ms, range 687–1,218 ms): the worker does. The model's own frame
+is cheap (`viewer.bodies` about 10 ms).
+
+A first visit grows these tasks, because a fresh profile has no GPU shader
+cache. One traced cold run (fresh profile, Fast 4G) had a **1,488 ms**
+mount task, almost all in `viewer.environment` (1,386 ms). Of that task,
+1,299 ms was `GetProgramiv`, the main thread waiting on the GPU process to
+link the PMREM shaders. The first frame took another 383 ms. Without
+tracing, the five cold runs per build had longest tasks of 957–1,633 ms. No
+task near 618 ms appeared in the warm runs. The QA task is most plausibly
+this PMREM link wait on a partly cold shader cache, inflated by the
+profiler, but that is not proven.
+
+Two changes could cut the blocking. Neither moves readiness on this machine,
+where the kernel arrives later, and neither is low-risk, so neither is made:
+
+- Building the studio environment without a synchronous link: three.js
+  `PMREMGenerator` has no async path, so this means a pre-baked environment
+  or compiling its programs through `KHR_parallel_shader_compile`.
+- Compiling the stage's programs with `renderer.compileAsync` before the
+  first frame.
+
+Measure on slower GPUs, and on a cold shader cache, before taking either.
+
+### Lazy-chunk prefetch (F023)
+
+The production HAR's 47 duplicate requests were the prefetcher fetching
+chunks the page had already imported. They came from the network only
+because DevTools' "Disable cache" was on. The prefetcher now skips any chunk
+the page has requested, and starts only after `oz:model-visible`.
+`measure-startup.mjs` counts requests from the page target only, so the
+worker's kernel WASM is not in these totals. Same laptop, headed, 5 runs per
+build:
+
+| Heat Sink                                  |               Before |                After |
+| ------------------------------------------ | -------------------: | -------------------: |
+| Warm reload: requests / duplicates         |             215 / 45 |        171–172 / 0–1 |
+| Warm reload: prefetch requests             | 156 (all cache hits) | 111–112 (cache hits) |
+| Cold, Fast 4G: requests / duplicates       |             215 / 45 |              172 / 1 |
+| Cold, Fast 4G: prefetch bytes              |              ~700 kB |               595 kB |
+| Cold, Fast 4G: `worker.ready` (median)     | 12.6 s (11.1–19.3 s) |   9.4 s (8.6–11.5 s) |
+| Cold, Fast 4G: viewer first frame (median) | 15.2 s (13.6–21.8 s) | 12.0 s (10.4–14.1 s) |
+
+Every duplicate before was served from cache, so bytes moved little. The
+cold-start gain is from waiting for the model. The old prefetch started at
+startup-ready, while the library was showing, and competed with the kernel
+download on a constrained link. The baseline build's bundle-evaluation time
+also varied more (1.4–5.8 s against 1.3–1.5 s), so treat the cold gap as
+indicative, not exact.
+
 ### Kernel timing harness for an offset-face edit
 
 `test/perf/offset-face-perf.test.ts` times one offset-face direct edit on an

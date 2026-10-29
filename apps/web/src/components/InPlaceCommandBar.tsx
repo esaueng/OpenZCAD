@@ -1,4 +1,5 @@
 import { Check, MoreHorizontal, X } from 'lucide-react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 
@@ -90,6 +91,30 @@ export function InPlaceCommandBar({
   onCancel
 }: InPlaceCommandBarProps) {
   const refusalSummary = refusal ? modelingRefusalSummary(refusal) : null;
+  const shown = refusalSummary ?? refusal;
+  const hintRef = useRef<HTMLSpanElement>(null);
+  const hintId = useId();
+  // A refusal wraps to three lines; one longer than that offers the rest
+  // rather than leaving its recovery to a tooltip (F014).
+  const [clamped, setClamped] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  useLayoutEffect(() => {
+    setExpanded(false);
+    const element = hintRef.current;
+    if (!element || !shown) {
+      setClamped(false);
+      return;
+    }
+    const measure = () =>
+      setClamped(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => observer?.disconnect();
+  }, [shown]);
   return (
     <div
       className={`in-place-command${refusal ? ' refused' : ''}`}
@@ -98,13 +123,26 @@ export function InPlaceCommandBar({
     >
       <span className="in-place-command-title">{title}</span>
       <span
-        className="in-place-command-hint"
+        ref={hintRef}
+        id={hintId}
+        className={`in-place-command-hint${expanded ? ' is-expanded' : ''}`}
         role="status"
         aria-live="polite"
-        title={refusalSummary ?? refusal ?? undefined}
+        title={shown ?? undefined}
       >
-        {refusalSummary ?? refusal ?? hint}
+        {shown ?? hint}
       </span>
+      {shown && (clamped || expanded) ? (
+        <button
+          type="button"
+          className="in-place-command-more"
+          aria-expanded={expanded}
+          aria-controls={hintId}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? 'Less' : 'More'}
+        </button>
+      ) : null}
       {refusalSummary && (
         <details className="in-place-command-options">
           <summary>Technical details</summary>

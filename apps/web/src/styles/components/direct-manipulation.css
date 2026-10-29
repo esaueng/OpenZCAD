@@ -379,6 +379,23 @@
   font-size: 0.85em;
 }
 
+/* A command chip moved off another one it would cover (a hole's step chip
+   off its bore's) keeps a leader back to its own handle, so each number
+   still says where it belongs. The viewport sets where the line leaves the
+   box, how long it runs and which way. */
+.handle-value-chip[data-leader]::before {
+  content: '';
+  position: absolute;
+  left: var(--leader-x, 50%);
+  top: var(--leader-y, 100%);
+  width: var(--leader-len, 0px);
+  height: 1px;
+  background: color-mix(in srgb, var(--hud-accent-border) 90%, #eaf1ff);
+  transform: rotate(var(--leader-angle, 90deg));
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+
 /* Nothing has moved and no hand is on the handle: the chip is only a tap
    target for exact entry, so it recedes rather than announcing "+0". */
 .handle-value-chip[data-engaged='false'] {
@@ -1255,6 +1272,32 @@
 .sketch-type-sides input:focus-visible {
   border-color: var(--color-accent-border);
   outline: none;
+}
+
+/* A count the polygon refuses (2) is marked and explained under the field,
+   rather than quietly put back to the last good one. */
+.sketch-type-sides {
+  position: relative;
+}
+
+.sketch-type-sides.is-invalid input,
+.sketch-type-sides.is-invalid input:focus-visible {
+  border-color: var(--color-error);
+}
+
+.sketch-type-sides-error {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  padding: 4px 8px;
+  color: var(--color-error-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .sketch-palette-header {

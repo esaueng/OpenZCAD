@@ -23,6 +23,92 @@ describe('InPlaceCommandBar', () => {
     expect(disclosure?.textContent).toContain(diagnostic);
   });
 
+  it('offers the rest of a refusal too long for its three lines', () => {
+    // F014: an oversized fillet's "Try a smaller radius: radius 11.8 builds
+    // here." sat past the one-line ellipsis, reachable only by tooltip.
+    const refusal =
+      'Feature "Fillet": Fillet could not be created on 1 selected edge with radius 1000. Try a smaller radius: radius 11.8 builds here.';
+    const scrollHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollHeight'
+    );
+    const clientHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'clientHeight'
+    );
+    // Laid out, the clamped hint holds 3 of its 4 lines.
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() {
+        return 64;
+      }
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get() {
+        return 48;
+      }
+    });
+    try {
+      render(
+        <InPlaceCommandBar
+          title="Fillet"
+          hint="Drag the radius"
+          refusal={refusal}
+          canFinish={false}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      const status = screen.getByRole('status');
+      expect(status.textContent).toBe(refusal);
+      const more = screen.getByRole('button', { name: 'More' });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      expect(more).toHaveAttribute('aria-controls', status.id);
+      fireEvent.click(more);
+      expect(status).toHaveClass('is-expanded');
+      expect(screen.getByRole('button', { name: 'Less' })).toHaveAttribute(
+        'aria-expanded',
+        'true'
+      );
+    } finally {
+      for (const [name, descriptor] of [
+        ['scrollHeight', scrollHeight],
+        ['clientHeight', clientHeight]
+      ] as const) {
+        if (descriptor) {
+          Object.defineProperty(HTMLElement.prototype, name, descriptor);
+        } else {
+          Reflect.deleteProperty(HTMLElement.prototype, name);
+        }
+      }
+    }
+  });
+
+  it('shows no More while the refusal fits, nor for a plain hint', () => {
+    const { rerender } = render(
+      <InPlaceCommandBar
+        title="Fillet"
+        hint="Drag the radius"
+        refusal="Radius must be positive."
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    rerender(
+      <InPlaceCommandBar
+        title="Fillet"
+        hint="Drag the radius"
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+  });
+
   it('offers precise values before Done without committing', () => {
     const precise = vi.fn();
     const done = vi.fn();

@@ -252,3 +252,55 @@
     display: none;
   }
 }
+
+/* A sample opened before has an edited copy on this device: a copy to keep,
+   and a way back to the original, beside its entry. */
+.demo-item {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+
+.demo-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.demo-item:hover .demo-actions,
+.demo-item:focus-within .demo-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .demo-actions {
+    opacity: 1;
+  }
+}
+
+.demo-action {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.demo-action:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+@media (min-width: 901px) {
+  .start-screen:not(.is-fresh) .demo-actions {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}

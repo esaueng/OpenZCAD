@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { extrudeSidesConflict } from '@openzcad/document-core';
 import {
   toBodyId,
   toFeatureId,
@@ -95,6 +96,23 @@ describe('extrude edit in place', () => {
       expect(edited(node)).toEqual(node.data);
     }
   );
+
+  // F002 (edit path): switching an extrude that stores a back distance to
+  // Symmetric must not leave the two side by side for the document to
+  // refuse. The field cannot be cleared, so it is zeroed.
+  it('zeroes a stored back distance when the edit switches to Symmetric', () => {
+    const twoSided = feature({ backDistance: 5 });
+    const data = edited(twoSided, () => ({ symmetric: true }));
+    expect(data).toMatchObject({ symmetric: true, backDistance: 0 });
+    expect(extrudeSidesConflict(data)).toBe(false);
+    // A stored zero keeps its written form; an absent one stays absent.
+    expect(
+      edited(feature({ backDistance: '0' }), () => ({ symmetric: true }))
+    ).toMatchObject({ symmetric: true, backDistance: '0' });
+    expect(edited(feature({}), () => ({ symmetric: true }))).not.toHaveProperty(
+      'backDistance'
+    );
+  });
 
   it('seeds the draft from the stored feature, expressions as written', () => {
     const initial = extrudeEditInitial(

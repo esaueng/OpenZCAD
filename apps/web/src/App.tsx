@@ -170,7 +170,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
-  isDrawingCommandKind,
+  isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
   type AnyCommand
@@ -3409,10 +3409,19 @@ export function App() {
   const [sectionOutline, setSectionOutline] = useState<SectionOutlineState>({
     kind: 'clipping'
   });
+  // A standard or saved view, asked for in one project. The viewer is
+  // keyed by project and replays a pending request when it mounts, so a
+  // request is only ever handed to the project it was made in (F009: a Top
+  // view chosen in one project opened the next one in Top, off-screen).
   const [viewRequest, setViewRequest] = useState<{
     view: ViewRequestTarget;
     nonce: number;
+    projectId: string | null;
   } | null>(null);
+  const projectViewRequest =
+    viewRequest && viewRequest.projectId === (doc?.projectId ?? null)
+      ? viewRequest
+      : null;
   const [normalToFaceRequest, setNormalToFaceRequest] =
     useState<NormalToFaceRequest | null>(null);
   // The command bar has focus and its list is up.
@@ -5363,7 +5372,7 @@ export function App() {
     // passes in the Draw workspace on the project's own locks alone.
     if (
       commands.length > 0 &&
-      commands.every((command) => isDrawingCommandKind(command.kind))
+      commands.every(isDrawingCommand)
     ) {
       return ensureCanEditDrawings(action);
     }
@@ -5845,6 +5854,8 @@ export function App() {
 
   useLayoutEffect(() => {
     setDatumRepair(null);
+    // Reopening the project a view was asked in must not replay it either.
+    setViewRequest(null);
   }, [doc?.projectId]);
 
   useEffect(() => {
@@ -8466,7 +8477,7 @@ export function App() {
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
       // Drawings, images and folders edit presentation without rebuilding.
       if (
-        isDrawingCommandKind(command.kind) ||
+        isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind)
       )
@@ -10508,7 +10519,11 @@ export function App() {
   }
 
   function requestView(view: ViewRequestTarget) {
-    setViewRequest({ view, nonce: ++viewNonceRef.current });
+    setViewRequest({
+      view,
+      nonce: ++viewNonceRef.current,
+      projectId: doc?.projectId ?? null
+    });
   }
 
   // Saved views: per project, on this device. The list and its storage live
@@ -13180,6 +13195,73 @@ export function App() {
     }
   }
 
+  /** Several parts onto one shelf, from the library's selection. */
+  async function handleMoveProjectsToShelf(
+    targets: ProjectSummary[],
+    status: ProjectStatus
+  ) {
+    let moved = 0;
+    let failure: unknown;
+    for (const project of targets) {
+      try {
+        await persistOrganization(project.projectId, (current) =>
+          applyOrganizationUpdate(current, { status })
+        );
+        moved += 1;
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    const what =
+      targets.length === 1
+        ? targets[0]!.name
+        : countLabel(moved, 'part', 'parts');
+    if (failure) {
+      setStatus(
+        errorMessage(
+          failure,
+          `Moved ${countLabel(moved, 'part', 'parts')}; ${targets.length - moved} could not be moved.`
+        )
+      );
+      return;
+    }
+    setStatus(
+      status === 'deleted'
+        ? `Moved ${what} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
+        : status === 'archived'
+          ? `Archived ${what}.`
+          : `Restored ${what}.`
+    );
+  }
+
+  /** Pins or unpins several parts, from the library's selection. */
+  async function handleSetProjectsPinned(
+    targets: ProjectSummary[],
+    pinned: boolean
+  ) {
+    let failure: unknown;
+    for (const project of targets) {
+      try {
+        await persistOrganization(project.projectId, (current) =>
+          applyOrganizationUpdate(current, { pinned })
+        );
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    const what =
+      targets.length === 1
+        ? targets[0]!.name
+        : countLabel(targets.length, 'part', 'parts');
+    setStatus(
+      failure
+        ? errorMessage(failure, `Could not update every part.`)
+        : pinned
+          ? `Pinned ${what}.`
+          : `Unpinned ${what}.`
+    );
+  }
+
   async function handleTogglePin(project: ProjectSummary) {
     try {
       const { pinned } = await persistOrganization(
@@ -13262,6 +13344,23 @@ export function App() {
         undefined,
         organizationScope
       ).catch(() => undefined);
+    }
+  }
+
+  /** Best effort: a save state left behind still reads "not stored". */
+  async function copyDuplicateSaveStates(
+    sourceProjectId: string,
+    copy: ProjectDocument
+  ) {
+    try {
+      const { copyLocalSaveStates } = await import('./lib/duplicateSaveStates');
+      // One import shared by many saves is loaded and hashed once.
+      const verified = new Set<string>();
+      await copyLocalSaveStates(sourceProjectId, copy, (snapshot) =>
+        cacheCopySources(snapshot, loadSourceBlob, sha256Hex, verified)
+      );
+    } catch {
+      // The copy itself is saved; its inherited saves stay records.
     }
   }
 
@@ -13364,6 +13463,12 @@ export function App() {
           // Kept on the device too, so the copy opens offline exactly like the
           // original it was made from.
           await saveLocalProject(localCopy).catch(() => undefined);
+          // With the save states it lists, where this device holds them: the
+          // account stores only the copy's own (F018). An encrypted copy
+          // keeps the source's blob ids, which a re-homed save state would not.
+          if (!isEncryptedProject(project.projectId)) {
+            await copyDuplicateSaveStates(project.projectId, localCopy);
+          }
           if (response.project.organization) {
             await saveLocalProjectOrganization(
               response.project.projectId,
@@ -13425,6 +13530,9 @@ export function App() {
         sortOrder: projectOrganization(project).sortOrder
       };
       await saveLocalProject(copy);
+      // The copy lists the source's saves; store their documents with it, so
+      // they open here as they do in the source (F018).
+      await copyDuplicateSaveStates(project.projectId, copy);
       await saveLocalProjectOrganization(copy.projectId, organization, {
         mirrorPending: true
       }).catch(() => undefined);
@@ -13614,6 +13722,22 @@ export function App() {
     setProjects((current) =>
       current.filter((project) => !destroyed.has(project.projectId))
     );
+    // A destroyed project is in no account any more. A sample keeps its fixed
+    // id, so a reset one rebuilt later must not inherit the old copy's cloud
+    // standing (listed as saved, or written at the deleted version).
+    for (const projectId of destroyed) {
+      remoteVersionsRef.current.delete(projectId);
+    }
+    if (destroyed.size > 0) {
+      setCloudProjectIds((current) => {
+        if (![...destroyed].some((projectId) => current.has(projectId))) {
+          return current;
+        }
+        const next = new Set(current);
+        destroyed.forEach((projectId) => next.delete(projectId));
+        return next;
+      });
+    }
     if (destroyed.size > 0) {
       if (session) forgetShelfProjectNames(session.userId, destroyed);
       void import('./lib/savedViews').then(({ forgetSavedViews }) =>
@@ -13641,6 +13765,64 @@ export function App() {
       setStatus(`Deleted ${project.name} permanently.`);
     } catch (error) {
       setStatus(errorMessage(error, 'Could not delete the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Destroys the library's selection in the trash, after one confirm. */
+  async function handleDeleteProjectsForever(targets: ProjectSummary[]) {
+    if (targets.length === 1) {
+      await handleDeleteProjectForever(targets[0]!);
+      return;
+    }
+    if (
+      targets.length === 0 ||
+      (appSettings.general.confirmDestructiveActions &&
+        !window.confirm(
+          `Permanently delete ${countLabel(targets.length, 'project', 'projects')}? This cannot be undone.`
+        ))
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects(targets);
+      setStatus(
+        `Deleted ${countLabel(targets.length, 'project', 'projects')} permanently.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not delete every project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Discards this device's copy of a sample, edits and save states with it,
+   * so its next open builds the original again from its definition.
+   */
+  async function handleResetDemo(
+    definition: DemoDefinition,
+    project: ProjectSummary
+  ): Promise<boolean> {
+    const name = definition.name.replace('Demo · ', '');
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Reset the ${name} sample? Your changes to it are discarded; save a copy first to keep them.`
+      )
+    ) {
+      return false;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects([project]);
+      setStatus(`Reset ${name}. It opens as the original.`);
+      return true;
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not reset ${name}.`));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -21027,7 +21209,9 @@ export function App() {
     setKeypad({
       kind: 'command',
       commandValueId: valueId,
-      label: valueSpec.label,
+      label:
+        inPlace.handles.find((handle) => handle.valueId === valueId)?.label ??
+        valueSpec.label,
       // A parametric value opens as its expression, and comes back as one
       // if entry is canceled.
       initial: raw ?? keypadText(value),
@@ -21066,15 +21250,20 @@ export function App() {
             ? formatNumber(shown)
             : String(shown);
         };
+        // A handle that names its own direction ("Y count") reads it first,
+        // as a length's chip reads its label.
+        const label = handle.label ?? valueSpec?.label ?? '';
         const format =
           valueSpec?.unit === 'angle'
             ? (value: number) => `${round(value)}°`
             : valueSpec?.label === '×'
               ? (value: number) => `× ${round(value)}`
               : valueSpec?.unit === 'count'
-              ? (value: number) => `${round(value)} ${valueSpec.label.toLowerCase()}`
+              ? handle.label
+                ? (value: number) => `${label} ${round(value)}`
+                : (value: number) => `${round(value)} ${label.toLowerCase()}`
               : (value: number) =>
-                  `${valueSpec?.label ?? ''} ${round(value)} ${inPlaceUnits}`.trim();
+                  `${label} ${round(value)} ${inPlaceUnits}`.trim();
         return {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
@@ -21838,6 +22027,11 @@ export function App() {
   useEffect(() => {
     setRevertPill(null);
   }, [resolvedWorkspaceMode]);
+  // Nor does it outlive its project: a new, empty project offered to edit
+  // the last project's sketch (F011). Before paint, so it never shows there.
+  useLayoutEffect(() => {
+    setRevertPill(null);
+  }, [doc?.projectId]);
 
   /** A detected bounded cell was clicked: update persistent profile selection. */
   function handleSelectRegion(
@@ -22077,7 +22271,10 @@ export function App() {
       sketchId: target.sketchId as SketchId,
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
-      backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
+      // Symmetric has no back distance; sending its 0 beside it was F002.
+      backDistance: regionExtrudeSettings.current?.symmetric
+        ? undefined
+        : (regionExtrudeSettings.current?.backDistance ?? 0),
       // The form sends a side only with a through-all extent, and a face
       // only with a to-face one.
       endCondition: regionExtrudeSettings.current?.endCondition,
@@ -26787,6 +26984,18 @@ export function App() {
             void handleMoveProjectToShelf(project, shelf)
           }
           onTogglePin={(project) => void handleTogglePin(project)}
+          onMoveManyToShelf={(targets, shelf) =>
+            void handleMoveProjectsToShelf(targets, shelf)
+          }
+          onSetPinnedMany={(targets, pinned) =>
+            void handleSetProjectsPinned(targets, pinned)
+          }
+          onDeleteManyForever={(targets) =>
+            void handleDeleteProjectsForever(targets)
+          }
+          onResetDemo={(definition, project) =>
+            handleResetDemo(definition, project)
+          }
           onReorder={(projectIds, pin) =>
             handleReorderProjects(projectIds, pin)
           }
@@ -28397,7 +28606,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             autoFrame={autoFrame}
-            viewRequest={viewRequest}
+            viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
             // Every drag handle below is disarmed by passing nothing to arm:

@@ -1588,3 +1588,62 @@
     scale: 0.97;
   }
 }
+
+/* Which part's preview stands for a folder: its parts as small cards. */
+.folder-cover-dialog {
+  display: grid;
+  gap: var(--sp-3);
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 64px));
+  padding: var(--sp-4);
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+
+.folder-cover-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.folder-cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--sp-2);
+}
+
+.folder-cover-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+.folder-cover-option:hover {
+  color: var(--color-text);
+  border-color: var(--color-accent-border);
+}
+
+.folder-cover-option.is-chosen {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.folder-cover-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

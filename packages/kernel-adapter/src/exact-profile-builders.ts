@@ -1,5 +1,7 @@
 import type { RemusKernel } from './remus-runtime';
 import {
+  EXTRUDE_SIDES_CONFLICT_MESSAGE,
+  extrudeSidesConflict,
   findSketch,
   listFeaturesInOrder,
   resolveParamValue
@@ -190,10 +192,10 @@ function resolveExtrudeSpan(
           'back distance',
           documentUnits
         );
-  if (back !== 0 && data.symmetric) {
-    throw new Error(
-      'Extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
-    );
+  // The document's rule, on the resolved value: a zero back distance is the
+  // one-sided default beside symmetric, anything else conflicts.
+  if (extrudeSidesConflict({ symmetric: data.symmetric, backDistance: back })) {
+    throw new Error(EXTRUDE_SIDES_CONFLICT_MESSAGE);
   }
   if (back < 0) {
     throw new Error(`Extrude back distance must be non-negative, got ${back}.`);

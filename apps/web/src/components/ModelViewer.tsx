@@ -24,6 +24,7 @@ import {
   watchStageTheme
 } from '../lib/stagePalette';
 import { mark, measure, timed } from '../lib/perf';
+import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { recordEditPhase } from '../lib/editTrace';
 import {
   avoidSketchDimensionOverlays,
@@ -229,6 +230,7 @@ import {
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
+import { chipLeader, separateChips } from '../lib/commandChipLayout';
 import { faceDepthBehind, faceLift } from '../lib/faceDepthBehind';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
@@ -727,6 +729,19 @@ export type CommandHandleView = (
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
 /** How far inside the canvas edge a command chip is kept, in CSS pixels. */
 const COMMAND_CHIP_MARGIN_PX = 12;
+/**
+ * How far a command chip's box centre stands above its point, in chip
+ * heights: `.handle-value-chip` is drawn at translate(-50%, -130%).
+ */
+const COMMAND_CHIP_LIFT = 0.8;
+
+/** One command value's handle in the viewport: its rig, if it drags, and chip. */
+interface CommandRigEntry {
+  key: string;
+  rig: DragRig | null;
+  anchor: THREE.Vector3 | null;
+  chip: HTMLDivElement;
+}
 
 export interface SketchViewData {
   sketchId: string;
@@ -2420,17 +2435,7 @@ export function ModelViewer({
    * U09: the in-place command's handles by value id — a rig (none for a
    * chip-only value) and its chip — and the drag holding one of them.
    */
-  const commandRigsRef = useRef(
-    new Map<
-      string,
-      {
-        key: string;
-        rig: DragRig | null;
-        anchor: THREE.Vector3 | null;
-        chip: HTMLDivElement;
-      }
-    >()
-  );
+  const commandRigsRef = useRef(new Map<string, CommandRigEntry>());
   const commandDragRef = useRef<{
     pointerId: number;
     valueId: string;
@@ -4205,16 +4210,39 @@ export function ModelViewer({
         .filter((rect) => rect.width > 0 && rect.height > 0);
       const topbarBottom =
         otherPanels.length > 0
-          ? renderer.domElement.ownerDocument
+          ? (renderer.domElement.ownerDocument
               .querySelector('.app-shell > .topbar')
-              ?.getBoundingClientRect().bottom ?? null
+              ?.getBoundingClientRect().bottom ?? null)
           : null;
+      // A chip first shown this frame is still hidden, and a hidden chip
+      // measures 0×0: placed and separated at that size, a hole's chips
+      // opened on top of each other and stayed there until the next frame
+      // the on-demand loop happened to draw. Reveal each with its text before
+      // measuring; nothing paints before the loop below places it or hides
+      // it again behind the camera.
+      for (const [valueId, entry] of rigs) {
+        if (!entry.chip.hidden) continue;
+        const view = commandHandlesRef.current.find(
+          (handle) => handle.valueId === valueId
+        );
+        if (!view) continue;
+        const text = view.format(entry.rig ? entry.rig.value() : view.value);
+        if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        entry.chip.hidden = false;
+      }
       const chipWidths = new Map(
         [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetWidth])
       );
       const chipHeights = new Map(
         [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetHeight])
       );
+      const shown: {
+        valueId: string;
+        entry: CommandRigEntry;
+        x: number;
+        y: number;
+        order: number;
+      }[] = [];
       for (const [valueId, entry] of rigs) {
         const view = commandHandlesRef.current.find(
           (handle) => handle.valueId === valueId
@@ -4300,17 +4328,15 @@ export function ModelViewer({
                 topbarBottom
               )
             : { dx: 0, dy: 0 };
-        const chipX = x + dodge.dx;
-        const chipY = y + dodge.dy;
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
-        hud.showAt(entry.chip, chipX, chipY);
-        // The keypad rides the chip it was opened from: the one dragged
-        // last, else the first.
-        if (valueId === activeId) {
-          keypadAnchorRef.current?.({ x: chipX, y: chipY });
-          anchored = true;
-        }
+        shown.push({
+          valueId,
+          entry,
+          x: x + dodge.dx,
+          y: y + dodge.dy,
+          order: commandHandlesRef.current.indexOf(view)
+        });
         if (E2E_CANVAS_HOOKS_ENABLED) {
           // Each handle in page pixels, for specs that drag it the way a
           // hand would rather than reaching into the command.
@@ -4323,6 +4349,74 @@ export function ModelViewer({
             y: rect.top + ((1 - grip.y) / 2) * rect.height,
             value
           };
+        }
+      }
+      // Chips whose handles project close together (a hole's bore and step
+      // rims on a small face) are pulled apart, in the command's value
+      // order, each moved one with a leader back to its handle (F005). The
+      // chip's box stands above its point (translate -50%, -130%), so its
+      // centre is 0.8 of its height above it.
+      shown.sort((a, b) => a.order - b.order);
+      const separated = separateChips(
+        shown.map(({ valueId, x, y }) => ({
+          id: valueId,
+          x,
+          y: y - (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT,
+          width: chipWidths.get(valueId) ?? 0,
+          height: chipHeights.get(valueId) ?? 0
+        })),
+        {
+          left: COMMAND_CHIP_MARGIN_PX,
+          top: 0,
+          right:
+            laneLeft === null
+              ? canvasCssWidth - COMMAND_CHIP_MARGIN_PX
+              : Math.min(
+                  canvasCssWidth - COMMAND_CHIP_MARGIN_PX,
+                  laneLeft - COMMAND_CHIP_MARGIN_PX
+                ),
+          bottom:
+            footTop === null
+              ? canvasCssHeight - COMMAND_CHIP_MARGIN_PX
+              : Math.min(
+                  canvasCssHeight - COMMAND_CHIP_MARGIN_PX,
+                  footTop - COMMAND_CHIP_MARGIN_PX
+                )
+        }
+      );
+      for (const { valueId, entry, x, y } of shown) {
+        const { dx, dy } = separated.get(valueId) ?? { dx: 0, dy: 0 };
+        const chipX = x + dx;
+        const chipY = y + dy;
+        hud.showAt(entry.chip, chipX, chipY);
+        const width = chipWidths.get(valueId) ?? 0;
+        const height = chipHeights.get(valueId) ?? 0;
+        const leader =
+          Math.hypot(dx, dy) > 1
+            ? chipLeader(
+                { x: chipX, y: chipY - height * COMMAND_CHIP_LIFT },
+                { x, y },
+                width,
+                height
+              )
+            : null;
+        if (leader) {
+          entry.chip.dataset.leader = '';
+          entry.chip.style.setProperty('--leader-x', `${leader.x}px`);
+          entry.chip.style.setProperty('--leader-y', `${leader.y}px`);
+          entry.chip.style.setProperty('--leader-len', `${leader.length}px`);
+          entry.chip.style.setProperty(
+            '--leader-angle',
+            `${leader.angleDeg}deg`
+          );
+        } else if (entry.chip.dataset.leader !== undefined) {
+          delete entry.chip.dataset.leader;
+        }
+        // The keypad rides the chip it was opened from: the one dragged
+        // last, else the first.
+        if (valueId === activeId) {
+          keypadAnchorRef.current?.({ x: chipX, y: chipY });
+          anchored = true;
         }
       }
       if (
@@ -10862,6 +10956,9 @@ export function ModelViewer({
       if (presented) {
         pendingEditFrameRef.current = undefined;
         recordEditPhase(presented, 'frame', { analysis: presented.analysis });
+        // The workspace's readiness marks (`lib/startupReadiness.ts`): this
+        // frame is the first to show this revision's exact geometry.
+        reportPresentedGeometry(presented, context.renderedBodies?.length ?? 0);
       }
       if (e2eCanvasHooksEnabled) {
         const distance = context.activeCamera.position.distanceTo(

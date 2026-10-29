@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -1200,6 +1201,230 @@ describe('DrawingWorkspace', () => {
       fireEvent.keyDown(canvas, { key: 'Escape' });
       expect(screen.queryByRole('status')).toBeNull();
       expect(canvas.querySelector('.drawing-pick-surface')).toBeNull();
+    });
+  });
+});
+
+describe('DrawingWorkspace QA fixes', () => {
+  const fingerprint = () =>
+    drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
+  const withSheets = (sheets: DrawingSheet[]): ProjectDocument => ({
+    ...createProjectDocument('Bracket', toUserId('test')),
+    bodyOrder: [bodyId],
+    drawings: { sheets }
+  });
+  const viewBox = () =>
+    screen
+      .getByRole('application', { name: 'Sheet Sheet 1' })
+      .getAttribute('viewBox')!
+      .split(' ')
+      .map(Number) as [number, number, number, number];
+
+  it('flags a view partly off the paper, refuses export, and fits the views back', async () => {
+    // QA F006: the old flag tested only the centre, so a view half off the
+    // paper exported half a view without a word.
+    const sheet = starter(fingerprint());
+    const iso = sheet.views.find((view) => view.orientation === 'iso')!;
+    // A3 landscape is 420 mm wide: the centre stays on it, the view does not.
+    iso.centerMm = { x: 416, y: iso.centerMm.y };
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const shared = {
+      bodies: { [bodyId]: cube() },
+      geometryPending: false,
+      defaultBodyIds: [bodyId],
+      requestTessellation: displayTessellation({ [bodyId]: cube() }),
+      editDisabledReason: null,
+      onCommand,
+      onStatus: vi.fn()
+    };
+    const before = withSheets([sheet]);
+    const { rerender } = render(
+      <DrawingWorkspace document={before} {...shared} />
+    );
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    const list = screen.getByRole('listbox', { name: 'Views on this sheet' });
+    expect(
+      within(list).getByRole('option', {
+        name: 'Isometric (partly off the page)'
+      })
+    ).toBeTruthy();
+    const pdf = screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' });
+    expect(pdf.disabled).toBe(true);
+    expect(pdf.title).toBe(
+      'The Isometric view runs off the paper. Fit views to sheet, or move it onto the page, to export.'
+    );
+    expect(screen.getByRole('status').textContent).toBe(pdf.title);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Fit views to sheet' })
+    );
+    // One command, so one undo puts the layout back.
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.label).toBe('Fit views to sheet');
+    expect(
+      command.commands?.every((entry) => entry.kind.startsWith('drawing.'))
+    ).toBe(true);
+    command.validate(before);
+    const after = command.apply(before);
+    rerender(<DrawingWorkspace document={after} {...shared} />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      ).toBe(false)
+    );
+    expect(
+      within(
+        screen.getByRole('listbox', { name: 'Views on this sheet' })
+      ).getByRole('option', { name: 'Isometric' })
+    ).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('warns, without refusing, about sheet text the PDF font prints as "?"', () => {
+    // QA F008: U+2300 prints as Ø; a star has no stand-in and becomes "?".
+    setup({ sheet: starter(fingerprint()) });
+    const title = screen.getByRole('textbox', { name: 'Title' });
+    fireEvent.change(title, { target: { value: '⌀12 bore' } });
+    expect(screen.queryByRole('status')).toBeNull();
+    fireEvent.change(title, { target: { value: '⌀12 bore ★' } });
+    const warning = screen.getByRole('status');
+    expect(warning.textContent).toContain('★ will print as "?"');
+    expect(warning.textContent).not.toContain('⌀');
+  });
+
+  describe('sheet zoom', () => {
+    // A3 landscape (420 × 297 mm) fitted to an 840 × 594 px canvas: 2 px/mm.
+    const mockCanvas = () =>
+      vi
+        .spyOn(Element.prototype, 'getBoundingClientRect')
+        .mockReturnValue(new DOMRect(0, 0, 840, 594));
+
+    it('zooms with the buttons, shows the level and fits the sheet again', async () => {
+      setup({ sheet: starter(fingerprint()) });
+      const zoom = screen.getByRole('toolbar', { name: 'Sheet zoom' });
+      const button = (name: string) =>
+        within(zoom).getByRole<HTMLButtonElement>('button', { name });
+      expect(zoom.textContent).toContain('100%');
+      expect(viewBox()).toEqual([0, 0, 420, 297]);
+      await userEvent.click(button('Zoom in'));
+      expect(zoom.textContent).toContain('125%');
+      // About the sheet's centre: 420 / 1.25 = 336 mm wide.
+      expect(viewBox()).toEqual([42, 29.7, 336, 237.6]);
+      await userEvent.click(button('Zoom out'));
+      expect(zoom.textContent).toContain('100%');
+      await userEvent.click(button('Zoom in'));
+      await userEvent.click(button('Fit sheet'));
+      expect(viewBox()).toEqual([0, 0, 420, 297]);
+      expect(button('Fit sheet').disabled).toBe(true);
+    });
+
+    it('zooms about the pointer with Ctrl+wheel, and scrolls only once zoomed', () => {
+      const rect = mockCanvas();
+      try {
+        setup({ sheet: starter(fingerprint()) });
+        const canvas = screen.getByRole('application', {
+          name: 'Sheet Sheet 1'
+        });
+        // happy-dom's WheelEvent has no modifier keys or pointer position
+        // (it extends UIEvent), so they are set on the event as a browser
+        // would deliver them. Returns whether the default went ahead.
+        const wheel = (
+          init: { deltaY: number; ctrlKey?: boolean },
+          at = { x: 0, y: 0 }
+        ) => {
+          const event = new WheelEvent('wheel', {
+            deltaY: init.deltaY,
+            bubbles: true,
+            cancelable: true
+          });
+          for (const [key, value] of Object.entries({
+            ctrlKey: init.ctrlKey ?? false,
+            metaKey: false,
+            shiftKey: false,
+            clientX: at.x,
+            clientY: at.y
+          }))
+            Object.defineProperty(event, key, { value });
+          let result = true;
+          act(() => {
+            result = canvas.dispatchEvent(event);
+          });
+          return result;
+        };
+        // A plain wheel on a fitted sheet is left to the page.
+        expect(wheel({ deltaY: 100 })).toBe(true);
+        expect(viewBox()).toEqual([0, 0, 420, 297]);
+        // The pointer at (210, 150) px is over paper (105, 75) mm (SVG y
+        // down); zooming in keeps that point under it.
+        expect(wheel({ deltaY: -300, ctrlKey: true }, { x: 210, y: 150 })).toBe(
+          false
+        );
+        const [x0, y0, width, height] = viewBox();
+        const zoom = 420 / width;
+        expect(zoom).toBeGreaterThan(1.5);
+        expect(height).toBeCloseTo(297 / zoom, 2);
+        const pxPerMm = 2 * zoom;
+        expect(x0 + width / 2 + (210 - 420) / pxPerMm).toBeCloseTo(105, 1);
+        expect(y0 + height / 2 + (150 - 297) / pxPerMm).toBeCloseTo(75, 1);
+        // Zoomed, a plain wheel scrolls the sheet.
+        expect(wheel({ deltaY: 80 })).toBe(false);
+        expect(viewBox()[1]).toBeCloseTo(y0 + 80 / pxPerMm, 2);
+        expect(viewBox()[0]).toBeCloseTo(x0, 2);
+      } finally {
+        rect.mockRestore();
+      }
+    });
+
+    it('pans by dragging empty paper and keeps view drags in paper millimetres', async () => {
+      const rect = mockCanvas();
+      try {
+        const { onCommand } = setup({ sheet: starter(fingerprint()) });
+        const canvas = screen.getByRole('application', {
+          name: 'Sheet Sheet 1'
+        });
+        const zoomIn = screen.getByRole('button', { name: 'Zoom in' });
+        await userEvent.click(zoomIn);
+        await userEvent.click(zoomIn);
+        // 1.25² zoom: 2 × 1.5625 = 3.125 px per paper millimetre.
+        const [x0, y0] = viewBox();
+        fireEvent.pointerDown(canvas, {
+          button: 0,
+          pointerId: 7,
+          clientX: 400,
+          clientY: 300
+        });
+        fireEvent.pointerMove(canvas, {
+          pointerId: 7,
+          clientX: 431.25,
+          clientY: 300
+        });
+        fireEvent.pointerUp(canvas, { pointerId: 7 });
+        expect(viewBox()[0]).toBeCloseTo(x0 - 10, 3);
+        expect(viewBox()[1]).toBeCloseTo(y0, 3);
+        expect(onCommand).not.toHaveBeenCalled();
+
+        // Dragging a view 62.5 px at this zoom moves it 20 mm, not 31.25.
+        const iso = screen.getByRole('button', { name: 'Isometric view' });
+        const origin = starter(fingerprint()).views.find(
+          (view) => view.orientation === 'iso'
+        )!.centerMm;
+        fireEvent.pointerDown(iso, { button: 0, clientX: 100, clientY: 100 });
+        fireEvent.pointerMove(iso, { clientX: 162.5, clientY: 100 });
+        fireEvent.pointerUp(iso);
+        const command = onCommand.mock.calls.at(-1)![0];
+        expect(command.kind).toBe('drawing.view.update');
+        expect(
+          (command.payload as { centerMm: { x: number } }).centerMm.x
+        ).toBeCloseTo(Math.round((origin.x + 20) * 10) / 10, 5);
+      } finally {
+        rect.mockRestore();
+      }
     });
   });
 });

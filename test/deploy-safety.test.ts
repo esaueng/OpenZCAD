@@ -1,10 +1,47 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 import { foldEvidence, readFragments } from '../scripts/roadmap-evidence.mjs';
 import { UPLOAD_CLEANUP_CRON } from '../scripts/validate-deployment-config.mjs';
 import { FLEET_CI_PATH } from './fleet-workflow';
 import { MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
+
+it('runs the locked deployment CLI from the repository root without registry or cached packages', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'openzcad-wrangler-'));
+  const webWrangler = JSON.parse(
+    readFileSync('apps/web/node_modules/wrangler/package.json', 'utf8')
+  ) as { version: string };
+  try {
+    const version = execFileSync(
+      'npm',
+      [
+        'exec',
+        '--offline',
+        '--yes=false',
+        '--cache',
+        join(scratch, 'npm'),
+        '--',
+        'wrangler',
+        '--version'
+      ],
+      {
+        encoding: 'utf8',
+        timeout: 15_000,
+        env: {
+          ...process.env,
+          npm_config_update_notifier: 'false',
+          WRANGLER_LOG_PATH: join(scratch, 'wrangler.log')
+        }
+      }
+    );
+    expect(version.trim()).toBe(webWrangler.version);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}, 20_000);
 
 interface PackageJson {
   scripts?: Record<string, string>;

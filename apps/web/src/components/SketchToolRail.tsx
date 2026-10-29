@@ -425,10 +425,21 @@ function shapeModeSpec(mode: SketchRectangleMode | 'polygon') {
   return SHAPE_MODES.find((spec) => spec.mode === mode) ?? SHAPE_MODES[0]!;
 }
 
+function validPolygonSides(sides: number): boolean {
+  return (
+    Number.isInteger(sides) &&
+    sides >= MIN_POLYGON_SIDES &&
+    sides <= MAX_SKETCH_POLYGON_SIDES
+  );
+}
+
 /**
  * The polygon's side count as typed: the draft stays in the field while it
  * is on its way to valid ("", "1" on the way to "12"), and only a whole
- * number the document accepts is committed.
+ * number the document accepts is committed. A count it refuses says so and
+ * which count the tool still draws with, and stays in the field until it is
+ * fixed: blurring it back to 6 without a word read as the field ignoring
+ * the user (F019).
  */
 function PolygonSidesField({
   value,
@@ -438,8 +449,11 @@ function PolygonSidesField({
   onCommit(value: number): void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const errorId = useId();
+  const invalid =
+    draft !== null && draft.trim() !== '' && !validPolygonSides(Number(draft));
   return (
-    <label className="sketch-type-sides">
+    <label className={`sketch-type-sides${invalid ? ' is-invalid' : ''}`}>
       <span>Sides</span>
       <input
         type="number"
@@ -449,20 +463,27 @@ function PolygonSidesField({
         inputMode="numeric"
         value={draft ?? String(value)}
         aria-label="Polygon sides"
+        aria-invalid={invalid || undefined}
+        aria-describedby={invalid ? errorId : undefined}
         onChange={(event) => {
           const text = event.currentTarget.value;
           setDraft(text);
           const next = Number(text);
-          if (
-            Number.isInteger(next) &&
-            next >= MIN_POLYGON_SIDES &&
-            next <= MAX_SKETCH_POLYGON_SIDES
-          ) {
+          if (validPolygonSides(next)) {
             onCommit(next);
           }
         }}
-        onBlur={() => setDraft(null)}
+        // An empty field goes back to the count in use; a refused one
+        // keeps its message until it is corrected.
+        onBlur={() => {
+          if (!invalid) setDraft(null);
+        }}
       />
+      {invalid && (
+        <span id={errorId} className="sketch-type-sides-error" role="status">
+          {`A polygon takes ${MIN_POLYGON_SIDES} to ${MAX_SKETCH_POLYGON_SIDES} sides · drawing with ${value}`}
+        </span>
+      )}
     </label>
   );
 }

@@ -150,6 +150,29 @@ test('Hole in place: a counterbore follows the bore until its chips size it', as
   await expect(page.getByTestId('command-handle-counterboreDepth')).toHaveText(
     'Counterbore depth 3 mm'
   );
+  // F005: the chips that opened with the step stand apart at once, without
+  // waiting for a drag or orbit to draw another frame.
+  await expect
+    .poll(() =>
+      page.locator('[data-testid^="command-handle-"]:visible').evaluateAll(
+        (chips) => {
+          const boxes = chips.map((chip) => chip.getBoundingClientRect());
+          if (boxes.some((box) => box.width === 0 || box.height === 0))
+            return 'unmeasured';
+          for (const [i, a] of boxes.entries())
+            for (const b of boxes.slice(i + 1))
+              if (
+                a.left < b.right - 1 &&
+                b.left < a.right - 1 &&
+                a.top < b.bottom - 1 &&
+                b.top < a.bottom - 1
+              )
+                return 'overlap';
+          return 'apart';
+        }
+      )
+    )
+    .toBe('apart');
   await enterCommandValue(page, 'diameter', '4');
   // An unset step still follows the bore; a typed one is kept.
   await expect(

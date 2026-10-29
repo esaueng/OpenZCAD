@@ -159,6 +159,29 @@ it('names the live tool as the rails do, armed tools first', () => {
       pendingEdit: { kind: 'fillet', picks: ['ent_1'] }
     })
   ).toBe('Fillet: 1/2 selected');
+  // A dimension counts its picks, then says the click it still wants
+  // rather than "2/2 selected" (F019).
+  expect(
+    readout({
+      ...SELECT_TOOL,
+      pendingConstraint: {
+        kind: 'angle',
+        picks: [{ kind: 'object', objectId: 'ent_1' }]
+      }
+    })
+  ).toBe('Angle: 1/2 selected');
+  expect(
+    readout({
+      ...SELECT_TOOL,
+      pendingConstraint: {
+        kind: 'angle',
+        picks: [
+          { kind: 'object', objectId: 'ent_1' },
+          { kind: 'object', objectId: 'ent_2' }
+        ]
+      }
+    })
+  ).toBe('Angle: click to place the value');
 });
 
 it('says the Shift hint once, in the palette footer, not here too', () => {

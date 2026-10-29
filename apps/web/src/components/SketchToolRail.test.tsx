@@ -293,10 +293,19 @@ describe('SketchToolRail', () => {
     expect(sides).toHaveValue(6);
     await user.clear(sides);
     await user.type(sides, '2');
-    // A count the document refuses is never committed.
+    // A count the document refuses is never committed, and says so: it
+    // used to go back to 6 on blur without a word (F019).
     expect(onPolygonSides).not.toHaveBeenCalled();
+    expect(sides).toHaveAttribute('aria-invalid', 'true');
+    expect(sides).toHaveAccessibleDescription(
+      'A polygon takes 3 to 64 sides · drawing with 6'
+    );
+    sides.blur();
+    expect(sides).toHaveValue(2);
+    expect(sides).toHaveAttribute('aria-invalid', 'true');
     await user.type(sides, '4');
     expect(onPolygonSides).toHaveBeenLastCalledWith(24);
+    expect(sides).not.toHaveAttribute('aria-invalid');
     await user.clear(sides);
     await user.type(sides, '65');
     expect(onPolygonSides).toHaveBeenLastCalledWith(6);

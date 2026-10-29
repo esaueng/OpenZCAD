@@ -28,7 +28,7 @@
 .settings-page {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   color: var(--color-text);
   background: var(--color-bg);
 }
@@ -78,9 +78,9 @@
   border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
 }
 
-/* The sections are the library's column: a floating island on the
-   workspace tool rail's edge, 10px under the top bar, ending where its list
-   does. */
+/* The sections are the library's column, column first as there: an island
+   the window's full height, the logo at its head where the workspace's top
+   bar puts it, and the way back under it. */
 .settings-layout {
   min-height: 0;
   display: grid;
@@ -88,13 +88,11 @@
 }
 
 .settings-nav {
-  align-self: start;
   min-height: 0;
-  max-height: calc(100% - var(--island-gap) * 2);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  margin: var(--island-gap) 0 0 var(--island-gap);
+  margin: var(--island-gap) 0 var(--island-gap) var(--island-gap);
   padding: var(--sp-2);
   background: var(--color-surface);
   border: var(--border-thin);
@@ -1275,5 +1273,91 @@
 
   .settings-unit-input input {
     flex: 1;
+  }
+}
+
+.settings-nav-head {
+  display: flex;
+  align-items: center;
+  min-height: var(--topbar-island-h);
+  padding: 0 6px;
+}
+
+.settings-nav-head .brand {
+  margin: 0;
+}
+
+.settings-close {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  margin: var(--sp-2) 0;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.settings-close:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+/* The page's head: its name, the save note and the search, on one ruled
+   line like the library's shelf toolbar. */
+.settings-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  width: min(1040px, 100%);
+  min-height: 40px;
+  margin-bottom: var(--sp-5);
+  padding-bottom: var(--sp-2);
+  border-bottom: var(--border-thin);
+}
+
+.settings-head-title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 18px;
+  font-weight: var(--fw-medium);
+  letter-spacing: -0.01em;
+}
+
+.settings-head .settings-save-message {
+  flex: 1;
+  text-align: left;
+}
+
+.settings-head .settings-search {
+  width: clamp(180px, 24vw, 300px);
+  min-height: 30px;
+}
+
+@media (max-width: 580px) {
+  .settings-nav-head {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .settings-nav-head .brand {
+    font-size: 0;
+    gap: 0;
+  }
+
+  .settings-nav-head .brand .beta-tag {
+    display: none;
+  }
+
+  .settings-close {
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+    gap: 0;
   }
 }
