@@ -47,6 +47,8 @@ interface DragSession {
   group: string;
   scroller: HTMLElement | null;
   frame: number;
+  /** What the tile would be dropped into, and whether its hold has armed. */
+  into: { target: string; armed: boolean; timer: number | null } | null;
 }
 
 /**
@@ -56,6 +58,17 @@ interface DragSession {
 export type TileMoves = ReadonlyMap<string, string>;
 
 const NO_MOVES: TileMoves = new Map();
+
+/**
+ * Something a tile can be dropped INTO rather than beside: a folder, or a
+ * part that would become a folder with it. `delay` is how long the pointer
+ * must rest there before it counts, so a drag passing over a part reorders
+ * as before and only a deliberate hold merges.
+ */
+export interface TileDropTarget {
+  target: string;
+  delay?: number;
+}
 
 /** A tile dropped into another group than its own. */
 export interface TileGroupMove {
@@ -79,6 +92,19 @@ export interface TileReorderOptions {
    * settles, so a later save landing first cannot show an in-between state.
    */
   onCommit(ids: string[], moved?: TileGroupMove): void | Promise<unknown>;
+  /**
+   * What lies under the pointer that the dragged tile would go into, if
+   * anything; null means it is placed beside the tile there instead.
+   */
+  dropInto?(
+    draggedId: string,
+    hit: Element,
+    pointer: { x: number; y: number }
+  ): TileDropTarget | null;
+  /** Whether the dragged tile may take a place beside this one. */
+  canPlaceBeside?(draggedId: string, targetId: string): boolean;
+  /** Saves a drop into a target `dropInto` named. */
+  onDropInto?(draggedId: string, target: string): void | Promise<unknown>;
 }
 
 /**
@@ -99,19 +125,47 @@ export function useTileReorder({
   enabled,
   tileRefs,
   groupOf,
-  onCommit
+  onCommit,
+  dropInto,
+  canPlaceBeside,
+  onDropInto
 }: TileReorderOptions) {
   const [order, setOrder] = useState<string[] | null>(null);
   const [moved, setMoved] = useState<TileMoves>(NO_MOVES);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // The drop-into target under the pointer: `armed` once its hold elapses.
+  const [dropTarget, setDropTarget] = useState<{
+    target: string;
+    armed: boolean;
+  } | null>(null);
   const session = useRef<DragSession | null>(null);
   const settleTimer = useRef<number | null>(null);
   // Drops whose saves are still running; the preview stays until all are in.
   const [savesInFlight, setSavesInFlight] = useState(0);
   // Positions before a reflow, so each moved tile can ease from there.
   const before = useRef<Map<string, DOMRect> | null>(null);
-  const latest = useRef({ ids, enabled, groupOf, onCommit, order, moved });
-  latest.current = { ids, enabled, groupOf, onCommit, order, moved };
+  const latest = useRef({
+    ids,
+    enabled,
+    groupOf,
+    onCommit,
+    dropInto,
+    canPlaceBeside,
+    onDropInto,
+    order,
+    moved
+  });
+  latest.current = {
+    ids,
+    enabled,
+    groupOf,
+    onCommit,
+    dropInto,
+    canPlaceBeside,
+    onDropInto,
+    order,
+    moved
+  };
   const stop = useRef<(() => void) | null>(null);
 
   const idsKey = ids.join('\n');
@@ -204,6 +258,17 @@ export function useTileReorder({
     // The dragged tile ignores the pointer while it moves, so this finds what
     // lies beneath it.
     const hit = document.elementFromPoint(current.x, current.y);
+    const into = hit
+      ? (latest.current.dropInto?.(current.id, hit, {
+          x: current.x,
+          y: current.y
+        }) ?? null)
+      : null;
+    if (into) {
+      aimInto(current, into);
+      return;
+    }
+    aimInto(current, null);
     const under = hit?.closest<HTMLElement>('[data-tile-id]');
     // A tile still easing out of the slot it just gave up is hit where it
     // was, not where it is going; taking it would swap straight back. Look
@@ -234,16 +299,23 @@ export function useTileReorder({
     const next = current.order.filter((id) => id !== current.id);
     let group: string;
     if (target) {
-      if (target === current.id) {
+      if (
+        target === current.id ||
+        latest.current.canPlaceBeside?.(current.id, target) === false
+      ) {
         return;
       }
-      // Takes the target's slot: the target shifts away from where the
-      // dragged tile came from.
-      const to = current.order.indexOf(target);
-      if (to < 0) {
+      // Lands before the target over its first half and after it over the
+      // second, so resting on a neighbour's near side changes nothing and
+      // the drag can reach its middle (where a hold merges) without first
+      // pushing it away.
+      const to = next.indexOf(target);
+      if (to < 0 || !under) {
         return;
       }
-      next.splice(to, 0, current.id);
+      const box = under.getBoundingClientRect();
+      const after = current.x > box.left + box.width / 2;
+      next.splice(after ? to + 1 : to, 0, current.id);
       group = groupOf(target);
     } else {
       const area = hit?.closest<HTMLElement>('[data-tile-group]');
@@ -289,6 +361,38 @@ export function useTileReorder({
       moves.set(current.id, group);
     }
     setMoved(moves);
+  }
+
+  /** Points the drag at a drop-into target, arming it after its hold. */
+  function aimInto(current: DragSession, into: TileDropTarget | null) {
+    if (current.into?.target === into?.target) {
+      return;
+    }
+    if (current.into?.timer != null) {
+      window.clearTimeout(current.into.timer);
+    }
+    if (!into) {
+      current.into = null;
+      setDropTarget(null);
+      return;
+    }
+    const delay = into.delay ?? 0;
+    const aimed: NonNullable<DragSession['into']> = {
+      target: into.target,
+      armed: delay <= 0,
+      timer: null
+    };
+    if (!aimed.armed) {
+      aimed.timer = window.setTimeout(() => {
+        aimed.timer = null;
+        if (current.into === aimed && session.current === current) {
+          aimed.armed = true;
+          setDropTarget({ target: aimed.target, armed: true });
+        }
+      }, delay);
+    }
+    current.into = aimed;
+    setDropTarget({ target: aimed.target, armed: aimed.armed });
   }
 
   function autoScroll(current: DragSession) {
@@ -360,7 +464,8 @@ export function useTileReorder({
       initialGroup: shownGroup(id),
       group: shownGroup(id),
       scroller: scrollParent(tile),
-      frame: 0
+      frame: 0,
+      into: null
     };
     session.current = current;
 
@@ -396,6 +501,26 @@ export function useTileReorder({
         0
       );
       setDraggingId(null);
+      const into = current.into;
+      if (into?.timer != null) {
+        window.clearTimeout(into.timer);
+      }
+      current.into = null;
+      setDropTarget(null);
+      if (commit && into?.armed) {
+        // Dropped into a folder (or onto a part to make one): the shelf
+        // keeps the order it showed before the drag; the tile leaves it.
+        snapshot();
+        setOrder(current.seed);
+        setMoved(current.seedMoved);
+        if (current.seed) {
+          armSettleTimer();
+        }
+        void Promise.resolve(
+          latest.current.onDropInto?.(current.id, into.target)
+        ).catch(() => undefined);
+        return;
+      }
       const regrouped = current.group !== current.initialGroup;
       const changed =
         regrouped || current.order.join('\n') !== current.initial.join('\n');
@@ -497,7 +622,7 @@ export function useTileReorder({
     window.addEventListener('blur', cancel);
   }
 
-  return { order, moved, draggingId, onPointerDown };
+  return { order, moved, draggingId, dropTarget, onPointerDown };
 }
 
 /** Keeps the dragged tile under the pointer, wherever its slot now is. */

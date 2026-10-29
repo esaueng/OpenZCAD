@@ -22,8 +22,16 @@ async function cardOrder(page: Page) {
   return page.locator('.start-tile-name').allTextContents();
 }
 
-/** Presses on a card's preview and drags it onto another card's centre. */
-async function dragCard(page: Page, from: string, to: string) {
+/**
+ * Presses on a card's preview and drags it to another card's far side, the
+ * side it would land on: a card's middle is where a hold makes a folder.
+ */
+async function dragCard(
+  page: Page,
+  from: string,
+  to: string,
+  where: 'side' | 'middle' = 'side'
+) {
   const source = await card(page, from)
     .locator('.start-tile-thumb')
     .boundingBox();
@@ -36,8 +44,9 @@ async function dragCard(page: Page, from: string, to: string) {
     source.y + source.height / 2
   );
   await page.mouse.down();
+  const across = where === 'middle' ? 0.5 : target.x > source.x ? 0.9 : 0.1;
   await page.mouse.move(
-    target.x + target.width / 2,
+    target.x + target.width * across,
     target.y + target.height / 2,
     { steps: 12 }
   );
@@ -74,6 +83,51 @@ test(
     await expect(page.locator('.start-tile-project')).toHaveCount(3);
   }
 );
+
+test(
+  'holding a card over another makes a folder of the two',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await dragCard(page, names[0]!, names[2]!, 'middle');
+    // A pass over the middle does nothing; the hold arms it.
+    await expect(card(page, names[2]!)).toHaveClass(/is-drop-pending/);
+    await expect(card(page, names[2]!)).toHaveClass(/is-drop-target/);
+    await page.mouse.up();
+
+    const field = page.getByRole('textbox', { name: 'Folder name' });
+    await expect(field).toBeFocused();
+    await field.fill('Reorder pair');
+    await field.press('Enter');
+    await expect
+      .poll(() => cardOrder(page))
+      .toEqual(['Reorder pair', names[1]]);
+
+    await page
+      .getByRole('button', { name: 'Open folder Reorder pair, 2 parts' })
+      .click();
+    await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);
+    // The folder outlives a reload: it is kept on this device.
+    await page.reload();
+    await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);
+    await page.getByRole('button', { name: 'Parts', exact: true }).click();
+    await expect
+      .poll(() => cardOrder(page))
+      .toEqual(['Reorder pair', names[1]]);
+  }
+);
+
+test('selects several cards and trashes them together', async ({ page }) => {
+  await page.getByRole('checkbox', { name: `Select ${names[0]}` }).click();
+  await page
+    .getByRole('checkbox', { name: `Select ${names[2]}` })
+    .click({ modifiers: ['Shift'] });
+  const bar = page.getByRole('toolbar', { name: '3 parts selected' });
+  await expect(bar).toBeVisible();
+  await bar.getByRole('button', { name: 'Move to trash' }).click();
+  await expect(page.locator('.start-tile-project')).toHaveCount(0);
+  await page.getByRole('tab', { name: /Trash/ }).click();
+  await expect.poll(() => cardOrder(page)).toHaveLength(3);
+});
 
 test('Escape puts a dragged card back', async ({ page }) => {
   await dragCard(page, names[2]!, names[0]!);

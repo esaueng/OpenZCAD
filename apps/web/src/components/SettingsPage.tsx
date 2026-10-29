@@ -17,6 +17,7 @@ import {
   type UIEvent
 } from 'react';
 import {
+  ArrowLeft,
   Bot,
   ChevronDown,
   CloudOff,
@@ -37,7 +38,6 @@ import {
   RefreshCcw,
   Search,
   SearchX,
-  Settings,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -59,7 +59,7 @@ import { countLabel } from '../lib/toasts';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
-import { PageTopBar } from './PageTopBar';
+import { BrandMark } from './BrandMark';
 import { ExternalAnchor } from './ExternalAnchor';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
@@ -899,55 +899,32 @@ export function SettingsPage({
       className={`settings-page density-${settings.appearance.density}`}
       data-reduced-motion={settings.appearance.reducedMotion ? 'true' : 'false'}
     >
-      <PageTopBar
-        className="settings-topbar"
-        title="Settings"
-        brandRef={brandRef}
-        onBrand={onClose}
-        center={
-          <label className="settings-search">
-            <Search size={14} aria-hidden="true" />
-            <input
-              value={query}
-              placeholder="Find a setting"
-              aria-label="Find a setting"
-              onChange={(event) => changeQuery(event.target.value)}
-              onKeyDown={(event) => {
-                // Escape clears a search before it closes Settings, as it
-                // does in any search field; otherwise the filter outlived the
-                // close and greeted the next visit.
-                if (event.key === 'Escape' && query) {
-                  event.stopPropagation();
-                  changeQuery('');
-                }
-              }}
-            />
-          </label>
-        }
-        actionsLabel="Settings actions"
-        actions={
-          <>
-            <span className="settings-save-message" aria-live="polite">
-              {message}
-            </span>
-            {/* The button that opened Settings, in the same place, pressed:
-                pressing it again goes back. */}
+      <div className="settings-layout">
+        <aside className="settings-nav" aria-label="Settings sections">
+          {/* Column first, as the library: the logo heads the column (and
+              goes back, as it does from every page), then the way out. */}
+          <div className="settings-nav-head">
             <button
-              className="secondary topbar-action settings-action settings-close is-active"
+              ref={brandRef}
+              className="brand"
               type="button"
-              aria-label={`Close settings and go ${backLabel.toLowerCase()}`}
               title={`${backLabel} (Esc)`}
               onClick={onClose}
             >
-              <Settings size={14} aria-hidden="true" />
-              Settings
+              <BrandMark compact />
+              OpenZCAD <span className="beta-tag">Beta</span>
             </button>
-          </>
-        }
-      />
-
-      <div className="settings-layout">
-        <aside className="settings-nav" aria-label="Settings sections">
+          </div>
+          <button
+            className="settings-close"
+            type="button"
+            aria-label={`Close settings and go ${backLabel.toLowerCase()}`}
+            title={`${backLabel} (Esc)`}
+            onClick={onClose}
+          >
+            <ArrowLeft size={14} aria-hidden="true" />
+            {backLabel}
+          </button>
           {/* The narrow layout has no room for the field, so while a filter
               is narrowing the sections it shows this way out of it instead;
               without it a filter typed in a wider window stranded the rail on
@@ -1031,6 +1008,30 @@ export function SettingsPage({
             scrollTopRef.current = event.currentTarget.scrollTop;
           }}
         >
+          <header className="settings-head">
+            <h1 className="settings-head-title">Settings</h1>
+            <span className="settings-save-message" aria-live="polite">
+              {message}
+            </span>
+            <label className="settings-search">
+              <Search size={14} aria-hidden="true" />
+              <input
+                value={query}
+                placeholder="Find a setting"
+                aria-label="Find a setting"
+                onChange={(event) => changeQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  // Escape clears a search before it closes Settings, as it
+                  // does in any search field; otherwise the filter outlived
+                  // the close and greeted the next visit.
+                  if (event.key === 'Escape' && query) {
+                    event.stopPropagation();
+                    changeQuery('');
+                  }
+                }}
+              />
+            </label>
+          </header>
           {!anyMatch && (
             <p className="settings-empty">
               No settings match “{query.trim()}”. Clear the search to see every
@@ -1998,8 +1999,8 @@ export function SettingsPage({
                           >
                             Keep this device unlocked for your next sign-in?
                             Removing its keys means approving it again or
-                            entering your recovery key; it stays in your
-                            device list until another device removes it.
+                            entering your recovery key; it stays in your device
+                            list until another device removes it.
                           </Notice>
                         ) : null}
                         <SettingRow
@@ -2344,23 +2345,23 @@ export function SettingsPage({
             anyMatch &&
             session &&
             encryptionAvailable && (
-            <Section
-              title="Encryption"
-              intro="Beta. End-to-end encryption for cloud projects. The server stores your account keys only wrapped. Existing projects can be encrypted after setup."
-            >
-              <ErrorBoundary label="Encryption settings">
-                <Suspense
-                  fallback={
-                    <p className="encryption-loading" role="status">
-                      Loading encryption keys…
-                    </p>
-                  }
-                >
-                  <EncryptionSettings userId={session.userId} />
-                </Suspense>
-              </ErrorBoundary>
-            </Section>
-          )}
+              <Section
+                title="Encryption"
+                intro="Beta. End-to-end encryption for cloud projects. The server stores your account keys only wrapped. Existing projects can be encrypted after setup."
+              >
+                <ErrorBoundary label="Encryption settings">
+                  <Suspense
+                    fallback={
+                      <p className="encryption-loading" role="status">
+                        Loading encryption keys…
+                      </p>
+                    }
+                  >
+                    <EncryptionSettings userId={session.userId} />
+                  </Suspense>
+                </ErrorBoundary>
+              </Section>
+            )}
 
           {active === 'privacy' && anyMatch && (
             <Section title="Privacy & data" intro="What leaves this device.">

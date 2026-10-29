@@ -1120,3 +1120,174 @@ describe('StartScreen shelf filters, order and layout', () => {
     localStorage.removeItem('openzcad.start.layout');
   });
 });
+
+describe('StartScreen folders and selection', () => {
+  const parts: ProjectSummary[] = ['Alpha', 'Bravo', 'Charlie', 'Delta'].map(
+    (name, index) => ({
+      projectId: toProjectId(`project_${name.toLowerCase()}`),
+      name: `${name} plate`,
+      revisionCount: 1,
+      updatedAt: `2026-10-0${index + 1}T12:00:00.000Z`,
+      organization: { status: 'active', pinned: false, sortOrder: index }
+    })
+  );
+
+  afterEach(() => localStorage.clear());
+
+  function seedFolder(projectIds: string[], extra: object = {}) {
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'folder-1',
+            name: 'Fixtures',
+            projectIds,
+            pinned: false,
+            createdAt: '2026-10-29T00:00:00.000Z',
+            ...extra
+          }
+        ]
+      })
+    );
+  }
+
+  const names = () =>
+    Array.from(document.querySelectorAll('.start-tile-name')).map(
+      (element) => element.textContent
+    );
+
+  it('shows filed parts inside their folder, not loose on the shelf', () => {
+    seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
+    renderStartScreen({ projects: parts });
+    expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 parts' })
+    );
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Fixtures' })
+    ).toBeInTheDocument();
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+    // The crumb goes back out.
+    fireEvent.click(screen.getByRole('button', { name: 'Parts' }));
+    expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
+  });
+
+  it('looks through folders while searching', () => {
+    seedFolder([parts[1]!.projectId]);
+    renderStartScreen({ projects: parts });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search parts' }), {
+      target: { value: 'bravo' }
+    });
+    expect(names()).toEqual(['Bravo plate']);
+  });
+
+  it('pins a folder ahead of the parts', () => {
+    seedFolder([parts[0]!.projectId]);
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Pin folder Fixtures' })
+    );
+    const pinned = document.querySelector('[data-tile-group="pinned"]');
+    expect(
+      within(pinned as HTMLElement).getByText('Fixtures')
+    ).toBeInTheDocument();
+  });
+
+  it('selects a range and trashes it in one action', () => {
+    const onMoveManyToShelf = vi.fn();
+    const onOpen = vi.fn();
+    renderStartScreen({ projects: parts, onMoveManyToShelf, onOpen });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Charlie plate' }),
+      { shiftKey: true }
+    );
+    const bar = screen.getByRole('toolbar', { name: '3 parts selected' });
+    // While anything is picked, a click on a card picks it too.
+    fireEvent.click(screen.getByText('Delta plate'));
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(within(bar).getByText('4 selected')).toBeInTheDocument();
+    fireEvent.click(within(bar).getByRole('button', { name: 'Move to trash' }));
+    expect(onMoveManyToShelf).toHaveBeenCalledWith(parts, 'deleted');
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('files the selection in a new folder and names it', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Delta plate' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Move to' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+    const field = screen.getByRole('textbox', { name: 'Folder name' });
+    fireEvent.change(field, { target: { value: 'Holders' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(names()).toEqual(['Holders', 'Bravo plate', 'Charlie plate']);
+    expect(
+      screen.getByRole('button', { name: 'Open folder Holders, 2 parts' })
+    ).toBeInTheDocument();
+  });
+
+  it('clears the selection with Escape', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('offers a reset and a copy for a sample opened before', () => {
+    const demo = {
+      key: 'bracket',
+      projectId: toProjectId('proj_demo_mounting_bracket'),
+      name: 'Demo · Mounting Bracket',
+      tagline: 'L-bracket with boss and mounting holes',
+      revisions: ['A — one', 'B — two', 'C — three'] as [string, string, string]
+    };
+    const edited: ProjectSummary = {
+      projectId: demo.projectId,
+      name: demo.name,
+      revisionCount: 7,
+      updatedAt: '2026-10-29T12:00:00.000Z'
+    };
+    const onResetDemo = vi.fn();
+    const onDuplicate = vi.fn();
+    const { rerender } = renderStartScreen({
+      demos: [demo],
+      projects: [localProject]
+    });
+    expect(
+      screen.queryByRole('button', { name: /Reset Mounting Bracket/ })
+    ).toBeNull();
+    rerender(
+      <StartScreen
+        {...startScreenProps({
+          demos: [demo],
+          projects: [localProject, edited],
+          onResetDemo,
+          onDuplicate
+        })}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Reset Mounting Bracket to the original'
+      })
+    );
+    expect(onResetDemo).toHaveBeenCalledWith(demo, edited);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save a copy of Mounting Bracket to your parts'
+      })
+    );
+    expect(onDuplicate).toHaveBeenCalledWith(edited);
+  });
+});
