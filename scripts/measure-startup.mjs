@@ -485,7 +485,8 @@ async function throttle(cdp, args) {
 
 async function openDemo(page, demo) {
   await page
-    .getByRole('button', { name: new RegExp(demo) })
+    // A plain substring match: the demo name comes from the command line.
+    .getByRole('button', { name: demo })
     .first()
     .click({ timeout: 60_000 });
 }

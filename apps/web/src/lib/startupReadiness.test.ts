@@ -35,6 +35,20 @@ describe('startup readiness marks', () => {
     ]);
   });
 
+  it('gives a return to a project that was ready before its own pair', () => {
+    const report = createReadinessReporter();
+    report({ projectId: 'a', analysis: 'ready' }, 2);
+    report({ projectId: 'b', analysis: 'pending' }, 2);
+    report({ projectId: 'a', analysis: 'ready' }, 2);
+    expect(names()).toEqual([
+      MODEL_VISIBLE_MARK,
+      INPUT_READY_MARK,
+      MODEL_VISIBLE_MARK,
+      MODEL_VISIBLE_MARK,
+      INPUT_READY_MARK
+    ]);
+  });
+
   it('ignores a frame with no bodies to show', () => {
     const report = createReadinessReporter();
     report({ projectId: 'empty', analysis: 'ready' }, 0);

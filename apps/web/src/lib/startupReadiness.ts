@@ -38,6 +38,9 @@ export function createReadinessReporter() {
     if (bodies === 0) return;
     if (visibleProject !== frame.projectId) {
       visibleProject = frame.projectId;
+      // A new opening owes its own input-ready, even for a project that was
+      // ready before the user left it (A ready, B pending, back to A).
+      readyProject = null;
       mark('model-visible', { bodies, analysis: frame.analysis });
     }
     if (frame.analysis === 'ready' && readyProject !== frame.projectId) {
