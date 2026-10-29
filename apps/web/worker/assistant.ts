@@ -18,6 +18,10 @@ import {
   validateAssistantResponse,
   type AssistantResponseFailureClassification
 } from './assistantStreamDiagnostics';
+import {
+  anthropicOutputOptions,
+  translateAnthropicStream
+} from './assistantAnthropic';
 import { isPrivateHostname } from './privateNetwork';
 import { matchesAssistantSchema } from './assistantJsonSchema';
 
@@ -27,6 +31,7 @@ export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_AI_TIMEOUT_MS = 90_000;
 export const DEFAULT_AI_PROVIDER = 'openrouter';
+const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const OPENROUTER_RESPONSES_URL = 'https://openrouter.ai/api/v1/responses';
 const OPENROUTER_CHAT_COMPLETIONS_URL =
@@ -299,13 +304,16 @@ function apiKeyFor(env: CloudflareEnv, provider: string) {
   const providerKey =
     provider === 'openrouter'
       ? env.OPENROUTER_API_KEY?.trim()
-      : env.OPENAI_API_KEY?.trim();
+      : provider === 'anthropic'
+        ? undefined
+        : env.OPENAI_API_KEY?.trim();
   return provider === 'openrouter'
     ? providerKey || undefined
     : genericKey || providerKey || undefined;
 }
 
 function modelFor(env: CloudflareEnv, provider: string) {
+  if (provider === 'anthropic') return env.AI_MODEL ?? 'claude-sonnet-5-5';
   if (env.AI_PROVIDER && env.AI_PROVIDER !== provider) {
     return provider === 'openrouter'
       ? DEFAULT_OPENROUTER_MODEL
@@ -368,7 +376,9 @@ function validatedUpstreamUrl(raw: string, provider: string): string {
       ? 'api.openai.com'
       : provider === 'openrouter'
         ? 'openrouter.ai'
-        : null;
+        : provider === 'anthropic'
+          ? 'api.anthropic.com'
+          : null;
   if (expectedHostname && url.hostname !== expectedHostname) {
     throw new HttpAssistantConfigurationError(
       `The ${provider} provider endpoint must use ${expectedHostname}.`
@@ -381,6 +391,7 @@ function upstreamUrlFor(env: CloudflareEnv, provider: string) {
   if (env.AI_BASE_URL) {
     return validatedUpstreamUrl(env.AI_BASE_URL, provider);
   }
+  if (provider === 'anthropic') return ANTHROPIC_MESSAGES_URL;
   if (provider === 'openai') {
     return OPENAI_RESPONSES_URL;
   }
@@ -1078,6 +1089,71 @@ function openRouterChatMessages(
   ];
 }
 
+function anthropicMessages(input: ProposalInput): unknown[] {
+  return [
+    ...(input.history ?? []).map((turn) => ({
+      role: turn.role,
+      content: turn.answeredQuestionId
+        ? `[answer to ${turn.answeredQuestionId}] ${turn.text}`
+        : turn.text
+    })),
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `CAD request:\n${input.prompt}\n\nCurrent document digest:\n${JSON.stringify(input.digest)}`
+        },
+        ...(input.attachments ?? []).map((attachment) => ({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: attachment.mediaType,
+            data: attachment.dataBase64
+          }
+        }))
+      ]
+    }
+  ];
+}
+
+async function requestAnthropic(
+  url: string,
+  apiKey: string,
+  model: string,
+  system: string,
+  messages: unknown[],
+  env: CloudflareEnv,
+  effort: AssistantReasoningEffort,
+  maxTokens: number,
+  signal: AbortSignal,
+  safetyIdentifier?: string
+): Promise<Response> {
+  return translateAnthropicStream(
+    await fetch(url, {
+      method: 'POST',
+      redirect: 'manual',
+      signal,
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        system,
+        messages,
+        max_tokens: maxTokens,
+        stream: true,
+        ...(safetyIdentifier
+          ? { metadata: { user_id: safetyIdentifier } }
+          : {}),
+        ...anthropicOutputOptions(assistantReplySchemaFor(env), effort, model)
+      })
+    })
+  );
+}
+
 function openRouterProviderOptions(model: string) {
   return {
     require_parameters: true,
@@ -1267,12 +1343,32 @@ export async function streamAssistantProposal(
 
   let upstream: Response;
   try {
-    upstream = promptedSchema
-      ? await translateOpenRouterChatCompletion(
-          await requestOpenRouterChat(),
-          jsonReplyValidator(env, input.digest)
-        )
-      : await requestUpstream();
+    upstream =
+      provider === 'anthropic'
+        ? await requestAnthropic(
+            upstreamUrl,
+            apiKey,
+            model,
+            requestInstructions(
+              env,
+              runtime,
+              (input.attachments?.length ?? 0) > 0
+            ),
+            anthropicMessages(input),
+            env,
+            runtime?.reasoningEffort ??
+              env.AI_REASONING_EFFORT ??
+              DEFAULT_AI_REASONING_EFFORT,
+            runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
+            AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
+            safetyIdentifier
+          )
+        : promptedSchema
+          ? await translateOpenRouterChatCompletion(
+              await requestOpenRouterChat(),
+              jsonReplyValidator(env, input.digest)
+            )
+          : await requestUpstream();
     if (
       !promptedSchema &&
       shouldUseOpenRouterChatFallback(provider, model, upstream.status)
@@ -1426,12 +1522,30 @@ export async function testAssistantConnection(
     });
   let response: Response;
   try {
-    response = promptedSchema
-      ? await translateOpenRouterChatCompletion(
-          await requestOpenRouterChat(),
-          jsonReplyValidator(env)
-        )
-      : await requestUpstream();
+    response =
+      runtime.provider === 'anthropic'
+        ? await requestAnthropic(
+            upstreamUrl,
+            runtime.apiKey,
+            runtime.model,
+            'Return a short connection confirmation as an OpenZCAD message reply.',
+            [
+              {
+                role: 'user',
+                content: 'Test the configured OpenZCAD AI connection.'
+              }
+            ],
+            env,
+            runtime.reasoningEffort,
+            Math.min(runtime.maxOutputTokens, 4_096),
+            timeoutSignal
+          )
+        : promptedSchema
+          ? await translateOpenRouterChatCompletion(
+              await requestOpenRouterChat(),
+              jsonReplyValidator(env)
+            )
+          : await requestUpstream();
     if (
       !promptedSchema &&
       shouldUseOpenRouterChatFallback(

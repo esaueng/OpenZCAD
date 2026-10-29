@@ -54,7 +54,12 @@ const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;
 const MIDDLE_DRAGS = ['pan', 'orbit', 'zoom'] as const;
 const POINTER_NAVIGATIONS = ['auto', 'mouse', 'trackpad'] as const;
 const RELATION_GLYPHS = ['always', 'selected', 'hidden'] as const;
-const PROVIDERS = ['openrouter', 'openai', 'responses-compatible'] as const;
+const PROVIDERS = [
+  'openrouter',
+  'openai',
+  'anthropic',
+  'responses-compatible'
+] as const;
 const CREDENTIAL_SOURCES = ['deployment', 'personal'] as const;
 const REASONING_EFFORTS = [
   'provider-default',

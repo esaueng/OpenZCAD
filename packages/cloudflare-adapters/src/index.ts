@@ -292,7 +292,7 @@ export interface CloudflareEnv {
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
   EMAIL?: SendEmail;
-  AI_PROVIDER?: 'openai' | 'openrouter' | 'responses-compatible';
+  AI_PROVIDER?: 'openai' | 'openrouter' | 'anthropic' | 'responses-compatible';
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
   /** Backward-compatible OpenAI-specific secret name. */

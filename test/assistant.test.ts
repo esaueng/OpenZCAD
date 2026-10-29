@@ -7,6 +7,7 @@ import {
   DEFAULT_AI_TIMEOUT_MS,
   DEFAULT_OPENROUTER_MODEL,
   assistantReplySchemaFor,
+  assistantEndpointIdentity,
   assistantSafetyIdentifier,
   getAssistantStatus,
   maxOutputTokensFor,
@@ -2114,5 +2115,199 @@ describe('assistant integration', () => {
       );
       assertStrictObjectSchemas(assistantReplySchemaFor(env));
     }
+  });
+});
+
+describe('Anthropic Messages provider', () => {
+  const runtime = {
+    provider: 'anthropic' as const,
+    apiKey: 'test-anthropic-key',
+    model: 'claude-sonnet-5-5',
+    reasoningEffort: 'high' as const,
+    maxOutputTokens: 32_000,
+    timeoutMs: 120_000,
+    customInstructions: 'Prefer metric dimensions.'
+  };
+  const reply = JSON.stringify({
+    replyKind: 'message',
+    proposal: null,
+    questions: null,
+    message: 'Connection ready.',
+    readings: null
+  });
+  function nativeStream(stopReason = 'end_turn', complete = true) {
+    const events = [
+      { type: 'message_start', message: { id: 'msg_test' } },
+      {
+        type: 'content_block_delta',
+        delta: { type: 'thinking_delta', thinking: 'private reasoning' }
+      },
+      {
+        type: 'content_block_delta',
+        delta: { type: 'text_delta', text: reply.slice(0, 20) }
+      },
+      {
+        type: 'content_block_delta',
+        delta: { type: 'text_delta', text: reply.slice(20) }
+      },
+      { type: 'message_delta', delta: { stop_reason: stopReason } },
+      ...(complete ? [{ type: 'message_stop' }] : [])
+    ];
+    const wire = events
+      .map(
+        (event) =>
+          `event: ${event.type}\r\ndata: ${JSON.stringify(event)}\r\n\r\n`
+      )
+      .join('');
+    // Split within JSON and SSE framing to exercise network chunk boundaries.
+    const bytes = new TextEncoder().encode(wire);
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let offset = 0; offset < bytes.length; offset += 17) {
+            controller.enqueue(bytes.slice(offset, offset + 17));
+          }
+          controller.close();
+        }
+      })
+    );
+  }
+
+  it('sends native authentication, history, images, reasoning and structured schema', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      nativeStream()
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await streamAssistantProposal(
+      {
+        ...input,
+        history: [
+          { role: 'assistant', text: 'Which size?' },
+          { role: 'user', text: '20 mm', answeredQuestionId: 'size' }
+        ],
+        attachments: [
+          {
+            id: 'image_1',
+            label: 'drawing.png',
+            mediaType: 'image/png',
+            dataBase64: 'aGVsbG8='
+          }
+        ]
+      },
+      {},
+      'user_test',
+      runtime
+    );
+    const output = await response.text();
+    expect(output).toContain('response.output_text.delta');
+    expect(output).toContain('completed');
+    expect(output).not.toContain('private reasoning');
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://api.anthropic.com/v1/messages');
+    expect(init?.headers).toMatchObject({
+      'x-api-key': runtime.apiKey,
+      'anthropic-version': '2023-06-01'
+    });
+    expect(init?.headers).not.toHaveProperty('authorization');
+    const body = JSON.parse(init?.body as string) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      model: runtime.model,
+      metadata: { user_id: 'user_test' },
+      max_tokens: 32_000,
+      stream: true,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high', format: { type: 'json_schema' } },
+      messages: [
+        { role: 'assistant', content: 'Which size?' },
+        { role: 'user', content: '[answer to size] 20 mm' },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `CAD request:\n${input.prompt}\n\nCurrent document digest:\n${JSON.stringify(input.digest)}`
+            },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: 'aGVsbG8='
+              }
+            }
+          ]
+        }
+      ]
+    });
+    expect(body.system).toContain(runtime.customInstructions);
+    expect(body).not.toHaveProperty('reasoning');
+    expect(body).not.toHaveProperty('max_output_tokens');
+  });
+
+  it('validates connection replies through the same native stream adapter', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => nativeStream())
+    );
+    await expect(testAssistantConnection(runtime, {})).resolves.toMatchObject({
+      ok: true
+    });
+  });
+
+  it.each(['max_tokens', 'refusal'])(
+    'rejects %s even when the text is valid JSON',
+    async (reason) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => nativeStream(reason))
+      );
+      await expect(testAssistantConnection(runtime, {})).rejects.toThrow();
+    }
+  );
+
+  it('rejects a stream without message_stop', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => nativeStream('end_turn', false))
+    );
+    await expect(testAssistantConnection(runtime, {})).rejects.toThrow();
+  });
+
+  it('uses the same official endpoint in encrypted-project consent routes', () => {
+    expect(assistantEndpointIdentity({}, 'anthropic')).toBe(
+      'https://api.anthropic.com/v1/messages'
+    );
+  });
+
+  it('never borrows an OpenAI key for Anthropic deployment requests', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'anthropic',
+      OPENAI_API_KEY: 'other-provider-key'
+    });
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-Anthropic endpoint before sending credentials', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await streamAssistantProposal(input, {}, undefined, {
+      ...runtime,
+      baseUrl: 'https://other.example.com/v1/messages'
+    });
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reports credential rejection without leaking the API key', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('{}', { status: 401 }))
+    );
+    await expect(testAssistantConnection(runtime, {})).rejects.toThrow(
+      'rejected the saved credential'
+    );
   });
 });

@@ -369,6 +369,9 @@ function providerDefaults(provider: AppSettings['assistant']['provider']) {
   if (provider === 'openai') {
     return { model: 'gpt-6-luna', baseUrl: '' };
   }
+  if (provider === 'anthropic') {
+    return { model: 'claude-sonnet-5-5', baseUrl: '' };
+  }
   if (provider === 'openrouter') {
     return { model: 'openai/gpt-6-luna', baseUrl: '' };
   }
@@ -1642,6 +1645,7 @@ export function SettingsPage({
                       >
                         <option value="openrouter">OpenRouter</option>
                         <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
                         <option value="responses-compatible">
                           Responses-compatible
                         </option>

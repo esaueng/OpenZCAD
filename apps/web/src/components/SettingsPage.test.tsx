@@ -886,6 +886,32 @@ describe('settings assistant section', () => {
     };
   }
 
+  it('selects Anthropic with its official endpoint and Claude default', async () => {
+    const user = userEvent.setup();
+    const accountState = personalAssistantState();
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, {
+      settings: accountState.settings,
+      accountState,
+      initialSection: 'assistant',
+      onChange
+    });
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'AI provider' }),
+      'anthropic'
+    );
+    expect(onChange).toHaveBeenCalledOnce();
+    const next = onChange.mock.calls[0]![0];
+    expect(next.assistant).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-sonnet-5-5',
+      baseUrl: ''
+    });
+    expect(
+      screen.queryByRole('textbox', { name: 'AI API endpoint' })
+    ).toBeNull();
+  });
+
   it('labels an untested saved credential as configured, not ready', () => {
     const accountState = personalAssistantState();
     renderSettings(null, {
