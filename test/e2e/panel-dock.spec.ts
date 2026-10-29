@@ -1241,6 +1241,7 @@ for (const theme of ['dark', 'light'] as const) {
     });
     const settings = structuredClone(DEFAULT_APP_SETTINGS);
     settings.appearance = {
+      ...settings.appearance,
       theme,
       density: theme === 'dark' ? 'comfortable' : 'compact',
       reducedMotion: true

@@ -49,6 +49,7 @@ interface CredentialRow {
 const UNIT_SYSTEMS = ['mm', 'cm', 'm', 'inch'] as const;
 const THEMES = ['system', 'dark', 'light'] as const;
 const DENSITIES = ['compact', 'comfortable'] as const;
+const LIBRARY_CARD_SIZES = ['small', 'medium', 'large'] as const;
 const PROJECTIONS = ['perspective', 'orthographic'] as const;
 const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;
 const MIDDLE_DRAGS = ['pan', 'orbit', 'zoom'] as const;
@@ -290,7 +291,14 @@ export function parseUpdateAppSettingsRequest(
       appearance: {
         theme: requiredMember(appearance, 'theme', THEMES),
         density: requiredMember(appearance, 'density', DENSITIES),
-        reducedMotion: requiredBoolean(appearance, 'reducedMotion')
+        reducedMotion: requiredBoolean(appearance, 'reducedMotion'),
+        // Optional so clients from before library card sizes keep saving.
+        libraryCardSize: optionalMember(
+          appearance,
+          'libraryCardSize',
+          LIBRARY_CARD_SIZES,
+          'small'
+        )
       },
       layout: {
         sidebarWidth: optionalPanelWidth(

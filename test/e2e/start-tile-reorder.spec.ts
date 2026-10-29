@@ -129,6 +129,51 @@ test('selects several cards and trashes them together', async ({ page }) => {
   await expect.poll(() => cardOrder(page)).toHaveLength(3);
 });
 
+test('drops a dragged card on Trash', async ({ page }) => {
+  const trash = page.getByRole('tab', { name: /Trash/ });
+  const source = await card(page, names[1]!)
+    .locator('.start-tile-thumb')
+    .boundingBox();
+  const target = await trash.boundingBox();
+  if (!source || !target) throw new Error('No layout box');
+  await page.mouse.move(
+    source.x + source.width / 2,
+    source.y + source.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(source.x + source.width / 2 + 20, source.y + 20, {
+    steps: 4
+  });
+  // Mid-drag, Archive and Trash say they take the part.
+  await expect(trash).toHaveClass(/is-drop-ready/);
+  await page.mouse.move(
+    target.x + target.width / 2,
+    target.y + target.height / 2,
+    { steps: 12 }
+  );
+  await expect(trash).toHaveClass(/is-drop-target/);
+  await page.mouse.up();
+
+  await expect.poll(() => cardOrder(page)).toEqual([names[0], names[2]]);
+  await expect(page.getByText(`Moved ${names[1]} to the trash.`)).toBeVisible();
+  await trash.click();
+  await expect.poll(() => cardOrder(page)).toEqual([names[1]]);
+});
+
+test('reorders under Last edited and keeps the arrangement', async ({
+  page
+}) => {
+  const sort = page.getByLabel('Sort parts');
+  await sort.selectOption('edited');
+  await dragCard(page, names[0]!, names[2]!);
+  await page.mouse.up();
+  await expect
+    .poll(() => cardOrder(page))
+    .toEqual([names[1], names[2], names[0]]);
+  // A hand arrangement is a custom order, so the shelf now shows that.
+  await expect(sort).toHaveValue('custom');
+});
+
 test('Escape puts a dragged card back', async ({ page }) => {
   await dragCard(page, names[2]!, names[0]!);
   await expect
