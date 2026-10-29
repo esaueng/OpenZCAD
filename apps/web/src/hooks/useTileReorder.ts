@@ -37,6 +37,8 @@ interface DragSession {
   ty: number;
   active: boolean;
   initial: string[];
+  /** The dropped order still waiting on its save when this drag began. */
+  seed: string[] | null;
   order: string[];
   scroller: HTMLElement | null;
   frame: number;
@@ -77,8 +79,8 @@ export function useTileReorder({
   const settleTimer = useRef<number | null>(null);
   // Positions before a reflow, so each moved tile can ease from there.
   const before = useRef<Map<string, DOMRect> | null>(null);
-  const latest = useRef({ ids, enabled, canSwap, onCommit });
-  latest.current = { ids, enabled, canSwap, onCommit };
+  const latest = useRef({ ids, enabled, canSwap, onCommit, order });
+  latest.current = { ids, enabled, canSwap, onCommit, order };
   const stop = useRef<(() => void) | null>(null);
 
   const idsKey = ids.join('\n');
@@ -139,6 +141,15 @@ export function useTileReorder({
         element.getBoundingClientRect()
       ])
     );
+  }
+
+  /** A save that never lands must not pin a dropped order forever. */
+  function armSettleTimer() {
+    clearTimer(settleTimer);
+    settleTimer.current = window.setTimeout(() => {
+      settleTimer.current = null;
+      setOrder(null);
+    }, SETTLE_TIMEOUT_MS);
   }
 
   function follow(current: DragSession) {
@@ -242,8 +253,12 @@ export function useTileReorder({
       tx: 0,
       ty: 0,
       active: false,
-      initial: latest.current.ids,
-      order: latest.current.ids,
+      // A drop whose save has not landed is what the shelf shows, so the
+      // next drag starts from it rather than snapping back to the stored
+      // order (and undoing the first move when it commits).
+      initial: latest.current.order ?? latest.current.ids,
+      order: latest.current.order ?? latest.current.ids,
+      seed: latest.current.order,
       scroller: scrollParent(tile),
       frame: 0
     };
@@ -284,17 +299,17 @@ export function useTileReorder({
       const changed = current.order.join('\n') !== current.initial.join('\n');
       if (commit && changed) {
         latest.current.onCommit(current.order);
-        clearTimer(settleTimer);
-        // A save that never lands must not pin the preview forever.
-        settleTimer.current = window.setTimeout(() => {
-          settleTimer.current = null;
-          setOrder(null);
-        }, SETTLE_TIMEOUT_MS);
+        armSettleTimer();
       } else {
         if (changed) {
           snapshot();
         }
-        setOrder(null);
+        // Back to what the shelf showed before: the stored order, or a drop
+        // still waiting on its save.
+        setOrder(current.seed);
+        if (current.seed) {
+          armSettleTimer();
+        }
       }
     };
 
@@ -315,6 +330,14 @@ export function useTileReorder({
         // A drop still waiting on its save must not let go of this drag's
         // preview when its fallback fires.
         clearTimer(settleTimer);
+        // Captured at the root, so a release outside the window (over the
+        // browser's chrome, or another app) still ends the drag. The root,
+        // not the tile: the tile ignores the pointer and moves in the DOM.
+        try {
+          document.documentElement.setPointerCapture(current.pointerId);
+        } catch {
+          // A pointer already gone ends the drag through pointercancel.
+        }
         document.getSelection()?.removeAllRanges();
         document.documentElement.classList.add(DRAGGING_ROOT_CLASS);
         setDraggingId(current.id);
@@ -345,6 +368,9 @@ export function useTileReorder({
       window.removeEventListener('keydown', key, { capture: true });
       window.removeEventListener('blur', cancel);
       window.cancelAnimationFrame(current.frame);
+      if (document.documentElement.hasPointerCapture?.(current.pointerId)) {
+        document.documentElement.releasePointerCapture(current.pointerId);
+      }
       document.documentElement.classList.remove(DRAGGING_ROOT_CLASS);
       session.current = null;
       stop.current = null;
