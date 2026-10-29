@@ -1023,7 +1023,7 @@ export function SettingsPage({
           </label>
           {/* The library's and the workspace's Settings button sits in this
               corner; the way back takes its place. */}
-          <div className="topbar-island corner-island">
+          <div className="corner-slot">
             <button
               className="corner-action settings-close"
               type="button"

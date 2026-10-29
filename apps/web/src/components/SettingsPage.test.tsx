@@ -509,7 +509,7 @@ describe('settings navigation', () => {
       name: 'Close settings and go back to workspace'
     });
     // Where the library's and the workspace's Settings button sits.
-    expect(back.closest('.topbar-island.corner-island')).not.toBeNull();
+    expect(back.closest('.corner-slot')).not.toBeNull();
     expect(back.closest('.settings-head')).not.toBeNull();
     // The head is not inside the page that scrolls, so neither moves.
     expect(back.closest('.settings-content')).toBeNull();
