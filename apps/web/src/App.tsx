@@ -13065,7 +13065,7 @@ export function App() {
     projectId: string,
     organization: ProjectOrganization
   ): Promise<void> {
-    pendingOrganizations.current.set(projectId, organization);
+    const displaced = claimPendingOrganization(projectId, organization);
     // Durable locally first, flagged as not yet mirrored: the listing's
     // reconcile pushes a flagged row and adopts the account's otherwise, so
     // the flag is what keeps a change alive across a failed mirror without
@@ -13075,7 +13075,7 @@ export function App() {
         mirrorPending: true
       });
     } catch (error) {
-      forgetPendingOrganization(projectId, organization);
+      releasePendingOrganization(projectId, organization, displaced);
       throw error;
     }
     setProjects((current) =>
@@ -13108,11 +13108,32 @@ export function App() {
     );
   }
 
-  function forgetPendingOrganization(
+  /** Records a shelf write in flight; returns the pending row it displaces. */
+  function claimPendingOrganization(
     projectId: string,
     organization: ProjectOrganization
+  ): ProjectOrganization | undefined {
+    const displaced = pendingOrganizations.current.get(projectId);
+    pendingOrganizations.current.set(projectId, organization);
+    return displaced;
+  }
+
+  /**
+   * Withdraws a failed shelf write. The row it displaced (an earlier write
+   * still in flight) takes its place again, so that write's own completion
+   * still finds itself current and shows its change.
+   */
+  function releasePendingOrganization(
+    projectId: string,
+    organization: ProjectOrganization,
+    displaced: ProjectOrganization | undefined
   ) {
-    if (pendingOrganizations.current.get(projectId) === organization) {
+    if (pendingOrganizations.current.get(projectId) !== organization) {
+      return;
+    }
+    if (displaced) {
+      pendingOrganizations.current.set(projectId, displaced);
+    } else {
       pendingOrganizations.current.delete(projectId);
     }
   }
@@ -13179,9 +13200,12 @@ export function App() {
           }
         ])
     );
-    for (const [projectId, organization] of organizations) {
-      pendingOrganizations.current.set(projectId, organization);
-    }
+    const displaced = new Map(
+      [...organizations].map(([projectId, organization]) => [
+        projectId,
+        claimPendingOrganization(projectId, organization)
+      ])
+    );
     const pinnedName = pin
       ? projects.find((project) => project.projectId === pin.projectId)?.name
       : undefined;
@@ -13231,7 +13255,11 @@ export function App() {
       }
     } catch (error) {
       for (const [projectId, organization] of organizations) {
-        forgetPendingOrganization(projectId, organization);
+        releasePendingOrganization(
+          projectId,
+          organization,
+          displaced.get(projectId)
+        );
       }
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
     }
