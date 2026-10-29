@@ -24,6 +24,7 @@ import {
   watchStageTheme
 } from '../lib/stagePalette';
 import { mark, measure, timed } from '../lib/perf';
+import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { recordEditPhase } from '../lib/editTrace';
 import {
   avoidSketchDimensionOverlays,
@@ -10896,6 +10897,9 @@ export function ModelViewer({
       if (presented) {
         pendingEditFrameRef.current = undefined;
         recordEditPhase(presented, 'frame', { analysis: presented.analysis });
+        // The workspace's readiness marks (`lib/startupReadiness.ts`): this
+        // frame is the first to show this revision's exact geometry.
+        reportPresentedGeometry(presented, context.renderedBodies?.length ?? 0);
       }
       if (e2eCanvasHooksEnabled) {
         const distance = context.activeCamera.position.distanceTo(
