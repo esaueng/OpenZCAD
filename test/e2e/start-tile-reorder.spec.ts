@@ -121,6 +121,28 @@ test.describe('with a pinned part', () => {
     ]);
   });
 
+  test('keeps both pins when two parts are dropped in quick succession', async ({
+    page
+  }) => {
+    await dragCard(page, names[1]!, names[0]!);
+    await page.mouse.up();
+    // Only long enough for the cards to finish easing into place (a drop
+    // onto a card mid-animation is ignored), not for the save to land.
+    await page.waitForTimeout(250);
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    // Every part is pinned now, so the shelf shows one ungrouped grid.
+    const unpin = (name: string) =>
+      page.getByRole('button', { name: `Unpin ${name}`, exact: true });
+    for (const name of names) {
+      await expect(unpin(name)).toBeAttached();
+    }
+    await page.reload();
+    for (const name of names) {
+      await expect(unpin(name)).toBeAttached();
+    }
+  });
+
   test('pins a part dropped into the pinned row’s empty space', async ({
     page
   }) => {

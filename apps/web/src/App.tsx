@@ -2603,6 +2603,22 @@ export function App() {
     useState(false);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  // Shelf rows written but not yet back in `projects`. Each new shelf write
+  // starts from these, so two quick drags (or a drag right after a pin)
+  // cannot rebuild a row from a stale snapshot and undo the first change.
+  const pendingOrganizations = useRef(
+    new Map<string, ProjectOrganization>()
+  );
+  useEffect(() => {
+    for (const project of projects) {
+      if (
+        pendingOrganizations.current.get(project.projectId) ===
+        project.organization
+      ) {
+        pendingOrganizations.current.delete(project.projectId);
+      }
+    }
+  }, [projects]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   /**
    * Which of the open project's save points can actually be opened. Empty
@@ -13042,17 +13058,25 @@ export function App() {
     projectId: string,
     organization: ProjectOrganization
   ): Promise<void> {
+    pendingOrganizations.current.set(projectId, organization);
     // Durable locally first, flagged as not yet mirrored: the listing's
     // reconcile pushes a flagged row and adopts the account's otherwise, so
     // the flag is what keeps a change alive across a failed mirror without
     // letting this device overrule every other one forever.
-    await saveLocalProjectOrganization(projectId, organization, {
-      mirrorPending: true
-    });
+    try {
+      await saveLocalProjectOrganization(projectId, organization, {
+        mirrorPending: true
+      });
+    } catch (error) {
+      forgetPendingOrganization(projectId, organization);
+      throw error;
+    }
     setProjects((current) =>
       current
         .map((project) =>
-          project.projectId === projectId
+          project.projectId === projectId &&
+          // A later shelf write that landed first keeps its row.
+          pendingOrganizations.current.get(projectId) === organization
             ? { ...project, organization }
             : project
         )
@@ -13069,13 +13093,30 @@ export function App() {
     ).catch(() => undefined);
   }
 
+  /** A project's shelf row, including a write not yet back in state. */
+  function latestOrganization(project: ProjectSummary): ProjectOrganization {
+    return (
+      pendingOrganizations.current.get(project.projectId) ??
+      projectOrganization(project)
+    );
+  }
+
+  function forgetPendingOrganization(
+    projectId: string,
+    organization: ProjectOrganization
+  ) {
+    if (pendingOrganizations.current.get(projectId) === organization) {
+      pendingOrganizations.current.delete(projectId);
+    }
+  }
+
   async function handleMoveProjectToShelf(
     project: ProjectSummary,
     status: ProjectStatus
   ) {
     try {
       const organization = applyOrganizationUpdate(
-        projectOrganization(project),
+        latestOrganization(project),
         { status }
       );
       await persistOrganization(project.projectId, organization);
@@ -13093,7 +13134,7 @@ export function App() {
 
   async function handleTogglePin(project: ProjectSummary) {
     try {
-      const current = projectOrganization(project);
+      const current = latestOrganization(project);
       await persistOrganization(
         project.projectId,
         applyOrganizationUpdate(current, { pinned: !current.pinned })
@@ -13123,14 +13164,17 @@ export function App() {
           project.projectId,
           {
             ...(pin?.projectId === project.projectId
-              ? applyOrganizationUpdate(projectOrganization(project), {
+              ? applyOrganizationUpdate(latestOrganization(project), {
                   pinned: pin.pinned
                 })
-              : projectOrganization(project)),
+              : latestOrganization(project)),
             sortOrder: positions.get(project.projectId)!
           }
         ])
     );
+    for (const [projectId, organization] of organizations) {
+      pendingOrganizations.current.set(projectId, organization);
+    }
     const pinnedName = pin
       ? projects.find((project) => project.projectId === pin.projectId)?.name
       : undefined;
@@ -13146,7 +13190,12 @@ export function App() {
         current
           .map((project) => {
             const organization = organizations.get(project.projectId);
-            return organization ? { ...project, organization } : project;
+            // A later shelf write that landed first keeps its row.
+            return organization &&
+              pendingOrganizations.current.get(project.projectId) ===
+                organization
+              ? { ...project, organization }
+              : project;
           })
           .sort(compareProjectSummaries)
       );
@@ -13174,6 +13223,9 @@ export function App() {
         ).catch(() => undefined);
       }
     } catch (error) {
+      for (const [projectId, organization] of organizations) {
+        forgetPendingOrganization(projectId, organization);
+      }
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
     }
   }
