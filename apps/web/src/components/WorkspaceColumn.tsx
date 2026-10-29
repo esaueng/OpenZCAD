@@ -12,11 +12,6 @@ interface WorkspaceColumnProps {
   children?: ReactNode;
   /** The mode's closing action (the sketch's Finish), at the column's foot. */
   footer?: ReactNode;
-  /**
-   * The Selection card: what is picked and its verbs. It hangs above the
-   * column rather than in it, so picking never moves a tool on the rail.
-   */
-  selection?: ReactNode;
 }
 
 /**
@@ -29,18 +24,14 @@ export function WorkspaceColumn({
   header,
   tools,
   children,
-  footer,
-  selection
+  footer
 }: WorkspaceColumnProps) {
   return (
-    <>
-      {selection}
-      <div className="workspace-column">
-        {header && <div className="workspace-column-header">{header}</div>}
-        {tools && <div className="workspace-column-tools">{tools}</div>}
-        {children && <div className="workspace-column-browser">{children}</div>}
-        {footer && <div className="workspace-column-footer">{footer}</div>}
-      </div>
-    </>
+    <div className="workspace-column">
+      {header && <div className="workspace-column-header">{header}</div>}
+      {tools && <div className="workspace-column-tools">{tools}</div>}
+      {children && <div className="workspace-column-browser">{children}</div>}
+      {footer && <div className="workspace-column-footer">{footer}</div>}
+    </div>
   );
 }

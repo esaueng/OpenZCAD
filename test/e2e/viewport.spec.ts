@@ -341,7 +341,7 @@ test('Space centres and faces an exact planar selection head-on', { tag: '@ci-sm
   await expect(radiusInput).toHaveCount(0);
   await expect(inspector).toHaveCount(0);
   await expect(
-    page.locator('.selection-card .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toContainText('Bottom face');
 
   const cameraPose = async () =>
@@ -378,7 +378,7 @@ test('Space centres and faces an exact planar selection head-on', { tag: '@ci-sm
   expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
 
   await expect(faceOperation).toBeVisible();
-  await expect(page.locator('.selection-callout-chip')).toContainText(/face/i);
+  await expect(page.locator('.selection-readout')).toContainText(/face/i);
   await expect(
     page.getByRole('button', { name: /projection \(P\).*perspective/i })
   ).toHaveAttribute('aria-pressed', 'false');
@@ -1112,7 +1112,7 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
-  const label = page.locator('.selection-callout-chip .selection-callout-name');
+  const label = page.locator('.selection-readout .selection-callout-name');
   let cycled = false;
 
   // The default box and cylinder overlap around the centre in the isometric
@@ -1163,7 +1163,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     x: bounds.x + bounds.width * 0.42,
     y: bounds.y + bounds.height * 0.55
   };
-  const label = page.locator('.selection-callout-chip .selection-callout-name');
+  const label = page.locator('.selection-readout .selection-callout-name');
 
   // A plain click keeps the active sub-element filter.
   await page.mouse.click(spot.x, spot.y);
@@ -1283,7 +1283,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
 
   await expect(status).toContainText('connected edges');
   const chip = await page
-    .locator('.selection-callout-chip .selection-callout-name')
+    .locator('.selection-readout .selection-callout-name')
     .textContent();
   const match = /^(\d+) edges$/.exec((chip ?? '').trim());
   // Exactly eight, not merely "more than one". The body is the app's default
@@ -1321,7 +1321,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
     x: bounds.x + bounds.width * 0.42,
     y: bounds.y + bounds.height * 0.55
   };
-  const label = page.locator('.selection-callout-chip .selection-callout-name');
+  const label = page.locator('.selection-readout .selection-callout-name');
 
   // A plain click on the solid lands on a face.
   await page.mouse.click(spot.x, spot.y);
@@ -2157,14 +2157,14 @@ test('the selection callout follows the body it names through a move', async ({
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  // Selecting the body names it in the Selection card, not over the model;
+  // Selecting the body names it in the bar, not over the model;
   // a running Move hangs the name callout over the body it moves.
   await page
     .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
   const callout = page.locator('.selection-callout');
-  await expect(page.locator('.selection-card')).toBeVisible();
+  await expect(page.locator('.selection-readout')).toBeVisible();
   await expect(callout).toHaveCount(0);
 
   await page.keyboard.press('m');

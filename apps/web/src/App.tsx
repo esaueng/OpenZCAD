@@ -1116,15 +1116,15 @@ const LazyCommandCard = lazyWithStaleChunkNotice(() =>
     default: module.CommandCard
   }))
 );
-// The pick's verbs and its refusal: drawn on every selection, but only once
+// The pick's name and its refusal: drawn on every selection, but only once
 // a model is open, so they wait with the workspace rather than the launcher.
-const LazySelectionCard = lazyWithStaleChunkNotice(() =>
-  import('./components/SelectionCard').then((module) => ({
-    default: module.SelectionCard
+const LazySelectionReadout = lazyWithStaleChunkNotice(() =>
+  import('./components/SelectionRail').then((module) => ({
+    default: module.SelectionReadout
   }))
 );
 const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
-  import('./components/SelectionCard').then((module) => ({
+  import('./components/SelectionRail').then((module) => ({
     default: module.SelectionRefusal
   }))
 );
@@ -1319,7 +1319,7 @@ const MeasurementDock = withSuspense(LazyMeasurementDock);
 
 const CommandCard = withSuspense(LazyCommandCard);
 
-const SelectionCard = withSuspense(LazySelectionCard);
+const SelectionReadout = withSuspense(LazySelectionReadout);
 
 const SelectionRefusal = withSuspense(LazySelectionRefusal);
 
@@ -7798,7 +7798,7 @@ export function App() {
     exactGeometryReady: displayedGeometryComplete,
     hasEdgeSelected: selectedEdges.length > 0
   };
-  // What the palette, the selection card and the command bar show. Launching
+  // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
   // model cannot open from the one a short rebuild is replacing; it only
   // stops the buttons greying out and back for that rebuild's length.
@@ -7853,7 +7853,7 @@ export function App() {
 
   /**
    * The imported face whose own card (resize a hole, remove a blend) the
-   * Selection card's Edit face opened. Keyed by the pick, so any other pick
+   * rail's Edit face opened. Keyed by the pick, so any other pick
    * closes it: a direct pick otherwise gets no card at all.
    */
   const [editFaceKey, setEditFaceKey] = useState<string | null>(null);
@@ -8805,7 +8805,7 @@ export function App() {
     panelLoadSettled = false
   ) {
     const launch = ++toolLaunchRef.current;
-    // Move's panel takes the selection card's place. Before its chunk has
+    // Move's panel takes the selection verbs' place. Before its chunk has
     // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
     // it) the swap left neither on screen, so the card stays up until the
     // panel can render. A failed load launches anyway, to report it.
@@ -8861,7 +8861,7 @@ export function App() {
       const pick = inPlaceProfilePick(region);
       return pick ? [pick] : [];
     });
-    // A face selected first (the selection card's Hole, Shell…) is the
+    // A face selected first (the rail's Hole, Shell…) is the
     // command's first face, clicked where it was clicked.
     const current = interactionRef.current;
     const selectedFace =
@@ -8905,7 +8905,7 @@ export function App() {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
-    // Edges selected first (the selection card's Fillet, the edge's own
+    // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
       ? (current.mode === 'edges' ? current.edges : selectedEdges).flatMap(
@@ -8920,7 +8920,7 @@ export function App() {
         )
       : [];
     // A solid offset takes a body, named by any of its faces: a body picked
-    // first (its Selection card's Solid offset) is that body, its handle on
+    // first (its rail's Solid offset) is that body, its handle on
     // a flat face where it has one.
     const bodyFace =
       tool === 'solid-offset' && !selectedFace && initialBodies[0]
@@ -27298,8 +27298,21 @@ export function App() {
   const measureKey = keymap.label('view-measure')
     ? platformShortcutLabel(keymap.label('view-measure')!)
     : null;
+  // The pick the rail and the bar's readout carry. A History row's own card
+  // names the feature it opened, so they would only repeat it, behind that
+  // card: whether the row's result is consumed (a focus) or a live body the
+  // row selected. A face or edge picked since is a pick of its own, and its
+  // verbs show.
+  const railPick =
+    calloutWithOperation &&
+    !historyFocus &&
+    !historyRowSelection &&
+    interaction.mode !== 'sketch'
+      ? calloutWithOperation
+      : null;
+  // The readout at the head of the line already names the face.
   const faceSelectedHint = [
-    'Face selected',
+    railPick ? null : 'Face selected',
     keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
   ]
     .filter(Boolean)
@@ -27855,6 +27868,8 @@ export function App() {
         activeTool={tool ?? inPlace.tool}
         availability={shownAvailability}
         onLaunchTool={launchTool}
+        pick={railPick}
+        pickSummary={commandContextLabel(commandSelection) ?? ''}
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
@@ -28094,19 +28109,6 @@ export function App() {
             header={columnHeader}
             tools={columnTools}
             footer={columnFooter}
-            selection={
-              // A History row's own card names the feature it opened, so
-              // the Selection card would only repeat it, behind that card:
-              // whether the row's result is consumed (a focus) or a live
-              // body the row selected. A face or edge picked since is a
-              // pick of its own, and its verbs show.
-              calloutWithOperation &&
-              !historyFocus &&
-              !historyRowSelection &&
-              interaction.mode !== 'sketch' ? (
-                <SelectionCard content={calloutWithOperation} />
-              ) : null
-            }
           />
         )
       }
@@ -28294,7 +28296,7 @@ export function App() {
             viewMode={modelingLocked}
             selectionCallout={calloutWithOperation}
             selectionFilterAutomatic={manualSelectionFilter === null}
-            // The Selection card names the pick and carries its verbs; the
+            // The bar names the pick and the rail carries its verbs; the
             // model keeps only the handle and its value. Where there is no
             // card (View, Tweak, a running tool) the pick keeps its name.
             pickLabel={calloutWithOperation === null}
@@ -29545,6 +29547,14 @@ export function App() {
             logOpen={activityLogOpen}
             onToggleLog={() => setActivityLogOpen((open) => !open)}
             prompt={workspacePrompt}
+            pick={
+              railPick ? (
+                <SelectionReadout
+                  label={railPick.label}
+                  detail={railPick.detail}
+                />
+              ) : null
+            }
             commandRow={
               inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar

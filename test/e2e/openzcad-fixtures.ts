@@ -605,7 +605,7 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
 
   await expect(status).toContainText('2 edges selected');
   await expect(
-    page.locator('.selection-callout-chip .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toHaveText('2 edges');
 }
 

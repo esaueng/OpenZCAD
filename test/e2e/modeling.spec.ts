@@ -127,8 +127,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', { t
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 28 mm'
   );
-  // The Selection card names the pick, live diameter included.
-  await expect(page.locator('.selection-card')).toContainText(
+  // The bar names the pick, live diameter included.
+  await expect(page.locator('.selection-readout')).toContainText(
     'Cylindrical face Ø28'
   );
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
@@ -170,8 +170,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', { t
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
   );
-  // The Selection card names the pick, live diameter included.
-  await expect(page.locator('.selection-card')).toContainText(
+  // The bar names the pick, live diameter included.
+  await expect(page.locator('.selection-readout')).toContainText(
     'Cylindrical face Ø36'
   );
   await expect(canvas).toHaveAttribute('data-e2e-cylinder-proxy-radius', '18');
@@ -3916,7 +3916,7 @@ test('each sketch plane label names the plane it actually opens', async ({
   // Read from the detail: the name beside it ("Extrude 1") ends in a digit.
   const chip =
     (await page
-      .locator('.selection-callout-chip .selection-callout-detail')
+      .locator('.selection-readout .selection-callout-detail')
       .textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
@@ -4030,7 +4030,7 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   // ("Extrude 1") ends in a digit that would run into the first dimension.
   const chip =
     (await page
-      .locator('.selection-callout-chip .selection-callout-detail')
+      .locator('.selection-readout .selection-callout-detail')
       .textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {

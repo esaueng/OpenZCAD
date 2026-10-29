@@ -486,7 +486,7 @@ test('resizes an imported analytic blend twice without reselection', async ({
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector).toHaveCount(0);
   await expect(
-    page.locator('.selection-card .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toContainText('Blend face R3');
   await expect(
     page.getByRole('button', { name: 'Selection: Edit face' })

@@ -1,0 +1,214 @@
+/* ── The pick, on the verb rail ─────────────────────────────
+   A pick gives the rail to its own verbs: Deselect all over the verbs that
+   act on it, the armed one lit as the rail lights an armed tool. The
+   buttons are the rail's own (button.command-rail); only what is the
+   pick's alone is styled here. */
+
+/* Over the right lane, as the card that carried the verbs was: on a phone
+   the drawer spans the stage, and a rail under it would carry verbs and a
+   way out no press can reach. The float and the lane share a z-index, so
+   the later lane won. */
+.workspace-column-float:has(.selection-rail) {
+  z-index: calc(var(--z-inspector-float) + 1);
+}
+
+/* Over a floating model panel too, while one is open: a window may stand
+   anywhere, the top bar included (--z-panel-float), but never over the
+   pick's only verbs. Only then: raised for good, the column's flyouts (More
+   tools) stood over the assistant's stream and took its presses. */
+.viewer-area:has(.panel-float) .workspace-column-float:has(.selection-rail) {
+  z-index: calc(var(--z-panel-float) + 8);
+}
+
+.selection-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The verbs keep the rail's look, not the old viewport chip's, whose
+   rules (viewer.css) still style the refusal's parts on the dark stage. */
+button.command-rail.selection-rail-verb[aria-pressed='true'] {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+  border-color: transparent;
+}
+
+/* Quick checks hold the verbs without dimming them: the verbs are back a
+   frame or two later, and a blink of grey read as a refusal. */
+.selection-rail[data-busy='quiet'] button.command-rail:disabled {
+  opacity: 1;
+}
+
+.selection-rail .selection-rail-badge {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 22px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-md);
+}
+
+/* The phase, as a mark under the verbs: the rail has no room for a pill,
+   and the words ride the tooltip and the accessible text. */
+.selection-rail .selection-callout-phase-dot,
+.selection-rail .selection-rail-phase {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin: 4px 0 2px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.selection-rail .selection-rail-phase {
+  background: var(--color-text-muted);
+  border: 0;
+}
+
+.selection-rail .selection-rail-phase.phase-exact-entry {
+  background: var(--color-accent);
+}
+
+.selection-rail .selection-rail-phase.phase-failed {
+  background: var(--color-error);
+}
+
+/* ── The pick, in the bar's guidance line ───────────────────
+   Its name and measurement lead the line, as one quiet chip; the guidance
+   follows it. The line never takes the pointer, so neither does the chip. */
+
+.workspace-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The guidance gives way first: the pick is what the line is about. */
+.workspace-hint-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-readout {
+  display: inline-flex;
+  flex: 0 0 auto;
+  max-width: 100%;
+  align-items: center;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.selection-readout .selection-callout-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selection-readout .selection-callout-detail {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  padding-left: 8px;
+  color: var(--color-text-muted);
+  border-left: var(--border-thin);
+}
+
+/* ── The refusal, in the notice lane ────────────────────────
+   Over the status row (and the activity pill), under the Undo toast, which
+   adds --lane-refusal to its own offset. */
+
+.viewer-area {
+  --lane-refusal: 0px;
+}
+
+.viewer-area:has(.selection-refusal-lane .selection-callout-diagnostic) {
+  --lane-refusal: 52px;
+}
+
+.selection-refusal-lane {
+  position: absolute;
+  left: var(--notice-start, 12px);
+  right: var(--notice-end, 12px);
+  bottom: calc(var(--lane-base, 48px) + var(--lane-status, 0px));
+  z-index: calc(var(--z-inspector-float) + 1);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.selection-refusal-lane .selection-callout-diagnostic {
+  /* The ways out wrap under the sentence when the lane is too narrow for
+     both (a phone, a long culprit name), rather than running off it. */
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  width: auto;
+  min-width: 0;
+  max-width: min(640px, 100%);
+  padding: 4px 6px 4px 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-sm);
+  pointer-events: auto;
+}
+
+.selection-refusal-lane .selection-callout-error {
+  flex: 1 1 240px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--color-text);
+  line-height: 1.3;
+}
+
+.selection-refusal-lane .selection-callout-recovery {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+  background: transparent;
+  border: var(--border-thin);
+}
+
+.selection-refusal-lane .selection-callout-recovery:hover {
+  background: var(--color-surface-hover);
+}
+
+/* Narrow, the ways out wrap to a second row: the Undo toast stands clear of
+   the taller row. (A query on the viewer area styles only what is inside
+   it, so the toast takes the larger offset itself.) */
+@container viewer-area (max-width: 719px) {
+  .viewer-area:has(.selection-refusal-lane .selection-callout-diagnostic)
+    .toast {
+    --lane-refusal: 92px;
+  }
+}
+
+@container viewer-area (min-width: 1240px) {
+  .workspace.column-layout
+    .viewer-area:has(.workspace-tour)
+    .selection-refusal-lane {
+    --notice-start: max(
+      var(--lane-inset),
+      calc(var(--tour-left) + 296px + 12px)
+    );
+  }
+}

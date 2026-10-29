@@ -421,7 +421,7 @@ test('a glyph pick selects, arms and builds the whole word', async ({
   // glyph that was clicked (an H alone is under 15 mm).
   const detail =
     (await page
-      .locator('.selection-callout-chip .selection-callout-detail')
+      .locator('.selection-readout .selection-callout-detail')
       .textContent()) ?? '';
   const size = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(detail);
   expect(size, `no size in selection chip: ${detail}`).not.toBeNull();

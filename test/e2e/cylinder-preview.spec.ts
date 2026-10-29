@@ -166,7 +166,7 @@ test('rounded cylinder rapid bottom, top, and radius edits survive reload', asyn
     );
     // The Selection card names the pick; a pick opens no inspector.
     await expect(
-      page.locator('.selection-card .selection-callout-name')
+      page.locator('.selection-readout .selection-callout-name')
     ).toContainText(
       surface === 'bottom-cap'
         ? 'Bottom face'

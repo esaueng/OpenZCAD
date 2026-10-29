@@ -151,9 +151,9 @@ test('a viewport body pick settles the typed Move once before changing selection
   await pickBody();
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
-  // The new pick lands: the Selection card names it, and a viewport pick
+  // The new pick lands: the rail carries its verbs, and a viewport pick
   // opens no card of its own.
-  await expect(page.locator('.selection-card')).toBeVisible();
+  await expect(page.locator('.selection-rail')).toBeVisible();
   await expect(inspector).toHaveCount(0);
   await expect(moveRows).toHaveCount(0);
   await page.keyboard.press('Escape');
@@ -233,7 +233,9 @@ test('a connected edge run settles the typed Move before replacing its target', 
   await pickRun();
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
-  await expect(page.locator('.selection-callout-name')).toHaveText('8 edges');
+  await expect(
+    page.locator('.selection-readout .selection-callout-name')
+  ).toHaveText('8 edges');
   await expect(moveRows).toHaveCount(0);
 
   await startMove(page);
@@ -261,7 +263,9 @@ test('a connected edge run settles the typed Move before replacing its target', 
   await pickRun();
   await expect(ask).toHaveCount(0);
   await expect(move).toHaveCount(0);
-  await expect(page.locator('.selection-callout-name')).toHaveText('8 edges');
+  await expect(
+    page.locator('.selection-readout .selection-callout-name')
+  ).toHaveText('8 edges');
   expect(await maxCards()).toBe(1);
 });
 
