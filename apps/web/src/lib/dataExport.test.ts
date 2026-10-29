@@ -9,7 +9,8 @@ import {
   createCheckpoint,
   createSavedRevision,
   createProjectDocument,
-  importStepBody
+  importStepBody,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
@@ -19,7 +20,7 @@ import {
   type ArtifactRecord
 } from '@openzcad/shared';
 import type { SkippedDataProject } from './dataExportTypes';
-import { api } from './api';
+import { api, rememberProjectFormats } from './api';
 import * as localStore from './localProjectStore';
 import * as transfers from './projectBackupTransfer';
 import { parseProjectBackup } from './projectBackup';
@@ -33,6 +34,12 @@ import {
 const encoding = vi.hoisted(() => ({
   oversizedProjectId: '',
   stagedProjectId: ''
+}));
+vi.mock('./e2ee/encryptedProjects', () => ({
+  encryptedMeasurements: async () => ({
+    loadProjectMeasurements: async () => ({ record: null })
+  }),
+  encryptedViewStates: async () => ({ load: async () => ({ sessions: [] }) })
 }));
 vi.mock('fflate', async (importOriginal) => {
   const actual = await importOriginal<typeof Fflate>();
@@ -520,6 +527,57 @@ it('cancels rather than treating an account change during a project read as a sk
     downloadAllData({ ...options(true), isCurrent: () => current })
   ).rejects.toThrow('account changed');
   expect(download).not.toHaveBeenCalled();
+});
+
+it('includes an existing encrypted retained save in the bulk ZIP without skipping its project', async () => {
+  const captured = createSavedRevision(
+    createProjectDocument('Retained encrypted backup', session.userId),
+    'Captured before encryption advanced the version'
+  );
+  const point = captured.checkpoints.at(-1)!;
+  const sealed = { ...captured, version: captured.version + 1 };
+  rememberProjectFormats([{ projectId: captured.projectId, storageFormat: 2 }]);
+  vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
+  vi.spyOn(api, 'listProjects').mockResolvedValue({
+    projects: [{
+      projectId: captured.projectId,
+      name: captured.name,
+      updatedAt: '2026-10-28T00:00:00.000Z',
+      revisionCount: 1
+    }]
+  });
+  vi.spyOn(api, 'loadProject').mockResolvedValue(sealed);
+  vi.spyOn(api, 'listRevisions').mockResolvedValue({
+    revisions: [{
+      revisionId: point.revisionId,
+      projectId: captured.projectId,
+      reason: point.reason,
+      createdAt: '2026-10-28T00:00:00.000Z',
+      documentBytes: 100
+    }],
+    maxRevisions: 50
+  });
+  vi.spyOn(api, 'loadRevision').mockResolvedValue(sealed);
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [] });
+  const archive = await entries(await createDataExport(options(true)));
+  const manifest = JSON.parse(strFromU8(archive['manifest.json']!)) as {
+    cloudProjects: unknown[];
+    skippedProjects: unknown[];
+    omittedSections: unknown[];
+  };
+  expect(manifest.cloudProjects).toHaveLength(1);
+  expect(manifest.skippedProjects).toEqual([]);
+  expect(manifest.omittedSections).toEqual([]);
+  const backup = await parseProjectBackup(
+    strFromU8(archive['projects/cloud/1/project.openzcad']!)
+  );
+  expect(backup.document.version).toBe(sealed.version);
+  expect(backup.saveStates).toEqual([
+    {
+      checkpointId: point.checkpointId,
+      document: withoutDerivedProjection(captured)
+    }
+  ]);
 });
 
 it('retains a checkpoint and file added while its document read is pending', async () => {

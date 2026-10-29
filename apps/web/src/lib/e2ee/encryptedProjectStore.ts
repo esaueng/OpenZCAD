@@ -1758,6 +1758,25 @@ export function createEncryptedProjectStore(
       throw new ApiError(404, 'Project not found.', 'PROJECT_NOT_FOUND');
     }
     const head = await headFor(projectId, expectedVersion);
+    const checkpoint = document.checkpoints.at(-1);
+    const version = Math.max(document.version, head.version + 1);
+    // Sharing-only writes can advance the accepted base behind the page's
+    // version. Stamp just the newly captured point at the actual sealed
+    // version, preserving older points and the caller's document.
+    const toSeal =
+      revisionId !== null &&
+      version !== document.version &&
+      checkpoint?.revisionId === revisionId &&
+      checkpoint.documentVersion === document.version &&
+      document.revisions.at(-1)?.revisionId === revisionId
+        ? {
+            ...document,
+            version,
+            checkpoints: document.checkpoints.map((point) =>
+              point === checkpoint ? { ...point, documentVersion: version } : point
+            )
+          }
+        : document;
     let restored = false;
     for (let attempt = 0; ; attempt++) {
       const material = await currentMaterial(device, projectId);
@@ -1780,7 +1799,7 @@ export function createEncryptedProjectStore(
         device,
         material,
         projectId,
-        document,
+        toSeal,
         head.version,
         head.hash,
         head.revisionHashes,

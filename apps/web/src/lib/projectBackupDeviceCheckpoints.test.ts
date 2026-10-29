@@ -58,6 +58,72 @@ it('keeps canonical checkpoint backups compatible without a device-only marker',
   expect(state.deviceOnly).toBeUndefined();
 });
 
+it('exports the captured state of a legacy encrypted save whose envelope advanced its version', async () => {
+  const captured = createSavedRevision(
+    createProjectDocument('Legacy encrypted save', toUserId('owner')),
+    'Retained before the change'
+  );
+  const point = captured.checkpoints.at(-1)!;
+  const sealed = { ...captured, version: captured.version + 1 };
+  rememberProjectFormats([
+    { projectId: captured.projectId, storageFormat: 2 }
+  ]);
+  vi.mocked(api.loadRevision).mockResolvedValue(sealed);
+  const backup = await parseProjectBackup(
+    await createProjectBackup(sealed, true, undefined, {
+      retainedRevisionIds: new Set([point.revisionId])
+    })
+  );
+  expect(backup.document.version).toBe(sealed.version);
+  expect(backup.saveStates).toEqual([
+    {
+      checkpointId: point.checkpointId,
+      document: withoutDerivedProjection(captured)
+    }
+  ]);
+  expect(sealed.version).toBe(captured.version + 1);
+});
+
+it.each([
+  'plaintext',
+  'foreign project',
+  'wrong checkpoint',
+  'wrong revision',
+  'larger version gap'
+] as const)(
+  'refuses legacy-looking saved states with %s', async (fault) => {
+    const captured = createSavedRevision(
+      createProjectDocument('Guarded legacy save', toUserId('owner')),
+      'Captured point'
+    );
+    const point = captured.checkpoints.at(-1)!;
+    const sealed = structuredClone(captured);
+    sealed.version += 1;
+    if (fault === 'foreign project')
+      sealed.projectId = 'proj_foreign' as typeof sealed.projectId;
+    if (fault === 'wrong checkpoint')
+      sealed.checkpoints.at(-1)!.checkpointId = 'checkpoint_other';
+    if (fault === 'wrong revision')
+      sealed.revisions.at(-1)!.revisionId = 'rev_other' as typeof point.revisionId;
+    if (fault === 'larger version gap') sealed.version += 1;
+    rememberProjectFormats([
+      {
+        projectId: captured.projectId,
+        storageFormat: fault === 'plaintext' ? 1 : 2
+      }
+    ]);
+    vi.mocked(api.loadRevision).mockResolvedValue(sealed);
+    await expect(
+      createProjectBackup(
+        { ...captured, version: captured.version + 2 },
+        true,
+        undefined,
+        { retainedRevisionIds: new Set([point.revisionId]) }
+      )
+    ).rejects.toThrow();
+  }
+);
+
 it.each(['new version', 'old artifact id'] as const)(
   'uses the migrated signed save instead of a cached plaintext snapshot with %s',
   async (stale) => {

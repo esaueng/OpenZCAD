@@ -221,14 +221,38 @@ export async function createProjectBackup(
       (local.version !== checkpoint.documentVersion ||
         (isEncryptedProject(snapshot.projectId) &&
           importArtifactIds(local).some((id) => id.startsWith('artifact_'))));
-    const saved =
-      (stale ? null : local) ??
+    const cached = stale ? null : local;
+    let saved =
+      cached ??
       (remote &&
       !privatePoint &&
       (options.retainedRevisionIds === undefined ||
         options.retainedRevisionIds.has(checkpoint.revisionId))
         ? await api.loadRevision(snapshot.projectId, checkpoint.revisionId)
         : null);
+    if (
+      saved &&
+      !cached &&
+      remote &&
+      !privatePoint &&
+      isEncryptedProject(snapshot.projectId)
+    ) {
+      const captured = saved.checkpoints.at(-1);
+      // Older encrypted writers advanced the envelope/document version after
+      // minting the point. The verified revision still contains the captured
+      // model. Restore its logical snapshot version in this backup only;
+      // leave the signed source and the current head unchanged.
+      if (
+        saved.projectId === snapshot.projectId &&
+        captured?.checkpointId === checkpoint.checkpointId &&
+        captured.revisionId === checkpoint.revisionId &&
+        captured.documentVersion === checkpoint.documentVersion &&
+        saved.revisions.at(-1)?.revisionId === checkpoint.revisionId &&
+        saved.version === checkpoint.documentVersion + 1
+      ) {
+        saved = { ...saved, version: checkpoint.documentVersion };
+      }
+    }
     if (saved) {
       const state = {
         checkpointId: checkpoint.checkpointId,
