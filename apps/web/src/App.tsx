@@ -13182,10 +13182,11 @@ export function App() {
   async function handleReorderProjects(
     projectIds: string[],
     pin?: { projectId: string; pinned: boolean }
-  ) {
+  ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
+    let pinnedName: string | undefined;
     try {
-      const pinnedName = await queueShelfWrite(async () => {
+      pinnedName = await queueShelfWrite(async () => {
         const rows = new Map(
           latestProjects.current
             .filter((project) => positions.has(project.projectId))
@@ -13211,31 +13212,35 @@ export function App() {
             )?.name
           : undefined;
       });
-      if (pin && pinnedName !== undefined) {
-        setStatus(
-          pin.pinned ? `Pinned ${pinnedName}.` : `Unpinned ${pinnedName}.`
-        );
-      }
-      if (session) {
-        const organizationScope = organizationBackground.scopeFor(
-          session.userId
-        );
-        await mirrorPendingReorder(
-          projectIds,
-          organizationMirrorHost,
-          async (ids) =>
-            (
-              await api.reorderProjects(
-                { projectIds: ids.map(toProjectId) },
-                organizationScope.signal
-              )
-            ).projects,
-          undefined,
-          organizationScope
-        ).catch(() => undefined);
-      }
     } catch (error) {
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
+      return;
+    }
+    if (pin && pinnedName !== undefined) {
+      setStatus(
+        pin.pinned ? `Pinned ${pinnedName}.` : `Unpinned ${pinnedName}.`
+      );
+    }
+    // Resolves once the device has the new order; the account catches up
+    // in the background, so a slow network never holds the shelf's drag
+    // preview (and its Pin/Unpin state) past the local save.
+    if (session) {
+      const organizationScope = organizationBackground.scopeFor(
+        session.userId
+      );
+      void mirrorPendingReorder(
+        projectIds,
+        organizationMirrorHost,
+        async (ids) =>
+          (
+            await api.reorderProjects(
+              { projectIds: ids.map(toProjectId) },
+              organizationScope.signal
+            )
+          ).projects,
+        undefined,
+        organizationScope
+      ).catch(() => undefined);
     }
   }
 

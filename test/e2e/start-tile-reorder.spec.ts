@@ -155,6 +155,25 @@ test.describe('with a pinned part', () => {
     ).toHaveText([names[0]!]);
   });
 
+  test('the pin button follows a drop even while the account is slow', async ({
+    page
+  }) => {
+    // The account never answers the reorder: only the device save counts.
+    await page.route('**/api/projects/reorder', () => undefined);
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    const unpin = page.getByRole('button', {
+      name: `Unpin ${names[2]}`,
+      exact: true
+    });
+    await expect(unpin).toBeAttached();
+    await card(page, names[2]!).hover();
+    await unpin.click();
+    await expect(
+      page.getByRole('button', { name: `Pin ${names[2]}`, exact: true })
+    ).toBeAttached();
+  });
+
   test('unpins a part dragged out of a fully pinned shelf', async ({
     page
   }) => {
