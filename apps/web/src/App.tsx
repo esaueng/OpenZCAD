@@ -10726,6 +10726,13 @@ export function App() {
       setStatus('Section view off.');
       return;
     }
+    // Switching the cut on brings its controls back, even when they were
+    // hidden the last time it was on.
+    setPanelState((current) =>
+      current.sectionPanelOpen
+        ? current
+        : { ...current, sectionPanelOpen: true }
+    );
     const remembered = rememberedSection.current;
     if (remembered) {
       setViewerSettings((current) => ({ ...current, sectionView: remembered }));
@@ -28955,6 +28962,14 @@ export function App() {
                 : null
             }
             onToggleSection={toggleSectionView}
+            sectionPanelOpen={panelState.sectionPanelOpen}
+            onSectionPanelOpenChange={(open) =>
+              setPanelState((current) =>
+                current.sectionPanelOpen === open
+                  ? current
+                  : { ...current, sectionPanelOpen: open }
+              )
+            }
             onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
             // The slider was released, or a key repeat ended: cut it exactly.

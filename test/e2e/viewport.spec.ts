@@ -2009,7 +2009,7 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   await planes.getByRole('button', { name: 'Side (YZ plane)' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: YZ plane/);
 
-  // Compact controls preserve the complete cut when their close button is used.
+  // The section button puts the controls away and keeps the complete cut.
   const position = page.getByLabel('Cut position', { exact: true });
   await position.fill('3.125');
   await position.press('Enter');
@@ -2017,7 +2017,7 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   const flip = page.getByRole('button', { name: 'Flip cut direction' });
   await flip.click();
   await expect(flip).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Close section controls' }).click();
+  await sectionButton.click();
   await expect(slider).toHaveCount(0);
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
   await sectionButton.click();
@@ -2044,10 +2044,12 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   await expect(slider).toBeVisible();
   await expect(views).toHaveAttribute('aria-expanded', 'false');
 
-  // One click switches it off.
-  await sectionButton.click();
+  // Only the panel's switch ends the cut, and the panel stays up for it.
+  const cutSwitch = page.getByRole('switch', { name: 'Section cut' });
+  await cutSwitch.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
-  await expect(slider).toHaveCount(0);
+  await expect(cutSwitch).toHaveAttribute('aria-checked', 'false');
+  await expect(slider).toBeDisabled();
   await expect
     .poll(async () => {
       const state = await sectionState();
@@ -2055,7 +2057,8 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
     })
     .toBe(0);
   // Switching the cut off and on also restores its offset and direction.
-  await sectionButton.click();
+  await cutSwitch.click();
+  await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
   await expect(position).toHaveValue('3.125');
   await expect(flip).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Center cut' }).click();

@@ -115,6 +115,14 @@ export interface PanelState {
    * with — the knobs are what Tweak is for — and remembered per device.
    */
   tweakPanelOpen: boolean;
+  /**
+   * The section controls beside the viewer bar. The cut and its panel are
+   * two things: hiding the panel leaves the cut on. Remembered because the
+   * viewer bar remounts with the workspace mode and the dock layout, and a
+   * panel someone put away came straight back each time. Switching the cut
+   * on opens it again.
+   */
+  sectionPanelOpen: boolean;
 }
 
 export const DEFAULT_PANEL_STATE: PanelState = {
@@ -139,7 +147,8 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   drawerOpen: false,
   commandFoldOpen: false,
   sketchPaletteOpen: false,
-  tweakPanelOpen: true
+  tweakPanelOpen: true,
+  sectionPanelOpen: true
 };
 
 export const TOOL_GROUP_KEYS = Object.keys(
@@ -157,7 +166,8 @@ function copyDefaults(): PanelState {
     drawerOpen: DEFAULT_PANEL_STATE.drawerOpen,
     commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen,
     sketchPaletteOpen: DEFAULT_PANEL_STATE.sketchPaletteOpen,
-    tweakPanelOpen: DEFAULT_PANEL_STATE.tweakPanelOpen
+    tweakPanelOpen: DEFAULT_PANEL_STATE.tweakPanelOpen,
+    sectionPanelOpen: DEFAULT_PANEL_STATE.sectionPanelOpen
   };
 }
 
@@ -195,6 +205,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.tweakPanelOpen === 'boolean') {
     state.tweakPanelOpen = root.tweakPanelOpen;
+  }
+  if (typeof root.sectionPanelOpen === 'boolean') {
+    state.sectionPanelOpen = root.sectionPanelOpen;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {

@@ -12,7 +12,7 @@ function setup() {
       range={{ min: -10, max: 20 }}
       outline={{ kind: 'clipping' }}
       units="mm"
-      onClose={vi.fn()}
+      onSwitch={vi.fn()}
       onPlane={vi.fn()}
       onOffset={onOffset}
       onCommit={onCommit}
@@ -24,6 +24,12 @@ function setup() {
 }
 
 describe('compact section controls', () => {
+  it('labels the slider ends with the model bounds', () => {
+    setup();
+    const ends = document.querySelector('.rail-section-ends');
+    expect(ends?.textContent).toBe('-1020');
+  });
+
   it.each(['pointerUp', 'keyUp', 'pointerCancel'] as const)(
     'commits a changed slider once on %s and skips a redundant blur',
     (release) => {
@@ -101,12 +107,9 @@ describe('compact section controls', () => {
     expect(onFlip).toHaveBeenCalledOnce();
   });
 
-  it('keeps the full preview explanation available on demand and never exports a preview', () => {
+  it('always explains the preview and never exports one', () => {
     setup();
-    const detail = screen.getByText(/Approximate cut/);
-    expect(detail).not.toBeVisible();
-    fireEvent.click(screen.getByLabelText('Section details'));
-    expect(detail).toBeVisible();
+    expect(screen.getByText(/Approximate cut/)).toBeVisible();
     expect(
       screen.getByLabelText('Export the exact section as DXF')
     ).toBeDisabled();
