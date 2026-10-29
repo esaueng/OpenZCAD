@@ -22404,9 +22404,25 @@ export function App() {
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
       ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
       : null;
+  /**
+   * The Ø/R choice carried onto the wall an applied radius edit regenerated.
+   * That wall has a new topology id, so without this the reset below read it
+   * as a fresh pick and flipped Radius back to Diameter after every edit.
+   */
+  const carriedCylinderModeRef = useRef<{
+    key: string;
+    mode: DimensionMode;
+  } | null>(null);
   useEffect(() => {
-    setCylinderDimensionMode('diameter');
     cylinderRadiusPreview.clear();
+    const carried = carriedCylinderModeRef.current;
+    // Between the commit handing the body back and the wall being picked
+    // again there is no wall: keep the carried mode for it.
+    if (carried && cylinderSelectionKey === null) return;
+    carriedCylinderModeRef.current = null;
+    setCylinderDimensionMode(
+      carried?.key === cylinderSelectionKey ? carried.mode : 'diameter'
+    );
   }, [cylinderSelectionKey, cylinderRadiusPreview]);
 
   function buildCylinderRadiusCommand(
@@ -22685,6 +22701,10 @@ export function App() {
           ...(wall.reference ? { reference: wall.reference } : {})
         });
         setSelectedBodyIds([bodyId]);
+        carriedCylinderModeRef.current = {
+          key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
+          mode: cylinderDimensionMode
+        };
         dispatchInteraction({ type: 'select-face', target: nextTarget });
       },
       plan.sourceFeatureId

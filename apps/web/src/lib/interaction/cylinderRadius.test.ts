@@ -317,5 +317,14 @@ describe('hole diameter drag', () => {
         2
       )
     ).toBeNull();
+    // A separate band on the same axis and radius, further along it, is not
+    // the edited wall and does not make the pick ambiguous.
+    const band = bore('lower-band', 2, { x: 0, y: 34 });
+    band.geometry!.axisStart = { x: 0, y: 34, z: 20 };
+    band.geometry!.axisEnd = { x: 0, y: 34, z: 30 };
+    expect(
+      findResizedCylinderFace([...faces, band], axisStart, axisEnd, 2)
+        ?.topologyId
+    ).toBe('bore');
   });
 });

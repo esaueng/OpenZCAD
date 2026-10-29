@@ -74,9 +74,11 @@ export function sameCylinderAxis(
 
 /**
  * The cylindrical face a committed radius edit left on the same axis at the
- * new radius: what stays selected once a drag applies, so the bore keeps its
- * handle instead of the selection falling back to the whole body. Null when
- * no face, or more than one, fits.
+ * new radius, overlapping the source wall's span along it: what stays
+ * selected once a drag applies, so the bore keeps its handle instead of the
+ * selection falling back to the whole body. A separate band of a stepped or
+ * grooved part can share the axis and radius; the overlap keeps it out. Null
+ * when no face, or more than one, fits.
  */
 export function findResizedCylinderFace(
   faces: readonly FaceTopology[],
@@ -92,17 +94,27 @@ export function findResizedCylinderFace(
   if (!axis) return null;
   const scale = Math.max(1, radius, pointDistance(axisStart, axisEnd));
   const tolerance = scale * 1e-6;
+  const along = (point: Vector3) =>
+    dot(
+      {
+        x: point.x - axisStart.x,
+        y: point.y - axisStart.y,
+        z: point.z - axisStart.z
+      },
+      axis
+    );
+  const sourceEnd = along(axisEnd);
   const offAxis = (point: Vector3) => {
     const relative = {
       x: point.x - axisStart.x,
       y: point.y - axisStart.y,
       z: point.z - axisStart.z
     };
-    const along = dot(relative, axis);
+    const axial = dot(relative, axis);
     return Math.hypot(
-      relative.x - axis.x * along,
-      relative.y - axis.y * along,
-      relative.z - axis.z * along
+      relative.x - axis.x * axial,
+      relative.y - axis.y * axial,
+      relative.z - axis.z * axial
     );
   };
   const matches = faces.filter((face) => {
@@ -121,11 +133,15 @@ export function findResizedCylinderFace(
       y: geometry.axisEnd.y - geometry.axisStart.y,
       z: geometry.axisEnd.z - geometry.axisStart.z
     });
+    const start = along(geometry.axisStart);
+    const end = along(geometry.axisEnd);
     return (
       direction !== null &&
       1 - Math.abs(dot(direction, axis)) <= 1e-9 &&
       offAxis(geometry.axisStart) <= tolerance &&
-      offAxis(geometry.axisEnd) <= tolerance
+      offAxis(geometry.axisEnd) <= tolerance &&
+      Math.max(Math.min(start, end), Math.min(0, sourceEnd)) <=
+        Math.min(Math.max(start, end), Math.max(0, sourceEnd)) + tolerance
     );
   });
   return matches.length === 1 ? matches[0]! : null;
