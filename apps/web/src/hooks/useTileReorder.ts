@@ -85,6 +85,7 @@ export function useTileReorder({
   // A dropped order stands in for the stored one until the save lands.
   useEffect(() => {
     if (!draggingId && order && order.join('\n') === idsKey) {
+      clearTimer(settleTimer);
       setOrder(null);
     }
   }, [draggingId, idsKey, order]);
@@ -92,9 +93,7 @@ export function useTileReorder({
   useEffect(
     () => () => {
       stop.current?.();
-      if (settleTimer.current !== null) {
-        window.clearTimeout(settleTimer.current);
-      }
+      clearTimer(settleTimer);
     },
     []
   );
@@ -285,9 +284,7 @@ export function useTileReorder({
       const changed = current.order.join('\n') !== current.initial.join('\n');
       if (commit && changed) {
         latest.current.onCommit(current.order);
-        if (settleTimer.current !== null) {
-          window.clearTimeout(settleTimer.current);
-        }
+        clearTimer(settleTimer);
         // A save that never lands must not pin the preview forever.
         settleTimer.current = window.setTimeout(() => {
           settleTimer.current = null;
@@ -315,6 +312,9 @@ export function useTileReorder({
           return;
         }
         current.active = true;
+        // A drop still waiting on its save must not let go of this drag's
+        // preview when its fallback fires.
+        clearTimer(settleTimer);
         document.getSelection()?.removeAllRanges();
         document.documentElement.classList.add(DRAGGING_ROOT_CLASS);
         setDraggingId(current.id);
@@ -370,6 +370,14 @@ function followPointer(tile: HTMLElement | undefined, current: DragSession) {
   current.tx = current.x - current.grabX - slotLeft;
   current.ty = current.y - current.grabY - slotTop;
   tile.style.transform = `translate(${current.tx}px, ${current.ty}px)`;
+}
+
+/** Disarms a timeout held in a ref, such as a dropped order's fallback. */
+function clearTimer(timer: { current: number | null }) {
+  if (timer.current !== null) {
+    window.clearTimeout(timer.current);
+    timer.current = null;
+  }
 }
 
 function scrollStep(depth: number): number {
