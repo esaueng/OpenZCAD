@@ -51,6 +51,14 @@ export const FOLD_GROUPS: readonly CommandRailGroup[] = TOOL_GROUPS.map(
   })
 ).filter((group) => group.tools.length > 0);
 
+/**
+ * Every tool under its group heading: the fold while a pick holds the rail,
+ * whose fixed verbs then give way to the pick's own.
+ */
+export const ALL_TOOL_GROUPS: readonly CommandRailGroup[] = TOOL_GROUPS.map(
+  (group) => ({ label: group.label, tools: group.tools })
+);
+
 export interface CommandContext {
   kind: CommandContextKind;
   /** The tool drawn as the context's primary verb, or none. */

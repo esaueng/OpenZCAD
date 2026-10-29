@@ -169,7 +169,7 @@ test('lists stacked faces without disturbing selection or click cycling', async 
   // dismissing the list must leave that state alone, so the next click still
   // advances exactly one row deeper.
   const selectionLabel = page.locator(
-    '.selection-callout-chip .selection-callout-name'
+    '.selection-readout .selection-callout-name'
   );
   await page.mouse.click(probe!.x, probe!.y);
   await expect(selectionLabel).toHaveText(probe!.labels[0]!);

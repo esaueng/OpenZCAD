@@ -554,7 +554,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   // the unrelated lower-rim fillet either.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector).toHaveCount(0);
-  const selectionChip = page.locator('.selection-callout-chip');
+  const selectionChip = page.locator('.selection-readout');
   await expect(selectionChip.locator('.selection-callout-name')).toHaveText(
     'Through hole'
   );
@@ -562,6 +562,11 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     'Ø 20 mm'
   );
   await expect(selectionChip).not.toContainText('Lower rim fillet');
+  await expect(
+    page.locator('.selection-rail').getByRole('button', {
+      name: /Lower rim fillet/
+    })
+  ).toHaveCount(0);
 
   await page.keyboard.press('Delete');
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
@@ -808,7 +813,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     'data-e2e-selected-face',
     rimBlend!.topologyId
   );
-  const selectionReadout = page.locator('.selection-callout-chip');
+  const selectionReadout = page.locator('.selection-readout');
   await expect(selectionReadout).toContainText('Blend face R1.5');
 
   // 10. A second oblique angle keeps the rim selection and chip world anchor.

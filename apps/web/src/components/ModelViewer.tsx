@@ -845,8 +845,8 @@ export interface ModelViewerProps {
   selectionCallout?: SelectionCalloutContent | null;
   /**
    * Whether the pick wears a label in the viewport at all. Off while the
-   * workspace's Selection card names the pick and carries its verbs, so the
-   * model shows only the handle and its value. Several picked bodies still
+   * workspace names the pick in its bar and carries its verbs on the rail,
+   * so the model shows only the handle and its value. Several picked bodies still
    * wear their pick numbers: those say which body is which, not what to do.
    */
   pickLabel?: boolean;
@@ -3403,10 +3403,13 @@ export function ModelViewer({
         labelRenderer.domElement,
         radius === null ? null : radius * 2
       );
-      // The workspace's Selection card names the pick outside the viewer.
-      const card =
-        labelRenderer.domElement.ownerDocument.querySelector('.selection-card');
-      if (card) setLiveDiameter(card, radius === null ? null : radius * 2);
+      // The workspace's bar names the pick outside the viewer.
+      const readout =
+        labelRenderer.domElement.ownerDocument.querySelector(
+          '.selection-readout'
+        );
+      if (readout)
+        setLiveDiameter(readout, radius === null ? null : radius * 2);
     }
 
     function restoreCylinderRadiusProxy() {

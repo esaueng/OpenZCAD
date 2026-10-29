@@ -604,11 +604,11 @@ test('a window floated over a live handle leaves its value chip clear and reacha
   ).toBe(true);
 });
 
-test('a window floating over the Selection card leaves its verbs pressable', async ({
+test("a window floating over the rail leaves the pick's verbs pressable", async ({
   page
 }) => {
-  // A window over the left of the stage, clear of the rail but across the
-  // card that hangs above it.
+  // A window over the left of the stage, beside the rail that carries the
+  // pick's verbs.
   await openWorkspace(page, 'Card over window', {
     right: [],
     floats: [
@@ -619,14 +619,22 @@ test('a window floating over the Selection card leaves its verbs pressable', asy
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
   await selectBodyFromObjects(page);
-  const card = page.locator('.selection-card');
+  const card = page.locator('.selection-rail');
   const move = card.getByRole('button', { name: 'Selection: Move' });
   await expect(move).toBeVisible();
   const window = windowOf(page, 'History');
   await expect(window).toBeVisible();
-  // The window covers the card's place; the card, which carries the pick's
-  // only verbs, stays on top of it and takes its own presses.
-  expect(overlaps(await box(window), await box(card))).toBe(true);
+  // The rail, which carries the pick's only verbs, stands over any window
+  // while it does, so a window dragged across it never takes its presses.
+  const stacking = await page.evaluate(() => {
+    const z = (selector: string) =>
+      Number(getComputedStyle(document.querySelector(selector)!).zIndex || '0');
+    return {
+      rail: z('.workspace-column-float'),
+      window: z('.panel-float')
+    };
+  });
+  expect(stacking.rail).toBeGreaterThan(stacking.window);
   const owned = await move.evaluate((button) => {
     const rect = button.getBoundingClientRect();
     const hit = document.elementFromPoint(

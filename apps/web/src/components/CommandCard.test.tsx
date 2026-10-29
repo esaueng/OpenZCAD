@@ -232,6 +232,103 @@ describe('CommandCard', () => {
     expect(container.querySelector('.command-flyout')).toBeNull();
   });
 
+  it('gives the rail to a pick: Deselect all and its verbs, every tool in the fold', () => {
+    const onVerb = vi.fn();
+    const onClear = vi.fn();
+    const { container } = renderCard(
+      { ...NOTHING, faceSelected: true, bodyCount: 1 },
+      {
+        pickSummary: '1 face',
+        pick: {
+          label: textLabelSegments('Bracket · Top face'),
+          detail: '2503.45 mm²',
+          verbs: [
+            {
+              id: 'action:offset-face',
+              label: 'Offset',
+              title: 'Offset the face',
+              disabled: false,
+              pressed: true
+            },
+            {
+              id: 'tool:shell',
+              label: 'Shell',
+              title: 'Shell',
+              disabled: false,
+              pressed: false
+            }
+          ],
+          anchor: 'selection',
+          onVerb,
+          onClear
+        }
+      }
+    );
+    // The fixed verbs give way: none of the rail's own groups is drawn.
+    for (const group of RAIL_GROUPS) {
+      expect(screen.queryByRole('group', { name: group.label })).toBeNull();
+    }
+    const rail = screen.getByRole('group', { name: 'Selection' });
+    expect(
+      within(rail)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Deselect all', 'Selection: Offset', 'Selection: Shell']);
+    fireEvent.click(within(rail).getByRole('button', { name: 'Deselect all' }));
+    expect(onClear).toHaveBeenCalledOnce();
+    fireEvent.click(
+      within(rail).getByRole('button', { name: 'Selection: Shell' })
+    );
+    expect(onVerb).toHaveBeenCalledWith('tool:shell');
+    // Every tool, the rail's fixed ones included, stays a press away.
+    const toggle = screen.getByRole('button', { name: /^More tools/ });
+    expect(toggle).toHaveAccessibleName(
+      `More tools (${Object.keys(TOOL_META).length})`
+    );
+    fireEvent.click(toggle);
+    expect(foldTools(container)).toEqual(
+      expect.arrayContaining([...RAIL_TOOLS])
+    );
+    expect(container.querySelectorAll('.command-tile')).toHaveLength(
+      Object.keys(TOOL_META).length
+    );
+  });
+
+  it('keeps only the verb being dragged, with no fold', () => {
+    renderCard(
+      { ...NOTHING, faceSelected: true, bodyCount: 1 },
+      {
+        pickSummary: '1 face',
+        pick: {
+          label: textLabelSegments('Bracket · Top face'),
+          verbs: [
+            {
+              id: 'action:offset-face',
+              label: 'Offset',
+              title: 'Offset the face',
+              disabled: false,
+              pressed: true
+            }
+          ],
+          anchor: 'selection',
+          onVerb: vi.fn(),
+          onClear: vi.fn(),
+          operation: {
+            title: 'Offset Face',
+            phase: 'dragging',
+            onEditCulprit: vi.fn(),
+            onViewDetails: vi.fn(),
+            onKeepLastValid: vi.fn(),
+            onSelectAllEdges: vi.fn()
+          }
+        }
+      }
+    );
+    expect(
+      screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))
+    ).toEqual(['Selection: Offset']);
+  });
+
   it('launches a tool from the rail or from the flyout', () => {
     const { onLaunchTool } = renderCard({ ...NOTHING, bodyCount: 1 });
     fireEvent.click(screen.getByRole('button', { name: /^Move \(M\)/ }));

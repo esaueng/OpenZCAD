@@ -42,7 +42,7 @@
 @import './components/quiet-stage.css';
 /* The library's and Settings' top bar reuses the quiet stage's islands. */
 @import './components/page-topbar.css';
-/* The Selection card hangs off the column the quiet stage just placed. */
-@import './components/selection-card.css';
+/* The pick's verbs ride the rail the quiet stage just placed. */
+@import './components/selection-rail.css';
 /* After every sizing rule: it only adds hit area, never moves a control. */
 @import './components/target-size.css';

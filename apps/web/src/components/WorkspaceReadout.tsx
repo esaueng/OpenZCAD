@@ -53,6 +53,12 @@ interface WorkspaceReadoutProps {
    */
   prompt: string | null;
   /**
+   * What is picked: its name and key measurement, read at the head of the
+   * bar's guidance line. It stays while a status message has the toast,
+   * which only the guidance makes way for.
+   */
+  pick?: ReactNode;
+  /**
    * U09: an in-place command's bar. It takes the guidance row while a
    * command runs, so its step is read where every hint is.
    */
@@ -98,6 +104,7 @@ export function WorkspaceReadout({
   logOpen,
   onToggleLog,
   prompt,
+  pick = null,
   commandRow = null,
   projectName,
   featureCount,
@@ -240,15 +247,21 @@ export function WorkspaceReadout({
   // its visibility changes.
   return (
     <>
-      {/* The foot of the stage: one line of guidance over the search bar.
-          The guidance is the prompt the summary below already carries for
-          assistive tech, so it is drawn here but hidden from the tree; a live
-          status message takes its place while the toast is up. */}
+      {/* The foot of the stage: one line of guidance over the search bar,
+          led by what is picked. The guidance is the prompt the summary below
+          already carries for assistive tech, so it is drawn here but hidden
+          from the tree; a live status message takes its place while the
+          toast is up. */}
       <div className="command-bar-lane" ref={laneRef}>
         {commandRow ??
-          (prompt && !shown ? (
-            <p className="workspace-hint" aria-hidden="true">
-              {prompt}
+          ((prompt && !shown) || pick ? (
+            <p className="workspace-hint">
+              {pick}
+              {prompt && !shown ? (
+                <span className="workspace-hint-text" aria-hidden="true">
+                  {prompt}
+                </span>
+              ) : null}
             </p>
           ) : null)}
         {searchBar}

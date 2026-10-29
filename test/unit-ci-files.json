@@ -93,7 +93,7 @@
     "src/components/ProjectConflictDialog.test.tsx",
     "src/components/ProjectEncryptionPreference.test.tsx",
     "src/components/ProjectSharingDialog.test.tsx",
-    "src/components/SelectionCard.test.tsx",
+    "src/components/SelectionRail.test.tsx",
     "src/components/SettingsPage.test.tsx",
     "src/components/SketchEntityEditor.test.tsx",
     "src/components/SketchWorkflow.test.tsx",

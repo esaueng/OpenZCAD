@@ -502,8 +502,8 @@
   left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
 }
 
-/* Up to 860px tall the left rail has no room to lift for the bar: the
-   Selection card hangs above it (selection-card.css), and lifted it ran off
+/* Up to 860px tall the left rail has no room to lift for the bar: a
+   pick's verbs make it taller (selection-rail.css), and lifted it ran off
    the top bar. There the bar stands beside the rail instead, as in a
    sketch, and the rail keeps its centre. */
 @media (max-height: 860px) {

@@ -68,7 +68,7 @@ async function armedBox(page: Page, options: { hole?: boolean } = {}) {
     // front face past 6 mm runs it into the hole.
     await selectFace(canvas, { x: 0, y: 0, z: 1 });
     await page
-      .locator('.selection-card')
+      .locator('.selection-rail')
       .getByRole('button', { name: 'Selection: Hole', exact: true })
       .click();
     // U09: Hole runs in place from the face just picked, at the point it
@@ -81,7 +81,7 @@ async function armedBox(page: Page, options: { hole?: boolean } = {}) {
   }
   await selectFace(canvas, { x: 0, y: -1, z: 0 });
   await page
-    .locator('.selection-card')
+    .locator('.selection-rail')
     .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   await expect(
@@ -280,7 +280,7 @@ test('dragging the selected face itself pushes it, as the arrow does', async ({
   // A press on the face that does not travel is still a click: it picks the
   // face afresh, never the body.
   await page.mouse.click(startX, startY);
-  await expect(page.locator('.selection-card')).toContainText(
+  await expect(page.locator('.selection-readout')).toContainText(
     'Box 1 · Front face'
   );
   await expect(
@@ -449,7 +449,7 @@ test('the committed face stays selected while the follow-up rebuild analyses', a
     window.__slowAnalysis!.armed = true;
     window.__cardlessFrames = 0;
     const sample = () => {
-      const card = document.querySelector('.selection-card');
+      const card = document.querySelector('.selection-rail');
       if (!card || /direct edit/i.test(document.body.innerText))
         window.__cardlessFrames! += 1;
       requestAnimationFrame(sample);
@@ -473,7 +473,7 @@ test('the committed face stays selected while the follow-up rebuild analyses', a
     .toBeGreaterThan(0);
   // Through the held analysis and a little after it.
   await page.waitForTimeout(1200);
-  await expect(page.locator('.selection-card')).toContainText(
+  await expect(page.locator('.selection-readout')).toContainText(
     'Box 1 · Front face'
   );
   expect(await page.evaluate(() => window.__cardlessFrames)).toBe(0);
@@ -603,7 +603,7 @@ test('applying a fillet goes straight from its preview to the blend face', async
     .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
     .toBeGreaterThan(0);
   await page.waitForTimeout(1200);
-  await expect(page.locator('.selection-card')).toContainText('Blend face');
+  await expect(page.locator('.selection-readout')).toContainText('Blend face');
   expect(await page.evaluate(() => window.__bodyCardFrames)).toBe(0);
 });
 

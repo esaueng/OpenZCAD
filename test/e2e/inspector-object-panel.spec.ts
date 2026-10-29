@@ -49,7 +49,7 @@ for (const directManipulation of [true, false]) {
     // reads as a full-width card and hides the viewer rail.
     await expect(page.locator('.viewer-area')).not.toHaveClass(/has-inspector/);
     await expect(
-      page.locator('.selection-card .selection-callout-name')
+      page.locator('.selection-readout .selection-callout-name')
     ).toContainText(`${featureName} 1`);
     const canvas = page.locator('.viewer-host canvas');
     const selectWall = () =>
@@ -65,7 +65,7 @@ for (const directManipulation of [true, false]) {
     await expect(inspector).toHaveCount(0);
     await expect(page.locator('.viewer-area')).not.toHaveClass(/has-inspector/);
     await expect(
-      page.locator('.selection-card .selection-callout-name')
+      page.locator('.selection-readout .selection-callout-name')
     ).toContainText(/wall|face/i);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     const operation = page.getByRole('region', {

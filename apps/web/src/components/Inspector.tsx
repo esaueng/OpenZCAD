@@ -215,7 +215,7 @@ interface InspectorProps extends InspectorCallbacks {
   /**
    * Whether a direct viewport pick (a face, an edge or a body, with no tool
    * and no History row behind it) gets a card. Off by default: the pick is
-   * answered on the model and in the Selection card, and the details open
+   * answered on the model and on the verb rail, and the details open
    * from History. An imported face's Edit face verb turns it on, because
    * its hole and blend edits have no History step to open them from.
    */
@@ -1694,7 +1694,7 @@ export function Inspector(props: InspectorProps) {
             units={units}
           />
         ) : null}
-        {/* Opened by the Selection card's Edit face: the imported face's own
+        {/* Opened by the rail's Edit face: the imported face's own
             edits are what was asked for, not just its provenance. */}
         {props.directPickDetails &&
           !commandSession &&

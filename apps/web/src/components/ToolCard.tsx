@@ -224,7 +224,7 @@ export function ToolCard({
                 type="button"
                 className="tool-card-recovery"
                 title={verb.title}
-                // The selection card's naming, so a pick's verbs are reached
+                // The verb rail's naming, so a pick's verbs are reached
                 // the same way wherever its card stands.
                 aria-label={`Selection: ${verb.label}`}
                 disabled={
