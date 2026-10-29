@@ -50,6 +50,7 @@
     "test/e2ee-default-on.test.ts",
     "test/e2ee-member-lists.test.ts",
     "test/e2ee-plaintext-freeze.test.ts",
+    "test/e2ee-project-documents.test.ts",
     "test/e2ee-project-state-code.test.ts",
     "test/e2ee-shared-device-removal.test.ts",
     "test/exact-kernel-adapter.test.ts",

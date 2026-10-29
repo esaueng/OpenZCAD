@@ -7,6 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createSavedRevision } from '@openzcad/document-core';
 import {
   EnvelopeKey,
   authorCutoffKey,
@@ -899,6 +900,7 @@ describe('version integrity', () => {
       document: v1
     });
     const revisionId = named.revisions.at(-1)!.revisionId;
+    expect(named.checkpoints.at(-1)!.documentVersion).toBe(named.version);
     // Reloaded: the head is the named save, whose own body cannot name its
     // own hash in the signed revision map.
     const page = reload(srv, laptop);
@@ -915,6 +917,63 @@ describe('version integrity', () => {
     expect(
       (await desktop.store.loadRevision(projectId, revisionId))?.version
     ).toBe(named.version);
+  });
+
+  it.each([false, true])(
+    'stamps a pre-minted save at its stored version after an intervening autosave: %s',
+    async (advance) => {
+      const srv = server();
+      const laptop = device(srv, owner, 'owner_laptop');
+      const { document: initial } = await createEncrypted(laptop);
+      const first = await laptop.store.saveRevision({
+        projectId: initial.projectId,
+        reason: 'First point',
+        expectedVersion: initial.version,
+        document: initial
+      });
+      const captured = createSavedRevision(first, 'Captured point');
+      const revisionId = captured.revisions.at(-1)!.revisionId;
+      const current = advance
+        ? await save(laptop, edited(first, 'Subsequent autosave'), first.version)
+        : first;
+      const named = await laptop.store.saveRevision({
+        projectId: first.projectId,
+        reason: 'Captured point',
+        expectedVersion: current.version,
+        savedRevisionId: revisionId,
+        document: captured
+      });
+      expect(named.version).toBe(current.version + 1);
+      expect(named.checkpoints.at(-1)!.documentVersion).toBe(named.version);
+      expect(named.checkpoints.slice(0, -1)).toEqual(first.checkpoints);
+      expect(captured.version).toBe(first.version);
+      expect(captured.checkpoints.at(-1)!.documentVersion).toBe(first.version);
+      const loaded = await reload(srv, laptop).store.loadRevision(
+        first.projectId,
+        revisionId
+      );
+      expect(loaded).toEqual(named);
+    }
+  );
+
+  it('stamps a named save after share-link metadata advanced its accepted base', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: initial } = await createEncrypted(laptop);
+    await laptop.store.writeShareLinks(initial.projectId, async () => ({
+      grants: [],
+      tombstones: []
+    }));
+    const linked = await laptop.store.loadProject(initial.projectId);
+    expect(linked.version).toBe(initial.version + 1);
+    const named = await laptop.store.saveRevision({
+      projectId: initial.projectId,
+      reason: 'After sharing metadata',
+      expectedVersion: initial.version,
+      document: initial
+    });
+    expect(named.version).toBe(linked.version + 1);
+    expect(named.checkpoints.at(-1)!.documentVersion).toBe(named.version);
   });
 
   it('refuses a revoked author outside its cutoff', async () => {
