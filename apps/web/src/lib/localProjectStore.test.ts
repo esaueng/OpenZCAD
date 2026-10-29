@@ -8,6 +8,7 @@ import {
   importStepBody
 } from '@openzcad/document-core';
 import {
+  compareProjectSummaries,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   toBodyId,
   toProjectId,
@@ -630,7 +631,8 @@ describe('listLocalProjects', () => {
     const projects = await listLocalProjects();
 
     expect(trace.documentReads()).toEqual([]);
-    expect(projects.map((project) => project.name)).toEqual([
+    // Shelf order puts the newer save first; this test is about reads.
+    expect(projects.map((project) => project.name).sort()).toEqual([
       'Bracket',
       'Housing'
     ]);
@@ -722,6 +724,39 @@ describe('listLocalProjects', () => {
     });
 
     expect((await listPendingOrganizationMirrors()).size).toBe(0);
+  });
+
+  it('lists cards in the saved shelf order, not storage key order', async () => {
+    // Startup paints this list before the account listing arrives. Key order
+    // here is a, b, c; the shelf order the merged list later settles on is the
+    // pinned part, then ascending sortOrder. Anything else reshuffles on reload.
+    await saveLocalProject(projectDocument('Bracket', 'proj-a'));
+    await saveLocalProject(projectDocument('Housing', 'proj-b'));
+    await saveLocalProject(projectDocument('Lid', 'proj-c'));
+    await saveLocalProjectOrganization('proj-a', {
+      status: 'active',
+      pinned: false,
+      sortOrder: 2
+    });
+    await saveLocalProjectOrganization('proj-b', {
+      status: 'active',
+      pinned: true,
+      sortOrder: 5
+    });
+    await saveLocalProjectOrganization('proj-c', {
+      status: 'active',
+      pinned: false,
+      sortOrder: 1
+    });
+
+    const projects = await listLocalProjects();
+
+    expect(projects.map((project) => project.name)).toEqual([
+      'Housing',
+      'Lid',
+      'Bracket'
+    ]);
+    expect(projects).toEqual([...projects].sort(compareProjectSummaries));
   });
 
   it('leaves organization undefined when the device has never organised it', async () => {

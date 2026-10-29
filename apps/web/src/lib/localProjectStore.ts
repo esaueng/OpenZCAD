@@ -1,5 +1,6 @@
 import type { BackupFile, ProjectBackup } from './projectBackup';
 import {
+  compareProjectSummaries,
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   MAX_PROJECT_CHECKPOINTS,
@@ -1750,7 +1751,10 @@ export async function listLocalProjects(): Promise<ProjectSummary[]> {
       ...(organization ? { organization } : {})
     });
   }
-  return projects;
+  // In shelf order, not key order: startup paints this list before the
+  // account listing arrives, and the start screen's custom order draws the
+  // array as given, so unsorted cards visibly reshuffle once the merge lands.
+  return projects.sort(compareProjectSummaries);
 }
 
 /**
