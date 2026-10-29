@@ -131,8 +131,8 @@ it('opens a cold shared project within its verification request budget', async (
   expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
   expect(
     requests.filter((path) => path.endsWith('/mls/leaves')).length
-  ).toBeLessThanOrEqual(14);
-  expect(requests.length).toBeLessThanOrEqual(57);
+  ).toBeLessThanOrEqual(12);
+  expect(requests.length).toBeLessThanOrEqual(49);
 });
 
 describe('co-members’ device lists from contacts (5-1 into 5-2)', () => {

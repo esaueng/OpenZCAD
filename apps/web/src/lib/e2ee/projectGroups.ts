@@ -1256,7 +1256,8 @@ async function openArchive(
   projectId: string,
   keyEpoch: number,
   projectKey: Uint8Array,
-  archive: E2eeKeyArchiveRecord
+  archive: E2eeKeyArchiveRecord,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<KeyArchiveBody> {
   const refuse = (why: string): never => {
     throw new ProjectGroupError(
@@ -1266,7 +1267,7 @@ async function openArchive(
   };
   if (archive.keyEpoch !== keyEpoch) refuse('names another epoch');
   const envelope = bytes(archive.envelope);
-  const lists = await projectDeviceLists(ctx, projectId);
+  const lists = deviceLists ?? (await projectDeviceLists(ctx, projectId));
   // Device ids are not unique across accounts: any list's key may verify.
   const candidates = lists.flatMap((list) => {
     const key = signerKey(list, archive.signerDeviceId);
@@ -1352,7 +1353,8 @@ async function openArchive(
 export async function epochAuthenticatorForEpoch(
   ctx: ProjectGroupContext,
   projectId: string,
-  keyEpoch: number
+  keyEpoch: number,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<Uint8Array> {
   const projectKey = await projectKeyForEpoch(ctx, projectId, keyEpoch);
   const body = await openArchive(
@@ -1360,7 +1362,8 @@ export async function epochAuthenticatorForEpoch(
     projectId,
     keyEpoch,
     projectKey,
-    await fetchArchive(ctx, projectId, keyEpoch)
+    await fetchArchive(ctx, projectId, keyEpoch),
+    deviceLists
   );
   return new Uint8Array(body.epochAuthenticator);
 }
@@ -3575,9 +3578,12 @@ export function forgetEpochRoles(userId: string, projectId: string): void {
 export async function epochRoles(
   ctx: ProjectGroupContext,
   projectId: string,
-  keyEpoch: number
+  keyEpoch: number,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<ProjectRoles> {
-  return (await epochAuthority(ctx, projectId, keyEpoch)).roles;
+  return (
+    await epochAuthority(ctx, projectId, keyEpoch, undefined, deviceLists)
+  ).roles;
 }
 
 type VerifiedEpochAuthority = EpochAuthority & {
@@ -3660,7 +3666,8 @@ export async function epochAuthority(
         projectId,
         keyEpoch,
         key,
-        await fetchArchive(ctx, projectId, keyEpoch)
+        await fetchArchive(ctx, projectId, keyEpoch),
+        heads
       ));
     const suppliedManifest = body.authorityManifest ?? pinned;
     if (!suppliedManifest)

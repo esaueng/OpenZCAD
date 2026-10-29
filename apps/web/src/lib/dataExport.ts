@@ -69,6 +69,11 @@ function failureReason(error: unknown): string {
   );
 }
 
+function readResult<T>(result: PromiseSettledResult<T>): T {
+  if (result.status === 'rejected') throw result.reason;
+  return result.value;
+}
+
 type PendingEntry = { path: string; data: Uint8Array | Blob };
 
 async function buildDataExport(options: DataExportOptions): Promise<{
@@ -295,28 +300,46 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           check();
           // Catalogs must not predate this document: a concurrent save can
           // add a retained checkpoint or file that the backup must include.
-          // Fetch them together; encrypted names reuse the verified head.
-          const [revisions, catalog] = await Promise.all([
-            api.listRevisions(project.projectId),
-            api.listArtifacts(project.projectId)
-          ]);
+          // Independent catalogs and encrypted sidecars can share this wait.
+          // Keep complete project staging sequential so its memory budget and
+          // all-or-nothing ZIP commit retain the same bounds.
+          const encrypted = isEncryptedProject(project.projectId)
+            ? import('./e2ee/encryptedProjects')
+            : null;
+          // Drain every sibling before moving on, including when one read
+          // fails. Otherwise stalled reads could accumulate across projects.
+          const [revisionRead, catalogRead, measurementRead, sessionRead] =
+            await Promise.allSettled([
+              api.listRevisions(project.projectId),
+              api.listArtifacts(project.projectId),
+              encrypted
+                ? encrypted.then(async (module) => {
+                    const client = await module.encryptedMeasurements();
+                    return client.loadProjectMeasurements(project.projectId);
+                  })
+                : null,
+              encrypted
+                ? encrypted.then(async (module) => {
+                    const client = await module.encryptedViewStates();
+                    return client.load(project.projectId);
+                  })
+                : null
+            ]);
+          check();
+          const revisions = readResult(revisionRead);
+          const catalog = readResult(catalogRead);
+          const sidecarMeasurements = readResult(measurementRead);
+          const sessions = readResult(sessionRead);
           const retainedRevisionIds = new Set(
             revisions.revisions.map((revision) => revision.revisionId as string)
           );
           check();
           let measurements: StoredMeasurementRecord | null = null;
-          if (isEncryptedProject(project.projectId)) {
-            const encrypted = await import('./e2ee/encryptedProjects');
-            measurements = (
-              await (
-                await encrypted.encryptedMeasurements()
-              ).loadProjectMeasurements(project.projectId)
-            ).record;
+          if (sessions !== null) {
+            measurements = sidecarMeasurements?.record ?? null;
             pending.json(
               `${folder}/workspace-sessions.json`,
-              await (
-                await encrypted.encryptedViewStates()
-              ).load(project.projectId)
+              sessions
             );
           } else {
             const records = account.records as
