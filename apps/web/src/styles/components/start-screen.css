@@ -114,10 +114,10 @@
 
 /* ── StartScreen ─────────────────────────────────────────── */
 
-/* A library shell: the workspace's floating top bar across the top (identity,
-   search, the cloud readout, Import and Settings), a floating column on the
-   left (the launch form, the shelves, the demos), the shelf you are looking
-   at filling the rest. Every block is a direct grid item
+/* A library shell: a floating column on the left (the logo, the launch form,
+   the shelves, the demos, the cloud readout and Import), the shelf you are
+   looking at filling the rest, and Settings in the workspace's top-right
+   corner island. Every block is a direct grid item
    placed by name, so the same markup re-flows for the three layouts below —
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
@@ -188,7 +188,7 @@
   margin: 0;
 }
 
-/* The column's foot: where the parts are kept, then Import and Settings. */
+/* The column's foot: where the parts are kept, then Import. */
 .start-column-foot {
   grid-area: account;
   display: grid;
@@ -675,6 +675,8 @@
   align-items: center;
   gap: var(--sp-2) var(--sp-5);
   min-height: 40px;
+  /* Room on the rule's end for the Settings island floating over it. */
+  padding-right: calc(var(--corner-island-w) + var(--sp-3));
   border-bottom: var(--border-thin);
 }
 
@@ -1479,7 +1481,9 @@
 
 /* Once the toolbar wraps, the rule belongs under the tabs, not the tools. */
 @media (max-width: 900px) {
+  /* The island sits beside the logo here, above the shelf. */
   .start-toolbar {
+    padding-right: 0;
     border-bottom: 0;
   }
 
@@ -2366,9 +2370,11 @@
     max-width: calc(100vw - 16px);
   }
 
-  /* One scrolling page: the logo, then the account line with its two
-     actions beside it, then the rest. */
+  /* One scrolling page: the logo with the Settings island beside it, then
+     the account line, then the rest. The row is the island's height below
+     its 12px inset, so the logo centres on it and nothing runs under it. */
   .start-brand {
+    min-height: calc(12px + var(--topbar-island-h));
     padding: var(--sp-3) var(--sp-3) 0;
   }
 

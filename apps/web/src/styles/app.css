@@ -40,7 +40,9 @@
 /* Last: the quiet stage re-anchors every floating region, in every mode, as
    islands over the viewport; it only positions and frames, never hides. */
 @import './components/quiet-stage.css';
-/* The library's and Settings' top bar reuses the quiet stage's islands. */
+/* The library's and Settings' corner island reuses the quiet stage's
+   island frame, so it follows it. */
+@import './components/corner-island.css';
 /* The pick's verbs ride the rail the quiet stage just placed. */
 @import './components/selection-rail.css';
 /* After every sizing rule: it only adds hit area, never moves a control. */
