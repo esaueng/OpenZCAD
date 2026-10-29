@@ -56,6 +56,40 @@ const active: EncryptedShareLinksState = {
 };
 
 describe('EncryptedShareLinks (slice 5-10)', () => {
+  it('requires confirmation before creating a link, then enables creation', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true },
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Confirm sharing…' });
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    expect(client.create).not.toHaveBeenCalled();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Confirm sharing…' })
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Confirm with passkey' })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled()
+    );
+    expect(client.confirm).toHaveBeenCalledWith('proj_x', 'passkey');
+  });
+
+  it.each(['not-published', 'needs-confirming', 'revocation-pending'] as const)(
+    'does not copy a link while it is %s',
+    async (status) => {
+      const client = fakeClient([
+        { ...active, links: [{ ...active.links[0]!, status }] }
+      ]);
+      render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+      expect(
+        await screen.findByRole('button', { name: 'Copy View only link' })
+      ).toBeDisabled();
+    }
+  );
+
   it('keeps the newest affected links when failed-journal callbacks arrive out of order', async () => {
     const client = fakeClient([active]);
     client.dismissRemoval = vi.fn(async () => {});

@@ -374,6 +374,59 @@ async function writeWithLinks(
 }
 
 describe('creating a link (slice 5-10)', { timeout: 120_000 }, () => {
+  it('accepts an authority another publication already made current', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const register = laptop.shareLinks.api.create.bind(laptop.shareLinks.api);
+    vi.spyOn(laptop.shareLinks.api, 'create').mockImplementation(
+      async (...args) => {
+        const result = await register(...args);
+        await issueShareAuthorities(laptop.shareLinks, projectId);
+        return result;
+      }
+    );
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    expect(created.pending).toEqual([]);
+    expect(created.needsConfirmation).toBe(false);
+    expect(created.problem).toBeNull();
+    expect((await visit(srv, created.url)).document).toBeTruthy();
+  });
+
+  it.each(['authority', 'snapshot'] as const)(
+    'preserves a failed %s publication and retries without another confirmation',
+    async (stage) => {
+      const { srv, laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      const reason = `${stage} publication unavailable`;
+      const unavailable = vi
+        .spyOn(
+          laptop.shareLinks.api,
+          stage === 'authority' ? 'putAuthority' : 'putSnapshot'
+        )
+        .mockRejectedValue(new Error(reason));
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      expect(created.pending).toEqual([stage]);
+      expect(created.needsConfirmation).toBe(false);
+      expect(created.problem).toBe(reason);
+      expect((await served(srv, created.fragment.token)).status).toBe(404);
+      unavailable.mockRestore();
+      if (stage === 'authority') {
+        expect(
+          (await issueShareAuthorities(laptop.shareLinks, projectId)).issued
+        ).toEqual([created.shareId]);
+      } else {
+        expect(
+          (await publishShareSnapshots(laptop.shareLinks, projectId)).published
+        ).toEqual([created.shareId]);
+      }
+      expect((await visit(srv, created.url)).document).toBeTruthy();
+    }
+  );
+
   it('writes a grant, and the anonymous route serves a snapshot that verifies end to end', async () => {
     const { srv, laptop, member, projectId, document } = await linkedProject();
     await delegate(laptop);
@@ -901,6 +954,49 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
       'share-links'
     );
   });
+
+  it.each(['fresh', 'reload', 'room'] as const)(
+    'refuses a signed v2-to-v1 link-set downgrade on a %s read',
+    async (mode) => {
+      const { srv, laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      await createShareLink(laptop.shareLinks, projectId, 'view');
+      const base = await laptop.store.shareHead(projectId);
+      const reader = reload(srv, laptop, {
+        members: othersOf(owner),
+        ...(mode === 'fresh' ? { pins: memoryVersionPins() } : {})
+      });
+      if (mode === 'fresh') {
+        // An unpinned page normally receives an owner-authenticated head
+        // alone. If the server supplies the signed prefix as well, a v2
+        // commitment in that prefix must also prevent a downgrade.
+        const load = reader.documents.loadDocument;
+        reader.documents.loadDocument = (id, after) => load(id, after ?? 1);
+      }
+      if (mode !== 'fresh') await reader.store.loadProject(projectId);
+      const before = await reader.pins.read(OWNER, projectId);
+      await writeWithLinks(
+        srv,
+        laptop,
+        projectId,
+        base.document,
+        base.shareLinks!.set,
+        true
+      );
+      if (mode === 'room') {
+        const loaded = await laptop.documents.loadDocument(projectId);
+        await integrity(
+          reader.store
+            .roomAccess()
+            .openHead(projectId, loaded.metadata.head, loaded.envelope),
+          'share-links'
+        );
+      } else {
+        await integrity(reader.store.loadProject(projectId), 'share-links');
+      }
+      expect(await reader.pins.read(OWNER, projectId)).toEqual(before);
+    }
+  );
 
   it('refuses an editor’s change of the set, even one that only drops a link', async () => {
     const { srv, laptop, member, projectId } = await linkedProject();
@@ -1812,6 +1908,8 @@ describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
     // Without a delegation the link exists but has no statement yet.
     const created = await createShareLink(laptop.shareLinks, projectId, 'view');
     expect(created.pending).toEqual(['authority']);
+    expect(created.needsConfirmation).toBe(true);
+    expect(created.problem).toBeNull();
     expect((await served(srv, created.fragment.token)).status).toBe(404);
     // The passkey touch when sharing opens.
     expect((await delegate(laptop)).status).toBe('valid');

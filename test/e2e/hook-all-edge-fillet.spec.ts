@@ -155,7 +155,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   });
   await selectAll.click();
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await expect(card).toContainText('49 edges');
+  await expect(page.locator('.selection-readout')).toContainText('49 edges');
   await expect(card.getByRole('button', { name: /Select all/ })).toHaveCount(0);
 
   // Enter 1 mm and wait for the exact preview before Apply. Preview must not

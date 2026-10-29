@@ -8,6 +8,35 @@
  */
 export const PROJECT_SHARE_HASH_PREFIX = 'share=';
 
+/** Recognize the share destination even when its capability is incomplete. */
+export function shareRequestFromHash(hash: string): string | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  return raw.startsWith(PROJECT_SHARE_HASH_PREFIX)
+    ? raw.slice(PROJECT_SHARE_HASH_PREFIX.length).trim()
+    : null;
+}
+
+/** Includes empty/malformed links so they reach the dedicated share page. */
+export function captureProjectShareRequest(): string | null {
+  try {
+    return shareRequestFromHash(globalThis.location?.hash ?? '');
+  } catch {
+    return null;
+  }
+}
+
+/** A creation result is copyable only after every publication step finished. */
+export function shareLinkCreationProblem(created: {
+  readonly pending: readonly string[];
+  readonly needsConfirmation: boolean;
+  readonly problem: string | null;
+}): string | null {
+  if (!created.pending.length) return null;
+  return created.needsConfirmation
+    ? "The link needs your confirmation before it can open. Confirm sharing in the project's sharing dialog, then copy it from the link list."
+    : `The link could not be published yet. Open the project's sharing dialog to retry.${created.problem ? ` ${created.problem}` : ''}`;
+}
+
 /** The same app route, without an invitation or share capability fragment. */
 export function projectLinkPath(
   location: Pick<Location, 'pathname' | 'search'> = globalThis.location
@@ -76,7 +105,7 @@ export function captureProjectShareToken(): string | null {
  */
 export function clearProjectShareFragment(): void {
   try {
-    if (shareLinkFromHash(globalThis.location?.hash ?? '') !== null) {
+    if (captureProjectShareRequest() !== null) {
       globalThis.history.replaceState(null, '', projectLinkPath());
     }
   } catch {

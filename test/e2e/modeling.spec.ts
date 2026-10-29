@@ -32,7 +32,7 @@ import {
   setBarValues
 } from './openzcad-fixtures';
 
-test('suppresses features and rolls the timeline back as one undoable edit', async ({
+test('suppresses features and rolls the timeline back as one undoable edit', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -83,7 +83,7 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
   expect(consoleErrors).toEqual([]);
 });
 
-test('resizes a cylinder wall concentrically with one undoable radius edit', async ({
+test('resizes a cylinder wall concentrically with one undoable radius edit', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   // Five gestures on one body: create, drag the wall out, undo/redo, drag and
@@ -127,8 +127,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 28 mm'
   );
-  // The Selection card names the pick, live diameter included.
-  await expect(page.locator('.selection-card')).toContainText(
+  // The bar names the pick, live diameter included.
+  await expect(page.locator('.selection-readout')).toContainText(
     'Cylindrical face Ø28'
   );
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
@@ -170,8 +170,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
   );
-  // The Selection card names the pick, live diameter included.
-  await expect(page.locator('.selection-card')).toContainText(
+  // The bar names the pick, live diameter included.
+  await expect(page.locator('.selection-readout')).toContainText(
     'Cylindrical face Ø36'
   );
   await expect(canvas).toHaveAttribute('data-e2e-cylinder-proxy-radius', '18');
@@ -279,7 +279,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   expect(consoleErrors).toEqual([]);
 });
 
-test('resizes a literal box by dragging an exact face', async ({ page }) => {
+test('resizes a literal box by dragging an exact face', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Direct Edit Part');
@@ -839,7 +839,7 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   expect(idleRegionBoundaries.every((line) => !line.visible)).toBe(true);
 });
 
-test('extrudes and edits one of multiple closed sketch regions', async ({
+test('extrudes and edits one of multiple closed sketch regions', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   test.setTimeout(90_000);
@@ -1171,7 +1171,7 @@ test('the Edit Sketch offer does not outlive the mode it was made in', async ({
   await expect(offer).toHaveCount(0);
 });
 
-test('fillets all twelve edges of a box in one exact feature', async ({
+test('fillets all twelve edges of a box in one exact feature', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -1606,7 +1606,7 @@ test('preflights and splits a box into two live half bodies', async ({
   expect(consoleErrors).toEqual([]);
 });
 
-test('preflights and drills a through hole into the top face', async ({
+test('preflights and drills a through hole into the top face', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -1680,7 +1680,7 @@ test('preflights and drills a through hole into the top face', async ({
   expect(consoleErrors).toEqual([]);
 });
 
-test('preflights and creates an exact open-top shell', async ({ page }) => {
+test('preflights and creates an exact open-top shell', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
@@ -1882,7 +1882,7 @@ test('the armed fillet handle rounds every shift-selected edge, not just the las
   );
 });
 
-test('applies an assistant-created sketch and same-proposal extrude', async ({
+test('applies an assistant-created sketch and same-proposal extrude', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page, { assistantEnabled: true });
@@ -2631,7 +2631,7 @@ test('drops a STEP file on the viewport to import it', async ({ page }) => {
   await expectBodyCount(page, 1);
 });
 
-test('imports a STEP solid, fillets it, and re-exports it', async ({
+test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   // Z3: imported STEP documents build on Remus like everything else. This
@@ -2891,7 +2891,7 @@ test('archives a browser-generated STEP export and lists the stored file', async
   ).toHaveAttribute('href', `/api/artifacts/${artifactId}/download`);
 });
 
-test('models a parametric part and exports a true STEP file', async ({
+test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -3148,7 +3148,7 @@ test('keeps parameter names visible in the 252px Build sidebar', async ({
     .toBe(true);
 });
 
-test('exports a 3MF package through the mesh export dialog', async ({
+test('exports a 3MF package through the mesh export dialog', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -3280,7 +3280,7 @@ test('mesh export keeps the keyboard, its scope and its verdict together', async
   await expect(featureRows).toHaveCount(1);
 });
 
-test('rejects a disconnected Union and succeeds after the gap is closed', async ({
+test('rejects a disconnected Union and succeeds after the gap is closed', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -3341,7 +3341,7 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
-test('M opens the move gizmo overlay and applies an exact move', async ({
+test('M opens the move gizmo overlay and applies an exact move', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -3916,7 +3916,7 @@ test('each sketch plane label names the plane it actually opens', async ({
   // Read from the detail: the name beside it ("Extrude 1") ends in a digit.
   const chip =
     (await page
-      .locator('.selection-callout-chip .selection-callout-detail')
+      .locator('.selection-readout .selection-callout-detail')
       .textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
@@ -4030,7 +4030,7 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   // ("Extrude 1") ends in a digit that would run into the first dimension.
   const chip =
     (await page
-      .locator('.selection-callout-chip .selection-callout-detail')
+      .locator('.selection-readout .selection-callout-detail')
       .textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
@@ -4175,7 +4175,7 @@ test('dragging the move gizmo streams live values and commits what was dragged',
     .toBeGreaterThan(5);
 });
 
-test('imports an STL mesh and measures the body the worker rebuilt', async ({
+test('imports an STL mesh and measures the body the worker rebuilt', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   // The only e2e that drives an `imported-mesh` feature at all, which is why
@@ -4645,7 +4645,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   ).toBeVisible();
 });
 
-test('a refused boolean never lands in history and says why in the form', async ({
+test('a refused boolean never lands in history and says why in the form', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);

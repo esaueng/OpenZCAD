@@ -6,6 +6,7 @@ import { createE2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
 import { shareWorkStore } from './shareWorkStore';
 import { projectAuthorityStore } from './projectAuthorityStore';
+import { forgetShelfNames } from '../projectShelfNames';
 import {
   beginKeySessionTeardown,
   finishKeySessionTeardown
@@ -42,6 +43,7 @@ async function clearDeviceUnderLock(
 ): Promise<void> {
   requireCurrentSession();
   lockAccount(userId);
+  forgetShelfNames(userId);
   if (!keepDevice) {
     const device = await store.loadDevice(userId);
     requireCurrentSession();
@@ -104,6 +106,7 @@ export async function signOutAfterSaving(input: {
     } else {
       requireCurrentSession();
       await input.revokeSession();
+      if (input.userId) forgetShelfNames(input.userId);
       finishKeySessionTeardown(teardown.operation, true);
     }
   } catch (error) {

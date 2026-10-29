@@ -91,6 +91,12 @@
   animation: workspace-reveal 180ms ease-out;
 }
 
+/* A share destination covers the workspace without stopping its live work. */
+.workspace-reveal[aria-hidden='true'] {
+  visibility: hidden;
+  opacity: 0;
+}
+
 @keyframes workspace-reveal {
   from {
     opacity: 0;
@@ -108,9 +114,10 @@
 
 /* ── StartScreen ─────────────────────────────────────────── */
 
-/* A library shell: a fixed column on the left (identity, the launch form, the
-   shelves, the demos, the cloud card), the shelf you are looking at filling
-   the rest. Every block is a direct grid item
+/* A library shell: the workspace's floating top bar across the top (identity,
+   search, the cloud readout, Import and Settings), a floating column on the
+   left (the launch form, the shelves, the demos), the shelf you are looking
+   at filling the rest. Every block is a direct grid item
    placed by name, so the same markup re-flows for the three layouts below —
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
@@ -123,14 +130,18 @@
   /* minmax(0, …) so the body can shrink below its content's natural width:
      a grid track defaults to min-content, which on a phone let the toolbar
      hold the whole page wider than the screen. */
-  grid-template-columns: var(--start-column-w) minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns:
+    calc(var(--island-gap) + var(--start-column-w))
+    minmax(0, 1fr);
+  /* The column hugs its blocks; the demos give way first and scroll when
+     the window is too short for all of it. */
+  grid-template-rows: auto auto auto minmax(0, max-content) minmax(0, 1fr);
   grid-template-areas:
-    'header  body'
+    'header  header'
     'launch  body'
     'library body'
     'learn   body'
-    'cloud   body';
+    '.       body';
   background: var(--color-bg);
   overflow: hidden;
 }
@@ -140,17 +151,18 @@
   z-index: calc(var(--z-start-screen) + 1);
 }
 
-/* The column's surface, drawn once behind its blocks so each block can be a
-   separate grid item. */
+/* The column's island, drawn once behind its blocks so each block can be a
+   separate grid item: a grid item itself, spanning their rows, so it ends
+   where they do. On the workspace tool rail's edge, 10px under the top bar. */
 .start-screen::before {
   content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: var(--start-column-w);
+  grid-column: 1;
+  grid-row: 2 / 5;
+  margin: var(--island-gap) 0 0 var(--island-gap);
   background: var(--color-surface);
-  border-right: var(--border-thin);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
   pointer-events: none;
 }
 
@@ -159,81 +171,11 @@
   min-width: 0;
 }
 
-/* ── Column: identity ────────────────────────────────────── */
+/* ── Top bar ─────────────────────────────────────────────── */
 
+/* PageTopBar draws it (page-topbar.css); the grid only places it. */
 .start-header {
   grid-area: header;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px var(--sp-2);
-  padding: 12px 12px 10px 18px;
-}
-
-.start-tagline {
-  grid-column: 1 / -1;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-}
-
-/* Mirrors the workspace top bar's identity cluster so leaving a part and
-   arriving here reads as the same application, not a different site. */
-.start-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.start-brand > svg {
-  width: 20px;
-  height: 20px;
-  flex: none;
-  color: var(--color-accent);
-}
-
-.start-header-name {
-  margin: 0;
-  font-size: var(--fs-md);
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.01em;
-}
-
-.start-beta {
-  display: inline-flex;
-  align-items: center;
-  min-height: 16px;
-  padding: 0 5px;
-  color: var(--color-accent-hi);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.start-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.start-settings-button {
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-}
-
-/* The import is an icon button beside Settings; it gains its label only in
-   the narrow layout's header bar, which has the room the column does not. */
-.start-import > span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 /* Section labels in the column: the same mono eyebrow the workspace uses. */
@@ -255,7 +197,8 @@
   grid-area: launch;
   display: grid;
   gap: var(--sp-2);
-  padding: 0 12px 14px;
+  padding: calc(var(--island-gap) + 10px) 10px 12px
+    calc(var(--island-gap) + 10px);
 }
 
 .start-launch-form {
@@ -348,7 +291,7 @@
 
 .start-library {
   grid-area: library;
-  padding: 0 12px 14px;
+  padding: 0 10px 12px calc(var(--island-gap) + 10px);
 }
 
 /* The shelves are the column's navigation: icon, name, count. */
@@ -416,7 +359,7 @@
   align-content: start;
   gap: 2px;
   min-height: 0;
-  padding: 0 12px 18px;
+  padding: 0 10px 10px calc(var(--island-gap) + 10px);
   overflow-y: auto;
 }
 
@@ -457,18 +400,16 @@
   }
 }
 
-/* ── Column: cloud card ──────────────────────────────────── */
+/* ── Top bar: cloud readout ──────────────────────────────── */
 
-/* Where the parts are kept, closing the column, said as one sentence with at
-   most one action beside it. The icon carries the tone (saved, not saved,
-   failed) so the words can stay short; the full account is in the tooltip. */
+/* Where the parts are kept, said as one sentence with at most one action
+   beside it, in the top bar where the workspace says Saved. The icon carries
+   the tone (saved, not saved, failed) so the words can stay short; the full
+   account is in the tooltip. page-topbar.css lays it out in the island. */
 .start-cloud {
-  grid-area: cloud;
-  align-self: end;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
-  margin: 0 12px 12px;
 }
 
 .start-account {
@@ -646,7 +587,7 @@
   display: grid;
   align-content: start;
   gap: var(--sp-3);
-  padding: 18px var(--sp-4) var(--sp-4);
+  padding: var(--island-gap) var(--island-gap) var(--sp-4);
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -946,7 +887,7 @@
    stretching one tile across the whole stage. (A partial last row is the
    same either way; only a shelf shorter than one row differs.) */
 .start-tile-grid {
-  --start-tile-min: 220px;
+  --start-tile-min: 180px;
   display: grid;
   grid-template-columns: repeat(
     auto-fill,
@@ -969,7 +910,14 @@
    the part. */
 .start-tile-project {
   position: relative;
+  grid-template-columns: minmax(0, 1fr);
   color: var(--color-text-muted);
+}
+
+/* The card's controls share the open action's cell, so they sit on it at its
+   corners however tall its preview and text turn out. */
+.start-tile-project > .start-tile-open {
+  grid-area: 1 / 1;
 }
 
 .start-tile-open {
@@ -985,8 +933,7 @@
 .start-tile-project:has(
   > .start-tile-open:not(.is-static):hover:not(:disabled)
 ),
-.start-tile-project:has(.start-tile-open:focus-visible),
-.start-tile-project.is-drop-target {
+.start-tile-project:has(.start-tile-open:focus-visible) {
   color: var(--color-text);
   border-color: var(--color-accent-border);
 }
@@ -999,19 +946,39 @@
   outline: none;
 }
 
-/* A pinned part keeps a permanent marker so its position reads as deliberate
-   rather than as wherever the sort happened to leave it. */
-.start-tile-project.is-pinned {
-  border-color: var(--color-accent-border);
-}
-
+/* A card being dragged rides above the rest under the pointer; the pointer
+   looks through it to the card it would take the place of. */
 .start-tile-project.is-dragging {
-  opacity: 0.45;
+  z-index: 5;
+  pointer-events: none;
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-popover);
+  scale: 1.02;
+  /* It moves with the pointer, never behind it. */
+  transition: none;
 }
 
-.start-tile-project.is-drop-target {
-  outline: 2px dashed var(--color-accent);
-  outline-offset: -2px;
+:root.is-tile-dragging,
+:root.is-tile-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+/* A recovery copy reads as secondary to the part it was made from. */
+.start-tile-project.is-recovery .start-tile-name {
+  color: var(--color-text-muted);
+}
+
+/* A group a drag has emptied keeps a target to drop back into. */
+.start-drop-zone {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
 }
 
 /* The preview is the tile: a pane at a fixed aspect so a row of parts lines
@@ -1074,25 +1041,19 @@
   color: var(--color-accent);
 }
 
-/*
- * Sits over the preview rather than in the grid flow, so a part that is only on
- * this device is marked without the thumbnail being resized around the mark.
- */
-/* The part's states, over the top-left of its preview in the grid and as the
-   Status column in the list. Plain labels for anything that needs a decision
-   (a divergence, a failed save, a recovery copy); an icon for ordinary ones. */
+/* What wants a look (a divergence, a save under way or failed): one mark in
+   the top-right corner of a card's preview, and the Status column in the
+   list, where it keeps its words. */
 .start-tile-open {
   position: relative;
 }
 
 .start-tile-flags {
   position: absolute;
-  top: 6px;
-  left: 6px;
+  top: 8px;
+  right: 8px;
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
-  max-width: calc(100% - 96px);
   pointer-events: none;
 }
 
@@ -1147,10 +1108,35 @@
   border-color: currentcolor;
 }
 
+.start-tile-grid:not(.is-list) .start-tile-badge {
+  border-radius: 999px;
+}
+
+.start-tile-grid:not(.is-list) .start-tile-badge-text {
+  display: none;
+}
+
+/* A decision waiting is a dot in the corner; its words are its name and
+   its tooltip. */
+.start-tile-grid:not(.is-list) .start-tile-badge.is-conflict,
+.start-tile-grid:not(.is-list) .start-tile-badge.is-sync-failed {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  background: currentcolor;
+  border: 0;
+}
+
+.start-tile-grid:not(.is-list) .start-tile-badge.is-conflict svg,
+.start-tile-grid:not(.is-list) .start-tile-badge.is-sync-failed svg {
+  display: none;
+}
+
 .start-tile-body {
   display: grid;
   gap: 3px;
-  padding: 9px var(--sp-3) 10px;
+  /* The right edge is the actions button's. */
+  padding: 9px 40px 10px var(--sp-3);
 }
 
 .start-tile-name {
@@ -1175,6 +1161,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The date and the quiet marks that qualify it: encrypted, a recovery copy,
+   on this device only. */
+.start-tile-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.start-tile-mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-subtle);
+}
+
+.start-tile-mark.is-encrypting {
+  color: var(--color-accent);
+}
+
+/* Room for the copies count beside the actions button. */
+.start-tile-project:has(> .start-tile-copies) .start-tile-meta {
+  padding-right: 34px;
 }
 
 .start-tile-rev {
@@ -1203,32 +1213,37 @@
   color: var(--color-text-subtle);
 }
 
-.start-tile-badge.is-locked {
-  color: var(--color-text-muted);
-}
-
-/* An original's recovery copies, one press from being shown beside it. */
+/* An original's recovery copies, one press from being shown beside it: a
+   count in the card's bottom-right corner, beside its actions. */
 .start-tile-copies {
-  display: flex;
+  grid-area: 1 / 1;
+  align-self: end;
+  justify-self: end;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 var(--sp-3);
+  gap: 4px;
+  height: 20px;
+  margin: 0 36px 11px 0;
+  padding: 0 5px;
   color: var(--color-accent);
-  font-size: var(--fs-xs);
-  text-align: left;
-  border-top: var(--border-thin);
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-sm);
 }
 
 .start-tile-copies:hover {
   background: var(--color-accent-dim);
 }
 
+.start-tile-copies-label {
+  display: none;
+}
+
 /* ── List layout ─────────────────────────────────────────── */
 
 /* The same tiles, laid out as rows: the body and its meta dissolve into the
-   row's columns, so every action, menu and reorder handle keeps working. */
+   row's columns, so every action and menu keeps working. */
 .start-list-head,
 .start-tile-grid.is-list .start-tile-open {
   grid-template-columns: 52px minmax(0, 1fr) 170px 160px 56px 88px;
@@ -1266,10 +1281,6 @@
 
 .start-tile-grid.is-list .start-tile + .start-tile {
   border-top: var(--border-thin);
-}
-
-.start-tile-grid.is-list .start-tile-project.is-pinned {
-  border-color: var(--color-border);
 }
 
 .start-tile-grid.is-list
@@ -1317,7 +1328,7 @@
   display: flex;
 }
 
-.start-tile-grid.is-list .start-tile-meta time {
+.start-tile-grid.is-list .start-tile-when {
   order: 3;
 }
 
@@ -1332,14 +1343,41 @@
 
 /* Centred on the part's own row, not on a row that carries its copies. */
 .start-tile-grid.is-list .start-tile-actions {
+  position: absolute;
   top: 22px;
   right: var(--sp-3);
+  display: flex;
+  gap: 2px;
   transform: translateY(-50%);
 }
 
+.start-tile-grid.is-list .start-tile-action {
+  margin: 0;
+}
+
 .start-tile-grid.is-list .start-tile-copies {
-  padding-left: calc(52px + var(--sp-3) * 2);
+  grid-area: auto;
+  justify-self: stretch;
+  display: flex;
+  gap: 6px;
+  height: auto;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 var(--sp-3) 0 calc(52px + var(--sp-3) * 2);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  border-top: var(--border-thin);
   border-radius: 0;
+}
+
+.start-tile-grid.is-list .start-tile-copies-label {
+  display: inline;
+}
+
+.start-tile-grid.is-list .start-tile-menu {
+  grid-area: auto;
+  top: 32px;
+  bottom: auto;
 }
 
 /* The menu carries Restore and Delete forever; a row has no footer. */
@@ -1361,11 +1399,6 @@
   .start-toolbar-tools {
     margin-left: 0;
     width: 100%;
-  }
-
-  .start-toolbar-tools .start-search {
-    flex: 1;
-    width: auto;
   }
 }
 
@@ -1397,29 +1430,53 @@
 
 /* ── Tile actions ────────────────────────────────────────── */
 
+/* On a card the pin takes the top-left corner and the menu the bottom-right;
+   a list row keeps them together at its end (see the list layout). */
 .start-tile-actions {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
+  display: contents;
+}
+
+/* Above the open action, which is positioned and so would paint over any
+   unpositioned control sharing its cell. */
+.start-tile-action,
+.start-tile-copies {
+  position: relative;
+  z-index: 1;
+}
+
+.start-tile-pin {
+  grid-area: 1 / 1;
+  align-self: start;
+  justify-self: start;
+  margin: 6px 0 0 6px;
+}
+
+.start-tile-menu-button {
+  grid-area: 1 / 1;
+  align-self: end;
+  justify-self: end;
+  margin: 0 8px 9px 0;
 }
 
 /* Hidden until the tile is under the pointer or holds focus, so a wall of
    tiles stays a wall of parts — but never hidden from the keyboard, and never
-   hidden while it is the thing you are using. */
-.start-tile-project:hover .start-tile-actions,
-.start-tile-project:focus-within .start-tile-actions,
-.start-tile-project.is-pinned .start-tile-actions {
+   hidden while it is the thing you are using. A pinned part keeps its pin in
+   sight, so its place reads as deliberate. */
+.start-tile-action {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.start-tile-project:hover .start-tile-action,
+.start-tile-project:focus-within .start-tile-action,
+.start-tile-project.is-pinned .start-tile-pin {
   opacity: 1;
 }
 
 /* Without hover, a hidden action could never be revealed before a tap on the
    tile opened the part, so Archive, Trash and the rest stay in sight. */
 @media (hover: none) {
-  .start-tile-actions {
+  .start-tile-action {
     opacity: 1;
   }
 }
@@ -1446,17 +1503,11 @@
   border-color: var(--color-accent-border);
 }
 
-.start-tile-grip {
-  cursor: grab;
-}
-
-.start-tile-grip:active {
-  cursor: grabbing;
-}
-
+/* Opens upward over the card from its button, inside the card's own cell. */
 .start-tile-menu {
   position: absolute;
-  top: 32px;
+  grid-area: 1 / 1;
+  bottom: 38px;
   right: 6px;
   z-index: 2;
   display: grid;
@@ -1587,6 +1638,10 @@
     left center / 55% 8px no-repeat;
 }
 
+.start-tile-placeholder .start-tile-when {
+  flex: 1;
+}
+
 .start-tile-placeholder .start-tile-meta time {
   width: 60%;
   background-size: 65% 6px;
@@ -1613,12 +1668,18 @@
 
 @media (min-width: 901px) {
   .start-screen.is-fresh {
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'header  body'
+      'header  header'
       'launch  body'
       'library body'
-      'cloud   learn';
+      '.       body'
+      '.       learn';
+  }
+
+  /* The demos left the column for the stage; it hugs the two blocks left. */
+  .start-screen.is-fresh::before {
+    grid-row: 2 / 4;
   }
 
   .start-screen.is-fresh .start-library {
@@ -1629,19 +1690,18 @@
     padding-bottom: 0;
   }
 
-  /* The shelf's own inset and the cloud card's bottom margin, so the cards
-     line up with the shelf above and the card beside them. */
+  /* The shelf's own inset, so the cards line up with the shelf above. */
   .start-screen.is-fresh .start-learn {
     gap: var(--sp-3);
-    padding: var(--sp-4) var(--sp-4) 12px;
+    padding: var(--sp-4) var(--island-gap) var(--island-gap);
     overflow: visible;
   }
 }
 
 /* ── Narrow layouts ──────────────────────────────────────── */
 
-/* One column that scrolls as a page: identity, the launch card, the shelves
-   as a tab strip, the shelf itself, the demos as cards, the cloud card. */
+/* One column that scrolls as a page: the top bar, the launch card, the
+   shelves as a tab strip, the shelf itself, the demos as cards. */
 @media (max-width: 900px) {
   .start-screen,
   .start-screen.is-fresh {
@@ -1649,54 +1709,19 @@
     /* The shelf never shrinks below its content here: the page scrolls as
        a whole, and a track that could collapse would let the shelf spill
        over the demos beneath it. */
-    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto;
+    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto;
     grid-template-areas:
       'header'
       'launch'
       'library'
       'body'
-      'learn'
-      'cloud';
+      'learn';
     overflow-x: hidden;
     overflow-y: auto;
   }
 
   .start-screen::before {
     display: none;
-  }
-
-  .start-header {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    padding: 10px var(--sp-3);
-    background: var(--color-surface);
-    border-bottom: var(--border-thin);
-  }
-
-  /* One row: brand, tagline, settings. */
-  .start-tagline {
-    grid-column: auto;
-    padding-left: var(--sp-3);
-    border-left: var(--border-thin);
-  }
-
-  .start-header-actions {
-    order: 1;
-  }
-
-  .start-import {
-    display: inline-flex;
-    gap: 6px;
-    width: auto;
-    padding: 0 10px;
-  }
-
-  .start-import > span {
-    position: static;
-    width: auto;
-    height: auto;
-    overflow: visible;
-    clip-path: none;
-    font-size: var(--fs-sm);
   }
 
   /* The launch card is one row — heading, name, units, create — so it costs
@@ -1775,11 +1800,6 @@
     padding: 0 var(--sp-3) var(--sp-3);
     overflow: visible;
   }
-
-  .start-cloud {
-    align-self: start;
-    margin: 0 var(--sp-3) var(--sp-3);
-  }
 }
 
 /* Too narrow for the heading beside the fields: it still names the card
@@ -1798,36 +1818,6 @@
 
   .start-field-name {
     grid-column: 1 / -1;
-  }
-
-  /* Back to the icon alone; clipped rather than display: none, so the label
-     still names the button. */
-  .start-import {
-    width: 28px;
-    padding: 0;
-  }
-
-  .start-import > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  .start-tagline {
-    display: none;
-  }
-
-  /* With the tagline gone the actions land in its track; keep them at the
-     end of the bar. */
-  .start-header-actions {
-    justify-self: end;
-  }
-
-  .start-search {
-    margin-left: 0;
-    width: 100%;
   }
 }
 

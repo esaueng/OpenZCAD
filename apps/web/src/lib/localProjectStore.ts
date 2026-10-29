@@ -1,5 +1,6 @@
 import type { BackupFile, ProjectBackup } from './projectBackup';
 import {
+  compareProjectSummaries,
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   MAX_PROJECT_CHECKPOINTS,
@@ -490,6 +491,50 @@ export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
     (error: unknown) =>
       isLocalStorageBlockedError(error) ? 'blocked' : 'unavailable'
   );
+}
+
+/** Read every project-store record, including Trash and recovery companions.
+ * The visitor is synchronous so all stores share one readonly IDB snapshot.
+ * Encryption private keys live in separate databases and never enter this path.
+ */
+export async function visitLocalProjectData(
+  visit: (store: string, key: IDBValidKey, value: unknown) => void,
+  selectedStores?: readonly string[]
+): Promise<void> {
+  const database = await openDatabase();
+  try {
+    const names = selectedStores
+      ? [...selectedStores]
+      : Array.from(database.objectStoreNames);
+    const tx = database.transaction(names, 'readonly');
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = tx.onerror = () =>
+        reject(tx.error ?? new Error('Could not read local project data.'));
+      for (const name of names) {
+        const request = tx.objectStore(name).openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          try {
+            visit(name, cursor.key, cursor.value);
+            cursor.continue();
+          } catch (error) {
+            reject(
+              error instanceof Error
+                ? error
+                : new Error('Could not read local project data.', {
+                    cause: error
+                  })
+            );
+            tx.abort();
+          }
+        };
+      }
+    });
+  } finally {
+    database.close();
+  }
 }
 
 /** Settles when one request inside an open transaction has its result. */
@@ -1706,7 +1751,10 @@ export async function listLocalProjects(): Promise<ProjectSummary[]> {
       ...(organization ? { organization } : {})
     });
   }
-  return projects;
+  // In shelf order, not key order: startup paints this list before the
+  // account listing arrives, and the start screen's custom order draws the
+  // array as given, so unsorted cards visibly reshuffle once the merge lands.
+  return projects.sort(compareProjectSummaries);
 }
 
 /**
@@ -1767,7 +1815,7 @@ export async function purgeExpiredLocalProjects(
  * versions and then timestamps cannot tell a device that is behind from two
  * devices that both moved, and it settles the second case by discarding one
  * side on the authority of a device clock. Reporting the ambiguity instead lets
- * the caller write a recovery copy and ask.
+ * the caller ask which version to keep before replacing either side.
  */
 export type ProjectOpenChoice =
   | { choice: 'none' }

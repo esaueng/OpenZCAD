@@ -752,10 +752,11 @@ export function buildCylinderRadiusHandle(
   addHandleParts(group, [pin.halo]);
   pin.halo.renderOrder = HANDLE_RENDER_ORDER - 1;
 
-  // The measurement graphic is a radius callout: a dashed line from the axis
-  // out to the handle on the wall, with a small arrowhead at each end. It is
-  // visible for the whole gesture — the line is what says "this drag edits a
-  // radius", not just where the delta went.
+  // The measurement graphic is the dimension the chip names: a dashed line
+  // with a small arrowhead at each end, rim to rim through the axis for a
+  // diameter (the default) and axis to rim for a radius. It is visible for
+  // the whole gesture — the line is what says what this drag edits, not just
+  // where the delta went. A radius leader labelled "Diameter" read as a bug.
   //
   // Shared with the measurement tape rather than written twice. Witness lines
   // are off here: a radius is measured from an axis that has no edge to stand
@@ -767,6 +768,7 @@ export function buildCylinderRadiusHandle(
   worldGroup.add(dimension.object);
 
   let currentRadius = originalRadius;
+  let spanMode: 'diameter' | 'radius' = 'diameter';
   const presence = createRigPresence([group, worldGroup]);
   const paintParts = () => {
     const color = new THREE.Color(HANDLE_COLOR).lerp(
@@ -797,10 +799,14 @@ export function buildCylinderRadiusHandle(
     const lineEnd = tip
       .clone()
       .addScaledVector(direction, -DIMENSION_CLEARANCE * scale);
-    const room = lineEnd.clone().sub(axisCenter).dot(direction) > 0;
+    const lineStart =
+      spanMode === 'diameter'
+        ? axisCenter.clone().addScaledVector(direction, -currentRadius)
+        : axisCenter;
+    const room = lineEnd.clone().sub(lineStart).dot(direction) > 0;
     dimension.object.visible = room;
     if (room) {
-      dimension.update(axisCenter, lineEnd, scale);
+      dimension.update(lineStart, lineEnd, scale);
     }
   };
   updateGraphic();
@@ -848,18 +854,17 @@ export function buildCylinderRadiusHandle(
     value() {
       return currentRadius;
     },
-    chipAnchor() {
-      // The chip rides the dimension line itself, partway between the axis
-      // and the wall, like a drawing's inline radius callout.
-      return axisCenter
-        .clone()
-        .addScaledVector(direction, currentRadius * 0.45);
+    setSpanMode(mode) {
+      if (mode === spanMode) return;
+      spanMode = mode;
+      updateGraphic();
     },
-    chipLine() {
-      return {
-        start: axisCenter.clone(),
-        end: axisCenter.clone().addScaledVector(direction, currentRadius)
-      };
+    chipAnchor() {
+      // The label hangs beside the handle, not on the line: inside a bore
+      // the line crosses shading and the hole's own edges, and a label that
+      // switched between riding it and hanging beside the pin as the hole
+      // grew on screen was the jumpiest part of the gesture.
+      return group.position.clone();
     },
     dispose() {
       dimension.dispose();

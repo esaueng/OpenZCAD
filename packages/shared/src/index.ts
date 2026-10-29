@@ -1,3 +1,4 @@
+export * from './anthropic-models';
 export * from './workspace-resume';
 export * from './document-validation';
 export * from './document-history';
@@ -4058,7 +4059,7 @@ export function normalizeHiddenRelationGlyphs(
   return SKETCH_RELATION_GLYPH_KINDS.filter((kind) => value.includes(kind));
 }
 export type AssistantProvider =
-  'openrouter' | 'openai' | 'responses-compatible';
+  'openrouter' | 'openai' | 'anthropic' | 'responses-compatible';
 export type AssistantCredentialSource = 'deployment' | 'personal';
 export type AssistantReasoningEffort =
   'provider-default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh';

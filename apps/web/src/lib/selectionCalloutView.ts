@@ -275,7 +275,7 @@ export const RIGHT_LANE_MODEL_PANELS =
  * pressable — the column-top chip it replaced always sat in the lane, so it
  * never had to avoid it.
  */
-export const SELECTION_CALLOUT_OBSTACLES = `.stage-right > *, ${MODEL_PANEL_OBSTACLES}, .palette-float, .workspace-column-float, .selection-card, .instrument-rail`;
+export const SELECTION_CALLOUT_OBSTACLES = `.stage-right > *, ${MODEL_PANEL_OBSTACLES}, .palette-float, .workspace-column-float, .instrument-rail`;
 
 /**
  * The smallest move that takes a chip out from under every obstacle and

@@ -1,6 +1,7 @@
 import { Blob as NodeBlob } from 'node:buffer';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import {
   addReferenceImage,
@@ -51,6 +52,7 @@ import * as localProjectStore from './localProjectStore';
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
   vi.stubGlobal('Blob', NodeBlob);
+  vi.spyOn(api, 'loadRevision').mockResolvedValue(null);
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -120,7 +122,9 @@ it('moves source blobs, restorable save states, measurements and files to an ind
     (await loadProjectMeasurements(copy.document.projectId))?.display.precision
   ).toBe(2);
   const again = await parseProjectBackup(
-    await createProjectBackup(reopened!, false)
+    await createProjectBackup(reopened!, false, undefined, {
+      includeOriginalImports: true
+    })
   );
   expect(again.sources).toEqual(copy.sources);
   expect(again.files).toEqual(copy.files);
@@ -166,6 +170,68 @@ it('enforces streamed download limits even without content-length', async () => 
     readBackupResponse(new Response(new Uint8Array(10)), 5)
   ).rejects.toThrow('limit');
 });
+
+it('applies a smaller bulk-export budget before reading sources and preserves the normal individual-export limit', async () => {
+  const bytes = new Uint8Array(4096);
+  const ref = await putSourceBlob(bytes);
+  const document = importStepBody(
+    createProjectDocument('Budgeted source', toUserId('owner')),
+    {
+      name: 'STEP source',
+      sourceName: 'part.step',
+      artifactId: 'budget_source',
+      stepSourceRef: ref
+    }
+  ).document;
+  const source = vi.spyOn(localProjectStore, 'loadSourceBlob');
+  await expect(
+    createProjectBackup(document, false, undefined, {
+      localOnly: true,
+      maxBytes: 4096
+    })
+  ).rejects.toThrow('bulk-download memory budget');
+  expect(source).not.toHaveBeenCalled();
+  const backup = await parseProjectBackup(
+    await createProjectBackup(document, false)
+  );
+  expect(backup.sources).toHaveLength(1);
+  expect(source).toHaveBeenCalledOnce();
+});
+
+it.each([undefined, 12000])(
+  'bounds archived file reads with an optional declared size of %s',
+  async (size) => {
+    const document = createProjectDocument(
+      'Budgeted archive',
+      toUserId('owner')
+    );
+    vi.spyOn(api, 'listArtifacts').mockResolvedValue({
+      artifacts: [
+        {
+          artifactId: toArtifactId('budgeted_export'),
+          projectId: document.projectId,
+          kind: 'step-export',
+          name: 'part.step',
+          contentType: 'application/step',
+          bytes: size,
+          objectKey: 'archive',
+          metadata: {},
+          createdAt: new Date().toISOString()
+        }
+      ]
+    });
+    const fetch = vi.fn(async () => new Response(new Uint8Array(12000)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      createProjectBackup(document, true, undefined, { maxBytes: 4096 })
+    ).rejects.toThrow(
+      size === undefined
+        ? 'remaining download size limit'
+        : 'bulk-download memory budget'
+    );
+    expect(fetch).toHaveBeenCalledTimes(size === undefined ? 1 : 0);
+  }
+);
 
 it('rolls back all companion data when a project import transaction fails', async () => {
   const document = createProjectDocument('Atomic', toUserId('owner'));
@@ -237,7 +303,9 @@ it('backs up a cloud mesh payload once as a source while keeping its original fi
   vi.spyOn(api, 'loadRevision').mockResolvedValue(initial);
   const fetch = vi.fn(async () => new Response(originalBytes));
   vi.stubGlobal('fetch', fetch);
-  const text = await createProjectBackup(document, true);
+  const text = await createProjectBackup(document, true, undefined, {
+    includeOriginalImports: true
+  });
   const backup = await parseProjectBackup(text);
   expect(backup.files.map((file) => file.artifact.artifactId)).toEqual([
     'artifact_original'
@@ -253,8 +321,11 @@ it('backs up a cloud mesh payload once as a source while keeping its original fi
     new NodeBlob([duplicated]).size - new NodeBlob([text]).size
   ).toBeGreaterThan(backup.sources![0]!.base64.length);
   expect(fetch).toHaveBeenCalledOnce();
+  const signal = vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
   expect(fetch).toHaveBeenCalledWith(
-    '/api/artifacts/artifact_original/download'
+    '/api/artifacts/artifact_original/download',
+    { signal }
   );
 
   // A new device restores the payload even though it has no file entry, and
@@ -289,8 +360,11 @@ it('downloads a missing cloud mesh payload once into sources instead of files to
   expect(backup.sources![0]!.sha256).toBe(await checksum(bytes));
   expect(backup.sources![0]!.logicalBytes).toBe(ref.logicalBytes);
   expect(fetch).toHaveBeenCalledOnce();
+  const signal = vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
   expect(fetch).toHaveBeenCalledWith(
-    '/api/artifacts/artifact_payload/download'
+    '/api/artifacts/artifact_payload/download',
+    { signal }
   );
 });
 
@@ -380,9 +454,7 @@ it('backs up an encrypted project’s sources through its blob reader', async ()
       logicalBytes: bytes.byteLength
     }
   }).document;
-  rememberProjectFormats([
-    { projectId: document.projectId, storageFormat: 2 }
-  ]);
+  rememberProjectFormats([{ projectId: document.projectId, storageFormat: 2 }]);
   pageBlobReferences.remember(document.projectId, {
     blobId,
     kind: 'import-source',
@@ -413,3 +485,222 @@ it('backs up an encrypted project’s sources through its blob reader', async ()
     rememberProjectFormats([{ projectId: document.projectId }]);
   }
 });
+
+it('includes encrypted archived exports in a bulk backup without plaintext requests', async () => {
+  const document = createProjectDocument('Encrypted export', toUserId('owner'));
+  const blobId = 'd'.repeat(32);
+  const bytes = new TextEncoder().encode('exported STEP bytes');
+  rememberProjectFormats([{ projectId: document.projectId, storageFormat: 2 }]);
+  pageBlobReferences.remember(document.projectId, {
+    blobId,
+    kind: 'export',
+    key: new Uint8Array(32),
+    ciphertextHash: new Uint8Array(32),
+    plaintextLength: bytes.length
+  });
+  const reader = vi.fn(async () => bytes);
+  setEncryptedBlobReader(reader);
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({
+    artifacts: [
+      {
+        artifactId: toArtifactId(blobId),
+        projectId: document.projectId,
+        kind: 'step-export',
+        name: 'model.step',
+        contentType: 'application/step',
+        objectKey: '',
+        bytes: bytes.length,
+        createdAt: new Date().toISOString(),
+        metadata: {}
+      }
+    ]
+  });
+  vi.spyOn(api, 'loadRevision').mockResolvedValue(null);
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const backup = await parseProjectBackup(
+      await createProjectBackup(document, true, null, {
+        includeEncryptedFiles: true
+      })
+    );
+    expect(backup.files).toHaveLength(1);
+    expect(backupFileBytes(backup.files[0]!)).toEqual(bytes);
+    expect(fetch).not.toHaveBeenCalled();
+  } finally {
+    setEncryptedBlobReader(null);
+    pageBlobReferences.clear();
+    rememberProjectFormats([{ projectId: document.projectId }]);
+  }
+});
+
+it('stores canonical STEP bytes once without downloading a duplicate original, including saved history', async () => {
+  const bytes = new TextEncoder().encode(
+    'ISO-10303-21;\n' + 'source'.repeat(2048) + '\nEND-ISO-10303-21;'
+  );
+  const ref = await putSourceBlob(bytes);
+  let document = importStepBody(
+    createProjectDocument('Deduplicated STEP', toUserId('owner')),
+    {
+      name: 'Part',
+      sourceName: 'part.step',
+      artifactId: 'artifact_step',
+      stepSourceRef: ref
+    }
+  ).document;
+  document = createCheckpoint(document, 'Source checkpoint');
+  await saveLocalProject(document);
+  const artifact: ArtifactRecord = {
+    artifactId: toArtifactId('artifact_step'),
+    projectId: document.projectId,
+    kind: 'step-import',
+    name: 'part.step',
+    contentType: 'model/step',
+    objectKey: 'fixture',
+    bytes: bytes.length,
+    metadata: {},
+    createdAt: new Date().toISOString()
+  };
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [artifact] });
+  const fetch = vi
+    .fn()
+    .mockRejectedValue(
+      new Error('A duplicate original must not be downloaded')
+    );
+  vi.stubGlobal('fetch', fetch);
+  const text = await createProjectBackup(document, true);
+  const backup = await parseProjectBackup(text);
+  expect(backup.files).toEqual([]);
+  expect(backup.sources).toHaveLength(1);
+  expect(backup.saveStates).toHaveLength(1);
+  expect(text.split(backup.sources![0]!.base64)).toHaveLength(2);
+  expect(fetch).not.toHaveBeenCalled();
+  const duplicated = JSON.stringify({
+    ...backup,
+    files: [await packBackupFile(artifact, bytes.buffer)]
+  });
+  expect(new Blob([duplicated]).size - new Blob([text]).size).toBeGreaterThan(
+    backup.sources![0]!.base64.length
+  );
+  // The smaller file remains independently restorable on a new device.
+  const copy = importProjectCopy(backup, toUserId('new-owner'));
+  globalThis.indexedDB = new IDBFactory();
+  await saveImportedProject(copy);
+  expect(await loadSourceBlob(ref.checksumSha256)).toEqual(bytes);
+});
+
+it('externalizes legacy embedded STEP text throughout commands and undo without altering the input', async () => {
+  const stepText =
+    'ISO-10303-21;\n' + 'legacy-source'.repeat(2048) + '\nEND-ISO-10303-21;';
+  const manager = new CommandManager(
+    createProjectDocument('Legacy STEP', toUserId('owner'))
+  );
+  manager.execute(
+    commandFactories.importStep({
+      name: 'Part',
+      sourceName: 'part.step',
+      artifactId: 'artifact_missing',
+      stepText
+    })
+  );
+  const document = manager.document;
+  const original = JSON.stringify(document);
+  const result = await createProjectBackup(document, false);
+  const backup = await parseProjectBackup(result);
+  expect(backup.sources).toHaveLength(1);
+  expect(JSON.stringify(backup.document)).not.toContain('stepText');
+  expect(JSON.stringify(document)).toBe(original);
+  expect(new Blob([result]).size).toBeLessThan(new Blob([original]).size);
+});
+
+it('makes original mesh interchange files optional while always retaining their rebuild payload', async () => {
+  const bytes = encodeImportedMeshPayload({
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2]
+  });
+  const ref = await putSourceBlob(bytes);
+  const document = importMeshBody(
+    createProjectDocument('Optional original', toUserId('owner')),
+    {
+      name: 'Scan',
+      sourceName: 'scan.obj',
+      artifactId: 'artifact_payload',
+      triangleCount: 1,
+      meshPayloadRef: ref
+    }
+  ).document;
+  const original: ArtifactRecord = {
+    artifactId: toArtifactId('artifact_original'),
+    projectId: document.projectId,
+    kind: 'mesh-import',
+    name: 'scan.obj',
+    objectKey: 'fixture',
+    contentType: 'text/plain',
+    createdAt: new Date().toISOString(),
+    metadata: {}
+  };
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [original] });
+  const fetch = vi.fn(async () => new Response('original OBJ file'));
+  vi.stubGlobal('fetch', fetch);
+  const compact = await parseProjectBackup(
+    await createProjectBackup(document, true)
+  );
+  expect(compact.files).toEqual([]);
+  expect(compact.sources).toHaveLength(1);
+  expect(fetch).not.toHaveBeenCalled();
+  const complete = await parseProjectBackup(
+    await createProjectBackup(document, true, undefined, {
+      includeOriginalImports: true
+    })
+  );
+  expect(complete.sources).toEqual(compact.sources);
+  expect(complete.files).toHaveLength(1);
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+it.each([true, false])(
+  'preserves a requested STEP original only when it differs from canonical rebuild bytes (identical=%s)',
+  async (identical) => {
+    const canonical = new TextEncoder().encode('canonical STEP rebuild bytes');
+    const original = identical
+      ? canonical
+      : new TextEncoder().encode('distinct original STEP header and data');
+    const ref = await putSourceBlob(canonical);
+    const document = importStepBody(
+      createProjectDocument('Optional STEP original', toUserId('owner')),
+      {
+        name: 'Part',
+        sourceName: 'part.step',
+        artifactId: 'artifact_original_step',
+        stepSourceRef: ref
+      }
+    ).document;
+    vi.spyOn(api, 'listArtifacts').mockResolvedValue({
+      artifacts: [
+        {
+          artifactId: toArtifactId('artifact_original_step'),
+          projectId: document.projectId,
+          kind: 'step-import',
+          name: 'part.step',
+          objectKey: 'fixture',
+          bytes: original.length,
+          contentType: 'model/step',
+          createdAt: new Date().toISOString(),
+          metadata: {}
+        }
+      ]
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(original))
+    );
+    const backup = await parseProjectBackup(
+      await createProjectBackup(document, true, undefined, {
+        includeOriginalImports: true
+      })
+    );
+    expect(backup.sources).toHaveLength(1);
+    expect(backup.files).toHaveLength(identical ? 0 : 1);
+    if (!identical) expect(backupFileBytes(backup.files[0]!)).toEqual(original);
+  }
+);

@@ -56,6 +56,7 @@ const DISPLAY_MODES: AppSettings['viewport']['displayMode'][] = [
 const PROVIDERS: AppSettings['assistant']['provider'][] = [
   'openrouter',
   'openai',
+  'anthropic',
   'responses-compatible'
 ];
 const CREDENTIAL_SOURCES: AppSettings['assistant']['credentialSource'][] = [

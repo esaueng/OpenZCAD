@@ -165,7 +165,10 @@ async function relatedPeople(
   const encryptedInvitations = await isE2eeInvitationStorageReady(db);
   const { results } = await db
     .prepare(
-      `WITH related(user_id, email_known) AS (
+      // D1 limits each compound SELECT to five terms. Keep membership and
+      // invitation relations separate, then deduplicate and cap the combined
+      // result in the same snapshot with the same email-visibility rule.
+      `WITH membership_related(user_id, email_known) AS (
          SELECT m.user_id, 1 FROM project_members m
            JOIN projects p ON p.id = m.project_id WHERE p.user_id = ?1
          UNION ALL
@@ -175,7 +178,7 @@ async function relatedPeople(
          SELECT b.user_id, 0 FROM project_members a
            JOIN project_members b ON b.project_id = a.project_id
            WHERE a.user_id = ?1
-         UNION ALL
+       ), invitation_related(user_id, email_known) AS (
          SELECT u.id, 1 FROM project_invitations i
            JOIN users u ON u.email = i.email
            WHERE i.invited_by_user_id = ?1 AND i.revoked_at IS NULL
@@ -198,6 +201,10 @@ async function relatedPeople(
              AND e.completed_at IS NULL AND e.expires_at >= ?4`
                  : ''
              }
+       ), related(user_id, email_known) AS (
+         SELECT user_id, email_known FROM membership_related
+         UNION ALL
+         SELECT user_id, email_known FROM invitation_related
        )
        SELECT r.user_id AS user_id,
               CASE WHEN MAX(r.email_known) = 1 THEN u.email END AS email

@@ -27,6 +27,7 @@ import {
   approveDevice,
   approverComparisonCode,
   beginCompareApproval,
+  canResumeCompareApproval,
   cancelApprovalRequest,
   confirmApprovalCode,
   defaultDeviceLabel,
@@ -233,7 +234,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
             <Group title="Set up">
               <SettingRow
                 title="End-to-end encryption"
-                hint="Not set up. This creates your keys and a recovery key. Projects are not encrypted yet: that comes in a later beta step."
+                hint="Create your account keys and save a recovery key. Existing projects stay as they are until you encrypt them."
               >
                 <button
                   className="primary"
@@ -862,7 +863,10 @@ function EnrollPanel({
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      const next = await confirmApprovalCode(ctx);
+                      const next = await confirmApprovalCode(
+                        ctx,
+                        step.approval
+                      );
                       if (next.step === 'done') {
                         setFlow(null);
                         notifyContactsChanged();
@@ -904,6 +908,31 @@ function EnrollPanel({
           That approval request expired. Ask again.
         </Notice>
       ) : null}
+      {account.device?.approval ? (
+        <SettingRow
+          title="Continue your approval request"
+          hint="Resume the request already started on this device."
+        >
+          <button
+            className="secondary"
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const next = await advanceApprovalAsNewDevice(ctx);
+                if (next.step === 'done') {
+                  setFlow(null);
+                  notifyContactsChanged();
+                  return next.state;
+                }
+                setFlow({ kind: 'request', step: next });
+              })
+            }
+          >
+            Resume approval
+          </button>
+        </SettingRow>
+      ) : null}
       <SettingRow
         title="Approve from another device"
         hint="Show a code to scan or compare on a device that is already unlocked."
@@ -925,7 +954,7 @@ function EnrollPanel({
       </SettingRow>
       <SettingRow
         title="Use your recovery key"
-        hint="Unlocks and certifies this device on its own."
+        hint="Unlocks and certifies this device on its own. Approve from another unlocked device when possible: it also confirms the latest device list. A recovery key alone cannot prove the list is up to date on a fresh browser."
       >
         <button
           className="secondary"
@@ -1030,7 +1059,10 @@ function ApprovalsPanel({
                 className="secondary"
                 type="button"
                 disabled={
-                  busy || !approval.commitment || approval.state !== 'requested'
+                  busy ||
+                  !approval.commitment ||
+                  (approval.state !== 'requested' &&
+                    !canResumeCompareApproval(ctx, account, approval))
                 }
                 onClick={() =>
                   void run(async () => {
@@ -1047,7 +1079,9 @@ function ApprovalsPanel({
                   })
                 }
               >
-                Compare codes
+                {approval.state === 'requested'
+                  ? 'Compare codes'
+                  : 'Resume comparison'}
               </button>
               <button
                 className="secondary"

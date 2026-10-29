@@ -185,7 +185,7 @@ test('lists bodies in the model browser and selects them from the tree', async (
   await expect(bodies.getByRole('button', { name: /^Box/ })).toBeVisible();
 
   await bodies.getByRole('button', { name: /^Box/ }).click();
-  const chip = page.locator('.selection-callout-chip');
+  const chip = page.locator('.selection-readout');
   await expect(chip).toContainText('Box');
   await expect(bodies.getByRole('button', { name: /^Box/ })).toHaveAttribute(
     'aria-pressed',
@@ -210,13 +210,13 @@ test('names picked faces and edges without raw fingerprints', async ({
     page.getByRole('region', { name: 'Resize Body operation' })
   ).toBeVisible();
 
-  const chip = page.locator('.selection-callout-chip');
+  const chip = page.locator('.selection-readout');
   await expect(chip).toContainText('Box');
   await expect(chip).not.toContainText('face:');
   await expect(chip).toContainText(/face/i);
 
-  // The chip carries the operation; no second chip says it again at the top
-  // of the column. Armed is its resting state and the lit verb says so, so
+  // The rail carries the operation; no card says it again at the top of
+  // the column. Armed is its resting state and the lit verb says so, so
   // there is no "Ready" pill — only a phase that is news gets a marker.
   const card = page.getByRole('region', { name: 'Resize Body operation' });
   await expect(card).toHaveClass(/selection-callout-chip/);
@@ -242,8 +242,8 @@ test('a command started from the selection chip takes the face-drag rig down', a
 
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
-  const chip = page.locator('.selection-callout-chip');
-  await expect(chip).toContainText(/face/i);
+  const chip = page.locator('.selection-rail');
+  await expect(page.locator('.selection-readout')).toContainText(/face/i);
   // The bare pick carries the box's span: a dashed line and its size pill.
   const sizePill = page.locator('.dimension-callout');
   await expect(sizePill).toHaveCount(1);
@@ -258,7 +258,7 @@ test('a command started from the selection chip takes the face-drag rig down', a
   await expect(sizePill).toHaveCount(0);
 });
 
-test('fits the face Selection card and orientation cube at every width', async ({
+test('fits the face pick on the rail and in the bar at every width', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1024, height: 700 });
@@ -267,8 +267,8 @@ test('fits the face Selection card and orientation cube at every width', async (
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
 
-  // The face's operation rides the Selection card (F11), and a direct pick
-  // opens no inspector beside it: the card is what has to hold.
+  // The face's operation rides the rail (F11), and a direct pick opens no
+  // inspector beside it: the rail and the bar's readout have to hold.
   const card = page.getByRole('region', { name: 'Resize Body operation' });
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(card).toBeVisible();
@@ -278,19 +278,17 @@ test('fits the face Selection card and orientation cube at every width', async (
 
   const measure = () =>
     page.locator('.viewer-area').evaluate((viewer) => {
-      const chip = viewer.querySelector<HTMLElement>('.selection-callout-chip');
-      const name = chip?.querySelector<HTMLElement>('.selection-callout-name');
-      const verbs = chip?.querySelector<HTMLElement>(
-        '.selection-callout-verbs'
+      const rail = viewer.querySelector<HTMLElement>('.selection-rail');
+      const name = viewer.querySelector<HTMLElement>(
+        '.selection-readout .selection-callout-name'
       );
       const cube = viewer.querySelector<SVGElement>('.orientation-cube');
-      if (!chip || !name || !verbs || !cube) {
-        throw new Error('Expected the Selection card and the cube.');
+      if (!rail || !name || !cube) {
+        throw new Error('Expected the rail, the readout and the cube.');
       }
 
-      const chipBox = chip.getBoundingClientRect();
+      const railBox = rail.getBoundingClientRect();
       const nameBox = name.getBoundingClientRect();
-      const verbsBox = verbs.getBoundingClientRect();
       const cubeBox = cube.getBoundingClientRect();
       const cubeHit = document.elementFromPoint(
         cubeBox.left + cubeBox.width / 2,
@@ -303,7 +301,7 @@ test('fits the face Selection card and orientation cube at every width', async (
         a.bottom > b.top;
       // Every verb takes its own press: nothing lies over the switch.
       const verbsHitTestable = [
-        ...chip.querySelectorAll<HTMLButtonElement>('button')
+        ...rail.querySelectorAll<HTMLButtonElement>('button')
       ].every((button) => {
         const box = button.getBoundingClientRect();
         const hit = document.elementFromPoint(
@@ -314,20 +312,18 @@ test('fits the face Selection card and orientation cube at every width', async (
       });
 
       return {
-        chipContainsItsContents:
-          chip.scrollWidth <= chip.clientWidth + 1 &&
-          chip.scrollHeight <= chip.clientHeight + 1,
-        nameIntersectsVerbs: intersects(nameBox, verbsBox),
+        // The name is never squeezed out by the guidance beside it.
+        nameWidth: nameBox.width,
         verbsHitTestable,
         phase:
-          chip.querySelector('.selection-callout-phase')?.textContent ?? null,
-        cubeIntersectsChip: intersects(cubeBox, chipBox),
+          rail.querySelector('.selection-callout-phase')?.textContent ?? null,
+        cubeIntersectsRail: intersects(cubeBox, railBox),
         cubeOwnsItsCentre: Boolean(cubeHit && cube.contains(cubeHit)),
-        chipBox: {
-          left: chipBox.left,
-          right: chipBox.right,
-          top: chipBox.top,
-          bottom: chipBox.bottom
+        railBox: {
+          left: railBox.left,
+          right: railBox.right,
+          top: railBox.top,
+          bottom: railBox.bottom
         },
         cubeBox: {
           left: cubeBox.left,
@@ -338,19 +334,16 @@ test('fits the face Selection card and orientation cube at every width', async (
       };
     });
 
-  // The column-top card once squeezed its copy to two characters below
-  // ~1000px. The Selection card that replaced it has to hold at every width.
   for (const width of [1440, 1100, 990, 900]) {
     await page.setViewportSize({ width, height: 700 });
     await page.waitForTimeout(150);
     const geometry = await measure();
     const where = `at ${width}px: ${JSON.stringify(geometry, null, 2)}`;
 
-    expect(geometry.chipContainsItsContents, where).toBe(true);
-    expect(geometry.nameIntersectsVerbs, where).toBe(false);
+    expect(geometry.nameWidth, where).toBeGreaterThan(40);
     expect(geometry.verbsHitTestable, where).toBe(true);
     expect(geometry.phase, where).toBeNull();
-    expect(geometry.cubeIntersectsChip, where).toBe(false);
+    expect(geometry.cubeIntersectsRail, where).toBe(false);
     expect(geometry.cubeOwnsItsCentre, where).toBe(true);
   }
 });
@@ -1043,16 +1036,18 @@ async function openBracketDemo(page: Page) {
 /**
  * A face click with no tool running used to raise five surfaces: the tool
  * card, the drag handle, a name-only label, a bottom-lane chip with the
- * area, and an inspector that said no one feature owned the face. The name,
- * the measurement and the verbs are one chip beside the pick now.
+ * area, and an inspector that said no one feature owned the face. Now the
+ * verbs take over the rail and the name and measurement lead the bar's
+ * guidance line: no surface of its own at all.
  */
-test('a face click raises one selection chip with verbs and no other surface', async ({
+test('a face click gives the rail its verbs and the bar its name, no other surface', async ({
   page
 }) => {
   test.setTimeout(150_000);
   const canvas = await openBracketDemo(page);
   const bounds = (await canvas.boundingBox())!;
-  const chip = page.locator('.selection-callout-chip');
+  const chip = page.locator('.selection-rail');
+  const readout = page.locator('.selection-readout');
   // The demo frames the part in the middle of the canvas; walk a few spots
   // until one lands on a face.
   for (const [fx, fy] of [
@@ -1074,17 +1069,19 @@ test('a face click raises one selection chip with verbs and no other surface', a
   }
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(chip).toHaveCount(1);
-  await expect(chip.locator('.selection-callout-name')).toContainText(
+  await expect(readout.locator('.selection-callout-name')).toContainText(
     'Mounting Bracket'
   );
-  // The key measurement rides the chip: an area or a diameter.
-  await expect(chip.locator('.selection-callout-detail')).toContainText(
+  // The key measurement reads beside it: an area or a diameter.
+  await expect(readout.locator('.selection-callout-detail')).toContainText(
     /mm²|Ø/
   );
-  const verbs = chip.locator('.selection-callout-verb');
+  // The rail is the pick's: its verbs in place of the fixed tools.
+  const verbs = chip.locator('.selection-rail-verb');
   expect(await verbs.count()).toBeGreaterThanOrEqual(1);
-  // Four at most as buttons; a face's other tools wait behind More.
-  expect(await verbs.count()).toBeLessThanOrEqual(4);
+  await expect(
+    page.getByRole('group', { name: 'Sketch', exact: true })
+  ).toHaveCount(0);
   await expect(
     chip.getByRole('button', { name: 'Deselect all' })
   ).toBeVisible();
@@ -1100,6 +1097,7 @@ test('a face click raises one selection chip with verbs and no other surface', a
   // The chip's clear is the deselect.
   await chip.getByRole('button', { name: 'Deselect all' }).click();
   await expect(chip).toHaveCount(0);
+  await expect(readout).toHaveCount(0);
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
 });
 

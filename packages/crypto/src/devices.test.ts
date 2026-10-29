@@ -87,6 +87,40 @@ interface Fixture {
   genesis: DeviceListEntry;
 }
 
+describe('device-list input boundary', () => {
+  it.each([
+    null,
+    undefined,
+    42,
+    'entry',
+    {},
+    { entry: [], signature: new Uint8Array() },
+    { entry: new Uint8Array(), signature: null }
+  ])('refuses an ill-typed signed entry as E2eeError: %j', async (entry) => {
+    const identity = await generateSigningKeyPair();
+    await rejectsWith(
+      verifyDeviceList(identity.publicKey, [entry] as unknown as SignedDeviceListEntry[]),
+      'invalid-argument'
+    );
+  });
+
+  it('refuses a sparse chain with the same typed error', async () => {
+    const identity = await generateSigningKeyPair();
+    await rejectsWith(
+      verifyDeviceList(identity.publicKey, new Array<SignedDeviceListEntry>(1)),
+      'invalid-argument'
+    );
+  });
+
+  it('captures signed bytes before asynchronous key verification', async () => {
+    const f = await fixture();
+    const verification = verifyDeviceList(f.identityRaw, f.chain);
+    f.chain[0]!.entry.fill(0);
+    f.chain[0]!.signature.fill(0);
+    await expect(verification).resolves.toMatchObject({ userId: USER });
+  });
+});
+
 async function fixture(devices = 2): Promise<Fixture> {
   const identity = await generateSigningKeyPair(false);
   const identityRaw = await exportPublicKey(identity.publicKey);

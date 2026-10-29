@@ -2,12 +2,21 @@ import { describe, expect, it } from 'vitest';
 import {
   PROJECT_SHARE_HASH_PREFIX,
   isEncryptedShareLink,
+  shareRequestFromHash,
   shareLinkFromHash,
   shareTokenFromHash
 } from '../apps/web/src/lib/projectShareLink';
 
 const token = 'a'.repeat(43);
 describe('share link fragments', () => {
+  it('recognizes the share destination independently of token validity', () => {
+    for (const payload of ['', '   ', 'truncated', 'a.b', token]) {
+      expect(shareRequestFromHash(`#share=${payload}`)).toBe(payload.trim());
+    }
+    expect(shareRequestFromHash('#invite=truncated')).toBeNull();
+    expect(shareRequestFromHash('')).toBeNull();
+    expect(shareRequestFromHash('#sharing=truncated')).toBeNull();
+  });
   it('reads the token out of a #share= fragment', () => {
     expect(shareTokenFromHash(`#share=${token}`)).toBe(token);
     expect(shareTokenFromHash(`share=${token}`)).toBe(token);

@@ -68,7 +68,7 @@ test('selects all edges from the fillet card, previews joined corners, and survi
     .getByRole('button', { name: 'Selection: Fillet', exact: true })
     .click();
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await expect(card).toContainText('12 edges');
+  await expect(page.locator('.selection-readout')).toContainText('12 edges');
   await expect(card.getByRole('button', { name: /Select all/ })).toHaveCount(0);
   await page.getByTestId('direct-manipulation-value').click();
   const keypad = page.getByRole('dialog', { name: 'Radius value' });

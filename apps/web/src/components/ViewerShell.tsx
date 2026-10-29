@@ -51,7 +51,7 @@ import type {
   ViewRequestTarget,
   WheelDevice
 } from '@openzcad/viewport';
-import { ViewerToolbar } from './ViewerToolbar';
+import { SECTION_PLANE_LABELS, ViewerToolbar } from './ViewerToolbar';
 import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
   measurementAnnotationsOnScreen,
@@ -387,6 +387,9 @@ interface ViewerShellProps {
   xrayOpacity?: number;
   sectionRange: { min: number; max: number } | null;
   onToggleSection(): void;
+  /** Whether the section controls show while the cut is on (remembered). */
+  sectionPanelOpen?: boolean;
+  onSectionPanelOpenChange?(open: boolean): void;
   onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
   onSectionCommit(offset?: number): void;
@@ -542,6 +545,8 @@ export function ViewerShell({
   xrayOpacity,
   sectionRange,
   onToggleSection,
+  sectionPanelOpen,
+  onSectionPanelOpenChange,
   onSectionPlane,
   onSectionOffset,
   onSectionCommit,
@@ -641,6 +646,9 @@ export function ViewerShell({
 
   const viewerToolbar = (
     <ViewerToolbar
+      // Its panel can stay up on the last cut after the cut is switched off;
+      // that cut belongs to this project, so another project starts clean.
+      key={projectId ?? ''}
       settings={settings}
       projection={projection}
       canUndo={canUndo}
@@ -658,6 +666,8 @@ export function ViewerShell({
       onToggleProjection={onToggleProjection}
       sectionRange={sectionRange}
       onToggleSection={onToggleSection}
+      {...(sectionPanelOpen !== undefined ? { sectionPanelOpen } : {})}
+      {...(onSectionPanelOpenChange ? { onSectionPanelOpenChange } : {})}
       onSectionPlane={onSectionPlane}
       onSectionOffset={onSectionOffset}
       onSectionCommit={onSectionCommit}
@@ -910,6 +920,27 @@ export function ViewerShell({
               }
               onDragEnd={() => orientationDragRef.current?.end()}
             />
+            {/* View has no instrument rail, yet command search can still
+                turn the cut on there. Without this the model stayed clipped
+                with nothing on screen saying so or turning it off. */}
+            {viewMode && settings.sectionView && (
+              <div
+                className="view-mode-section"
+                role="group"
+                aria-label="Section view"
+              >
+                <span className="view-mode-section-label">
+                  Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
+                </span>
+                <button
+                  type="button"
+                  className="view-mode-section-off"
+                  onClick={onToggleSection}
+                >
+                  Turn off
+                </button>
+              </div>
+            )}
           </div>
           {!viewMode && !dockLayout && viewerToolbar}
         </>

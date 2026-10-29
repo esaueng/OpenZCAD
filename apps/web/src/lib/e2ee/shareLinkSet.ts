@@ -59,6 +59,8 @@ export interface HeadShareLinksInput {
   };
   /** Cutoffs of removed devices, keyed by `authorCutoffKey`. */
   readonly cutoffs: ReadonlyMap<string, VersionCutoff>;
+  /** Current verified directory snapshot for this head read, never a page cache. */
+  readonly deviceLists?: readonly VerifiedDeviceList[];
   /**
    * Whether to record the set's tombstones as seen (default true). A
    * browser checking a set it is about to write records them only once
@@ -71,9 +73,10 @@ export interface HeadShareLinksInput {
 export async function projectOwnerOf(
   groups: ProjectGroupContext,
   projectId: string,
-  keyEpoch: number
+  keyEpoch: number,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<string | null> {
-  const roles = await epochRoles(groups, projectId, keyEpoch);
+  const roles = await epochRoles(groups, projectId, keyEpoch, deviceLists);
   return roles.users.find((entry) => entry.role === 'owner')?.userId ?? null;
 }
 
@@ -81,8 +84,11 @@ export async function projectOwnerOf(
 export async function ownerDeviceList(
   groups: ProjectGroupContext,
   projectId: string,
-  ownerUserId: string
+  ownerUserId: string,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<VerifiedDeviceList | null> {
+  if (deviceLists)
+    return deviceLists.find((list) => list.userId === ownerUserId) ?? null;
   if (ownerUserId === groups.account.userId) return groups.account.list;
   return (
     (await projectDeviceLists(groups, projectId)).find(
@@ -138,9 +144,14 @@ export async function verifyHeadShareLinks(
   if (input.set === undefined && !previousHolds) return null;
   const set = input.set ?? EMPTY_SHARE_LINK_SET;
   const userId = groups.account.userId;
-  const owner = await projectOwnerOf(groups, input.projectId, input.keyEpoch);
+  const owner = await projectOwnerOf(
+    groups,
+    input.projectId,
+    input.keyEpoch,
+    input.deviceLists
+  );
   const ownerList = owner
-    ? await ownerDeviceList(groups, input.projectId, owner)
+    ? await ownerDeviceList(groups, input.projectId, owner, input.deviceLists)
     : null;
   const seen =
     (await pins.read(userId, input.projectId).catch(() => null))?.tombstones ??

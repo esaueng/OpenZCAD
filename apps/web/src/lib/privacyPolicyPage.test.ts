@@ -92,6 +92,7 @@ describe('privacy policy page', () => {
     expect(document.querySelector('h1')?.textContent?.trim()).toBe(
       'Privacy policy'
     );
+    expect(pageText()).toContain('Effective October 28, 2026');
     // No script means no sign-in, no app boot and nothing for the entry
     // budget; nothing is fetched from another origin either.
     expect(parsed.querySelectorAll('script')).toHaveLength(0);
@@ -148,7 +149,10 @@ describe('privacy policy page', () => {
     renderPolicy();
     const text = pageText();
     expect(text).toContain('opt-in per account');
-    expect(text).toContain('may not yet be available to your account');
+    expect(text).toContain('available to every signed-in account');
+    expect(text).not.toMatch(
+      /may not yet be available|made available gradually/
+    );
     expect(text).toContain(
       'Cloud projects are stored in readable form unless they are end-to-end encrypted.'
     );
@@ -221,6 +225,11 @@ describe('privacy policy page', () => {
   it('matches the official deployment configuration', () => {
     renderPolicy();
     const official = wranglerConfig(resolve(REPO_ROOT, 'wrangler.jsonc'));
+    expect(official.vars.E2EE_KEYS_ENABLED).toBe('true');
+    expect(official.vars.E2EE_DEFAULT_ON).toBe('false');
+    expect(sectionText('encrypted-projects')).toContain(
+      'available to every signed-in account in Settings → Encryption'
+    );
     expect(official.vars.AUTH_SESSION_DAYS).toBe('30');
     expect(sectionText('account')).toContain('A session lasts 30 days');
     // The provider is named as today's, because the deployment can change it.

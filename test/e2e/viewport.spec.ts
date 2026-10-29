@@ -53,7 +53,7 @@ async function selectRailView(page: Page, name: RegExp | string) {
   await page.getByRole('button', { name }).click();
 }
 
-test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
+test('keeps undo and redo in the quick-actions rail', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('History Rail Part');
@@ -193,7 +193,7 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
   ).toHaveCount(0);
 });
 
-test('P toggles the camera projection', async ({ page }) => {
+test('P toggles the camera projection', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Projection Part');
@@ -300,7 +300,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     .not.toBe(zoomedLabel);
 });
 
-test('Space centres and faces an exact planar selection head-on', async ({
+test('Space centres and faces an exact planar selection head-on', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -341,7 +341,7 @@ test('Space centres and faces an exact planar selection head-on', async ({
   await expect(radiusInput).toHaveCount(0);
   await expect(inspector).toHaveCount(0);
   await expect(
-    page.locator('.selection-card .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toContainText('Bottom face');
 
   const cameraPose = async () =>
@@ -378,7 +378,7 @@ test('Space centres and faces an exact planar selection head-on', async ({
   expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
 
   await expect(faceOperation).toBeVisible();
-  await expect(page.locator('.selection-callout-chip')).toContainText(/face/i);
+  await expect(page.locator('.selection-readout')).toContainText(/face/i);
   await expect(
     page.getByRole('button', { name: /projection \(P\).*perspective/i })
   ).toHaveAttribute('aria-pressed', 'false');
@@ -1112,7 +1112,7 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
-  const label = page.locator('.selection-callout-chip .selection-callout-name');
+  const label = page.locator('.selection-readout .selection-callout-name');
   let cycled = false;
 
   // The default box and cylinder overlap around the centre in the isometric
@@ -1163,7 +1163,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     x: bounds.x + bounds.width * 0.42,
     y: bounds.y + bounds.height * 0.55
   };
-  const label = page.locator('.selection-callout-chip .selection-callout-name');
+  const label = page.locator('.selection-readout .selection-callout-name');
 
   // A plain click keeps the active sub-element filter.
   await page.mouse.click(spot.x, spot.y);
@@ -1283,7 +1283,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
 
   await expect(status).toContainText('connected edges');
   const chip = await page
-    .locator('.selection-callout-chip .selection-callout-name')
+    .locator('.selection-readout .selection-callout-name')
     .textContent();
   const match = /^(\d+) edges$/.exec((chip ?? '').trim());
   // Exactly eight, not merely "more than one". The body is the app's default
@@ -1321,7 +1321,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
     x: bounds.x + bounds.width * 0.42,
     y: bounds.y + bounds.height * 0.55
   };
-  const label = page.locator('.selection-callout-chip .selection-callout-name');
+  const label = page.locator('.selection-readout .selection-callout-name');
 
   // A plain click on the solid lands on a face.
   await page.mouse.click(spot.x, spot.y);
@@ -2009,7 +2009,7 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   await planes.getByRole('button', { name: 'Side (YZ plane)' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: YZ plane/);
 
-  // Compact controls preserve the complete cut when their close button is used.
+  // The section button puts the controls away and keeps the complete cut.
   const position = page.getByLabel('Cut position', { exact: true });
   await position.fill('3.125');
   await position.press('Enter');
@@ -2017,7 +2017,7 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   const flip = page.getByRole('button', { name: 'Flip cut direction' });
   await flip.click();
   await expect(flip).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Close section controls' }).click();
+  await sectionButton.click();
   await expect(slider).toHaveCount(0);
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
   await sectionButton.click();
@@ -2044,10 +2044,12 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   await expect(slider).toBeVisible();
   await expect(views).toHaveAttribute('aria-expanded', 'false');
 
-  // One click switches it off.
-  await sectionButton.click();
+  // Only the panel's switch ends the cut, and the panel stays up for it.
+  const cutSwitch = page.getByRole('switch', { name: 'Section cut' });
+  await cutSwitch.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
-  await expect(slider).toHaveCount(0);
+  await expect(cutSwitch).toHaveAttribute('aria-checked', 'false');
+  await expect(slider).toBeDisabled();
   await expect
     .poll(async () => {
       const state = await sectionState();
@@ -2055,7 +2057,8 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
     })
     .toBe(0);
   // Switching the cut off and on also restores its offset and direction.
-  await sectionButton.click();
+  await cutSwitch.click();
+  await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
   await expect(position).toHaveValue('3.125');
   await expect(flip).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Center cut' }).click();
@@ -2154,14 +2157,14 @@ test('the selection callout follows the body it names through a move', async ({
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  // Selecting the body names it in the Selection card, not over the model;
+  // Selecting the body names it in the bar, not over the model;
   // a running Move hangs the name callout over the body it moves.
   await page
     .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
   const callout = page.locator('.selection-callout');
-  await expect(page.locator('.selection-card')).toBeVisible();
+  await expect(page.locator('.selection-readout')).toBeVisible();
   await expect(callout).toHaveCount(0);
 
   await page.keyboard.press('m');

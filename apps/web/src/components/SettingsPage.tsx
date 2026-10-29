@@ -19,7 +19,6 @@ import {
 import {
   Bot,
   ChevronDown,
-  ChevronLeft,
   CloudOff,
   Cpu,
   Database,
@@ -38,12 +37,14 @@ import {
   RefreshCcw,
   Search,
   SearchX,
+  Settings,
   Settings2,
   ShieldCheck,
   Trash2,
   UserRound
 } from 'lucide-react';
 import {
+  anthropicThinkingOffType,
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
@@ -59,6 +60,7 @@ import { countLabel } from '../lib/toasts';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
+import { PageTopBar } from './PageTopBar';
 import { ExternalAnchor } from './ExternalAnchor';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
@@ -86,7 +88,6 @@ import { KeymapEditor } from './KeymapEditor';
 import { RelationGlyphFilter } from './RelationGlyphFilter';
 import { resolveKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { BrandMark } from './BrandMark';
 import {
   Group,
   Meter,
@@ -100,6 +101,7 @@ import {
   type SegmentOption
 } from './settingsControls';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { DataDownload } from './DataDownload';
 import {
   PersonalInfoToggle,
   PrivateEmailInput,
@@ -367,6 +369,9 @@ const CREDENTIAL_OPTIONS: readonly SegmentOption<
 function providerDefaults(provider: AppSettings['assistant']['provider']) {
   if (provider === 'openai') {
     return { model: 'gpt-6-luna', baseUrl: '' };
+  }
+  if (provider === 'anthropic') {
+    return { model: 'claude-sonnet-5-5', baseUrl: '' };
   }
   if (provider === 'openrouter') {
     return { model: 'openai/gpt-6-luna', baseUrl: '' };
@@ -898,34 +903,12 @@ export function SettingsPage({
       className={`settings-page density-${settings.appearance.density}`}
       data-reduced-motion={settings.appearance.reducedMotion ? 'true' : 'false'}
     >
-      <header className="settings-topbar">
-        <button
-          ref={brandRef}
-          className="brand"
-          type="button"
-          onClick={onClose}
-        >
-          <BrandMark compact />
-          OpenZCAD <span className="beta-tag">Beta</span>
-        </button>
-        <h1 className="settings-topbar-title">Settings</h1>
-        <span className="settings-save-message" aria-live="polite">
-          {message}
-        </span>
-        <button
-          className="settings-back-action"
-          type="button"
-          aria-label={backLabel}
-          title={backLabel}
-          onClick={onClose}
-        >
-          <ChevronLeft size={14} aria-hidden="true" />
-          Back
-        </button>
-      </header>
-
-      <div className="settings-layout">
-        <aside className="settings-nav" aria-label="Settings sections">
+      <PageTopBar
+        className="settings-topbar"
+        title="Settings"
+        brandRef={brandRef}
+        onBrand={onClose}
+        center={
           <label className="settings-search">
             <Search size={14} aria-hidden="true" />
             <input
@@ -944,6 +927,31 @@ export function SettingsPage({
               }}
             />
           </label>
+        }
+        actionsLabel="Settings actions"
+        actions={
+          <>
+            <span className="settings-save-message" aria-live="polite">
+              {message}
+            </span>
+            {/* The button that opened Settings, in the same place, pressed:
+                pressing it again goes back. */}
+            <button
+              className="secondary topbar-action settings-action settings-close is-active"
+              type="button"
+              aria-label={`Close settings and go ${backLabel.toLowerCase()}`}
+              title={`${backLabel} (Esc)`}
+              onClick={onClose}
+            >
+              <Settings size={14} aria-hidden="true" />
+              Settings
+            </button>
+          </>
+        }
+      />
+
+      <div className="settings-layout">
+        <aside className="settings-nav" aria-label="Settings sections">
           {/* The narrow layout has no room for the field, so while a filter
               is narrowing the sections it shows this way out of it instead;
               without it a filter typed in a wider window stranded the rail on
@@ -1623,13 +1631,14 @@ export function SettingsPage({
               {settings.assistant.credentialSource === 'personal' ? (
                 <>
                   <Group title="Model">
-                    <SettingRow title="Provider">
+                    <SettingRow title="Provider" hint="Changing provider removes the saved token.">
                       <select
                         value={settings.assistant.provider}
                         aria-label="AI provider"
                         onChange={(event) => {
                           const provider = event.target
                             .value as AppSettings['assistant']['provider'];
+                          setToken('');
                           patchAssistant({
                             provider,
                             ...providerDefaults(provider)
@@ -1638,6 +1647,7 @@ export function SettingsPage({
                       >
                         <option value="openrouter">OpenRouter</option>
                         <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
                         <option value="responses-compatible">
                           Responses-compatible
                         </option>
@@ -1646,7 +1656,7 @@ export function SettingsPage({
                     {settings.assistant.provider === 'responses-compatible' ? (
                       <SettingRow
                         title="API endpoint"
-                        hint="Public HTTPS only."
+                        hint="Public HTTPS only. Changing endpoint removes the saved token."
                       >
                         <input
                           className="settings-text-wide"
@@ -1654,9 +1664,10 @@ export function SettingsPage({
                           value={settings.assistant.baseUrl}
                           placeholder="https://models.example.com/v1/responses"
                           aria-label="AI API endpoint"
-                          onChange={(event) =>
-                            patchAssistant({ baseUrl: event.target.value })
-                          }
+                          onChange={(event) => {
+                            setToken('');
+                            patchAssistant({ baseUrl: event.target.value });
+                          }}
                         />
                       </SettingRow>
                     ) : null}
@@ -1665,14 +1676,27 @@ export function SettingsPage({
                         className="settings-text-wide mono"
                         value={settings.assistant.model}
                         aria-label="AI model"
-                        onChange={(event) =>
-                          patchAssistant({ model: event.target.value })
-                        }
+                        onChange={(event) => {
+                          const model = event.target.value;
+                          patchAssistant({
+                            model,
+                            ...(settings.assistant.provider === 'anthropic' &&
+                            settings.assistant.reasoningEffort === 'off' &&
+                            !anthropicThinkingOffType(model)
+                              ? { reasoningEffort: 'provider-default' as const }
+                              : {})
+                          });
+                        }}
                       />
                     </SettingRow>
                     <SettingRow
                       title="Reasoning level"
-                      hint="Higher plans better, costs more."
+                      hint={
+                        settings.assistant.provider === 'anthropic' &&
+                        !anthropicThinkingOffType(settings.assistant.model)
+                          ? 'Off isn’t available for this model.'
+                          : 'Higher plans better, costs more.'
+                      }
                     >
                       <select
                         value={settings.assistant.reasoningEffort}
@@ -1687,7 +1711,15 @@ export function SettingsPage({
                         <option value="provider-default">
                           Provider default
                         </option>
-                        <option value="off">Off</option>
+                        <option
+                          value="off"
+                          disabled={
+                            settings.assistant.provider === 'anthropic' &&
+                            !anthropicThinkingOffType(settings.assistant.model)
+                          }
+                        >
+                          Off
+                        </option>
                         <option value="low">Low</option>
                         <option value="medium">Medium</option>
                         <option value="high">High</option>
@@ -2342,7 +2374,7 @@ export function SettingsPage({
             encryptionAvailable && (
             <Section
               title="Encryption"
-              intro="Beta. Your keys for end-to-end encrypted projects. The server stores them only wrapped; projects are not encrypted yet."
+              intro="Beta. End-to-end encryption for cloud projects. The server stores your account keys only wrapped. Existing projects can be encrypted after setup."
             >
               <ErrorBoundary label="Encryption settings">
                 <Suspense
@@ -2385,6 +2417,21 @@ export function SettingsPage({
                 ) : null}
               </Group>
               <Group title="Your data">
+                <SettingRow
+                  title="Download your data"
+                  hint={
+                    session && cloudFunctionsEnabled
+                      ? 'Local and cloud projects, history, files, settings, and profile. Unencrypted ZIP; up to 512 MB.'
+                      : 'Device projects, files, and settings in an unencrypted ZIP. Sign in for cloud data. Up to 512 MB.'
+                  }
+                >
+                  <DataDownload
+                    settings={settings}
+                    session={session}
+                    cloudFunctionsEnabled={cloudFunctionsEnabled}
+                    busy={busy}
+                  />
+                </SettingRow>
                 <SettingRow
                   title="Local project data"
                   hint={

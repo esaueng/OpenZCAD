@@ -34,6 +34,7 @@ function Bar({
   draft = null,
   context = null,
   askUnavailable = false,
+  attachUnavailable = false,
   pick = null
 }: {
   commands: PaletteCommand[];
@@ -43,6 +44,7 @@ function Bar({
   draft?: { id: number; text: string } | null;
   context?: string | null;
   askUnavailable?: boolean;
+  attachUnavailable?: boolean;
   pick?: string | null;
 }) {
   const [open, setOpen] = useState(initialOpen);
@@ -59,6 +61,7 @@ function Bar({
       draft={draft}
       context={context}
       askUnavailable={askUnavailable}
+      attachUnavailable={attachUnavailable}
       pick={pick}
     />
   );
@@ -614,6 +617,64 @@ describe('CommandBar', () => {
     expect(textOnly).toBe(false);
     expect(files).toHaveLength(1);
     window.removeEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
+  });
+
+  it('hands picked drawings to the conversation from its attach button', async () => {
+    const user = userEvent.setup();
+    const { container, unmount } = render(
+      <Bar commands={[]} onAsk={vi.fn()} />
+    );
+    const files: File[][] = [];
+    const take = (event: Event) => {
+      files.push((event as CustomEvent<{ files: File[] }>).detail.files);
+      event.preventDefault();
+    };
+    window.addEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
+    try {
+      const attach = screen.getByRole('button', { name: 'Attach a drawing' });
+      expect(attach).toBeEnabled();
+      // A press keeps the field's focus: the bar stays open behind the
+      // picker.
+      expect(fireEvent.mouseDown(attach)).toBe(false);
+
+      const picker =
+        container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      expect(picker.accept).toBe(
+        'image/png,image/jpeg,image/webp,application/pdf'
+      );
+      const drawing = new File(['png'], 'drawing.png', { type: 'image/png' });
+      await user.upload(picker, drawing);
+      expect(files).toEqual([[drawing]]);
+      // Cleared, so the same drawing picked again still arrives.
+      expect(picker.value).toBe('');
+    } finally {
+      window.removeEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
+      unmount();
+    }
+  });
+
+  it('offers no drawing pick it could never send', () => {
+    const { unmount } = render(
+      <Bar commands={[]} onAsk={vi.fn()} askUnavailable />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Attach a drawing' })
+    ).toBeDisabled();
+    unmount();
+    // Nor while the conversation could not take it: status still loading,
+    // or the tray full.
+    const full = render(
+      <Bar commands={[]} onAsk={vi.fn()} attachUnavailable />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Attach a drawing' })
+    ).toBeDisabled();
+    full.unmount();
+    // No assistant at all: the bar is search alone.
+    render(<Bar commands={[]} />);
+    expect(
+      screen.queryByRole('button', { name: 'Attach a drawing' })
+    ).toBeNull();
   });
 
   it('runs a command from the list and hands focus back to where it was', async () => {

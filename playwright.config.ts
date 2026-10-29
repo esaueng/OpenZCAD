@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { register } from 'node:module';
 import { defineConfig } from '@playwright/test';
+import { resolveSuite, SMOKE_TAG } from './scripts/e2e-shards.mjs';
 import {
   privateArtifactPaths,
   privatePlaywrightOutput
@@ -62,6 +63,7 @@ const PORT = portForCheckout();
 // Performance probes and documentation captures build the production
 // renderer, and never reuse a server that may hold the cheaper e2e one.
 const FULL_RENDER_BUILD = fullRenderBuild();
+const suite = resolveSuite();
 
 export default defineConfig({
   ...(privateOutput ? { outputDir: privateOutput } : {}),
@@ -71,6 +73,10 @@ export default defineConfig({
   // here is already a root Vitest file). Pinning the pattern keeps the two
   // in step by construction; `test/e2e-shards.test.ts` checks this line.
   testMatch: '**/*.spec.ts',
+  // Regular CI exercises representative journeys. Local runs retain the full
+  // regression suite; OPENZCAD_E2E_SUITE=full opts CI into it explicitly.
+  grep: suite === 'smoke' ? new RegExp(SMOKE_TAG) : undefined,
+  metadata: { e2eSuite: suite },
   // Tests in one file run on different workers, so a long file such as
   // modeling.spec.ts (53 tests) does not serialise a CI shard onto one
   // worker. CI assigns whole files to shards by recorded duration through

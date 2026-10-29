@@ -1,5 +1,11 @@
-import { useId, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeftRight, Crosshair, Download, Info, X } from 'lucide-react';
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties
+} from 'react';
+import { ArrowLeftRight, Crosshair, Download, Slice } from 'lucide-react';
 import type { SectionPlaneId, SectionViewSettings } from '@openzcad/viewport';
 import {
   describeSectionOutline,
@@ -8,10 +14,11 @@ import {
 } from '../lib/sectionOutline';
 import { Tooltip } from './Tooltip';
 
+/** Each plane's swatch takes the colour of the axis it cuts across. */
 const PLANES = [
-  { id: 'XY', name: 'Top' },
-  { id: 'XZ', name: 'Front' },
-  { id: 'YZ', name: 'Side' }
+  { id: 'XY', name: 'Top', axis: 'z' },
+  { id: 'XZ', name: 'Front', axis: 'y' },
+  { id: 'YZ', name: 'Side', axis: 'x' }
 ] as const;
 
 const STATUS_LABELS = {
@@ -21,12 +28,23 @@ const STATUS_LABELS = {
   refused: 'Preview'
 } as const;
 
+/** Slider ends: enough digits to place the cut, not a float's tail. */
+function formatEnd(value: number): string {
+  return String(Number(value.toFixed(2)));
+}
+
 interface SectionToolboxProps {
   section: SectionViewSettings;
   range: { min: number; max: number };
   outline: SectionOutlineState;
   units: string;
-  onClose(): void;
+  /**
+   * False once the header switch has ended the cut: the panel stays up on
+   * the last cut, so the switch or a plane brings it straight back.
+   */
+  active?: boolean;
+  /** Turns the cut off or back on; the rail button hides the controls. */
+  onSwitch(): void;
   onPlane(plane: SectionPlaneId): void;
   onOffset(offset: number): void;
   onCommit(offset?: number): void;
@@ -34,23 +52,27 @@ interface SectionToolboxProps {
   onExport(): void;
 }
 
-/** Small live-view controls; putting them away never changes the cut. */
+/**
+ * Small live-view controls. The header switch is the only thing in them that
+ * ends the cut; the rail button and Escape put them away and leave it on.
+ */
 export function SectionToolbox({
   section,
   range,
   outline,
   units,
-  onClose,
+  active = true,
+  onSwitch,
   onPlane,
   onOffset,
   onCommit,
   onFlip,
   onExport
 }: SectionToolboxProps) {
+  const headingId = useId();
   const positionId = useId();
   const detailId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const [sourceOffset, setSourceOffset] = useState(section.offset);
   const [draft, setDraft] = useState(String(section.offset));
   const cancelEdit = useRef(false);
@@ -60,8 +82,19 @@ export function SectionToolbox({
     setDraft(String(section.offset));
   }
   const status = describeSectionOutline(outline, units);
-  const exportable = sectionOutlineExportable(outline);
-  const partial = outline.kind === 'exact' && outline.unsectioned > 0;
+  const exportable = active && sectionOutlineExportable(outline);
+  const partial = active && outline.kind === 'exact' && outline.unsectioned > 0;
+  const stateKind = !active ? 'off' : partial ? 'refused' : status.kind;
+  const stateLabel = !active
+    ? 'Off'
+    : partial
+      ? 'Partial'
+      : STATUS_LABELS[status.kind];
+  const span = range.max - range.min;
+  const fill =
+    span > 0
+      ? Math.min(100, Math.max(0, ((section.offset - range.min) / span) * 100))
+      : 50;
 
   // A pinned column can put the rail near the opposite edge on a phone.
   // Keep its toolbox on screen even when there is no room to its left.
@@ -128,50 +161,99 @@ export function SectionToolbox({
   return (
     <div
       ref={panelRef}
-      className="rail-section-panel"
+      className={`rail-section-panel${active ? '' : ' is-off'}`}
       data-rail-flyout=""
       role="group"
-      aria-label="Section view"
+      aria-labelledby={headingId}
     >
       <div className="rail-section-heading">
-        <strong>Section view</strong>
+        <Slice size={14} className="rail-section-glyph" aria-hidden="true" />
+        <strong id={headingId}>Section view</strong>
+        <span
+          className={`rail-section-state is-${stateKind}`}
+          role="status"
+          aria-describedby={detailId}
+        >
+          <span className="rail-section-state-kind">{stateLabel}</span>
+        </span>
         <Tooltip
-          label="Close section controls"
-          description="The cut stays active"
+          label={active ? 'Turn section view off' : 'Turn section view on'}
+          description="The section button hides these controls"
+        >
+          <button
+            type="button"
+            role="switch"
+            className="rail-section-switch"
+            aria-checked={active}
+            aria-label="Section cut"
+            onClick={onSwitch}
+          >
+            <span aria-hidden="true" />
+          </button>
+        </Tooltip>
+      </div>
+      <div className="rail-section-planes-row">
+        <div
+          className="rail-section-planes"
+          role="group"
+          aria-label="Section plane"
+        >
+          {PLANES.map(({ id, name, axis }) => (
+            <button
+              key={id}
+              type="button"
+              className="rail-section-plane"
+              data-axis={axis}
+              aria-label={`${name} (${id} plane)`}
+              aria-pressed={active && section.plane === id}
+              onClick={() => {
+                // Off, the last cut's plane switches that cut back on.
+                if (section.plane !== id) onPlane(id);
+                else if (!active) onSwitch();
+              }}
+            >
+              <span className="rail-section-swatch" aria-hidden="true" />
+              <span>{name}</span>
+              <small>{id}</small>
+            </button>
+          ))}
+        </div>
+        <Tooltip
+          label="Flip cut direction"
+          description="Show the other side of the plane"
+        >
+          <button
+            type="button"
+            className="rail-section-flip"
+            onClick={onFlip}
+            disabled={!onFlip || !active}
+            aria-label="Flip cut direction"
+            aria-pressed={section.flipped === true}
+          >
+            <ArrowLeftRight size={14} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      </div>
+      <div className="rail-section-position">
+        <label htmlFor={positionId}>Cut position</label>
+        <Tooltip
+          label="Center cut"
+          description="Move the plane to the middle of the model"
         >
           <button
             type="button"
             className="rail-section-icon"
-            onClick={onClose}
-            aria-label="Close section controls"
+            disabled={!active}
+            onClick={() => {
+              const center = (range.min + range.max) / 2;
+              onOffset(center);
+              onCommit(center);
+            }}
+            aria-label="Center cut"
           >
-            <X size={15} aria-hidden="true" />
+            <Crosshair size={14} aria-hidden="true" />
           </button>
         </Tooltip>
-      </div>
-      <div
-        className="rail-section-planes"
-        role="group"
-        aria-label="Section plane"
-      >
-        {PLANES.map(({ id, name }) => (
-          <button
-            key={id}
-            type="button"
-            className="rail-section-plane"
-            aria-label={`${name} (${id} plane)`}
-            aria-pressed={section.plane === id}
-            onClick={() => {
-              if (section.plane !== id) onPlane(id);
-            }}
-          >
-            <span>{name}</span>
-            <small>{id}</small>
-          </button>
-        ))}
-      </div>
-      <div className="rail-section-position">
-        <label htmlFor={positionId}>Cut position</label>
         <div className="rail-section-value">
           <input
             id={positionId}
@@ -179,6 +261,7 @@ export function SectionToolbox({
             min={range.min}
             max={range.max}
             step="any"
+            disabled={!active}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onBlur={commitPosition}
@@ -197,78 +280,39 @@ export function SectionToolbox({
           <span>{units}</span>
         </div>
       </div>
-      <input
-        type="range"
-        className="rail-section-slider"
-        min={range.min}
-        max={range.max}
-        step="any"
-        value={section.offset}
-        onChange={(event) => {
-          const offset = Number(event.target.value);
-          pendingSliderOffset.current = offset;
-          onOffset(offset);
-        }}
-        onPointerUp={commitSlider}
-        onPointerCancel={commitSlider}
-        onKeyUp={commitSlider}
-        onBlur={commitSlider}
-        aria-label="Section plane offset"
-        aria-valuetext={`${section.offset} ${units}`}
-      />
+      <div className="rail-section-track">
+        <input
+          type="range"
+          className="rail-section-slider"
+          min={range.min}
+          max={range.max}
+          step="any"
+          disabled={!active}
+          value={section.offset}
+          style={{ '--section-fill': `${fill}%` } as CSSProperties}
+          onChange={(event) => {
+            const offset = Number(event.target.value);
+            pendingSliderOffset.current = offset;
+            onOffset(offset);
+          }}
+          onPointerUp={commitSlider}
+          onPointerCancel={commitSlider}
+          onKeyUp={commitSlider}
+          onBlur={commitSlider}
+          aria-label="Section plane offset"
+          aria-valuetext={`${section.offset} ${units}`}
+        />
+        <div className="rail-section-ends" aria-hidden="true">
+          <span>{formatEnd(range.min)}</span>
+          <span>{formatEnd(range.max)}</span>
+        </div>
+      </div>
       <div className="rail-section-footer">
-        <Tooltip
-          label="Flip cut direction"
-          description="Show the other side of the plane"
-        >
-          <button
-            type="button"
-            className="rail-section-action"
-            onClick={onFlip}
-            disabled={!onFlip}
-            aria-label="Flip cut direction"
-            aria-pressed={section.flipped === true}
-          >
-            <ArrowLeftRight size={14} aria-hidden="true" />
-            Flip
-          </button>
-        </Tooltip>
-        <Tooltip
-          label="Center cut"
-          description="Move the plane to the middle of the model"
-        >
-          <button
-            type="button"
-            className="rail-section-action"
-            onClick={() => {
-              const center = (range.min + range.max) / 2;
-              onOffset(center);
-              onCommit(center);
-            }}
-            aria-label="Center cut"
-          >
-            <Crosshair size={14} aria-hidden="true" />
-            Center
-          </button>
-        </Tooltip>
-        <span
-          className={`rail-section-state is-${partial ? 'refused' : status.kind}`}
-          role="status"
-        >
-          <span className="rail-section-state-kind">
-            {partial ? 'Partial' : STATUS_LABELS[status.kind]}
-          </span>
-        </span>
-        <button
-          type="button"
-          className="rail-section-icon"
-          aria-label="Section details"
-          aria-expanded={detailsOpen}
-          aria-controls={detailId}
-          onClick={() => setDetailsOpen((open) => !open)}
-        >
-          <Info size={14} aria-hidden="true" />
-        </button>
+        <p id={detailId} className="rail-section-state-detail">
+          {active
+            ? status.detail
+            : 'The cut is off. Switch it on or pick a plane.'}
+        </p>
         <Tooltip
           label="Export section"
           description={
@@ -289,13 +333,6 @@ export function SectionToolbox({
           </button>
         </Tooltip>
       </div>
-      <p
-        id={detailId}
-        className="rail-section-state-detail"
-        hidden={!detailsOpen}
-      >
-        {status.detail}
-      </p>
     </div>
   );
 }

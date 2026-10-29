@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link2 } from 'lucide-react';
 import { StableLabel } from './StableLabel';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
+import { shareLinkCreationProblem } from '../lib/projectShareLink';
 
 /**
  * Share links of an end-to-end encrypted project, in the sharing dialog's
@@ -136,6 +137,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       projectId,
       mode
     );
+    const problem = shareLinkCreationProblem(created);
+    if (problem) throw new Error(problem);
     return { url: created.url };
   },
   async revoke(projectId, shareId) {
@@ -373,7 +376,7 @@ export function EncryptedShareLinks({
         <button
           type="button"
           className="primary sharing-share-create"
-          disabled={disabled}
+          disabled={disabled || state?.needsConfirmation}
           onClick={() =>
             void run('create', async () => {
               setCreated(null);
@@ -457,7 +460,8 @@ export function EncryptedShareLinks({
         ) : (
           <div className="sharing-share-notice" role="status">
             <span className="sharing-tag">
-              Links need your confirmation to keep opening for visitors.
+              Confirm sharing before creating a link. Existing links also need
+              confirmation to keep opening for visitors.
             </span>
             <button
               type="button"
@@ -567,7 +571,7 @@ export function EncryptedShareLinks({
                 <button
                   type="button"
                   className="sharing-row-action"
-                  disabled={busy !== null}
+                  disabled={busy !== null || row.status !== 'active'}
                   aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
                   onClick={() => void copy(row.url!, row.shareId)}
                 >

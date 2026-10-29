@@ -58,13 +58,20 @@ mark('bundle.evaluated');
 // waits for a connection before it loads, and a failure is only a missed
 // optimisation: each chunk still loads on demand.
 if (import.meta.env.VITE_E2E !== '1') {
+  const startupReady = new Promise<void>((resolve) => {
+    window.addEventListener('openzcad:startup-ready', () => resolve(), {
+      once: true
+    });
+  });
   window.addEventListener(
     'load',
     () =>
-      void loadWhenOnline(() => import('./lib/lazyChunkPrefetch')).then(
-        (m) => m.prefetchLazyChunks(),
-        () => undefined
-      ),
+      void startupReady
+        .then(() => loadWhenOnline(() => import('./lib/lazyChunkPrefetch')))
+        .then(
+          (m) => m.prefetchLazyChunks(),
+          () => undefined
+        ),
     { once: true }
   );
 }

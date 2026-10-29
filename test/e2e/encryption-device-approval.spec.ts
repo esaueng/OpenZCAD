@@ -122,7 +122,7 @@ for (const cancellation of ['stop', 'close', 'active'] as const) {
   });
 }
 
-test('certifies a new device approved by its full-hash scan code', async ({
+test('certifies a new device approved by its full-hash scan code', { tag: '@ci-smoke' }, async ({
   page,
   browser
 }) => {
@@ -267,6 +267,216 @@ test('two approval tabs retain one staged device and can both unlock it', async 
     }
   } finally {
     release();
+    await phone.context.close();
+  }
+});
+
+test('resumes comparison after an accepted response is lost', async ({
+  page,
+  browser
+}) => {
+  const server = createE2eeServer();
+  const { settings } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  let responses = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/respond')) responses += 1;
+  });
+  try {
+    const phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    await expect(
+      phoneSettings.getByRole('img', { name: 'Device approval QR code' })
+    ).toBeVisible();
+    await page.evaluate(() => {
+      const fetch = window.fetch.bind(window);
+      let dropped = false;
+      window.fetch = async (...args) => {
+        const response = await fetch(...args);
+        const input = args[0];
+        const url = input instanceof Request ? input.url : input;
+        if (
+          !dropped &&
+          new URL(url, window.location.href).pathname.endsWith('/respond') &&
+          response.ok
+        ) {
+          dropped = true;
+          throw new TypeError('Simulated comparison response loss');
+        }
+        return response;
+      };
+    });
+    await settings
+      .getByRole('button', { name: 'Compare codes' })
+      .click({ timeout: 10_000 });
+    await expect(
+      settings.getByText(
+        'Encryption keys are unavailable right now. Check your connection and try again.'
+      )
+    ).toBeVisible();
+    const phoneCode = phoneSettings.getByLabel('Approval code');
+    await expect(phoneCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    const resume = settings.getByRole('button', { name: 'Resume comparison' });
+    await expect(resume).toBeEnabled();
+    await resume.click();
+    const laptopCode = settings.getByLabel('Approval code');
+    await expect(laptopCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    expect(await laptopCode.textContent()).toBe(await phoneCode.textContent());
+    await phoneSettings.getByRole('button', { name: 'Codes match' }).click();
+    await settings
+      .getByRole('button', { name: 'Codes match, approve' })
+      .click();
+    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(
+      phoneSettings.getByText('Unlocked', { exact: true })
+    ).toBeVisible();
+    expect(responses).toBe(1);
+  } finally {
+    await phone.context.close();
+  }
+});
+
+test('restarts comparison after session lock before response delivery', async ({
+  page,
+  browser
+}, testInfo) => {
+  const server = createE2eeServer();
+  const { settings } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  const responses: unknown[] = [];
+  await page.route('**/api/e2ee/approvals/*/respond', async (route) => {
+    responses.push(route.request().postDataJSON());
+    if (responses.length === 1) await route.abort('failed');
+    else await route.fallback();
+  });
+  try {
+    const phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    await expect(
+      phoneSettings.getByRole('img', { name: 'Device approval QR code' })
+    ).toBeVisible();
+    await settings
+      .getByRole('button', { name: 'Compare codes' })
+      .click({ timeout: 10_000 });
+    await expect(
+      settings.getByText(
+        'Encryption keys are unavailable right now. Check your connection and try again.'
+      )
+    ).toBeVisible();
+    expect(responses).toHaveLength(1);
+    expect(
+      server.db.prepare('SELECT state FROM e2ee_device_approvals').get()
+    ).toEqual({ state: 'requested' });
+
+    // Deliver the same cross-tab lifecycle notices as session teardown.
+    // The ended notice permits reopening only after a fresh session read.
+    await page.evaluate(() => {
+      const channel = new BroadcastChannel('openzcad:e2ee-key-session:v1');
+      channel.postMessage({
+        id: 'approval-lock-prepare',
+        operation: 'approval-lock',
+        phase: 'prepare'
+      });
+      channel.close();
+    });
+    await expect(
+      settings.getByText(
+        'Encryption keys are locked while the account session is checked.'
+      )
+    ).toBeVisible();
+    const rechecked = page.waitForResponse('**/api/session');
+    await page.evaluate(() => {
+      const channel = new BroadcastChannel('openzcad:e2ee-key-session:v1');
+      channel.postMessage({
+        id: 'approval-lock-ended',
+        operation: 'approval-lock',
+        phase: 'ended'
+      });
+      channel.close();
+    });
+    await rechecked;
+    await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+    await settings.getByRole('button', { name: 'Compare codes' }).click();
+    const phoneCode = phoneSettings.getByLabel('Approval code');
+    const laptopCode = settings.getByLabel('Approval code');
+    await expect(phoneCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    await expect(laptopCode).toHaveText(/^\d{3} \d{3}$/, { timeout: 15_000 });
+    expect(await laptopCode.textContent()).toBe(await phoneCode.textContent());
+    expect(responses).toHaveLength(2);
+    expect(responses[1]).toEqual(responses[0]);
+    await testInfo.attach('restarted-comparison', {
+      body: await page.screenshot({
+        path: testInfo.outputPath('restarted-comparison.png')
+      }),
+      contentType: 'image/png'
+    });
+    await phoneSettings.getByRole('button', { name: 'Codes match' }).click();
+    await settings
+      .getByRole('button', { name: 'Codes match, approve' })
+      .click();
+    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(
+      phoneSettings.getByText('Unlocked', { exact: true })
+    ).toBeVisible();
+  } finally {
+    await phone.context.close();
+  }
+});
+
+test('resumes the requesting device comparison after reloading its browser', async ({
+  page,
+  browser
+}) => {
+  const server = createE2eeServer();
+  const { settings } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  try {
+    let phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    await expect(
+      phoneSettings.getByRole('img', { name: 'Device approval QR code' })
+    ).toBeVisible();
+    await settings
+      .getByRole('button', { name: 'Compare codes' })
+      .click({ timeout: 10_000 });
+    await expect(phoneSettings.getByLabel('Approval code')).toHaveText(
+      /^\d{3} \d{3}$/,
+      { timeout: 15_000 }
+    );
+    const original = await phoneSettings
+      .getByLabel('Approval code')
+      .textContent();
+    await phone.page.reload();
+    phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Resume approval' })
+      .click();
+    await expect(phoneSettings.getByLabel('Approval code')).toHaveText(
+      original!,
+      { timeout: 15_000 }
+    );
+    await expect(settings.getByLabel('Approval code')).toHaveText(original!);
+    await phoneSettings.getByRole('button', { name: 'Codes match' }).click();
+    await settings
+      .getByRole('button', { name: 'Codes match, approve' })
+      .click();
+    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(
+      phoneSettings.getByText('Unlocked', { exact: true })
+    ).toBeVisible();
+  } finally {
     await phone.context.close();
   }
 });

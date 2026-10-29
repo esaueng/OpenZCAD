@@ -55,6 +55,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createId,
+  compareProjectSummaries,
   ENCRYPTED_PROJECTS_REQUIRED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
@@ -70,6 +71,20 @@ import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
+import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
+import { prioritizeShelfEntries } from './projectShelf';
+
+/** Optional presentation updates; document opens still perform full verification. */
+export interface ProjectListingProgress {
+  isCurrent(): boolean;
+  priorityProjectIds?(projects: readonly ProjectSummary[]): readonly string[];
+  onVerified(project: ProjectSummary): void;
+}
+
+/** Client-only presentation state; never part of the server/storage contract. */
+interface ShelfListingResponse extends ListProjectsResponse {
+  pendingEncryptedProjectIds?: ReadonlySet<string>;
+}
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -569,6 +584,8 @@ export const api = {
       { method: 'POST', body: '{}' }
     ),
   storageUsage: () => requestJson<AccountStorageUsage>('/api/account/storage'),
+  exportAccountData: () =>
+    requestJson<Record<string, unknown>>('/api/account/export'),
   accountDeletionPreview: (scope: AccountDeletionScope) =>
     requestJson<AccountDeletionPreview>(
       `/api/account/deletion-preview?scope=${encodeURIComponent(scope)}`
@@ -585,19 +602,75 @@ export const api = {
    * otherwise. A thumbnail is named by its blob id, whose reference this
    * page then holds, so the shelf reads it through the decode worker.
    */
-  listProjects: async (): Promise<ListProjectsResponse> => {
+  listProjects: async (
+    progress?: ProjectListingProgress
+  ): Promise<ShelfListingResponse> => {
+    const revision = getKeySessionRevision();
+    const isCurrent = () =>
+      isCurrentKeySession(revision) && (progress?.isCurrent() ?? true);
     const { encryptedProjectInfo, ...listing } = await requestJson<
       ListProjectsResponse & E2eeListProjectsExtension
     >('/api/projects');
+    const pending = new Set<string>(
+      Array.isArray(listing.projects)
+        ? listing.projects
+            .filter((project) => project.storageFormat === 2)
+            .map((project) => project.projectId)
+        : []
+    );
+    const unverified = (): ShelfListingResponse =>
+      pending.size
+        ? { ...listing, pendingEncryptedProjectIds: pending }
+        : listing;
+    if (progress && !isCurrent()) return unverified();
     if (Array.isArray(listing.projects))
       rememberProjectFormats(listing.projects);
-    if (!encryptedProjectInfo?.length) return listing;
+    if (!encryptedProjectInfo?.length) return unverified();
+    if (progress) {
+      const projects = new Map<string, ProjectSummary>(
+        listing.projects.map((p) => [p.projectId, p])
+      );
+      // The HTTP listing is enough to draw cards and establish storage formats.
+      // Names and thumbnail references arrive only after the existing verifier.
+      void encryptedProjects()
+        .then((module) =>
+          module.encryptedProjectShelf(
+            prioritizeShelfEntries(encryptedProjectInfo, [
+              ...(progress.priorityProjectIds?.(listing.projects) ?? []),
+              ...[...listing.projects]
+                .sort(compareProjectSummaries)
+                .map((project) => project.projectId)
+            ]),
+            {
+              isCurrent,
+              onEntry(projectId, entry) {
+                const project = projects.get(projectId);
+                if (!project || !isCurrent()) return;
+                progress.onVerified({
+                  ...project,
+                  name: entry.name,
+                  ...(entry.thumbnailBlobId
+                    ? {
+                        thumbnailArtifactId:
+                          entry.thumbnailBlobId as ProjectSummary['thumbnailArtifactId']
+                      }
+                    : {})
+                });
+              }
+            }
+          )
+        )
+        .catch(() => undefined);
+      return unverified();
+    }
     try {
       const shelf = await (
         await encryptedProjects()
       ).encryptedProjectShelf(encryptedProjectInfo);
+      if (!isCurrent()) return unverified();
+      for (const id of shelf.keys()) pending.delete(id);
       return {
-        ...listing,
+        ...unverified(),
         projects: listing.projects.map((project) => {
           const entry = shelf.get(project.projectId);
           return entry === undefined
@@ -615,7 +688,7 @@ export const api = {
         })
       };
     } catch {
-      return listing;
+      return unverified();
     }
   },
   /**

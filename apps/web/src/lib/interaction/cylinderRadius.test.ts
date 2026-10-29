@@ -3,9 +3,12 @@ import {
   cylinderRadiusSnapStep,
   cylinderRadiusTolerance,
   cylinderRadialFrame,
+  findResizedCylinderFace,
+  isUnchangedCylinderRadius,
   isValidCylinderRadius,
   radiusFromRadialDelta,
   sameCylinderAxis,
+  snapCylinderRadius,
   supportsRadialCylinderPreview,
   cylinderPreviewProfile
 } from './cylinderRadius';
@@ -244,5 +247,97 @@ describe('round rim cylinder preview eligibility', () => {
         ])
       )
     ).toBeNull();
+  });
+});
+
+describe('hole diameter drag', () => {
+  it('snaps the diameter it shows, not the radius underneath', () => {
+    // At 100 px per mm the step is 0.1: on the radius that is Ø 10.4 or
+    // Ø 10.2 apart, on the diameter it reads Ø 10.3.
+    expect(snapCylinderRadius(5.16, 1 / 100, 'diameter') * 2).toBeCloseTo(
+      10.3,
+      9
+    );
+    expect(snapCylinderRadius(5.16, 1 / 100, 'radius')).toBeCloseTo(5.2, 9);
+    // Smaller on screen, coarser steps: whole millimetres of diameter.
+    expect(snapCylinderRadius(5.16, 1 / 10, 'diameter') * 2).toBe(10);
+  });
+
+  it('treats a value back at the start as no edit, by each edit gate', () => {
+    // Through-hole resize: 1e-6, or a millionth of the radius.
+    expect(isUnchangedCylinderRadius(3, 3, 'through-hole')).toBe(true);
+    expect(isUnchangedCylinderRadius(3 + 1e-7, 3, 'through-hole')).toBe(true);
+    expect(isUnchangedCylinderRadius(3.01, 3, 'through-hole')).toBe(false);
+    expect(isUnchangedCylinderRadius(100.0005, 100, 'through-hole')).toBe(
+      false
+    );
+    // Direct cylindrical-face resize: 1e-5 of the radius, so 100 → 100.0005
+    // is refused by the kernel and must not be sent.
+    expect(isUnchangedCylinderRadius(100.0005, 100, 'cylindrical-face')).toBe(
+      true
+    );
+    expect(isUnchangedCylinderRadius(100.002, 100, 'cylindrical-face')).toBe(
+      false
+    );
+    expect(
+      isUnchangedCylinderRadius(1e-4 + 5e-10, 1e-4, 'cylindrical-face')
+    ).toBe(true);
+    // A primitive's radius parameter rebuilds any change: 100 → 100.0005
+    // is a real edit there, and only rounding noise is none.
+    expect(
+      isUnchangedCylinderRadius(100.0005, 100, 'primitive-parameter')
+    ).toBe(false);
+    expect(
+      isUnchangedCylinderRadius(0.1 + 0.2, 0.3, 'primitive-parameter')
+    ).toBe(true);
+  });
+
+  it('finds the resized bore on the same axis to keep it selected', () => {
+    const bore = (
+      topologyId: string,
+      radius: number,
+      at: { x: number; y: number }
+    ): FaceTopology =>
+      ({
+        topologyId,
+        hash: radius,
+        geometry: {
+          surfaceType: 'cylinder',
+          radius,
+          diameter: radius * 2,
+          axisStart: { ...at, z: 0 },
+          axisEnd: { ...at, z: 10 },
+          center: { ...at, z: 5 },
+          area: 0
+        }
+      }) as FaceTopology;
+    const faces = [
+      bore('other-hole', 2, { x: 34, y: 0 }),
+      bore('bore', 2, { x: 0, y: 34 }),
+      bore('hub', 12, { x: 0, y: 0 })
+    ];
+    const axisStart = { x: 0, y: 34, z: -0.5 };
+    const axisEnd = { x: 0, y: 34, z: 3 };
+    expect(
+      findResizedCylinderFace(faces, axisStart, axisEnd, 2)?.topologyId
+    ).toBe('bore');
+    expect(findResizedCylinderFace(faces, axisStart, axisEnd, 3)).toBeNull();
+    expect(
+      findResizedCylinderFace(
+        [...faces, bore('twin', 2, { x: 0, y: 34 })],
+        axisStart,
+        axisEnd,
+        2
+      )
+    ).toBeNull();
+    // A separate band on the same axis and radius, further along it, is not
+    // the edited wall and does not make the pick ambiguous.
+    const band = bore('lower-band', 2, { x: 0, y: 34 });
+    band.geometry!.axisStart = { x: 0, y: 34, z: 20 };
+    band.geometry!.axisEnd = { x: 0, y: 34, z: 30 };
+    expect(
+      findResizedCylinderFace([...faces, band], axisStart, axisEnd, 2)
+        ?.topologyId
+    ).toBe('bore');
   });
 });

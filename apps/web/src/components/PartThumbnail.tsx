@@ -1,8 +1,24 @@
-import { useEffect, useRef, useState, type Ref } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type Ref
+} from 'react';
 import type { ProjectSummary } from '@openzcad/shared';
+import {
+  getKeySessionRevision,
+  getKeySessionVersion,
+  isCurrentKeySession,
+  isKeySessionActive,
+  subscribeKeySession
+} from '../lib/e2ee/keySession';
+import { projectNeedsUpdate } from '../lib/projectShelf';
 
 interface PartThumbnailProps {
   project: ProjectSummary;
+  accountId?: string | null;
   /**
    * Reads this device's cached preview. It must not load the project document:
    * the shelf has to stay reachable for a part whose source is far too large to
@@ -22,29 +38,85 @@ interface PartThumbnailProps {
 
 interface ThumbnailResult {
   key: string;
+  projectId: string;
+  authorization: string;
+  protected: boolean;
   /** Null is a real empty part; undefined means there is no preview to show. */
   source: string | null | undefined;
 }
 
-const thumbnailPromises = new Map<string, Promise<string | null | undefined>>();
+const thumbnailPromises = new Map<
+  string,
+  Promise<ThumbnailResult | undefined>
+>();
+// Only already-decoded images/known-empty answers are reused on remount. Keep
+// one answer per project, bounded independently of the number of refreshes.
+const thumbnails = new Map<string, ThumbnailResult>();
+const latestRequest = new Map<string, string>();
+const MAX_RETAINED_THUMBNAILS = 256;
+subscribeKeySession(() => {
+  for (const [id, value] of thumbnails)
+    if (value.protected) thumbnails.delete(id);
+  for (const key of thumbnailPromises.keys())
+    if (key.startsWith('protected:')) thumbnailPromises.delete(key);
+  for (const [id, key] of latestRequest)
+    if (key.startsWith('protected:')) latestRequest.delete(id);
+});
+
+async function decodeThumbnail(source: string) {
+  const image = new Image();
+  if (typeof image.decode === 'function') {
+    image.src = source;
+    await image.decode();
+  } else {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () =>
+        reject(new Error('Thumbnail could not be decoded.'));
+      image.src = source;
+    });
+  }
+}
+
+function cachedThumbnail(
+  projectId: string,
+  authorization: string,
+  protectedImage: boolean
+): ThumbnailResult | undefined {
+  const cached = thumbnails.get(projectId);
+  // A device image already visible before encryption is a safe seed, but a
+  // protected image is never carried into another account/key session.
+  return cached &&
+    (cached.authorization === authorization ||
+      (!cached.protected && protectedImage))
+    ? cached
+    : undefined;
+}
 
 function thumbnailFor(
   cacheKey: string,
+  authorization: string,
+  protectedImage: boolean,
+  isCurrent: () => boolean,
   project: ProjectSummary,
   loadThumbnail: PartThumbnailProps['loadThumbnail'],
   publishThumbnail: PartThumbnailProps['publishThumbnail']
-): Promise<string | null | undefined> {
+): Promise<ThumbnailResult | undefined> {
+  latestRequest.set(project.projectId, cacheKey);
+  const ready = thumbnails.get(project.projectId);
+  if (ready?.key === cacheKey && ready.authorization === authorization) {
+    if (ready.source && !project.thumbnailArtifactId && isCurrent())
+      void publishThumbnail(project).catch(() => undefined);
+    return Promise.resolve(ready);
+  }
   const cached = thumbnailPromises.get(cacheKey);
   if (cached) {
     return cached;
   }
-  for (const key of thumbnailPromises.keys()) {
-    if (key !== cacheKey && key.startsWith(`${project.projectId}:`)) {
-      thumbnailPromises.delete(key);
-    }
-  }
   const pending = loadThumbnail(project)
     .then((source) => {
+      if (!isCurrent() || latestRequest.get(project.projectId) !== cacheKey)
+        return undefined;
       // Only a cache miss reaches the publisher. A cached null is an answer —
       // the part is genuinely empty — and re-deriving it every visit would
       // undo the caching this store exists for.
@@ -59,18 +131,42 @@ function thumbnailFor(
       }
       return source;
     })
-    .catch(() => {
-      thumbnailPromises.delete(cacheKey);
-      return undefined;
+    .then(async (source) => {
+      if (
+        source === undefined ||
+        !isCurrent() ||
+        latestRequest.get(project.projectId) !== cacheKey
+      )
+        return undefined;
+      if (source) await decodeThumbnail(source);
+      if (!isCurrent() || latestRequest.get(project.projectId) !== cacheKey)
+        return undefined;
+      const result = {
+        key: cacheKey,
+        projectId: project.projectId,
+        authorization,
+        protected: protectedImage,
+        source
+      };
+      thumbnails.delete(project.projectId);
+      thumbnails.set(project.projectId, result);
+      if (thumbnails.size > MAX_RETAINED_THUMBNAILS) {
+        const oldest = thumbnails.keys().next().value!;
+        thumbnails.delete(oldest);
+        latestRequest.delete(oldest);
+      }
+      return result;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (thumbnailPromises.get(cacheKey) === pending)
+        thumbnailPromises.delete(cacheKey);
+      if (
+        !thumbnails.has(project.projectId) &&
+        latestRequest.get(project.projectId) === cacheKey
+      )
+        latestRequest.delete(project.projectId);
     });
-  void pending.then((source) => {
-    // A miss before sign-in or before the account listing arrived must remain
-    // retryable when those inputs change. Successful images and real empty
-    // projects stay memoized.
-    if (source === undefined) {
-      thumbnailPromises.delete(cacheKey);
-    }
-  });
   thumbnailPromises.set(cacheKey, pending);
   return pending;
 }
@@ -115,27 +211,62 @@ function ThumbnailPlaceholder({
 
 export function PartThumbnail({
   project,
+  accountId = null,
   loadThumbnail,
   publishThumbnail
 }: PartThumbnailProps) {
-  const cacheKey = `${project.projectId}:${project.updatedAt}:${project.thumbnailArtifactId ?? ''}`;
-  const previewRef = useRef<SVGSVGElement>(null);
-  const [result, setResult] = useState<ThumbnailResult | null>(null);
+  const sessionVersion = useSyncExternalStore(
+    subscribeKeySession,
+    getKeySessionVersion,
+    getKeySessionVersion
+  );
+  const protectedImage = project.storageFormat === 2;
+  const revision = getKeySessionRevision();
+  const authorized =
+    !projectNeedsUpdate(project) &&
+    (!protectedImage || (accountId !== null && isKeySessionActive()));
+  const authorization = protectedImage
+    ? `protected:${accountId}:${sessionVersion}`
+    : 'device';
+  const cacheKey = `${authorization}:${project.projectId}:${project.updatedAt}:${project.documentVersion ?? ''}:${project.thumbnailArtifactId ?? ''}`;
+  const previewRef = useRef<Element | null>(null);
+  const attachPreview = useCallback(
+    (node: SVGSVGElement | HTMLImageElement | null) => {
+      previewRef.current = node;
+    },
+    []
+  );
+  const [result, setResult] = useState<ThumbnailResult | undefined>(() =>
+    authorized
+      ? cachedThumbnail(project.projectId, authorization, protectedImage)
+      : undefined
+  );
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const authorizationRef = useRef(authorization);
+  authorizationRef.current = authorization;
 
   useEffect(() => {
     let active = true;
     let started = false;
+    if (!authorized) return;
+    const isCurrent = () =>
+      authorizationRef.current === authorization &&
+      (!protectedImage || isCurrentKeySession(revision));
     const load = () => {
-      if (!active || started) return;
+      if (!active || started || !isCurrent()) return;
       started = true;
       void thumbnailFor(
         cacheKey,
-        project,
+        authorization,
+        protectedImage,
+        isCurrent,
+        projectRef.current,
         loadThumbnail,
         publishThumbnail
-      ).then((source) => {
-        if (active) {
-          setResult({ key: cacheKey, source });
+      ).then((next) => {
+        if (active && next && isCurrent()) {
+          setResult(next);
         }
       });
     };
@@ -161,14 +292,34 @@ export function PartThumbnail({
       active = false;
       observer?.disconnect();
     };
-  }, [publishThumbnail, cacheKey, loadThumbnail, project]);
+  }, [
+    publishThumbnail,
+    cacheKey,
+    loadThumbnail,
+    authorization,
+    authorized,
+    protectedImage,
+    revision
+  ]);
 
-  if (result?.key === cacheKey) {
-    if (result.source) {
-      return <img src={result.source} alt="" draggable={false} />;
-    }
-    return <ThumbnailPlaceholder empty={result.source === null} />;
+  const visible =
+    authorized &&
+    result?.projectId === project.projectId &&
+    (result.authorization === authorization ||
+      (!result.protected && protectedImage))
+      ? result
+      : authorized
+        ? cachedThumbnail(project.projectId, authorization, protectedImage)
+        : undefined;
+  if (visible?.source) {
+    return (
+      <img ref={attachPreview} src={visible.source} alt="" draggable={false} />
+    );
   }
-
-  return <ThumbnailPlaceholder empty={false} previewRef={previewRef} />;
+  return (
+    <ThumbnailPlaceholder
+      empty={visible?.key === cacheKey && visible.source === null}
+      previewRef={attachPreview}
+    />
+  );
 }

@@ -37,7 +37,7 @@ export interface MigrationPlaintextSource {
   ): Promise<ProjectDocument | null>;
   listArtifacts(projectId: string): Promise<ArtifactRecord[]>;
   artifact(artifactId: string): Promise<ArtifactRecord | null>;
-  download(artifactId: string): Promise<Blob>;
+  download(artifactId: string, maxBytes?: number): Promise<Blob>;
   measurements(projectId: string): Promise<PlaintextMeasurements>;
   workspaceSessions(projectId: string): Promise<ProjectWorkspaceSession[]>;
 }
@@ -148,10 +148,35 @@ export function createMigrationPlaintextSource(
         throw error;
       }
     },
-    download: async (artifactId) =>
-      (
-        await get(`/api/artifacts/${encodeURIComponent(artifactId)}/download`)
-      ).blob(),
+    async download(artifactId, maxBytes) {
+      const response = await get(
+        `/api/artifacts/${encodeURIComponent(artifactId)}/download`
+      );
+      if (maxBytes === undefined) return response.blob();
+      const reader = response.body?.getReader();
+      if (!reader) return new Blob([]);
+      const chunks: Uint8Array<ArrayBuffer>[] = [];
+      let length = 0;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          length += value.byteLength;
+          if (length > maxBytes) {
+            await reader.cancel();
+            throw new ApiError(
+              409,
+              'Stored rebuild data exceeds the size recorded by this project.',
+              'E2EE_MIGRATION_FILE_MISSING'
+            );
+          }
+          chunks.push(new Uint8Array(value));
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return new Blob(chunks);
+    },
     measurements: (projectId) => json(`${project(projectId)}/measurements`),
     workspaceSessions: async (projectId) =>
       (

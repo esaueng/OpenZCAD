@@ -132,7 +132,7 @@ export function AssistantConsentChip({
       </span>
       <button
         type="button"
-        className="assistant-foot-action"
+        className="assistant-consent-stop"
         aria-label="Stop the assistant reading this project"
         onClick={onStop}
       >

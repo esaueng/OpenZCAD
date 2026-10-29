@@ -396,7 +396,9 @@ describe('deployment configuration preflight', () => {
       );
 
       const migration = officialConfig();
-      Object.assign(migration.vars, { E2EE_MIGRATION_ENABLED: 'true' });
+      Object.assign(migration.vars, {
+        E2EE_PROJECTS_ENABLED: 'false', E2EE_MIGRATION_ENABLED: 'true'
+      });
       expect(validateDeploymentConfig(migration, officialOptions)).toEqual([
         'vars.E2EE_MIGRATION_ENABLED requires vars.E2EE_PROJECTS_ENABLED to be "true"'
       ]);

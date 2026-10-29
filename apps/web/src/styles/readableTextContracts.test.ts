@@ -35,8 +35,8 @@ const READABLE: readonly [string, string][] = [
   ['assistant.css', '.assistant-day-rule'],
   ['assistant.css', '.assistant-turn-time'],
   ['assistant.css', '.assistant-pending-hint'],
-  ['assistant.css', '.assistant-foot'],
-  ['assistant.css', '.assistant-foot-action']
+  ['assistant.css', '.assistant-model'],
+  ['assistant.css', '.assistant-head-action']
 ];
 
 describe('readable text contrast', () => {

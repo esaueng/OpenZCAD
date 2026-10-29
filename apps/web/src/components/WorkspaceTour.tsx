@@ -190,6 +190,10 @@ export function WorkspaceTour({
           onClick={() => {
             if (last) {
               releaseFocus();
+              // Finish must notify the parent before the card disappears:
+              // a reload can arrive before a passive completion effect runs.
+              onDismiss();
+              return;
             }
             setIndex((current) => current + 1);
           }}

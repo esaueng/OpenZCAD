@@ -253,6 +253,34 @@ describe.each(['memory', 'indexeddb'] as const)(
       expect(
         (await left.loadDevice(USER))?.approval?.confirmedApproverKey
       ).toBe('new confirmation');
+      const comparison = {
+        commitment: 'original commitment',
+        responder: { key: 'original key', nonce: 'original nonce' },
+        confirmed: false
+      };
+      for (const next of [
+        comparison,
+        { ...comparison, commitment: 'changed commitment' },
+        {
+          ...comparison,
+          responder: { ...comparison.responder, key: 'changed key' }
+        },
+        {
+          ...comparison,
+          responder: { ...comparison.responder, nonce: 'changed nonce' }
+        },
+        { ...comparison, confirmed: true },
+        undefined
+      ]) {
+        const before = (await right.loadDevice(USER))!;
+        await left.saveDevice({
+          ...before,
+          approval: { ...before.approval!, comparison: next }
+        });
+        expect(await right.replaceDeviceIfCurrent(before, snapshot)).toBe(
+          false
+        );
+      }
       await left.deleteDevice(USER);
       expect(await right.replaceDeviceIfCurrent(pending, snapshot)).toBe(false);
       expect(await left.loadDevice(USER)).toBeNull();

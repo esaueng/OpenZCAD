@@ -389,28 +389,7 @@ async function createInvitation(
   const windowStart =
     Math.floor(seconds / PROJECT_INVITATION_RATE_WINDOW_SECONDS) *
     PROJECT_INVITATION_RATE_WINDOW_SECONDS;
-  const rate = await db
-    .prepare(
-      `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
-       VALUES (?, ?, 1)
-       ON CONFLICT(bucket) DO UPDATE SET
-         request_count = CASE
-           WHEN auth_rate_limits.window_start = excluded.window_start
-             THEN auth_rate_limits.request_count + 1
-           ELSE 1
-         END,
-         window_start = excluded.window_start
-       RETURNING request_count`
-    )
-    .bind(`project-invite-account:${userId}`, windowStart)
-    .first<{ request_count: number }>();
-  if (!rate || rate.request_count > PROJECT_INVITATION_RATE_LIMIT) {
-    refuse(
-      429,
-      'INVITATION_RATE_LIMIT',
-      'Too many project invitations were created recently.'
-    );
-  }
+  const bucket = `project-invite-account:${userId}`;
   const token = createProjectInvitationToken();
   const tokenHash = await hashProjectInvitationToken(token);
   const emailHex = toHex(emailHash);
@@ -429,7 +408,9 @@ async function createInvitation(
                AND revoked_at IS NULL AND expires_at > ?)
            AND (SELECT COUNT(*) FROM e2ee_invitations
              WHERE project_id = ? AND completed_at IS NULL
-               AND revoked_at IS NULL AND expires_at > ?) < ?`
+               AND revoked_at IS NULL AND expires_at > ?) < ?
+           AND COALESCE((SELECT request_count FROM auth_rate_limits
+             WHERE bucket = ? AND window_start = ?), 0) < ?`
       )
       .bind(
         decoded.invitationId,
@@ -451,10 +432,43 @@ async function createInvitation(
         nowMs,
         projectId,
         nowMs,
-        PROJECT_ACTIVE_INVITATION_CAP
+        PROJECT_ACTIVE_INVITATION_CAP,
+        bucket,
+        windowStart,
+        PROJECT_INVITATION_RATE_LIMIT
+      ),
+    // Charge only an invitation whose guarded insert landed. The quota
+    // predicate and counter share this transaction, including concurrent
+    // requests and the plaintext routes' account/window bucket.
+    db
+      .prepare(
+        `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
+       SELECT ?, ?, 1 WHERE changes() = 1
+       ON CONFLICT(bucket) DO UPDATE SET
+         request_count = CASE
+           WHEN auth_rate_limits.window_start = excluded.window_start
+             THEN auth_rate_limits.request_count + 1
+           ELSE 1
+         END,
+         window_start = excluded.window_start`
       )
+      .bind(bucket, windowStart)
   ]);
   if ((inserted?.meta?.changes ?? 0) !== 1) {
+    const rate = await db
+      .prepare(
+        `SELECT request_count FROM auth_rate_limits
+       WHERE bucket = ? AND window_start = ?`
+      )
+      .bind(bucket, windowStart)
+      .first<{ request_count: number }>();
+    if ((rate?.request_count ?? 0) >= PROJECT_INVITATION_RATE_LIMIT) {
+      refuse(
+        429,
+        'INVITATION_RATE_LIMIT',
+        'Too many project invitations were created recently.'
+      );
+    }
     const duplicate = await db
       .prepare(
         `SELECT 1 AS found FROM e2ee_invitations

@@ -113,6 +113,7 @@ import {
 } from './lib/localProjectStore';
 import {
   Suspense,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -183,7 +184,6 @@ import {
   createCheckpoint,
   createFeatureOnlyIds,
   createSavePoint,
-  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -199,7 +199,6 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
-  normalizeDocumentHistory,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -360,6 +359,7 @@ import {
   announceKeySessionChange,
   blockKeySession,
   getKeySessionRevision,
+  isCurrentKeySession,
   subscribeKeySession,
   type KeySessionEvent
 } from './lib/e2ee/keySession';
@@ -390,6 +390,8 @@ import {
   isProjectDocumentUnavailableError,
   isProjectFormatUnsupportedError
 } from './lib/api';
+import type { ProjectListingProgress } from './lib/api';
+import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
@@ -475,7 +477,11 @@ import {
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
-import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
+import {
+  modalHoldsKeyboard,
+  modalLendsWorkspaceKeys,
+  useModalFocus
+} from './lib/useModalFocus';
 import {
   downloadText,
   evalParamValue,
@@ -563,6 +569,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
+import { SharePage, type SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import {
   WorkspaceAppShell,
@@ -582,8 +589,9 @@ import {
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import {
-  captureProjectShareLink,
+  captureProjectShareRequest,
   isEncryptedShareLink,
+  shareLinkFromHash,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
@@ -677,6 +685,9 @@ import {
 } from './lib/selectionFeature';
 import {
   cylinderRadialFrame,
+  type CylinderRadiusEdit,
+  findResizedCylinderFace,
+  isUnchangedCylinderRadius,
   isValidCylinderRadius,
   sameCylinderAxis,
   supportsRadialCylinderPreview,
@@ -1112,15 +1123,15 @@ const LazyCommandCard = lazyWithStaleChunkNotice(() =>
     default: module.CommandCard
   }))
 );
-// The pick's verbs and its refusal: drawn on every selection, but only once
+// The pick's name and its refusal: drawn on every selection, but only once
 // a model is open, so they wait with the workspace rather than the launcher.
-const LazySelectionCard = lazyWithStaleChunkNotice(() =>
-  import('./components/SelectionCard').then((module) => ({
-    default: module.SelectionCard
+const LazySelectionReadout = lazyWithStaleChunkNotice(() =>
+  import('./components/SelectionRail').then((module) => ({
+    default: module.SelectionReadout
   }))
 );
 const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
-  import('./components/SelectionCard').then((module) => ({
+  import('./components/SelectionRail').then((module) => ({
     default: module.SelectionRefusal
   }))
 );
@@ -1315,7 +1326,7 @@ const MeasurementDock = withSuspense(LazyMeasurementDock);
 
 const CommandCard = withSuspense(LazyCommandCard);
 
-const SelectionCard = withSuspense(LazySelectionCard);
+const SelectionReadout = withSuspense(LazySelectionReadout);
 
 const SelectionRefusal = withSuspense(LazySelectionRefusal);
 
@@ -1453,11 +1464,19 @@ import {
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
+  withVerifiedShelfMetadata,
+  retainPendingShelfOrder,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail
 } from './lib/projectShelf';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
+import {
+  cachedShelfNames,
+  forgetShelfProjectNames,
+  rememberVerifiedShelfName,
+  withCachedShelfNames
+} from './lib/projectShelfNames';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
@@ -1601,13 +1620,13 @@ import {
   clearUnresolvedConflict,
   conflictFromDocuments,
   hasUnresolvedConflict,
-  recoveryCopyName,
-  recoveryCopyNote,
+  conflictCopyNote,
   resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
   type ProjectConflict
 } from './lib/conflictRecovery';
+import { localConflictCopy } from './lib/conflictLocalCopy';
 import {
   buildModelingOperationSubmission,
   modelingFaceOptions,
@@ -1942,7 +1961,11 @@ const organizationBackground = new OrganizationMirrorBackground();
  */
 async function loadProjectSummaries(
   accountId: string | null,
-  allowPurge = true
+  allowPurge = true,
+  options?: {
+    local?: Promise<ProjectSummary[]>;
+    progress?: ProjectListingProgress;
+  }
 ): Promise<{
   projects: ProjectSummary[];
   remoteReached: boolean;
@@ -1954,6 +1977,7 @@ async function loadProjectSummaries(
    */
   cloudProjectIds: Set<string>;
 }> {
+  const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
   const unavailableAs =
@@ -1967,12 +1991,50 @@ async function loadProjectSummaries(
       }
       return fallback;
     };
+  let priorityProjects: ProjectSummary[] = [];
+  const localRead = (options?.local ?? listLocalProjects())
+    .catch(unavailableAs<ProjectSummary[]>([]))
+    .then((projects) => {
+      priorityProjects = projects;
+      return projects;
+    });
+  const progress = options?.progress;
+  const shelfNames = cachedShelfNames(accountId);
   const [local, organizationSnapshots, remote] = await Promise.all([
-    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
+    localRead,
     listLocalProjectOrganizationSnapshots().catch(
       unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
     ),
-    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+    signedIn
+      ? api
+          .listProjects(
+            progress
+              ? {
+                  ...progress,
+                  priorityProjectIds: (projects) =>
+                    retainPendingShelfOrder(
+                      mergeProjectSummaries(priorityProjects, [...projects]),
+                      priorityProjects,
+                      new Set(
+                        projects
+                          .filter((project) => project.storageFormat === 2)
+                          .map((project) => project.projectId)
+                      )
+                    ).map((project) => project.projectId),
+                  onVerified(project) {
+                    if (
+                      !isCurrentKeySession(keySessionRevision) ||
+                      !progress.isCurrent()
+                    )
+                      return;
+                    rememberVerifiedShelfName(accountId, project);
+                    progress.onVerified(project);
+                  }
+                }
+              : undefined
+          )
+          .catch(() => null)
+      : Promise.resolve(null)
   ]);
   const localOrganizations = new Map(
     [...organizationSnapshots].map(([id, snapshot]) => [
@@ -2016,9 +2078,35 @@ async function loadProjectSummaries(
         unavailableAs(localOrganizations)
       )
     : localOrganizations;
-  const projects = applyLocalProjectOrganizations(
-    mergeProjectSummaries(local, remoteProjects),
-    settledOrganizations
+  const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
+    ? remote?.pendingEncryptedProjectIds
+    : undefined;
+  if (accountId && isCurrentKeySession(keySessionRevision)) {
+    if (remote) forgetShelfProjectNames(accountId, [...shelfNames.keys()].filter((id) => !remoteIds.has(id)), scope.ownsDiscovery);
+    for (const project of remoteProjects) {
+      if (
+        project.storageFormat === 2 &&
+        !remote?.pendingEncryptedProjectIds?.has(project.projectId)
+      )
+        rememberVerifiedShelfName(accountId, project);
+    }
+  }
+  const projects = retainPendingShelfOrder(
+    applyLocalProjectOrganizations(
+      withCachedShelfNames(
+        mergeProjectSummaries(
+          local,
+          remoteProjects,
+          pendingEncryptedProjectIds
+        ),
+        shelfNames,
+        pendingEncryptedProjectIds,
+        local
+      ),
+      settledOrganizations
+    ),
+    local,
+    pendingEncryptedProjectIds
   ).filter(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
@@ -2028,40 +2116,6 @@ async function loadProjectSummaries(
     remoteReached: Boolean(remote),
     cloudProjectIds: remoteIds
   };
-}
-
-function localRecoveryCopy(
-  source: ProjectDocument,
-  label: 'Recovery' | 'Local copy'
-): ProjectDocument {
-  const copy = structuredClone(source);
-  const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
-  const name = recoveryCopyName(source.name, label);
-  copy.projectId = projectId;
-  if (copy.editHistory) {
-    copy.editHistory.projectId = projectId;
-    for (const historical of documentNodesWithHistory(copy)) {
-      if (historical.kind === 'project') historical.projectId = projectId;
-    }
-  }
-  const beforeRename = structuredClone(copy);
-  copy.name = name;
-  copy.revisions = [];
-  copy.checkpoints = [];
-  copy.derived.updatedAt = new Date().toISOString();
-  const root = copy.nodes[copy.rootNodeId];
-  if (root?.kind === 'project') {
-    root.projectId = projectId;
-    root.name = name;
-    root.revisionId = null;
-  }
-  // The source's save points stay with the source; the copy starts its own
-  // record. Born with none at all, it could not be saved: every Save,
-  // including Save to my account, refused for want of a revision to name.
-  return createSavedRevision(
-    normalizeDocumentHistory(beforeRename, copy),
-    `Recovered from ${source.name}`
-  );
 }
 
 /**
@@ -2163,7 +2217,7 @@ export function App() {
   );
   const [pendingInvitationToken, setPendingInvitationToken] = useState(() => {
     // An explicit public link supersedes an invitation retained for sign-in.
-    if (captureProjectShareLink()) {
+    if (captureProjectShareRequest() !== null) {
       clearPendingProjectInvitation();
       return null;
     }
@@ -2187,7 +2241,10 @@ export function App() {
    * verified statement's mode: a view-only link pins the visitor to View.
    */
   const [pendingShareToken, setPendingShareToken] = useState(
-    captureProjectShareLink
+    captureProjectShareRequest
+  );
+  const [sharePage, setSharePage] = useState<SharePageState | null>(() =>
+    pendingShareToken === null ? null : { phase: 'loading' }
   );
   const [shareSession, setShareSession] = useState<{
     token: string;
@@ -2211,36 +2268,44 @@ export function App() {
   >(async () => undefined);
   const fragmentNavigationRef = useRef(0);
   const navigationBusyRef = useRef<object | null>(null);
+  const [openingProject, setOpeningProject] = useState<string | null>(null);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
   const cancelNavigationBusy = useCallback(() => {
     if (navigationBusyRef.current === null) return;
     navigationBusyRef.current = null;
+    setOpeningProject(null);
     setBusy(false);
   }, []);
-  const startNavigationBusy = useCallback(() => {
+  const startNavigationBusy = useCallback((projectName?: string) => {
     const owner = {};
     navigationBusyRef.current = owner;
     setBusy(true);
+    setOpeningProject(projectName ?? null);
     return () => {
       if (navigationBusyRef.current !== owner) return;
       navigationBusyRef.current = null;
+      setOpeningProject(null);
       setBusy(false);
     };
   }, []);
-  function beginProjectNavigation(clearShareFragment = true) {
-    cancelNavigationBusy();
-    if (clearShareFragment) clearProjectShareFragment();
-    const navigation = ++fragmentNavigationRef.current;
-    clearPendingProjectInvitation();
-    pendingInvitationAttemptRef.current = null;
-    setPendingInvitationToken(null);
-    setPendingInvitationError(null);
-    shareOpenAttemptRef.current = null;
-    setPendingShareToken(null);
-    return () => fragmentNavigationRef.current === navigation;
-  }
+  const beginProjectNavigation = useCallback(
+    (clearShareFragment = true) => {
+      cancelNavigationBusy();
+      if (clearShareFragment) clearProjectShareFragment();
+      const navigation = ++fragmentNavigationRef.current;
+      clearPendingProjectInvitation();
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationToken(null);
+      setPendingInvitationError(null);
+      shareOpenAttemptRef.current = null;
+      setPendingShareToken(null);
+      setSharePage(null);
+      return () => fragmentNavigationRef.current === navigation;
+    },
+    [cancelNavigationBusy]
+  );
   const restoreShareSessionFragment = useCallback(() => {
     const active = shareSessionRef.current;
     if (!active) return;
@@ -2251,11 +2316,13 @@ export function App() {
     );
     shareOpenAttemptRef.current = active.token;
     setPendingShareToken(active.token);
+    setSharePage(null);
   }, []);
   useEffect(() => {
     const openFragment = () => {
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
+          beginProjectNavigation(false);
           updateSettingsViewState({ open: true, activeSection: 'encryption' });
           setSettingsOpen(true);
         }
@@ -2286,6 +2353,7 @@ export function App() {
           setPendingInvitationToken(token);
           setInvitationNavigation((current) => current + 1);
           setPendingShareToken(null);
+          setSharePage(null);
           updateSettingsViewState({ open: true, activeSection: 'account' });
           setSettingsOpen(true);
           return;
@@ -2295,10 +2363,11 @@ export function App() {
       pendingInvitationAttemptRef.current = null;
       setPendingInvitationToken(null);
       setPendingInvitationError(null);
-      const token = captureProjectShareLink();
+      const token = captureProjectShareRequest();
       shareOpenAttemptRef.current = null;
       setPendingShareToken(token);
-      if (!token) {
+      setSharePage(token === null ? null : { phase: 'loading' });
+      if (token === null) {
         if (shareSessionRef.current) {
           void leaveShareSessionRef.current(
             () => fragmentNavigationRef.current === navigation
@@ -2310,7 +2379,7 @@ export function App() {
     };
     window.addEventListener('hashchange', openFragment);
     return () => window.removeEventListener('hashchange', openFragment);
-  }, [cancelNavigationBusy]);
+  }, [beginProjectNavigation, cancelNavigationBusy]);
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
@@ -2373,7 +2442,7 @@ export function App() {
       startupPointer: pointer,
       startupProjectId:
         !pendingInvitationToken &&
-        !pendingShareToken &&
+        pendingShareToken === null &&
         appSettings.general.reopenLastProject
           ? pointer.activeProjectId
           : null
@@ -2396,6 +2465,7 @@ export function App() {
   const accountSettingsRef = useRef(accountSettings);
   accountSettingsRef.current = accountSettings;
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
+  const cloudConfigurationReads = useRef(createCloudConfigurationReads());
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
   const [panelState, setPanelState] = useState<PanelState>(() =>
@@ -2540,6 +2610,28 @@ export function App() {
     useState(false);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  // Shelf writes (pin, reorder, shelf moves) run one at a time, each built
+  // from the rows the writes before it left, so two quick drags (or a drag
+  // right after a pin) cannot rebuild a row from a stale snapshot and undo
+  // the first change. A finished write's rows stay here until `projects`
+  // has them, and the latest `projects` is read through a ref because a
+  // queued write outlives the render that queued it.
+  const shelfWrites = useRef<Promise<unknown>>(Promise.resolve());
+  const latestProjects = useRef(projects);
+  latestProjects.current = projects;
+  const pendingOrganizations = useRef(
+    new Map<string, ProjectOrganization>()
+  );
+  useEffect(() => {
+    for (const project of projects) {
+      if (
+        pendingOrganizations.current.get(project.projectId) ===
+        project.organization
+      ) {
+        pendingOrganizations.current.delete(project.projectId);
+      }
+    }
+  }, [projects]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   /**
    * Which of the open project's save points can actually be opened. Empty
@@ -2889,7 +2981,7 @@ export function App() {
   // reports a stale chunk where the user is looking.
   useEffect(() => {
     // Save-Data asks for nothing speculative, as the chunk prefetch honours.
-    if (prefersSavingData()) return;
+    if (startupState !== 'ready' || prefersSavingData()) return;
     // Offline, a failed module download can stay cached until navigation,
     // so wait for the connection rather than poison the surfaces' own loads.
     const warm = () =>
@@ -2903,7 +2995,7 @@ export function App() {
     }
     const timer = window.setTimeout(warm, 2_000);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [startupState]);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));
@@ -3349,7 +3441,8 @@ export function App() {
       thinking: false,
       unread: 0,
       context: null,
-      unavailable: false
+      unavailable: false,
+      canAttach: false
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -4787,6 +4880,12 @@ export function App() {
     doc?.ownerUserId !== session.userId &&
     !encryptedMemberProject
   );
+  // Discovery may display the model before the optional capability read ends.
+  // A foreign plaintext document never grants a seat by arriving first.
+  const pendingSharedProjectAccessReason =
+    sharedAccountProject && !projectSharingEnabled
+      ? 'Waiting for project access'
+      : null;
 
   // An end-to-end encrypted project's room relays ciphertext (ADR-024
   // slice 4-9), and every version the room accepts is already the account's.
@@ -5005,19 +5104,21 @@ export function App() {
   // workspace is the parameters, and Make a copy is the road to Build.
   const seatBuildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
-    : !sharedProjectDisabled && encryptedMemberEditReason
-      ? // An encrypted member who may not edit (a viewer, or one whose role
-        // is not known, or no longer exists) is held in View, as a
-        // read-only collaborator is (slice 5-4).
-        encryptedMemberEditReason
-      : !sharedProjectDisabled &&
-          cloudAvailable &&
-          session &&
-          projectSharingEnabled &&
-          (collaboration.role === 'viewer' ||
-            collaboration.status === 'read-only')
-        ? 'This shared project is read-only'
-        : null;
+    : !sharedProjectDisabled && pendingSharedProjectAccessReason
+      ? pendingSharedProjectAccessReason
+      : !sharedProjectDisabled && encryptedMemberEditReason
+        ? // An encrypted member who may not edit (a viewer, or one whose role
+          // is not known, or no longer exists) is held in View, as a
+          // read-only collaborator is (slice 5-4).
+          encryptedMemberEditReason
+        : !sharedProjectDisabled &&
+            cloudAvailable &&
+            session &&
+            projectSharingEnabled &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          ? 'This shared project is read-only'
+          : null;
   const buildModeDisabledReason =
     !shareSession && migrationEditReason
       ? migrationEditReason
@@ -5112,26 +5213,28 @@ export function App() {
         null
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
-        : encryptedMemberProject
-          ? encryptedMemberEditReason
-          : !activeProjectIsCloud ||
-              !cloudAvailable ||
-              !session ||
-              !projectSharingEnabled
-            ? null
-            : collaboration.conflict
-              ? 'Resolve the collaboration conflict before editing'
-              : collaboration.role === 'viewer' ||
-                  collaboration.status === 'read-only'
-                ? 'This shared project is read-only'
-                : collaboration.role === null
-                  ? 'Waiting for project access'
-                  : collaborationRollout.editLeasesEnforced &&
-                      !activeCollaborationLease
-                    ? collaboration.status === 'lease-denied'
-                      ? 'Another collaborator holds the edit lease'
-                      : 'Waiting for the project edit lease'
-                    : null;
+        : pendingSharedProjectAccessReason
+          ? pendingSharedProjectAccessReason
+          : encryptedMemberProject
+            ? encryptedMemberEditReason
+            : !activeProjectIsCloud ||
+                !cloudAvailable ||
+                !session ||
+                !projectSharingEnabled
+              ? null
+              : collaboration.conflict
+                ? 'Resolve the collaboration conflict before editing'
+                : collaboration.role === 'viewer' ||
+                    collaboration.status === 'read-only'
+                  ? 'This shared project is read-only'
+                  : collaboration.role === null
+                    ? 'Waiting for project access'
+                    : collaborationRollout.editLeasesEnforced &&
+                        !activeCollaborationLease
+                      ? collaboration.status === 'lease-denied'
+                        ? 'Another collaborator holds the edit lease'
+                        : 'Waiting for the project edit lease'
+                      : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
   const projectEditDisabledReason =
@@ -5285,8 +5388,12 @@ export function App() {
   }
 
   const conflictHandlers: ConflictResolutionHandlers = {
-    async writeRecoveryCopy(source) {
-      const copy = localRecoveryCopy(source, 'Recovery');
+    async saveLocalAsCopy(source) {
+      const copy = await localConflictCopy(
+        source,
+        projects.map((project) => project.name),
+        session?.userId ?? localUserId
+      );
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
@@ -5305,31 +5412,30 @@ export function App() {
         )
         .catch(() => undefined);
       // From the document just written, so the card counts the copy's own
-      // recovery save point rather than claiming it has none.
+      // initial save point rather than claiming it has none.
       setProjects((current) =>
         mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
+      return copy.projectId;
+    },
+    async localCopyExists(projectId) {
+      const [document, snapshot] = await Promise.all([
+        loadLocalProject(projectId),
+        loadLocalProjectOrganizationSnapshot(projectId)
+      ]);
+      return document !== null && snapshot?.organization.status !== 'deleted';
     },
     useRemoteVersion(remoteDocument, outcome) {
       if (!collaboration.useRemoteVersion(remoteDocument.version)) {
         throw new Error(
-          'The room version changed before recovery could complete.'
+          'The live version changed before your choice could be applied.'
         );
       }
-      setStatus(
-        `Using the current room version; ${recoveryCopyNote(outcome)}.`
-      );
+      setStatus(`Using the live version${conflictCopyNote(outcome)}.`);
     },
     async keepMyVersion({ expectedRemoteVersion }) {
       await collaboration.keepLocalVersion(expectedRemoteVersion);
       setStatus('Kept this device’s version in the live session.');
-    },
-    saveLocalAsCopy(_document, outcome) {
-      setStatus(
-        outcome.recoveryCopy === 'already-preserved'
-          ? 'This version already has a local recovery project.'
-          : 'Saved the divergent document as a local recovery project.'
-      );
     }
   };
 
@@ -5340,7 +5446,8 @@ export function App() {
    * against the version the account reported.
    */
   const accountConflictHandlers: ConflictResolutionHandlers = {
-    writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
+    saveLocalAsCopy: conflictHandlers.saveLocalAsCopy,
+    localCopyExists: conflictHandlers.localCopyExists,
     async useRemoteVersion(incomingDocument, outcome) {
       // Account documents are stored without their derived projection.
       // Reattach the local one when it provably describes the same canonical
@@ -5369,9 +5476,7 @@ export function App() {
         rememberProject: false
       });
       setAccountConflict(null);
-      setStatus(
-        `Using the version from your account; ${recoveryCopyNote(outcome)}.`
-      );
+      setStatus(`Using the cloud version${conflictCopyNote(outcome)}.`);
     },
     async keepMyVersion({ document, expectedRemoteVersion }, outcome) {
       const saved = await api.saveRevision({
@@ -5397,7 +5502,7 @@ export function App() {
           restored.version
         );
         setAccountConflict(null);
-        setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
+        setStatus(`Kept this browser’s version${conflictCopyNote(outcome)}.`);
         return;
       }
       await saveLocalProject(restored);
@@ -5409,14 +5514,7 @@ export function App() {
       );
       setAccountConflict(null);
       setSaveState('synced');
-      setStatus(`Kept this device’s version; ${recoveryCopyNote(outcome)}.`);
-    },
-    saveLocalAsCopy(_document, outcome) {
-      setStatus(
-        outcome.recoveryCopy === 'already-preserved'
-          ? 'This version already has a local recovery project.'
-          : 'Saved the divergent document as a local recovery project.'
-      );
+      setStatus(`Kept this browser’s version${conflictCopyNote(outcome)}.`);
     }
   };
 
@@ -6000,85 +6098,133 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let metadataTimer: ReturnType<typeof setTimeout> | undefined;
     mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
     void (async () => {
       try {
-        const [health, rememberedLocal, currentAuth] = await Promise.all([
+        const keySessionRevision = getKeySessionRevision();
+        const startupSettings = appSettingsRef.current;
+        const ownsCloudMode = cloudConfigurationReads.current.captureMode();
+        const ownsHealthRead = cloudConfigurationReads.current.begin('health');
+        const ownsAuthRead = cloudConfigurationReads.current.begin('auth');
+        const isCurrent = () =>
+          !cancelled &&
+          ownsCloudMode() &&
+          getKeySessionRevision() === keySessionRevision;
+        const verifiedMetadata = new Map<string, ProjectSummary>();
+        const local = listLocalProjects();
+        // Cards already stored on this device need neither cloud discovery nor
+        // decryption. Keep actions gated until account discovery settles.
+        void local.then(
+          (projects) => {
+            if (isCurrent() && !startupProjectId) {
+              setProjects(projects);
+              mark('startup.localLibrary.ready');
+            }
+          },
+          () => undefined
+        );
+        void (
           bootCloudFunctionsEnabledRef.current
             ? api.health().catch(() => null)
-            : null,
-          startupProjectId
-            ? timedAsync('startup.localProject', () =>
-                loadLocalProject(startupProjectId).catch(() => null)
-              )
-            : Promise.resolve(null),
+            : Promise.resolve(null)
+        ).then((health) => {
+          if (!cancelled && ownsHealthRead()) setDeploymentHealth(health);
+        });
+        void (
           bootCloudFunctionsEnabledRef.current
-            ? api
-                .authConfig()
-                .then((config) => ({
-                  config,
-                  status: 'ready' as const
-                }))
-                .catch(() => ({
-                  config: null,
-                  status: 'unavailable' as const
-                }))
-            : {
-                config: null,
-                status: 'unavailable' as const
-              }
-        ]);
-        const keySessionRevision = getKeySessionRevision();
+            ? api.authConfig().then(
+                (config) => ({ config, status: 'ready' as const }),
+                () => ({ config: null, status: 'unavailable' as const })
+              )
+            : Promise.resolve({ config: null, status: 'unavailable' as const })
+        ).then((auth) => {
+          if (!cancelled && ownsAuthRead()) {
+            setAuthConfig(auth.config);
+            setAuthConfigStatus(auth.status);
+          }
+        });
         let sessionLookupFailed = false;
-        const activeSession = bootCloudFunctionsEnabledRef.current
-          ? await timedAsync('startup.session', () =>
+        const sessionPromise = bootCloudFunctionsEnabledRef.current
+          ? timedAsync('startup.session', () =>
               api.session().catch(() => {
                 sessionLookupFailed = true;
                 return null;
               })
             )
-          : null;
+          : Promise.resolve(null);
+        const [rememberedLocal, activeSession] = await Promise.all([
+          startupProjectId
+            ? timedAsync('startup.localProject', () =>
+                loadLocalProject(startupProjectId).catch(() => null)
+              )
+            : Promise.resolve(null),
+          sessionPromise
+        ]);
+        if (!isCurrent()) return;
+        const progress: ProjectListingProgress = {
+          isCurrent,
+          onVerified(project) {
+            verifiedMetadata.set(project.projectId, project);
+            if (metadataTimer !== undefined) return;
+            metadataTimer = setTimeout(() => {
+              metadataTimer = undefined;
+              if (!isCurrent()) return;
+              startTransition(() =>
+                setProjects((current) => {
+                  if (!isCurrent()) return current;
+                  const next = current.map((entry) =>
+                    withVerifiedShelfMetadata(entry, verifiedMetadata.get(entry.projectId))
+                  );
+                  return next.some((entry, index) => entry !== current[index])
+                    ? next
+                    : current;
+                })
+              );
+            }, 50);
+          }
+        };
+        const remoteSettingsPromise = activeSession
+          ? api.getSettings().catch(() => null)
+          : Promise.resolve(null);
+        const collaborationPromise = activeSession
+          ? api
+              .collaborationCapabilities()
+              .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+          : Promise.resolve(DISABLED_COLLABORATION_ROLLOUT);
         const listedPromise = timedAsync('startup.projectList', () =>
           loadProjectSummaries(
             activeSession?.userId ?? null,
-            !sessionLookupFailed
+            !sessionLookupFailed,
+            { local, progress }
           )
         );
         const lastSyncedVersionPromise = startupProjectId
           ? loadLastSyncedVersion(startupProjectId)
           : Promise.resolve(null);
-        const [
-          listed,
-          rememberedRemoteResult,
-          remoteSettings,
-          collaborationCapabilities,
-          lastSyncedVersion
-        ] = await Promise.all([
-          listedPromise,
-          activeSession && startupProjectId
-            ? lastSyncedVersionPromise.then((baseline) =>
-                loadAccountProjectResult(startupProjectId, {
-                  localDocument: rememberedLocal,
-                  previouslySynced: baseline !== null,
-                  accountProjects: listedPromise
-                })
-              )
-            : Promise.resolve<AccountProjectLoadResult>({
-                document: null
-              }),
-          activeSession ? api.getSettings().catch(() => null) : null,
-          activeSession
-            ? api
-                .collaborationCapabilities()
-                .catch(() => DISABLED_COLLABORATION_ROLLOUT)
-            : DISABLED_COLLABORATION_ROLLOUT,
-          lastSyncedVersionPromise
-        ]);
-        if (cancelled) {
-          return;
-        }
-        setDeploymentHealth(health);
-        const merged = listed.projects;
+        const [listed, rememberedRemoteResult, lastSyncedVersion] =
+          await Promise.all([
+            listedPromise,
+            activeSession && startupProjectId
+              ? lastSyncedVersionPromise.then((baseline) =>
+                  loadAccountProjectResult(startupProjectId, {
+                    localDocument: rememberedLocal,
+                    previouslySynced: baseline !== null,
+                    accountProjects: listedPromise
+                  })
+                )
+              : Promise.resolve<AccountProjectLoadResult>({
+                  document: null
+                }),
+            lastSyncedVersionPromise
+          ]);
+        if (!isCurrent()) return;
+        const merged = listed.projects.map((project) =>
+          withVerifiedShelfMetadata(
+            project,
+            verifiedMetadata.get(project.projectId)
+          )
+        );
         const rememberedRemote = rememberedRemoteResult.document;
         const accountOwnsStartupProject = Boolean(
           startupProjectId && listed.cloudProjectIds.has(startupProjectId)
@@ -6117,7 +6263,7 @@ export function App() {
             restoredDocument.projectId,
             restoredDocument.version
           );
-          if (cancelled) {
+          if (!isCurrent()) {
             return;
           }
         }
@@ -6126,7 +6272,13 @@ export function App() {
           accountDocumentNeedsRepair && startupProjectId
             ? startupProjectId
             : null;
-        setCollaborationRollout(collaborationCapabilities);
+        void collaborationPromise.then((capabilities) => {
+          if (
+            isCurrent() &&
+            sessionRef.current?.userId === activeSession?.userId
+          )
+            setCollaborationRollout(capabilities);
+        });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
@@ -6143,9 +6295,13 @@ export function App() {
           sessionRef.current = activeSession;
           setSession(activeSession);
         }
-        setAuthConfig(currentAuth.config);
-        setAuthConfigStatus(currentAuth.status);
-        if (remoteSettings) {
+        void remoteSettingsPromise.then((remoteSettings) => {
+          if (
+            !remoteSettings ||
+            !isCurrent() ||
+            sessionRef.current?.userId !== activeSession?.userId
+          )
+            return;
           accountSettingsRef.current = remoteSettings;
           setAccountSettings(remoteSettings);
           // Adopting the account copy over an unsaved local change would revert
@@ -6153,6 +6309,7 @@ export function App() {
           // not working at all.
           if (
             remoteSettings.synced &&
+            appSettingsRef.current === startupSettings &&
             shouldAdoptAccountSettings(bootSettingsRef.current)
           ) {
             appSettingsRef.current = remoteSettings.settings;
@@ -6176,7 +6333,7 @@ export function App() {
             );
             cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
-        }
+        });
         setSaveState(
           !canUseCloud
             ? accountDocumentNeedsRepair
@@ -6243,9 +6400,9 @@ export function App() {
             ? LIBRARY_MODE_STATUS.offlineMode
             : activeSession && listed.remoteReached
               ? LIBRARY_MODE_STATUS.cloudReady
-              : health
-                ? LIBRARY_MODE_STATUS.local
-                : LIBRARY_MODE_STATUS.offline
+              : sessionLookupFailed
+                ? LIBRARY_MODE_STATUS.offline
+                : LIBRARY_MODE_STATUS.local
         );
       } catch (error) {
         if (!cancelled) {
@@ -6258,12 +6415,14 @@ export function App() {
           measure('startup.restore', 'startup.begin', 'startup.ready');
           measure('startup.total', 'bundle.evaluated', 'startup.ready');
           setStartupState('ready');
+          window.dispatchEvent(new Event('openzcad:startup-ready'));
         }
       }
     })();
     return () => {
       cancelled = true;
       organizationBackground.dispose();
+      clearTimeout(metadataTimer);
     };
     // Startup settings are intentionally read once. Later settings changes
     // should not re-run project discovery or reopen a different document.
@@ -6843,11 +7002,13 @@ export function App() {
   // End the session permanently when its view changes. Merely hiding the
   // indicator would let an old snapshot revive if the same set returns later.
   if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
-  // Only whether a face offset is in progress matters to the bodies: keyed on
+  // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
-  const faceOffsetInteraction =
-    interaction.mode === 'face' && interaction.op === 'offset-face';
+  const faceDragInteraction =
+    interaction.mode === 'face' &&
+    (interaction.op === 'offset-face' ||
+      interaction.op === 'resize-cylinder-radius');
   const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
     const bodies = (
       currentFaceGeometryPreview
@@ -6858,12 +7019,13 @@ export function App() {
     ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
     // G2: what a command preview would make is drawn in the preview hue
     // until it is applied, including edits that retain an existing body ID.
-    // A face offset is the exception: the viewer draws its result solid over
-    // a ghost of the part as it was, and a hue change mid-drag would read as
-    // a different part.
-    const faceOffsetPreview =
-      currentFaceGeometryPreview && faceOffsetInteraction;
-    return !faceOffsetPreview &&
+    // A face drag is the exception: an offset draws its result solid over a
+    // ghost of the part as it was, a bore's handle and dimension line say
+    // what is changing, and a whole flange flashing mint the moment a hole
+    // starts to grow read as a different part.
+    const faceDragPreview =
+      currentFaceGeometryPreview && faceDragInteraction;
+    return !faceDragPreview &&
       (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
       ? tintPreviewResultBodies(bodies, representations)
       : bodies;
@@ -6872,7 +7034,7 @@ export function App() {
     hiddenBodyIds,
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
-    faceOffsetInteraction,
+    faceDragInteraction,
     previewDoc,
     representations
   ]);
@@ -7295,6 +7457,8 @@ export function App() {
   // the card's label rewritten) on every interaction step of a drag.
   const offsettingFace =
     interaction.mode === 'face' && interaction.op === 'offset-face';
+  const resizingCylinder =
+    interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius';
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
@@ -7360,12 +7524,13 @@ export function App() {
       // face on screen, since an offset can change a face's boundary (a
       // tapered or imported part); while the preview has none to give, the
       // line holds a placeholder rather than leaving and shifting the card.
-      // Other edits (a cylinder's radius, a fillet's) name and measure from
-      // the preview: their figure is the dragged value, which the viewer
-      // writes into the label live.
+      // A cylinder's radius drag names from the committed face too: the
+      // preview's bore carries no feature type, so mid-drag the card swapped
+      // "Through hole · Ø 6" for "Pipe Flange · Face". It measures from the
+      // preview, whose figure is the dragged value.
       const sourceBody =
         currentFaceGeometryPreview &&
-        offsettingFace &&
+        (offsettingFace || resizingCylinder) &&
         selectedTopology?.kind === 'face' &&
         selectedTopology.bodyId === renderedSelectedTopology.bodyId
           ? representations[selectedTopology.bodyId]
@@ -7391,10 +7556,16 @@ export function App() {
       // tape is simultaneously refusing as ambiguous.
       const resolved = resolveFace(measuredBody, renderedSelectedTopology);
       const geometry = resolved.ok ? resolved.entry.geometry : undefined;
-      if (
-        geometry?.featureType === 'through-hole' &&
-        geometry.diameter !== undefined
-      ) {
+      const sourceResolved =
+        fromSource && selectedTopology
+          ? resolveFace(sourceBody, selectedTopology)
+          : null;
+      const isThroughHole =
+        geometry?.featureType === 'through-hole' ||
+        (resizingCylinder &&
+          sourceResolved?.ok === true &&
+          sourceResolved.entry.geometry?.featureType === 'through-hole');
+      if (isThroughHole && geometry?.diameter !== undefined) {
         const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: textLabelSegments('Through hole'),
@@ -7450,7 +7621,8 @@ export function App() {
     currentFaceGeometryPreview,
     selectedTopology,
     representations,
-    offsettingFace
+    offsettingFace,
+    resizingCylinder
   ]);
 
   const {
@@ -7669,7 +7841,7 @@ export function App() {
     exactGeometryReady: displayedGeometryComplete,
     hasEdgeSelected: selectedEdges.length > 0
   };
-  // What the palette, the selection card and the command bar show. Launching
+  // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
   // model cannot open from the one a short rebuild is replacing; it only
   // stops the buttons greying out and back for that rebuild's length.
@@ -7724,7 +7896,7 @@ export function App() {
 
   /**
    * The imported face whose own card (resize a hole, remove a blend) the
-   * Selection card's Edit face opened. Keyed by the pick, so any other pick
+   * rail's Edit face opened. Keyed by the pick, so any other pick
    * closes it: a direct pick otherwise gets no card at all.
    */
   const [editFaceKey, setEditFaceKey] = useState<string | null>(null);
@@ -8676,7 +8848,7 @@ export function App() {
     panelLoadSettled = false
   ) {
     const launch = ++toolLaunchRef.current;
-    // Move's panel takes the selection card's place. Before its chunk has
+    // Move's panel takes the selection verbs' place. Before its chunk has
     // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
     // it) the swap left neither on screen, so the card stays up until the
     // panel can render. A failed load launches anyway, to report it.
@@ -8732,7 +8904,7 @@ export function App() {
       const pick = inPlaceProfilePick(region);
       return pick ? [pick] : [];
     });
-    // A face selected first (the selection card's Hole, Shell…) is the
+    // A face selected first (the rail's Hole, Shell…) is the
     // command's first face, clicked where it was clicked.
     const current = interactionRef.current;
     const selectedFace =
@@ -8776,7 +8948,7 @@ export function App() {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
-    // Edges selected first (the selection card's Fillet, the edge's own
+    // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
       ? (current.mode === 'edges' ? current.edges : selectedEdges).flatMap(
@@ -8791,7 +8963,7 @@ export function App() {
         )
       : [];
     // A solid offset takes a body, named by any of its faces: a body picked
-    // first (its Selection card's Solid offset) is that body, its handle on
+    // first (its rail's Solid offset) is that body, its handle on
     // a flat face where it has one.
     const bodyFace =
       tool === 'solid-offset' && !selectedFace && initialBodies[0]
@@ -10596,6 +10768,13 @@ export function App() {
       setStatus('Section view off.');
       return;
     }
+    // Switching the cut on brings its controls back, even when they were
+    // hidden the last time it was on.
+    setPanelState((current) =>
+      current.sectionPanelOpen
+        ? current
+        : { ...current, sectionPanelOpen: true }
+    );
     const remembered = rememberedSection.current;
     if (remembered) {
       setViewerSettings((current) => ({ ...current, sectionView: remembered }));
@@ -11164,6 +11343,7 @@ export function App() {
     if (next === cloudFunctionsEnabledRef.current) {
       return;
     }
+    cloudConfigurationReads.current.changeMode();
     if (!next) organizationBackground.cancel();
     // Flip the transport gate before React can render another cloud consumer.
     // This also aborts active browser API and assistant fetches when going off.
@@ -11235,11 +11415,22 @@ export function App() {
       return;
     }
     const keySessionRevision = getKeySessionRevision();
+    const ownsMode = cloudConfigurationReads.current.captureMode();
+    const ownsAuth = cloudConfigurationReads.current.begin('auth');
+    const ownsHealth = cloudConfigurationReads.current.begin('health');
+    const isCurrent = () =>
+      cloudFunctionsEnabledRef.current &&
+      ownsMode() &&
+      getKeySessionRevision() === keySessionRevision;
     setAuthConfigStatus('loading');
     void api
       .health()
-      .then(setDeploymentHealth)
-      .catch(() => setDeploymentHealth(null));
+      .catch(() => null)
+      .then((health) => {
+        if (ownsHealth() && cloudFunctionsEnabledRef.current) {
+          setDeploymentHealth(health);
+        }
+      });
     const [nextAuth, activeSession] = await Promise.all([
       api
         .authConfig()
@@ -11247,14 +11438,13 @@ export function App() {
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
     ]);
-    if (
-      !cloudFunctionsEnabledRef.current ||
-      getKeySessionRevision() !== keySessionRevision
-    ) {
+    if (!isCurrent()) {
       return;
     }
-    setAuthConfig(nextAuth.config);
-    setAuthConfigStatus(nextAuth.status);
+    if (ownsAuth()) {
+      setAuthConfig(nextAuth.config);
+      setAuthConfigStatus(nextAuth.status);
+    }
     organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
@@ -11279,7 +11469,7 @@ export function App() {
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
       ]);
-      if (!cloudFunctionsEnabledRef.current) {
+      if (!isCurrent()) {
         return;
       }
       accountSettingsRef.current = remoteSettings;
@@ -11288,7 +11478,7 @@ export function App() {
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );
-      if (!cloudFunctionsEnabledRef.current) {
+      if (!isCurrent()) {
         return;
       }
       setProjects(listed.projects);
@@ -11297,7 +11487,7 @@ export function App() {
       setSettingsMessage('Cloud profile connected.');
       setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
-      if (cloudFunctionsEnabledRef.current) {
+      if (isCurrent()) {
         setSettingsMessage(
           'Cloud profile unavailable · device settings remain active.'
         );
@@ -11335,10 +11525,13 @@ export function App() {
   }
 
   async function handleRefreshAuthConfig() {
+    if (!cloudFunctionsEnabledRef.current) return;
+    const ownsRead = cloudConfigurationReads.current.begin('auth');
     setAuthConfigStatus('loading');
     setSettingsMessage('Checking beta sign-in readiness…');
     try {
       const nextAuthConfig = await api.authConfig();
+      if (!ownsRead()) return;
       setAuthConfig(nextAuthConfig);
       setAuthConfigStatus('ready');
       setSettingsMessage(
@@ -11347,6 +11540,7 @@ export function App() {
           : 'Email sign-in is not configured · device settings remain active.'
       );
     } catch {
+      if (!ownsRead()) return;
       setAuthConfig(null);
       setAuthConfigStatus('unavailable');
       setSettingsMessage(
@@ -11775,6 +11969,8 @@ export function App() {
                 projectController?.closeProject();
               }
             });
+      if (scope === 'projects' && departingSession)
+        forgetShelfProjectNames(departingSession.userId, deleted.deletedProjectIds);
       if (deleted.signedOut) {
         if (sessionRef.current !== null) return;
         organizationBackground.confirmSignedOut();
@@ -12338,7 +12534,7 @@ export function App() {
       return;
     }
     const activeProjectSince = snapshotActiveProject();
-    const finishBusy = startNavigationBusy();
+    const finishBusy = startNavigationBusy(listed?.name ?? 'project');
     try {
       await flushPendingLocalSave();
       if (!isCurrent()) return;
@@ -12348,15 +12544,9 @@ export function App() {
       await sharedThumbnailCapture.flush();
       if (!isCurrent()) return;
       sharedThumbnailCapture.discard();
-      if (
-        accountDocumentUnavailableProjectIdRef.current !== null &&
-        accountDocumentUnavailableProjectIdRef.current !== projectId
-      ) {
-        accountDocumentUnavailableProjectIdRef.current = null;
-      }
       const localDocumentPromise = loadLocalProject(projectId);
       const lastSyncedVersionPromise = loadLastSyncedVersion(projectId);
-      const [localDocument, remoteResult, lastSyncedVersion, artifactList] =
+      const [localDocument, remoteResult, lastSyncedVersion] =
         await Promise.all([
           localDocumentPromise,
           session
@@ -12377,13 +12567,7 @@ export function App() {
             : Promise.resolve<AccountProjectLoadResult>({
                 document: null
               }),
-          lastSyncedVersionPromise,
-          // Read alongside the document so the File menu's count is on the
-          // bar from the workspace's first frame, not a round-trip later.
-          listProjectArtifacts(
-            projectId,
-            Boolean(session && cloudProjectIds.has(projectId))
-          )
+          lastSyncedVersionPromise
         ]);
       const remoteDocument = remoteResult.document;
       if (!isCurrent()) return;
@@ -12392,7 +12576,6 @@ export function App() {
         setStatus(remoteResult.error.message);
         return;
       }
-      setArtifacts(artifactList);
       // A project this device holds alone is not in the account, and the
       // account says so with a 404. That is the ordinary answer, not an
       // outage: reading it as one opened every device project with "The
@@ -12410,6 +12593,7 @@ export function App() {
           ? projectId
           : null;
         setCloudAvailable(false);
+        setArtifacts([]);
         hydrateDocument(localDocument, { activeProjectSince });
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
@@ -12432,20 +12616,16 @@ export function App() {
       if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
       }
-      if (
-        accountDocumentUnavailableProjectIdRef.current === projectId &&
-        remoteDocument
-      ) {
+      const commitAccountState = () => {
         accountDocumentUnavailableProjectIdRef.current = null;
-      }
-      setCloudAvailable(Boolean(remoteDocument));
-      if (remoteDocument) {
-        remoteVersionsRef.current.set(
-          remoteDocument.projectId,
-          remoteDocument.version
-        );
-      }
+        setCloudAvailable(Boolean(remoteDocument));
+        setArtifacts([]);
+        if (remoteDocument) {
+          remoteVersionsRef.current.set(remoteDocument.projectId, remoteDocument.version);
+        }
+      };
       if (outcome.choice === 'diverged') {
+        commitAccountState();
         // Both copies moved since this device last agreed with the account.
         // Open the local one — it is the work in front of the user — and ask
         // rather than discarding either side.
@@ -12466,12 +12646,14 @@ export function App() {
         outcome.choice === 'remote' && localDocument
           ? withLocalDerived(outcome.document, localDocument)
           : outcome.document;
-      hydrateDocument(openedDocument, { activeProjectSince });
       if (outcome.choice === 'remote') {
         await saveLocalProject(openedDocument);
+        if (!isCurrent()) return;
         await saveLastSyncedVersion(projectId, openedDocument.version);
       }
       if (!isCurrent()) return;
+      commitAccountState();
+      hydrateDocument(openedDocument, { activeProjectSince });
       setStatus(
         outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`
@@ -12533,26 +12715,31 @@ export function App() {
     if (
       startupState !== 'ready' ||
       foregroundBusy ||
-      !pendingShareToken ||
+      pendingShareToken === null ||
       shareOpenAttemptRef.current === pendingShareToken
     ) {
       return;
     }
     shareOpenAttemptRef.current = pendingShareToken;
+    updateSettingsViewState({ open: false });
+    setSettingsOpen(false);
+    setSharingOpen(false);
+    if (!shareLinkFromHash(`#share=${pendingShareToken}`)) {
+      setSharePage({
+        phase: 'error',
+        title: 'This share link is incomplete',
+        message:
+          'The link is incomplete or has been changed, so the shared model cannot be opened.',
+        guidance:
+          'Ask the owner to send the full link again. Copy everything, including the part after #share=.'
+      });
+      return;
+    }
     let cancelled = false;
     const navigation = fragmentNavigationRef.current;
     const isCurrent = () =>
       !cancelled && fragmentNavigationRef.current === navigation;
     const finishBusy = startNavigationBusy();
-    const restoreActiveShare = () => {
-      const active = shareSessionRef.current;
-      if (!active || active.token === pendingShareToken) return;
-      finishBusy();
-      restoreShareSessionFragment();
-    };
-    updateSettingsViewState({ open: false });
-    setSettingsOpen(false);
-    setSharingOpen(false);
     // An encrypted link's failures are worded by its loader (slice 5-11).
     let describeFailure: ((error: unknown) => string) | null = null;
     void (async () => {
@@ -12592,11 +12779,14 @@ export function App() {
         }
         if (!isCurrent()) return;
         if (!shared) {
-          restoreActiveShare();
-          setStatus(
-            'This share link is no longer available. It may have been revoked.',
-            { sticky: true }
-          );
+          setSharePage({
+            phase: 'error',
+            title: 'This share link is unavailable',
+            message:
+              'This share link is no longer available. It may have expired, been revoked, or the owner may have removed the model.',
+            guidance:
+              'Ask the owner to check sharing and send you a working link.'
+          });
           return;
         }
         await flushPendingLocalSaveRef.current();
@@ -12617,6 +12807,7 @@ export function App() {
           : { token: pendingShareToken };
         setShareSession(opened);
         shareSessionRef.current = opened;
+        setSharePage(null);
         hydrateSharedDocumentRef.current(shared.document, {
           rememberProject: false
         });
@@ -12627,13 +12818,15 @@ export function App() {
         );
       } catch (error) {
         if (isCurrent()) {
-          restoreActiveShare();
-          setStatus(
-            describeFailure
+          setSharePage({
+            phase: 'error',
+            title: 'We couldn’t open this shared model',
+            message: describeFailure
               ? describeFailure(error)
               : errorMessage(error, 'Could not open the share link.'),
-            { sticky: true }
-          );
+            guidance:
+              'Check your connection and try again. If it still won’t open, ask the owner to check the link and its sharing settings.'
+          });
         }
       } finally {
         finishBusy();
@@ -12648,8 +12841,7 @@ export function App() {
     startupState,
     foregroundBusy,
     startNavigationBusy,
-    setStatus,
-    restoreShareSessionFragment
+    setStatus
   ]);
 
   /**
@@ -12898,33 +13090,74 @@ export function App() {
    */
   async function persistOrganization(
     projectId: string,
-    organization: ProjectOrganization
-  ): Promise<void> {
-    // Durable locally first, flagged as not yet mirrored: the listing's
-    // reconcile pushes a flagged row and adopts the account's otherwise, so
-    // the flag is what keeps a change alive across a failed mirror without
-    // letting this device overrule every other one forever.
-    await saveLocalProjectOrganization(projectId, organization, {
-      mirrorPending: true
+    update: (current: ProjectOrganization) => ProjectOrganization
+  ): Promise<ProjectOrganization> {
+    const organization = await queueShelfWrite(async () => {
+      const project = latestProjects.current.find(
+        (entry) => entry.projectId === projectId
+      );
+      const next = update(
+        pendingOrganizations.current.get(projectId) ??
+          projectOrganization(project ?? {})
+      );
+      // Durable locally first, flagged as not yet mirrored: the listing's
+      // reconcile pushes a flagged row and adopts the account's otherwise,
+      // so the flag is what keeps a change alive across a failed mirror
+      // without letting this device overrule every other one forever.
+      await saveShelfRows(new Map([[projectId, next]]));
+      return next;
     });
+    if (session) {
+      await mirrorPendingOrganization(
+        projectId,
+        organizationMirrorHost,
+        undefined,
+        organizationBackground.scopeFor(session.userId)
+      ).catch(() => undefined);
+    }
+    return organization;
+  }
+
+  /** Runs a shelf write after every one queued before it has finished. */
+  function queueShelfWrite<T>(write: () => Promise<T>): Promise<T> {
+    const run = shelfWrites.current.then(write);
+    shelfWrites.current = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Saves shelf rows locally and shows them. Called only from a queued
+   * write, so no other shelf write is in flight: a failure drops just these
+   * rows, and the rows before them are already on the shelf.
+   */
+  async function saveShelfRows(rows: Map<string, ProjectOrganization>) {
+    for (const [projectId, organization] of rows) {
+      pendingOrganizations.current.set(projectId, organization);
+    }
+    try {
+      await Promise.all(
+        [...rows].map(([projectId, organization]) =>
+          saveLocalProjectOrganization(projectId, organization, {
+            mirrorPending: true
+          })
+        )
+      );
+    } catch (error) {
+      for (const [projectId, organization] of rows) {
+        if (pendingOrganizations.current.get(projectId) === organization) {
+          pendingOrganizations.current.delete(projectId);
+        }
+      }
+      throw error;
+    }
     setProjects((current) =>
       current
-        .map((project) =>
-          project.projectId === projectId
-            ? { ...project, organization }
-            : project
-        )
+        .map((project) => {
+          const organization = rows.get(project.projectId);
+          return organization ? { ...project, organization } : project;
+        })
         .sort(compareProjectSummaries)
     );
-    if (!session) {
-      return;
-    }
-    await mirrorPendingOrganization(
-      projectId,
-      organizationMirrorHost,
-      undefined,
-      organizationBackground.scopeFor(session.userId)
-    ).catch(() => undefined);
   }
 
   async function handleMoveProjectToShelf(
@@ -12932,11 +13165,9 @@ export function App() {
     status: ProjectStatus
   ) {
     try {
-      const organization = applyOrganizationUpdate(
-        projectOrganization(project),
-        { status }
+      await persistOrganization(project.projectId, (current) =>
+        applyOrganizationUpdate(current, { status })
       );
-      await persistOrganization(project.projectId, organization);
       setStatus(
         status === 'deleted'
           ? `Moved ${project.name} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
@@ -12951,68 +13182,86 @@ export function App() {
 
   async function handleTogglePin(project: ProjectSummary) {
     try {
-      const current = projectOrganization(project);
-      await persistOrganization(
+      const { pinned } = await persistOrganization(
         project.projectId,
-        applyOrganizationUpdate(current, { pinned: !current.pinned })
+        (current) =>
+          applyOrganizationUpdate(current, { pinned: !current.pinned })
       );
       setStatus(
-        current.pinned ? `Unpinned ${project.name}.` : `Pinned ${project.name}.`
+        pinned ? `Pinned ${project.name}.` : `Unpinned ${project.name}.`
       );
     } catch (error) {
       setStatus(errorMessage(error, `Could not update ${project.name}.`));
     }
   }
 
-  async function handleReorderProjects(projectIds: string[]) {
+  /**
+   * Saves a new shelf order. A part dragged into or out of the pinned group
+   * changes its pin in the same write, so neither change can overwrite the
+   * other.
+   */
+  async function handleReorderProjects(
+    projectIds: string[],
+    pin?: { projectId: string; pinned: boolean }
+  ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
-    const organizations = new Map(
-      projects
-        .filter((project) => positions.has(project.projectId))
-        .map((project) => [
-          project.projectId,
-          {
-            ...projectOrganization(project),
-            sortOrder: positions.get(project.projectId)!
-          }
-        ])
-    );
+    let pinnedName: string | undefined;
     try {
-      await Promise.all(
-        [...organizations].map(([projectId, organization]) =>
-          saveLocalProjectOrganization(projectId, organization, {
-            mirrorPending: true
-          })
-        )
-      );
-      setProjects((current) =>
-        current
-          .map((project) => {
-            const organization = organizations.get(project.projectId);
-            return organization ? { ...project, organization } : project;
-          })
-          .sort(compareProjectSummaries)
-      );
-      if (session) {
-        const organizationScope = organizationBackground.scopeFor(
-          session.userId
+      pinnedName = await queueShelfWrite(async () => {
+        const rows = new Map(
+          latestProjects.current
+            .filter((project) => positions.has(project.projectId))
+            .map((project) => {
+              const current =
+                pendingOrganizations.current.get(project.projectId) ??
+                projectOrganization(project);
+              return [
+                project.projectId,
+                {
+                  ...(pin?.projectId === project.projectId
+                    ? applyOrganizationUpdate(current, { pinned: pin.pinned })
+                    : current),
+                  sortOrder: positions.get(project.projectId)!
+                }
+              ];
+            })
         );
-        await mirrorPendingReorder(
-          projectIds,
-          organizationMirrorHost,
-          async (ids) =>
-            (
-              await api.reorderProjects(
-                { projectIds: ids.map(toProjectId) },
-                organizationScope.signal
-              )
-            ).projects,
-          undefined,
-          organizationScope
-        ).catch(() => undefined);
-      }
+        await saveShelfRows(rows);
+        return pin
+          ? latestProjects.current.find(
+              (project) => project.projectId === pin.projectId
+            )?.name
+          : undefined;
+      });
     } catch (error) {
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
+      return;
+    }
+    if (pin && pinnedName !== undefined) {
+      setStatus(
+        pin.pinned ? `Pinned ${pinnedName}.` : `Unpinned ${pinnedName}.`
+      );
+    }
+    // Resolves once the device has the new order; the account catches up
+    // in the background, so a slow network never holds the shelf's drag
+    // preview (and its Pin/Unpin state) past the local save.
+    if (session) {
+      const organizationScope = organizationBackground.scopeFor(
+        session.userId
+      );
+      void mirrorPendingReorder(
+        projectIds,
+        organizationMirrorHost,
+        async (ids) =>
+          (
+            await api.reorderProjects(
+              { projectIds: ids.map(toProjectId) },
+              organizationScope.signal
+            )
+          ).projects,
+        undefined,
+        organizationScope
+      ).catch(() => undefined);
     }
   }
 
@@ -13366,6 +13615,7 @@ export function App() {
       current.filter((project) => !destroyed.has(project.projectId))
     );
     if (destroyed.size > 0) {
+      if (session) forgetShelfProjectNames(session.userId, destroyed);
       void import('./lib/savedViews').then(({ forgetSavedViews }) =>
         destroyed.forEach((projectId) => forgetSavedViews(projectId))
       );
@@ -22239,14 +22489,32 @@ export function App() {
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
       ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
       : null;
+  /**
+   * The Ø/R choice carried onto the wall an applied radius edit regenerated.
+   * That wall has a new topology id, so without this the reset below read it
+   * as a fresh pick and flipped Radius back to Diameter after every edit.
+   */
+  const carriedCylinderModeRef = useRef<{
+    key: string;
+    mode: DimensionMode;
+  } | null>(null);
   useEffect(() => {
-    setCylinderDimensionMode('diameter');
     cylinderRadiusPreview.clear();
+    const carried = carriedCylinderModeRef.current;
+    // Between the commit handing the body back and the wall being picked
+    // again there is no wall: keep the carried mode for it.
+    if (carried && cylinderSelectionKey === null) return;
+    carriedCylinderModeRef.current = null;
+    setCylinderDimensionMode(
+      carried?.key === cylinderSelectionKey ? carried.mode : 'diameter'
+    );
   }, [cylinderSelectionKey, cylinderRadiusPreview]);
 
-  function buildCylinderRadiusCommand(
-    radius: ParamValue
-  ): { command: AnyCommand; sourceFeatureId?: FeatureId } | null {
+  function buildCylinderRadiusCommand(radius: ParamValue): {
+    command: AnyCommand;
+    edit: CylinderRadiusEdit;
+    sourceFeatureId?: FeatureId;
+  } | null {
     const current = interactionRef.current;
     const base = managerRef.current?.document;
     if (
@@ -22274,6 +22542,7 @@ export function App() {
       const diameter: ParamValue =
         typeof radius === 'number' ? radius * 2 : `(${radius}) * 2`;
       return {
+        edit: 'through-hole',
         command: commandFactories.directEditBody({
           name: 'Resize Through Hole',
           targetBodyId: target.bodyId as BodyId,
@@ -22315,6 +22584,7 @@ export function App() {
             ? radius
             : `(${radius}) / ${scale}`;
       return {
+        edit: 'primitive-parameter',
         command: commandFactories.updateFeature(
           {
             featureId: primitive.featureId,
@@ -22332,6 +22602,7 @@ export function App() {
     }
 
     return {
+      edit: 'cylindrical-face',
       command: commandFactories.directEditBody({
         // The history row and the command card read the same name, so a
         // feature is called the same thing while it runs and afterwards.
@@ -22370,6 +22641,20 @@ export function App() {
     ) {
       return;
     }
+    // Back at the starting size the part is simply itself again. Asking the
+    // kernel to rebuild it there is refused ("must differ from its current
+    // diameter"), which flagged a drag that merely passed its start as
+    // Failed, turned the chip amber and left the refusal in the status line.
+    const edit = buildCylinderRadiusCommand(radius)?.edit;
+    if (
+      edit &&
+      isUnchangedCylinderRadius(radius, current.target.radius, edit)
+    ) {
+      cylinderRadiusPreview.clear();
+      setLastValidPreview(null);
+      recoverPreviewInteraction();
+      return;
+    }
     if (exactGeometry) {
       cylinderRadiusPreview.request(radius);
     } else {
@@ -22405,6 +22690,17 @@ export function App() {
     }
     const sourceRadius = current.target.radius;
     const plan = buildCylinderRadiusCommand(exact ?? radius);
+    // Entering the size it already has is no edit: close quietly, as a
+    // release at the starting size does, rather than show a refusal.
+    if (
+      exact === undefined &&
+      sourceRadius !== undefined &&
+      plan &&
+      isUnchangedCylinderRadius(radius, sourceRadius, plan.edit)
+    ) {
+      handleCylinderRadiusCancel();
+      return true;
+    }
     if (
       sourceRadius === undefined ||
       !isValidCylinderRadius(radius, sourceRadius) ||
@@ -22425,12 +22721,77 @@ export function App() {
       previewSelectionIsCurrent(candidate)
         ? candidate
         : null;
+    const target = current.target;
     void executeValidatedDirectEdit(
       reuse?.command ?? plan.command,
-      current.target.bodyId as BodyId,
+      target.bodyId as BodyId,
       `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
       radius,
-      undefined,
+      // The resized wall stays picked with its handle armed at the new size,
+      // as a moved face does: falling back to the whole body swapped the
+      // hole's card for the body's Move/Rotate card the moment it applied.
+      () => {
+        if (!target.axisStart || !target.axisEnd) return;
+        const vector = (value: readonly [number, number, number]) => ({
+          x: value[0],
+          y: value[1],
+          z: value[2]
+        });
+        const bodyId = target.bodyId as BodyId;
+        const faces =
+          managerRef.current?.document.derived.bodyRepresentations[bodyId]
+            ?.topology?.faces;
+        const wall = faces
+          ? findResizedCylinderFace(
+              faces,
+              vector(target.axisStart),
+              vector(target.axisEnd),
+              radius
+            )
+          : null;
+        const geometry = wall?.geometry;
+        if (!wall || !geometry?.axisStart || !geometry.axisEnd) return;
+        const radial = target.radialDirection ?? target.normal;
+        const delta = radius - sourceRadius;
+        const { reference: _staleReference, ...stableTarget } = target;
+        const triple = (value: {
+          x: number;
+          y: number;
+          z: number;
+        }): [number, number, number] => [value.x, value.y, value.z];
+        const nextTarget: FaceTarget = {
+          ...stableTarget,
+          topologyId: wall.topologyId,
+          hash: wall.hash,
+          ...(wall.reference ? { reference: wall.reference } : {}),
+          point: target.point.map(
+            (component, axis) => component + radial[axis]! * delta
+          ) as [number, number, number],
+          surfaceCenter: triple(geometry.center),
+          radius,
+          axisStart: triple(geometry.axisStart),
+          axisEnd: triple(geometry.axisEnd),
+          ...(geometry.axialLength !== undefined
+            ? { axialLength: geometry.axialLength }
+            : {}),
+          ...(geometry.diameter !== undefined
+            ? { diameter: geometry.diameter }
+            : {})
+        };
+        setSelectedTopology({
+          bodyId,
+          kind: 'face',
+          topologyId: wall.topologyId,
+          hash: wall.hash,
+          ...(wall.reference ? { reference: wall.reference } : {})
+        });
+        setSelectedBodyIds([bodyId]);
+        carriedCylinderModeRef.current = {
+          key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
+          mode: cylinderDimensionMode
+        };
+        dispatchInteraction({ type: 'select-face', target: nextTarget });
+      },
       plan.sourceFeatureId
         ? affectedFeatureTargets(
             managerRef.current!.document,
@@ -25566,6 +25927,7 @@ export function App() {
    * they need to reach.
    */
   const workspaceInputEnabled =
+    openingProject === null &&
     !settingsOpen &&
     !sharingOpen &&
     !pendingShaprImport &&
@@ -25585,8 +25947,10 @@ export function App() {
   useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
       if (
+        sharePage !== null ||
         !workspaceInputEnabled ||
-        workspaceRef.current?.closest('[inert]') ||
+        (workspaceRef.current?.closest('[inert]') &&
+          !modalLendsWorkspaceKeys()) ||
         modalHoldsKeyboard()
       ) {
         return;
@@ -26275,6 +26639,47 @@ export function App() {
       .filter((projectId) => hasUnresolvedConflict(projectId))
   );
 
+  if (openingProject !== null) {
+    return (
+      <StartupScreen
+        projectName={openingProject}
+        backLabel={doc ? 'Cancel opening' : 'Back to parts'}
+        onBack={() => {
+          beginProjectNavigation();
+          setStatus('');
+        }}
+      />
+    );
+  }
+  const shareDestination = sharePage ? (
+    <SharePage
+      state={sharePage}
+      onRetry={
+        pendingShareToken !== null &&
+        shareLinkFromHash(`#share=${pendingShareToken}`)
+          ? () => {
+              shareOpenAttemptRef.current = null;
+              setSharePage({ phase: 'loading' });
+              setShareNavigation((current) => current + 1);
+            }
+          : undefined
+      }
+      onBack={() => {
+        const isCurrent = beginProjectNavigation();
+        void handleGoHome(isCurrent);
+      }}
+      onReturnToModel={
+        doc
+          ? () => {
+              beginProjectNavigation();
+              restoreShareSessionFragment();
+            }
+          : undefined
+      }
+    />
+  ) : null;
+  if (shareDestination && !doc) return shareDestination;
+
   if (startupState === 'restoring') {
     return <StartupScreen />;
   }
@@ -26382,12 +26787,15 @@ export function App() {
             void handleMoveProjectToShelf(project, shelf)
           }
           onTogglePin={(project) => void handleTogglePin(project)}
-          onReorder={(projectIds) => void handleReorderProjects(projectIds)}
+          onReorder={(projectIds, pin) =>
+            handleReorderProjects(projectIds, pin)
+          }
           onDeleteForever={(project) =>
             void handleDeleteProjectForever(project)
           }
           onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
           loadThumbnail={loadThumbnail}
+          thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
         />
         {settingsOverlay}
@@ -27104,8 +27512,21 @@ export function App() {
   const measureKey = keymap.label('view-measure')
     ? platformShortcutLabel(keymap.label('view-measure')!)
     : null;
+  // The pick the rail and the bar's readout carry. A History row's own card
+  // names the feature it opened, so they would only repeat it, behind that
+  // card: whether the row's result is consumed (a focus) or a live body the
+  // row selected. A face or edge picked since is a pick of its own, and its
+  // verbs show.
+  const railPick =
+    calloutWithOperation &&
+    !historyFocus &&
+    !historyRowSelection &&
+    interaction.mode !== 'sketch'
+      ? calloutWithOperation
+      : null;
+  // The readout at the head of the line already names the face.
   const faceSelectedHint = [
-    'Face selected',
+    railPick ? null : 'Face selected',
     keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
   ]
     .filter(Boolean)
@@ -27661,6 +28082,8 @@ export function App() {
         activeTool={tool ?? inPlace.tool}
         availability={shownAvailability}
         onLaunchTool={launchTool}
+        pick={railPick}
+        pickSummary={commandContextLabel(commandSelection) ?? ''}
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
@@ -27687,8 +28110,9 @@ export function App() {
     onIsolate: isolateBody,
     onShowAll: showAllBodies
   };
-  return (
+  const workspace = (
     <WorkspaceAppShell
+      covered={sharePage !== null}
       projectId={doc.projectId}
       loadingReady={
         displayedGeometryComplete ||
@@ -27899,19 +28323,6 @@ export function App() {
             header={columnHeader}
             tools={columnTools}
             footer={columnFooter}
-            selection={
-              // A History row's own card names the feature it opened, so
-              // the Selection card would only repeat it, behind that card:
-              // whether the row's result is consumed (a focus) or a live
-              // body the row selected. A face or edge picked since is a
-              // pick of its own, and its verbs show.
-              calloutWithOperation &&
-              !historyFocus &&
-              !historyRowSelection &&
-              interaction.mode !== 'sketch' ? (
-                <SelectionCard content={calloutWithOperation} />
-              ) : null
-            }
           />
         )
       }
@@ -28099,7 +28510,7 @@ export function App() {
             viewMode={modelingLocked}
             selectionCallout={calloutWithOperation}
             selectionFilterAutomatic={manualSelectionFilter === null}
-            // The Selection card names the pick and carries its verbs; the
+            // The bar names the pick and the rail carries its verbs; the
             // model keeps only the handle and its value. Where there is no
             // card (View, Tweak, a running tool) the pick keeps its name.
             pickLabel={calloutWithOperation === null}
@@ -28766,6 +29177,14 @@ export function App() {
                 : null
             }
             onToggleSection={toggleSectionView}
+            sectionPanelOpen={panelState.sectionPanelOpen}
+            onSectionPanelOpenChange={(open) =>
+              setPanelState((current) =>
+                current.sectionPanelOpen === open
+                  ? current
+                  : { ...current, sectionPanelOpen: open }
+              )
+            }
             onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
             // The slider was released, or a key repeat ended: cut it exactly.
@@ -29342,6 +29761,14 @@ export function App() {
             logOpen={activityLogOpen}
             onToggleLog={() => setActivityLogOpen((open) => !open)}
             prompt={workspacePrompt}
+            pick={
+              railPick ? (
+                <SelectionReadout
+                  label={railPick.label}
+                  detail={railPick.detail}
+                />
+              ) : null
+            }
             commandRow={
               inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar
@@ -29652,6 +30079,7 @@ export function App() {
                 }
                 searchKey={commandPaletteKey}
                 askUnavailable={assistantActivity.unavailable}
+                attachUnavailable={!assistantActivity.canAttach}
                 busy={assistantAvailable && assistantActivity.thinking}
                 unread={
                   assistantAvailable &&
@@ -30045,5 +30473,11 @@ export function App() {
         </>
       }
     />
+  );
+  return (
+    <>
+      {workspace}
+      {shareDestination}
+    </>
   );
 }

@@ -62,6 +62,16 @@ test('a question typed into the prompt goes to the stream standing on it', async
   expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(barBox!.y + 0.5);
   await expect(panel.locator('textarea')).toHaveCount(0);
 
+  // Stream and bar are one surface: the stream meets the bar's top edge
+  // with the bar's width, names itself in a header that holds its actions,
+  // and the bar carries attach and the Enter key while it stands there.
+  expect(Math.abs(panelBox!.y + panelBox!.height - barBox!.y)).toBeLessThan(1);
+  expect(Math.abs(panelBox!.width - barBox!.width)).toBeLessThan(1);
+  await expect(panel.locator('.assistant-head')).toContainText('Assistant');
+  const attach = page.getByRole('button', { name: 'Attach a drawing' });
+  await expect(attach).toHaveCount(1);
+  await expect(page.locator('.command-bar').locator(attach)).toBeVisible();
+
   // The proposal waiting at the foot of the stream is driven from the
   // empty prompt: Enter applies it.
   await expect(
@@ -98,9 +108,9 @@ test('a question typed into the prompt goes to the stream standing on it', async
     'Add a 10 mm cube'
   );
 
-  // Once the status goes quiet the guidance hint takes the bar's lane, but
-  // the stream's foot line stands there: the hint waits until it is tucked
-  // away rather than drawing over it.
+  // Once the status goes quiet the guidance hint would read in the idle
+  // bar, but the bar is the stream's composer: the hint waits until the
+  // stream is tucked away.
   const hint = page.locator('.workspace-hint');
   await expect(page.locator('.workspace-toast')).toHaveClass(/\bhidden\b/, {
     timeout: 15_000
@@ -111,6 +121,11 @@ test('a question typed into the prompt goes to the stream standing on it', async
   await page.getByRole('button', { name: 'Hide the assistant' }).click();
   await expect(panel).toHaveCount(0);
   await expect(search).toBeVisible();
+  // Tucked away, the bar is search again: attach goes with the stream.
+  await expect(attach).toBeHidden();
+  // The hint is the idle bar's resting line: it reads in the field once the
+  // bar lets go of focus, where the placeholder stands while it has it.
+  await search.blur();
   await expect(hint).toBeVisible();
 });
 

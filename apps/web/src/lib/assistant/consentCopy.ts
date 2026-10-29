@@ -120,6 +120,7 @@ export const ASSISTANT_CONSENT_ITEMS: readonly AssistantConsentItem[] = [
 const PROVIDER_NAMES: Record<string, string> = {
   openrouter: 'OpenRouter',
   openai: 'OpenAI',
+  anthropic: 'Anthropic',
   'responses-compatible': 'a Responses-compatible endpoint'
 };
 

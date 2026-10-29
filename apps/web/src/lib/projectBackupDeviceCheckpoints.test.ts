@@ -6,10 +6,16 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createProjectDocument,
   createSavedRevision,
-  restoreFromSaveState
+  restoreFromSaveState,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
-import { encodeImportedMeshPayload, toUserId } from '@openzcad/shared';
-import { api } from './api';
+import {
+  encodeImportedMeshPayload,
+  toArtifactId,
+  toAssetId,
+  toUserId
+} from '@openzcad/shared';
+import { api, rememberProjectFormats } from './api';
 import { preserveFailedCheckpoint } from './collaborationCheckpointFallback';
 import {
   listLocalSaveStateCheckpoints,
@@ -51,6 +57,134 @@ it('keeps canonical checkpoint backups compatible without a device-only marker',
   expect(state.document.nodes).toEqual(saved.nodes);
   expect(state.deviceOnly).toBeUndefined();
 });
+
+it('exports the captured state of a legacy encrypted save whose envelope advanced its version', async () => {
+  const captured = createSavedRevision(
+    createProjectDocument('Legacy encrypted save', toUserId('owner')),
+    'Retained before the change'
+  );
+  const point = captured.checkpoints.at(-1)!;
+  const sealed = { ...captured, version: captured.version + 1 };
+  rememberProjectFormats([
+    { projectId: captured.projectId, storageFormat: 2 }
+  ]);
+  vi.mocked(api.loadRevision).mockResolvedValue(sealed);
+  const backup = await parseProjectBackup(
+    await createProjectBackup(sealed, true, undefined, {
+      retainedRevisionIds: new Set([point.revisionId])
+    })
+  );
+  expect(backup.document.version).toBe(sealed.version);
+  expect(backup.saveStates).toEqual([
+    {
+      checkpointId: point.checkpointId,
+      document: withoutDerivedProjection(captured)
+    }
+  ]);
+  expect(sealed.version).toBe(captured.version + 1);
+});
+
+it.each([
+  'plaintext',
+  'foreign project',
+  'wrong checkpoint',
+  'wrong revision',
+  'larger version gap'
+] as const)(
+  'refuses legacy-looking saved states with %s', async (fault) => {
+    const captured = createSavedRevision(
+      createProjectDocument('Guarded legacy save', toUserId('owner')),
+      'Captured point'
+    );
+    const point = captured.checkpoints.at(-1)!;
+    const sealed = structuredClone(captured);
+    sealed.version += 1;
+    if (fault === 'foreign project')
+      sealed.projectId = 'proj_foreign' as typeof sealed.projectId;
+    if (fault === 'wrong checkpoint')
+      sealed.checkpoints.at(-1)!.checkpointId = 'checkpoint_other';
+    if (fault === 'wrong revision')
+      sealed.revisions.at(-1)!.revisionId = 'rev_other' as typeof point.revisionId;
+    if (fault === 'larger version gap') sealed.version += 1;
+    rememberProjectFormats([
+      {
+        projectId: captured.projectId,
+        storageFormat: fault === 'plaintext' ? 1 : 2
+      }
+    ]);
+    vi.mocked(api.loadRevision).mockResolvedValue(sealed);
+    await expect(
+      createProjectBackup(
+        { ...captured, version: captured.version + 2 },
+        true,
+        undefined,
+        { retainedRevisionIds: new Set([point.revisionId]) }
+      )
+    ).rejects.toThrow();
+  }
+);
+
+it.each(['new version', 'old artifact id'] as const)(
+  'uses the migrated signed save instead of a cached plaintext snapshot with %s',
+  async (stale) => {
+    const original = createSavedRevision(
+      {
+        ...createProjectDocument('Migrated backup', toUserId('owner')),
+        checkpoints: []
+      },
+      'Retained point'
+    );
+    if (stale === 'old artifact id') {
+      original.assets[toAssetId('legacy')] = {
+        assetId: toAssetId('legacy'),
+        artifactId: toArtifactId('artifact_plaintext'),
+        kind: 'thumbnail',
+        name: 'Original thumbnail',
+        contentType: 'image/webp',
+        storage: 'remote',
+        createdAt: original.checkpoints.at(-1)!.createdAt
+      };
+    }
+    await saveLocalSaveStates([original]);
+    const migratedVersion =
+      original.version + (stale === 'new version' ? 4 : 0);
+    const migrated = {
+      ...original,
+      assets: {},
+      version: migratedVersion,
+      checkpoints: original.checkpoints.map((checkpoint) => ({
+        ...checkpoint,
+        documentVersion: migratedVersion
+      }))
+    };
+    rememberProjectFormats([
+      { projectId: original.projectId, storageFormat: 2 }
+    ]);
+    const remote = vi.mocked(api.loadRevision).mockResolvedValue(migrated);
+    const backup = await parseProjectBackup(
+      await createProjectBackup(
+        { ...migrated, version: migrated.version + 1 },
+        true,
+        undefined,
+        {
+          retainedRevisionIds: new Set([
+            original.checkpoints.at(-1)!.revisionId
+          ])
+        }
+      )
+    );
+    expect(remote).toHaveBeenCalledWith(
+      original.projectId,
+      original.checkpoints.at(-1)!.revisionId
+    );
+    expect(backup.saveStates).toEqual([
+      {
+        checkpointId: original.checkpoints.at(-1)!.checkpointId,
+        document: withoutDerivedProjection(migrated)
+      }
+    ]);
+  }
+);
 
 it('moves a failed member save and its exclusive mesh source to a fresh device without publishing its checkpoint', async () => {
   const initial = createProjectDocument('Member project', toUserId('owner'));

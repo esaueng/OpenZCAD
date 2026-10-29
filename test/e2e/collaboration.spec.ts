@@ -54,11 +54,13 @@ async function hasCachedProjectThumbnail(page: Page): Promise<boolean> {
   );
 }
 
-test('loads the OpenZCAD shell', async ({ page }) => {
+test('loads the OpenZCAD shell', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
-  await expect(page.getByText('OpenZCAD')).toBeVisible();
-  await expect(page.getByText('parametric cad in the browser')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /OpenZCAD/ })
+  ).toBeVisible();
+  await expect(page.getByLabel('Project name')).toBeVisible();
 });
 
 for (const fromPublicShare of [false, true]) {
@@ -697,7 +699,7 @@ for (const active of [false, true]) {
 }
 
 for (const status of [404, 503]) {
-  test(`restores the active model URL when a replacement share returns ${status}`, async ({
+  test(`offers the active model when a replacement share returns ${status}`, async ({
     page
   }) => {
     await stubAnonymousApi(page);
@@ -719,11 +721,14 @@ for (const status of [404, 503]) {
     await page.evaluate(() => {
       window.location.hash = `share=${'b'.repeat(43)}`;
     });
-    await expect(page.getByRole('contentinfo')).toContainText(
+    await expect(page.getByRole('main', { name: 'Shared model' })).toContainText(
       status === 404
         ? 'This share link is no longer available'
         : 'Replacement unavailable.'
     );
+    expect(new URL(page.url()).hash).toBe(`#share=${'b'.repeat(43)}`);
+    await expect(page.locator('.breadcrumb')).toBeHidden();
+    await page.getByRole('button', { name: 'Return to previous model' }).click();
     expect(new URL(page.url()).hash).toBe(`#share=${'a'.repeat(43)}`);
     await expect(page.locator('.breadcrumb')).toContainText(document.name);
     await expect(
@@ -767,10 +772,10 @@ for (const status of [404, 503]) {
             : 'Unavailable share'
       })
     ).toBeVisible();
+    await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
     await page
-      .locator('.start-tile-open', {
-        hasText: 'Local project after failed link'
-      })
+      .getByRole('tabpanel', { name: 'Parts 1' })
+      .getByRole('button', { name: /^Local project after failed link/ })
       .click();
     await expect(page.locator('.breadcrumb')).toContainText(
       'Local project after failed link'
@@ -831,6 +836,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
             .getByRole('status')
             .filter({ hasText: 'This share link is no longer available' })
         ).toBeVisible();
+      await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
       try {
         if (action === 'create') {
           await page.getByLabel('Project name').fill('New shelf project');
@@ -900,7 +906,7 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
     await route.fulfill({ status: 401, json: { error: 'Signed out' } });
   });
   await page.goto(`/#share=${'a'.repeat(43)}`);
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'Shared model' })).toBeVisible();
   await expect(
     page
       .getByRole('status')
@@ -909,9 +915,7 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
   // Status lifetime must not erase the explanation before the user reads it.
   await page.waitForTimeout(6500);
   await expect(
-    page.getByText(
-      'This share link is no longer available. It may have been revoked.'
-    )
+    page.getByRole('heading', { name: 'This share link is unavailable' })
   ).toBeVisible();
 });
 
@@ -1079,7 +1083,7 @@ test('makes a durable share copy without storing the owner snapshot', async ({
   expect(ids).not.toContain(document.projectId);
 });
 
-test('saves incoming member updates through the room without refused account writes', async ({
+test('saves incoming member updates through the room without refused account writes', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   const document = createProjectDocument(
@@ -1444,7 +1448,7 @@ test('focuses signed-out invitation links on email sign-in and resumes them', as
   ).toBeNull();
 });
 
-test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
+test('keeps a shared-project viewer visibly read-only', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page, { collaborationRole: 'viewer' });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Viewer Role Part');
@@ -1911,7 +1915,7 @@ test('leaves the restore screen when a remembered project is missing', async ({
   );
 });
 
-test('keeps anonymous CAD creation local without calling cloud projects', async ({
+test('keeps anonymous CAD creation local without calling cloud projects', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubAnonymousApi(page);
@@ -1947,7 +1951,7 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
   expect(cloudProjectRequests).toBe(0);
 });
 
-test('signs in with an email code only when cloud profile access is requested', async ({
+test('signs in with an email code only when cloud profile access is requested', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   const emailApi = await stubEmailLoginApi(page);
@@ -2041,8 +2045,8 @@ test('signs in with an email code only when cloud profile access is requested', 
     page.getByRole('button', { name: 'Save to account' })
   ).toHaveCount(0);
   await expect(
-    page.locator('.settings-topbar > :last-child')
-  ).toHaveAccessibleName('Back to projects');
+    page.locator('.settings-close')
+  ).toHaveAccessibleName('Close settings and go back to projects');
   await page.getByRole('button', { name: 'General', exact: true }).click();
   await page
     .getByRole('checkbox', { name: 'Reopen the last project' })

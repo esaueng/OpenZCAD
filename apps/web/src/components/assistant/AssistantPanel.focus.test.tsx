@@ -1,7 +1,15 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi
+} from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import { saveAssistantThread } from '../../lib/assistant/history';
@@ -313,7 +321,14 @@ describe('focus after a proposal is decided', () => {
 });
 
 describe('focus in the drawing tray', () => {
-  it('moves to the next drawing, then to "attach" once the tray is empty', async () => {
+  it('moves to the next drawing, then to the prompt line once the tray is empty', async () => {
+    // The prompt line carries "attach" now, and is where the next ask goes.
+    const line = window.document.createElement('div');
+    line.setAttribute('data-assistant-prompt', '');
+    const prompt = window.document.createElement('input');
+    line.append(prompt);
+    window.document.body.append(line);
+    onTestFinished(() => line.remove());
     const user = userEvent.setup();
     render(<AssistantPanel {...panelProps()} />);
     await act(async () => {});
@@ -332,8 +347,35 @@ describe('focus in the drawing tray', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Remove side.png' }));
-    expect(window.document.activeElement).toBe(
-      screen.getByRole('button', { name: 'Attach a drawing' })
+    expect(window.document.activeElement).toBe(prompt);
+  });
+});
+
+describe('a full drawing tray', () => {
+  it('tells the prompt line, which then offers no pick it would turn away', async () => {
+    const onActivity = vi.fn();
+    render(<AssistantPanel {...panelProps({ onActivity })} />);
+    await act(async () => {});
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canAttach: true })
+    );
+    await act(async () => {
+      sendAssistantPromptFiles(
+        ['a', 'b', 'c', 'd'].map(
+          (name) => new File([name], `${name}.png`, { type: 'image/png' })
+        )
+      );
+    });
+    await waitFor(() =>
+      expect(onActivity).toHaveBeenLastCalledWith(
+        expect.objectContaining({ canAttach: false })
+      )
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: 'Remove a.png' }));
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canAttach: true })
     );
   });
 });

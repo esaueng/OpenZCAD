@@ -16,7 +16,7 @@ import {
   pickObjectsBody
 } from './openzcad-fixtures';
 
-test('discloses free built-in AI data use and lets users choose a personal model', async ({
+test('discloses free built-in AI data use and lets users choose a personal model', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page, { assistantEnabled: true });
@@ -298,7 +298,7 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
   }
 });
 
-test('opens new projects blank with the assistant collapsed', async ({
+test('opens new projects blank with the assistant collapsed', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page, { assistantEnabled: true });
@@ -327,7 +327,7 @@ test('opens new projects blank with the assistant collapsed', async ({
   await expect(page.locator('.viewer-notice')).toHaveCount(0);
 });
 
-test('keeps every workspace surface inside a narrow viewport', async ({
+test('keeps every workspace surface inside a narrow viewport', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -518,7 +518,7 @@ function pageGround(page: Page) {
   return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 }
 
-test('theme setting repaints the chrome and follows the system preference', async ({
+test('theme setting repaints the chrome and follows the system preference', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -1083,7 +1083,7 @@ for (const tier of ['free', 'premium'] as const) {
   });
 }
 
-test('optional Glimpse analytics require a new opt-in and withdraw immediately', async ({
+test('optional Glimpse analytics require a new opt-in and withdraw immediately', { tag: '@ci-smoke' }, async ({
   page
 }) => {
   await stubApi(page);
@@ -1387,3 +1387,40 @@ test('consented diagnostics count transaction edits without sending names', asyn
   await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('1');
   expect(JSON.stringify(requests)).not.toContain('Private');
 });
+
+test(
+  'Anthropic provider selects its official API and persists after reload',
+  { tag: '@smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page
+      .getByRole('button', { name: 'AI Assistant', exact: true })
+      .click();
+    await page.getByRole('checkbox', { name: 'AI assistant' }).check();
+    await page
+      .getByRole('radio', { name: 'Personal token', exact: true })
+      .click();
+    await page
+      .getByLabel('AI provider', { exact: true })
+      .selectOption('anthropic');
+    await expect(page.getByLabel('AI model', { exact: true })).toHaveValue(
+      'claude-sonnet-5-5'
+    );
+    await expect(page.getByLabel('AI API endpoint')).toHaveCount(0);
+    await page.getByLabel('AI reasoning level').selectOption('off');
+    await page.getByLabel('AI model', { exact: true }).fill('claude-opus-5-5');
+    await expect(page.getByLabel('AI reasoning level')).toHaveValue('provider-default');
+    await expect(page.getByRole('option', { name: 'Off', exact: true })).toBeDisabled();
+    await page.getByLabel('AI model', { exact: true }).fill('claude-sonnet-5-5');
+    await page.reload();
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+    await expect(page.getByLabel('AI provider', { exact: true })).toHaveValue(
+      'anthropic'
+    );
+    await expect(page.getByLabel('AI model', { exact: true })).toHaveValue(
+      'claude-sonnet-5-5'
+    );
+  }
+);

@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { toHex } from '@openzcad/crypto';
+import { fromBase64Url, toBase64Url, toHex } from '@openzcad/crypto';
 import { isE2eeMlsProposalStorageReady } from '@openzcad/cloudflare-adapters';
 import { proposalErasureStatements } from '../apps/web/worker/e2eeProposals';
 import { ownProjectRole } from '../apps/web/src/lib/e2ee/memberships';
@@ -187,6 +187,72 @@ async function leavesByUser(d: Device, projectId: string) {
 }
 
 describe('the owner removes a member (slice 5-5)', { timeout: 60_000 }, () => {
+  it.each([2, 4])(
+    'never reports removal success after two staggered SelfRemoves (round budget %s)',
+    async (attempts) => {
+      const { srv, laptop, member, otherDesktop, projectId } =
+        await threeMembers();
+      const before = serverKeyEpoch(srv, projectId);
+      const depart = async (d: Device) => {
+        await catchUpProjectGroup(d.groups, projectId);
+        const { leaves } = await laptop.groups.api.leaves(projectId);
+        const message = await d.sessions.proposeSelfRemove(
+          { userId: OTHER, deviceId: d.deviceId!, projectId },
+          {
+            lists: accounts().map((a) => a.list),
+            certifications: leaves.map((leaf) => ({
+              userId: leaf.userId,
+              deviceId: leaf.deviceId,
+              leafKey: fromBase64Url(leaf.leafKey),
+              certification: fromBase64Url(leaf.certification)
+            }))
+          }
+        );
+        await d.groups.api.propose!(projectId, {
+          epoch: serverKeyEpoch(srv, projectId),
+          deviceId: d.deviceId!,
+          kind: 'self-remove',
+          message: toBase64Url(message)
+        });
+      };
+      await depart(member);
+      let staggered = false;
+      laptop.before = async (path, init) => {
+        if (
+          !staggered &&
+          init.method === 'GET' &&
+          path.endsWith('/mls/group-info') &&
+          serverKeyEpoch(srv, projectId) === before + 1
+        ) {
+          staggered = true;
+          // A hostile server restores access to stage a second still-valid
+          // leaf's SelfRemove in the next epoch, before the owner's drop.
+          memberRow(srv, projectId, OTHER, 'editor');
+          await depart(otherDesktop);
+        }
+      };
+      const removal = removeMember(
+        { ...laptop.groups, attempts },
+        projectId,
+        OTHER
+      );
+      if (attempts === 2) {
+        await expect(removal).rejects.toMatchObject({ code: 'epoch-lost' });
+      } else {
+        const state = await removal;
+        expect(state.keyEpoch).toBe(before + 3);
+        expect(
+          (
+            await epochRoles(laptop.groups, projectId, state.keyEpoch)
+          ).users.some((u) => u.userId === OTHER)
+        ).toBe(false);
+        expect(mirrored(srv, projectId).some((m) => m.user_id === OTHER)).toBe(
+          false
+        );
+      }
+      expect(staggered).toBe(true);
+    }
+  );
   it('drops the identity, its row, wraps and consent in the Commit, replaces the dedupe secret, and shuts the member out of later keys and writes', async () => {
     const { srv, laptop, member, projectId } = await sharedProject(
       accounts(),

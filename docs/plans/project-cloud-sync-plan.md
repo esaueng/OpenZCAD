@@ -6,6 +6,14 @@
 > historical; technical contracts and explicit exclusions remain reference material.
 > Implemented design record; remaining live acceptance maps to L01.
 
+**28 October 2026 amendment:** conflict choices now replace the unwanted version
+on the original project without automatic recovery projects. Only Keep both
+saves a separate ordinary local project before adopting remote; a failed remote
+adoption reuses that saved copy on retry. The compact dialog presents clickable
+rows with recorded modified timestamps and a Newer label. These timestamps do
+not decide synchronization or bypass fencing. This supersedes recovery-copy-first
+ordering in the historical phase notes below; ADR-016 records the current contract.
+
 Status: all phases implemented. Decisions are recorded in
 [ADR-016](../adrs/ADR-016-project-cloud-sync.md); the phase notes below are kept
 as the record of what each one covered and why.

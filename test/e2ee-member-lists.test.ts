@@ -6,8 +6,8 @@
  * browser's pins. Node devices of two accounts run the real client modules
  * with the in-process MLS engine against the real Worker over SQLite.
  */
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { toHex } from '@openzcad/crypto';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { signRevocationCutoffs, toBase64Url, toHex } from '@openzcad/crypto';
 import type { E2eeContext } from '../apps/web/src/lib/e2ee/accountKeys';
 import { memoryContactPins } from '../apps/web/src/lib/e2ee/contactPins';
 import {
@@ -48,12 +48,15 @@ beforeAll(async () => {
 
 afterEach(() => {
   forgetAllProjectKeys();
+  vi.restoreAllMocks();
 });
 
 /** The owner's encrypted project, with OTHER an editor who saved an edit. */
-async function sharedWithEdit() {
-  const srv = newServer([owner, other]);
-  const laptop = device(srv, owner, 'owner_laptop', { members: [other] });
+async function sharedWithEdit(memberAccount = other) {
+  const srv = newServer([owner, memberAccount]);
+  const laptop = device(srv, owner, 'owner_laptop', {
+    members: [memberAccount]
+  });
   const { document } = await createEncrypted(laptop);
   const projectId = document.projectId;
   srv.db
@@ -67,7 +70,9 @@ async function sharedWithEdit() {
     setRoles: [{ userId: OTHER, role: 'editor' }]
   });
   // The Welcome's stand-in (slice 5-3): epoch 1's keys, handed over.
-  const member = device(srv, other, 'other_laptop', { members: [owner] });
+  const member = device(srv, memberAccount, 'other_laptop', {
+    members: [owner]
+  });
   await rememberExpectedProjectOwner(member.groups, projectId, owner.list);
   await postOwnEpochKeys(
     member.groups,
@@ -120,7 +125,98 @@ function contactsBrowser(srv: Server, pins = memoryContactPins()) {
   return { d, pins, requests, inspected };
 }
 
+it('opens a cold shared project within its verification request budget', async () => {
+  const { srv, projectId } = await sharedWithEdit();
+  const { d, requests } = contactsBrowser(srv);
+  expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
+  expect(
+    requests.filter((path) => path.endsWith('/mls/leaves')).length
+  ).toBeLessThanOrEqual(12);
+  expect(requests.length).toBeLessThanOrEqual(49);
+});
+
 describe('co-members’ device lists from contacts (5-1 into 5-2)', () => {
+  it('never combines a live signer snapshot with cutoffs verified against a later removal', async () => {
+    const member = await makeAccount(OTHER, ['other_laptop', 'other_desktop']);
+    const { srv, projectId } = await sharedWithEdit(member);
+    const oldList = member.list;
+    const d = device(srv, owner, 'owner_desktop');
+    const { metadata } = await d.documents.loadDocument(projectId);
+    await member.revoke(srv.db, 'other_laptop');
+    let reads = 0;
+    Object.assign(d.groups, {
+      members: { lists: async () => [reads++ === 0 ? oldList : member.list] }
+    });
+    const statements = async (cutoffEpoch: number) => {
+      const signed = await signRevocationCutoffs(member.identityPrivateKey, {
+        userId: OTHER,
+        generation: 1,
+        entrySequence: member.list.pin.sequence,
+        entryHash: member.list.headHash,
+        issuedAt: 1_700_000_010_000,
+        cutoffs: [{ projectId, cutoffEpoch }]
+      });
+      return {
+        statements: [
+          {
+            userId: OTHER,
+            generation: 1,
+            entrySequence: member.list.pin.sequence,
+            entryHash: toHex(member.list.headHash),
+            statement: toBase64Url(signed.statement),
+            signature: toBase64Url(signed.signature),
+            updatedAt: '2026-10-24T00:00:00.000Z'
+          }
+        ]
+      };
+    };
+    const cutoffs = vi
+      .spyOn(d.groups.api, 'memberCutoffs')
+      .mockResolvedValue(await statements(metadata.head.keyEpoch + 1));
+    const crypto = await import('@openzcad/crypto');
+    const verify = vi.spyOn(crypto, 'verifyAuthoredLogRecord');
+    // The first directory read races the removal. Historical data remains
+    // valid, but no signature decision may mix the two snapshots.
+    expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
+    const inputs = verify.mock.calls[0]![1];
+    expect(inputs.deviceLists.find((list) => list.userId === OTHER)).toBe(
+      oldList
+    );
+    expect(inputs.cutoffs?.size).toBe(0);
+    // The next read sees the new list and still accepts a historical head.
+    expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
+    expect(verify.mock.calls.at(-1)![1].deviceLists).toContain(member.list);
+    // A head at the cutoff is refused, including on an already warm client.
+    cutoffs.mockResolvedValue(await statements(metadata.head.keyEpoch));
+    await expect(d.store.loadProject(projectId)).rejects.toBeInstanceOf(
+      EncryptedProjectIntegrityError
+    );
+  });
+
+  it('refreshes membership inputs on the next read and refuses a withdrawn co-member list', async () => {
+    const { srv, projectId } = await sharedWithEdit();
+    const { d, requests } = contactsBrowser(srv);
+    expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
+    requests.length = 0;
+    const real = d.fetcher;
+    d.fetcher = async (path, init) =>
+      path.endsWith(`/users/${OTHER}/device-list`)
+        ? new Response(
+            JSON.stringify({
+              error: 'Not found.',
+              code: 'E2EE_CONTACT_NOT_FOUND'
+            }),
+            {
+              status: 404,
+              headers: { 'content-type': 'application/json' }
+            }
+          )
+        : real(path, init);
+    await expect(d.store.loadProject(projectId)).rejects.toBeInstanceOf(
+      EncryptedProjectIntegrityError
+    );
+    expect(requests).toContain(`/api/e2ee/projects/${projectId}/mls/leaves`);
+  });
   it('reads a member’s version with their seen list and pins its head', async () => {
     const { srv, projectId } = await sharedWithEdit();
     const { d, pins, requests, inspected } = contactsBrowser(srv);

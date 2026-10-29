@@ -96,7 +96,7 @@ test('measuring in View leaves the Build selection untouched', async ({
   await page.mouse.click(buildEdge.x, buildEdge.y);
   await expect(status).toContainText('1 edge selected');
   const selectedBefore = await page
-    .locator('.selection-callout-chip .selection-callout-name')
+    .locator('.selection-readout .selection-callout-name')
     .textContent();
   expect(selectedBefore).toBeTruthy();
 
@@ -116,7 +116,7 @@ test('measuring in View leaves the Build selection untouched', async ({
   // thing that happened, not the state that survived it.
   await switchWorkspace(page, 'Build');
   await expect(
-    page.locator('.selection-callout-chip .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toHaveText(selectedBefore!);
   await expect(status).toContainText('Edge selected');
 });
@@ -146,7 +146,7 @@ test('a measured pick arms no sketch and no drag handle', async ({ page }) => {
   await expect(page.getByRole('form', { name: 'Move controls' })).toBeHidden();
   // And no selection was made to produce the measurement.
   await expect(
-    page.locator('.selection-callout-chip .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toBeHidden();
   await expect(page.getByRole('contentinfo')).toContainText('measured');
 });
@@ -169,12 +169,12 @@ test('measuring an edge records it without selecting it', async ({ page }) => {
   // The running edge set is the measure tool's own state now, so recording a
   // length leaves the workspace selection empty.
   await expect(
-    page.locator('.selection-callout-chip .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toBeHidden();
 
   await switchWorkspace(page, 'Build');
   await expect(
-    page.locator('.selection-callout-chip .selection-callout-name')
+    page.locator('.selection-readout .selection-callout-name')
   ).toBeHidden();
 });
 
@@ -253,7 +253,7 @@ test('a hover on an edge snaps to a named point', async ({ page }) => {
   await expect(glyph).toHaveText(/Endpoint|Midpoint|Center/);
 });
 
-test('a measurement survives a reload', async ({ page }) => {
+test('a measurement survives a reload', { tag: '@ci-smoke' }, async ({ page }) => {
   // The whole promise of persisting them. Measurements belong to the project,
   // not to the tab: someone who measures a part, closes the laptop and comes
   // back to check a figure should find it.

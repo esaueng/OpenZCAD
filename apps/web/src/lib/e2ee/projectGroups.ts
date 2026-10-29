@@ -1256,7 +1256,8 @@ async function openArchive(
   projectId: string,
   keyEpoch: number,
   projectKey: Uint8Array,
-  archive: E2eeKeyArchiveRecord
+  archive: E2eeKeyArchiveRecord,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<KeyArchiveBody> {
   const refuse = (why: string): never => {
     throw new ProjectGroupError(
@@ -1266,7 +1267,7 @@ async function openArchive(
   };
   if (archive.keyEpoch !== keyEpoch) refuse('names another epoch');
   const envelope = bytes(archive.envelope);
-  const lists = await projectDeviceLists(ctx, projectId);
+  const lists = deviceLists ?? (await projectDeviceLists(ctx, projectId));
   // Device ids are not unique across accounts: any list's key may verify.
   const candidates = lists.flatMap((list) => {
     const key = signerKey(list, archive.signerDeviceId);
@@ -1352,7 +1353,8 @@ async function openArchive(
 export async function epochAuthenticatorForEpoch(
   ctx: ProjectGroupContext,
   projectId: string,
-  keyEpoch: number
+  keyEpoch: number,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<Uint8Array> {
   const projectKey = await projectKeyForEpoch(ctx, projectId, keyEpoch);
   const body = await openArchive(
@@ -1360,7 +1362,8 @@ export async function epochAuthenticatorForEpoch(
     projectId,
     keyEpoch,
     projectKey,
-    await fetchArchive(ctx, projectId, keyEpoch)
+    await fetchArchive(ctx, projectId, keyEpoch),
+    deviceLists
   );
   return new Uint8Array(body.epochAuthenticator);
 }
@@ -1470,7 +1473,7 @@ const previousKeysOf = (
     .map(([keyEpoch, key]) => ({ keyEpoch, key }));
 
 /** Bind application generation numbering to independently authenticated roots. */
-async function authorityManifestForState(
+export async function authorityManifestForState(
   ctx: ProjectGroupContext,
   projectId: string,
   keyEpoch: number,
@@ -2915,10 +2918,9 @@ export async function removeMember(
   projectId: string,
   userId: string
 ): Promise<ProjectGroupState> {
-  let state: ProjectGroupState | null = null;
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < (ctx.attempts ?? DEFAULT_ATTEMPTS); round++) {
     let departing = false;
-    state = await commitLoop(
+    const state = await commitLoop(
       ctx,
       projectId,
       async (status, _group, departures) => {
@@ -2935,7 +2937,10 @@ export async function removeMember(
             'The owner cannot be removed from an encrypted project.'
           );
         }
-        if (!status.roles?.users.some((u) => u.userId === userId)) return null;
+        if (!status.roles?.users.some((u) => u.userId === userId)) {
+          departing = false;
+          return null;
+        }
         departing = departures.leaving.includes(userId);
         // Its own departure first; the drop follows in the next round.
         if (departing) return { request: {}, rotation: false };
@@ -2944,7 +2949,10 @@ export async function removeMember(
     );
     if (!departing) return state;
   }
-  return state!;
+  throw new ProjectGroupError(
+    'epoch-lost',
+    'The member kept departing while this device removed them. Try again.'
+  );
 }
 
 /**
@@ -3570,9 +3578,12 @@ export function forgetEpochRoles(userId: string, projectId: string): void {
 export async function epochRoles(
   ctx: ProjectGroupContext,
   projectId: string,
-  keyEpoch: number
+  keyEpoch: number,
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<ProjectRoles> {
-  return (await epochAuthority(ctx, projectId, keyEpoch)).roles;
+  return (
+    await epochAuthority(ctx, projectId, keyEpoch, undefined, deviceLists)
+  ).roles;
 }
 
 type VerifiedEpochAuthority = EpochAuthority & {
@@ -3594,7 +3605,9 @@ export async function epochAuthority(
     readonly body: KeyArchiveBody;
     readonly key: Uint8Array;
     readonly genesis?: boolean;
-  }
+  },
+  /** Current, verified lists already read by this log-verification operation. */
+  deviceLists?: readonly VerifiedDeviceList[]
 ): Promise<VerifiedEpochAuthority> {
   try {
     await loadProjectAuthority(ctx, projectId).catch(async (error: unknown) => {
@@ -3620,7 +3633,7 @@ export async function epochAuthority(
       [...decodeMlsAuthorityManifest(pinned.statement).roots]
         .reverse()
         .find((root) => root.keyEpochBase <= keyEpoch);
-    const heads = await projectDeviceLists(ctx, projectId);
+    const heads = deviceLists ?? (await projectDeviceLists(ctx, projectId));
     const cacheId = JSON.stringify([
       getKeySessionRevision(),
       projectId,
@@ -3653,7 +3666,8 @@ export async function epochAuthority(
         projectId,
         keyEpoch,
         key,
-        await fetchArchive(ctx, projectId, keyEpoch)
+        await fetchArchive(ctx, projectId, keyEpoch),
+        heads
       ));
     const suppliedManifest = body.authorityManifest ?? pinned;
     if (!suppliedManifest)

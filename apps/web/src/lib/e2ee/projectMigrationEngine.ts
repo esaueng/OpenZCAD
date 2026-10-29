@@ -72,6 +72,9 @@ import type { EncryptedDocumentsApi } from './encryptedDocumentsApi';
 import { EXPORT_ARTIFACT_KINDS, exportMetadata } from './encryptedProjectInfo';
 import type { EncryptedProjectStore } from './encryptedProjectStore';
 import type { MigrationPlaintextSource } from './migrationPlaintextSource';
+import { prepareProjectSources, type ProjectSource } from '../projectSources';
+import { checksum } from '../projectBackup';
+import { meshPayloadArchive } from '../importArchival';
 import type { InvitationContext } from './invitations';
 import {
   MigrationMembersNotReadyError,
@@ -190,6 +193,8 @@ export interface MigrationEngineDeps {
   readonly fetcher: Fetch;
   readonly migrations: ProjectMigrationsApi;
   readonly plaintext: MigrationPlaintextSource;
+  /** A verified local source can recover an unavailable legacy archive. */
+  loadSource?(checksumSha256: string): Promise<Uint8Array | null>;
   /** The encrypted clients, built once over the leased fetcher. */
   createStaging(leased: Fetch): MigrationStagingClients;
   readonly leases?: MigrationLeaseStore;
@@ -293,6 +298,8 @@ export function migrationErrorOf(error: unknown): MigrationError {
     case 'E2EE_KEYS_LOCKED':
     case 'E2EE_READ_ONLY_DEVICE':
     case 'E2EE_DEVICE_NOT_CERTIFIED':
+      return { code, retryable: false, message };
+    case 'E2EE_MIGRATION_FILE_MISSING':
       return { code, retryable: false, message };
   }
   if (error instanceof Error && error.name === 'UnstorableDocumentError') {
@@ -629,7 +636,11 @@ export function createProjectMigrationEngine(
 
     // The plaintext, as the lock froze it.
     await check('read');
-    const head = await plaintext.loadProject(projectId);
+    const [head, listedRevisions, listedArtifacts] = await Promise.all([
+      plaintext.loadProject(projectId),
+      plaintext.listRevisions(projectId),
+      plaintext.listArtifacts(projectId)
+    ]);
     if (head.version !== migration.sourceVersion) {
       throw new RestartError(
         'stale',
@@ -642,19 +653,14 @@ export function createProjectMigrationEngine(
     const order = new Map(
       head.revisions.map((r, index) => [r.revisionId as string, index])
     );
-    const revisions: RevisionSummary[] = [
-      ...(await plaintext.listRevisions(projectId)).revisions
-    ].sort(
+    const revisions: RevisionSummary[] = [...listedRevisions.revisions].sort(
       (a, b) =>
         (order.get(a.revisionId) ?? -1) - (order.get(b.revisionId) ?? -1) ||
         a.createdAt.localeCompare(b.createdAt) ||
         a.revisionId.localeCompare(b.revisionId)
     );
     const artifacts = new Map<string, ArtifactRecord>(
-      (await plaintext.listArtifacts(projectId)).map((artifact) => [
-        artifact.artifactId,
-        artifact
-      ])
+      listedArtifacts.map((artifact) => [artifact.artifactId, artifact])
     );
     const exports = [...artifacts.values()].filter((artifact) =>
       EXPORT_ARTIFACT_KINDS.has(artifact.kind)
@@ -689,6 +695,7 @@ export function createProjectMigrationEngine(
     // The journal: what an earlier run staged, verified.
     let stagedVersion = migration.stagedVersion;
     const staged = new Set<string>();
+    const revisionVersions = new Map<string, number>();
     if (stagedVersion > 0) {
       await check('journal');
       try {
@@ -696,7 +703,8 @@ export function createProjectMigrationEngine(
         for (const revisionId of map.keys()) {
           // Opening each one hands this page its blob keys, so the dedupe
           // tags find the files it already stored.
-          await store.loadRevision(projectId, revisionId);
+          const saved = await store.loadRevision(projectId, revisionId);
+          if (saved) revisionVersions.set(revisionId, saved.version);
           staged.add(revisionId);
         }
       } catch (error) {
@@ -713,8 +721,76 @@ export function createProjectMigrationEngine(
       }
     }
 
+    // Encryption gives retained saves new signed versions. Keep the head's
+    // checkpoint identities aligned with those versions, including a resume's
+    // already-staged journal, so backups can restore each retained snapshot.
+    function withCheckpointVersions(
+      document: ProjectDocument,
+      current?: { revisionId: string; version: number }
+    ): ProjectDocument {
+      return {
+        ...document,
+        checkpoints: document.checkpoints.map((checkpoint) => ({
+          ...checkpoint,
+          documentVersion:
+            (checkpoint.revisionId === current?.revisionId
+              ? current.version
+              : revisionVersions.get(checkpoint.revisionId)) ??
+            checkpoint.documentVersion
+        }))
+      };
+    }
+
     // Files: each one stored once, named by its blob id.
     const blobIds = new Map<string, string>();
+    const sourceBlobs = new Map<string, string>();
+    async function storeSource(source: ProjectSource): Promise<string> {
+      const { ref } = source;
+      const key = `${source.kind}:${ref.checksumSha256}:${ref.logicalBytes}`;
+      const known = sourceBlobs.get(key);
+      if (known) return known;
+      await check('file');
+      const missing = () =>
+        new ApiError(
+          409,
+          `Required rebuild data for "${source.name}" is unavailable, including in saved history. Try a device that opened this project, or restore a complete .openzcad backup.`,
+          'E2EE_MIGRATION_FILE_MISSING'
+        );
+      let bytes =
+        source.bytes ??
+        (await deps.loadSource?.(ref.checksumSha256).catch(() => null));
+      const matches = async (value: Uint8Array | null | undefined) =>
+        value?.byteLength === ref.logicalBytes &&
+        (await checksum(value)) === ref.checksumSha256;
+      if (!(await matches(bytes))) {
+        let body: Blob;
+        try {
+          body = await plaintext.download(source.artifactId, ref.logicalBytes);
+        } catch (error) {
+          if (
+            statusOf(error) === 404 ||
+            codeOf(error) === 'E2EE_MIGRATION_FILE_MISSING'
+          )
+            throw missing();
+          throw error;
+        }
+        if (body.size !== ref.logicalBytes) throw missing();
+        bytes = new Uint8Array(await body.arrayBuffer());
+        if (!(await matches(bytes))) throw missing();
+      }
+      const blobId = await blobs.archive(projectId, {
+        fileName:
+          source.kind === 'mesh-payload'
+            ? meshPayloadArchive(source.name).fileName
+            : source.name,
+        kind: source.kind,
+        contentType: source.contentType,
+        body: new Blob([new Uint8Array(bytes!)])
+      });
+      sourceBlobs.set(key, blobId);
+      advance(ref.logicalBytes);
+      return blobId;
+    }
     async function storeFile(record: ArtifactRecord): Promise<string> {
       const known = blobIds.get(record.artifactId);
       if (known) return known;
@@ -732,7 +808,9 @@ export function createProjectMigrationEngine(
     async function encryptedDocument(
       document: ProjectDocument
     ): Promise<ProjectDocument> {
-      for (const artifactId of importArtifactIds(document)) {
+      const prepared = await prepareProjectSources(document, storeSource);
+      for (const artifactId of importArtifactIds(prepared)) {
+        if (references.get(projectId, artifactId)) continue;
         if (blobIds.has(artifactId)) continue;
         await check('file');
         const record =
@@ -746,7 +824,7 @@ export function createProjectMigrationEngine(
         }
         await storeFile(record);
       }
-      return withBlobIds(document, blobIds);
+      return withBlobIds(prepared, blobIds);
     }
 
     const info = (): ProjectInfoBody => ({ name: head.name, exports: [] });
@@ -789,10 +867,17 @@ export function createProjectMigrationEngine(
           projectId,
           reason: revision.reason,
           expectedVersion: stagedVersion,
-          document: { ...document, version: stagedVersion },
+          document: {
+            ...withCheckpointVersions(document, {
+              revisionId: revision.revisionId,
+              version: stagedVersion + 1
+            }),
+            version: stagedVersion
+          },
           savedRevisionId: revision.revisionId
         })
       ).version;
+      revisionVersions.set(revision.revisionId, stagedVersion);
       staged.add(revision.revisionId);
       done++;
       advance(revision.documentBytes, { revisionsDone: done });
@@ -809,7 +894,7 @@ export function createProjectMigrationEngine(
     await store.saveProjectDocument({
       projectId,
       expectedVersion: stagedVersion,
-      document: { ...document, version: headVersion }
+      document: { ...withCheckpointVersions(document), version: headVersion }
     });
     advance(documentBytes(head));
 

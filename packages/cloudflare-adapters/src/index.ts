@@ -292,7 +292,7 @@ export interface CloudflareEnv {
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
   EMAIL?: SendEmail;
-  AI_PROVIDER?: 'openai' | 'openrouter' | 'responses-compatible';
+  AI_PROVIDER?: 'openai' | 'openrouter' | 'anthropic' | 'responses-compatible';
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
   /** Backward-compatible OpenAI-specific secret name. */
@@ -5052,7 +5052,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // A staged session reserves the part only under its live lease, of
     // either direction (#925 follow-up: a decrypt staging's session too).
     const leaseFence = this.uploadLeaseFence(session);
-    let reserved: number | undefined;
+    let reserved: string | undefined;
     try {
       const result = await this.env.DB.prepare(
         `INSERT INTO artifact_upload_parts
@@ -5067,7 +5067,8 @@ export class D1R2PersistenceService implements PersistenceService {
          ON CONFLICT(upload_session_id, part_number) DO UPDATE SET
            bytes = excluded.bytes,
            etag = NULL,
-           reservation_token = excluded.reservation_token`
+           reservation_token = excluded.reservation_token
+         RETURNING reservation_token`
       )
         .bind(
           uploadSessionId,
@@ -5076,15 +5077,17 @@ export class D1R2PersistenceService implements PersistenceService {
           reservationToken,
           ...(leaseFence ? [uploadSessionId] : [])
         )
-        .run();
-      reserved = result.meta?.changes;
+        .first<{ reservation_token: string }>();
+      // Reservation triggers also update the session and account totals.
+      // Match this write's token instead of D1's trigger-inclusive count.
+      reserved = result?.reservation_token;
     } catch (error) {
       throw artifactAccountingError(
         error,
         (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
       );
     }
-    if (leaseFence && reserved !== 1) {
+    if (leaseFence && reserved !== reservationToken) {
       await this.refuseIfUploadLeaseLost(session);
       throw new ArtifactStorageError('Upload part could not be reserved.');
     }
@@ -5602,7 +5605,8 @@ export class D1R2PersistenceService implements PersistenceService {
                  SELECT 1 FROM project_members m
                  WHERE m.project_id = projects.id AND m.user_id = ?
                    AND m.role = 'editor'))
-           )`
+           )
+         RETURNING id`
         )
         .bind(
           uploadSessionId,
@@ -5624,8 +5628,10 @@ export class D1R2PersistenceService implements PersistenceService {
           userId,
           userId
         )
-        .run();
-      if (inserted.meta?.changes !== 1) {
+        .first<{ id: string }>();
+      // D1's change count includes the upload-accounting trigger. Only the
+      // row returned by this fenced insert proves this request created it.
+      if (inserted?.id !== uploadSessionId) {
         throw new EncryptedBlobError(
           401,
           'E2EE_SESSION_REQUIRED',

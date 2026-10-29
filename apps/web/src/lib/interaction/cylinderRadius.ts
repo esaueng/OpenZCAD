@@ -1,4 +1,8 @@
-import type { BodyRepresentation, Vector3 } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  FaceTopology,
+  Vector3
+} from '@openzcad/shared';
 import type { CylinderPreviewProfile } from '@openzcad/viewport';
 import { geometryTolerance } from '@openzcad/geometry';
 
@@ -66,6 +70,81 @@ export function sameCylinderAxis(
     pointDistance(firstStart, secondEnd) <= tolerance &&
     pointDistance(firstEnd, secondStart) <= tolerance;
   return aligned || reversed;
+}
+
+/**
+ * The cylindrical face a committed radius edit left on the same axis at the
+ * new radius, overlapping the source wall's span along it: what stays
+ * selected once a drag applies, so the bore keeps its handle instead of the
+ * selection falling back to the whole body. A separate band of a stepped or
+ * grooved part can share the axis and radius; the overlap keeps it out. Null
+ * when no face, or more than one, fits.
+ */
+export function findResizedCylinderFace(
+  faces: readonly FaceTopology[],
+  axisStart: Vector3,
+  axisEnd: Vector3,
+  radius: number
+): FaceTopology | null {
+  const axis = normalized({
+    x: axisEnd.x - axisStart.x,
+    y: axisEnd.y - axisStart.y,
+    z: axisEnd.z - axisStart.z
+  });
+  if (!axis) return null;
+  const scale = Math.max(1, radius, pointDistance(axisStart, axisEnd));
+  const tolerance = scale * 1e-6;
+  const along = (point: Vector3) =>
+    dot(
+      {
+        x: point.x - axisStart.x,
+        y: point.y - axisStart.y,
+        z: point.z - axisStart.z
+      },
+      axis
+    );
+  const sourceEnd = along(axisEnd);
+  const offAxis = (point: Vector3) => {
+    const relative = {
+      x: point.x - axisStart.x,
+      y: point.y - axisStart.y,
+      z: point.z - axisStart.z
+    };
+    const axial = dot(relative, axis);
+    return Math.hypot(
+      relative.x - axis.x * axial,
+      relative.y - axis.y * axial,
+      relative.z - axis.z * axial
+    );
+  };
+  const matches = faces.filter((face) => {
+    const geometry = face.geometry;
+    if (
+      geometry?.surfaceType !== 'cylinder' ||
+      geometry.radius === undefined ||
+      !geometry.axisStart ||
+      !geometry.axisEnd ||
+      Math.abs(geometry.radius - radius) > tolerance
+    ) {
+      return false;
+    }
+    const direction = normalized({
+      x: geometry.axisEnd.x - geometry.axisStart.x,
+      y: geometry.axisEnd.y - geometry.axisStart.y,
+      z: geometry.axisEnd.z - geometry.axisStart.z
+    });
+    const start = along(geometry.axisStart);
+    const end = along(geometry.axisEnd);
+    return (
+      direction !== null &&
+      1 - Math.abs(dot(direction, axis)) <= 1e-9 &&
+      offAxis(geometry.axisStart) <= tolerance &&
+      offAxis(geometry.axisEnd) <= tolerance &&
+      Math.max(Math.min(start, end), Math.min(0, sourceEnd)) <=
+        Math.min(Math.max(start, end), Math.max(0, sourceEnd)) + tolerance
+    );
+  });
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /**
@@ -189,6 +268,33 @@ export function cylinderRadiusTolerance(scale: number): number {
   return Number.isFinite(scale) ? geometryTolerance(Math.abs(scale)) : Infinity;
 }
 
+/** Which edit a cylinder radius drag produces; each has its own no-op gate. */
+export type CylinderRadiusEdit =
+  'through-hole' | 'cylindrical-face' | 'primitive-parameter';
+
+/**
+ * A radius that would make no edit. A through-hole resize refuses within
+ * 1e-6 (or a millionth of the radius) and a direct cylindrical-face resize
+ * within 1e-5 of the radius (floored at 1e-9); a guard tighter than those
+ * sends a value the kernel refuses as Failed. A primitive's radius parameter
+ * has no such gate and rebuilds any change, so only an equal value (to
+ * rounding) is no edit there; a looser guard would swallow a real change.
+ */
+export function isUnchangedCylinderRadius(
+  radius: number,
+  sourceRadius: number,
+  edit: CylinderRadiusEdit
+): boolean {
+  const scale = Math.abs(sourceRadius);
+  const tolerance =
+    edit === 'through-hole'
+      ? Math.max(1e-6, scale * 1e-6)
+      : edit === 'cylindrical-face'
+        ? Math.max(1e-9, scale * 1e-5)
+        : Math.max(1e-12, scale * 1e-12);
+  return Math.abs(radius - sourceRadius) <= tolerance;
+}
+
 /**
  * Reject radii that are non-finite, inverted, or indistinguishable from zero
  * at the scale of the edit. There is deliberately no model-size ceiling:
@@ -244,6 +350,22 @@ export function cylinderRadiusSnapStep(worldPerPixel: number): number {
       (candidate) => candidate >= minimumStep
     ) ?? magnitude * 10
   );
+}
+
+/**
+ * Snap the dimension the chip shows, not the radius underneath it. Snapping
+ * the radius to 0.02 lands a diameter drag on Ø 10.32; in diameter mode the
+ * same zoom-adaptive step is taken in diameter units, so the value reads
+ * Ø 10.3 rather than an odd hundredth.
+ */
+export function snapCylinderRadius(
+  radius: number,
+  worldPerPixel: number,
+  mode: 'diameter' | 'radius'
+): number {
+  const factor = mode === 'diameter' ? 2 : 1;
+  const step = cylinderRadiusSnapStep(worldPerPixel);
+  return (Math.round((radius * factor) / step) * step) / factor;
 }
 
 /** Recognized round-rim profile; history eligibility is checked by the caller. */

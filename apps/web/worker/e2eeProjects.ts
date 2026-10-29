@@ -1098,6 +1098,27 @@ async function submitCommit(
   // lands first makes the Commit refuse, so a removed device cannot move
   // the group after its revocation.
   const signerList = deviceListUnchanged(userId, account);
+  // D1 accepts at most 100 binds per statement. Legal Add, role/drop and
+  // proposal gates can exceed that together. Keep every predicate in this
+  // sequencer, but carry their scalar inputs as one JSON value.
+  const gateInputs: unknown[] = [];
+  const packed = (sql: string, binds: readonly unknown[]): string => {
+    const offset = gateInputs.length;
+    let index = 0;
+    const result = sql.replace(
+      /\?/g,
+      () => `json_extract(commit_inputs.bindings, '$[${offset + index++}]')`
+    );
+    if (index !== binds.length) throw new Error('MLS gate binding mismatch');
+    gateInputs.push(...binds);
+    return result;
+  };
+  const authorizationSql = packed(authorization.sql, authorization.binds);
+  const fenceSql = packed(fence.sql, fence.binds);
+  const signerSql = packed(signerList.sql, signerList.binds);
+  const addSql = add ? packed(add.gateSql, add.gateBinds) : '';
+  const membershipSql = packed(membership.gateSql, membership.gateBinds);
+  const settlementSql = packed(settlement.gateSql, settlement.gateBinds);
   const statements = [
     // The sequencer: one Commit per epoch, only on top of the current one.
     db
@@ -1105,12 +1126,13 @@ async function submitCommit(
         `INSERT INTO e2ee_mls_commits
            (project_id, epoch, kind, sender_user_id, sender_device_id, message, created_at)
          SELECT ?, ?, ?, ?, ?, ?, ?
-         WHERE ${authorization.sql} AND ${fence.sql}
+         FROM (SELECT ? AS bindings) AS commit_inputs
+         WHERE ${authorizationSql} AND ${fenceSql}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
-           AND ${signerList.sql}${add ? ` AND ${add.gateSql}` : ''}${
-             membership.gateSql ? ` AND ${membership.gateSql}` : ''
-           }${settlement.gateSql ? ` AND ${settlement.gateSql}` : ''}`
+           AND ${signerSql}${addSql ? ` AND ${addSql}` : ''}${
+             membershipSql ? ` AND ${membershipSql}` : ''
+           }${settlementSql ? ` AND ${settlementSql}` : ''}`
       )
       .bind(
         projectId,
@@ -1120,15 +1142,10 @@ async function submitCommit(
         deviceId,
         message,
         now,
-        ...authorization.binds,
-        ...fence.binds,
+        JSON.stringify(gateInputs),
         projectId,
         epoch,
-        group.key_epoch_base,
-        ...signerList.binds,
-        ...(add?.gateBinds ?? []),
-        ...membership.gateBinds,
-        ...settlement.gateBinds
+        group.key_epoch_base
       ),
     db
       .prepare(
