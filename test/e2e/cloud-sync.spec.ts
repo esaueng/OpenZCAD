@@ -1387,7 +1387,7 @@ for (const resolution of [
           resolution === 'save-local-copy' ? 2 : 1
         );
         await expect(
-          pageB.getByText('Recovery copy', { exact: true })
+          pageB.getByRole('img', { name: 'Recovery copy', exact: true })
         ).toHaveCount(0);
         if (resolution === 'save-local-copy') {
           const copy = pageB.locator('.start-tile-open', {

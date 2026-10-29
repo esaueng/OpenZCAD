@@ -2,6 +2,7 @@ import { ProjectImportButton } from './ProjectImportButton';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { Fragment, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
+import { useTileReorder } from '../hooks/useTileReorder';
 import {
   Archive,
   ArchiveRestore,
@@ -14,7 +15,7 @@ import {
   CloudOff,
   CloudUpload,
   Copy,
-  GripVertical,
+  History,
   Info,
   LayoutGrid,
   List,
@@ -327,9 +328,7 @@ export function StartScreen({
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [propertiesProject, setPropertiesProject] =
     useState<ProjectSummary | null>(null);
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [dropId, setDropId] = useState<string | null>(null);
-  const tileRefs = useRef(new Map<string, HTMLDivElement>());
+  const tileRefs = useRef(new Map<string, HTMLElement>());
   // Which end of a menu takes focus as it opens: ArrowUp on the opener asks
   // for the last item, everything else for the first.
   const menuFocusEnd = useRef<'first' | 'last'>('first');
@@ -541,6 +540,20 @@ export function StartScreen({
     !busy &&
     activeFilter === 'all' &&
     sort === 'custom';
+  const pinnedIds = new Set<string>(
+    shelfProjects
+      .filter((project) => projectOrganization(project).pinned)
+      .map((project) => project.projectId)
+  );
+  const reorder = useTileReorder({
+    ids: shelfProjects.map((project) => project.projectId),
+    enabled: canReorder,
+    tileRefs,
+    // Pinned parts head the shelf as their own group, so a drag stays in it.
+    canSwap: (dragged, target) =>
+      pinnedIds.has(dragged) === pinnedIds.has(target),
+    onCommit: onReorder
+  });
 
   function moveProject(projectId: string, toIndex: number) {
     const from = shelfProjects.findIndex(
@@ -594,7 +607,7 @@ export function StartScreen({
     writeShelfLayout(next);
   }
 
-  function renderProjectTile(project: ProjectSummary, index: number) {
+  function renderProjectTile(project: ProjectSummary) {
     const organization = projectOrganization(project);
     const menuOpen = openMenu === project.projectId;
     const trashed = shelf === 'deleted';
@@ -641,18 +654,70 @@ export function StartScreen({
         <span className="start-tile-body">
           <strong className="start-tile-name">{project.name}</strong>
           <small className="start-tile-meta">
-            <time
-              dateTime={project.updatedAt}
-              title={`Last edited ${formatLastEditedExact(project.updatedAt)}`}
-            >
-              {formatLastEdited(project.updatedAt)}
-              {recoveryOf !== null &&
-                ` · ${formatTime(new Date(project.updatedAt))}`}
-            </time>
-            <span className="start-tile-rev">
-              {project.revisionCount}{' '}
-              {project.revisionCount === 1 ? 'save' : 'saves'}
+            {/* Quiet marks for the part's standing traits, ahead of the date
+                they qualify: how it is stored, where it lives, what it is. */}
+            <span className="start-tile-when">
+              {migrating && !encrypted ? (
+                <span
+                  className="start-tile-mark is-encrypting"
+                  role="img"
+                  aria-label="Encrypting"
+                  title="Being end-to-end encrypted. It opens read-only until that finishes."
+                >
+                  <LoaderCircle size={11} className="spin" aria-hidden="true" />
+                </span>
+              ) : (
+                (locked || encrypted) && (
+                  <span
+                    className="start-tile-mark"
+                    role="img"
+                    aria-label="End-to-end encrypted"
+                    title={
+                      locked
+                        ? 'End-to-end encrypted. Update OpenZCAD to open this project.'
+                        : 'End-to-end encrypted.'
+                    }
+                  >
+                    <Lock size={11} aria-hidden="true" />
+                  </span>
+                )
+              )}
+              {recoveryOf !== null && !trashed && (
+                <span
+                  className="start-tile-mark"
+                  role="img"
+                  aria-label="Recovery copy"
+                  title={`Recovery copy of ${recoveryOf}`}
+                >
+                  <History size={11} aria-hidden="true" />
+                </span>
+              )}
+              {localOnly && !trashed && !syncEntry && !conflicted && (
+                <span
+                  className="start-tile-mark"
+                  role="img"
+                  aria-label="On this device only"
+                  title="On this device only — not saved to your account."
+                >
+                  <CloudOff size={11} aria-hidden="true" />
+                </span>
+              )}
+              <time
+                dateTime={project.updatedAt}
+                title={`Last edited ${formatLastEditedExact(project.updatedAt)}`}
+              >
+                {formatLastEdited(project.updatedAt)}
+                {recoveryOf !== null &&
+                  ` · ${formatTime(new Date(project.updatedAt))}`}
+              </time>
             </span>
+            {/* The list has a Saves column; a card leaves the count out. */}
+            {layout === 'list' && (
+              <span className="start-tile-rev">
+                {project.revisionCount}{' '}
+                {project.revisionCount === 1 ? 'save' : 'saves'}
+              </span>
+            )}
           </small>
           {locked && (
             <small className="start-tile-update">
@@ -667,6 +732,8 @@ export function StartScreen({
             </small>
           )}
         </span>
+        {/* Anything that wants a look: a dot in the card's corner, a word in
+            the list's Status column. */}
         <span className="start-tile-flags">
           {syncEntry && !trashed ? (
             <span
@@ -704,65 +771,27 @@ export function StartScreen({
                 <span className="start-tile-badge-text">Not saved</span>
               )}
             </span>
-          ) : conflicted && !trashed ? (
-            <span
-              className="start-tile-badge is-conflict"
-              role="img"
-              aria-label="Changed in two places"
-              title="This project changed here and in your account. Open it to choose which to keep."
-            >
-              <TriangleAlert size={12} aria-hidden="true" />
-              <span className="start-tile-badge-text">
-                Changed in two places
-              </span>
-            </span>
           ) : (
-            localOnly &&
+            conflicted &&
             !trashed && (
               <span
-                className="start-tile-badge"
+                className="start-tile-badge is-conflict"
                 role="img"
-                aria-label="On this device only"
-                title="On this device only — not saved to your account."
+                aria-label="Changed in two places"
+                title="This project changed here and in your account. Open it to choose which to keep."
               >
-                <CloudOff size={12} aria-hidden="true" />
+                <TriangleAlert size={12} aria-hidden="true" />
+                <span className="start-tile-badge-text">
+                  Changed in two places
+                </span>
               </span>
             )
-          )}
-          {migrating && !encrypted && (
-            <span
-              className="start-tile-badge is-locked"
-              role="img"
-              aria-label="Encrypting"
-              title="Being end-to-end encrypted. It opens read-only until that finishes."
-            >
-              <Lock size={12} aria-hidden="true" />
-              <span className="start-tile-badge-text">Encrypting</span>
-            </span>
-          )}
-          {(locked || encrypted) && (
-            <span
-              className="start-tile-badge is-locked"
-              role="img"
-              aria-label="End-to-end encrypted"
-              title={
-                locked
-                  ? 'End-to-end encrypted. Update OpenZCAD to open this project.'
-                  : 'End-to-end encrypted.'
-              }
-            >
-              <Lock size={12} aria-hidden="true" />
-            </span>
-          )}
-          {recoveryOf !== null && !trashed && (
-            <span className="start-tile-badge is-recovery">
-              <span className="start-tile-badge-text">Recovery copy</span>
-            </span>
           )}
         </span>
       </>
     );
 
+    const dragging = reorder.draggingId === project.projectId;
     return (
       <div
         key={project.projectId}
@@ -773,37 +802,23 @@ export function StartScreen({
             tileRefs.current.delete(project.projectId);
           }
         }}
+        data-tile-id={project.projectId}
         className={[
           'start-tile',
           'start-tile-project',
           organization.pinned ? 'is-pinned' : '',
-          dragId === project.projectId ? 'is-dragging' : '',
-          dropId === project.projectId ? 'is-drop-target' : ''
+          recoveryOf !== null ? 'is-recovery' : '',
+          canReorder ? 'is-reorderable' : '',
+          dragging ? 'is-dragging' : ''
         ]
           .filter(Boolean)
           .join(' ')}
-        onDragOver={(event) => {
-          if (!canReorder || !dragId || dragId === project.projectId) {
-            return;
-          }
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'move';
-          setDropId(project.projectId);
-        }}
-        onDragLeave={() => {
-          setDropId((current) =>
-            current === project.projectId ? null : current
-          );
-        }}
-        onDrop={(event) => {
-          if (!canReorder || !dragId) {
-            return;
-          }
-          event.preventDefault();
-          moveProject(dragId, index);
-          setDragId(null);
-          setDropId(null);
-        }}
+        onPointerDown={(event) =>
+          reorder.onPointerDown(project.projectId, event)
+        }
+        // The preview picture is an image, which the browser would otherwise
+        // drag out on its own instead of moving the card.
+        onDragStart={(event) => event.preventDefault()}
       >
         {trashed || locked ? (
           // A locked card opens nothing: loading it would only fetch a
@@ -818,54 +833,36 @@ export function StartScreen({
           <button
             type="button"
             className="start-tile-open"
+            data-tile-drag=""
             disabled={busy}
+            aria-keyshortcuts={
+              canReorder
+                ? 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown'
+                : undefined
+            }
             onClick={() => onOpen(project.projectId)}
+            onKeyDown={(event) => {
+              if (!canReorder || !event.altKey) {
+                return;
+              }
+              const offset =
+                event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                  ? -1
+                  : event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                    ? 1
+                    : 0;
+              if (offset === 0) {
+                return;
+              }
+              event.preventDefault();
+              nudgeProject(project.projectId, offset);
+            }}
           >
             {preview}
           </button>
         )}
 
         <div className="start-tile-actions">
-          {canReorder && (
-            <button
-              type="button"
-              className="start-tile-action start-tile-grip"
-              aria-label={`Reorder ${project.name}. Use the arrow keys to move it.`}
-              title="Drag to reorder"
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData('text/plain', project.projectId);
-                const tile = tileRefs.current.get(project.projectId);
-                if (tile) {
-                  // Without this the drag ghost is the grip alone, which gives
-                  // no clue which part is being moved.
-                  event.dataTransfer.setDragImage(tile, 24, 24);
-                }
-                setDragId(project.projectId);
-              }}
-              onDragEnd={() => {
-                setDragId(null);
-                setDropId(null);
-              }}
-              onKeyDown={(event) => {
-                const offset =
-                  event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-                    ? -1
-                    : event.key === 'ArrowRight' || event.key === 'ArrowDown'
-                      ? 1
-                      : 0;
-                if (offset === 0) {
-                  return;
-                }
-                event.preventDefault();
-                nudgeProject(project.projectId, offset);
-              }}
-            >
-              <GripVertical size={12} aria-hidden="true" />
-            </button>
-          )}
-
           {shelf === 'active' && (
             <button
               type="button"
@@ -1078,6 +1075,7 @@ export function StartScreen({
           <button
             type="button"
             className="start-tile-copies"
+            title={`Show its ${copies} recovery ${copies === 1 ? 'copy' : 'copies'}`}
             aria-label={`Show ${project.name} with its ${copies} recovery ${
               copies === 1 ? 'copy' : 'copies'
             }`}
@@ -1087,7 +1085,11 @@ export function StartScreen({
             }}
           >
             <Copy size={12} aria-hidden="true" />
-            {copies} recovery {copies === 1 ? 'copy' : 'copies'}
+            {copies}
+            <span className="start-tile-copies-label">
+              {' '}
+              recovery {copies === 1 ? 'copy' : 'copies'}
+            </span>
           </button>
         )}
 
@@ -1129,13 +1131,21 @@ export function StartScreen({
   const showFilters = filterable && (loading || shelfProjects.length > 0);
   // Pinned parts head the shelf as their own group when the whole shelf is
   // on screen. Partitioned by the flag, not sliced by count: a part created
-  // this session is prepended to the listing ahead of pinned ones. Each tile
-  // keeps its shelf-wide position, which is what reordering uses.
-  const pinnedProjects = matchingProjects.filter(
+  // this session is prepended to the listing ahead of pinned ones.
+  // While a drag is under way, the parts take the order it would drop into.
+  const dragPositions =
+    canReorder && reorder.order
+      ? new Map(reorder.order.map((id, index) => [id, index]))
+      : null;
+  const orderedProjects = dragPositions
+    ? [...matchingProjects].sort(
+        (a, b) =>
+          (dragPositions.get(a.projectId) ?? 0) -
+          (dragPositions.get(b.projectId) ?? 0)
+      )
+    : matchingProjects;
+  const pinnedProjects = orderedProjects.filter(
     (project) => projectOrganization(project).pinned
-  );
-  const shelfPositions = new Map(
-    matchingProjects.map((project, index) => [project.projectId, index])
   );
   const shelfGroups: Array<{
     label: string | null;
@@ -1150,12 +1160,12 @@ export function StartScreen({
           { label: 'Pinned', projects: pinnedProjects },
           {
             label: 'Parts',
-            projects: matchingProjects.filter(
+            projects: orderedProjects.filter(
               (project) => !projectOrganization(project).pinned
             )
           }
         ]
-      : [{ label: null, projects: matchingProjects }];
+      : [{ label: null, projects: orderedProjects }];
 
   const { all, pinned, attention, local } = filterCounts;
   const footerPositions = shelfGroups
@@ -1726,15 +1736,22 @@ export function StartScreen({
                           <span className="start-tile-body">
                             <strong className="start-tile-name">&nbsp;</strong>
                             <small className="start-tile-meta">
-                              <time>&nbsp;</time>
-                              <span className="start-tile-rev">&nbsp;</span>
+                              <span className="start-tile-when">
+                                <time>&nbsp;</time>
+                              </span>
+                              {layout === 'list' && (
+                                <span className="start-tile-rev">&nbsp;</span>
+                              )}
                             </small>
                           </span>
                           <span className="start-tile-flags" />
                         </div>
-                        {previousLayout?.footers.includes(
-                          group.offset + index
-                        ) && <div className="start-tile-copies" />}
+                        {/* Only a row grows by its copies line; a card
+                            keeps its count in the corner. */}
+                        {layout === 'list' &&
+                          previousLayout?.footers.includes(
+                            group.offset + index
+                          ) && <div className="start-tile-copies" />}
                       </div>
                     ))}
                   </div>
@@ -1769,10 +1786,7 @@ export function StartScreen({
                     }
                   >
                     {group.projects.map((project) =>
-                      renderProjectTile(
-                        project,
-                        shelfPositions.get(project.projectId) ?? 0
-                      )
+                      renderProjectTile(project)
                     )}
                   </div>
                 </Fragment>

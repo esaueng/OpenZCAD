@@ -514,9 +514,10 @@ describe('StartScreen library discovery', () => {
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(3);
+      // Only a list row grows by a copies line; a card keeps a corner count.
       expect(
         container.querySelectorAll('.start-tile-placeholder .start-tile-copies')
-      ).toHaveLength(1);
+      ).toHaveLength(layout === 'list' ? 1 : 0);
       expect(screen.getByRole('group', { name: 'Show parts' })).toBeVisible();
       expect(screen.getByLabelText('Sort parts')).toBeDisabled();
       expect(
@@ -608,14 +609,21 @@ describe('StartScreen project timestamps', () => {
 });
 
 describe('StartScreen cloud project status', () => {
-  it('shows recovery time and save count without presenting it as a model version', () => {
+  it('shows recovery time, and the save count only in the list, without presenting it as a model version', () => {
     const project = {
       ...localProject,
       name: 'Bracket (Recovery)',
       revisionCount: 1,
       updatedAt: '2026-10-05T05:00:00Z'
     };
+    const { unmount } = renderStartScreen({ projects: [project] });
+    expect(
+      screen.getByText(project.name).closest('button')
+    ).not.toHaveTextContent('save');
+    unmount();
+    localStorage.setItem('openzcad.start.layout', 'list');
     renderStartScreen({ projects: [project] });
+    localStorage.removeItem('openzcad.start.layout');
     const tile = screen.getByText(project.name).closest('button')!;
     expect(tile).toHaveTextContent('1 save');
     expect(tile).toHaveTextContent(
@@ -908,6 +916,46 @@ describe('StartScreen shelf filters, order and layout', () => {
     Array.from(document.querySelectorAll('.start-tile-name')).map(
       (element) => element.textContent
     );
+  const openButton = (id: string) =>
+    document.querySelector<HTMLElement>(
+      `[data-tile-id="${id}"] .start-tile-open`
+    )!;
+  // A card that can be moved is dragged by itself and offers Alt+arrow keys.
+  const reorderableCards = () =>
+    document.querySelectorAll('.start-tile-open[aria-keyshortcuts]').length;
+
+  it('moves a card with Alt and the arrow keys, and leaves plain arrows alone', () => {
+    const onReorder = vi.fn();
+    renderStartScreen({ projects, onReorder });
+    expect(document.querySelector('.start-tile-grip')).toBeNull();
+    fireEvent.keyDown(openButton('project_b'), { key: 'ArrowRight' });
+    expect(onReorder).not.toHaveBeenCalled();
+    fireEvent.keyDown(openButton('project_b'), {
+      key: 'ArrowRight',
+      altKey: true
+    });
+    expect(onReorder).toHaveBeenCalledWith([
+      'project_a',
+      'project_b',
+      'project_r',
+      'project_c'
+    ]);
+  });
+
+  it('marks a recovery copy on its date line instead of with a badge', () => {
+    renderStartScreen({ projects });
+    expect(screen.getAllByRole('img', { name: 'Recovery copy' })).toHaveLength(
+      1
+    );
+    expect(screen.queryByText('Recovery copy')).toBeNull();
+    // The card keeps the count; the list row keeps the words.
+    expect(
+      screen.getByRole('button', {
+        name: 'Show Bracket with its 1 recovery copy'
+      })
+    ).toHaveTextContent('1 recovery copy');
+    expect(document.querySelector('.start-tile-rev')).toBeNull();
+  });
 
   it('names the part a recovery copy came from', () => {
     expect(recoveryCopyOf('Bracket (Recovery)')).toBe('Bracket');
@@ -972,9 +1020,7 @@ describe('StartScreen shelf filters, order and layout', () => {
         part('project_p', 'Pinned plate', '2026-07-01T00:00:00.000Z', true)
       ]
     });
-    expect(
-      screen.getAllByRole('button', { name: /^Reorder / }).length
-    ).toBeGreaterThan(0);
+    expect(reorderableCards()).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText('Sort parts'), {
       target: { value: 'name' }
     });
@@ -995,7 +1041,7 @@ describe('StartScreen shelf filters, order and layout', () => {
       'Bracket (Recovery)',
       'Bracket'
     ]);
-    expect(screen.queryByRole('button', { name: /^Reorder / })).toBeNull();
+    expect(reorderableCards()).toBe(0);
     expect(screen.getByRole('heading', { name: /Pinned/ })).toBeVisible();
   });
 

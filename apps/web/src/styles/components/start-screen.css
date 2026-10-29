@@ -975,7 +975,14 @@
    the part. */
 .start-tile-project {
   position: relative;
+  grid-template-columns: minmax(0, 1fr);
   color: var(--color-text-muted);
+}
+
+/* The card's controls share the open action's cell, so they sit on it at its
+   corners however tall its preview and text turn out. */
+.start-tile-project > .start-tile-open {
+  grid-area: 1 / 1;
 }
 
 .start-tile-open {
@@ -991,8 +998,7 @@
 .start-tile-project:has(
   > .start-tile-open:not(.is-static):hover:not(:disabled)
 ),
-.start-tile-project:has(.start-tile-open:focus-visible),
-.start-tile-project.is-drop-target {
+.start-tile-project:has(.start-tile-open:focus-visible) {
   color: var(--color-text);
   border-color: var(--color-accent-border);
 }
@@ -1005,19 +1011,27 @@
   outline: none;
 }
 
-/* A pinned part keeps a permanent marker so its position reads as deliberate
-   rather than as wherever the sort happened to leave it. */
-.start-tile-project.is-pinned {
-  border-color: var(--color-accent-border);
-}
-
+/* A card being dragged rides above the rest under the pointer; the pointer
+   looks through it to the card it would take the place of. */
 .start-tile-project.is-dragging {
-  opacity: 0.45;
+  z-index: 5;
+  pointer-events: none;
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-popover);
+  scale: 1.02;
+  /* It moves with the pointer, never behind it. */
+  transition: none;
 }
 
-.start-tile-project.is-drop-target {
-  outline: 2px dashed var(--color-accent);
-  outline-offset: -2px;
+:root.is-tile-dragging,
+:root.is-tile-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+/* A recovery copy reads as secondary to the part it was made from. */
+.start-tile-project.is-recovery .start-tile-name {
+  color: var(--color-text-muted);
 }
 
 /* The preview is the tile: a pane at a fixed aspect so a row of parts lines
@@ -1080,25 +1094,19 @@
   color: var(--color-accent);
 }
 
-/*
- * Sits over the preview rather than in the grid flow, so a part that is only on
- * this device is marked without the thumbnail being resized around the mark.
- */
-/* The part's states, over the top-left of its preview in the grid and as the
-   Status column in the list. Plain labels for anything that needs a decision
-   (a divergence, a failed save, a recovery copy); an icon for ordinary ones. */
+/* What wants a look (a divergence, a save under way or failed): one mark in
+   the top-right corner of a card's preview, and the Status column in the
+   list, where it keeps its words. */
 .start-tile-open {
   position: relative;
 }
 
 .start-tile-flags {
   position: absolute;
-  top: 6px;
-  left: 6px;
+  top: 8px;
+  right: 8px;
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
-  max-width: calc(100% - 96px);
   pointer-events: none;
 }
 
@@ -1153,10 +1161,35 @@
   border-color: currentcolor;
 }
 
+.start-tile-grid:not(.is-list) .start-tile-badge {
+  border-radius: 999px;
+}
+
+.start-tile-grid:not(.is-list) .start-tile-badge-text {
+  display: none;
+}
+
+/* A decision waiting is a dot in the corner; its words are its name and
+   its tooltip. */
+.start-tile-grid:not(.is-list) .start-tile-badge.is-conflict,
+.start-tile-grid:not(.is-list) .start-tile-badge.is-sync-failed {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  background: currentcolor;
+  border: 0;
+}
+
+.start-tile-grid:not(.is-list) .start-tile-badge.is-conflict svg,
+.start-tile-grid:not(.is-list) .start-tile-badge.is-sync-failed svg {
+  display: none;
+}
+
 .start-tile-body {
   display: grid;
   gap: 3px;
-  padding: 9px var(--sp-3) 10px;
+  /* The right edge is the actions button's. */
+  padding: 9px 40px 10px var(--sp-3);
 }
 
 .start-tile-name {
@@ -1181,6 +1214,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The date and the quiet marks that qualify it: encrypted, a recovery copy,
+   on this device only. */
+.start-tile-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.start-tile-mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-subtle);
+}
+
+.start-tile-mark.is-encrypting {
+  color: var(--color-accent);
+}
+
+/* Room for the copies count beside the actions button. */
+.start-tile-project:has(> .start-tile-copies) .start-tile-meta {
+  padding-right: 34px;
 }
 
 .start-tile-rev {
@@ -1209,32 +1266,37 @@
   color: var(--color-text-subtle);
 }
 
-.start-tile-badge.is-locked {
-  color: var(--color-text-muted);
-}
-
-/* An original's recovery copies, one press from being shown beside it. */
+/* An original's recovery copies, one press from being shown beside it: a
+   count in the card's bottom-right corner, beside its actions. */
 .start-tile-copies {
-  display: flex;
+  grid-area: 1 / 1;
+  align-self: end;
+  justify-self: end;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 var(--sp-3);
+  gap: 4px;
+  height: 20px;
+  margin: 0 36px 11px 0;
+  padding: 0 5px;
   color: var(--color-accent);
-  font-size: var(--fs-xs);
-  text-align: left;
-  border-top: var(--border-thin);
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-sm);
 }
 
 .start-tile-copies:hover {
   background: var(--color-accent-dim);
 }
 
+.start-tile-copies-label {
+  display: none;
+}
+
 /* ── List layout ─────────────────────────────────────────── */
 
 /* The same tiles, laid out as rows: the body and its meta dissolve into the
-   row's columns, so every action, menu and reorder handle keeps working. */
+   row's columns, so every action and menu keeps working. */
 .start-list-head,
 .start-tile-grid.is-list .start-tile-open {
   grid-template-columns: 52px minmax(0, 1fr) 170px 160px 56px 88px;
@@ -1272,10 +1334,6 @@
 
 .start-tile-grid.is-list .start-tile + .start-tile {
   border-top: var(--border-thin);
-}
-
-.start-tile-grid.is-list .start-tile-project.is-pinned {
-  border-color: var(--color-border);
 }
 
 .start-tile-grid.is-list
@@ -1338,14 +1396,41 @@
 
 /* Centred on the part's own row, not on a row that carries its copies. */
 .start-tile-grid.is-list .start-tile-actions {
+  position: absolute;
   top: 22px;
   right: var(--sp-3);
+  display: flex;
+  gap: 2px;
   transform: translateY(-50%);
 }
 
+.start-tile-grid.is-list .start-tile-action {
+  margin: 0;
+}
+
 .start-tile-grid.is-list .start-tile-copies {
-  padding-left: calc(52px + var(--sp-3) * 2);
+  grid-area: auto;
+  justify-self: stretch;
+  display: flex;
+  gap: 6px;
+  height: auto;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 var(--sp-3) 0 calc(52px + var(--sp-3) * 2);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  border-top: var(--border-thin);
   border-radius: 0;
+}
+
+.start-tile-grid.is-list .start-tile-copies-label {
+  display: inline;
+}
+
+.start-tile-grid.is-list .start-tile-menu {
+  grid-area: auto;
+  top: 32px;
+  bottom: auto;
 }
 
 /* The menu carries Restore and Delete forever; a row has no footer. */
@@ -1403,29 +1488,53 @@
 
 /* ── Tile actions ────────────────────────────────────────── */
 
+/* On a card the pin takes the top-left corner and the menu the bottom-right;
+   a list row keeps them together at its end (see the list layout). */
 .start-tile-actions {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
+  display: contents;
+}
+
+/* Above the open action, which is positioned and so would paint over any
+   unpositioned control sharing its cell. */
+.start-tile-action,
+.start-tile-copies {
+  position: relative;
+  z-index: 1;
+}
+
+.start-tile-pin {
+  grid-area: 1 / 1;
+  align-self: start;
+  justify-self: start;
+  margin: 6px 0 0 6px;
+}
+
+.start-tile-menu-button {
+  grid-area: 1 / 1;
+  align-self: end;
+  justify-self: end;
+  margin: 0 8px 9px 0;
 }
 
 /* Hidden until the tile is under the pointer or holds focus, so a wall of
    tiles stays a wall of parts — but never hidden from the keyboard, and never
-   hidden while it is the thing you are using. */
-.start-tile-project:hover .start-tile-actions,
-.start-tile-project:focus-within .start-tile-actions,
-.start-tile-project.is-pinned .start-tile-actions {
+   hidden while it is the thing you are using. A pinned part keeps its pin in
+   sight, so its place reads as deliberate. */
+.start-tile-action {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.start-tile-project:hover .start-tile-action,
+.start-tile-project:focus-within .start-tile-action,
+.start-tile-project.is-pinned .start-tile-pin {
   opacity: 1;
 }
 
 /* Without hover, a hidden action could never be revealed before a tap on the
    tile opened the part, so Archive, Trash and the rest stay in sight. */
 @media (hover: none) {
-  .start-tile-actions {
+  .start-tile-action {
     opacity: 1;
   }
 }
@@ -1452,17 +1561,11 @@
   border-color: var(--color-accent-border);
 }
 
-.start-tile-grip {
-  cursor: grab;
-}
-
-.start-tile-grip:active {
-  cursor: grabbing;
-}
-
+/* Opens upward over the card from its button, inside the card's own cell. */
 .start-tile-menu {
   position: absolute;
-  top: 32px;
+  grid-area: 1 / 1;
+  bottom: 38px;
   right: 6px;
   z-index: 2;
   display: grid;
