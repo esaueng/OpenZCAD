@@ -96,6 +96,38 @@ describe('application settings', () => {
     expect(parsed.settings.appearance.theme).toBe('light');
   });
 
+  it('keeps the library card size on both layers, small by default', () => {
+    expect(DEFAULT_APP_SETTINGS.appearance.libraryCardSize).toBe('small');
+    expect(
+      normalizeAppSettings({ appearance: { libraryCardSize: 'large' } })
+        .appearance.libraryCardSize
+    ).toBe('large');
+    expect(
+      normalizeAppSettings({ appearance: { libraryCardSize: 'huge' } })
+        .appearance.libraryCardSize
+    ).toBe('small');
+
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.appearance.libraryCardSize = 'medium';
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings },
+        'development'
+      ).settings.appearance.libraryCardSize
+    ).toBe('medium');
+    // A client from before the setting still saves; it reads as small.
+    const older = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      appearance: Record<string, unknown>;
+    };
+    delete older.appearance.libraryCardSize;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: older },
+        'development'
+      ).settings.appearance.libraryCardSize
+    ).toBe('small');
+  });
+
   it('returns independent default objects', () => {
     const first = defaultAppSettings();
     const second = defaultAppSettings();

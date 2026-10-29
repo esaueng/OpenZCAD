@@ -57,6 +57,7 @@ import {
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   TRASH_RETENTION_DAYS,
+  type LibraryCardSize,
   type ProjectStatus,
   type ProjectSummary,
   type UnitSystem
@@ -116,6 +117,8 @@ interface StartScreenProps {
   loading?: boolean;
   demos: DemoDefinition[];
   defaultUnits: UnitSystem;
+  /** The grid's card size (Settings › Appearance); small is the original. */
+  cardSize?: LibraryCardSize;
   onImportProject?(file: File): void;
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
@@ -442,6 +445,7 @@ export function StartScreen({
   loading = false,
   demos,
   defaultUnits,
+  cardSize = 'small',
   onImportProject,
   onCreate,
   onOpen,
@@ -793,13 +797,12 @@ export function StartScreen({
   });
 
   // Dragging reorders positions within a shelf, which only means anything when
-  // every position is on screen and in its stored order.
+  // every position is on screen. Under a sort the shelf shows its sorted
+  // order; a drag saves that order with the move and switches to Custom
+  // order, so the arrangement holds (see commitOrder). Drops into a folder,
+  // a shelf or Pinned work under any sort.
   const canReorder =
-    shelf === 'active' &&
-    !search &&
-    !busy &&
-    activeFilter === 'all' &&
-    sort === 'custom';
+    shelf === 'active' && !search && !busy && activeFilter === 'all';
   const pinnedIds = new Set<string>(
     shelfProjects
       .filter((project) => projectOrganization(project).pinned)
@@ -819,6 +822,11 @@ export function StartScreen({
    * ones (a folder orders its own parts).
    */
   function commitOrder(ids: string[], moved?: { id: string; group: string }) {
+    if (sort !== 'custom') {
+      // A hand arrangement is a custom order: keep showing it as placed.
+      setSort('custom');
+      setNotice('Now sorted by Custom order, so your arrangement stays.');
+    }
     if (openFolder) {
       updateFolders((state) => reorderFolderMembers(state, openFolder.id, ids));
       return;
@@ -861,6 +869,27 @@ export function StartScreen({
     return selected.has(projectId)
       ? visibleProjectIds().filter((id) => selected.has(id))
       : [projectId];
+  }
+
+  /** A drag onto Archive or Trash: the dragged parts (or picked ones) go. */
+  function sendToShelf(projectIds: string[], status: ProjectStatus) {
+    const chosen = projectIds.flatMap((projectId) => {
+      const project = shelfProjects.find(
+        (entry) => entry.projectId === projectId
+      );
+      return project ? [project] : [];
+    });
+    if (chosen.length === 0) return;
+    setSelected(new Set());
+    if (onMoveManyToShelf) onMoveManyToShelf(chosen, status);
+    else chosen.forEach((project) => onMoveToShelf(project, status));
+    const what =
+      chosen.length === 1 ? chosen[0]!.name : `${chosen.length} parts`;
+    setNotice(
+      status === 'deleted'
+        ? `Moved ${what} to the trash. Restore it from Trash.`
+        : `Archived ${what}.`
+    );
   }
 
   function fileProjects(projectIds: string[], folderId: string | null) {
@@ -910,6 +939,13 @@ export function StartScreen({
     canPlaceBeside: (dragged, target) =>
       Boolean(folderIdOf(dragged)) === Boolean(folderIdOf(target)),
     dropInto: (dragged, hit, pointer) => {
+      // Onto Archive or Trash in the column: the part goes to that shelf.
+      const shelfTab = hit.closest<HTMLElement>('[data-drop-shelf]');
+      if (shelfTab?.dataset.dropShelf) {
+        return folderIdOf(dragged)
+          ? null
+          : { target: `shelf:${shelfTab.dataset.dropShelf}` };
+      }
       if (folderIdOf(dragged)) return null;
       const root = hit.closest<HTMLElement>('[data-drop-root]');
       if (root && openFolder) return { target: 'root' };
@@ -935,6 +971,10 @@ export function StartScreen({
     },
     onDropInto: (dragged, target) => {
       const moving = draggedProjectIds(dragged);
+      if (target.startsWith('shelf:')) {
+        sendToShelf(moving, target.slice('shelf:'.length) as ProjectStatus);
+        return;
+      }
       if (target === 'root') {
         fileProjects(moving, null);
         return;
@@ -953,6 +993,9 @@ export function StartScreen({
     },
     onCommit: (ids, moved) => commitOrder(ids, moved)
   });
+  // A part on the move: Archive and Trash show they will take it.
+  const draggingPart =
+    reorder.draggingId !== null && !folderIdOf(reorder.draggingId);
   /** Pinned as stored, or as a drag would leave it. */
   function shownPinned(project: ProjectSummary): boolean {
     const group = canReorder ? reorder.moved.get(project.projectId) : undefined;
@@ -2489,7 +2532,25 @@ export function StartScreen({
               aria-controls="start-shelf-panel"
               // One tab stop for the strip; the arrow keys move along it.
               tabIndex={shelf === entry.status ? 0 : -1}
-              className={shelf === entry.status ? 'is-active' : undefined}
+              // Archive and Trash take parts dragged off the Parts shelf.
+              data-drop-shelf={
+                canReorder && entry.status !== 'active'
+                  ? entry.status
+                  : undefined
+              }
+              className={
+                [
+                  shelf === entry.status ? 'is-active' : '',
+                  reorder.dropTarget?.target === `shelf:${entry.status}`
+                    ? 'is-drop-target'
+                    : '',
+                  draggingPart && entry.status !== 'active'
+                    ? 'is-drop-ready'
+                    : ''
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined
+              }
               onClick={() => selectShelf(entry.status)}
               onKeyDown={(event) => {
                 const step =
@@ -2815,7 +2876,7 @@ export function StartScreen({
                     </h3>
                   )}
                   <div
-                    className={`start-tile-grid${layout === 'list' ? ' is-list' : ''}`}
+                    className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
                     aria-hidden="true"
                   >
                     {Array.from({ length: group.count }, (_, index) => (
@@ -2894,7 +2955,7 @@ export function StartScreen({
                       className={
                         layout === 'list'
                           ? 'start-tile-grid is-list'
-                          : 'start-tile-grid'
+                          : `start-tile-grid is-${cardSize}`
                       }
                       data-tile-group={canReorder ? group.group : undefined}
                     >

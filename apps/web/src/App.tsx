@@ -26948,6 +26948,7 @@ export function App() {
           loading={startupState === 'loading-library'}
           demos={START_SCREEN_DEMOS}
           defaultUnits={appSettings.general.defaultUnits}
+          cardSize={appSettings.appearance.libraryCardSize}
           onCreate={(name, units) => void handleCreateProject(name, units)}
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}

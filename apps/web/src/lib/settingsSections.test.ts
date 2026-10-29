@@ -18,6 +18,12 @@ describe('find a setting', () => {
     }
   });
 
+  it('finds the library card size by thumbnail', () => {
+    for (const query of ['thumbnail', 'card size']) {
+      expect(matches(query)).toContain('appearance');
+    }
+  });
+
   it('finds the theme by dark and light', () => {
     for (const query of ['dark', 'light mode']) {
       expect(matches(query)).toContain('appearance');

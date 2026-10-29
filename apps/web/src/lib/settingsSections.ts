@@ -58,10 +58,22 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'appearance',
     label: 'Appearance',
-    detail: 'Theme, density, and motion',
+    detail: 'Theme, density, card size, and motion',
     group: 'Workspace',
-    settings: ['Theme', 'Interface density', 'Reduce motion'],
-    searchTerms: ['dark mode', 'light mode', 'color scheme']
+    settings: [
+      'Theme',
+      'Interface density',
+      'Library card size',
+      'Reduce motion'
+    ],
+    searchTerms: [
+      'dark mode',
+      'light mode',
+      'color scheme',
+      'thumbnail',
+      'thumbnails',
+      'preview size'
+    ]
   },
   {
     id: 'viewport',
@@ -350,7 +362,8 @@ export function visibleSettingsSections({
         )
   ).filter(
     (section) =>
-      section.id !== 'encryption' || (cloudFunctionsEnabled && encryptionAvailable)
+      section.id !== 'encryption' ||
+      (cloudFunctionsEnabled && encryptionAvailable)
   );
   const normalized = query.trim().toLowerCase();
   return normalized

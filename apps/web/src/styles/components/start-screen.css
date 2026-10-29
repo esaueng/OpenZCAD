@@ -402,6 +402,24 @@
   color: var(--color-accent);
 }
 
+/* Mid-drag, Archive and Trash say they take the part; the one under the
+   pointer lights up (Trash in the danger tone). */
+.start-shelf-tabs button.is-drop-ready {
+  outline: 1px dashed var(--color-border-strong);
+  outline-offset: -1px;
+}
+
+.start-shelf-tabs button.is-drop-target {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  outline: 1px solid var(--color-accent);
+}
+
+.start-shelf-tabs button[data-drop-shelf='deleted'].is-drop-target {
+  background: color-mix(in srgb, var(--color-error) 16%, transparent);
+  outline-color: var(--color-error);
+}
+
 .start-shelf-count {
   margin-left: auto;
   min-width: 18px;
@@ -990,6 +1008,20 @@
   gap: var(--sp-3);
 }
 
+/* Card size (Settings › Appearance): the narrowest a card may be. Small is
+   the original; the preview keeps its 16:10, so it grows with the card. */
+.start-tile-grid.is-small {
+  --start-tile-min: 180px;
+}
+
+.start-tile-grid.is-medium {
+  --start-tile-min: 240px;
+}
+
+.start-tile-grid.is-large {
+  --start-tile-min: 320px;
+}
+
 .start-tile {
   display: grid;
   background: var(--color-surface);
@@ -1558,8 +1590,9 @@
 
 /* ── Tile actions ────────────────────────────────────────── */
 
-/* On a card the pin takes the top-left corner and the menu the bottom-right;
-   a list row keeps them together at its end (see the list layout). */
+/* On a card the pick box takes the top-left corner, the pin the top-right
+   and the menu the bottom-right; a list row keeps pin and menu together at
+   its end (see the list layout). */
 .start-tile-actions {
   display: contents;
 }
@@ -1575,8 +1608,15 @@
 .start-tile-pin {
   grid-area: 1 / 1;
   align-self: start;
-  justify-self: start;
-  margin: 6px 0 0 6px;
+  justify-self: end;
+  margin: 6px 6px 0 0;
+}
+
+/* A card's attention mark steps left of the pin's corner. */
+.start-tile-grid:not(.is-list)
+  .start-tile:has(> .start-tile-actions > .start-tile-pin)
+  .start-tile-flags {
+  right: 36px;
 }
 
 .start-tile-menu-button {
@@ -2007,11 +2047,6 @@
   .start-tile-select {
     opacity: 1;
   }
-}
-
-/* The pin steps right of the check, which takes the corner. */
-.start-tile-grid:not(.is-list) .start-tile-pin {
-  margin-left: 34px;
 }
 
 .start-tile-grid.is-list .start-tile-select {

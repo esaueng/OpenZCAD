@@ -146,7 +146,8 @@ describe('boot state', () => {
       appearance: {
         theme: 'light',
         density: 'comfortable',
-        reducedMotion: true
+        reducedMotion: true,
+        libraryCardSize: 'small'
       }
     });
     const record: LocalAppSettingsRecord = {
@@ -178,7 +179,8 @@ describe('device persistence and chrome', () => {
       appearance: {
         theme: 'light',
         density: 'comfortable',
-        reducedMotion: true
+        reducedMotion: true,
+        libraryCardSize: 'small'
       }
     });
     loadRecord.mockReturnValue({ settings: stored, syncedRevision: 7 });
@@ -239,7 +241,8 @@ describe('theme switch', () => {
           appearance: {
             theme: 'dark',
             density: 'compact',
-            reducedMotion: false
+            reducedMotion: false,
+            libraryCardSize: 'small'
           }
         }),
         syncedRevision: 7
@@ -258,7 +261,8 @@ describe('theme switch', () => {
             appearance: {
               theme: 'light',
               density: 'compact',
-              reducedMotion: false
+              reducedMotion: false,
+              libraryCardSize: 'small'
             }
           })
         )
@@ -364,7 +368,8 @@ describe('theme switch', () => {
             appearance: {
               theme: 'light',
               density: 'compact',
-              reducedMotion: false
+              reducedMotion: false,
+              libraryCardSize: 'small'
             }
           })
         )
@@ -391,7 +396,8 @@ describe('theme switch', () => {
           appearance: {
             theme: 'dark',
             density: 'compact',
-            reducedMotion: false
+            reducedMotion: false,
+            libraryCardSize: 'small'
           }
         }),
         syncedRevision: 7

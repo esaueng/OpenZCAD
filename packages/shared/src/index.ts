@@ -4014,6 +4014,8 @@ export const APP_SETTINGS_SCHEMA_VERSION = 1 as const;
 
 export type AppTheme = 'system' | 'dark' | 'light';
 export type AppDensity = 'compact' | 'comfortable';
+/** How large the library's part cards are; small is the original size. */
+export type LibraryCardSize = 'small' | 'medium' | 'large';
 export type SettingsProjectionMode = 'perspective' | 'orthographic';
 export type SettingsDisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 export type SettingsMiddleDrag = 'pan' | 'orbit' | 'zoom';
@@ -4080,6 +4082,7 @@ export interface AppSettings {
     theme: AppTheme;
     density: AppDensity;
     reducedMotion: boolean;
+    libraryCardSize: LibraryCardSize;
   };
   /**
    * Workspace chrome widths in CSS pixels. Panel *collapse* is a per-device
@@ -4242,7 +4245,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   appearance: {
     theme: 'system',
     density: 'compact',
-    reducedMotion: false
+    reducedMotion: false,
+    libraryCardSize: 'small'
   },
   layout: {
     sidebarWidth: PANEL_WIDTH_LIMITS.sidebar.default,

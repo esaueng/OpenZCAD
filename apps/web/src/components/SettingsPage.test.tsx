@@ -1579,6 +1579,24 @@ describe('settings page pattern', () => {
     expect(onChange.mock.calls[0]?.[0].appearance.theme).toBe('light');
   });
 
+  it('offers small, medium and large library cards, small first', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, { initialSection: 'appearance', onChange });
+
+    const size = screen.getByRole('radiogroup', { name: 'Library card size' });
+    expect(
+      within(size)
+        .getAllByRole('radio')
+        .map((option) => option.closest('label')?.textContent)
+    ).toEqual(['Small', 'Medium', 'Large']);
+    expect(within(size).getByRole('radio', { name: 'Small' })).toBeChecked();
+    await user.click(within(size).getByRole('radio', { name: 'Large' }));
+    expect(onChange.mock.calls[0]?.[0].appearance.libraryCardSize).toBe(
+      'large'
+    );
+  });
+
   it('names an abbreviated unit in full for assistive technology', () => {
     renderSettings(null, { initialSection: 'general' });
     const units = screen.getByRole('radiogroup', { name: 'Default units' });

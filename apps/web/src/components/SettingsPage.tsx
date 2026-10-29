@@ -320,6 +320,14 @@ const DENSITY_OPTIONS: readonly SegmentOption<
   { value: 'comfortable', label: 'Comfortable' }
 ];
 
+const LIBRARY_CARD_SIZE_OPTIONS: readonly SegmentOption<
+  AppSettings['appearance']['libraryCardSize']
+>[] = [
+  { value: 'small', label: 'Small' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'large', label: 'Large' }
+];
+
 const PROJECTION_OPTIONS: readonly SegmentOption<
   AppSettings['viewport']['defaultProjection']
 >[] = [
@@ -1175,6 +1183,21 @@ export function SettingsPage({
                     onChange={(density) =>
                       patch({
                         appearance: { ...settings.appearance, density }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Library card size"
+                  hint="How large parts show in the library's grid."
+                >
+                  <Segmented
+                    label="Library card size"
+                    value={settings.appearance.libraryCardSize}
+                    options={LIBRARY_CARD_SIZE_OPTIONS}
+                    onChange={(libraryCardSize) =>
+                      patch({
+                        appearance: { ...settings.appearance, libraryCardSize }
                       })
                     }
                   />

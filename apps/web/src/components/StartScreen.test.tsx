@@ -714,6 +714,29 @@ describe('StartScreen library shell', () => {
     expect(foot?.contains(importButton)).toBe(false);
   });
 
+  it('sizes the card grid from the setting, small by default', () => {
+    const { container, unmount } = renderStartScreen();
+    expect(container.querySelector('.start-tile-grid')).toHaveClass('is-small');
+    unmount();
+    renderStartScreen({ cardSize: 'large' });
+    expect(document.querySelector('.start-tile-grid')).toHaveClass('is-large');
+  });
+
+  it('marks only Archive and Trash as places to drop a part', () => {
+    renderStartScreen();
+    expect(screen.getByRole('tab', { name: /^Archive/ })).toHaveAttribute(
+      'data-drop-shelf',
+      'archived'
+    );
+    expect(screen.getByRole('tab', { name: /^Trash/ })).toHaveAttribute(
+      'data-drop-shelf',
+      'deleted'
+    );
+    expect(screen.getByRole('tab', { name: /^Parts/ })).not.toHaveAttribute(
+      'data-drop-shelf'
+    );
+  });
+
   it('names each shelf with its count in the column', () => {
     renderStartScreen();
 
@@ -1081,7 +1104,7 @@ describe('StartScreen shelf filters, order and layout', () => {
     expect(tileNames().sort()).toEqual(['Bracket', 'Bracket (Recovery)']);
   });
 
-  it('orders by name or last edit with pinned parts first, and stops reordering', () => {
+  it('orders by name or last edit with pinned parts first, still reorderable', () => {
     renderStartScreen({
       projects: [
         ...projects,
@@ -1109,7 +1132,9 @@ describe('StartScreen shelf filters, order and layout', () => {
       'Bracket (Recovery)',
       'Bracket'
     ]);
-    expect(reorderableCards()).toBe(0);
+    // Cards still drag under a sort: a drop saves the order as shown, moved,
+    // and switches to Custom order (start-tile-reorder e2e).
+    expect(reorderableCards()).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: /Pinned/ })).toBeVisible();
   });
 

@@ -26,6 +26,11 @@ const DENSITIES: AppSettings['appearance']['density'][] = [
   'compact',
   'comfortable'
 ];
+const LIBRARY_CARD_SIZES: AppSettings['appearance']['libraryCardSize'][] = [
+  'small',
+  'medium',
+  'large'
+];
 const PROJECTIONS: AppSettings['viewport']['defaultProjection'][] = [
   'perspective',
   'orthographic'
@@ -192,6 +197,11 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       reducedMotion: boolean(
         appearance.reducedMotion,
         defaults.appearance.reducedMotion
+      ),
+      libraryCardSize: member(
+        appearance.libraryCardSize,
+        LIBRARY_CARD_SIZES,
+        defaults.appearance.libraryCardSize
       )
     },
     layout: {
