@@ -139,6 +139,22 @@ test.describe('with a pinned part', () => {
     }
   });
 
+  test('ends unpinned when a part is dragged into Pinned and straight back', async ({
+    page
+  }) => {
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+    await dragCard(page, names[2]!, names[1]!);
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Pin ${names[2]}`, exact: true })
+    ).toBeAttached();
+    await expect(
+      page.locator('[data-tile-group="pinned"] .start-tile-name')
+    ).toHaveText([names[0]!]);
+  });
+
   test('unpins a part dragged out of a fully pinned shelf', async ({
     page
   }) => {

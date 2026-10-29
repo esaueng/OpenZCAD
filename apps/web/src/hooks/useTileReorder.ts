@@ -74,7 +74,11 @@ export interface TileReorderOptions {
    * empty space in its grid, joins that group where it lands.
    */
   groupOf(id: string): string;
-  onCommit(ids: string[], moved?: TileGroupMove): void;
+  /**
+   * Saves a drop. A returned promise holds the drop's preview until it
+   * settles, so a later save landing first cannot show an in-between state.
+   */
+  onCommit(ids: string[], moved?: TileGroupMove): void | Promise<unknown>;
 }
 
 /**
@@ -102,6 +106,8 @@ export function useTileReorder({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const session = useRef<DragSession | null>(null);
   const settleTimer = useRef<number | null>(null);
+  // Drops whose saves are still running; the preview stays until all are in.
+  const [savesInFlight, setSavesInFlight] = useState(0);
   // Positions before a reflow, so each moved tile can ease from there.
   const before = useRef<Map<string, DOMRect> | null>(null);
   const latest = useRef({ ids, enabled, groupOf, onCommit, order, moved });
@@ -112,12 +118,18 @@ export function useTileReorder({
   const movedLanded = [...moved].every(([id, group]) => groupOf(id) === group);
   // A dropped order stands in for the stored one until the save lands.
   useEffect(() => {
-    if (!draggingId && order && order.join('\n') === idsKey && movedLanded) {
+    if (
+      !draggingId &&
+      savesInFlight === 0 &&
+      order &&
+      order.join('\n') === idsKey &&
+      movedLanded
+    ) {
       clearTimer(settleTimer);
       setOrder(null);
       setMoved(NO_MOVES);
     }
-  }, [draggingId, idsKey, order, movedLanded]);
+  }, [draggingId, savesInFlight, idsKey, order, movedLanded]);
 
   useEffect(
     () => () => {
@@ -266,7 +278,12 @@ export function useTileReorder({
     setOrder(next);
     // Every earlier drop still waiting on its save keeps its group too.
     const moves = new Map(current.seedMoved);
-    if (group === latest.current.groupOf(current.id)) {
+    // Back in its stored group counts as no move only if no earlier drop of
+    // this tile is still saving: that save would show the in-between group.
+    if (
+      group === latest.current.groupOf(current.id) &&
+      !current.seedMoved.has(current.id)
+    ) {
       moves.delete(current.id);
     } else {
       moves.set(current.id, group);
@@ -383,11 +400,20 @@ export function useTileReorder({
       const changed =
         regrouped || current.order.join('\n') !== current.initial.join('\n');
       if (commit && changed) {
-        latest.current.onCommit(
-          current.order,
-          regrouped ? { id: current.id, group: current.group } : undefined
-        );
-        armSettleTimer();
+        clearTimer(settleTimer);
+        setSavesInFlight((count) => count + 1);
+        void Promise.resolve(
+          latest.current.onCommit(
+            current.order,
+            regrouped ? { id: current.id, group: current.group } : undefined
+          )
+        )
+          .catch(() => undefined)
+          .finally(() => {
+            setSavesInFlight((count) => count - 1);
+            // Only a preview the shelf never catches up with needs this.
+            armSettleTimer();
+          });
       } else {
         if (changed) {
           snapshot();

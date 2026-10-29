@@ -134,7 +134,7 @@ interface StartScreenProps {
   onReorder(
     projectIds: string[],
     pin?: { projectId: string; pinned: boolean }
-  ): void;
+  ): void | Promise<void>;
   /** Irreversible: destroys the project outright. */
   onDeleteForever(project: ProjectSummary): void;
   onEmptyTrash(projects: ProjectSummary[]): void;
@@ -665,7 +665,7 @@ export function StartScreen({
     );
     const reordered = moveItem(shelfProjects, from, toIndex);
     if (reordered !== shelfProjects) {
-      onReorder(reordered.map((project) => project.projectId));
+      void onReorder(reordered.map((project) => project.projectId));
     }
   }
 
@@ -987,9 +987,7 @@ export function StartScreen({
               className="start-tile-action start-tile-pin"
               aria-pressed={pinnedNow}
               aria-label={
-                pinnedNow
-                  ? `Unpin ${project.name}`
-                  : `Pin ${project.name}`
+                pinnedNow ? `Unpin ${project.name}` : `Pin ${project.name}`
               }
               title={pinnedNow ? 'Unpin' : 'Pin to the front'}
               disabled={busy}

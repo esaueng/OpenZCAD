@@ -26650,7 +26650,7 @@ export function App() {
           }
           onTogglePin={(project) => void handleTogglePin(project)}
           onReorder={(projectIds, pin) =>
-            void handleReorderProjects(projectIds, pin)
+            handleReorderProjects(projectIds, pin)
           }
           onDeleteForever={(project) =>
             void handleDeleteProjectForever(project)
