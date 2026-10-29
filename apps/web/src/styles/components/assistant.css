@@ -4,17 +4,14 @@
 
 /* ── The stream ──────────────────────────────────────────────
    Search and the assistant are one prompt line (U04 slice 5), and the
-   conversation is a stream of text standing on it: no panel, no header,
-   no second field. It sits on the stage colour at full opacity so nothing
-   read competes with geometry, and that ground dies out over its top edge,
-   so the stream dissolves into the viewer instead of ending at a border.
-   Unfocused it goes quiet; the model wins by default. */
+   conversation stands on it as one surface with the bar: the bar's own
+   surface and strong border, square where the two meet, so the bar's top
+   border is the one line between them — as the command list stands on it.
+   A slim header names it and holds its actions; the bar below is the only
+   field, and carries "attach" and the Enter key while the stream is up. */
 
 .assistant-panel {
   --assistant-bottom: calc(var(--island-gap) + var(--command-bar-h));
-  /* How much of the top edge dissolves. The thread pads itself by the same
-     amount so its first visible line sits on solid ground. */
-  --assistant-fade: 72px;
   position: absolute;
   z-index: var(--z-assistant-float);
   left: var(--lane-inset);
@@ -31,26 +28,23 @@
   margin-inline: auto;
   display: grid;
   /* One column the panel's own width. An implicit auto column sized to the
-     foot line's min-content, wider than a 292px panel at 1024px, and the
-     mask clipped "hide", the times and the badges at its edge. */
+     footer's min-content, wider than a 292px panel at 1024px, and clipped
+     its actions at the edge. */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   color: var(--color-text);
-  background: var(--color-bg);
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-bottom: 0;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 var(--assistant-fade)
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 var(--assistant-fade)
-  );
+  box-shadow: var(--shadow-3);
+  /* The shadow stops at the stream's foot, as the command list's does: it
+     fell on the bar below and read as a seam between the two. */
+  clip-path: inset(-64px -64px 0 -64px);
   font-size: var(--fs-base);
+  /* Its width is the lane's, never its content's: the proposal actions
+     read it below. */
+  container-type: inline-size;
   animation: assistant-dock-in var(--dur-base) var(--ease-out);
   transition: max-height var(--dur-base) var(--ease-out);
 }
@@ -78,7 +72,7 @@
   }
 }
 
-/* Scrollback: the stream takes the stage and stops fading. */
+/* Scrollback: the stream takes the stage's height. */
 .assistant-panel.scrollback {
   max-height: calc(100% - var(--stage-top) - var(--assistant-bottom));
 }
@@ -107,6 +101,15 @@
   border-top-right-radius: 0;
 }
 
+/* One surface, one border: the stream's strong edge runs on down the bar,
+   and the focus halo around the field alone goes, as it does under the
+   command list. While the list stands there instead, its own rules hold. */
+.workspace.with-assistant .command-bar:not(.listing),
+.workspace.with-assistant .command-bar.open:not(.listing) {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-3);
+}
+
 /* The ask hint rises onto the stream's foot line and covered attach,
    history, clear and hide while a question was being typed — attaching a
    drawing to it included. With the stream up, Enter plainly asks it; the
@@ -125,7 +128,7 @@
 .assistant-panel.dragging::after {
   content: 'Drop the drawing to attach it';
   position: absolute;
-  inset: auto 10px 56px;
+  inset: auto 12px 12px;
   padding: 7px 10px;
   color: var(--color-accent);
   background: var(--color-surface-2);
@@ -136,20 +139,90 @@
   pointer-events: none;
 }
 
+/* ── The header ─────────────────────────────────────────
+   The eyebrow in the panels' title type, the model answering, and the
+   stream's own actions as quiet icons. */
+
+.assistant-head {
+  grid-area: 1 / 1;
+  min-width: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border-bottom: var(--border-thin);
+}
+
+.assistant-eyebrow {
+  flex: 0 0 auto;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.assistant-model {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-head-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.assistant-head-action {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.assistant-head-action:hover:not(:disabled),
+.assistant-head-action:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.assistant-head-action.active {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+}
+
+.assistant-head-action:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
 /* ── The thread ─────────────────────────────────────────── */
 
 .assistant-thread {
   /* The jump button shares this cell, so it stands on the thread's foot
      whatever the footer below holds. */
-  grid-area: 1 / 1;
+  grid-area: 2 / 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--assistant-fade) 14px 10px 10px;
+  padding: 14px 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   scroll-behavior: smooth;
-  transition: opacity var(--dur-base) var(--ease-out);
+  scrollbar-width: thin;
 }
 
 /* Stands the stream on the prompt line. Not `align-content: end`: in a scroll
@@ -160,18 +233,13 @@
   margin-top: auto;
 }
 
-.assistant-panel.quiet .assistant-thread {
-  opacity: 0.8;
-}
-
 .assistant-day {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 /* An older day's landmark; today needs none. */
 .assistant-day-rule {
-  padding-left: 28px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
@@ -179,14 +247,19 @@
   text-transform: uppercase;
 }
 
-/* One line: the glyph in the margin, the body, the time. */
+/* A turn: the user's words in a soft bubble on the right, the assistant's
+   as plain prose across the width; the time beside either on hover. */
 .assistant-turn {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   animation: assistant-turn-in var(--dur-base) var(--ease-out);
-  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.assistant-turn.user {
+  justify-content: flex-end;
 }
 
 @keyframes assistant-turn-in {
@@ -210,28 +283,22 @@
   }
 }
 
-/* Age fades the stream on top of the top-edge dissolve: the further a line
-   is from the prompt, the quieter. Hovering lifts it for a read-back, and
-   scrollback, which is for reading back, does not fade at all. The age is
-   counted over the whole thread (AssistantPanel), not within each day. */
-.assistant-panel:not(.scrollback)
-  .assistant-thread:not(:hover)
-  .assistant-turn.age-1 {
-  opacity: 0.86;
+.assistant-turn-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
 }
 
-.assistant-panel:not(.scrollback)
-  .assistant-thread:not(:hover)
-  .assistant-turn.age-2 {
-  opacity: 0.68;
+.assistant-turn.user .assistant-turn-body {
+  flex: 0 1 auto;
+  max-width: 78%;
+  padding: 7px 10px;
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-lg);
 }
 
-.assistant-panel:not(.scrollback)
-  .assistant-thread:not(:hover)
-  .assistant-turn.age-3 {
-  opacity: 0.5;
-}
-
+/* The suggestions' opener glyph. */
 .assistant-turn-mark {
   height: 21px;
   display: grid;
@@ -241,17 +308,8 @@
   line-height: 21px;
 }
 
-.assistant-turn.user .assistant-turn-mark {
-  color: var(--color-accent);
-}
-
-.assistant-turn-body {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-}
-
 .assistant-turn-time {
+  flex: 0 0 auto;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
@@ -260,17 +318,32 @@
   transition: opacity var(--dur-fast) var(--ease-out);
 }
 
+/* The bubble keeps the right edge; its time stands to its left. */
+.assistant-turn.user .assistant-turn-time {
+  order: -1;
+  line-height: 33px;
+}
+
+/* The assistant's turns take the whole width, so their time stands in the
+   gap above the turn's end rather than in a column of its own. */
+.assistant-turn.assistant .assistant-turn-time {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  line-height: 14px;
+  pointer-events: none;
+}
+
 .assistant-thread:hover .assistant-turn-time,
 .assistant-panel.scrollback .assistant-turn-time {
   opacity: 1;
 }
 
-/* The user's own words: the full ink, a touch heavier. */
+/* The user's own words, in the bubble. */
 .assistant-ask {
   margin: 0;
   color: var(--color-text);
-  font-weight: 500;
-  line-height: 1.5;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
@@ -319,7 +392,6 @@
 /* An ask that never got its answer: the line under it says so. */
 .assistant-stopped {
   margin: 0;
-  padding-left: 28px;
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
 }
@@ -329,7 +401,6 @@
 .assistant-empty {
   display: grid;
   gap: 8px;
-  padding-left: 28px;
 }
 
 .assistant-empty-lead {
@@ -340,7 +411,7 @@
 }
 
 .assistant-suggestions {
-  margin: 0 0 0 -28px;
+  margin: 0 0 0 -4px;
   padding: 0;
   display: grid;
   gap: 4px;
@@ -411,7 +482,7 @@
 }
 
 .assistant-jump {
-  grid-area: 1 / 1;
+  grid-area: 2 / 1;
   align-self: end;
   justify-self: end;
   z-index: 1;
@@ -430,13 +501,53 @@
 }
 
 /* ── Blocks: proposals, questions, replies ──────────────────
-   No cards. A block is a label, its copy and its actions on the stream's
-   own ground; the label's colour is the state. */
+   A reply or a question is a label, its copy and its actions on the
+   stream's own ground; the label's colour is the state. A proposal is a
+   plain fill a step up from the surface, with no border: its summary is
+   the title, the operations a short numbered list, and Apply the one
+   control in the selected tint. */
 
 .assistant-card {
   min-width: 0;
   display: grid;
   gap: 5px;
+}
+
+.assistant-card.proposal {
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-lg);
+}
+
+/* Apply and Reject hand focus to the card that records the decision.
+   From the keyboard it shows where focus landed; after a click it does
+   not ring the whole card. */
+.assistant-card.proposal:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.assistant-card.proposal:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.assistant-card-head {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+
+.assistant-card-title {
+  flex: 1 1 14em;
+  font-weight: var(--fw-medium);
+}
+
+.assistant-card-head .assistant-disclosure {
+  margin-left: auto;
+  font-family: inherit;
 }
 
 .assistant-card.proposal.rejected .assistant-card-copy,
@@ -460,8 +571,7 @@
   text-transform: uppercase;
 }
 
-.assistant-card.questions .assistant-card-label,
-.assistant-card.proposal.open .assistant-card-label {
+.assistant-card.questions .assistant-card-label {
   color: var(--color-accent);
 }
 
@@ -603,6 +713,23 @@
   margin-right: 2px;
 }
 
+/* A proposal's actions are buttons on its fill: the same height, Apply
+   tinted, the others plain text that the hover picks out. */
+.assistant-card.proposal .assistant-card-actions {
+  gap: 4px;
+}
+
+.assistant-card.proposal .assistant-card-actions button {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+.assistant-card.proposal .assistant-card-actions button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
 .assistant-action-hint {
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
@@ -616,6 +743,56 @@
 .assistant-primary:hover:not(:disabled),
 .assistant-card-actions .assistant-primary:hover:not(:disabled) {
   color: var(--color-accent-hi);
+}
+
+.assistant-card.proposal .assistant-card-actions .assistant-primary {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+  font-weight: var(--fw-medium);
+}
+
+.assistant-card.proposal
+  .assistant-card-actions
+  .assistant-primary:hover:not(:disabled) {
+  color: var(--color-selected-text);
+  background: color-mix(
+    in srgb,
+    var(--color-selected-fill),
+    var(--color-selected-text) 12%
+  );
+}
+
+.assistant-card.proposal .assistant-card-actions kbd {
+  color: inherit;
+  background: var(--color-surface-hover);
+  border: 0;
+}
+
+.assistant-card.proposal .assistant-primary kbd {
+  padding-inline: 2px;
+  background: transparent;
+  opacity: 0.75;
+}
+
+/* In the narrow stream (292px at a 1024px window) the three actions with
+   their keys wrapped into a column; the keys are hints, the bar's Enter key
+   still says what Enter does, and the prompt's keys still work. */
+@container (max-width: 359px) {
+  .assistant-card.proposal {
+    padding-inline: 10px;
+  }
+
+  .assistant-card.proposal .assistant-card-actions kbd,
+  .assistant-card.proposal
+    .assistant-card-actions
+    button:not(.assistant-primary)
+    svg {
+    display: none;
+  }
+
+  .assistant-card.proposal .assistant-card-actions button {
+    padding: 0 7px;
+  }
 }
 
 /* ── Questions ──────────────────────────────────────────── */
@@ -764,11 +941,11 @@
   margin: 0;
   padding-left: 18px;
   display: grid;
-  gap: 3px;
+  gap: 1px;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 /* The audit table: someone checks a misread decimal here before cutting metal. */
@@ -829,16 +1006,19 @@
 /* ── Between the stream and the prompt ───────────────────── */
 
 .assistant-actions {
-  grid-area: 2 / 1;
+  grid-area: 3 / 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
-  padding: 4px 10px 6px;
+  padding: 0 14px 10px;
+}
+
+.assistant-actions:empty {
+  display: none;
 }
 
 .assistant-notice {
   margin: 0;
-  padding-left: 28px;
   color: var(--color-warning);
   font-size: var(--fs-sm);
   line-height: 1.4;
@@ -849,7 +1029,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding-left: 28px;
 }
 
 .assistant-pending-item {
@@ -903,7 +1082,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 2px 14px;
-  padding-left: 28px;
 }
 
 /* A verified recipe is a text action, its badge saying it never leaves
@@ -936,7 +1114,6 @@
 }
 
 .assistant-edit-catalog {
-  padding-left: 28px;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
 }
@@ -957,47 +1134,6 @@
 .assistant-edit-catalog .assistant-verified-action {
   display: flex;
   margin-top: 4px;
-}
-
-/* The foot line: the model, then the quiet verbs. */
-.assistant-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  padding-top: 2px;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-}
-
-.assistant-model {
-  min-width: 0;
-  margin-right: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.assistant-foot-action {
-  min-height: 24px;
-  padding: 2px 0;
-  color: var(--color-text-subtle);
-  border: 0;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  cursor: pointer;
-}
-
-.assistant-foot-action:hover:not(:disabled),
-.assistant-foot-action:focus-visible,
-.assistant-foot-action.active {
-  color: var(--color-text);
-}
-
-.assistant-foot-action:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: not-allowed;
 }
 
 /* ── Assistant consent on encrypted projects (ADR-024 6-1) ──
@@ -1066,7 +1202,22 @@
   align-items: center;
   gap: var(--sp-2);
   margin: 0;
-  padding-left: 28px;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
+}
+
+/* Stopping is a quiet verb at the chip's end, in the footer's text type. */
+.assistant-consent-stop {
+  min-height: 24px;
+  padding: 2px 0;
+  color: var(--color-text-subtle);
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  cursor: pointer;
+}
+
+.assistant-consent-stop:hover,
+.assistant-consent-stop:focus-visible {
+  color: var(--color-text);
 }

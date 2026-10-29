@@ -7,11 +7,19 @@ import {
   useReducer,
   useRef,
   useState,
-  type ChangeEvent,
   type DragEvent,
   type ReactNode
 } from 'react';
-import { ArrowDown, ImageIcon, RotateCcw, Sparkles, X } from 'lucide-react';
+import {
+  ArrowDown,
+  ChevronDown,
+  History,
+  ImageIcon,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  X
+} from 'lucide-react';
 import {
   createGrowingHolderProposal,
   createEditCandidateCatalog,
@@ -64,7 +72,6 @@ import {
   type AssistantSuggestion
 } from '../../lib/assistant/suggestions';
 import {
-  ACCEPTED_ATTACHMENT_TYPES,
   attachmentDataUrl,
   attachmentsFromFile,
   AttachmentError
@@ -115,6 +122,12 @@ export interface AssistantActivity {
    * status could not be read. The prompt line stops offering to ask.
    */
   unavailable: boolean;
+  /**
+   * A drawing picked now would be taken: a provider answers (its status has
+   * loaded), the stream is not hidden, and the tray has room. Otherwise the
+   * prompt line offers no pick, which would only be turned away.
+   */
+  canAttach: boolean;
 }
 
 interface AssistantPanelProps {
@@ -277,33 +290,23 @@ function announcementFor(reply: AssistantReply): string {
 type TurnRole = 'user' | 'assistant';
 
 /**
- * One line of the stream: a glyph in the margin, the body, and the time.
- *
- * The user's lines carry the prompt's own chevron, the assistant's the spark,
- * so the margin reads as a conversation rather than shell output. The time
- * only shows while the pointer is over the stream — it matters when auditing
- * a decision, never while reading the sentence.
+ * One turn of the stream: the user's words in a bubble on the right, the
+ * assistant's as plain prose across the width, and the time. The time only
+ * shows while the pointer is over the stream — it matters when auditing a
+ * decision, never while reading the sentence.
  */
 function Turn({
   role,
   at,
-  age,
   children
 }: {
   role: TurnRole;
   at: number | undefined;
-  /** Turns between this one and the newest, across days. */
-  age: number;
   children: ReactNode;
 }) {
   const time = formatEntryTime(at);
-  const ageClass =
-    age >= 9 ? ' age-3' : age >= 6 ? ' age-2' : age >= 3 ? ' age-1' : '';
   return (
-    <article className={`assistant-turn ${role}${ageClass}`}>
-      <span className="assistant-turn-mark" aria-hidden="true">
-        {role === 'user' ? '›' : <Sparkles size={12} />}
-      </span>
+    <article className={`assistant-turn ${role}`}>
       <div className="assistant-turn-body">{children}</div>
       {time && at && (
         <time
@@ -320,11 +323,12 @@ function Turn({
 /**
  * The assistant as a stream standing on the prompt line.
  *
- * There is no panel chrome: the conversation is text over the viewport, on a
- * ground that fades out at its top edge, and the one text field on the stage
- * (the command bar) is its composer. It holds a thread that outlives the
- * session, a question the assistant asked, thumbnails of an attached drawing,
- * and a proposal detailed enough to audit. Two rules shape the rest: the
+ * The conversation and the command bar are one surface: a slim header with
+ * the model and the stream's own actions, the thread, and the bar as its foot
+ * — the one text field on the stage is its composer, and carries "attach"
+ * while the stream is up. It holds a thread that outlives the session, a
+ * question the assistant asked, thumbnails of an attached drawing, and a
+ * proposal detailed enough to audit. Two rules shape the rest: the
  * thread belongs to the project, so it is read back from storage when one
  * opens and written on every turn, and tucking the stream away is a display
  * decision only — the conversation and any request still in flight keep
@@ -413,8 +417,6 @@ export function AssistantPanel({
   const applyingEntryRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const attachRef = useRef<HTMLButtonElement | null>(null);
   /**
    * Which project the conversation on screen belongs to.
    *
@@ -469,15 +471,6 @@ export function AssistantPanel({
       : null;
   const groups = useMemo(
     () => groupThreadByDay(entries, Date.now()),
-    [entries]
-  );
-  // Age fades the stream by distance from the prompt across the whole
-  // thread; counted per day, yesterday's last turns outshone today's.
-  const entryAges = useMemo(
-    () =>
-      new Map(
-        entries.map((entry, index) => [entry.id, entries.length - 1 - index])
-      ),
     [entries]
   );
   const growingHolderProposal = useMemo(
@@ -630,14 +623,18 @@ export function AssistantPanel({
     }
   }, []);
 
+  // The same conditions promptFilesRef takes a file on, plus room for it.
+  const canAttach =
+    configured && !hidden && pending.length < MAX_ASSISTANT_ATTACHMENTS;
   useEffect(() => {
     onActivity?.({
       thinking,
       unread,
       context: selectionSummary,
-      unavailable
+      unavailable,
+      canAttach
     });
-  }, [onActivity, thinking, unread, selectionSummary, unavailable]);
+  }, [onActivity, thinking, unread, selectionSummary, unavailable, canAttach]);
 
   useEffect(() => {
     if (collapsed) {
@@ -1107,7 +1104,7 @@ export function AssistantPanel({
   function hideStream() {
     const active = window.document.activeElement;
     const prompt = window.document.querySelector<HTMLElement>(
-      `${ASSISTANT_PROMPT_SELECTOR} input`
+      `${ASSISTANT_PROMPT_SELECTOR} input:not([type='file'])`
     );
     if (
       prompt &&
@@ -1125,7 +1122,8 @@ export function AssistantPanel({
   }
 
   // A removed drawing's button goes with it; focus moves to its neighbour's,
-  // or to "attach" once the tray is empty.
+  // or to the prompt line, where the next ask is typed and "attach" now
+  // stands, once the tray is empty.
   const pendingFocusRef = useRef<number | null>(null);
   useEffect(() => {
     const index = pendingFocusRef.current;
@@ -1140,11 +1138,13 @@ export function AssistantPanel({
       buttons && buttons.length > 0
         ? buttons[Math.min(index, buttons.length - 1)]
         : null;
-    const attach = attachRef.current;
+    const prompt = window.document.querySelector<HTMLElement>(
+      `${ASSISTANT_PROMPT_SELECTOR} input:not([type='file'])`
+    );
     if (neighbour) {
       neighbour.focus();
-    } else if (attach && !attach.disabled) {
-      attach.focus();
+    } else if (prompt) {
+      prompt.focus({ preventScroll: true });
     } else {
       focusThread();
     }
@@ -1383,12 +1383,7 @@ export function AssistantPanel({
   function renderEntry(entry: AssistantEntry) {
     if (entry.kind === 'user') {
       return (
-        <Turn
-          role="user"
-          at={entry.at}
-          age={entryAges.get(entry.id) ?? 0}
-          key={entry.id}
-        >
+        <Turn role="user" at={entry.at} key={entry.id}>
           {entry.answers.length > 0 ? (
             <dl className="assistant-answer-list">
               {entry.answers.map((answer) => (
@@ -1431,12 +1426,7 @@ export function AssistantPanel({
     }
     if (entry.kind === 'questions') {
       return (
-        <Turn
-          role="assistant"
-          at={entry.at}
-          age={entryAges.get(entry.id) ?? 0}
-          key={entry.id}
-        >
+        <Turn role="assistant" at={entry.at} key={entry.id}>
           <QuestionCard
             entry={entry}
             busy={thinking}
@@ -1455,12 +1445,7 @@ export function AssistantPanel({
     }
     if (entry.kind === 'proposal') {
       return (
-        <Turn
-          role="assistant"
-          at={entry.at}
-          age={entryAges.get(entry.id) ?? 0}
-          key={entry.id}
-        >
+        <Turn role="assistant" at={entry.at} key={entry.id}>
           <ProposalCard
             entry={entry}
             busy={thinking || applyingEntryId !== null}
@@ -1480,12 +1465,7 @@ export function AssistantPanel({
       );
     }
     return (
-      <Turn
-        role="assistant"
-        at={entry.at}
-        age={entryAges.get(entry.id) ?? 0}
-        key={entry.id}
-      >
+      <Turn role="assistant" at={entry.at} key={entry.id}>
         <div className={`assistant-card message ${entry.tone}`}>
           {entry.tone === 'error' && (
             <span className="assistant-card-label">
@@ -1524,14 +1504,13 @@ export function AssistantPanel({
   const modelDescription = status?.configured
     ? `${status.model} · ${status.reasoningEffort} reasoning`
     : 'Assistant unavailable';
-  const quiet = !prompting && !thinking && !dragging;
 
   return (
     <section
       ref={panelRef}
       className={`assistant-panel${dragging ? ' dragging' : ''}${
         hidden ? ' assistant-off-screen' : ''
-      }${quiet ? ' quiet' : ''}${scrollback ? ' scrollback' : ''}`}
+      }${scrollback ? ' scrollback' : ''}`}
       aria-label="AI modeling assistant"
       aria-hidden={hidden || undefined}
       onDragOver={(event) => {
@@ -1549,6 +1528,55 @@ export function AssistantPanel({
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
     >
+      {/* The stream's title row: what it is, the model answering, and the
+          actions on the stream itself. */}
+      <header className="assistant-head">
+        <span className="assistant-eyebrow">Assistant</span>
+        <span className="assistant-model" title={modelDescription}>
+          {modelLabel}
+          {status?.configured && (
+            <span className="visually-hidden"> reasoning</span>
+          )}
+        </span>
+        <span className="assistant-head-actions">
+          {/* Pressed says whether scrollback is open. */}
+          <button
+            type="button"
+            className={`assistant-head-action${scrollback ? ' active' : ''}`}
+            title={`History (${platformShortcutLabel('Ctrl+↑')})`}
+            aria-label="History"
+            aria-pressed={scrollback}
+            onClick={() => setScrollback((open) => !open)}
+          >
+            <History size={13} aria-hidden="true" />
+          </button>
+          {entries.length > 0 && (
+            <button
+              type="button"
+              className="assistant-head-action"
+              title="Clear this project's conversation"
+              aria-label="Clear this project's conversation"
+              disabled={applyingEntryId !== null}
+              onClick={clearThread}
+            >
+              <Trash2 size={13} aria-hidden="true" />
+            </button>
+          )}
+          {/* Tucks the stream away behind the prompt line: the thread is
+              kept, and the assistant key (⌘J unless remapped) brings it
+              back. */}
+          <button
+            type="button"
+            className="assistant-head-action"
+            title={labelWithKey('Hide the assistant', hideKey)}
+            aria-label="Hide the assistant"
+            onClick={hideStream}
+          >
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+        </span>
+      </header>
+
       <div
         className="assistant-thread"
         ref={threadRef}
@@ -1614,10 +1642,7 @@ export function AssistantPanel({
         )}
 
         {thinking && (
-          <div className="assistant-turn assistant-working">
-            <span className="assistant-turn-mark" aria-hidden="true">
-              <Sparkles size={12} />
-            </span>
+          <div className="assistant-turn assistant assistant-working">
             <div className="assistant-turn-body">
               <span className="assistant-card-label">Thinking</span>
               <span className="assistant-working-copy">
@@ -1659,7 +1684,7 @@ export function AssistantPanel({
       )}
 
       {/* What stands between the stream and the prompt: notices, drawings
-          waiting for the next ask, the verified recipes, and the foot line. */}
+          waiting for the next ask, and the verified recipes. */}
       <footer className="assistant-actions">
         {notice && (
           <p className="assistant-notice" role="status">
@@ -1786,79 +1811,6 @@ export function AssistantPanel({
             )}
           </details>
         )}
-        <div className="assistant-foot">
-          <span className="assistant-model" title={modelDescription}>
-            {modelLabel}
-            {status?.configured && (
-              <span className="visually-hidden"> reasoning</span>
-            )}
-          </span>
-          <button
-            ref={attachRef}
-            type="button"
-            className="assistant-foot-action"
-            title="Attach a drawing (PNG, JPEG, WebP, or PDF)"
-            aria-label="Attach a drawing"
-            // Without a provider a drawing could only wait in the tray.
-            disabled={
-              !configured ||
-              thinking ||
-              pending.length >= MAX_ASSISTANT_ATTACHMENTS
-            }
-            onClick={() => fileInputRef.current?.click()}
-          >
-            attach
-          </button>
-          {/* Named by its own word, so "click history" finds it; pressed
-              says whether scrollback is open. */}
-          <button
-            type="button"
-            className={`assistant-foot-action${scrollback ? ' active' : ''}`}
-            title={`Scrollback (${platformShortcutLabel('Ctrl+↑')})`}
-            aria-pressed={scrollback}
-            onClick={() => setScrollback((open) => !open)}
-          >
-            history
-          </button>
-          {entries.length > 0 && (
-            <button
-              type="button"
-              className="assistant-foot-action"
-              title="Clear this project's conversation"
-              aria-label="Clear this project's conversation"
-              disabled={applyingEntryId !== null}
-              onClick={clearThread}
-            >
-              clear
-            </button>
-          )}
-          {/* Tucks the stream away behind the prompt line: the thread is
-              kept, and the assistant key (⌘J unless remapped) brings it
-              back. */}
-          <button
-            type="button"
-            className="assistant-foot-action"
-            title={labelWithKey('Hide the assistant', hideKey)}
-            aria-label="Hide the assistant"
-            onClick={hideStream}
-          >
-            hide
-          </button>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept={ACCEPTED_ATTACHMENT_TYPES}
-          style={{ display: 'none' }}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => {
-            const files = Array.from(event.target.files ?? []);
-            event.target.value = '';
-            if (files.length > 0) {
-              void addFiles(files);
-            }
-          }}
-        />
       </footer>
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
