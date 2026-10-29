@@ -187,6 +187,69 @@ function writeShelfLayout(layout: ShelfLayout) {
   }
 }
 
+const LIBRARY_VIEW_KEY = 'openzcad.start.view';
+
+interface LibraryView {
+  shelf: ProjectStatus;
+  filter: ShelfFilter;
+  sort: ShelfSort;
+  query: string;
+}
+
+/**
+ * The shelf, filter, sort and search this tab last showed, so a reload (or a
+ * trip into a part and back) returns to the same view, and its scroll
+ * position with it. Per tab: a new tab starts on Parts. Anything unreadable
+ * falls back to the defaults.
+ */
+function readLibraryView(): LibraryView {
+  const view: LibraryView = {
+    shelf: 'active',
+    filter: 'all',
+    sort: 'custom',
+    query: ''
+  };
+  try {
+    const stored = JSON.parse(
+      globalThis.sessionStorage?.getItem(LIBRARY_VIEW_KEY) ?? 'null'
+    ) as Partial<Record<keyof LibraryView, unknown>> | null;
+    if (!stored) {
+      return view;
+    }
+    if (
+      stored.shelf === 'active' ||
+      stored.shelf === 'archived' ||
+      stored.shelf === 'deleted'
+    ) {
+      view.shelf = stored.shelf;
+    }
+    if (
+      stored.filter === 'pinned' ||
+      stored.filter === 'attention' ||
+      stored.filter === 'local'
+    ) {
+      view.filter = stored.filter;
+    }
+    if (stored.sort === 'edited' || stored.sort === 'name') {
+      view.sort = stored.sort;
+    }
+    if (typeof stored.query === 'string') {
+      view.query = stored.query;
+    }
+  } catch {
+    // An unreadable store starts on the default view.
+  }
+  return view;
+}
+
+function writeLibraryView(view: LibraryView) {
+  try {
+    globalThis.sessionStorage?.setItem(LIBRARY_VIEW_KEY, JSON.stringify(view));
+  } catch {
+    // Forgetting the view is the whole failure mode.
+  }
+}
+
 const RECOVERY_SUFFIX = / \((?:Recovery|Local copy)\)(?: \(copy(?: \d+)?\))*$/;
 
 /**
@@ -338,10 +401,14 @@ export function StartScreen({
   const settingsKey = useKeymap().label('app-settings');
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
-  const [query, setQuery] = useState('');
-  const [shelf, setShelf] = useState<ProjectStatus>('active');
-  const [filter, setFilter] = useState<ShelfFilter>('all');
-  const [sort, setSort] = useState<ShelfSort>('custom');
+  const [initialView] = useState(readLibraryView);
+  const [query, setQuery] = useState(initialView.query);
+  const [shelf, setShelf] = useState<ProjectStatus>(initialView.shelf);
+  const [filter, setFilter] = useState<ShelfFilter>(initialView.filter);
+  const [sort, setSort] = useState<ShelfSort>(initialView.sort);
+  useEffect(() => {
+    writeLibraryView({ shelf, filter, sort, query });
+  }, [shelf, filter, sort, query]);
   const [layout, setLayout] = useState<ShelfLayout>(readShelfLayout);
   const [previousLayout] = useState(readLibraryLayout);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
