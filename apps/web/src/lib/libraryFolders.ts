@@ -169,6 +169,11 @@ export function moveProjectsToFolder(
   const moving = new Set(projectIds);
   const folders = withoutProjects(state.folders, moving);
   if (folderId === null) return { folders };
+  // A part moved within its own folder (a reorder) never left it, so the
+  // folder keeps the cover it had.
+  const cover = state.folders.find(
+    (folder) => folder.id === folderId
+  )?.coverProjectId;
   return {
     folders: folders.map((folder) =>
       folder.id === folderId
@@ -179,7 +184,8 @@ export function moveProjectsToFolder(
               ...projectIds.filter(
                 (id, index, all) => all.indexOf(id) === index
               )
-            ]
+            ],
+            ...(cover ? { coverProjectId: cover } : {})
           }
         : folder
     )

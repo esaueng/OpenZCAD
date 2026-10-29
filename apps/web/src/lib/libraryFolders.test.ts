@@ -205,4 +205,17 @@ describe('library folders', () => {
       'b'
     ]);
   });
+
+  it('keeps a folder’s cover when its parts are reordered', () => {
+    const state = setFolderCover(withTwo(), 'a', 'p2');
+    const reordered = moveProjectsToFolder(state, ['p2', 'p1'], 'a');
+    expect(reordered.folders[0]).toMatchObject({
+      projectIds: ['p2', 'p1'],
+      coverProjectId: 'p2'
+    });
+    // Moved to another folder, the cover still leaves with it.
+    expect(
+      moveProjectsToFolder(state, ['p2'], 'b').folders[0]!.coverProjectId
+    ).toBeUndefined();
+  });
 });
