@@ -1291,3 +1291,42 @@ describe('StartScreen folders and selection', () => {
     expect(onDuplicate).toHaveBeenCalledWith(edited);
   });
 });
+
+describe('StartScreen selection edge cases', () => {
+  const parts: ProjectSummary[] = ['Echo', 'Foxtrot'].map((name, index) => ({
+    projectId: toProjectId(`project_${name.toLowerCase()}`),
+    name: `${name} block`,
+    revisionCount: 1,
+    updatedAt: `2026-10-0${index + 1}T12:00:00.000Z`
+  }));
+
+  it('closes the Move menu on Escape before dropping the selection', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Echo block' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Move to' }));
+    const item = screen.getByRole('menuitem', { name: 'New folder' });
+    fireEvent.keyDown(item, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Move to folder' })).toBeNull();
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('hides the bar when a search hides every selected part', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Echo block' })
+    );
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search parts' }), {
+      target: { value: 'foxtrot' }
+    });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    // The hidden pick does not carry onto the part still shown.
+    expect(
+      screen.getByRole('checkbox', { name: 'Select Foxtrot block' })
+    ).toHaveAttribute('aria-checked', 'false');
+  });
+});

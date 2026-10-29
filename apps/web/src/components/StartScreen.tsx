@@ -1092,8 +1092,8 @@ export function StartScreen({
   }
 
   // A selection is a mode: Escape leaves it, and ⌘A / Ctrl+A takes in every
-  // part on screen while focus is not in a field.
-  const selecting = selected.size > 0;
+  // part on screen while focus is not in a field. (`selecting` counts only
+  // picked parts still on screen; it is set once the shelf is grouped.)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
@@ -1109,7 +1109,16 @@ export function StartScreen({
         !inField
       ) {
         event.stopPropagation();
-        setMoveMenuOpen(false);
+        // The Move menu closes first; the selection goes on the next press.
+        if (moveMenuOpen) {
+          setMoveMenuOpen(false);
+          globalThis.document
+            .querySelector<HTMLElement>(
+              '.start-selection-move > [aria-haspopup="menu"]'
+            )
+            ?.focus();
+          return;
+        }
         setSelected(new Set());
         return;
       }
@@ -2098,6 +2107,9 @@ export function StartScreen({
           }
         ]
       : [{ label: null, items: orderedItems }];
+  // A filter or search that hides every picked part ends selection mode
+  // rather than leaving a bar that acts on nothing.
+  const selecting = selectedOnScreen().length > 0;
   const shownProjectCount = shelfGroups.reduce(
     (count, group) => count + group.items.filter((item) => item.project).length,
     0
