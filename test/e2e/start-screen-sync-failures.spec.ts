@@ -1,6 +1,12 @@
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { DEMO_DEFINITIONS } from '../../apps/web/src/lib/demoDefinitions';
+import {
+  test,
+  expect,
+  stubApi,
+  withHydratedDocument
+} from './openzcad-fixtures';
 
 // The save-all results live in the cloud card at the foot of the library
 // column, and the column does not scroll. A run with many failures used to
@@ -73,3 +79,72 @@ test('a long list of failed saves stays reachable in the cloud card', async ({
   await inWindow(await lastRetry.boundingBox());
   await lastRetry.click({ trial: true });
 });
+
+test(
+  'a reset account sample can be saved as a fresh account project',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    const demo = DEMO_DEFINITIONS.find((item) => item.key === 'heatsink')!;
+    let deleted = false;
+    let creations = 0;
+    await stubApi(page);
+    await page.route('**/api/projects', async (route) => {
+      if (route.request().method() === 'POST') {
+        creations += 1;
+        const payload = (await withHydratedDocument(
+          route.request().postDataJSON()
+        )) as { document: ProjectDocument };
+        const document = payload.document;
+        return route.fulfill({
+          status: 201,
+          json: {
+            document,
+            project: {
+              projectId: document.projectId,
+              name: document.name,
+              documentVersion: document.version,
+              revisionCount: document.checkpoints.length,
+              updatedAt: document.derived.updatedAt
+            }
+          }
+        });
+      }
+      return route.fulfill({
+        json: {
+          projects: deleted
+            ? []
+            : [
+                {
+                  projectId: demo.projectId,
+                  name: demo.name,
+                  documentVersion: 1,
+                  revisionCount: 1,
+                  updatedAt: '2026-10-29T12:00:00.000Z'
+                }
+              ]
+        }
+      });
+    });
+    await page.route(`**/api/projects/${demo.projectId}`, (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback();
+      deleted = true;
+      return route.fulfill({ status: 204 });
+    });
+    await page.goto('/');
+    page.on('dialog', (dialog) => dialog.accept());
+    await page
+      .getByRole('button', { name: 'Reset Heat Sink to the original' })
+      .click();
+    await expect.poll(() => deleted).toBe(true);
+    await expect(
+      page.getByRole('button', { name: 'Reset Heat Sink to the original' })
+    ).toHaveCount(0);
+    await page.getByRole('button', { name: /^Open demo: Heat Sink/ }).click();
+    await expect(page.locator('.viewer-host canvas')).toBeVisible();
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => creations).toBe(1);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Saved project and source files to your account.'
+    );
+  }
+);

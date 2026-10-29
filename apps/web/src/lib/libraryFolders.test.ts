@@ -34,7 +34,40 @@ function withTwo(): LibraryFolders {
 }
 
 describe('library folders', () => {
-  afterEach(() => localStorage.clear());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it('retains edits and account isolation when storage reads and writes throw', () => {
+    vi.stubGlobal('localStorage', {
+      getItem() {
+        throw new Error('Storage blocked');
+      },
+      setItem() {
+        throw new Error('Storage blocked');
+      }
+    });
+    const key = folderStorageKey('blocked-reads');
+    expect(readLibraryFolders(key)).toEqual(empty);
+    const state = withTwo();
+    writeLibraryFolders(key, state);
+    expect(readLibraryFolders(key)).toBe(state);
+    const renamed = renameFolder(readLibraryFolders(key), 'a', 'Visit only');
+    writeLibraryFolders(key, renamed);
+    expect(readLibraryFolders(key)).toBe(renamed);
+    expect(readLibraryFolders(folderStorageKey('other-account'))).toEqual(
+      empty
+    );
+  });
+
+  it('retains folders for the visit when localStorage is absent', () => {
+    vi.stubGlobal('localStorage', undefined);
+    const state = withTwo();
+    const key = folderStorageKey('absent-storage');
+    writeLibraryFolders(key, state);
+    expect(readLibraryFolders(key)).toBe(state);
+  });
 
   it('names a new folder without duplicating an existing name', () => {
     let state = createFolder(empty, { id: 'a', now: NOW });

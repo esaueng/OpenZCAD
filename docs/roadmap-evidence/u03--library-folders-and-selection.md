@@ -17,3 +17,9 @@ Settings at its foot). Evidence: `libraryFolders.test.ts`,
 selection and bulk trash, new folder from a selection, Escape, sample reset)
 and `start-tile-reorder.spec.ts` (hold-to-merge folder that survives a
 reload; shift-range bulk trash).
+
+Review regressions cover absent storage, blocked reads and writes, and
+account isolation during visit-only folder edits. A CI smoke browser case in
+`start-screen-sync-failures.spec.ts` resets an account-saved sample, rebuilds
+it and saves it through account adoption again. Both regressions fail before
+the corresponding fixes. Folder tests are included in the unit smoke manifest.
