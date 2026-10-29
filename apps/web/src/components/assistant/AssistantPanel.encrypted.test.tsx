@@ -6,6 +6,7 @@ import {
   assistantDisabledReason,
   ENCRYPTED_PROJECT_ASSISTANT_NOTICE
 } from '../../lib/assistant/encryptedProject';
+import { sendAssistantPromptFiles } from '../../lib/assistant/promptKeys';
 import { AssistantPanel } from './AssistantPanel';
 
 const doc = createProjectDocument('Bracket', toUserId('user_a'));
@@ -87,9 +88,12 @@ describe('the assistant on an encrypted project', () => {
     const { rerender } = render(<AssistantPanel {...props} />);
     await act(async () => {});
     expect(screen.getByText(ENCRYPTED_PROJECT_ASSISTANT_NOTICE)).toBeTruthy();
+    // A drawing picked from the prompt line is left there, not taken.
     expect(
-      screen.getByRole('button', { name: 'Attach a drawing' })
-    ).toBeDisabled();
+      sendAssistantPromptFiles([
+        new File(['png'], 'drawing.png', { type: 'image/png' })
+      ])
+    ).toBe(false);
     expect(onActivity).toHaveBeenLastCalledWith(
       expect.objectContaining({ unavailable: true })
     );
@@ -124,8 +128,12 @@ describe('the assistant on an encrypted project', () => {
     );
     await act(async () => {});
     expect(screen.queryByText(ENCRYPTED_PROJECT_ASSISTANT_NOTICE)).toBeNull();
-    expect(
-      screen.getByRole('button', { name: 'Attach a drawing' })
-    ).toBeEnabled();
+    let taken = false;
+    await act(async () => {
+      taken = sendAssistantPromptFiles([
+        new File(['png'], 'drawing.png', { type: 'image/png' })
+      ]);
+    });
+    expect(taken).toBe(true);
   });
 });

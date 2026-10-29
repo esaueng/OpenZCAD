@@ -24,8 +24,8 @@ function rule(selector: string): string {
 
 describe('assistant stream width', () => {
   it('holds the panel and its footer to one column the panel’s own width', () => {
-    // An implicit auto column sized to the foot line's min-content (332px)
-    // overflowed a 292px panel at 1024px, and the mask clipped "hide".
+    // An implicit auto column sized to the old foot line's min-content
+    // (332px) overflowed a 292px panel at 1024px, and clipped "hide".
     for (const selector of ['.assistant-panel', '.assistant-actions']) {
       expect(rule(selector), selector).toMatch(
         /grid-template-columns:\s*minmax\(0, 1fr\)/
@@ -38,24 +38,27 @@ describe('jump to latest', () => {
   it('stands on the thread’s own foot, not a fixed offset over the footer', () => {
     // `bottom: 48px` from the panel put it on the verified recipes whenever
     // the footer held more than the foot line.
-    expect(rule('.assistant-thread')).toMatch(/grid-area:\s*1 \/ 1/);
-    expect(rule('.assistant-actions')).toMatch(/grid-area:\s*2 \/ 1/);
+    expect(rule('.assistant-head')).toMatch(/grid-area:\s*1 \/ 1/);
+    expect(rule('.assistant-thread')).toMatch(/grid-area:\s*2 \/ 1/);
+    expect(rule('.assistant-actions')).toMatch(/grid-area:\s*3 \/ 1/);
     const jump = rule('.assistant-jump');
-    expect(jump).toMatch(/grid-area:\s*1 \/ 1/);
+    expect(jump).toMatch(/grid-area:\s*2 \/ 1/);
     expect(jump).toMatch(/align-self:\s*end/);
     expect(jump).not.toMatch(/position:\s*absolute/);
   });
 });
 
-describe('age fading', () => {
-  it('never fades a turn in scrollback, and counts age across the thread', () => {
-    const fades = css.match(/[^{}]*\.age-[123][^{}]*\{/g) ?? [];
-    expect(fades).toHaveLength(3);
-    for (const selector of fades) {
-      expect(selector).toMatch(/\.assistant-panel:not\(\.scrollback\)/);
-    }
-    // Counting per `.assistant-day` left yesterday's last turns at full ink.
-    expect(css).not.toMatch(/\.assistant-turn:nth-last-child/);
+describe('one surface with the bar', () => {
+  it('stands on the bar in its surface and border, with no dissolve', () => {
+    // The stream was the stage colour under a fade mask, with older turns
+    // fading by age: it read as text dissolving into the model rather than
+    // as the bar's own surface (toolbar refinement, Oct 2026).
+    const panel = rule('.assistant-panel');
+    expect(panel).toMatch(/background:\s*var\(--color-surface\)/);
+    expect(panel).toMatch(/border:\s*var\(--border-strong\)/);
+    expect(panel).toMatch(/border-bottom:\s*0/);
+    expect(css).not.toMatch(/mask-image/);
+    expect(css).not.toMatch(/\.age-[123]/);
   });
 });
 

@@ -993,9 +993,6 @@ describe('an assistant with no provider', () => {
   */
   it('takes no drawing it could never send', async () => {
     await renderPanel({ effectiveAssistant: unconfigured });
-    expect(
-      screen.getByRole('button', { name: 'Attach a drawing' })
-    ).toBeDisabled();
 
     const drawing = new File(['png'], 'drawing.png', { type: 'image/png' });
     let taken = true;
@@ -1262,15 +1259,23 @@ describe('the stream as a record', () => {
     ).toBeInTheDocument();
   });
 
-  it('names its foot actions by their visible words', async () => {
+  it('holds its own actions in the header, beside the model', async () => {
     await renderPanel();
-    expect(
+    const header = window.document.querySelector('.assistant-head');
+    expect(header).toHaveTextContent(/^Assistant/);
+    expect(header).toContainElement(
       screen.getByRole('button', { name: 'Hide the assistant' })
-    ).toHaveTextContent('hide');
-    const history = screen.getByRole('button', { name: 'history' });
+    );
+    // Attach belongs to the prompt line now, which carries it while the
+    // stream stands there.
+    expect(
+      screen.queryByRole('button', { name: 'Attach a drawing' })
+    ).toBeNull();
+    const history = screen.getByRole('button', { name: 'History' });
+    expect(header).toContainElement(history);
     expect(history).toHaveAttribute('aria-pressed', 'false');
     await userEvent.setup().click(history);
-    expect(screen.getByRole('button', { name: 'history' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'History' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );

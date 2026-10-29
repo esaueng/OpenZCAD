@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Paperclip } from 'lucide-react';
 import {
   platformShortcutLabel,
   type PlatformShortcutCopy
 } from '../lib/platformShortcut';
 import {
+  ACCEPTED_ATTACHMENT_TYPES,
   sendAssistantPromptFiles,
   sendAssistantPromptKey
 } from '../lib/assistant/promptKeys';
@@ -143,6 +145,7 @@ export function CommandBar({
   // Most recent first; read once, then kept in step with what runs here.
   const [recentIds, setRecentIds] = useState(loadRecentCommands);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // Where focus was before the bar took it, for Escape and for a command
   // that has run: the canvas keeps its keys instead of landing on <body>.
@@ -587,6 +590,43 @@ export function CommandBar({
             }}
           />
         </span>
+        {onAsk && (
+          // The conversation's end of the bar, shown only while its stream
+          // stands on it (quiet-stage.css): a drawing for the next ask, and
+          // the key that sends it or applies the proposal waiting there.
+          <span className="command-bar-stream-keys">
+            <button
+              type="button"
+              className="command-bar-attach"
+              title="Attach a drawing (PNG, JPEG, WebP, or PDF)"
+              aria-label="Attach a drawing"
+              // Without a provider a drawing could only wait in the tray.
+              disabled={askUnavailable || busy}
+              // A press leaves focus in the field rather than closing the
+              // bar on the way to the picker.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip size={13} aria-hidden="true" />
+            </button>
+            <kbd aria-hidden="true">↵</kbd>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPTED_ATTACHMENT_TYPES}
+              hidden
+              tabIndex={-1}
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                event.target.value = '';
+                if (files.length > 0) {
+                  sendAssistantPromptFiles(files);
+                }
+              }}
+            />
+          </span>
+        )}
         {searchKey && (
           <kbd>
             <ShortcutKeys label={searchKey.glyph} />

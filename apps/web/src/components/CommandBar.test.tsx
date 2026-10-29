@@ -616,6 +616,55 @@ describe('CommandBar', () => {
     window.removeEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
   });
 
+  it('hands picked drawings to the conversation from its attach button', async () => {
+    const user = userEvent.setup();
+    const { container, unmount } = render(
+      <Bar commands={[]} onAsk={vi.fn()} />
+    );
+    const files: File[][] = [];
+    const take = (event: Event) => {
+      files.push((event as CustomEvent<{ files: File[] }>).detail.files);
+      event.preventDefault();
+    };
+    window.addEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
+    try {
+      const attach = screen.getByRole('button', { name: 'Attach a drawing' });
+      expect(attach).toBeEnabled();
+      // A press keeps the field's focus: the bar stays open behind the
+      // picker.
+      expect(fireEvent.mouseDown(attach)).toBe(false);
+
+      const picker =
+        container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      expect(picker.accept).toBe(
+        'image/png,image/jpeg,image/webp,application/pdf'
+      );
+      const drawing = new File(['png'], 'drawing.png', { type: 'image/png' });
+      await user.upload(picker, drawing);
+      expect(files).toEqual([[drawing]]);
+      // Cleared, so the same drawing picked again still arrives.
+      expect(picker.value).toBe('');
+    } finally {
+      window.removeEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
+      unmount();
+    }
+  });
+
+  it('offers no drawing pick it could never send', () => {
+    const { unmount } = render(
+      <Bar commands={[]} onAsk={vi.fn()} askUnavailable />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Attach a drawing' })
+    ).toBeDisabled();
+    unmount();
+    // No assistant at all: the bar is search alone.
+    render(<Bar commands={[]} />);
+    expect(
+      screen.queryByRole('button', { name: 'Attach a drawing' })
+    ).toBeNull();
+  });
+
   it('runs a command from the list and hands focus back to where it was', async () => {
     const run = vi.fn();
     const onOpenChange = vi.fn();
