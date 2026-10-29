@@ -178,7 +178,7 @@ h1.brand {
   top: calc(100% + var(--sp-2));
   right: 0;
   z-index: 1;
-  width: 300px;
+  width: min(300px, calc(100vw - var(--island-gap) * 2));
   display: grid;
   gap: var(--sp-2);
   padding: var(--sp-2);
@@ -256,13 +256,25 @@ h1.brand {
   .page-topbar .start-update-text {
     max-width: 140px;
   }
+
+  /* Hung from the chip, the panel would start left of the window when the
+     chip sits mid-bar; here it spans the window under the first row. */
+  .page-topbar .start-account-details {
+    position: fixed;
+    top: calc(var(--island-gap) + var(--topbar-island-h) + var(--sp-2));
+    right: var(--island-gap);
+    left: var(--island-gap);
+    width: auto;
+  }
 }
 
-/* On a phone the cloud sentence gives the page name its room back: the icon
-   keeps the tone, the action stays, and the words stay in the live region
-   (clipped, not removed) and the tooltip. */
+/* On a phone the cloud sentence and an update notice give the page name its
+   room back: the icon or dot keeps the tone, the action stays, and the words
+   stay readable to assistive technology (clipped, not removed) and in the
+   tooltip. */
 @media (max-width: 560px) {
-  .page-topbar .start-account-text {
+  .page-topbar .start-account-text,
+  .page-topbar .start-update-text {
     position: absolute;
     width: 1px;
     height: 1px;
