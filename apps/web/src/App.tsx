@@ -13760,7 +13760,7 @@ export function App() {
   async function handleResetDemo(
     definition: DemoDefinition,
     project: ProjectSummary
-  ) {
+  ): Promise<boolean> {
     const name = definition.name.replace('Demo · ', '');
     if (
       appSettings.general.confirmDestructiveActions &&
@@ -13768,14 +13768,16 @@ export function App() {
         `Reset the ${name} sample? Your changes to it are discarded; save a copy first to keep them.`
       )
     ) {
-      return;
+      return false;
     }
     setBusy(true);
     try {
       await destroyProjects([project]);
       setStatus(`Reset ${name}. It opens as the original.`);
+      return true;
     } catch (error) {
       setStatus(errorMessage(error, `Could not reset ${name}.`));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -26931,7 +26933,7 @@ export function App() {
             void handleDeleteProjectsForever(targets)
           }
           onResetDemo={(definition, project) =>
-            void handleResetDemo(definition, project)
+            handleResetDemo(definition, project)
           }
           onReorder={(projectIds, pin) =>
             handleReorderProjects(projectIds, pin)

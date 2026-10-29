@@ -172,9 +172,13 @@ interface StartScreenProps {
   onDeleteManyForever?(projects: ProjectSummary[]): void;
   /**
    * Discards this device's edited copy of a sample, so the next open builds
-   * it from its definition again.
+   * it from its definition again. Resolves true once the copy is destroyed;
+   * false when the reset was declined or failed.
    */
-  onResetDemo?(definition: DemoDefinition, project: ProjectSummary): void;
+  onResetDemo?(
+    definition: DemoDefinition,
+    project: ProjectSummary
+  ): Promise<boolean>;
   onEmptyTrash(projects: ProjectSummary[]): void;
   /**
    * Reads a cached preview image. Deliberately not a document load: the shelf
@@ -3042,10 +3046,14 @@ export function StartScreen({
                         onClick={() => {
                           // A reset sample comes back under the same id; it
                           // must not come back filed where the old one was.
-                          updateFolders((state) =>
-                            forgetProjects(state, [demo.projectId])
-                          );
-                          onResetDemo(demo, opened);
+                          // Only once it really was reset, though.
+                          void onResetDemo(demo, opened).then((reset) => {
+                            if (reset) {
+                              updateFolders((state) =>
+                                forgetProjects(state, [demo.projectId])
+                              );
+                            }
+                          });
                         }}
                       >
                         <RotateCcw size={12} aria-hidden="true" />

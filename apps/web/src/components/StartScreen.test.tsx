@@ -1366,7 +1366,7 @@ describe('StartScreen folders and selection', () => {
       revisionCount: 7,
       updatedAt: '2026-10-29T12:00:00.000Z'
     };
-    const onResetDemo = vi.fn();
+    const onResetDemo = vi.fn().mockResolvedValue(true);
     const onDuplicate = vi.fn();
     const { rerender } = renderStartScreen({
       demos: [demo],
@@ -1538,7 +1538,8 @@ describe('StartScreen permanent deletion', () => {
 describe('StartScreen sample reset and folders', () => {
   afterEach(() => localStorage.clear());
 
-  it('takes a reset sample out of any folder that still lists it', () => {
+  it('takes a reset sample out of any folder that still lists it', async () => {
+    const onResetDemo = vi.fn<() => Promise<boolean>>();
     const demo = {
       key: 'flange',
       projectId: toProjectId('proj_demo_pipe_flange'),
@@ -1572,11 +1573,29 @@ describe('StartScreen sample reset and folders', () => {
           updatedAt: '2026-10-29T12:00:00.000Z'
         }
       ],
-      onResetDemo: vi.fn()
+      onResetDemo
     });
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Reset Pipe Flange to the original' })
-    );
+    const reset = () =>
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Reset Pipe Flange to the original'
+        })
+      );
+    const members = () =>
+      (
+        JSON.parse(
+          localStorage.getItem('openzcad.library.folders.v1:device')!
+        ) as { folders: Array<{ projectIds: string[] }> }
+      ).folders[0]!.projectIds;
+    // Declined (or failed): the folder entry stays.
+    onResetDemo.mockResolvedValueOnce(false);
+    reset();
+    await waitFor(() => expect(onResetDemo).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(members()).toEqual([demo.projectId, localProject.projectId]);
+    onResetDemo.mockResolvedValueOnce(true);
+    reset();
+    await waitFor(() => expect(members()).toEqual([localProject.projectId]));
     const stored = JSON.parse(
       localStorage.getItem('openzcad.library.folders.v1:device')!
     ) as { folders: Array<{ projectIds: string[]; coverProjectId?: string }> };
