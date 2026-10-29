@@ -62,6 +62,17 @@ describe('one surface with the bar', () => {
   });
 });
 
+describe('focus on a decided proposal', () => {
+  it('keeps a visible ring when the keyboard lands on the card', () => {
+    // Apply and Reject move focus to the tabIndex=-1 card; a bare
+    // `:focus { outline: none }` left keyboard users no indicator.
+    expect(css).not.toMatch(/\.assistant-card\.proposal:focus\s*\{/);
+    expect(rule('.assistant-card.proposal:focus-visible')).toMatch(
+      /outline:\s*2px solid/
+    );
+  });
+});
+
 describe('ask hint beside the stream', () => {
   it('hides only the ask hint, not an empty command result', () => {
     // Picked out by the absence of a result list, the rule also hid "No
