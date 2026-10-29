@@ -1287,7 +1287,10 @@
 .settings-nav-head {
   display: flex;
   align-items: center;
-  min-height: var(--topbar-island-h);
+  /* The column's content starts 19px down; 22px centres the logo 30px
+     down, on the head's line (the workspace logo's and the library's). */
+  min-height: 22px;
+  margin-bottom: var(--sp-3);
   padding: 0 6px;
 }
 
@@ -1297,11 +1300,10 @@
 
 /* The page's head: its name, the save note and the search, on one ruled
    line like the library's shelf toolbar, across the page's whole width so
-   the way back floats on the rule's end in the corner island
-   (corner-island.css). Outside the scrolling page, neither moves when a
+   the way back sits on the rule's end (corner-slot.css). Outside the scrolling page, neither moves when a
    long section scrolls. */
 .settings-head {
-  --settings-back-w: 168px;
+  --settings-back-w: 160px;
   grid-column: 2;
   grid-row: 1;
   display: flex;
@@ -1357,6 +1359,6 @@
   }
 
   .settings-head {
-    --settings-back-w: 38px;
+    --settings-back-w: 40px;
   }
 }

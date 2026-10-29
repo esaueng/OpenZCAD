@@ -695,7 +695,7 @@ describe('StartScreen library shell', () => {
     const settings = screen.getByRole('button', { name: 'Open settings' });
     // The same island and pixels as the workspace's Settings button, and
     // Settings puts its way back there.
-    expect(settings.closest('.topbar-island.corner-island')).not.toBeNull();
+    expect(settings.closest('.corner-slot')).not.toBeNull();
     expect(
       container.querySelector('.start-column-foot .start-settings-button')
     ).toBeNull();
@@ -1267,6 +1267,18 @@ describe('StartScreen folders and selection', () => {
     fireEvent.click(within(bar).getByRole('button', { name: 'Move to trash' }));
     expect(onMoveManyToShelf).toHaveBeenCalledWith(parts, 'deleted');
     expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('makes room under the shelf while the selection bar shows', () => {
+    const { container } = renderStartScreen({ projects: parts });
+    const screenElement = container.querySelector('.start-screen')!;
+    expect(screenElement).not.toHaveClass('is-selecting');
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    expect(screenElement).toHaveClass('is-selecting');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screenElement).not.toHaveClass('is-selecting');
   });
 
   it('files the selection in a new folder and names it', () => {

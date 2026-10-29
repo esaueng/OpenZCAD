@@ -1,0 +1,54 @@
+/* The library's Settings and Settings' way back: one slot at the end of the
+   page's ruled head, on the workspace Settings button's line (16px down,
+   28px tall) with its right edge on the rule's end. The workspace floats its
+   button in an island over the model; a page has a head band, so the button
+   sits flat on it behind a divider, like the head's other tools. A page
+   whose head sits over its own scroller sets --corner-scrollbar-w so the
+   slot clears a classic scrollbar (overlay scrollbars take no width). */
+.corner-slot {
+  position: absolute;
+  top: 16px;
+  right: calc(var(--island-gap) + var(--corner-scrollbar-w, 0px));
+  /* Over the library's pinned shelf line (6); under the selection bar
+     (20). */
+  z-index: 10;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.corner-slot::before {
+  content: '';
+  width: 1px;
+  height: 20px;
+  background: var(--color-border);
+}
+
+/* The width a library head holds clear for the divider and Settings. */
+:root {
+  --corner-slot-w: 92px;
+}
+
+.corner-action {
+  height: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.corner-action:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}

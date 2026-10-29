@@ -116,8 +116,8 @@
 
 /* A library shell: a floating column on the left (the logo, the launch form,
    the shelves, the demos, the cloud readout and Import), the shelf you are
-   looking at filling the rest, and Settings in the workspace's top-right
-   corner island. Every block is a direct grid item
+   looking at filling the rest, and Settings on the end of the shelf's
+   line. Every block is a direct grid item
    placed by name, so the same markup re-flows for the three layouts below —
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
@@ -180,8 +180,9 @@
   grid-area: brand;
   display: flex;
   align-items: center;
-  min-height: var(--topbar-island-h);
-  padding: calc(var(--island-gap) + 8px) 10px 0 calc(var(--island-gap) + 14px);
+  /* Centred 30px down: the workspace logo's line, and the shelf line's. */
+  min-height: calc(12px + var(--topbar-island-h));
+  padding: 12px 10px 0 calc(var(--island-gap) + 14px);
 }
 
 .start-brand .brand {
@@ -675,15 +676,15 @@
    own are the page, so the controls that narrow them stay beside their
    heading rather than on a second row that pushes the grid down. In the
    column layout the line stays put while the shelf scrolls under it, so a
-   card never passes beneath the Settings island floating on its end. */
+   card never passes beneath Settings on its end. */
 .start-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2) var(--sp-5);
   min-height: 40px;
-  /* Room on the rule's end for the Settings island floating over it. */
-  padding-right: calc(var(--corner-island-w) + var(--sp-3));
+  /* Room on the rule's end for Settings, placed over it (corner-slot.css). */
+  padding-right: calc(var(--corner-slot-w) + var(--sp-3));
   border-bottom: var(--border-thin);
 }
 
@@ -1505,7 +1506,7 @@
 
 /* Once the toolbar wraps, the rule belongs under the tabs, not the tools. */
 @media (max-width: 900px) {
-  /* The island sits beside the logo here, above the shelf. */
+  /* Settings sits beside the logo here, above the shelf. */
   .start-toolbar {
     padding-right: 0;
     border-bottom: 0;
@@ -2023,6 +2024,11 @@
 
 /* What every selected part can have done to it, floating over the bottom of
    the shelf like the workspace's islands. */
+/* Room to scroll the last row clear of the floating selection bar. */
+.start-screen.is-selecting .start-body {
+  padding-bottom: calc(var(--sp-4) + 56px);
+}
+
 .start-selection-bar {
   position: fixed;
   bottom: var(--sp-4);
@@ -2390,12 +2396,21 @@
     max-width: calc(100vw - 16px);
   }
 
-  /* One scrolling page: the logo with the Settings island beside it, then
-     the account line, then the rest. The row is the island's height below
-     its 12px inset, so the logo centres on it and nothing runs under it. */
+  /* One scrolling page: the logo with Settings beside it, then the account
+     line, then the rest. The row is 48px, so the logo centres on Settings'
+     line (30px down) and nothing runs under it. */
   .start-brand {
     min-height: calc(12px + var(--topbar-island-h));
     padding: var(--sp-3) var(--sp-3) 0;
+  }
+
+  /* Beside the logo it needs no divider, and keeps the page's gutter. */
+  .start-screen > .corner-slot {
+    right: var(--sp-3);
+  }
+
+  .start-screen > .corner-slot::before {
+    display: none;
   }
 
   .start-column-foot {

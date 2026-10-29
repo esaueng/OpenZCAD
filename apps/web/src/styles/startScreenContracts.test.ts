@@ -80,15 +80,15 @@ describe('start screen tile actions', () => {
   });
 });
 
-describe('start screen shelf line and Settings island', () => {
+describe('start screen shelf line and Settings', () => {
   // 29 Oct 2026: the shelf scrolled with its line, so cards slid under the
-  // Settings island floating at the line's end.
-  const island = readFileSync(
-    join(resolve(__dirname, 'components'), 'corner-island.css'),
+  // Settings button placed at the line's end.
+  const slot = readFileSync(
+    join(resolve(__dirname, 'components'), 'corner-slot.css'),
     'utf8'
   ).replace(/\/\*[\s\S]*?\*\//g, '');
 
-  it('pins the line in the column layout and keeps the island above it', () => {
+  it('pins the line in the column layout and keeps Settings above it', () => {
     const pinned = /\.start-toolbar\s*\{([^}]*position:\s*sticky[^}]*)\}/.exec(
       css
     );
@@ -97,9 +97,24 @@ describe('start screen shelf line and Settings island', () => {
     expect(declarations).toMatch(/top:\s*0/);
     expect(declarations).toMatch(/background:/);
     const lineLayer = Number(/z-index:\s*(\d+)/.exec(declarations)![1]);
-    const islandLayer = Number(
-      /z-index:\s*(\d+)/.exec(rule(island, '.corner-island'))![1]
+    const slotLayer = Number(
+      /z-index:\s*(\d+)/.exec(rule(slot, '.corner-slot'))![1]
     );
-    expect(islandLayer).toBeGreaterThan(lineLayer);
+    expect(slotLayer).toBeGreaterThan(lineLayer);
+  });
+
+  it('ends Settings where the line and cards end, past any scrollbar', () => {
+    // 29 Oct 2026: placed against the window, Settings sat on Firefox's
+    // 15px shelf scrollbar and ran past the line's rule and the card grid.
+    expect(rule(slot, '.corner-slot')).toMatch(
+      /right:\s*calc\(var\(--island-gap\)\s*\+\s*var\(--corner-scrollbar-w/
+    );
+  });
+
+  it('lets the last row scroll clear of the selection bar', () => {
+    // 29 Oct 2026: the floating bar covered the shelf's last rows.
+    expect(rule(css, '.start-screen.is-selecting .start-body')).toMatch(
+      /padding-bottom:\s*calc\(/
+    );
   });
 });

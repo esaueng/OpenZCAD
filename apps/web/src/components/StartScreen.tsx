@@ -526,6 +526,24 @@ export function StartScreen({
     [shelf, filter, query, sort, layout, openFolderId ?? ''].join('|'),
     !loading
   );
+  // Settings sits on the shelf line's end, but is placed over the body, whose
+  // classic scrollbar (Firefox, Windows) takes width from the window's edge;
+  // the slot moves in by it so it ends where the line and the cards do.
+  useEffect(() => {
+    const screen = screenRef.current;
+    const body = screen?.querySelector<HTMLElement>('.start-body');
+    if (!screen || !body || typeof ResizeObserver === 'undefined') return;
+    const measure = () =>
+      screen.style.setProperty(
+        '--corner-scrollbar-w',
+        `${body.offsetWidth - body.clientWidth}px`
+      );
+    measure();
+    // A scrollbar appearing narrows the content box, which this observes.
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, []);
 
   // The server measures the trimmed name, so the form has to agree exactly or
   // it would block names the API accepts (or vice versa).
@@ -2338,7 +2356,14 @@ export function StartScreen({
   return (
     <div
       ref={screenRef}
-      className={fresh ? 'start-screen is-fresh' : 'start-screen'}
+      className={[
+        'start-screen',
+        fresh ? 'is-fresh' : '',
+        // The floating selection bar needs room under the last row.
+        selecting ? 'is-selecting' : ''
+      ]
+        .filter(Boolean)
+        .join(' ')}
     >
       {/* The column is the page's frame: the product at its head, on the
           pixels the workspace's logo takes, and where the parts are kept at
@@ -2350,9 +2375,9 @@ export function StartScreen({
           OpenZCAD <span className="beta-tag">Beta</span>
         </h1>
       </header>
-      {/* Settings keeps the workspace's corner: the same island at the same
-          pixels, and Settings puts its way back there too. */}
-      <div className="topbar-island corner-island">
+      {/* Settings on the shelf line's end, on the workspace Settings
+          button's line; Settings puts its way back in the same place. */}
+      <div className="corner-slot">
         <button
           className="corner-action start-settings-button"
           type="button"
