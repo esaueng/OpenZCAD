@@ -883,10 +883,18 @@ describe('backfilling projections for documents saved before this store', () => 
   });
 
   it('retries a document that failed to backfill', async () => {
-    await seedLegacyDocuments([
-      projectDocument('Bracket', 'proj-a'),
-      projectDocument('Housing', 'proj-b')
-    ]);
+    // Equal timestamps: createProjectDocument stamps the clock, so a tick
+    // between the two would sort Housing first instead of the projectId tie-break.
+    const updatedAt = '2026-08-06T14:30:00.000Z';
+    await seedLegacyDocuments(
+      [
+        projectDocument('Bracket', 'proj-a'),
+        projectDocument('Housing', 'proj-b')
+      ].map((document) => ({
+        ...document,
+        derived: { ...document.derived, updatedAt }
+      }))
+    );
     const failing = traceReads('proj-a');
     await listLocalProjects();
     failing.restore();
