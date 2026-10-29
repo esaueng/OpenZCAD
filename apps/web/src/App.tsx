@@ -13106,7 +13106,15 @@ export function App() {
     }
   }
 
-  async function handleReorderProjects(projectIds: string[]) {
+  /**
+   * Saves a new shelf order. A part dragged into or out of the pinned group
+   * changes its pin in the same write, so neither change can overwrite the
+   * other with a stale row.
+   */
+  async function handleReorderProjects(
+    projectIds: string[],
+    pin?: { projectId: string; pinned: boolean }
+  ) {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
     const organizations = new Map(
       projects
@@ -13114,11 +13122,18 @@ export function App() {
         .map((project) => [
           project.projectId,
           {
-            ...projectOrganization(project),
+            ...(pin?.projectId === project.projectId
+              ? applyOrganizationUpdate(projectOrganization(project), {
+                  pinned: pin.pinned
+                })
+              : projectOrganization(project)),
             sortOrder: positions.get(project.projectId)!
           }
         ])
     );
+    const pinnedName = pin
+      ? projects.find((project) => project.projectId === pin.projectId)?.name
+      : undefined;
     try {
       await Promise.all(
         [...organizations].map(([projectId, organization]) =>
@@ -13135,6 +13150,11 @@ export function App() {
           })
           .sort(compareProjectSummaries)
       );
+      if (pin && pinnedName !== undefined) {
+        setStatus(
+          pin.pinned ? `Pinned ${pinnedName}.` : `Unpinned ${pinnedName}.`
+        );
+      }
       if (session) {
         const organizationScope = organizationBackground.scopeFor(
           session.userId
@@ -26568,7 +26588,9 @@ export function App() {
             void handleMoveProjectToShelf(project, shelf)
           }
           onTogglePin={(project) => void handleTogglePin(project)}
-          onReorder={(projectIds) => void handleReorderProjects(projectIds)}
+          onReorder={(projectIds, pin) =>
+            void handleReorderProjects(projectIds, pin)
+          }
           onDeleteForever={(project) =>
             void handleDeleteProjectForever(project)
           }

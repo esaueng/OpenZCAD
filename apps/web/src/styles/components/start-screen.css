@@ -1034,6 +1034,18 @@
   color: var(--color-text-muted);
 }
 
+/* A group a drag has emptied keeps a target to drop back into. */
+.start-drop-zone {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+}
+
 /* The preview is the tile: a pane at a fixed aspect so a row of parts lines
    up whether or not each one has rendered yet. It takes the page's own
    ground, a step below the card, in both themes; a viewport-coloured pane

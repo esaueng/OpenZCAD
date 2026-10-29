@@ -10,6 +10,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
+import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useTileReorder } from '../hooks/useTileReorder';
 import {
   Archive,
@@ -126,8 +127,14 @@ interface StartScreenProps {
   onDismissSyncRun(): void;
   onMoveToShelf(project: ProjectSummary, status: ProjectStatus): void;
   onTogglePin(project: ProjectSummary): void;
-  /** The shelf's projects in their new order, front to back. */
-  onReorder(projectIds: string[]): void;
+  /**
+   * The shelf's projects in their new order, front to back, and the part a
+   * drag took into or out of the pinned group, if any.
+   */
+  onReorder(
+    projectIds: string[],
+    pin?: { projectId: string; pinned: boolean }
+  ): void;
   /** Irreversible: destroys the project outright. */
   onDeleteForever(project: ProjectSummary): void;
   onEmptyTrash(projects: ProjectSummary[]): void;
@@ -245,6 +252,8 @@ const SHELVES: ReadonlyArray<{
 ];
 
 /** The tile's actions button, which a closing menu hands focus back to. */
+const LIBRARY_SCROLL_KEY = 'openzcad.start.scroll';
+const LIBRARY_SCROLLERS = ['.start-body'] as const;
 const REORDER_KEYS = 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown';
 
 function tileMenuOpener(tile: HTMLElement | undefined) {
@@ -347,6 +356,15 @@ export function StartScreen({
   const screenRef = useRef<HTMLDivElement | null>(null);
   // Opening a part crossfades into the workspace instead of cutting to it.
   useDissolveOnUnmount(screenRef, START_SCREEN_DISSOLVE_MS);
+  // A reload, or a trip to a part and back, returns to the same place in the
+  // library. The page shell scrolls on narrow screens, the body on wide ones.
+  useScrollMemory(
+    screenRef,
+    LIBRARY_SCROLL_KEY,
+    LIBRARY_SCROLLERS,
+    [shelf, filter, query, sort, layout].join('|'),
+    !loading
+  );
 
   // The server measures the trimmed name, so the form has to agree exactly or
   // it would block names the API accepts (or vice versa).
@@ -559,11 +577,21 @@ export function StartScreen({
     ids: shelfProjects.map((project) => project.projectId),
     enabled: canReorder,
     tileRefs,
-    // Pinned parts head the shelf as their own group, so a drag stays in it.
-    canSwap: (dragged, target) =>
-      pinnedIds.has(dragged) === pinnedIds.has(target),
-    onCommit: onReorder
+    // Pinned parts head the shelf as their own group: dragging a part into
+    // it pins the part, and dragging one out unpins it.
+    groupOf: (id) => (pinnedIds.has(id) ? 'pinned' : 'parts'),
+    onCommit: (ids, moved) =>
+      onReorder(
+        ids,
+        moved && { projectId: moved.id, pinned: moved.group === 'pinned' }
+      )
   });
+  /** Pinned as stored, or as a drag would leave it. */
+  function shownPinned(project: ProjectSummary): boolean {
+    return canReorder && reorder.moved?.id === project.projectId
+      ? reorder.moved.group === 'pinned'
+      : projectOrganization(project).pinned;
+  }
 
   function moveProject(projectId: string, toIndex: number) {
     const from = shelfProjects.findIndex(
@@ -836,7 +864,7 @@ export function StartScreen({
         className={[
           'start-tile',
           'start-tile-project',
-          organization.pinned ? 'is-pinned' : '',
+          shownPinned(project) ? 'is-pinned' : '',
           recoveryOf !== null ? 'is-recovery' : '',
           canReorder ? 'is-reorderable' : '',
           dragging ? 'is-dragging' : ''
@@ -1165,25 +1193,31 @@ export function StartScreen({
           (dragPositions.get(b.projectId) ?? 0)
       )
     : matchingProjects;
-  const pinnedProjects = orderedProjects.filter(
+  // Grouped by the stored flags, so a drag that empties a group keeps its
+  // grid on screen to drop back into.
+  const storedPinned = matchingProjects.filter(
     (project) => projectOrganization(project).pinned
-  );
+  ).length;
   const shelfGroups: Array<{
     label: string | null;
+    group?: 'pinned' | 'parts';
     projects: ProjectSummary[];
   }> =
     shelf === 'active' &&
     activeFilter === 'all' &&
     !search &&
-    pinnedProjects.length > 0 &&
-    pinnedProjects.length < matchingProjects.length
+    storedPinned > 0 &&
+    storedPinned < matchingProjects.length
       ? [
-          { label: 'Pinned', projects: pinnedProjects },
+          {
+            label: 'Pinned',
+            group: 'pinned',
+            projects: orderedProjects.filter(shownPinned)
+          },
           {
             label: 'Parts',
-            projects: orderedProjects.filter(
-              (project) => !projectOrganization(project).pinned
-            )
+            group: 'parts',
+            projects: orderedProjects.filter((project) => !shownPinned(project))
           }
         ]
       : [{ label: null, projects: orderedProjects }];
@@ -1805,9 +1839,17 @@ export function StartScreen({
                         ? 'start-tile-grid is-list'
                         : 'start-tile-grid'
                     }
+                    data-tile-group={canReorder ? group.group : undefined}
                   >
                     {group.projects.map((project) =>
                       renderProjectTile(project)
+                    )}
+                    {group.projects.length === 0 && (
+                      <p className="start-drop-zone">
+                        {group.group === 'pinned'
+                          ? 'Drop here to pin'
+                          : 'Drop here to unpin'}
+                      </p>
                     )}
                   </div>
                 </Fragment>

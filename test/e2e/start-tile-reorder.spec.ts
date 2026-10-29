@@ -85,3 +85,98 @@ test('Escape puts a dragged card back', async ({ page }) => {
   await expect.poll(() => cardOrder(page)).toEqual(names);
   await expect(page.locator('.start-tile-project')).toHaveCount(3);
 });
+
+test.describe('with a pinned part', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await stubApi(page);
+    const pinned = projects.map((project, index) =>
+      index === 0
+        ? {
+            ...project,
+            organization: { ...project.organization, pinned: true }
+          }
+        : project
+    );
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({ json: { projects: pinned } })
+    );
+    await page.reload();
+    await expect(page.getByRole('heading', { name: /^Pinned/ })).toBeVisible();
+  });
+
+  test('pins a part dropped onto a pinned one', async ({ page }) => {
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Unpin ${names[2]}`, exact: true })
+    ).toBeAttached();
+    await expect(
+      page.getByText(`Pinned ${names[2]}.`, { exact: true })
+    ).toBeVisible();
+    const pinnedGrid = page.locator('[data-tile-group="pinned"]');
+    await expect(pinnedGrid.locator('.start-tile-name')).toHaveText([
+      names[2]!,
+      names[0]!
+    ]);
+  });
+
+  test('pins a part dropped into the pinned row’s empty space', async ({
+    page
+  }) => {
+    const source = await card(page, names[1]!)
+      .locator('.start-tile-thumb')
+      .boundingBox();
+    const row = await page.locator('[data-tile-group="pinned"]').boundingBox();
+    if (!source || !row) {
+      throw new Error('Library has no layout box');
+    }
+    await page.mouse.move(source.x + 40, source.y + 40);
+    await page.mouse.down();
+    await page.mouse.move(row.x + row.width - 60, row.y + row.height / 2, {
+      steps: 14
+    });
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Unpin ${names[1]}`, exact: true })
+    ).toBeAttached();
+    await expect(
+      page.locator('[data-tile-group="pinned"] .start-tile-name')
+    ).toHaveText([names[0]!, names[1]!]);
+  });
+});
+
+test('returns to the same scroll position after a reload', async ({ page }) => {
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await stubApi(page);
+  const many = Array.from({ length: 60 }, (_, index) => ({
+    projectId: `scroll-memory-${index}`,
+    name: `Scroll memory ${index}`,
+    revisionCount: 1,
+    updatedAt: '2026-10-21T12:00:00.000Z',
+    organization: { status: 'active', pinned: false, sortOrder: index }
+  }));
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({ json: { projects: many } })
+  );
+  await page.reload();
+  await expect(page.locator('.start-tile-project')).toHaveCount(60);
+  const body = page.locator('.start-body');
+  await body.evaluate((element) =>
+    element.scrollTo({ top: 700, behavior: 'instant' })
+  );
+  const top = await body.evaluate((element) => element.scrollTop);
+  expect(top).toBeGreaterThan(600);
+  // Let the throttled save land.
+  await page.waitForTimeout(100);
+  await page.reload();
+  await expect(page.locator('.start-tile-project')).toHaveCount(60);
+  // Within a few pixels: scroll anchoring may nudge it as late content
+  // (status notices, previews) settles above the fold.
+  await expect
+    .poll(() => body.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(top - 12);
+  expect(await body.evaluate((element) => element.scrollTop)).toBeLessThan(
+    top + 12
+  );
+});
