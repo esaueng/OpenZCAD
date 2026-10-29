@@ -779,7 +779,9 @@ describe('backfilling projections for documents saved before this store', () => 
     trace = traceReads();
     const projects = await listLocalProjects();
 
-    expect(projects.map((project) => project.name)).toEqual([
+    // Which documents, not their order: the shelf lists newest first, and
+    // the fixtures share a timestamp only when created within one ms.
+    expect(projects.map((project) => project.name).sort()).toEqual([
       'Bracket',
       'Housing',
       'Plate'
