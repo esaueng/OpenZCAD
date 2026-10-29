@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createFolder,
   deleteFolder,
@@ -148,5 +148,28 @@ describe('library folders', () => {
     expect(readLibraryFolders(folderStorageKey('user-a'))).toBe(
       readLibraryFolders(folderStorageKey('user-a'))
     );
+  });
+
+  it('keeps folders for the visit when storage refuses the write', () => {
+    const key = folderStorageKey('user-blocked');
+    const setItem = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      });
+    try {
+      writeLibraryFolders(key, withTwo());
+      expect(
+        readLibraryFolders(key).folders.map((folder) => folder.id)
+      ).toEqual(['a', 'b']);
+    } finally {
+      setItem.mockRestore();
+    }
+    // Once storage takes a write again, it is the source.
+    writeLibraryFolders(key, deleteFolder(withTwo(), 'a'));
+    expect(localStorage.getItem(key)).toContain('"b"');
+    expect(readLibraryFolders(key).folders.map((folder) => folder.id)).toEqual([
+      'b'
+    ]);
   });
 });

@@ -13677,6 +13677,22 @@ export function App() {
     setProjects((current) =>
       current.filter((project) => !destroyed.has(project.projectId))
     );
+    // A destroyed project is in no account any more. A sample keeps its fixed
+    // id, so a reset one rebuilt later must not inherit the old copy's cloud
+    // standing (listed as saved, or written at the deleted version).
+    for (const projectId of destroyed) {
+      remoteVersionsRef.current.delete(projectId);
+    }
+    if (destroyed.size > 0) {
+      setCloudProjectIds((current) => {
+        if (![...destroyed].some((projectId) => current.has(projectId))) {
+          return current;
+        }
+        const next = new Set(current);
+        destroyed.forEach((projectId) => next.delete(projectId));
+        return next;
+      });
+    }
     if (destroyed.size > 0) {
       if (session) forgetShelfProjectNames(session.userId, destroyed);
       void import('./lib/savedViews').then(({ forgetSavedViews }) =>

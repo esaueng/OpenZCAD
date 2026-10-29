@@ -271,7 +271,13 @@ const snapshots = new Map<
   { raw: string | null; value: LibraryFolders }
 >();
 
+// Folders written while storage refused them (blocked, full or absent): kept
+// for this visit, and read in place of storage until a write succeeds.
+const unsaved = new Map<string, string>();
+
 function readRaw(key: string): string | null {
+  const pending = unsaved.get(key);
+  if (pending !== undefined) return pending;
   try {
     return globalThis.localStorage?.getItem(key) ?? null;
   } catch {
@@ -292,11 +298,14 @@ export function readLibraryFolders(key: string): LibraryFolders {
 export function writeLibraryFolders(key: string, state: LibraryFolders) {
   const raw = JSON.stringify(state);
   try {
-    globalThis.localStorage?.setItem(key, raw);
+    if (!globalThis.localStorage) throw new Error('No local storage');
+    globalThis.localStorage.setItem(key, raw);
+    unsaved.delete(key);
   } catch {
-    // Blocked storage keeps the folders for this visit only.
+    // Blocked or full storage keeps the folders for this visit only.
+    unsaved.set(key, raw);
   }
-  snapshots.set(key, { raw: readRaw(key) ?? raw, value: state });
+  snapshots.set(key, { raw, value: state });
   listeners.forEach((listener) => listener());
 }
 
