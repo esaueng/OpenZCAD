@@ -35,7 +35,15 @@ export function createReadinessReporter() {
   let visibleProject: string | null = null;
   let readyProject: string | null = null;
   return function report(frame: PresentedGeometry, bodies: number): void {
-    if (bodies === 0) return;
+    if (bodies === 0) {
+      // An empty project marks nothing, but it is still an opening: leaving
+      // it for a project that was ready before owes that project a new pair.
+      if (visibleProject !== frame.projectId) {
+        visibleProject = null;
+        readyProject = null;
+      }
+      return;
+    }
     if (visibleProject !== frame.projectId) {
       visibleProject = frame.projectId;
       // A new opening owes its own input-ready, even for a project that was

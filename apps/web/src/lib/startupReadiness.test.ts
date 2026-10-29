@@ -49,6 +49,27 @@ describe('startup readiness marks', () => {
     ]);
   });
 
+  it('gives a project reopened after an empty one its own pair', () => {
+    const report = createReadinessReporter();
+    report({ projectId: 'a', analysis: 'ready' }, 2);
+    report({ projectId: 'empty', analysis: 'ready' }, 0);
+    report({ projectId: 'a', analysis: 'ready' }, 2);
+    expect(names()).toEqual([
+      MODEL_VISIBLE_MARK,
+      INPUT_READY_MARK,
+      MODEL_VISIBLE_MARK,
+      INPUT_READY_MARK
+    ]);
+  });
+
+  it('does not repeat the pair when the open project briefly has no bodies', () => {
+    const report = createReadinessReporter();
+    report({ projectId: 'a', analysis: 'ready' }, 2);
+    report({ projectId: 'a', analysis: 'ready' }, 0);
+    report({ projectId: 'a', analysis: 'ready' }, 2);
+    expect(names()).toEqual([MODEL_VISIBLE_MARK, INPUT_READY_MARK]);
+  });
+
   it('ignores a frame with no bodies to show', () => {
     const report = createReadinessReporter();
     report({ projectId: 'empty', analysis: 'ready' }, 0);

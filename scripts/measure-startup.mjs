@@ -310,9 +310,12 @@ async function collect(page) {
 function trackNetwork(cdp) {
   const requests = new Map();
   let lastActivity = Date.now();
+  /** Requests started and not yet finished or failed. */
+  const inFlight = new Set();
   const handlers = {
     'Network.requestWillBeSent': (event) => {
       lastActivity = Date.now();
+      inFlight.add(event.requestId);
       requests.set(event.requestId, {
         url: event.request.url,
         type: event.type,
@@ -335,16 +338,27 @@ function trackNetwork(cdp) {
     },
     'Network.loadingFinished': (event) => {
       lastActivity = Date.now();
+      inFlight.delete(event.requestId);
       const request = requests.get(event.requestId);
       if (request) request.bytes = event.encodedDataLength;
+    },
+    'Network.loadingFailed': (event) => {
+      lastActivity = Date.now();
+      inFlight.delete(event.requestId);
     }
   };
   for (const [name, handler] of Object.entries(handlers)) cdp.on(name, handler);
   return {
-    /** Resolves once no request has started or finished for `quietMs`. */
+    /**
+     * Resolves once nothing is in flight and no request has started or
+     * finished for `quietMs`: a slow request still loading is not quiet.
+     */
     async settled(quietMs, limitMs) {
       const deadline = Date.now() + limitMs;
-      while (Date.now() - lastActivity < quietMs && Date.now() < deadline)
+      while (
+        (inFlight.size > 0 || Date.now() - lastActivity < quietMs) &&
+        Date.now() < deadline
+      )
         await new Promise((resolve) => setTimeout(resolve, 250));
     },
     summary() {
