@@ -92,6 +92,16 @@ describe('workspace panel state', () => {
     );
   });
 
+  it('shows the section controls to begin with and remembers hiding them', () => {
+    expect(defaultPanelState().sectionPanelOpen).toBe(true);
+    expect(
+      normalizePanelState({ sectionPanelOpen: false }).sectionPanelOpen
+    ).toBe(false);
+    expect(
+      normalizePanelState({ sectionPanelOpen: 'no' }).sectionPanelOpen
+    ).toBe(true);
+  });
+
   it('folds one tool group without touching the others', () => {
     // Open to begin with: the names on the tiles are what make the tools
     // learnable, and folding is a choice someone makes for column height.

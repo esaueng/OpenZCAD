@@ -473,14 +473,18 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   // the display off and on requests a fresh exact section of the restored
   // document pose, which proves the refusal is recoverable.
   const sectionButton = page.getByRole('button', { name: /^Section view/ });
+  const cutSwitch = page.getByRole('switch', { name: 'Section cut' });
   // Cancellation can render one frame before the section-view state is
-  // cleared. Observe the button and turn it off only when it is still on;
+  // cleared. Observe the switch and turn it off only when it is still on;
   // either settled state must recover to the same explicit off state.
   for (let click = 0; click < 4; click += 1) {
-    if ((await sectionButton.getAttribute('aria-pressed')) !== 'true') break;
-    await sectionButton.click();
+    if ((await cutSwitch.getAttribute('aria-checked')) !== 'true') break;
+    await cutSwitch.click();
   }
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
+  // The switch leaves its panel up; the section button puts it away.
+  await sectionButton.click();
+  await expect(page.locator('.rail-section-panel')).toHaveCount(0);
   await openExactSection(page);
   await expect(exportButton).toBeEnabled();
 });

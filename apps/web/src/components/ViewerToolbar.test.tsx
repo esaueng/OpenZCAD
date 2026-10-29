@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within
+} from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ViewerToolbar } from './ViewerToolbar';
 import { TOOLTIP_OPEN_DELAY_MS } from './Tooltip';
@@ -272,6 +279,8 @@ describe('the section button and its panel', () => {
     handlers: {
       onToggleSection?: () => void;
       onSectionPlane?: (plane: 'XY' | 'XZ' | 'YZ') => void;
+      sectionPanelOpen?: boolean;
+      onSectionPanelOpenChange?: (open: boolean) => void;
     } = {}
   ) {
     const noop = () => undefined;
@@ -293,7 +302,13 @@ describe('the section button and its panel', () => {
       onSectionCommit: noop,
       onExportSectionDxf: noop,
       sectionOutline: { kind: 'clipping' } as const,
-      units: 'mm'
+      units: 'mm',
+      ...(handlers.sectionPanelOpen !== undefined
+        ? { sectionPanelOpen: handlers.sectionPanelOpen }
+        : {}),
+      ...(handlers.onSectionPanelOpenChange
+        ? { onSectionPanelOpenChange: handlers.onSectionPanelOpenChange }
+        : {})
     };
     const view = render(
       <ViewerToolbar
@@ -323,7 +338,7 @@ describe('the section button and its panel', () => {
     screen.getByRole('button', { name: /^Section view/ });
   const panel = () => document.querySelector('.rail-section-panel');
 
-  it('switches on and off with one click each', () => {
+  it('switches on with the button, then only shows and hides the panel', () => {
     const onToggleSection = vi.fn();
     const view = renderSection(undefined, { onToggleSection });
     expect(sectionButton().getAttribute('aria-pressed')).toBe('false');
@@ -333,8 +348,13 @@ describe('the section button and its panel', () => {
     view.rerender({ plane: 'XY', offset: 3 });
     expect(sectionButton().getAttribute('aria-pressed')).toBe('true');
     expect(panel()).not.toBeNull();
+    // Putting the controls away never ends the cut.
     fireEvent.click(sectionButton());
-    expect(onToggleSection).toHaveBeenCalledTimes(2);
+    expect(panel()).toBeNull();
+    expect(sectionButton().getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(sectionButton());
+    expect(panel()).not.toBeNull();
+    expect(onToggleSection).toHaveBeenCalledOnce();
   });
 
   it('chooses the plane inside the panel', () => {
@@ -389,7 +409,7 @@ describe('the section button and its panel', () => {
       'aria-pressed',
       'true'
     );
-    fireEvent.click(screen.getByLabelText('Close section controls'));
+    fireEvent.click(sectionButton());
     expect(panel()).toBeNull();
     expect(sectionButton()).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(sectionButton());
@@ -403,6 +423,65 @@ describe('the section button and its panel', () => {
       'true'
     );
     expect(onToggleSection).not.toHaveBeenCalled();
+  });
+
+  it('switches the cut off from inside the panel and keeps the panel up', () => {
+    const onToggleSection = vi.fn();
+    const onSectionPlane = vi.fn();
+    const view = renderSection(
+      { plane: 'XZ', offset: 3 },
+      { onToggleSection, onSectionPlane }
+    );
+    const cut = () => screen.getByRole('switch', { name: 'Section cut' });
+    expect(cut()).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(cut());
+    expect(onToggleSection).toHaveBeenCalledOnce();
+    view.rerender(undefined);
+    // Off, the panel stays on the last cut with its position put away.
+    expect(panel()).not.toBeNull();
+    expect(cut()).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByLabelText('Cut position')).toBeDisabled();
+    expect(screen.getByText('Off')).toBeTruthy();
+    // The switch, or the last cut's own plane, brings it back.
+    fireEvent.click(cut());
+    expect(onToggleSection).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Front (XZ plane)' }));
+    expect(onToggleSection).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Side (YZ plane)' }));
+    expect(onSectionPlane).toHaveBeenCalledWith('YZ');
+    // The section button puts the panel away without switching anything.
+    fireEvent.click(sectionButton());
+    expect(panel()).toBeNull();
+    expect(onToggleSection).toHaveBeenCalledTimes(3);
+  });
+
+  it('takes the panel down when the cut is switched off elsewhere', () => {
+    const view = renderSection({ plane: 'XY', offset: 3 });
+    expect(panel()).not.toBeNull();
+    view.rerender(undefined);
+    expect(panel()).toBeNull();
+  });
+
+  it('leaves hidden controls hidden when the bar mounts again', () => {
+    // The workspace owns the choice: the bar remounts with the workspace
+    // mode and the dock layout, and a panel put away came straight back.
+    const onSectionPanelOpenChange = vi.fn();
+    renderSection(
+      { plane: 'XY', offset: 3 },
+      { sectionPanelOpen: true, onSectionPanelOpenChange }
+    );
+    fireEvent.click(sectionButton());
+    expect(onSectionPanelOpenChange).toHaveBeenCalledWith(false);
+    cleanup();
+    renderSection(
+      { plane: 'XY', offset: 3 },
+      { sectionPanelOpen: false, onSectionPanelOpenChange }
+    );
+    expect(panel()).toBeNull();
+    expect(sectionButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(sectionButton()).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(sectionButton());
+    expect(onSectionPanelOpenChange).toHaveBeenLastCalledWith(true);
   });
 
   it('leaves Escape to the workspace while the user is elsewhere', () => {
@@ -582,7 +661,7 @@ describe('the section view help', () => {
     // The old sentence ran past the 320px tooltip and lost "Now: …".
     fireEvent.focus(screen.getByRole('button', { name: /^Section view/ }));
     expect(screen.getByRole('tooltip')).toHaveTextContent(
-      'Section viewNow: XY plane · cuts the display only'
+      'Section viewNow: XY plane · click to hide controls'
     );
     expect(
       screen.getByRole('group', { name: 'Section view' })

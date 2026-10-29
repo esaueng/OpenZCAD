@@ -387,6 +387,9 @@ interface ViewerShellProps {
   xrayOpacity?: number;
   sectionRange: { min: number; max: number } | null;
   onToggleSection(): void;
+  /** Whether the section controls show while the cut is on (remembered). */
+  sectionPanelOpen?: boolean;
+  onSectionPanelOpenChange?(open: boolean): void;
   onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
   onSectionCommit(offset?: number): void;
@@ -542,6 +545,8 @@ export function ViewerShell({
   xrayOpacity,
   sectionRange,
   onToggleSection,
+  sectionPanelOpen,
+  onSectionPanelOpenChange,
   onSectionPlane,
   onSectionOffset,
   onSectionCommit,
@@ -658,6 +663,8 @@ export function ViewerShell({
       onToggleProjection={onToggleProjection}
       sectionRange={sectionRange}
       onToggleSection={onToggleSection}
+      {...(sectionPanelOpen !== undefined ? { sectionPanelOpen } : {})}
+      {...(onSectionPanelOpenChange ? { onSectionPanelOpenChange } : {})}
       onSectionPlane={onSectionPlane}
       onSectionOffset={onSectionOffset}
       onSectionCommit={onSectionCommit}
