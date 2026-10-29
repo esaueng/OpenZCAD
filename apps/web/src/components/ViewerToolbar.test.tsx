@@ -480,6 +480,16 @@ describe('the section button and its panel', () => {
     view.rerender({ plane: 'XY', offset: 3 }, undefined, null);
     expect(panel()).toBeNull();
     expect(sectionButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(sectionButton()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('turns off a cut that has no bounds to show its panel against', () => {
+    // With no panel there is no switch, so the button must still end it.
+    const onToggleSection = vi.fn();
+    const view = renderSection({ plane: 'XY', offset: 3 }, { onToggleSection });
+    view.rerender({ plane: 'XY', offset: 3 }, undefined, null);
+    fireEvent.click(sectionButton());
+    expect(onToggleSection).toHaveBeenCalledOnce();
   });
 
   it('takes the panel down when the cut is switched off elsewhere', () => {

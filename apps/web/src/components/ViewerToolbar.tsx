@@ -203,8 +203,6 @@ export function ViewerToolbar({
       if (sectionPanelOpenProp === undefined) setLocalSectionPanelOpen(true);
     }
   }
-  const sectionPanelShown =
-    !sectionCovered && (sectionOn ? sectionPanelOpen : heldOff);
   // On, the panel drives the live cut and needs the model's current bounds:
   // with no bodies on screen there is nothing to place it against. Only the
   // held-off panel falls back to the last cut, which it shows dimmed.
@@ -213,6 +211,10 @@ export function ViewerToolbar({
       ? { section: settings.sectionView, range: sectionRange }
       : null
     : lastCut;
+  const sectionPanelShown =
+    shownCut !== null &&
+    !sectionCovered &&
+    (sectionOn ? sectionPanelOpen : heldOff);
   const panelId = useId();
   // X-ray rides over the display mode, so the mode button says when it is
   // on. It has no rail button of its own: the rail is sized to centre on the
@@ -315,7 +317,9 @@ export function ViewerToolbar({
    * Switches the cut on with its panel; after that the button shows and
    * hides the panel, like the views flyout's, and never ends the cut. The
    * panel's own switch is what turns it off, so putting the controls away is
-   * always safe.
+   * always safe. A cut left on with no bounds to show its panel against (the
+   * last body hidden or deleted) has no switch on screen, so the button
+   * turns that one off itself.
    */
   function pressSection(button: HTMLButtonElement) {
     // Safari does not focus a clicked button; Escape reads the focus.
@@ -325,7 +329,7 @@ export function ViewerToolbar({
       setHeldOff(false);
       return;
     }
-    if (!sectionOn) {
+    if (!sectionOn || !shownCut) {
       onToggleSection();
       return;
     }
@@ -434,9 +438,11 @@ export function ViewerToolbar({
           description={`Now: ${sectionLabel} · ${
             !sectionOn
               ? 'cuts the display only'
-              : sectionPanelShown
-                ? 'click to hide controls'
-                : 'click for controls'
+              : !shownCut
+                ? 'click to turn off'
+                : sectionPanelShown
+                  ? 'click to hide controls'
+                  : 'click for controls'
           }`}
         >
           <button
