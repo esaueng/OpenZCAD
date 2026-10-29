@@ -1171,6 +1171,52 @@ test('the Edit Sketch offer does not outlive the mode it was made in', async ({
   await expect(offer).toHaveCount(0);
 });
 
+// F011: the offer rode along into the next project, so a new, empty project
+// offered to edit a sketch it does not have.
+test('the Edit Sketch offer does not outlive its project', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Edit Sketch project');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  const bounds = (await canvas.boundingBox())!;
+  const center = {
+    x: bounds.x + bounds.width * 0.5,
+    y: bounds.y + bounds.height * 0.5
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 50, center.y, { steps: 6 });
+  await page.mouse.up();
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const heightKeypad = page.getByRole('dialog', { name: 'Distance value' });
+  await heightKeypad.getByRole('textbox').fill('12');
+  await heightKeypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
+  await expectBodyCount(page, 1);
+  await page.keyboard.press('Escape');
+  const offer = page.getByRole('button', { name: 'Edit Sketch', exact: true });
+  await expect(offer).toBeVisible();
+
+  await page.getByTitle('Back to projects').click();
+  await page.getByLabel('Project name').fill('Edit Sketch next project');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(canvas).toBeVisible({ timeout: 30_000 });
+  await expectBodyCount(page, 0);
+  await expect(offer).toHaveCount(0);
+});
+
 test('fillets all twelve edges of a box in one exact feature', { tag: '@ci-smoke' }, async ({
   page
 }) => {

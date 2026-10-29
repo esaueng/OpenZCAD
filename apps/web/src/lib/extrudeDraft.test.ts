@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { extrudeSidesConflict } from '@openzcad/document-core';
 import { toBodyId, toSketchId } from '@openzcad/shared';
 import {
   extrudeChoiceWith,
@@ -77,7 +78,27 @@ describe('extrude draft rules', () => {
         draft({ distance: '10', backDistance: '-1', symmetric: true }),
         ctx
       )
-    ).toEqual(expect.objectContaining({ symmetric: true, backDistance: 0 }));
+    ).toEqual(expect.objectContaining({ symmetric: true }));
+  });
+
+  // F002: Symmetric used to send `backDistance: 0` and the document refused
+  // every symmetric create as two-sided. It sends no back distance at all,
+  // so what Done stores passes the document's own sides rule.
+  it('sends Symmetric with no back distance, which the document accepts', () => {
+    const value = extrudeDraftValue(
+      draft({ distance: '10', backDistance: '4', symmetric: true }),
+      ctx
+    );
+    expect(value).toEqual(expect.objectContaining({ symmetric: true }));
+    expect(value).not.toHaveProperty('backDistance');
+    expect(extrudeSidesConflict(value!)).toBe(false);
+    expect(
+      extrudeDraftRefusal(
+        draft({ distance: '10', backDistance: '4', symmetric: true }),
+        ctx,
+        true
+      )
+    ).toBeNull();
   });
 
   it('needs a target for Add, Cut and Intersect, guessing the only body', () => {

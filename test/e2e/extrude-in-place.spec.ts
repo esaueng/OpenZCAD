@@ -235,6 +235,32 @@ test('Extrude in place: a draft dragged on its wall, typed on its chip, refused 
   expect(errors).toEqual([]);
 });
 
+// F002: every symmetric create was refused as "both symmetric and two-sided"
+// because the bar sent a zero back distance beside Symmetric.
+test('Extrude in place: Symmetric creates the extrude', { tag: '@ci-smoke' }, async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await openDocument(page, plateDocument('In-place extrude symmetric'));
+  const canvas = page.locator('.viewer-host canvas');
+  const bar = await startExtrude(page, canvas);
+  await chooseInPlaceOption(page, 'Extrude', 'Sides', 'Symmetric');
+  const done = bar.getByRole('button', { name: 'Done' });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await done.click();
+  await expect(bar).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.locator('body')).not.toContainText(
+    'both symmetric and two-sided'
+  );
+  await revealModelPanel(page, 'History');
+  const row = page.locator('.feature-row', { hasText: 'Extrude' }).last();
+  await expect(row).toContainText('10 mm symmetric');
+  expect(errors).toEqual([]);
+});
+
 test('Extrude in place: the back arrow, Symmetric under Options, and Enter to finish', async ({
   page
 }) => {

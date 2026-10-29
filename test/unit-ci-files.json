@@ -108,6 +108,7 @@
     "src/lib/commandOutcome.test.ts",
     "src/lib/conflictRecovery.test.ts",
     "src/lib/dataExport.test.ts",
+    "src/lib/duplicateSaveStates.test.ts",
     "src/lib/e2ee/accountErasure.test.ts",
     "src/lib/e2ee/encryptedProjects.test.ts",
     "src/lib/e2ee/encryptionStatus.test.ts",
