@@ -1,7 +1,9 @@
 import type { MutableRefObject } from 'react';
 import {
+  EXTRUDE_SIDES_CONFLICT_MESSAGE,
   MAX_EXTRUDE_DRAFT_DEG,
-  coerceParamValue
+  coerceParamValue,
+  extrudeSidesConflict
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -27,7 +29,11 @@ export interface ExtrudeFormValue {
   sketchId: SketchId;
   distance: ParamValue;
   symmetric: boolean;
-  backDistance: ParamValue;
+  /**
+   * Absent exactly when `symmetric`: a symmetric extrude has no back
+   * distance, and the document refuses one beside it.
+   */
+  backDistance?: ParamValue;
   choice: ExtrudeChoice;
   /**
    * F01: `through-all` is offered for an explicit cut only. Absent reads as
@@ -296,8 +302,13 @@ export function extrudeFormValue(
         ? 1
         : typed,
     symmetric: derived ? false : draft.symmetric,
-    backDistance:
-      derived || draft.symmetric ? 0 : coerceParamValue(draft.backDistance),
+    // Symmetric sends no back distance at all: the document reads any
+    // non-zero one beside it as a two-sided conflict (F002).
+    ...(!derived && draft.symmetric
+      ? {}
+      : {
+          backDistance: derived ? 0 : coerceParamValue(draft.backDistance)
+        }),
     choice: draft.choice,
     endCondition: throughAll ? 'through-all' : toFace ? 'to-face' : 'blind',
     ...(throughAll ? { throughAllSide: draft.throughAllSide } : {}),
@@ -375,6 +386,16 @@ export function extrudeDraftRefusal(
       }
       if (back.value < 0) return 'Back distance cannot be negative.';
     }
+  }
+  // The document's own sides rule, on what Done would store: the form never
+  // pairs Symmetric with a back distance, and Done stays off if it ever did.
+  const value = extrudeFormValue(draft, ctx);
+  if (
+    extrudeSidesConflict(value, (text) =>
+      extrudeDraftNumber(paramValueText(text), 'length', ctx)
+    )
+  ) {
+    return EXTRUDE_SIDES_CONFLICT_MESSAGE;
   }
   if (extrudeNeedsTarget(draft.choice)) {
     const targetBodyId =

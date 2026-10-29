@@ -1110,6 +1110,42 @@ export function duplicateProjectDocument(
 }
 
 /**
+ * One of the source's save states, re-homed in its duplicate `copy`.
+ *
+ * `duplicateProjectDocument` keeps every checkpoint of the source, so the
+ * copy lists the saves it was made from; without their documents those rows
+ * are only a record (F018). This is the document such a row opens: the same
+ * model at the same checkpoint, under the copy's id, owner and name, with
+ * archived imports made device-local exactly as the copy's own are, so a
+ * restore in the copy brings back that model and never the source project.
+ */
+export function duplicateSaveStateDocument(
+  snapshot: ProjectDocument,
+  copy: ProjectDocument
+): ProjectDocument {
+  const {
+    editHistory: _history,
+    branchedFrom: _branchedFrom,
+    ...model
+  } = cloneDocument(normalizeDocument(snapshot));
+  const rootNode = model.nodes[model.rootNodeId];
+  if (rootNode?.kind === 'project') {
+    model.nodes[model.rootNodeId] = {
+      ...rootNode,
+      projectId: copy.projectId,
+      name: copy.name
+    };
+  }
+  return localizeImportedSourceArtifacts({
+    ...model,
+    projectId: copy.projectId,
+    ownerUserId: copy.ownerUserId,
+    name: copy.name,
+    ...(copy.branchedFrom ? { branchedFrom: copy.branchedFrom } : {})
+  });
+}
+
+/**
  * `current` rewound to the model `snapshot` held, as a forward edit.
  *
  * Restoring an old save is not a rewind of the project's timeline, and this is
@@ -2258,6 +2294,24 @@ function resolvedZero(
 }
 
 /**
+ * The one rule every layer applies to an extrude's sides: `symmetric` and a
+ * back distance conflict only when the back distance is non-zero. A back
+ * distance that is absent or resolves to zero (`0`, `0 mm`, a parameter at
+ * 0) is the one-sided default, so it means nothing beside `symmetric: true`.
+ * Document entry passes a resolver; the build passes the resolved number.
+ */
+export function extrudeSidesConflict(
+  data: { symmetric?: unknown; backDistance?: unknown },
+  resolve?: ParamZeroResolver
+): boolean {
+  return data.symmetric === true && !resolvedZero(resolve)(data.backDistance);
+}
+
+/** Why `extrudeSidesConflict` refuses an extrude. */
+export const EXTRUDE_SIDES_CONFLICT_MESSAGE =
+  'An extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.';
+
+/**
  * F01 (v29): the structure of a `to-face` target. Whether the face still
  * resolves, is planar and is parallel to the sketch needs the exact build,
  * which refuses by name at the feature's history position.
@@ -2386,6 +2440,10 @@ export function validateExtrudeExtent(
       `Unknown extrude operation ${JSON.stringify(data.operation)}.`
     );
   }
+  // Entry, an edit and the build all refuse the same sides here.
+  if (extrudeSidesConflict(data, resolve)) {
+    throw new Error(EXTRUDE_SIDES_CONFLICT_MESSAGE);
+  }
   validateExtrudeDraft(data, resolve);
   // Only an absent field is blind: a stored `null` is malformed, not legacy.
   const condition =
@@ -2451,11 +2509,6 @@ export function extrudeSketch(
   input: ExtrudeInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   assertFeatureProfileProvenance(input, document);
-  if (input.symmetric && input.backDistance !== undefined) {
-    throw new Error(
-      'An extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
-    );
-  }
   validateExtrudeExtent(input, extrudeParamResolver(document));
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
@@ -2475,7 +2528,9 @@ export function extrudeSketch(
       sketchId: input.sketchId,
       distance: input.distance,
       ...(input.symmetric ? { symmetric: true } : {}),
-      ...(input.backDistance === undefined
+      // A symmetric extrude stores no back distance: beside it a zero is
+      // only the one-sided default (anything else was refused above).
+      ...(input.backDistance === undefined || input.symmetric
         ? {}
         : { backDistance: input.backDistance }),
       ...(input.operation === undefined ? {} : { operation: input.operation }),

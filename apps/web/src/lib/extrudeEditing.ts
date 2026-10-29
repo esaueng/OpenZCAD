@@ -90,6 +90,12 @@ export function extrudeEditData(
     value.choice.operation !== 'new-body' && 'targetBodyId' in value.choice
       ? value.choice.targetBodyId
       : undefined;
+  // Symmetric sends no back distance. The field cannot be cleared, so a
+  // stored non-zero one is zeroed (the one-sided default the document reads
+  // beside symmetric), and a stored zero keeps the form it was written in.
+  const backDistance =
+    value.backDistance ??
+    (storedZero(stored.backDistance) ? stored.backDistance! : 0);
   return {
     ...kept,
     distance: value.distance,
@@ -98,9 +104,9 @@ export function extrudeEditData(
       : stored.symmetric !== undefined
         ? { symmetric: false }
         : {}),
-    ...(storedZero(value.backDistance) && stored.backDistance === undefined
+    ...(storedZero(backDistance) && stored.backDistance === undefined
       ? {}
-      : { backDistance: value.backDistance }),
+      : { backDistance }),
     ...(operation === 'new-body' && stored.operation === undefined
       ? {}
       : { operation }),

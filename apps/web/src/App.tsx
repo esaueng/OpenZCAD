@@ -3409,10 +3409,19 @@ export function App() {
   const [sectionOutline, setSectionOutline] = useState<SectionOutlineState>({
     kind: 'clipping'
   });
+  // A standard or saved view, asked for in one project. The viewer is
+  // keyed by project and replays a pending request when it mounts, so a
+  // request is only ever handed to the project it was made in (F009: a Top
+  // view chosen in one project opened the next one in Top, off-screen).
   const [viewRequest, setViewRequest] = useState<{
     view: ViewRequestTarget;
     nonce: number;
+    projectId: string | null;
   } | null>(null);
+  const projectViewRequest =
+    viewRequest && viewRequest.projectId === (doc?.projectId ?? null)
+      ? viewRequest
+      : null;
   const [normalToFaceRequest, setNormalToFaceRequest] =
     useState<NormalToFaceRequest | null>(null);
   // The command bar has focus and its list is up.
@@ -5845,6 +5854,8 @@ export function App() {
 
   useLayoutEffect(() => {
     setDatumRepair(null);
+    // Reopening the project a view was asked in must not replay it either.
+    setViewRequest(null);
   }, [doc?.projectId]);
 
   useEffect(() => {
@@ -10508,7 +10519,11 @@ export function App() {
   }
 
   function requestView(view: ViewRequestTarget) {
-    setViewRequest({ view, nonce: ++viewNonceRef.current });
+    setViewRequest({
+      view,
+      nonce: ++viewNonceRef.current,
+      projectId: doc?.projectId ?? null
+    });
   }
 
   // Saved views: per project, on this device. The list and its storage live
@@ -13265,6 +13280,23 @@ export function App() {
     }
   }
 
+  /** Best effort: a save state left behind still reads "not stored". */
+  async function copyDuplicateSaveStates(
+    sourceProjectId: string,
+    copy: ProjectDocument
+  ) {
+    try {
+      const { copyLocalSaveStates } = await import('./lib/duplicateSaveStates');
+      // One import shared by many saves is loaded and hashed once.
+      const verified = new Set<string>();
+      await copyLocalSaveStates(sourceProjectId, copy, (snapshot) =>
+        cacheCopySources(snapshot, loadSourceBlob, sha256Hex, verified)
+      );
+    } catch {
+      // The copy itself is saved; its inherited saves stay records.
+    }
+  }
+
   /**
    * Copies a project, optionally starting from one of its save states.
    *
@@ -13364,6 +13396,12 @@ export function App() {
           // Kept on the device too, so the copy opens offline exactly like the
           // original it was made from.
           await saveLocalProject(localCopy).catch(() => undefined);
+          // With the save states it lists, where this device holds them: the
+          // account stores only the copy's own (F018). An encrypted copy
+          // keeps the source's blob ids, which a re-homed save state would not.
+          if (!isEncryptedProject(project.projectId)) {
+            await copyDuplicateSaveStates(project.projectId, localCopy);
+          }
           if (response.project.organization) {
             await saveLocalProjectOrganization(
               response.project.projectId,
@@ -13425,6 +13463,9 @@ export function App() {
         sortOrder: projectOrganization(project).sortOrder
       };
       await saveLocalProject(copy);
+      // The copy lists the source's saves; store their documents with it, so
+      // they open here as they do in the source (F018).
+      await copyDuplicateSaveStates(project.projectId, copy);
       await saveLocalProjectOrganization(copy.projectId, organization, {
         mirrorPending: true
       }).catch(() => undefined);
@@ -21838,6 +21879,11 @@ export function App() {
   useEffect(() => {
     setRevertPill(null);
   }, [resolvedWorkspaceMode]);
+  // Nor does it outlive its project: a new, empty project offered to edit
+  // the last project's sketch (F011). Before paint, so it never shows there.
+  useLayoutEffect(() => {
+    setRevertPill(null);
+  }, [doc?.projectId]);
 
   /** A detected bounded cell was clicked: update persistent profile selection. */
   function handleSelectRegion(
@@ -22077,7 +22123,10 @@ export function App() {
       sketchId: target.sketchId as SketchId,
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
-      backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
+      // Symmetric has no back distance; sending its 0 beside it was F002.
+      backDistance: regionExtrudeSettings.current?.symmetric
+        ? undefined
+        : (regionExtrudeSettings.current?.backDistance ?? 0),
       // The form sends a side only with a through-all extent, and a face
       // only with a to-face one.
       endCondition: regionExtrudeSettings.current?.endCondition,
@@ -28397,7 +28446,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             autoFrame={autoFrame}
-            viewRequest={viewRequest}
+            viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
             // Every drag handle below is disarmed by passing nothing to arm:

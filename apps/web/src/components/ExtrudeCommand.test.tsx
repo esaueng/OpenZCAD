@@ -3,8 +3,16 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  addSketchFeature,
+  createProjectDocument,
+  extrudeSketch,
+  getLatestSketchId,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
+import {
   toBodyId,
   toSketchId,
+  toUserId,
   type ExtrudeToFaceTarget,
   type ParamValue
 } from '@openzcad/shared';
@@ -14,7 +22,10 @@ import {
   type ExtrudeCommandHandle,
   type ExtrudeCommandState
 } from './ExtrudeCommand';
-import type { ExtrudeToFacePicking } from '../lib/extrudeDraft';
+import type {
+  ExtrudeFormValue,
+  ExtrudeToFacePicking
+} from '../lib/extrudeDraft';
 
 const sketchId = toSketchId('layout');
 const plate = toBodyId('plate');
@@ -104,15 +115,62 @@ describe('in-place Extrude bar', () => {
     expect(onPreview).toHaveBeenLastCalledWith(
       expect.objectContaining({ backDistance: 'thickness / 2' })
     );
-    // Symmetric drops the back distance, and its row.
+    // Symmetric drops the back distance, and its row: none is sent (F002).
     await user.click(choice('Sides', 'Symmetric'));
     expect(onPreview).toHaveBeenLastCalledWith(
-      expect.objectContaining({ symmetric: true, backDistance: 0 })
+      expect.objectContaining({ symmetric: true })
+    );
+    expect(vi.mocked(onPreview).mock.lastCall?.[0]).not.toHaveProperty(
+      'backDistance'
     );
     expect(screen.queryByRole('button', { name: 'Back distance' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Reverse direction' }));
     expect(onPreview).toHaveBeenLastCalledWith(
       expect.objectContaining({ distance: -10 })
+    );
+  });
+
+  // F002: every symmetric create was refused as "both symmetric and
+  // two-sided", because the bar sent a zero back distance beside Symmetric.
+  it('creates a symmetric extrude the document accepts', async () => {
+    const user = userEvent.setup();
+    const sketched = addSketchFeature(
+      createProjectDocument('Symmetric', toUserId('user_test')),
+      {
+        name: 'Circle',
+        plane: 'XY',
+        offset: 0,
+        object: { objectKind: 'circle', radius: 5, centerX: 0, centerY: 0 }
+      }
+    ).document;
+    const circleSketch = getLatestSketchId(sketched)!;
+    const { distanceSetterRef, onSubmit } = setup({
+      initial: { name: 'Extrude', sketchId: circleSketch, distance: 0 }
+    });
+    act(() => distanceSetterRef.current?.(10));
+    await openOptions(user);
+    await user.click(choice('Sides', 'Symmetric'));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledOnce();
+    const value = vi.mocked(onSubmit).mock.calls[0]![0] as ExtrudeFormValue;
+    expect(value).toEqual(
+      expect.objectContaining({ distance: 10, symmetric: true })
+    );
+    expect(value).not.toHaveProperty('backDistance');
+    // What the host then commits: the document takes it, stored symmetric.
+    const created = extrudeSketch(sketched, {
+      name: value.name,
+      sketchId: value.sketchId,
+      distance: value.distance,
+      symmetric: value.symmetric,
+      backDistance: value.backDistance
+    }).document;
+    expect(listFeaturesInOrder(created).at(-1)!.data).toEqual(
+      expect.objectContaining({
+        featureKind: 'extrude',
+        distance: 10,
+        symmetric: true
+      })
     );
   });
 

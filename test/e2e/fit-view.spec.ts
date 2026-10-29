@@ -138,3 +138,52 @@ test('picking a face leaves the scale bar alone', async ({ page }) => {
   );
   expect(Math.abs(widthAfter - widthBefore)).toBeLessThan(0.5);
 });
+
+// F009: a standard view was replayed by the next project's viewer, which
+// also skipped that project's first fit, so a part opened off-screen.
+test('a standard view stays in the project it was chosen in', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await createBox(page, 'View Request Part');
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
+  const opening = directionOf(await settledCamera(canvas));
+  // Top looks straight down the Z axis.
+  await page.keyboard.press('2');
+  await expect
+    .poll(async () => directionOf(await readLiveCamera(canvas))[2]!, {
+      timeout: 10_000
+    })
+    .toBeCloseTo(1, 3);
+  await settledCamera(canvas);
+
+  await page.getByTitle('Back to projects').click();
+  await page.getByLabel('Project name').fill('Next View Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+  const next = directionOf(await settledCamera(canvas));
+  // The new project opens on the same default view the first one did, and
+  // its first part is framed rather than left wherever Top put the camera.
+  for (const axis of [0, 1, 2]) {
+    expect(next[axis]!).toBeCloseTo(opening[axis]!, 3);
+  }
+  await expect
+    .poll(() =>
+      canvas.evaluate(
+        (element) =>
+          new Promise<boolean>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-bodies-in-view', {
+                detail: {
+                  resolve: (state: { inView: boolean }) => resolve(state.inView)
+                }
+              })
+            );
+          })
+      )
+    )
+    .toBe(true);
+});

@@ -4,7 +4,9 @@ import {
   createProjectDocument,
   extrudeSketch,
   getLatestBodyId,
-  getLatestSketchId
+  getLatestSketchId,
+  listFeaturesInOrder,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -267,4 +269,57 @@ describe('two-sided extrude geometry', () => {
       documentWithExtrude({ distance: 5, symmetric: true, backDistance: 2 })
     ).toThrow(/symmetric/);
   });
+
+  // F002: the Extrude form sent `backDistance: 0` beside Symmetric and the
+  // document refused every symmetric create, while the build accepted that
+  // zero. Both now read a zero back distance as the one-sided default.
+  it.each([0, '0', '0 mm'])(
+    'accepts symmetric beside a zero back distance (%j), stores none and builds it',
+    async (zero) => {
+      const { document, warnings, body } = await buildExtrude({
+        distance: 8,
+        symmetric: true,
+        backDistance: zero
+      });
+      const feature = listFeaturesInOrder(document).at(-1)!;
+      expect(feature.data).toEqual(
+        expect.objectContaining({ featureKind: 'extrude', symmetric: true })
+      );
+      expect(feature.data).not.toHaveProperty('backDistance');
+      expect(warnings).toEqual([]);
+      expect(Math.abs(body!.volume - boxVolume(8))).toBeLessThan(1e-9);
+      const span = normalSpan(body!.mesh);
+      expect(span.min).toBeCloseTo(-4, 9);
+      expect(span.max).toBeCloseTo(4, 9);
+    },
+    120_000
+  );
+
+  it('refuses an edit that leaves a non-zero back distance beside symmetric', () => {
+    const document = documentWithExtrude({ distance: 5, backDistance: 2 });
+    const featureId = listFeaturesInOrder(document).at(-1)!.featureId;
+    expect(() =>
+      updateFeature(document, { featureId, data: { symmetric: true } })
+    ).toThrow(/both symmetric and two-sided/);
+    // Switching to Symmetric zeroes the stored back distance (the field
+    // cannot be cleared), which is the one-sided default beside it.
+    expect(() =>
+      updateFeature(document, {
+        featureId,
+        data: { symmetric: true, backDistance: 0 }
+      })
+    ).not.toThrow();
+  });
+
+  it('refuses a stored symmetric two-sided extrude at rebuild, by name', async () => {
+    const document = documentWithExtrude({ distance: 5, backDistance: 2 });
+    const feature = listFeaturesInOrder(document).at(-1)!;
+    // A document written outside the editor: the build applies the same rule.
+    (feature.data as { symmetric?: boolean }).symmetric = true;
+    const derived = await kernel.syncDocument(document);
+    expect(
+      derived.bodyRepresentations[getLatestBodyId(document)!]
+    ).toBeUndefined();
+    expect(JSON.stringify(derived)).toMatch(/both symmetric and two-sided/);
+  }, 120_000);
 });
