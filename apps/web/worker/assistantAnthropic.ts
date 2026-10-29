@@ -1,4 +1,9 @@
-import type { AssistantReasoningEffort } from '@openzcad/shared';
+import {
+  anthropicThinkingOffType,
+  type AssistantReasoningEffort
+} from '@openzcad/shared';
+
+export class AnthropicModelConfigurationError extends Error {}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -10,6 +15,12 @@ export function anthropicOutputOptions(
   effort: AssistantReasoningEffort,
   model: string
 ) {
+  const offType = anthropicThinkingOffType(model);
+  if (effort === 'off' && !offType) {
+    throw new AnthropicModelConfigurationError(
+      'Reasoning Off is unavailable for this Anthropic model. Choose Provider default or a reasoning level.'
+    );
+  }
   return {
     output_config: {
       ...(effort === 'off'
@@ -21,9 +32,7 @@ export function anthropicOutputOptions(
     ...(effort === 'off'
       ? {
           thinking: {
-            type: model.startsWith('claude-sonnet-5-5')
-              ? 'between_tools'
-              : 'disabled'
+            type: offType
           }
         }
       : effort !== 'provider-default'

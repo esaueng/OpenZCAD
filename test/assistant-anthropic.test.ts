@@ -41,6 +41,23 @@ describe('Anthropic protocol adapter', () => {
     });
   });
 
+  it.each([
+    'claude-opus-5-5',
+    'claude-fable-5-1',
+    'claude-mythos-5-1',
+    'unknown-future-model'
+  ])('refuses Off for %s before any request is sent', (model) => {
+    expect(() => anthropicOutputOptions('off', model)).toThrow(
+      'Off is unavailable'
+    );
+  });
+
+  it('recognizes dated aliases of models supporting Off', () => {
+    expect(
+      anthropicOutputOptions('off', 'claude-sonnet-4-5-20250929')
+    ).toMatchObject({ thinking: { type: 'disabled' } });
+  });
+
   it.each(['low', 'medium', 'high', 'xhigh'] as const)(
     'maps %s effort to adaptive thinking',
     (effort) => {

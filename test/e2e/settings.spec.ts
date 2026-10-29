@@ -1409,6 +1409,11 @@ test(
       'claude-sonnet-5-5'
     );
     await expect(page.getByLabel('AI API endpoint')).toHaveCount(0);
+    await page.getByLabel('AI reasoning level').selectOption('off');
+    await page.getByLabel('AI model', { exact: true }).fill('claude-opus-5-5');
+    await expect(page.getByLabel('AI reasoning level')).toHaveValue('provider-default');
+    await expect(page.getByRole('option', { name: 'Off', exact: true })).toBeDisabled();
+    await page.getByLabel('AI model', { exact: true }).fill('claude-sonnet-5-5');
     await page.reload();
     await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
     await expect(page.getByLabel('AI provider', { exact: true })).toHaveValue(

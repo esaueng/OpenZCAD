@@ -20,6 +20,7 @@ import {
 } from './assistantStreamDiagnostics';
 import {
   anthropicOutputOptions,
+  AnthropicModelConfigurationError,
   translateAnthropicStream
 } from './assistantAnthropic';
 import { isPrivateHostname } from './privateNetwork';
@@ -1390,6 +1391,14 @@ export async function streamAssistantProposal(
       );
     }
   } catch (error) {
+    if (error instanceof AnthropicModelConfigurationError) {
+      return jsonError(
+        error.message,
+        'AI_PROVIDER_NOT_CONFIGURED',
+        503,
+        requestId
+      );
+    }
     const timedOut =
       error instanceof DOMException &&
       (error.name === 'TimeoutError' || error.name === 'AbortError');
@@ -1570,7 +1579,10 @@ export async function testAssistantConnection(
         await requestOpenRouterChat()
       );
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof AnthropicModelConfigurationError) {
+      throw new HttpAssistantConfigurationError(error.message, { requestId });
+    }
     const timedOut = timeoutSignal.aborted;
     console.error('AI Responses connection request failed:', {
       requestId,

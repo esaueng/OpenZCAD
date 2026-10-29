@@ -886,6 +886,41 @@ describe('settings assistant section', () => {
     };
   }
 
+  it('disables Off for always-thinking Anthropic models', () => {
+    const accountState = personalAssistantState();
+    accountState.settings.assistant.provider = 'anthropic';
+    accountState.settings.assistant.model = 'claude-opus-5-5';
+    renderSettings(null, {
+      settings: accountState.settings,
+      accountState,
+      initialSection: 'assistant'
+    });
+    expect(
+      screen.getByRole('option', { name: 'Off' })
+    ).toBeDisabled();
+  });
+
+  it('resets Off when editing the Anthropic model to an unsupported one', async () => {
+    const user = userEvent.setup();
+    const accountState = personalAssistantState();
+    accountState.settings.assistant.provider = 'anthropic';
+    accountState.settings.assistant.model = 'claude-sonnet-5-5';
+    accountState.settings.assistant.reasoningEffort = 'off';
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, {
+      settings: accountState.settings,
+      accountState,
+      initialSection: 'assistant',
+      onChange
+    });
+    await user.clear(
+      screen.getByRole('textbox', { name: 'AI model' })
+    );
+    expect(onChange.mock.calls.at(-1)?.[0].assistant.reasoningEffort).toBe(
+      'provider-default'
+    );
+  });
+
   it('selects Anthropic with its official endpoint and Claude default', async () => {
     const user = userEvent.setup();
     const accountState = personalAssistantState();
@@ -894,12 +929,15 @@ describe('settings assistant section', () => {
       settings: accountState.settings,
       accountState,
       initialSection: 'assistant',
+      session: { userId: toUserId('user_provider_switch'), displayName: 'person', mode: 'email-code' },
       onChange
     });
+    await user.type(screen.getByLabelText('Personal API token'), 'test-other-provider-token');
     await user.selectOptions(
       screen.getByRole('combobox', { name: 'AI provider' }),
       'anthropic'
     );
+    expect(screen.getByLabelText('Personal API token')).toHaveValue('');
     expect(onChange).toHaveBeenCalledOnce();
     const next = onChange.mock.calls[0]![0];
     expect(next.assistant).toMatchObject({

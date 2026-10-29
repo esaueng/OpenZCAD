@@ -2299,6 +2299,28 @@ describe('Anthropic Messages provider', () => {
     expect(wire).not.toContain('invalid output marker');
   });
 
+  it('explains unsupported Off settings without sending a provider request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const alwaysThinking = {
+      ...runtime,
+      model: 'claude-opus-5-5',
+      reasoningEffort: 'off' as const
+    };
+    await expect(testAssistantConnection(alwaysThinking, {})).rejects.toThrow(
+      'Off is unavailable'
+    );
+    const response = await streamAssistantProposal(
+      input,
+      {},
+      undefined,
+      alwaysThinking
+    );
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain('Off is unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('uses the same official endpoint in encrypted-project consent routes', () => {
     expect(assistantEndpointIdentity({}, 'anthropic')).toBe(
       'https://api.anthropic.com/v1/messages'

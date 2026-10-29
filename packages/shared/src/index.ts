@@ -1,3 +1,4 @@
+export * from './anthropic-models';
 export * from './workspace-resume';
 export * from './document-validation';
 export * from './document-history';

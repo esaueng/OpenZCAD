@@ -44,6 +44,7 @@ import {
   UserRound
 } from 'lucide-react';
 import {
+  anthropicThinkingOffType,
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
@@ -1630,13 +1631,14 @@ export function SettingsPage({
               {settings.assistant.credentialSource === 'personal' ? (
                 <>
                   <Group title="Model">
-                    <SettingRow title="Provider">
+                    <SettingRow title="Provider" hint="Changing provider removes the saved token.">
                       <select
                         value={settings.assistant.provider}
                         aria-label="AI provider"
                         onChange={(event) => {
                           const provider = event.target
                             .value as AppSettings['assistant']['provider'];
+                          setToken('');
                           patchAssistant({
                             provider,
                             ...providerDefaults(provider)
@@ -1654,7 +1656,7 @@ export function SettingsPage({
                     {settings.assistant.provider === 'responses-compatible' ? (
                       <SettingRow
                         title="API endpoint"
-                        hint="Public HTTPS only."
+                        hint="Public HTTPS only. Changing endpoint removes the saved token."
                       >
                         <input
                           className="settings-text-wide"
@@ -1662,9 +1664,10 @@ export function SettingsPage({
                           value={settings.assistant.baseUrl}
                           placeholder="https://models.example.com/v1/responses"
                           aria-label="AI API endpoint"
-                          onChange={(event) =>
-                            patchAssistant({ baseUrl: event.target.value })
-                          }
+                          onChange={(event) => {
+                            setToken('');
+                            patchAssistant({ baseUrl: event.target.value });
+                          }}
                         />
                       </SettingRow>
                     ) : null}
@@ -1673,14 +1676,27 @@ export function SettingsPage({
                         className="settings-text-wide mono"
                         value={settings.assistant.model}
                         aria-label="AI model"
-                        onChange={(event) =>
-                          patchAssistant({ model: event.target.value })
-                        }
+                        onChange={(event) => {
+                          const model = event.target.value;
+                          patchAssistant({
+                            model,
+                            ...(settings.assistant.provider === 'anthropic' &&
+                            settings.assistant.reasoningEffort === 'off' &&
+                            !anthropicThinkingOffType(model)
+                              ? { reasoningEffort: 'provider-default' as const }
+                              : {})
+                          });
+                        }}
                       />
                     </SettingRow>
                     <SettingRow
                       title="Reasoning level"
-                      hint="Higher plans better, costs more."
+                      hint={
+                        settings.assistant.provider === 'anthropic' &&
+                        !anthropicThinkingOffType(settings.assistant.model)
+                          ? 'Off isn’t available for this model.'
+                          : 'Higher plans better, costs more.'
+                      }
                     >
                       <select
                         value={settings.assistant.reasoningEffort}
@@ -1695,7 +1711,15 @@ export function SettingsPage({
                         <option value="provider-default">
                           Provider default
                         </option>
-                        <option value="off">Off</option>
+                        <option
+                          value="off"
+                          disabled={
+                            settings.assistant.provider === 'anthropic' &&
+                            !anthropicThinkingOffType(settings.assistant.model)
+                          }
+                        >
+                          Off
+                        </option>
                         <option value="low">Low</option>
                         <option value="medium">Medium</option>
                         <option value="high">High</option>

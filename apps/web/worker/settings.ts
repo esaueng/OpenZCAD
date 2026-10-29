@@ -1033,6 +1033,15 @@ export async function updateAppSettings(
   const serialized = JSON.stringify(settings);
   const timestamp = nowIso();
   if (
+    current.settings.assistant.provider !== settings.assistant.provider ||
+    current.settings.assistant.baseUrl !== settings.assistant.baseUrl
+  ) {
+    // A single saved token must never follow a provider/endpoint change.
+    // Remove it before publishing the new route; failed saves fail closed.
+    await env.DB.prepare('DELETE FROM user_ai_credentials WHERE user_id = ?')
+      .bind(userId)
+      .run();
+  } else if (
     assistantConnectionFingerprint(current.settings) !==
     assistantConnectionFingerprint(settings)
   ) {
