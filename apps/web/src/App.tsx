@@ -681,6 +681,9 @@ import {
 } from './lib/selectionFeature';
 import {
   cylinderRadialFrame,
+  type CylinderRadiusEdit,
+  findResizedCylinderFace,
+  isUnchangedCylinderRadius,
   isValidCylinderRadius,
   sameCylinderAxis,
   supportsRadialCylinderPreview,
@@ -6995,11 +6998,13 @@ export function App() {
   // End the session permanently when its view changes. Merely hiding the
   // indicator would let an old snapshot revive if the same set returns later.
   if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
-  // Only whether a face offset is in progress matters to the bodies: keyed on
+  // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
-  const faceOffsetInteraction =
-    interaction.mode === 'face' && interaction.op === 'offset-face';
+  const faceDragInteraction =
+    interaction.mode === 'face' &&
+    (interaction.op === 'offset-face' ||
+      interaction.op === 'resize-cylinder-radius');
   const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
     const bodies = (
       currentFaceGeometryPreview
@@ -7010,12 +7015,13 @@ export function App() {
     ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
     // G2: what a command preview would make is drawn in the preview hue
     // until it is applied, including edits that retain an existing body ID.
-    // A face offset is the exception: the viewer draws its result solid over
-    // a ghost of the part as it was, and a hue change mid-drag would read as
-    // a different part.
-    const faceOffsetPreview =
-      currentFaceGeometryPreview && faceOffsetInteraction;
-    return !faceOffsetPreview &&
+    // A face drag is the exception: an offset draws its result solid over a
+    // ghost of the part as it was, a bore's handle and dimension line say
+    // what is changing, and a whole flange flashing mint the moment a hole
+    // starts to grow read as a different part.
+    const faceDragPreview =
+      currentFaceGeometryPreview && faceDragInteraction;
+    return !faceDragPreview &&
       (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
       ? tintPreviewResultBodies(bodies, representations)
       : bodies;
@@ -7024,7 +7030,7 @@ export function App() {
     hiddenBodyIds,
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
-    faceOffsetInteraction,
+    faceDragInteraction,
     previewDoc,
     representations
   ]);
@@ -7447,6 +7453,8 @@ export function App() {
   // the card's label rewritten) on every interaction step of a drag.
   const offsettingFace =
     interaction.mode === 'face' && interaction.op === 'offset-face';
+  const resizingCylinder =
+    interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius';
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
@@ -7512,12 +7520,13 @@ export function App() {
       // face on screen, since an offset can change a face's boundary (a
       // tapered or imported part); while the preview has none to give, the
       // line holds a placeholder rather than leaving and shifting the card.
-      // Other edits (a cylinder's radius, a fillet's) name and measure from
-      // the preview: their figure is the dragged value, which the viewer
-      // writes into the label live.
+      // A cylinder's radius drag names from the committed face too: the
+      // preview's bore carries no feature type, so mid-drag the card swapped
+      // "Through hole · Ø 6" for "Pipe Flange · Face". It measures from the
+      // preview, whose figure is the dragged value.
       const sourceBody =
         currentFaceGeometryPreview &&
-        offsettingFace &&
+        (offsettingFace || resizingCylinder) &&
         selectedTopology?.kind === 'face' &&
         selectedTopology.bodyId === renderedSelectedTopology.bodyId
           ? representations[selectedTopology.bodyId]
@@ -7543,10 +7552,16 @@ export function App() {
       // tape is simultaneously refusing as ambiguous.
       const resolved = resolveFace(measuredBody, renderedSelectedTopology);
       const geometry = resolved.ok ? resolved.entry.geometry : undefined;
-      if (
-        geometry?.featureType === 'through-hole' &&
-        geometry.diameter !== undefined
-      ) {
+      const sourceResolved =
+        fromSource && selectedTopology
+          ? resolveFace(sourceBody, selectedTopology)
+          : null;
+      const isThroughHole =
+        geometry?.featureType === 'through-hole' ||
+        (resizingCylinder &&
+          sourceResolved?.ok === true &&
+          sourceResolved.entry.geometry?.featureType === 'through-hole');
+      if (isThroughHole && geometry?.diameter !== undefined) {
         const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: textLabelSegments('Through hole'),
@@ -7602,7 +7617,8 @@ export function App() {
     currentFaceGeometryPreview,
     selectedTopology,
     representations,
-    offsettingFace
+    offsettingFace,
+    resizingCylinder
   ]);
 
   const {
@@ -22469,14 +22485,32 @@ export function App() {
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius'
       ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
       : null;
+  /**
+   * The Ø/R choice carried onto the wall an applied radius edit regenerated.
+   * That wall has a new topology id, so without this the reset below read it
+   * as a fresh pick and flipped Radius back to Diameter after every edit.
+   */
+  const carriedCylinderModeRef = useRef<{
+    key: string;
+    mode: DimensionMode;
+  } | null>(null);
   useEffect(() => {
-    setCylinderDimensionMode('diameter');
     cylinderRadiusPreview.clear();
+    const carried = carriedCylinderModeRef.current;
+    // Between the commit handing the body back and the wall being picked
+    // again there is no wall: keep the carried mode for it.
+    if (carried && cylinderSelectionKey === null) return;
+    carriedCylinderModeRef.current = null;
+    setCylinderDimensionMode(
+      carried?.key === cylinderSelectionKey ? carried.mode : 'diameter'
+    );
   }, [cylinderSelectionKey, cylinderRadiusPreview]);
 
-  function buildCylinderRadiusCommand(
-    radius: ParamValue
-  ): { command: AnyCommand; sourceFeatureId?: FeatureId } | null {
+  function buildCylinderRadiusCommand(radius: ParamValue): {
+    command: AnyCommand;
+    edit: CylinderRadiusEdit;
+    sourceFeatureId?: FeatureId;
+  } | null {
     const current = interactionRef.current;
     const base = managerRef.current?.document;
     if (
@@ -22504,6 +22538,7 @@ export function App() {
       const diameter: ParamValue =
         typeof radius === 'number' ? radius * 2 : `(${radius}) * 2`;
       return {
+        edit: 'through-hole',
         command: commandFactories.directEditBody({
           name: 'Resize Through Hole',
           targetBodyId: target.bodyId as BodyId,
@@ -22545,6 +22580,7 @@ export function App() {
             ? radius
             : `(${radius}) / ${scale}`;
       return {
+        edit: 'primitive-parameter',
         command: commandFactories.updateFeature(
           {
             featureId: primitive.featureId,
@@ -22562,6 +22598,7 @@ export function App() {
     }
 
     return {
+      edit: 'cylindrical-face',
       command: commandFactories.directEditBody({
         // The history row and the command card read the same name, so a
         // feature is called the same thing while it runs and afterwards.
@@ -22600,6 +22637,20 @@ export function App() {
     ) {
       return;
     }
+    // Back at the starting size the part is simply itself again. Asking the
+    // kernel to rebuild it there is refused ("must differ from its current
+    // diameter"), which flagged a drag that merely passed its start as
+    // Failed, turned the chip amber and left the refusal in the status line.
+    const edit = buildCylinderRadiusCommand(radius)?.edit;
+    if (
+      edit &&
+      isUnchangedCylinderRadius(radius, current.target.radius, edit)
+    ) {
+      cylinderRadiusPreview.clear();
+      setLastValidPreview(null);
+      recoverPreviewInteraction();
+      return;
+    }
     if (exactGeometry) {
       cylinderRadiusPreview.request(radius);
     } else {
@@ -22635,6 +22686,17 @@ export function App() {
     }
     const sourceRadius = current.target.radius;
     const plan = buildCylinderRadiusCommand(exact ?? radius);
+    // Entering the size it already has is no edit: close quietly, as a
+    // release at the starting size does, rather than show a refusal.
+    if (
+      exact === undefined &&
+      sourceRadius !== undefined &&
+      plan &&
+      isUnchangedCylinderRadius(radius, sourceRadius, plan.edit)
+    ) {
+      handleCylinderRadiusCancel();
+      return true;
+    }
     if (
       sourceRadius === undefined ||
       !isValidCylinderRadius(radius, sourceRadius) ||
@@ -22655,12 +22717,77 @@ export function App() {
       previewSelectionIsCurrent(candidate)
         ? candidate
         : null;
+    const target = current.target;
     void executeValidatedDirectEdit(
       reuse?.command ?? plan.command,
-      current.target.bodyId as BodyId,
+      target.bodyId as BodyId,
       `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
       radius,
-      undefined,
+      // The resized wall stays picked with its handle armed at the new size,
+      // as a moved face does: falling back to the whole body swapped the
+      // hole's card for the body's Move/Rotate card the moment it applied.
+      () => {
+        if (!target.axisStart || !target.axisEnd) return;
+        const vector = (value: readonly [number, number, number]) => ({
+          x: value[0],
+          y: value[1],
+          z: value[2]
+        });
+        const bodyId = target.bodyId as BodyId;
+        const faces =
+          managerRef.current?.document.derived.bodyRepresentations[bodyId]
+            ?.topology?.faces;
+        const wall = faces
+          ? findResizedCylinderFace(
+              faces,
+              vector(target.axisStart),
+              vector(target.axisEnd),
+              radius
+            )
+          : null;
+        const geometry = wall?.geometry;
+        if (!wall || !geometry?.axisStart || !geometry.axisEnd) return;
+        const radial = target.radialDirection ?? target.normal;
+        const delta = radius - sourceRadius;
+        const { reference: _staleReference, ...stableTarget } = target;
+        const triple = (value: {
+          x: number;
+          y: number;
+          z: number;
+        }): [number, number, number] => [value.x, value.y, value.z];
+        const nextTarget: FaceTarget = {
+          ...stableTarget,
+          topologyId: wall.topologyId,
+          hash: wall.hash,
+          ...(wall.reference ? { reference: wall.reference } : {}),
+          point: target.point.map(
+            (component, axis) => component + radial[axis]! * delta
+          ) as [number, number, number],
+          surfaceCenter: triple(geometry.center),
+          radius,
+          axisStart: triple(geometry.axisStart),
+          axisEnd: triple(geometry.axisEnd),
+          ...(geometry.axialLength !== undefined
+            ? { axialLength: geometry.axialLength }
+            : {}),
+          ...(geometry.diameter !== undefined
+            ? { diameter: geometry.diameter }
+            : {})
+        };
+        setSelectedTopology({
+          bodyId,
+          kind: 'face',
+          topologyId: wall.topologyId,
+          hash: wall.hash,
+          ...(wall.reference ? { reference: wall.reference } : {})
+        });
+        setSelectedBodyIds([bodyId]);
+        carriedCylinderModeRef.current = {
+          key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
+          mode: cylinderDimensionMode
+        };
+        dispatchInteraction({ type: 'select-face', target: nextTarget });
+      },
       plan.sourceFeatureId
         ? affectedFeatureTargets(
             managerRef.current!.document,

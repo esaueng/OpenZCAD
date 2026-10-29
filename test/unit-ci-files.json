@@ -60,6 +60,7 @@
     "test/e2ee-share-links.test.ts",
     "test/exact-kernel-adapter.test.ts",
     "test/fleet-checkout-fixtures.test.ts",
+    "test/flange-bolt-hole-resize.test.ts",
     "test/geometry.test.ts",
     "test/io-step.test.ts",
     "test/parameter-delete-references.test.ts",
