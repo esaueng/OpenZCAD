@@ -812,7 +812,6 @@ import type { PaletteCommand } from './components/CommandBar';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
-import type { BodyFeatureIds } from '@openzcad/document-core';
 import type {
   ResolveExtrudeOptions,
   ResolvedExtrude
@@ -1534,7 +1533,8 @@ import {
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
-  canReuseBlendPreview
+  canReuseBlendPreview,
+  newBlendValidationTarget
 } from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
 import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
@@ -23030,24 +23030,7 @@ export function App() {
             current.target.filletFeatureId
           );
         } else if (current.mode === 'edges') {
-          // Fillet and chamfer payloads both reserve their result ids up
-          // front; the structural read keeps this independent of which one.
-          const payload = command.payload as {
-            ids?: BodyFeatureIds;
-            name?: string;
-            edgeHashes?: readonly number[];
-          };
-          if (
-            payload.edgeHashes &&
-            payload.ids?.bodyId &&
-            payload.ids.featureId
-          ) {
-            target = {
-              featureId: payload.ids.featureId,
-              featureName: payload.name ?? command.label,
-              resultBodyId: payload.ids.bodyId
-            };
-          }
+          target = newBlendValidationTarget(command);
         }
         return {
           command,
@@ -23333,6 +23316,9 @@ export function App() {
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
     const facesBefore =
       representations[command.payload.targetBodyId]?.topology?.faces;
+    // Judged as the preview judges it: the kernel names a refusal after the
+    // new feature ("Fillet edges 4"), never the command's generic label.
+    const validationTarget = newBlendValidationTarget(command);
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
@@ -23347,7 +23333,7 @@ export function App() {
           };
         }
       },
-      undefined,
+      validationTarget ? [validationTarget] : undefined,
       reuse
         ? {
             baseProjectId: reuse.candidate.baseProjectId,

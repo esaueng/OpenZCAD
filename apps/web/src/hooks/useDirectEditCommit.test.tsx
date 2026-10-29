@@ -19,6 +19,7 @@ import {
   type BodyRepresentation,
   type ProjectDocument
 } from '@openzcad/shared';
+import { newBlendValidationTarget } from '../lib/interaction/blendPreview';
 import { LivePreview } from '../lib/livePreview';
 import { PreviewRebuilds, predictedPreviewMs } from '../lib/previewRebuilds';
 import { useDirectEditCommit } from './useDirectEditCommit';
@@ -308,6 +309,77 @@ describe('direct manipulation commit', () => {
           String(message).includes('Fillet could not be created')
         )
     ).toEqual([]);
+  });
+
+  it("reports the kernel's refusal of a new blend named after its feature, not its label", async () => {
+    const { cylinder, sourceBodyId } = filletedCylinder();
+    const manager = new CommandManager(cylinder);
+    const command = commandFactories.filletEdges({
+      name: 'Fillet edges 4',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [101],
+      size: 1
+    });
+    const target = newBlendValidationTarget(command)!;
+    const refusal =
+      'Fillet could not be created on 1 selected edge with radius 1. Try a smaller radius: radius 0.45 builds here.';
+    const onValidationFailed = vi.fn();
+    const { result } = renderHook(() =>
+      useDirectEditCommit({
+        manager: () => manager,
+        derive: async (
+          candidate: ProjectDocument
+        ): Promise<ProjectDocument['derived']> => ({
+          bodyRepresentations: {},
+          exportableBodyIds: [],
+          warnings: [`Feature "Fillet edges 4": ${refusal}`],
+          featureWarnings: [
+            {
+              featureId: target.featureId,
+              featureName: 'Fillet edges 4',
+              message: `Feature "Fillet edges 4": ${refusal}`,
+              kind: 'build-failed'
+            }
+          ],
+          updatedAt: candidate.derived.updatedAt
+        }),
+        commit: vi.fn(() => true),
+        onValidationStart: vi.fn(),
+        onValidationFailed,
+        onCommitted: vi.fn(),
+        onBusy: vi.fn(),
+        onStatus: vi.fn()
+      })
+    );
+
+    let applied = true;
+    await act(async () => {
+      applied = await result.current.run(
+        command,
+        target.resultBodyId,
+        'Filleted 1 edge at 1 mm.',
+        1,
+        undefined,
+        [target]
+      );
+    });
+
+    // The command's label is the generic "Fillet edges"; judged by that, the
+    // refusal went unmatched and the missing body read as the generic
+    // "Direct edit did not produce the selected body."
+    expect(command.label).toBe('Fillet edges');
+    expect(applied).toBe(false);
+    expect(manager.canUndo).toBe(false);
+    expect(onValidationFailed).toHaveBeenCalledWith(
+      {
+        message: refusal,
+        culprit: {
+          featureId: target.featureId,
+          featureName: 'Fillet edges 4'
+        }
+      },
+      1
+    );
   });
 
   it('ignores an unrelated suppressed feature with the same name as a validation target', async () => {

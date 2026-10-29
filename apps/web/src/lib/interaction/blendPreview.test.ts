@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toBodyId, toFeatureId, toUserId } from '@openzcad/shared';
-import { blendPreviewSelectionKey, canReuseBlendPreview } from './blendPreview';
+import { commandFactories } from '@openzcad/command-system';
+import {
+  blendPreviewSelectionKey,
+  canReuseBlendPreview,
+  newBlendValidationTarget
+} from './blendPreview';
 import type { InteractionState } from './machine';
 
 const document = createProjectDocument('Blend', toUserId('user_preview'));
@@ -114,5 +119,38 @@ describe('exact blend preview reuse', () => {
         2
       )
     ).toBe(false);
+  });
+});
+
+describe('new blend validation target', () => {
+  const edges = {
+    targetBodyId: toBodyId('body_1'),
+    edgeHashes: [1],
+    size: 1
+  };
+
+  it('names the new feature as the kernel does, not the command label', () => {
+    for (const command of [
+      commandFactories.filletEdges({ ...edges, name: 'Fillet edges 4' }),
+      commandFactories.chamferEdges({ ...edges, name: 'Chamfer edges 2' })
+    ]) {
+      expect(command.label).not.toBe(command.payload.name);
+      expect(newBlendValidationTarget(command)).toEqual({
+        featureId: command.payload.ids!.featureId,
+        featureName: command.payload.name,
+        resultBodyId: command.payload.ids!.bodyId
+      });
+    }
+  });
+
+  it('has no target for an edit that creates no blend feature', () => {
+    expect(
+      newBlendValidationTarget(
+        commandFactories.updateFeature(
+          { featureId: toFeatureId('fillet_1'), data: { radius: 2 } },
+          'Edit Fillet 1'
+        )
+      )
+    ).toBeNull();
   });
 });
