@@ -188,7 +188,7 @@
   margin: 0;
 }
 
-/* The column's foot: where the parts are kept, then Import. */
+/* The column's foot: where the parts are kept. */
 .start-column-foot {
   grid-area: account;
   display: grid;
@@ -196,33 +196,6 @@
   margin: 0 0 var(--island-gap) var(--island-gap);
   padding: 10px;
   border-top: var(--border-thin);
-}
-
-.start-column-foot-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.start-column-action {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 8px;
-  color: var(--color-text-muted);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
-}
-
-.start-column-action:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
 }
 
 /* What the one-line readout cannot hold (a run's failures, any news) hangs
@@ -277,6 +250,16 @@
   border-radius: var(--radius-lg);
 }
 
+/* The card's head: New part, with Import beside it as the other way to
+   start. */
+.start-launch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
 .start-launch-form h2 {
   display: inline-flex;
   align-items: center;
@@ -285,6 +268,28 @@
   color: var(--color-text);
   font-size: var(--fs-base);
   font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.start-launch-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 6px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.start-launch-import:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
 }
 
 .start-launch-form h2 svg {
@@ -336,7 +341,7 @@
     column-gap: 6px;
   }
 
-  .start-launch-form h2,
+  .start-launch-head,
   .start-field-name,
   .start-launch-form .start-launch-error {
     grid-column: 1 / -1;
@@ -668,7 +673,9 @@
 
 /* Title, filters, order, search and layout on one ruled line: the parts you
    own are the page, so the controls that narrow them stay beside their
-   heading rather than on a second row that pushes the grid down. */
+   heading rather than on a second row that pushes the grid down. In the
+   column layout the line stays put while the shelf scrolls under it, so a
+   card never passes beneath the Settings island floating on its end. */
 .start-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -678,6 +685,23 @@
   /* Room on the rule's end for the Settings island floating over it. */
   padding-right: calc(var(--corner-island-w) + var(--sp-3));
   border-bottom: var(--border-thin);
+}
+
+@media (min-width: 901px) {
+  /* The body's top inset moves into the line itself, so the band the line
+     paints runs to the top edge and nothing shows above it. Above the
+     cards' own layers (a dragged card is 5); under the selection bar. */
+  .start-body {
+    padding-top: 0;
+  }
+
+  .start-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    padding-top: var(--island-gap);
+    background: var(--color-bg);
+  }
 }
 
 /* Text tabs on the toolbar's rule rather than a row of pills: the underline
@@ -1836,15 +1860,19 @@
   }
 
   .start-launch-form {
-    /* The units track sizes to its longest option, so it never clips. */
-    grid-template-columns: auto minmax(0, 1fr) max-content auto;
+    /* The units track sizes to its longest option, so it never clips. The
+       head (New part, Import) takes its own row over the fields. */
+    grid-template-columns: minmax(0, 1fr) max-content auto;
     align-items: center;
     padding: 8px;
   }
 
+  .start-launch-head {
+    grid-column: 1 / -1;
+  }
+
   .start-launch-form h2 {
     margin: 0 4px 0 2px;
-    white-space: nowrap;
   }
 
   .start-field-label,
@@ -1902,14 +1930,6 @@
     min-height: auto;
     padding: 0 var(--sp-3) var(--sp-3);
     overflow: visible;
-  }
-}
-
-/* Too narrow for the heading beside the fields: it still names the card
-   (aria-labelledby reads hidden text), and Create project says the rest. */
-@media (max-width: 680px) {
-  .start-launch-form h2 {
-    display: none;
   }
 }
 
@@ -2379,23 +2399,13 @@
   }
 
   .start-column-foot {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
     margin: 0;
     padding: var(--sp-3) var(--sp-3) 0;
     border-top: 0;
   }
-
-  .start-column-action {
-    flex: none;
-  }
 }
 
 @media (max-width: 560px) {
-  .start-column-foot {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .start-toolbar-tools .start-search {
     flex: 1;
     width: auto;

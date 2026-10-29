@@ -703,6 +703,17 @@ describe('StartScreen library shell', () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
+  it('offers Import beside New part, not in the column foot', () => {
+    const { container } = renderStartScreen({ onImportProject: vi.fn() });
+
+    const importButton = screen.getByRole('button', {
+      name: 'Import project…'
+    });
+    expect(importButton.closest('.start-launch-head')).not.toBeNull();
+    const foot = container.querySelector('.start-column-foot');
+    expect(foot?.contains(importButton)).toBe(false);
+  });
+
   it('names each shelf with its count in the column', () => {
     renderStartScreen();
 

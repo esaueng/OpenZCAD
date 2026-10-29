@@ -2389,10 +2389,21 @@ export function StartScreen({
             }
           }}
         >
-          <h2 id="start-launch-title">
-            <Plus size={15} aria-hidden="true" />
-            New part
-          </h2>
+          {/* The two ways to start: a new part, or a backup brought in. */}
+          <div className="start-launch-head">
+            <h2 id="start-launch-title">
+              <Plus size={15} aria-hidden="true" />
+              New part
+            </h2>
+            {onImportProject && (
+              <ProjectImportButton
+                onImport={onImportProject}
+                disabled={busy}
+                className="start-launch-import"
+                title="Import an .openzcad project backup"
+              />
+            )}
+          </div>
           <label className="start-field start-field-name">
             <span className="start-field-label">Name</span>
             <input
@@ -3192,16 +3203,6 @@ export function StartScreen({
             )}
           </div>
         </aside>
-        {onImportProject && (
-          <div className="start-column-foot-actions">
-            <ProjectImportButton
-              onImport={onImportProject}
-              disabled={busy}
-              className="start-column-action start-import"
-              title="Import project…"
-            />
-          </div>
-        )}
       </section>
 
       {coverFolderId && folderById.get(coverFolderId) && (

@@ -79,3 +79,27 @@ describe('start screen tile actions', () => {
     expect(rule(block!, '.start-tile-action')).toMatch(/opacity:\s*1/);
   });
 });
+
+describe('start screen shelf line and Settings island', () => {
+  // 29 Oct 2026: the shelf scrolled with its line, so cards slid under the
+  // Settings island floating at the line's end.
+  const island = readFileSync(
+    join(resolve(__dirname, 'components'), 'corner-island.css'),
+    'utf8'
+  ).replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('pins the line in the column layout and keeps the island above it', () => {
+    const pinned = /\.start-toolbar\s*\{([^}]*position:\s*sticky[^}]*)\}/.exec(
+      css
+    );
+    expect(pinned).not.toBeNull();
+    const declarations = pinned![1]!;
+    expect(declarations).toMatch(/top:\s*0/);
+    expect(declarations).toMatch(/background:/);
+    const lineLayer = Number(/z-index:\s*(\d+)/.exec(declarations)![1]);
+    const islandLayer = Number(
+      /z-index:\s*(\d+)/.exec(rule(island, '.corner-island'))![1]
+    );
+    expect(islandLayer).toBeGreaterThan(lineLayer);
+  });
+});

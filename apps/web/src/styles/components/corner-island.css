@@ -8,7 +8,9 @@
   position: absolute;
   top: var(--corner-island-top);
   right: var(--island-gap);
-  z-index: 2;
+  /* Over the library's pinned shelf line (6) it floats on; under the
+     selection bar (20). */
+  z-index: 10;
   box-sizing: border-box;
   height: var(--topbar-island-h);
   display: flex;
