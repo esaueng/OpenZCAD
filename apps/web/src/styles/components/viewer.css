@@ -133,6 +133,36 @@
   position: static;
 }
 
+/* View mode's only section control: which cut is on, and the way off. */
+.view-mode-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.view-mode-section-off {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--color-surface-hover);
+  color: var(--color-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.view-mode-section-off:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 /* The inspector occupies the top-right corner without resizing the canvas.
    Move the cube with that dock so its faces remain visible and clickable. */
 .viewer-area.has-inspector .viewer-rail-stack {

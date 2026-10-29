@@ -51,7 +51,7 @@ import type {
   ViewRequestTarget,
   WheelDevice
 } from '@openzcad/viewport';
-import { ViewerToolbar } from './ViewerToolbar';
+import { SECTION_PLANE_LABELS, ViewerToolbar } from './ViewerToolbar';
 import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
   measurementAnnotationsOnScreen,
@@ -920,6 +920,27 @@ export function ViewerShell({
               }
               onDragEnd={() => orientationDragRef.current?.end()}
             />
+            {/* View has no instrument rail, yet command search can still
+                turn the cut on there. Without this the model stayed clipped
+                with nothing on screen saying so or turning it off. */}
+            {viewMode && settings.sectionView && (
+              <div
+                className="view-mode-section"
+                role="group"
+                aria-label="Section view"
+              >
+                <span className="view-mode-section-label">
+                  Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
+                </span>
+                <button
+                  type="button"
+                  className="view-mode-section-off"
+                  onClick={onToggleSection}
+                >
+                  Turn off
+                </button>
+              </div>
+            )}
           </div>
           {!viewMode && !dockLayout && viewerToolbar}
         </>
