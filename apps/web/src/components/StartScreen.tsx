@@ -1066,11 +1066,14 @@ export function StartScreen({
     selectionAnchor.current = null;
   }
 
+  /** Picked parts on screen, in the order shown (a folder's own order). */
   function selectedOnScreen(): ProjectSummary[] {
-    const ids = new Set(visibleProjectIds());
-    return shelfProjects.filter(
-      (project) => selected.has(project.projectId) && ids.has(project.projectId)
-    );
+    return visibleProjectIds().flatMap((projectId) => {
+      const project = selected.has(projectId)
+        ? shelfById.get(projectId)
+        : undefined;
+      return project ? [project] : [];
+    });
   }
 
   function moveSelectedToShelf(status: ProjectStatus) {

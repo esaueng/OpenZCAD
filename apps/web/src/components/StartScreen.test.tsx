@@ -1603,3 +1603,50 @@ describe('StartScreen sample reset and folders', () => {
     expect(stored.folders[0]!.coverProjectId).toBeUndefined();
   });
 });
+
+describe('StartScreen selection order', () => {
+  afterEach(() => localStorage.clear());
+
+  it('files picked parts in the order a folder shows them', () => {
+    const parts: ProjectSummary[] = ['November', 'Oscar'].map(
+      (name, index) => ({
+        projectId: toProjectId(`project_${name.toLowerCase()}`),
+        name: `${name} plate`,
+        revisionCount: 1,
+        updatedAt: '2026-10-01T12:00:00.000Z',
+        organization: { status: 'active', pinned: false, sortOrder: index }
+      })
+    );
+    // The folder's order is the reverse of the shelf's.
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'f1',
+            name: 'Plates',
+            projectIds: [parts[1]!.projectId, parts[0]!.projectId],
+            pinned: false,
+            createdAt: ''
+          }
+        ]
+      })
+    );
+    const onMoveManyToShelf = vi.fn();
+    renderStartScreen({ projects: parts, onMoveManyToShelf });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Plates, 2 parts' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select November plate' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Oscar plate' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(onMoveManyToShelf).toHaveBeenCalledWith(
+      [parts[1], parts[0]],
+      'archived'
+    );
+  });
+});
