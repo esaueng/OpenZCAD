@@ -793,48 +793,76 @@ it('reads encrypted metadata concurrently after the verified head without stagin
   ).toEqual({ sessions: [] });
 });
 
-it('discards a failed encrypted metadata batch and still exports the next project', async () => {
-  const broken = createProjectDocument('Unreadable metadata', session.userId);
-  const good = createProjectDocument('Complete metadata', session.userId);
-  rememberProjectFormats(
-    [broken, good].map((document) => ({
-      projectId: document.projectId,
-      storageFormat: 2
-    }))
-  );
-  vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
-  vi.spyOn(api, 'listProjects').mockResolvedValue({
-    projects: [broken, good].map((document) => ({
-      projectId: document.projectId,
-      name: document.name,
-      updatedAt: '2026-10-28T00:00:00.000Z',
-      revisionCount: 0
-    }))
-  });
-  vi.spyOn(api, 'loadProject').mockImplementation(async (id) =>
-    id === broken.projectId ? broken : good
-  );
-  vi.spyOn(api, 'listRevisions').mockResolvedValue({
-    revisions: [], maxRevisions: 50
-  });
-  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [] });
-  sidecarReads.measurements.mockImplementation(async (id) => {
-    if (id === broken.projectId) throw new Error('Measurements unavailable');
-    return { record: null };
-  });
-  const archive = await entries(await createDataExport(options(true)));
-  expect(
-    Object.keys(archive).some((path) => path.startsWith('projects/cloud/1/'))
-  ).toBe(false);
-  expect(archive['projects/cloud/2/project.openzcad']).toBeDefined();
-  expect(JSON.parse(strFromU8(archive['manifest.json']!))).toMatchObject({
-    cloudProjects: [{ projectId: good.projectId }],
-    skippedProjects: [{
-      projectId: broken.projectId,
-      reason: 'Measurements unavailable'
-    }]
-  });
-});
+it.each(['catalog', 'sidecar'] as const)(
+  'drains a failed encrypted metadata batch with a pending %s before exporting the next project',
+  async (held) => {
+    const broken = createProjectDocument('Unreadable metadata', session.userId);
+    const good = createProjectDocument('Complete metadata', session.userId);
+    rememberProjectFormats(
+      [broken, good].map((document) => ({
+        projectId: document.projectId,
+        storageFormat: 2
+      }))
+    );
+    vi.spyOn(api, 'exportAccountData').mockResolvedValue({ profile: session });
+    vi.spyOn(api, 'listProjects').mockResolvedValue({
+      projects: [broken, good].map((document) => ({
+        projectId: document.projectId,
+        name: document.name,
+        updatedAt: '2026-10-28T00:00:00.000Z',
+        revisionCount: 0
+      }))
+    });
+    const head = vi.spyOn(api, 'loadProject').mockImplementation(async (id) =>
+      id === broken.projectId ? broken : good
+    );
+    vi.spyOn(api, 'listRevisions').mockResolvedValue({
+      revisions: [], maxRevisions: 50
+    });
+    let release!: () => void;
+    let holding = false;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(api, 'listArtifacts').mockImplementation(async (id) => {
+      if (id === broken.projectId && held === 'catalog') {
+        holding = true;
+        await gate;
+      }
+      return { artifacts: [] };
+    });
+    sidecarReads.sessions.mockImplementation(async (id) => {
+      if (id === broken.projectId && held === 'sidecar') {
+        holding = true;
+        await gate;
+      }
+      return { sessions: [] };
+    });
+    sidecarReads.measurements.mockImplementation(async (id) => {
+      if (id === broken.projectId) throw new Error('Measurements unavailable');
+      return { record: null };
+    });
+    const pending = createDataExport(options(true));
+    await vi.waitFor(() => {
+      expect(holding).toBe(true);
+      expect(sidecarReads.measurements).toHaveBeenCalledWith(broken.projectId);
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const projectsBeforeDrain = head.mock.calls.length;
+    release();
+    const archive = await entries(await pending);
+    expect(projectsBeforeDrain).toBe(1);
+    expect(
+      Object.keys(archive).some((path) => path.startsWith('projects/cloud/1/'))
+    ).toBe(false);
+    expect(archive['projects/cloud/2/project.openzcad']).toBeDefined();
+    expect(JSON.parse(strFromU8(archive['manifest.json']!))).toMatchObject({
+      cloudProjects: [{ projectId: good.projectId }],
+      skippedProjects: [{
+        projectId: broken.projectId,
+        reason: 'Measurements unavailable'
+      }]
+    });
+  }
+);
 
 it('can skip the extra device snapshot without reading its stores, while keeping portable project backups', async () => {
   const document = createProjectDocument('Portable project', session.userId);

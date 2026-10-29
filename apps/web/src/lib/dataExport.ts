@@ -69,6 +69,11 @@ function failureReason(error: unknown): string {
   );
 }
 
+function readResult<T>(result: PromiseSettledResult<T>): T {
+  if (result.status === 'rejected') throw result.reason;
+  return result.value;
+}
+
 type PendingEntry = { path: string; data: Uint8Array | Blob };
 
 async function buildDataExport(options: DataExportOptions): Promise<{
@@ -298,33 +303,43 @@ async function buildDataExport(options: DataExportOptions): Promise<{
           // Independent catalogs and encrypted sidecars can share this wait.
           // Keep complete project staging sequential so its memory budget and
           // all-or-nothing ZIP commit retain the same bounds.
-          const [revisions, catalog, sidecars] = await Promise.all([
-            api.listRevisions(project.projectId),
-            api.listArtifacts(project.projectId),
-            isEncryptedProject(project.projectId)
-              ? import('./e2ee/encryptedProjects').then(async (encrypted) => {
-                  const [measurement, sessions] = await Promise.all([
-                    encrypted.encryptedMeasurements().then((client) =>
-                      client.loadProjectMeasurements(project.projectId)
-                    ),
-                    encrypted.encryptedViewStates().then((client) =>
-                      client.load(project.projectId)
-                    )
-                  ]);
-                  return { measurements: measurement.record, sessions };
-                })
-              : null
-          ]);
+          const encrypted = isEncryptedProject(project.projectId)
+            ? import('./e2ee/encryptedProjects')
+            : null;
+          // Drain every sibling before moving on, including when one read
+          // fails. Otherwise stalled reads could accumulate across projects.
+          const [revisionRead, catalogRead, measurementRead, sessionRead] =
+            await Promise.allSettled([
+              api.listRevisions(project.projectId),
+              api.listArtifacts(project.projectId),
+              encrypted
+                ? encrypted.then(async (module) => {
+                    const client = await module.encryptedMeasurements();
+                    return client.loadProjectMeasurements(project.projectId);
+                  })
+                : null,
+              encrypted
+                ? encrypted.then(async (module) => {
+                    const client = await module.encryptedViewStates();
+                    return client.load(project.projectId);
+                  })
+                : null
+            ]);
+          check();
+          const revisions = readResult(revisionRead);
+          const catalog = readResult(catalogRead);
+          const sidecarMeasurements = readResult(measurementRead);
+          const sessions = readResult(sessionRead);
           const retainedRevisionIds = new Set(
             revisions.revisions.map((revision) => revision.revisionId as string)
           );
           check();
           let measurements: StoredMeasurementRecord | null = null;
-          if (sidecars) {
-            measurements = sidecars.measurements;
+          if (sessions !== null) {
+            measurements = sidecarMeasurements?.record ?? null;
             pending.json(
               `${folder}/workspace-sessions.json`,
-              sidecars.sessions
+              sessions
             );
           } else {
             const records = account.records as
