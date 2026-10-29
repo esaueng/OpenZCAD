@@ -6,60 +6,12 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/** Anthropic's grammar omits these constraints; the CAD reply parser still enforces them. */
-export function anthropicReplySchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(anthropicReplySchema);
-  const schema = record(value);
-  if (!schema) return value;
-  const result: Record<string, unknown> = {};
-  const constraints: string[] = [];
-  for (const [key, child] of Object.entries(schema)) {
-    if (
-      [
-        'minimum',
-        'maximum',
-        'exclusiveMinimum',
-        'exclusiveMaximum',
-        'multipleOf',
-        'minLength',
-        'maxLength',
-        'minItems',
-        'maxItems',
-        'pattern'
-      ].includes(key)
-    ) {
-      constraints.push(`${key}: ${JSON.stringify(child)}`);
-    } else if (
-      key === 'properties' ||
-      key === '$defs' ||
-      key === 'definitions'
-    ) {
-      result[key] = Object.fromEntries(
-        Object.entries(record(child) ?? {}).map(([name, property]) => [
-          name,
-          anthropicReplySchema(property)
-        ])
-      );
-    } else {
-      result[key] = anthropicReplySchema(child);
-    }
-  }
-  if (constraints.length) {
-    result.description = [schema.description, ...constraints]
-      .filter(Boolean)
-      .join('; ');
-  }
-  return result;
-}
-
 export function anthropicOutputOptions(
-  schema: unknown,
   effort: AssistantReasoningEffort,
   model: string
 ) {
   return {
     output_config: {
-      format: { type: 'json_schema', schema: anthropicReplySchema(schema) },
       ...(effort === 'off'
         ? { effort: 'low' }
         : effort !== 'provider-default'
@@ -80,8 +32,16 @@ export function anthropicOutputOptions(
   };
 }
 
-/** Translate native Messages events to the existing, validated Responses stream. */
-export function translateAnthropicStream(response: Response): Response {
+/**
+ * Translate Messages events, checking the full CAD contract before forwarding.
+ * Anthropic's grammar compiler permits only 16 union parameters; the CAD schema
+ * exceeds that, so requests use prompted JSON with server-side enforcement.
+ * https://platform.claude.com/docs/en/build-with-claude/structured-outputs#schema-complexity-limits
+ */
+export function translateAnthropicStream(
+  response: Response,
+  validateText: (text: string) => boolean
+): Response {
   if (!response.ok || !response.body) return response;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -89,6 +49,8 @@ export function translateAnthropicStream(response: Response): Response {
   let stopReason: string | undefined;
   let responseId: string | undefined;
   let stopped = false;
+  let output = '';
+  let outputBytes = 0;
   const emit = (
     controller: TransformStreamDefaultController<Uint8Array>,
     event: unknown
@@ -113,26 +75,37 @@ export function translateAnthropicStream(response: Response): Response {
     } else if (event?.type === 'content_block_delta') {
       const delta = record(event.delta);
       if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-        emit(controller, {
-          type: 'response.output_text.delta',
-          delta: delta.text
-        });
+        outputBytes += encoder.encode(delta.text).byteLength;
+        if (outputBytes > 2 * 1024 * 1024)
+          throw new Error('AI output exceeds the 2 MB limit.');
+        output += delta.text;
       }
     } else if (event?.type === 'message_delta') {
       const reason = record(event.delta)?.stop_reason;
       if (typeof reason === 'string') stopReason = reason;
     } else if (event?.type === 'message_stop') {
       stopped = true;
+      const valid = stopReason === 'end_turn' && validateText(output);
+      // Validate the entire CAD reply before exposing any generated output.
+      // Small delta frames also stay within the existing SSE parser's bounds.
+      if (valid) {
+        for (let offset = 0; offset < output.length; offset += 4096) {
+          emit(controller, {
+            type: 'response.output_text.delta',
+            delta: output.slice(offset, offset + 4096)
+          });
+        }
+      }
+      output = '';
       emit(controller, {
         type: 'response.done',
         response: {
           id: responseId,
-          status:
-            stopReason === 'end_turn'
-              ? 'completed'
-              : stopReason === 'max_tokens'
-                ? 'incomplete'
-                : 'failed',
+          status: valid
+            ? 'completed'
+            : stopReason === 'max_tokens'
+              ? 'incomplete'
+              : 'failed',
           ...(stopReason === 'max_tokens'
             ? { incomplete_details: { reason: 'max_output_tokens' } }
             : {})

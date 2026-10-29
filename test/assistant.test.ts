@@ -2135,7 +2135,11 @@ describe('Anthropic Messages provider', () => {
     message: 'Connection ready.',
     readings: null
   });
-  function nativeStream(stopReason = 'end_turn', complete = true) {
+  function nativeStream(
+    stopReason = 'end_turn',
+    complete = true,
+    text = reply
+  ) {
     const events = [
       { type: 'message_start', message: { id: 'msg_test' } },
       {
@@ -2144,11 +2148,11 @@ describe('Anthropic Messages provider', () => {
       },
       {
         type: 'content_block_delta',
-        delta: { type: 'text_delta', text: reply.slice(0, 20) }
+        delta: { type: 'text_delta', text: text.slice(0, 20) }
       },
       {
         type: 'content_block_delta',
-        delta: { type: 'text_delta', text: reply.slice(20) }
+        delta: { type: 'text_delta', text: text.slice(20) }
       },
       { type: 'message_delta', delta: { stop_reason: stopReason } },
       ...(complete ? [{ type: 'message_stop' }] : [])
@@ -2216,7 +2220,7 @@ describe('Anthropic Messages provider', () => {
       max_tokens: 32_000,
       stream: true,
       thinking: { type: 'adaptive' },
-      output_config: { effort: 'high', format: { type: 'json_schema' } },
+      output_config: { effort: 'high' },
       messages: [
         { role: 'assistant', content: 'Which size?' },
         { role: 'user', content: '[answer to size] 20 mm' },
@@ -2240,6 +2244,8 @@ describe('Anthropic Messages provider', () => {
       ]
     });
     expect(body.system).toContain(runtime.customInstructions);
+    expect(body.system).toContain('# Required JSON reply');
+    expect(body.output_config).not.toHaveProperty('format');
     expect(body).not.toHaveProperty('reasoning');
     expect(body).not.toHaveProperty('max_output_tokens');
   });
@@ -2271,6 +2277,26 @@ describe('Anthropic Messages provider', () => {
       vi.fn(async () => nativeStream('end_turn', false))
     );
     await expect(testAssistantConnection(runtime, {})).rejects.toThrow();
+  });
+
+  it('rejects schema-invalid JSON without forwarding provider text', async () => {
+    const invalid = JSON.stringify({
+      ...(JSON.parse(reply) as Record<string, unknown>),
+      unexpected: 'invalid output marker'
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => nativeStream('end_turn', true, invalid))
+    );
+    const response = await streamAssistantProposal(
+      input,
+      {},
+      undefined,
+      runtime
+    );
+    const wire = await response.text();
+    expect(wire).toContain('failed');
+    expect(wire).not.toContain('invalid output marker');
   });
 
   it('uses the same official endpoint in encrypted-project consent routes', () => {

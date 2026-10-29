@@ -1127,7 +1127,8 @@ async function requestAnthropic(
   effort: AssistantReasoningEffort,
   maxTokens: number,
   signal: AbortSignal,
-  safetyIdentifier?: string
+  safetyIdentifier?: string,
+  digest?: CadDocumentDigest
 ): Promise<Response> {
   return translateAnthropicStream(
     await fetch(url, {
@@ -1141,16 +1142,17 @@ async function requestAnthropic(
       },
       body: JSON.stringify({
         model,
-        system,
+        system: system + jsonSchemaInstructions(env),
         messages,
         max_tokens: maxTokens,
         stream: true,
         ...(safetyIdentifier
           ? { metadata: { user_id: safetyIdentifier } }
           : {}),
-        ...anthropicOutputOptions(assistantReplySchemaFor(env), effort, model)
+        ...anthropicOutputOptions(effort, model)
       })
-    })
+    }),
+    jsonReplyValidator(env, digest)
   );
 }
 
@@ -1361,7 +1363,8 @@ export async function streamAssistantProposal(
               DEFAULT_AI_REASONING_EFFORT,
             runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
             AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
-            safetyIdentifier
+            safetyIdentifier,
+            input.digest
           )
         : promptedSchema
           ? await translateOpenRouterChatCompletion(
