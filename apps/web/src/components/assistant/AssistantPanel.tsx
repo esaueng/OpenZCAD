@@ -123,10 +123,11 @@ export interface AssistantActivity {
    */
   unavailable: boolean;
   /**
-   * The drawing tray holds all it can: the prompt line stops offering to
-   * pick another, which would only be turned away.
+   * A drawing picked now would be taken: a provider answers (its status has
+   * loaded), the stream is not hidden, and the tray has room. Otherwise the
+   * prompt line offers no pick, which would only be turned away.
    */
-  attachmentsFull: boolean;
+  canAttach: boolean;
 }
 
 interface AssistantPanelProps {
@@ -622,23 +623,18 @@ export function AssistantPanel({
     }
   }, []);
 
-  const attachmentsFull = pending.length >= MAX_ASSISTANT_ATTACHMENTS;
+  // The same conditions promptFilesRef takes a file on, plus room for it.
+  const canAttach =
+    configured && !hidden && pending.length < MAX_ASSISTANT_ATTACHMENTS;
   useEffect(() => {
     onActivity?.({
       thinking,
       unread,
       context: selectionSummary,
       unavailable,
-      attachmentsFull
+      canAttach
     });
-  }, [
-    onActivity,
-    thinking,
-    unread,
-    selectionSummary,
-    unavailable,
-    attachmentsFull
-  ]);
+  }, [onActivity, thinking, unread, selectionSummary, unavailable, canAttach]);
 
   useEffect(() => {
     if (collapsed) {

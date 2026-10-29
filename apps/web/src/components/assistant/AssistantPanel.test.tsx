@@ -323,6 +323,43 @@ describe('assistant model settings', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('offers the prompt line no drawing pick until its status has loaded', async () => {
+    let resolveStatus!: (response: Response) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveStatus = resolve;
+          })
+      )
+    );
+    const onActivity = vi.fn();
+    await renderPanel({ onActivity });
+    // Loading is not "unavailable", but a drawing picked now is refused.
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ unavailable: false, canAttach: false })
+    );
+    await act(async () => {
+      resolveStatus(
+        new Response(
+          JSON.stringify({
+            configured: true,
+            provider: 'test',
+            model: 'status-test',
+            reasoningEffort: 'high'
+          }),
+          { headers: { 'content-type': 'application/json' } }
+        )
+      );
+    });
+    await waitFor(() =>
+      expect(onActivity).toHaveBeenLastCalledWith(
+        expect.objectContaining({ canAttach: true })
+      )
+    );
+  });
+
   it('ignores a stale initial status request after account settings arrive', async () => {
     let resolveStatus!: (response: Response) => void;
     vi.stubGlobal(
@@ -479,7 +516,7 @@ describe('asking from the prompt line', () => {
       unread: 0,
       context: '2 selected edges',
       unavailable: false,
-      attachmentsFull: false
+      canAttach: false
     });
   });
 });

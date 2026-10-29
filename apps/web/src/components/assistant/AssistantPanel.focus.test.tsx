@@ -357,7 +357,7 @@ describe('a full drawing tray', () => {
     render(<AssistantPanel {...panelProps({ onActivity })} />);
     await act(async () => {});
     expect(onActivity).toHaveBeenLastCalledWith(
-      expect.objectContaining({ attachmentsFull: false })
+      expect.objectContaining({ canAttach: true })
     );
     await act(async () => {
       sendAssistantPromptFiles(
@@ -368,14 +368,14 @@ describe('a full drawing tray', () => {
     });
     await waitFor(() =>
       expect(onActivity).toHaveBeenLastCalledWith(
-        expect.objectContaining({ attachmentsFull: true })
+        expect.objectContaining({ canAttach: false })
       )
     );
     await userEvent
       .setup()
       .click(screen.getByRole('button', { name: 'Remove a.png' }));
     expect(onActivity).toHaveBeenLastCalledWith(
-      expect.objectContaining({ attachmentsFull: false })
+      expect.objectContaining({ canAttach: true })
     );
   });
 });

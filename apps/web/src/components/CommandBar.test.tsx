@@ -34,7 +34,7 @@ function Bar({
   draft = null,
   context = null,
   askUnavailable = false,
-  attachmentsFull = false,
+  attachUnavailable = false,
   pick = null
 }: {
   commands: PaletteCommand[];
@@ -44,7 +44,7 @@ function Bar({
   draft?: { id: number; text: string } | null;
   context?: string | null;
   askUnavailable?: boolean;
-  attachmentsFull?: boolean;
+  attachUnavailable?: boolean;
   pick?: string | null;
 }) {
   const [open, setOpen] = useState(initialOpen);
@@ -61,7 +61,7 @@ function Bar({
       draft={draft}
       context={context}
       askUnavailable={askUnavailable}
-      attachmentsFull={attachmentsFull}
+      attachUnavailable={attachUnavailable}
       pick={pick}
     />
   );
@@ -661,8 +661,11 @@ describe('CommandBar', () => {
       screen.getByRole('button', { name: 'Attach a drawing' })
     ).toBeDisabled();
     unmount();
-    // A full tray would turn the drawing away.
-    const full = render(<Bar commands={[]} onAsk={vi.fn()} attachmentsFull />);
+    // Nor while the conversation could not take it: status still loading,
+    // or the tray full.
+    const full = render(
+      <Bar commands={[]} onAsk={vi.fn()} attachUnavailable />
+    );
     expect(
       screen.getByRole('button', { name: 'Attach a drawing' })
     ).toBeDisabled();
