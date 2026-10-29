@@ -4212,6 +4212,22 @@ export function ModelViewer({
               .querySelector('.app-shell > .topbar')
               ?.getBoundingClientRect().bottom ?? null)
           : null;
+      // A chip first shown this frame is still hidden, and a hidden chip
+      // measures 0×0: placed and separated at that size, a hole's chips
+      // opened on top of each other and stayed there until the next frame
+      // the on-demand loop happened to draw. Reveal each with its text before
+      // measuring; nothing paints before the loop below places it or hides
+      // it again behind the camera.
+      for (const [valueId, entry] of rigs) {
+        if (!entry.chip.hidden) continue;
+        const view = commandHandlesRef.current.find(
+          (handle) => handle.valueId === valueId
+        );
+        if (!view) continue;
+        const text = view.format(entry.rig ? entry.rig.value() : view.value);
+        if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        entry.chip.hidden = false;
+      }
       const chipWidths = new Map(
         [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetWidth])
       );
