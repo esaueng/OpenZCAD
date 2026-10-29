@@ -36,13 +36,13 @@ describe('start screen sync failures', () => {
 
 describe('start screen tile actions', () => {
   it('shows the tile actions where there is no hover to reveal them', () => {
-    // On a phone the pin, reorder and ••• buttons stayed at opacity 0, and a
-    // tap on the tile opened the part instead, so Archive and Trash were
+    // On a phone the pin and ••• buttons stayed at opacity 0, and a tap on
+    // the tile opened the part instead, so Archive and Trash were
     // unreachable.
     const block = /@media\s*\(hover:\s*none\)\s*\{([\s\S]*?\})\s*\}/.exec(
       css
     )?.[1];
     expect(block).toBeDefined();
-    expect(rule(block!, '.start-tile-actions')).toMatch(/opacity:\s*1/);
+    expect(rule(block!, '.start-tile-action')).toMatch(/opacity:\s*1/);
   });
 });

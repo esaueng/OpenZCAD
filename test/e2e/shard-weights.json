@@ -143,6 +143,7 @@
   "start-screen-refresh.spec.ts": 2,
   "start-screen-sync-failures.spec.ts": 3,
   "start-screen-update-notice.spec.ts": 1,
+  "start-tile-reorder.spec.ts": 3,
   "status-lifetime.spec.ts": 22,
   "step-bodies.spec.ts": 7,
   "stl-import-lifecycle.spec.ts": 29,
