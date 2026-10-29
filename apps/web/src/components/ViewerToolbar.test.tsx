@@ -320,9 +320,10 @@ describe('the section button and its panel', () => {
       />
     );
     return {
-      rerender(next: ViewerSettings['sectionView']) {
+      rerender(next: ViewerSettings['sectionView'], key?: string) {
         view.rerender(
           <ViewerToolbar
+            {...(key ? { key } : {})}
             settings={{
               ...settings,
               ...(next ? { sectionView: next } : { sectionView: undefined })
@@ -453,6 +454,17 @@ describe('the section button and its panel', () => {
     fireEvent.click(sectionButton());
     expect(panel()).toBeNull();
     expect(onToggleSection).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not carry a held-off panel into another project', () => {
+    // ViewerShell keys the bar by project: the last cut belongs to the
+    // project it was made in.
+    const view = renderSection({ plane: 'XZ', offset: 3 });
+    fireEvent.click(screen.getByRole('switch', { name: 'Section cut' }));
+    view.rerender(undefined);
+    expect(panel()).not.toBeNull();
+    view.rerender(undefined, 'another-project');
+    expect(panel()).toBeNull();
   });
 
   it('takes the panel down when the cut is switched off elsewhere', () => {

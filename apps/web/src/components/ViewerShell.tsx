@@ -646,6 +646,9 @@ export function ViewerShell({
 
   const viewerToolbar = (
     <ViewerToolbar
+      // Its panel can stay up on the last cut after the cut is switched off;
+      // that cut belongs to this project, so another project starts clean.
+      key={projectId ?? ''}
       settings={settings}
       projection={projection}
       canUndo={canUndo}
