@@ -64,6 +64,7 @@ import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
+import { PageTopBar } from './PageTopBar';
 import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
@@ -1395,35 +1396,181 @@ export function StartScreen({
       ref={screenRef}
       className={fresh ? 'start-screen is-fresh' : 'start-screen'}
     >
-      <header className="start-header">
-        <div className="start-brand">
-          <BrandMark />
-          <h1 className="start-header-name">OpenZCAD</h1>
-          <span className="start-beta">beta</span>
-        </div>
-        {/* Import sits with Settings as a header action: beside the launch
-            card it competed with Create project and pushed the shelf down. */}
-        <div className="start-header-actions">
-          {onImportProject && (
-            <ProjectImportButton
-              onImport={onImportProject}
-              disabled={busy}
-              className="icon-button start-import"
-              title="Import project…"
-            />
-          )}
-          <button
-            className="start-settings-button icon-button"
-            type="button"
-            aria-label="Open settings"
-            title={labelWithKey('Settings', settingsKey)}
-            onClick={onOpenSettings}
-          >
-            <Settings size={16} aria-hidden="true" />
-          </button>
-        </div>
-        <span className="start-tagline">Parametric CAD in the browser</span>
-      </header>
+      <PageTopBar
+        className="start-header"
+        title="Parts"
+        center={
+          (loading || userProjects.length > 0) && (
+            <div className="start-search">
+              <Search size={13} aria-hidden="true" />
+              <input
+                value={query}
+                type="text"
+                aria-label="Search parts"
+                placeholder="Search parts…"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && query) {
+                    // Escape belongs to the field while it has a query;
+                    // swallowing it stops the app's Escape ladder from also
+                    // reacting to a keystroke the user aimed here.
+                    event.stopPropagation();
+                    setQuery('');
+                  }
+                }}
+              />
+              {query && (
+                <button
+                  type="button"
+                  className="start-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => setQuery('')}
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )
+        }
+        actionsLabel="Library actions"
+        actions={
+          <>
+            {/* Where the parts are kept, said once: one sentence, its one action,
+                and a hairline of progress. A save-all run takes the sentence over
+                while it is on screen, and the status line speaks only with news
+                the sentence does not already carry. */}
+            <aside className="start-cloud" aria-label="Cloud sync">
+              {onReloadForUpdate || onReloadForLoadFailure ? (
+                // Module failures can stay cached until navigation. This action
+                // outlives the toast, whether or not an update was confirmed.
+                <span
+                  className={`start-update ${onReloadForUpdate ? 'is-update' : 'is-failure'}`}
+                  role="alert"
+                >
+                  <span className="start-update-dot" aria-hidden="true" />
+                  <span
+                    className="start-update-text"
+                    // The bar clips a long sentence; the tooltip keeps it whole.
+                    title={onReloadForUpdate ? undefined : STALE_CHUNK_MESSAGE}
+                  >
+                    {onReloadForUpdate
+                      ? 'New version ready'
+                      : STALE_CHUNK_MESSAGE}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onReloadForUpdate ?? onReloadForLoadFailure}
+                  >
+                    Reload
+                    <RotateCw size={13} aria-hidden="true" />
+                  </button>
+                </span>
+              ) : null}
+              <div
+                className={`start-account is-${cloud.tone}`}
+                role="status"
+                aria-live="polite"
+              >
+                <div className="start-account-row">
+                  <cloud.Icon
+                    size={14}
+                    aria-hidden="true"
+                    className={cloud.spin ? 'spin' : undefined}
+                  />
+                  <span className="start-account-text" title={cloud.title}>
+                    {cloud.text}
+                  </span>
+                  {cloud.action && (
+                    <button
+                      type="button"
+                      className="start-account-action"
+                      aria-label={cloud.action.label}
+                      title={cloud.action.label}
+                      disabled={cloud.action.needsIdle && busy}
+                      onClick={cloud.action.run}
+                    >
+                      {cloud.action.text}
+                    </button>
+                  )}
+                  {syncTotals && !syncTotals.active && (
+                    <button
+                      type="button"
+                      className="start-account-dismiss"
+                      aria-label="Dismiss sync results"
+                      onClick={onDismissSyncRun}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+                {cloud.progress && (
+                  <div className="start-account-track" aria-hidden="true">
+                    <span
+                      className="start-account-fill"
+                      style={{ width: `${cloud.progress.saved * 100}%` }}
+                    />
+                    <span
+                      className="start-account-fill is-failed"
+                      style={{ width: `${cloud.progress.failed * 100}%` }}
+                    />
+                  </div>
+                )}
+                {/* What the one-line readout cannot hold hangs below it. */}
+                {(syncFailures.length > 0 || statusLine) && (
+                  <div className="start-account-details">
+                    {syncFailures.length > 0 && (
+                      <ul className="start-sync-failures">
+                        {syncFailures.map((entry) => (
+                          <li
+                            key={entry.projectId}
+                            className="start-sync-failure"
+                          >
+                            <span
+                              className="start-sync-failure-name"
+                              title={entry.detail ?? 'Could not be saved.'}
+                            >
+                              {entry.name}
+                            </span>
+                            <button
+                              type="button"
+                              className="start-account-action"
+                              aria-label={`Retry ${entry.name}`}
+                              title={entry.detail ?? 'Could not be saved.'}
+                              disabled={busy}
+                              onClick={() => onRetrySync(entry.projectId)}
+                            >
+                              Retry
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {statusLine && <p className="start-status">{statusLine}</p>}
+                  </div>
+                )}
+              </div>
+            </aside>
+            {onImportProject && (
+              <ProjectImportButton
+                onImport={onImportProject}
+                disabled={busy}
+                className="secondary topbar-action start-import"
+                title="Import project…"
+              />
+            )}
+            <button
+              className="secondary topbar-action settings-action start-settings-button"
+              type="button"
+              aria-label="Open settings"
+              title={labelWithKey('Settings', settingsKey)}
+              onClick={onOpenSettings}
+            >
+              <Settings size={14} aria-hidden="true" />
+              Settings
+            </button>
+          </>
+        }
+      />
 
       <section className="start-launch" aria-labelledby="start-launch-title">
         <form
@@ -1641,35 +1788,6 @@ export function StartScreen({
                     </select>
                   </label>
                 )}
-                <div className="start-search">
-                  <Search size={13} aria-hidden="true" />
-                  <input
-                    value={query}
-                    type="text"
-                    aria-label="Search parts"
-                    placeholder="Search parts…"
-                    onChange={(event) => setQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape' && query) {
-                        // Escape belongs to the field while it has a query;
-                        // swallowing it stops the app's Escape ladder from also
-                        // reacting to a keystroke the user aimed here.
-                        event.stopPropagation();
-                        setQuery('');
-                      }
-                    }}
-                  />
-                  {query && (
-                    <button
-                      type="button"
-                      className="start-search-clear"
-                      aria-label="Clear search"
-                      onClick={() => setQuery('')}
-                    >
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  )}
-                </div>
                 <div className="start-layout" role="group" aria-label="Layout">
                   <button
                     type="button"
@@ -1932,107 +2050,6 @@ export function StartScreen({
         </div>
       </section>
 
-      {/* Where the parts are kept, said once: one sentence, its one action,
-          and a hairline of progress. A save-all run takes the sentence over
-          while it is on screen, and the status line speaks only with news
-          the sentence does not already carry. */}
-      <aside className="start-cloud" aria-label="Cloud sync">
-        {onReloadForUpdate || onReloadForLoadFailure ? (
-          // Module failures can stay cached until navigation. This action
-          // outlives the toast, whether or not an update was confirmed.
-          <span
-            className={`start-update ${onReloadForUpdate ? 'is-update' : 'is-failure'}`}
-            role="alert"
-          >
-            <span className="start-update-dot" aria-hidden="true" />
-            <span className="start-update-text">
-              {onReloadForUpdate ? 'New version ready' : STALE_CHUNK_MESSAGE}
-            </span>
-            <button
-              type="button"
-              onClick={onReloadForUpdate ?? onReloadForLoadFailure}
-            >
-              Reload
-              <RotateCw size={13} aria-hidden="true" />
-            </button>
-          </span>
-        ) : null}
-        <div
-          className={`start-account is-${cloud.tone}`}
-          role="status"
-          aria-live="polite"
-        >
-          <div className="start-account-row">
-            <cloud.Icon
-              size={14}
-              aria-hidden="true"
-              className={cloud.spin ? 'spin' : undefined}
-            />
-            <span className="start-account-text" title={cloud.title}>
-              {cloud.text}
-            </span>
-            {cloud.action && (
-              <button
-                type="button"
-                className="start-account-action"
-                aria-label={cloud.action.label}
-                title={cloud.action.label}
-                disabled={cloud.action.needsIdle && busy}
-                onClick={cloud.action.run}
-              >
-                {cloud.action.text}
-              </button>
-            )}
-            {syncTotals && !syncTotals.active && (
-              <button
-                type="button"
-                className="start-account-dismiss"
-                aria-label="Dismiss sync results"
-                onClick={onDismissSyncRun}
-              >
-                <X size={12} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-          {cloud.progress && (
-            <div className="start-account-track" aria-hidden="true">
-              <span
-                className="start-account-fill"
-                style={{ width: `${cloud.progress.saved * 100}%` }}
-              />
-              <span
-                className="start-account-fill is-failed"
-                style={{ width: `${cloud.progress.failed * 100}%` }}
-              />
-            </div>
-          )}
-          {syncFailures.length > 0 && (
-            <ul className="start-sync-failures">
-              {syncFailures.map((entry) => (
-                <li key={entry.projectId} className="start-sync-failure">
-                  <span
-                    className="start-sync-failure-name"
-                    title={entry.detail ?? 'Could not be saved.'}
-                  >
-                    {entry.name}
-                  </span>
-                  <button
-                    type="button"
-                    className="start-account-action"
-                    aria-label={`Retry ${entry.name}`}
-                    title={entry.detail ?? 'Could not be saved.'}
-                    disabled={busy}
-                    onClick={() => onRetrySync(entry.projectId)}
-                  >
-                    Retry
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {statusLine && <p className="start-status">{statusLine}</p>}
-        </div>
-      </aside>
       {propertiesProject && (
         <Suspense fallback={null}>
           <ProjectPropertiesDialog

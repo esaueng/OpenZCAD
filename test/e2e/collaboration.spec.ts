@@ -57,8 +57,10 @@ async function hasCachedProjectThumbnail(page: Page): Promise<boolean> {
 test('loads the OpenZCAD shell', { tag: '@ci-smoke' }, async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
-  await expect(page.getByText('OpenZCAD')).toBeVisible();
-  await expect(page.getByText('parametric cad in the browser')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /OpenZCAD/ })
+  ).toBeVisible();
+  await expect(page.getByLabel('Project name')).toBeVisible();
 });
 
 for (const fromPublicShare of [false, true]) {
@@ -2043,8 +2045,8 @@ test('signs in with an email code only when cloud profile access is requested', 
     page.getByRole('button', { name: 'Save to account' })
   ).toHaveCount(0);
   await expect(
-    page.locator('.settings-topbar > :last-child')
-  ).toHaveAccessibleName('Back to projects');
+    page.locator('.settings-close')
+  ).toHaveAccessibleName('Close settings and go back to projects');
   await page.getByRole('button', { name: 'General', exact: true }).click();
   await page
     .getByRole('checkbox', { name: 'Reopen the last project' })
