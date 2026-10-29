@@ -1,4 +1,5 @@
-import type { ProjectDocument } from '@openzcad/shared';
+import type { BodyId, FeatureId, ProjectDocument } from '@openzcad/shared';
+import type { AffectedFeatureTarget } from '../affectedFeatureTargets';
 import type { InteractionState } from './machine';
 
 export function blendPreviewSelectionKey(
@@ -33,4 +34,32 @@ export function canReuseBlendPreview(
     candidate.selectionKey === blendPreviewSelectionKey(selection) &&
     candidate.size === size
   );
+}
+
+/**
+ * The feature a new fillet or chamfer creates, as the kernel names it. The
+ * command's label is the generic "Fillet edges"; the kernel attributes a
+ * refusal to the new feature's own name ("Fillet edges 4"), so the preview
+ * and the commit both judge against that. Null for a command that reserves
+ * no new blend feature.
+ */
+export function newBlendValidationTarget(command: {
+  label: string;
+  payload: unknown;
+}): AffectedFeatureTarget | null {
+  // Fillet and chamfer payloads both reserve their result ids up front; the
+  // structural read keeps this independent of which one.
+  const payload = command.payload as {
+    ids?: { bodyId?: BodyId; featureId?: FeatureId };
+    name?: string;
+    edgeHashes?: readonly number[];
+  };
+  if (!payload.edgeHashes || !payload.ids?.bodyId || !payload.ids.featureId) {
+    return null;
+  }
+  return {
+    featureId: payload.ids.featureId,
+    featureName: payload.name ?? command.label,
+    resultBodyId: payload.ids.bodyId
+  };
 }
