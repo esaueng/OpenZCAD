@@ -320,7 +320,13 @@ describe('the section button and its panel', () => {
       />
     );
     return {
-      rerender(next: ViewerSettings['sectionView'], key?: string) {
+      rerender(
+        next: ViewerSettings['sectionView'],
+        key?: string,
+        range: { min: number; max: number } | null = next
+          ? { min: 0, max: 6 }
+          : null
+      ) {
         view.rerender(
           <ViewerToolbar
             {...(key ? { key } : {})}
@@ -329,7 +335,7 @@ describe('the section button and its panel', () => {
               ...(next ? { sectionView: next } : { sectionView: undefined })
             }}
             {...props}
-            sectionRange={next ? { min: 0, max: 6 } : null}
+            sectionRange={range}
           />
         );
       }
@@ -465,6 +471,15 @@ describe('the section button and its panel', () => {
     expect(panel()).not.toBeNull();
     view.rerender(undefined, 'another-project');
     expect(panel()).toBeNull();
+  });
+
+  it('puts no stale controls up while the model has no bounds', () => {
+    // The last body hidden or deleted with the cut on: no range to cut in.
+    const view = renderSection({ plane: 'XY', offset: 3 });
+    expect(panel()).not.toBeNull();
+    view.rerender({ plane: 'XY', offset: 3 }, undefined, null);
+    expect(panel()).toBeNull();
+    expect(sectionButton()).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('takes the panel down when the cut is switched off elsewhere', () => {

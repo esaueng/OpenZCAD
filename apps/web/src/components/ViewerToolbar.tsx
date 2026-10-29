@@ -205,6 +205,14 @@ export function ViewerToolbar({
   }
   const sectionPanelShown =
     !sectionCovered && (sectionOn ? sectionPanelOpen : heldOff);
+  // On, the panel drives the live cut and needs the model's current bounds:
+  // with no bodies on screen there is nothing to place it against. Only the
+  // held-off panel falls back to the last cut, which it shows dimmed.
+  const shownCut = sectionOn
+    ? settings.sectionView && sectionRange
+      ? { section: settings.sectionView, range: sectionRange }
+      : null
+    : lastCut;
   const panelId = useId();
   // X-ray rides over the display mode, so the mode button says when it is
   // on. It has no rail button of its own: the rail is sized to centre on the
@@ -445,11 +453,11 @@ export function ViewerToolbar({
             <Slice size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        {sectionPanelShown && lastCut && (
+        {sectionPanelShown && shownCut && (
           <SectionToolbox
-            key={lastCut.section.plane}
-            section={lastCut.section}
-            range={lastCut.range}
+            key={shownCut.section.plane}
+            section={shownCut.section}
+            range={shownCut.range}
             active={sectionOn}
             outline={sectionOutline}
             units={units}
