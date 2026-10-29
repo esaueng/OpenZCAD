@@ -11,6 +11,7 @@ import {
   parseLibraryFolders,
   readLibraryFolders,
   renameFolder,
+  reorderFolderMembers,
   reorderFolders,
   setFolderCover,
   setFolderPinned,
@@ -217,5 +218,17 @@ describe('library folders', () => {
     expect(
       moveProjectsToFolder(state, ['p2'], 'b').folders[0]!.coverProjectId
     ).toBeUndefined();
+  });
+
+  it('reorders the shown parts of a folder around the hidden ones', () => {
+    const state = createFolder(empty, {
+      id: 'a',
+      projectIds: ['p1', 'archived', 'p2', 'p3'],
+      now: NOW
+    });
+    const next = reorderFolderMembers(state, 'a', ['p3', 'p1', 'p2']);
+    expect(next.folders[0]!.projectIds).toEqual(['p3', 'archived', 'p1', 'p2']);
+    // An id outside the folder is refused rather than half-applied.
+    expect(reorderFolderMembers(state, 'a', ['p1', 'zz'])).toEqual(state);
   });
 });

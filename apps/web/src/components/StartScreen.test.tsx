@@ -1650,3 +1650,17 @@ describe('StartScreen selection order', () => {
     );
   });
 });
+
+describe('StartScreen move menu from a card', () => {
+  it('puts focus in the Move menu opened from a card menu', () => {
+    renderStartScreen();
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
+    const menu = screen.getByRole('menu', { name: 'Move to folder' });
+    expect(
+      within(menu).getByRole('menuitem', { name: 'New folder' })
+    ).toHaveFocus();
+  });
+});

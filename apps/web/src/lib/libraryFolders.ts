@@ -192,6 +192,27 @@ export function moveProjectsToFolder(
   };
 }
 
+/**
+ * A new order for the folder's parts that are on screen. Members the shelf
+ * is not showing (archived, trashed, not yet listed) keep their slots; the
+ * shown ones fill the remaining slots in the order given.
+ */
+export function reorderFolderMembers(
+  state: LibraryFolders,
+  folderId: string,
+  shownIds: readonly string[]
+): LibraryFolders {
+  return updateFolder(state, folderId, (folder) => {
+    const shown = new Set(shownIds);
+    const queue = shownIds.filter((id) => folder.projectIds.includes(id));
+    if (queue.length !== shown.size) return folder;
+    const projectIds = folder.projectIds.map((id) =>
+      shown.has(id) ? queue.shift()! : id
+    );
+    return { ...folder, projectIds };
+  });
+}
+
 /** Forgets parts that no longer exist anywhere (deleted forever). */
 export function forgetProjects(
   state: LibraryFolders,

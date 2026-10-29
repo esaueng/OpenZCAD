@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   Archive,
   ArchiveRestore,
@@ -61,14 +61,17 @@ export function LibrarySelectionBar({
   onDeleteForever(): void;
 }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const [focusFirst, setFocusFirst] = useState(false);
+
+  // The menu takes focus as it opens, however it was opened (its own button,
+  // or a card's "Move to folder…"): its items are not tab stops.
+  useEffect(() => {
+    if (moveMenuOpen) {
+      menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    }
+  }, [moveMenuOpen]);
 
   useEffect(() => {
     if (!moveMenuOpen) return;
-    if (focusFirst) {
-      menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-      setFocusFirst(false);
-    }
     const dismiss = (event: Event) => {
       if (
         event.target instanceof Element &&
@@ -81,7 +84,7 @@ export function LibrarySelectionBar({
     globalThis.document.addEventListener('pointerdown', dismiss, true);
     return () =>
       globalThis.document.removeEventListener('pointerdown', dismiss, true);
-  }, [moveMenuOpen, focusFirst, onMoveMenuOpenChange]);
+  }, [moveMenuOpen, onMoveMenuOpenChange]);
 
   const plural = count === 1 ? 'part' : 'parts';
   const targets = folders.filter((folder) => folder.id !== inFolderId);
@@ -113,10 +116,7 @@ export function LibrarySelectionBar({
               aria-haspopup="menu"
               aria-expanded={moveMenuOpen}
               disabled={busy}
-              onClick={() => {
-                setFocusFirst(true);
-                onMoveMenuOpenChange(!moveMenuOpen);
-              }}
+              onClick={() => onMoveMenuOpenChange(!moveMenuOpen)}
             >
               <Folder size={13} aria-hidden="true" />
               Move to

@@ -71,6 +71,7 @@ import {
   moveProjectsToFolder,
   newFolderId,
   renameFolder,
+  reorderFolderMembers,
   reorderFolders,
   setFolderCover,
   setFolderPinned,
@@ -801,7 +802,7 @@ export function StartScreen({
    */
   function commitOrder(ids: string[], moved?: { id: string; group: string }) {
     if (openFolder) {
-      updateFolders((state) => moveProjectsToFolder(state, ids, openFolder.id));
+      updateFolders((state) => reorderFolderMembers(state, openFolder.id, ids));
       return;
     }
     const folderIds = ids.flatMap((id) => {
