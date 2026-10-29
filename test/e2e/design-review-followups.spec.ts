@@ -221,12 +221,12 @@ for (const colorScheme of ['light', 'dark'] as const) {
             })
           )
           .toBe(true);
-        await reachable(
-          section.getByRole('button', { name: 'Close section controls' })
-        );
+        await reachable(section.getByRole('switch', { name: 'Section cut' }));
         await capture(page, testInfo, `section-${size.width}x${size.height}`);
+        // The switch ends the cut and keeps the panel; the button puts it away.
+        await section.getByRole('switch', { name: 'Section cut' }).click();
         await page
-          .getByRole('button', { name: /^Section view — now: XY plane$/ })
+          .getByRole('button', { name: /^Section view — now: Off$/ })
           .press('Enter');
         await expect(section).toHaveCount(0);
       }
