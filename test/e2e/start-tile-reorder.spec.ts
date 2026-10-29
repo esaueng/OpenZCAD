@@ -85,3 +85,192 @@ test('Escape puts a dragged card back', async ({ page }) => {
   await expect.poll(() => cardOrder(page)).toEqual(names);
   await expect(page.locator('.start-tile-project')).toHaveCount(3);
 });
+
+test.describe('with a pinned part', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await stubApi(page);
+    const pinned = projects.map((project, index) =>
+      index === 0
+        ? {
+            ...project,
+            organization: { ...project.organization, pinned: true }
+          }
+        : project
+    );
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({ json: { projects: pinned } })
+    );
+    await page.reload();
+    await expect(page.getByRole('heading', { name: /^Pinned/ })).toBeVisible();
+  });
+
+  test('pins a part dropped onto a pinned one', async ({ page }) => {
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Unpin ${names[2]}`, exact: true })
+    ).toBeAttached();
+    await expect(
+      page.getByText(`Pinned ${names[2]}.`, { exact: true })
+    ).toBeVisible();
+    const pinnedGrid = page.locator('[data-tile-group="pinned"]');
+    await expect(pinnedGrid.locator('.start-tile-name')).toHaveText([
+      names[2]!,
+      names[0]!
+    ]);
+  });
+
+  test('keeps both pins when two parts are dropped in quick succession', async ({
+    page
+  }) => {
+    await dragCard(page, names[1]!, names[0]!);
+    await page.mouse.up();
+    // Only long enough for the cards to finish easing into place (a drop
+    // onto a card mid-animation is ignored), not for the save to land.
+    await page.waitForTimeout(250);
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    // Every part is pinned now, so the shelf shows one ungrouped grid.
+    const unpin = (name: string) =>
+      page.getByRole('button', { name: `Unpin ${name}`, exact: true });
+    for (const name of names) {
+      await expect(unpin(name)).toBeAttached();
+    }
+  });
+
+  test('ends unpinned when a part is dragged into Pinned and straight back', async ({
+    page
+  }) => {
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+    await dragCard(page, names[2]!, names[1]!);
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Pin ${names[2]}`, exact: true })
+    ).toBeAttached();
+    await expect(
+      page.locator('[data-tile-group="pinned"] .start-tile-name')
+    ).toHaveText([names[0]!]);
+  });
+
+  test('the pin button follows a drop even while the account is slow', async ({
+    page
+  }) => {
+    // The account never answers the reorder: only the device save counts.
+    await page.route('**/api/projects/reorder', () => undefined);
+    await dragCard(page, names[2]!, names[0]!);
+    await page.mouse.up();
+    const unpin = page.getByRole('button', {
+      name: `Unpin ${names[2]}`,
+      exact: true
+    });
+    await expect(unpin).toBeAttached();
+    await card(page, names[2]!).hover();
+    await unpin.click();
+    await expect(
+      page.getByRole('button', { name: `Pin ${names[2]}`, exact: true })
+    ).toBeAttached();
+  });
+
+  test('unpins a part dragged out of a fully pinned shelf', async ({
+    page
+  }) => {
+    // The account stub never takes writes, so a fully pinned shelf is
+    // seeded rather than built by drops and a reload.
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await stubApi(page);
+    const allPinned = projects.map((project) => ({
+      ...project,
+      organization: { ...project.organization, pinned: true }
+    }));
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({ json: { projects: allPinned } })
+    );
+    await page.reload();
+    for (const name of names) {
+      await expect(
+        page.getByRole('button', { name: `Unpin ${name}`, exact: true })
+      ).toBeAttached();
+    }
+    // With every part pinned, Parts is still there to drag one back into.
+    // (Its heading and drop target appear only mid-drag.)
+    await expect(
+      page.locator('.start-shelf-group', { hasText: /^Parts/ })
+    ).toHaveCount(0);
+    await dragCard(page, names[0]!, names[2]!);
+    const partsZone = page.locator('[data-tile-group="parts"]');
+    await expect(partsZone).toContainText('Drop here to unpin');
+    const zone = await partsZone.boundingBox();
+    if (!zone) {
+      throw new Error('Parts drop zone has no layout box');
+    }
+    await page.mouse.move(zone.x + zone.width / 2, zone.y + zone.height / 2, {
+      steps: 10
+    });
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Pin ${names[0]}`, exact: true })
+    ).toBeAttached();
+  });
+
+  test('pins a part dropped into the pinned row’s empty space', async ({
+    page
+  }) => {
+    const source = await card(page, names[1]!)
+      .locator('.start-tile-thumb')
+      .boundingBox();
+    const row = await page.locator('[data-tile-group="pinned"]').boundingBox();
+    if (!source || !row) {
+      throw new Error('Library has no layout box');
+    }
+    await page.mouse.move(source.x + 40, source.y + 40);
+    await page.mouse.down();
+    await page.mouse.move(row.x + row.width - 60, row.y + row.height / 2, {
+      steps: 14
+    });
+    await page.mouse.up();
+    await expect(
+      page.getByRole('button', { name: `Unpin ${names[1]}`, exact: true })
+    ).toBeAttached();
+    await expect(
+      page.locator('[data-tile-group="pinned"] .start-tile-name')
+    ).toHaveText([names[0]!, names[1]!]);
+  });
+});
+
+test('returns to the same scroll position after a reload', async ({ page }) => {
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await stubApi(page);
+  const many = Array.from({ length: 60 }, (_, index) => ({
+    projectId: `scroll-memory-${index}`,
+    name: `Scroll memory ${index}`,
+    revisionCount: 1,
+    updatedAt: '2026-10-21T12:00:00.000Z',
+    organization: { status: 'active', pinned: false, sortOrder: index }
+  }));
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({ json: { projects: many } })
+  );
+  await page.reload();
+  await expect(page.locator('.start-tile-project')).toHaveCount(60);
+  const body = page.locator('.start-body');
+  await body.evaluate((element) =>
+    element.scrollTo({ top: 700, behavior: 'instant' })
+  );
+  const top = await body.evaluate((element) => element.scrollTop);
+  expect(top).toBeGreaterThan(600);
+  // Let the throttled save land.
+  await page.waitForTimeout(100);
+  await page.reload();
+  await expect(page.locator('.start-tile-project')).toHaveCount(60);
+  // Within a few pixels: scroll anchoring may nudge it as late content
+  // (status notices, previews) settles above the fold.
+  await expect
+    .poll(() => body.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(top - 12);
+  expect(await body.evaluate((element) => element.scrollTop)).toBeLessThan(
+    top + 12
+  );
+});
