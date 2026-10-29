@@ -590,7 +590,9 @@ describe('StartScreen project timestamps', () => {
       `Last edited ${date.toLocaleDateString()} ${date.toLocaleTimeString(
         undefined,
         { hour: 'numeric', minute: '2-digit' }
-      )}`
+      )} · ${localProject.revisionCount} ${
+        localProject.revisionCount === 1 ? 'save' : 'saves'
+      }`
     );
   });
 
@@ -934,6 +936,23 @@ describe('StartScreen shelf filters, order and layout', () => {
       key: 'ArrowRight',
       altKey: true
     });
+    expect(onReorder).toHaveBeenCalledWith([
+      'project_a',
+      'project_b',
+      'project_r',
+      'project_c'
+    ]);
+  });
+
+  it('lets the keyboard move a card this build cannot open', () => {
+    const onReorder = vi.fn();
+    renderStartScreen({
+      projects: [{ ...projects[0]!, storageFormat: 99 }, ...projects.slice(1)],
+      onReorder
+    });
+    const locked = screen.getByRole('group', { name: 'Bracket' });
+    expect(locked).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(locked, { key: 'ArrowRight', altKey: true });
     expect(onReorder).toHaveBeenCalledWith([
       'project_a',
       'project_b',

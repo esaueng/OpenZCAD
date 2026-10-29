@@ -1381,7 +1381,7 @@
   display: flex;
 }
 
-.start-tile-grid.is-list .start-tile-meta time {
+.start-tile-grid.is-list .start-tile-when {
   order: 3;
 }
 
@@ -1694,6 +1694,10 @@
 .start-tile-placeholder .start-tile-meta time {
   background: linear-gradient(var(--color-surface-2), var(--color-surface-2))
     left center / 55% 8px no-repeat;
+}
+
+.start-tile-placeholder .start-tile-when {
+  flex: 1;
 }
 
 .start-tile-placeholder .start-tile-meta time {

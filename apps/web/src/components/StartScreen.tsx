@@ -1,6 +1,14 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { labelWithKey, useKeymap } from '../lib/keymap';
-import { Fragment, lazy, Suspense, useEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent
+} from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
 import { useTileReorder } from '../hooks/useTileReorder';
 import {
@@ -237,6 +245,8 @@ const SHELVES: ReadonlyArray<{
 ];
 
 /** The tile's actions button, which a closing menu hands focus back to. */
+const REORDER_KEYS = 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown';
+
 function tileMenuOpener(tile: HTMLElement | undefined) {
   return (
     tile?.querySelector<HTMLButtonElement>('.start-tile-menu-button') ?? null
@@ -572,6 +582,24 @@ export function StartScreen({
     moveProject(projectId, from + offset);
   }
 
+  /** Alt and an arrow key move the focused card one place. */
+  function nudgeFromKey(projectId: string, event: ReactKeyboardEvent) {
+    if (!canReorder || !event.altKey) {
+      return;
+    }
+    const offset =
+      event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+        ? -1
+        : event.key === 'ArrowRight' || event.key === 'ArrowDown'
+          ? 1
+          : 0;
+    if (offset === 0) {
+      return;
+    }
+    event.preventDefault();
+    nudgeProject(projectId, offset);
+  }
+
   function shelfCount(status: ProjectStatus): number {
     return shelves[status].length;
   }
@@ -704,7 +732,9 @@ export function StartScreen({
               )}
               <time
                 dateTime={project.updatedAt}
-                title={`Last edited ${formatLastEditedExact(project.updatedAt)}`}
+                title={`Last edited ${formatLastEditedExact(project.updatedAt)} · ${
+                  project.revisionCount
+                } ${project.revisionCount === 1 ? 'save' : 'saves'}`}
               >
                 {formatLastEdited(project.updatedAt)}
                 {recoveryOf !== null &&
@@ -822,10 +852,20 @@ export function StartScreen({
       >
         {trashed || locked ? (
           // A locked card opens nothing: loading it would only fetch a
-          // refusal (or ciphertext) this build cannot read.
+          // refusal (or ciphertext) this build cannot read. It still takes
+          // focus while the shelf can be reordered, so the keyboard can move
+          // it like any other card.
           <div
             className="start-tile-open is-static"
             title={locked ? PROJECT_UPDATE_REQUIRED_LABEL : undefined}
+            {...(canReorder && {
+              tabIndex: 0,
+              role: 'group',
+              'aria-label': project.name,
+              'aria-keyshortcuts': REORDER_KEYS,
+              onKeyDown: (event: ReactKeyboardEvent) =>
+                nudgeFromKey(project.projectId, event)
+            })}
           >
             {preview}
           </div>
@@ -835,28 +875,9 @@ export function StartScreen({
             className="start-tile-open"
             data-tile-drag=""
             disabled={busy}
-            aria-keyshortcuts={
-              canReorder
-                ? 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown'
-                : undefined
-            }
+            aria-keyshortcuts={canReorder ? REORDER_KEYS : undefined}
             onClick={() => onOpen(project.projectId)}
-            onKeyDown={(event) => {
-              if (!canReorder || !event.altKey) {
-                return;
-              }
-              const offset =
-                event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-                  ? -1
-                  : event.key === 'ArrowRight' || event.key === 'ArrowDown'
-                    ? 1
-                    : 0;
-              if (offset === 0) {
-                return;
-              }
-              event.preventDefault();
-              nudgeProject(project.projectId, offset);
-            }}
+            onKeyDown={(event) => nudgeFromKey(project.projectId, event)}
           >
             {preview}
           </button>

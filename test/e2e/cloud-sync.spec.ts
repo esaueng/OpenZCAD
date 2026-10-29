@@ -1394,7 +1394,7 @@ for (const resolution of [
             hasText: 'Device B unsent edit (copy)'
           });
           await expect(copy).toBeVisible();
-          await expect(copy.locator('.start-tile-rev')).toHaveText('1 save');
+          await expect(copy.locator('time')).toHaveAttribute('title', / · 1 save$/);
           await copy.click();
           await expect(
             pageB.getByRole('button', { name: 'Undo', exact: true })
