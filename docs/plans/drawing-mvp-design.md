@@ -296,10 +296,36 @@ sheet/view contract above with these recorded departures:
   in a fresh kernel and compares the PDF and SVG bytes.
 - **PDF and fonts.** A dependency-free single-page PDF 1.4 writer and an SVG
   writer serialize the same page model the preview draws. Text uses the
-  base-14 Helvetica faces with WinAnsi encoding and is not embedded; any other
-  character becomes "?" before layout so preview and exports agree. Output has
+  base-14 Helvetica faces with WinAnsi encoding and is not embedded; common
+  engineering symbols outside Latin-1 print as a Latin-1 stand-in (U+2300 ⌀
+  as Ø, typographic dashes and the minus sign as "-", curly quotes as
+  straight ones) and any other character becomes "?" before layout so
+  preview and exports agree. The title-block and note fields warn, without
+  refusing, while their text still holds a character that will print as "?".
+  Output has
   no timestamps or ids and is byte-stable for a model state and kernel pin,
   however the model was built (see Canonical tessellation).
+- **Page bounds.** Paper and orientation changes still keep each `centerMm`
+  (above), so a smaller paper can leave views off it. Each view is judged by
+  its whole projected footprint, not its centre: the views list marks one off
+  the page, partly off it, past the border or over the title block. Export is
+  refused, with the reason, while any view runs off the paper; a view over the
+  border or the title block is a warning only. "Fit views to sheet" is the
+  explicit placement helper: one undoable `drawing.*` transaction that centres
+  the views as a group above the title block and, only if they do not fit,
+  drops to the largest preset scale at which they do. As defence in depth the
+  composed page drops strokes and text past the paper's edge (lines are split
+  at it), and the PDF content is clipped to its MediaBox.
+- **Editor-only overlays.** View names (and a view's "drawing…" or error
+  text), selection outlines and hit areas are drawn by the editor over the
+  page, never by `composeSheetPage`, so PDF and SVG exports carry no view
+  labels. Printing them would be a new, explicit sheet option.
+- **Sheet zoom.** Ctrl/Cmd+wheel and trackpad or touch pinch zoom the canvas
+  about the pointer, with zoom out, zoom in, a percentage readout (100 % is
+  the whole sheet fitted) and Fit sheet; a zoomed sheet scrolls with the wheel
+  and pans by dragging empty paper or with the middle button. It moves only
+  the canvas viewBox: editor state, never saved, never exported, and distinct
+  from the Fit views to sheet placement helper.
 - **Workspace.** Peter chose this placement and accepted the fence and
   projection departures above (2026-10-19). Drawings open as a fourth
   workspace mode, Draw: sheets in a left column, properties on the right, and

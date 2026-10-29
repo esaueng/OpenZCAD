@@ -4244,6 +4244,17 @@ export function isDrawingCommandKind(kind: string): boolean {
   return kind.startsWith('drawing.');
 }
 
+/**
+ * Whether a command, or every command a composed one runs, edits drawing
+ * sheets and nothing else: "Fit views to sheet" sets a scale and every view
+ * centre as one undo step.
+ */
+export function isDrawingCommand(command: AnyCommand): boolean {
+  return command.commands
+    ? command.commands.length > 0 && command.commands.every(isDrawingCommand)
+    : isDrawingCommandKind(command.kind);
+}
+
 /** U06: a command that organizes Objects folders and never the model. */
 export function isObjectFolderCommandKind(kind: string): boolean {
   return kind.startsWith('objectFolder.');

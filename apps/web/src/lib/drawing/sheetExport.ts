@@ -160,7 +160,12 @@ function pdfString(text: string): string {
  */
 export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
   const pt = (mm: number) => num(mm * PT_PER_MM);
-  const content: string[] = ['1 J 1 j 0 0 0 RG 0 0 0 rg'];
+  // Clipped to the page: the composed page already drops what lies past the
+  // paper, and this keeps any glyph that runs over its edge on it too.
+  const content: string[] = [
+    `0 0 ${pt(page.widthMm)} ${pt(page.heightMm)} re W n`,
+    '1 J 1 j 0 0 0 RG 0 0 0 rg'
+  ];
   for (const kind of STROKE_ORDER) {
     const strokes = page.strokes.filter((stroke) => stroke.kind === kind);
     if (strokes.length === 0) continue;

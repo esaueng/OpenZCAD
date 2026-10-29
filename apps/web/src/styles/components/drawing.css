@@ -476,3 +476,65 @@
     max-height: 20%;
   }
 }
+
+/* Sheet zoom (editor only): the canvas viewBox moves, the paper does not. */
+.drawing-canvas.is-zoomed {
+  cursor: grab;
+}
+
+.drawing-canvas.is-zoomed:active {
+  cursor: grabbing;
+}
+
+.drawing-zoom {
+  position: absolute;
+  right: 12px;
+  /* Above the command bar and status lane the stage keeps clear. */
+  bottom: calc(var(--command-bar-h) + var(--island-gap) * 3 + 12px);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.drawing-zoom-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.drawing-zoom-button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.drawing-zoom-button:disabled {
+  color: var(--color-text-subtle);
+  cursor: default;
+}
+
+.drawing-zoom-level {
+  min-width: 44px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Sheet text the PDF font cannot draw: kept, but it prints as "?". */
+.drawing-field-warning {
+  margin: -4px 0 0;
+  color: var(--color-warning);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}

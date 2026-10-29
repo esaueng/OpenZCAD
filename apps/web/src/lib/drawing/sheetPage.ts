@@ -1,5 +1,6 @@
 import {
   DRAWING_PAPER_LABELS,
+  DRAWING_SCALE_PRESETS,
   DRAWING_VIEW_FRAMES,
   drawingPaperMm,
   drawingPaperPerModelUnit,
@@ -121,21 +122,64 @@ function glyphWidth(code: number, bold: boolean): number {
 }
 
 /**
+ * Characters outside Latin-1 that engineering text often uses, mapped to the
+ * Latin-1 stand-in a reader expects instead of "?": U+2300 DIAMETER SIGN
+ * prints as Ø (the symbol diameter dimensions already use), typographic
+ * dashes and the minus sign as a hyphen, curly quotes as straight ones.
+ */
+const SHEET_TEXT_STAND_INS: Readonly<Record<string, string>> = {
+  '⌀': 'Ø', // diameter sign
+  '∅': 'Ø', // empty set, often typed for a diameter
+  '‐': '-', // hyphen
+  '‑': '-', // non-breaking hyphen
+  '‒': '-', // figure dash
+  '–': '-', // en dash
+  '—': '-', // em dash
+  '−': '-', // minus sign
+  '‘': "'",
+  '’': "'",
+  '“': '"',
+  '”': '"',
+  '…': '...',
+  '≤': '<=',
+  '≥': '>=',
+  '≈': '~',
+  '′': "'", // prime: feet, arc minutes
+  '″': '"' // double prime: inches, arc seconds
+};
+
+function sheetPrintable(code: number): boolean {
+  return (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff);
+}
+
+/**
  * Sheet text is drawn in the PDF base-14 Helvetica, which every reader
- * supplies, so nothing is embedded. That font covers WinAnsi only: anything
- * else becomes "?" here, before layout, so the preview, SVG and PDF show the
+ * supplies, so nothing is embedded. That font covers WinAnsi only: common
+ * engineering symbols become their Latin-1 stand-in and anything else
+ * becomes "?" here, before layout, so the preview, SVG and PDF show the
  * same characters.
  */
 export function sheetSafeText(text: string): string {
   let out = '';
   for (const char of text.replace(/\s+/g, ' ').trim()) {
-    const code = char.codePointAt(0)!;
-    out +=
-      (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff)
-        ? char
-        : '?';
+    const standIn = SHEET_TEXT_STAND_INS[char];
+    if (standIn !== undefined) out += standIn;
+    else out += sheetPrintable(char.codePointAt(0)!) ? char : '?';
   }
   return out;
+}
+
+/**
+ * The distinct characters of `text` a sheet prints as "?", in order of first
+ * appearance: what a text editor warns about before the text is placed.
+ */
+export function sheetUnprintableCharacters(text: string): string[] {
+  const found = new Set<string>();
+  for (const char of text.replace(/\s+/g, ' ')) {
+    if (SHEET_TEXT_STAND_INS[char] !== undefined) continue;
+    if (!sheetPrintable(char.codePointAt(0)!)) found.add(char);
+  }
+  return [...found];
 }
 
 export function textWidthMm(
@@ -331,7 +375,10 @@ function titleBlock(
       ]
     ]
   ];
-  const columns = [0.34, 0.14, 0.22, 0.3];
+  // REV and DATE each hold a full ISO date ("2026-10-28" is about 21.4 mm
+  // at 3 mm text). Every paper, A4 portrait included, is wide enough to give
+  // the block its full TITLE_BLOCK_MAX_WIDTH_MM, so these widths hold on all.
+  const columns = [0.3, 0.18, 0.22, 0.3];
   rows.forEach((cells, rowIndex) => {
     const top = titleBottom - rowIndex * rowHeight;
     let x = box.x;
@@ -355,6 +402,93 @@ function titleBlock(
 export interface ComposedView {
   view: DrawingView;
   projection: ViewProjection;
+}
+
+interface PaperRect {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+function insideRect(rect: PaperRect, x: number, y: number): boolean {
+  return x >= rect.minX && x <= rect.maxX && y >= rect.minY && y <= rect.maxY;
+}
+
+/** Liang–Barsky: the part of a segment inside `rect`, or null. */
+function clipSegment(
+  rect: PaperRect,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number
+): [number, number, number, number] | null {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  let t0 = 0;
+  let t1 = 1;
+  for (const [p, q] of [
+    [-dx, x0 - rect.minX],
+    [dx, rect.maxX - x0],
+    [-dy, y0 - rect.minY],
+    [dy, rect.maxY - y0]
+  ] as const) {
+    if (p === 0) {
+      if (q < 0) return null;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) {
+      if (t > t1) return null;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return null;
+      if (t < t1) t1 = t;
+    }
+  }
+  return [x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy];
+}
+
+/**
+ * The parts of a stroke on the paper. Nothing drawn may leave the page — a
+ * PDF reader would cut it at the MediaBox, other tools keep it — so a line
+ * that runs off is split where it crosses the edge; a filled mark (an
+ * arrowhead) is drawn whole or not at all.
+ */
+function clipStroke(stroke: SheetStroke, rect: PaperRect): SheetStroke[] {
+  const { points } = stroke;
+  let inside = true;
+  for (let i = 0; i + 1 < points.length && inside; i += 2)
+    inside = insideRect(rect, points[i]!, points[i + 1]!);
+  if (inside) return [stroke];
+  if (stroke.filled) return [];
+  const path =
+    stroke.closed && points.length >= 4
+      ? [...points, points[0]!, points[1]!]
+      : points;
+  const runs: SheetStroke[] = [];
+  let run: number[] | null = null;
+  for (let i = 0; i + 3 < path.length; i += 2) {
+    const clipped = clipSegment(
+      rect,
+      path[i]!,
+      path[i + 1]!,
+      path[i + 2]!,
+      path[i + 3]!
+    );
+    if (!clipped) {
+      run = null;
+      continue;
+    }
+    const [ax, ay, bx, by] = clipped;
+    if (run && run[run.length - 2] === ax && run[run.length - 1] === ay)
+      run.push(bx, by);
+    else {
+      run = [ax, ay, bx, by];
+      runs.push({ kind: stroke.kind, points: run });
+    }
+  }
+  return runs;
 }
 
 /**
@@ -405,10 +539,152 @@ export function composeSheetPage(
       }
   }
   const block = titleBlock(sheet, context);
+  // Views and annotations can be placed past the paper's edge (a smaller
+  // paper, a drag); what lies there is not on the page, so it is not drawn.
+  const onPaper: PaperRect = {
+    minX: 0,
+    minY: 0,
+    maxX: paper.width,
+    maxY: paper.height
+  };
   return {
     widthMm: paper.width,
     heightMm: paper.height,
-    strokes: [...strokes, ...(annotations?.strokes ?? []), ...block.strokes],
-    texts: [...(annotations?.texts ?? []), ...block.texts]
+    strokes: [
+      ...strokes,
+      ...(annotations?.strokes ?? []),
+      ...block.strokes
+    ].flatMap((stroke) => clipStroke(stroke, onPaper)),
+    texts: [...(annotations?.texts ?? []), ...block.texts].filter((text) =>
+      insideRect(onPaper, text.x, text.y)
+    )
+  };
+}
+
+/** How a view's footprint sits on its sheet; null when it is clear. */
+export type ViewPlacementIssue =
+  /** Nothing of it is on the paper. */
+  | 'off-page'
+  /** Part of it runs off the paper: that part would not print. */
+  | 'partly-off-page'
+  /** On the paper, but across the drawing border into the margin. */
+  | 'past-border'
+  /** Inside the border, but over the title block. */
+  | 'over-title-block';
+
+const PLACEMENT_TOLERANCE_MM = 0.01;
+
+export function viewPlacementIssue(
+  box: { x: number; y: number; width: number; height: number },
+  sheet: Pick<DrawingSheet, 'paper'>
+): ViewPlacementIssue | null {
+  const paper = drawingPaperMm(sheet.paper);
+  const e = PLACEMENT_TOLERANCE_MM;
+  const right = box.x + box.width;
+  const top = box.y + box.height;
+  const within = (minX: number, minY: number, maxX: number, maxY: number) =>
+    box.x >= minX - e &&
+    box.y >= minY - e &&
+    right <= maxX + e &&
+    top <= maxY + e;
+  if (
+    right < -e ||
+    top < -e ||
+    box.x > paper.width + e ||
+    box.y > paper.height + e
+  )
+    return 'off-page';
+  if (!within(0, 0, paper.width, paper.height)) return 'partly-off-page';
+  if (
+    !within(
+      SHEET_MARGIN_MM,
+      SHEET_MARGIN_MM,
+      paper.width - SHEET_MARGIN_MM,
+      paper.height - SHEET_MARGIN_MM
+    )
+  )
+    return 'past-border';
+  const block = titleBlockBox(sheet);
+  if (
+    right > block.x + e &&
+    box.x < block.x + block.width - e &&
+    top > block.y + e &&
+    box.y < block.y + block.height - e
+  )
+    return 'over-title-block';
+  return null;
+}
+
+/** Room kept between a fitted layout and the edges of the view area. */
+const FIT_INSET_MM = 5;
+
+/**
+ * "Fit views to sheet": the sheet's views laid out again above the title
+ * block, as one group. The group is centred in the view area and, only when
+ * it does not fit at the sheet's scale, drawn at the largest preset scale at
+ * which it does — every centre moves by the same rule, so projected views
+ * stay aligned with their base and the layout keeps its arrangement. An
+ * explicit scale and centres, never a viewport zoom (drawing-mvp-design.md).
+ * Null when the sheet has no view with an extent, or nothing fits.
+ */
+export function fitViewsToSheet(
+  sheet: DrawingSheet,
+  extents: ReadonlyMap<string, ViewExtent>,
+  units: UnitSystem
+): {
+  scale: DrawingSheet['scale'];
+  centers: {
+    viewId: DrawingView['viewId'];
+    centerMm: { x: number; y: number };
+  }[];
+} | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const view of sheet.views) {
+    const extent = extents.get(view.viewId);
+    if (!extent) continue;
+    const box = viewPageBox(view, extent, sheet, units);
+    minX = Math.min(minX, box.x);
+    minY = Math.min(minY, box.y);
+    maxX = Math.max(maxX, box.x + box.width);
+    maxY = Math.max(maxY, box.y + box.height);
+  }
+  if (!Number.isFinite(minX)) return null;
+  const area = sheetViewArea(sheet);
+  const width = area.width - 2 * FIT_INSET_MM;
+  const height = area.height - 2 * FIT_INSET_MM;
+  const current = drawingPaperPerModelUnit(sheet.scale, units);
+  const fits = (ratio: number) =>
+    (maxX - minX) * ratio <= width + PLACEMENT_TOLERANCE_MM &&
+    (maxY - minY) * ratio <= height + PLACEMENT_TOLERANCE_MM;
+  let scale = sheet.scale;
+  let ratio = 1;
+  if (!fits(1)) {
+    // Presets run from the largest scale down; take the first that fits.
+    const preset = DRAWING_SCALE_PRESETS.find((candidate) => {
+      const r = drawingPaperPerModelUnit(candidate, units) / current;
+      return r < 1 && fits(r);
+    });
+    if (!preset) return null;
+    scale = preset;
+    ratio = drawingPaperPerModelUnit(preset, units) / current;
+  }
+  const from = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  const to = {
+    x: area.x + area.width / 2,
+    y: area.y + area.height / 2
+  };
+  const round = (value: number) => Math.round(value * 10) / 10;
+  return {
+    scale,
+    centers: sheet.views.map((view) => ({
+      viewId: view.viewId,
+      centerMm: {
+        x: round(to.x + (view.centerMm.x - from.x) * ratio),
+        y: round(to.y + (view.centerMm.y - from.y) * ratio)
+      }
+    }))
   };
 }

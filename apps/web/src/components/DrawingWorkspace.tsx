@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -6,8 +7,22 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { Crosshair, FileDown, Plus, RefreshCw, Trash2, X } from 'lucide-react';
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  Crosshair,
+  FileDown,
+  Maximize,
+  Plus,
+  RefreshCw,
+  Trash2,
+  X,
+  ZoomIn,
+  ZoomOut
+} from 'lucide-react';
+import {
+  commandFactories,
+  composeCommands,
+  type AnyCommand
+} from '@openzcad/command-system';
 import { updateDrawingView } from '@openzcad/document-core';
 import {
   createDrawingAnnotationId,
@@ -51,11 +66,27 @@ import {
 import {
   composeSheetPage,
   type ComposedView,
+  fitViewsToSheet,
+  sheetUnprintableCharacters,
   sheetViewArea,
   titleBlockBox,
   viewPageBox,
-  type SheetPage
+  viewPlacementIssue,
+  type SheetPage,
+  type ViewExtent,
+  type ViewPlacementIssue
 } from '../lib/drawing/sheetPage';
+import {
+  fitSheetZoom,
+  MAX_SHEET_ZOOM,
+  panSheet,
+  SHEET_ZOOM_STEP,
+  sheetPxPerMm,
+  sheetViewBox,
+  wheelPixels,
+  zoomSheetAt,
+  type SheetZoom
+} from '../lib/drawing/sheetZoom';
 import {
   drawingExportFileName,
   sheetPageToPdf,
@@ -421,6 +452,22 @@ function statusMessage(status: SheetStatus): string | null {
   }
 }
 
+/** "The Front view", "The Front and Top views", "The Front, Top and Left views". */
+function listNames(names: string[]): string {
+  const list =
+    names.length === 1
+      ? names[0]!
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]!}`;
+  return `The ${list} view${names.length === 1 ? '' : 's'}`;
+}
+
+const PLACEMENT_LABELS: Readonly<Record<ViewPlacementIssue, string>> = {
+  'off-page': 'off the page',
+  'partly-off-page': 'partly off the page',
+  'past-border': 'past the border',
+  'over-title-block': 'over the title block'
+};
+
 function svgPoints(points: number[], height: number): string {
   const out: string[] = [];
   for (let i = 0; i + 1 < points.length; i += 2)
@@ -436,6 +483,8 @@ function TextField(props: {
   placeholder?: string;
   disabled: boolean;
   maxLength?: number;
+  /** Printed on the sheet: warn about characters the PDF font lacks. */
+  printed?: boolean;
   onCommit: (value: string) => void;
 }) {
   const [draft, setDraft] = useState(props.value);
@@ -443,23 +492,34 @@ function TextField(props: {
   const commit = () => {
     if (draft !== props.value) props.onCommit(draft);
   };
+  const unprintable = props.printed ? sheetUnprintableCharacters(draft) : [];
   return (
-    <label className="drawing-field">
-      <span>{props.label}</span>
-      <input
-        type="text"
-        value={draft}
-        placeholder={props.placeholder}
-        maxLength={props.maxLength ?? MAX_DRAWING_TEXT_LENGTH}
-        disabled={props.disabled}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(props.value);
-        }}
-      />
-    </label>
+    <>
+      <label className="drawing-field">
+        <span>{props.label}</span>
+        <input
+          type="text"
+          value={draft}
+          placeholder={props.placeholder}
+          maxLength={props.maxLength ?? MAX_DRAWING_TEXT_LENGTH}
+          disabled={props.disabled}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commit();
+            if (event.key === 'Escape') setDraft(props.value);
+          }}
+        />
+      </label>
+      {unprintable.length > 0 && (
+        // Not blocking: the text is kept, but the sheet font cannot draw
+        // these, so preview and exports show "?" for them.
+        <p className="drawing-field-warning" role="status">
+          {unprintable.join(' ')} will print as &quot;?&quot;: sheet text uses
+          the standard PDF Helvetica, which covers Latin-1 only.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -669,6 +729,7 @@ function AnnotationPanel(props: {
               label="Text"
               value={selected.text}
               maxLength={MAX_DRAWING_NOTE_LENGTH}
+              printed
               disabled={!editable}
               onCommit={(text) =>
                 text.trim() &&
@@ -814,6 +875,85 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ? annotationDrag
       : null;
   const canvasRef = useRef<SVGSVGElement | null>(null);
+  // The canvas element as state too, so the wheel listener (which must be
+  // non-passive to keep the page from scrolling) follows it in and out.
+  const [canvasElement, setCanvasElement] = useState<SVGSVGElement | null>(
+    null
+  );
+  const attachCanvas = useCallback((element: SVGSVGElement | null) => {
+    canvasRef.current = element;
+    setCanvasElement(element);
+  }, []);
+  // Sheet zoom, kept per sheet and paper: another sheet, or a new paper
+  // size or orientation, starts fitted again.
+  const zoomKey = sheet
+    ? `${sheet.sheetId}|${sheet.paper.size}|${sheet.paper.orientation}`
+    : '';
+  const [zoomEntry, setZoomEntry] = useState<{
+    key: string;
+    zoom: SheetZoom;
+  } | null>(null);
+  const zoomPaper = sheet ? drawingPaperMm(sheet.paper) : null;
+  const sheetZoom: SheetZoom | null = zoomPaper
+    ? zoomEntry?.key === zoomKey
+      ? zoomEntry.zoom
+      : fitSheetZoom(zoomPaper)
+    : null;
+  // Handlers read the latest zoom between renders: several wheel events or
+  // pinch moves can arrive before React renders the first.
+  const zoomRef = useRef<SheetZoom | null>(sheetZoom);
+  zoomRef.current = sheetZoom;
+  const setSheetZoom = (next: SheetZoom) => {
+    zoomRef.current = next;
+    setZoomEntry({ key: zoomKey, zoom: next });
+  };
+  const canvasRect = () => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    return rect && rect.width > 0 && rect.height > 0 ? rect : undefined;
+  };
+  /** Pan in progress: an empty-paper drag, or the middle button anywhere. */
+  const panRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  /** Touch points on the canvas, for a two-finger pinch. */
+  const touchesRef = useRef(new Map<number, { x: number; y: number }>());
+  const wheelRef = useRef<(event: WheelEvent) => void>(() => undefined);
+  wheelRef.current = (event: WheelEvent) => {
+    const current = zoomRef.current;
+    if (!current || !zoomPaper) return;
+    const delta = wheelPixels(event);
+    if (event.ctrlKey || event.metaKey) {
+      // Ctrl/Cmd+wheel, and a trackpad pinch (which browsers send as a
+      // wheel with ctrlKey), zoom about the pointer.
+      event.preventDefault();
+      setSheetZoom(
+        zoomSheetAt(
+          current,
+          zoomPaper,
+          current.zoom * Math.exp(-delta.y * 0.002),
+          canvasRect(),
+          { x: event.clientX, y: event.clientY }
+        )
+      );
+      return;
+    }
+    // A plain wheel scrolls a zoomed sheet; a fitted one has nowhere to go.
+    if (current.zoom <= 1) return;
+    const rect = canvasRect();
+    if (!rect) return;
+    event.preventDefault();
+    const x = event.shiftKey && delta.x === 0 ? delta.y : delta.x;
+    const y = event.shiftKey && delta.x === 0 ? 0 : delta.y;
+    setSheetZoom(panSheet(current, zoomPaper, rect, -x, -y));
+  };
+  useEffect(() => {
+    if (!canvasElement) return;
+    const listener = (event: WheelEvent) => wheelRef.current(event);
+    canvasElement.addEventListener('wheel', listener, { passive: false });
+    return () => canvasElement.removeEventListener('wheel', listener);
+  }, [canvasElement]);
   const editable = editDisabledReason === null;
   // Fingerprinting sorts every face and edge hash: once per model or sheet
   // change, never per pointer move of a drag.
@@ -1148,6 +1288,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       props.onStatus('Re-pick or delete the broken annotations, then export.');
       return;
     }
+    const offPaper = offPaperReason();
+    if (offPaper) {
+      props.onStatus(offPaper);
+      return;
+    }
     const drawn = viewStates.filter((entry) => entry !== null);
     const page = composeSheetPage(
       sheet,
@@ -1190,9 +1335,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (!editable || event.button !== 0 || !sheet || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const paper = drawingPaperMm(sheet.paper);
-    const pxPerMm = Math.min(
-      rect.width / paper.width,
-      rect.height / paper.height
+    // Through the zoom: a millimetre of drag on a zoomed sheet is more pixels.
+    const pxPerMm = sheetPxPerMm(
+      zoomRef.current ?? fitSheetZoom(paper),
+      paper,
+      rect
     );
     if (!(pxPerMm > 0)) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -1322,6 +1469,113 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     };
   }, [shownSheet, drawnViews, resolutions, document.name, document.units]);
   const page: SheetPage | null = composed?.page ?? null;
+  // Each view's projected extent: the drawn one once it is ready, the
+  // model's estimate before. The canvas outlines, the placement flags and
+  // "Fit views to sheet" all read the same one.
+  const viewExtents = useMemo(() => {
+    const extents = new Map<DrawingViewId, ViewExtent>();
+    for (const view of shownSheet?.views ?? []) {
+      const state = projections.get(view.viewId);
+      const extent =
+        state?.state === 'ready' && state.projection.bounds
+          ? state.projection.bounds
+          : estimateViewExtent(bodies, view.bodyIds, view.orientation);
+      if (extent) extents.set(view.viewId, extent);
+    }
+    return extents;
+  }, [shownSheet, projections, bodies]);
+  const placements = useMemo(() => {
+    const issues = new Map<DrawingViewId, ViewPlacementIssue>();
+    if (!shownSheet) return issues;
+    for (const view of shownSheet.views) {
+      const extent = viewExtents.get(view.viewId);
+      const issue = extent
+        ? viewPlacementIssue(
+            viewPageBox(view, extent, shownSheet, document.units),
+            shownSheet
+          )
+        : // Nothing to measure: only a centre off the paper says anything.
+          viewPlacementIssue(
+              { x: view.centerMm.x, y: view.centerMm.y, width: 0, height: 0 },
+              shownSheet
+            ) === 'off-page'
+          ? 'off-page'
+          : null;
+      if (issue) issues.set(view.viewId, issue);
+    }
+    return issues;
+  }, [shownSheet, viewExtents, document.units]);
+
+  /**
+   * Why the sheet cannot export as laid out: a view runs off the paper, so
+   * part of the drawing would silently not print.
+   */
+  function offPaperReason(): string | null {
+    if (!sheet) return null;
+    const names = sheet.views
+      .filter((view) => {
+        const issue = placements.get(view.viewId);
+        return issue === 'off-page' || issue === 'partly-off-page';
+      })
+      .map((view) => DRAWING_VIEW_LABELS[view.orientation]);
+    if (names.length === 0) return null;
+    return `${listNames(names)} ${names.length === 1 ? 'runs' : 'run'} off the paper. Fit views to sheet, or move ${names.length === 1 ? 'it' : 'them'} onto the page, to export.`;
+  }
+
+  const fitViews = () => {
+    if (!sheet) return;
+    const fitted = fitViewsToSheet(sheet, viewExtents, document.units);
+    if (!fitted) {
+      props.onStatus(
+        sheet.views.length === 0
+          ? 'Add a view to fit it to the sheet.'
+          : 'These views do not fit this paper at any scale. Pick a larger paper.'
+      );
+      return;
+    }
+    const scaled =
+      formatDrawingScale(fitted.scale) !== formatDrawingScale(sheet.scale);
+    // Bases first: moving one carries its projected views, which are then
+    // set to their own fitted centres.
+    const depth = (view: DrawingView): number => {
+      let count = 0;
+      let parent = view.parentViewId;
+      while (parent && count < sheet.views.length) {
+        count += 1;
+        parent = sheet.views.find(
+          (entry) => entry.viewId === parent
+        )?.parentViewId;
+      }
+      return count;
+    };
+    const byId = new Map(sheet.views.map((view) => [view.viewId, view]));
+    const moves = [...fitted.centers]
+      .sort((a, b) => depth(byId.get(a.viewId)!) - depth(byId.get(b.viewId)!))
+      .map(({ viewId, centerMm }) =>
+        commandFactories.updateDrawingView({
+          sheetId: sheet.sheetId,
+          viewId,
+          centerMm
+        })
+      );
+    const commands = [
+      ...(scaled
+        ? [
+            commandFactories.updateDrawingSheet({
+              sheetId: sheet.sheetId,
+              scale: fitted.scale
+            })
+          ]
+        : []),
+      ...moves
+    ];
+    if (run(composeCommands('Fit views to sheet', commands)))
+      props.onStatus(
+        scaled
+          ? `Fitted the views to the sheet at ${formatDrawingScale(fitted.scale)}.`
+          : 'Fitted the views to the sheet.'
+      );
+  };
   // Edges a tool can pick, kept while the drawn views and model are the same
   // objects: a pointer move re-renders, it must not re-project every edge.
   const pickCache = useRef<{
@@ -1621,6 +1875,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   const paper = drawingPaperMm(sheet.paper);
   const message = statusMessage(status);
+  const offPaper = offPaperReason();
   const exportReason =
     status.kind !== 'ready'
       ? message
@@ -1630,7 +1885,116 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ? 'Drawing the views…'
         : brokenCount > 0
           ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
-          : null;
+          : offPaper;
+  // Not blocking: on the paper, but over the border or the title block.
+  const layoutWarning = (() => {
+    const names = sheet.views
+      .filter((view) => {
+        const issue = placements.get(view.viewId);
+        return issue === 'past-border' || issue === 'over-title-block';
+      })
+      .map((view) => DRAWING_VIEW_LABELS[view.orientation]);
+    return names.length === 0
+      ? null
+      : `${listNames(names)} ${names.length === 1 ? 'crosses' : 'cross'} the sheet border or the title block.`;
+  })();
+  const zoom = sheetZoom ?? fitSheetZoom(paper);
+  const zoomBy = (factor: number) =>
+    setSheetZoom(zoomSheetAt(zoom, paper, zoom.zoom * factor));
+  const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    panRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  // Capture phase, ahead of the views and annotations: a second finger turns
+  // a touch into a pinch (and ends any drag the first one began), and the
+  // middle button pans from anywhere on the sheet.
+  const onCanvasPointerDownCapture = (
+    event: ReactPointerEvent<SVGSVGElement>
+  ) => {
+    if (event.pointerType === 'touch') {
+      const touches = touchesRef.current;
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (touches.size >= 2) {
+        panRef.current = null;
+        setDrag(null);
+        setAnnotationDrag(null);
+        event.stopPropagation();
+        return;
+      }
+    }
+    if (event.button === 1) {
+      event.preventDefault();
+      event.stopPropagation();
+      startPan(event);
+    }
+  };
+  const onCanvasPointerMoveCapture = (
+    event: ReactPointerEvent<SVGSVGElement>
+  ) => {
+    const touches = touchesRef.current;
+    if (event.pointerType === 'touch' && touches.has(event.pointerId)) {
+      if (touches.size === 2) {
+        const measure = () => {
+          const [a, b] = [...touches.values()] as [
+            { x: number; y: number },
+            { x: number; y: number }
+          ];
+          return {
+            mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+            distance: Math.hypot(a.x - b.x, a.y - b.y)
+          };
+        };
+        const before = measure();
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        const after = measure();
+        const rect = canvasRect();
+        const current = zoomRef.current;
+        if (rect && current && before.distance > 0)
+          setSheetZoom(
+            panSheet(
+              zoomSheetAt(
+                current,
+                paper,
+                (current.zoom * after.distance) / before.distance,
+                rect,
+                before.mid
+              ),
+              paper,
+              rect,
+              after.mid.x - before.mid.x,
+              after.mid.y - before.mid.y
+            )
+          );
+        event.stopPropagation();
+        return;
+      }
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+    const pan = panRef.current;
+    if (pan?.pointerId !== event.pointerId) return;
+    const rect = canvasRect();
+    const current = zoomRef.current;
+    if (rect && current)
+      setSheetZoom(
+        panSheet(
+          current,
+          paper,
+          rect,
+          event.clientX - pan.x,
+          event.clientY - pan.y
+        )
+      );
+    panRef.current = { ...pan, x: event.clientX, y: event.clientY };
+    event.stopPropagation();
+  };
+  const onCanvasPointerEnd = (event: ReactPointerEvent<SVGSVGElement>) => {
+    touchesRef.current.delete(event.pointerId);
+    if (panRef.current?.pointerId === event.pointerId) panRef.current = null;
+  };
   const scaleOptions = DRAWING_SCALE_PRESETS.some(
     (scale) => formatDrawingScale(scale) === formatDrawingScale(sheet.scale)
   )
@@ -1735,19 +2099,33 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           </div>
         )}
         <svg
-          ref={canvasRef}
-          className="drawing-canvas"
+          ref={attachCanvas}
+          className={`drawing-canvas${zoom.zoom > 1 ? ' is-zoomed' : ''}`}
           role="application"
           aria-label={`Sheet ${sheet.name}`}
           tabIndex={0}
-          viewBox={`0 0 ${paper.width} ${paper.height}`}
+          viewBox={sheetViewBox(zoom, paper)}
           preserveAspectRatio="xMidYMid meet"
           onKeyDown={onCanvasKeyDown}
+          onPointerDownCapture={onCanvasPointerDownCapture}
+          onPointerMoveCapture={onCanvasPointerMoveCapture}
+          onPointerUpCapture={onCanvasPointerEnd}
+          onPointerCancelCapture={onCanvasPointerEnd}
           onPointerDown={(event) => {
             if (event.target === event.currentTarget) {
               setSelectedViewId(null);
               setSelectedAnnotationId(null);
             }
+            // A zoomed sheet pans by dragging empty paper.
+            const target = event.target as Element;
+            if (
+              event.button === 0 &&
+              zoom.zoom > 1 &&
+              !target.closest?.(
+                '.drawing-view-hit, .drawing-annotation-hit, .drawing-pick-surface'
+              )
+            )
+              startPan(event);
           }}
         >
           <rect
@@ -1829,6 +2207,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     height={box.height}
                   />
                 )}
+                {/* Editor-only: view names (and drawing/error status) are an
+                    overlay for picking views. composeSheetPage never draws
+                    them, so PDF and SVG exports carry no view labels. */}
                 <text
                   className="drawing-view-label"
                   x={box.x}
@@ -1985,6 +2366,43 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             />
           )}
         </svg>
+        <div className="drawing-zoom" role="toolbar" aria-label="Sheet zoom">
+          <button
+            type="button"
+            className="drawing-zoom-button"
+            aria-label="Zoom out"
+            title="Zoom out (Ctrl+wheel or pinch on the sheet)"
+            disabled={zoom.zoom <= 1}
+            onClick={() => zoomBy(1 / SHEET_ZOOM_STEP)}
+          >
+            <ZoomOut size={14} aria-hidden="true" />
+          </button>
+          {/* Plain text, not an <output>: that is a live "status", and the
+              sheet's status lines must stay the only ones. */}
+          <span className="drawing-zoom-level" title="Zoom level">
+            {Math.round(zoom.zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            className="drawing-zoom-button"
+            aria-label="Zoom in"
+            title="Zoom in (Ctrl+wheel or pinch on the sheet)"
+            disabled={zoom.zoom >= MAX_SHEET_ZOOM}
+            onClick={() => zoomBy(SHEET_ZOOM_STEP)}
+          >
+            <ZoomIn size={14} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="drawing-zoom-button"
+            aria-label="Fit sheet"
+            title="Show the whole sheet"
+            disabled={zoom.zoom <= 1}
+            onClick={() => setSheetZoom(fitSheetZoom(paper))}
+          >
+            <Maximize size={14} aria-hidden="true" />
+          </button>
+        </div>
       </div>
       <aside className="drawing-panel" aria-label="Drawing properties">
         <div className="drawing-panel-section">
@@ -2110,6 +2528,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               label={label}
               value={sheet.titleBlock[key] ?? ''}
               placeholder={key === 'title' ? document.name : undefined}
+              printed
               disabled={!editable}
               onCommit={(value) =>
                 updateSheet({ titleBlock: { [key]: value } })
@@ -2132,11 +2551,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             aria-label="Views on this sheet"
           >
             {sheet.views.map((view) => {
-              const off =
-                view.centerMm.x < 0 ||
-                view.centerMm.y < 0 ||
-                view.centerMm.x > paper.width ||
-                view.centerMm.y > paper.height;
+              // The view's whole footprint, not its centre: a view half off
+              // the paper exports half a view.
+              const issue = placements.get(view.viewId);
               return (
                 <button
                   key={view.viewId}
@@ -2150,11 +2567,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   }}
                 >
                   {DRAWING_VIEW_LABELS[view.orientation]}
-                  {off ? ' (off the page)' : ''}
+                  {issue ? ` (${PLACEMENT_LABELS[issue]})` : ''}
                 </button>
               );
             })}
           </div>
+          {/* Off the paper is said once, under Export, which it blocks. This
+              one blocks nothing, so it is plain text, not a live status
+              that would talk over the sheet's own banner. */}
+          {!offPaper && layoutWarning && (
+            <p className="drawing-field-warning">{layoutWarning}</p>
+          )}
+          <button
+            type="button"
+            className="secondary"
+            disabled={!editable || sheet.views.length === 0}
+            title={
+              editDisabledReason ??
+              'Lay the views out again above the title block, at a smaller scale if they need it'
+            }
+            onClick={fitViews}
+          >
+            <Maximize size={13} aria-hidden="true" /> Fit views to sheet
+          </button>
           {selectedView ? (
             <>
               <div className="drawing-field-row">
@@ -2330,7 +2765,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               <FileDown size={13} aria-hidden="true" /> SVG
             </button>
           </div>
-          {brokenCount > 0 && (
+          {(brokenCount > 0 || (exportReason && exportReason === offPaper)) && (
             <p className="drawing-annotation-status" role="status">
               {exportReason}
             </p>
