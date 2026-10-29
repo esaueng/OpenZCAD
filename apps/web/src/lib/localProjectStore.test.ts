@@ -779,7 +779,10 @@ describe('backfilling projections for documents saved before this store', () => 
     trace = traceReads();
     const projects = await listLocalProjects();
 
-    expect(projects.map((project) => project.name)).toEqual([
+    // Order-independent: the subject is how the documents are read, and the
+    // shelf sorts these three backfilled cards on keys they tie on, so their
+    // order is not this test's to pin.
+    expect(projects.map((project) => project.name).sort()).toEqual([
       'Bracket',
       'Housing',
       'Plate'
