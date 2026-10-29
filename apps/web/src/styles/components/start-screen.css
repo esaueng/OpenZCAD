@@ -133,15 +133,17 @@
   grid-template-columns:
     calc(var(--island-gap) + var(--start-column-w))
     minmax(0, 1fr);
-  /* The column hugs its blocks; the demos give way first and scroll when
-     the window is too short for all of it. */
-  grid-template-rows: auto auto auto minmax(0, max-content) minmax(0, 1fr);
+  /* Column first: the column runs the window's full height, the product at
+     its head and the account at its foot, and the shelf takes everything
+     beside it. The demos give way first and scroll when the window is too
+     short for all of it. */
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   grid-template-areas:
-    'header  header'
+    'brand   body'
     'launch  body'
     'library body'
     'learn   body'
-    '.       body';
+    'account body';
   background: var(--color-bg);
   overflow: hidden;
 }
@@ -157,8 +159,8 @@
 .start-screen::before {
   content: '';
   grid-column: 1;
-  grid-row: 2 / 5;
-  margin: var(--island-gap) 0 0 var(--island-gap);
+  grid-row: 1 / -1;
+  margin: var(--island-gap) 0 var(--island-gap) var(--island-gap);
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
@@ -173,9 +175,75 @@
 
 /* ── Top bar ─────────────────────────────────────────────── */
 
-/* PageTopBar draws it (page-topbar.css); the grid only places it. */
-.start-header {
-  grid-area: header;
+/* The column's head: the logo where the workspace's top bar puts it. */
+.start-brand {
+  grid-area: brand;
+  display: flex;
+  align-items: center;
+  min-height: var(--topbar-island-h);
+  padding: calc(var(--island-gap) + 8px) 10px 0 calc(var(--island-gap) + 14px);
+}
+
+.start-brand .brand {
+  margin: 0;
+}
+
+/* The column's foot: where the parts are kept, then Import and Settings. */
+.start-column-foot {
+  grid-area: account;
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0 0 var(--island-gap) var(--island-gap);
+  padding: 10px;
+  border-top: var(--border-thin);
+}
+
+.start-column-foot-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.start-column-action {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.start-column-action:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+/* What the one-line readout cannot hold (a run's failures, any news) hangs
+   under it in the column, in its own flow. */
+.start-account-details {
+  display: grid;
+  gap: var(--sp-2);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.start-column-foot .start-update {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+/* The shelf's search sits with its other tools now there is no bar. */
+.start-toolbar-tools .start-search {
+  width: clamp(160px, 22vw, 280px);
 }
 
 /* Section labels in the column: the same mono eyebrow the workspace uses. */
@@ -197,8 +265,7 @@
   grid-area: launch;
   display: grid;
   gap: var(--sp-2);
-  padding: calc(var(--island-gap) + 10px) 10px 12px
-    calc(var(--island-gap) + 10px);
+  padding: 12px 10px 12px calc(var(--island-gap) + 10px);
 }
 
 .start-launch-form {
@@ -400,12 +467,12 @@
   }
 }
 
-/* ── Top bar: cloud readout ──────────────────────────────── */
+/* ── Column foot: cloud readout ──────────────────────────── */
 
 /* Where the parts are kept, said as one sentence with at most one action
-   beside it, in the top bar where the workspace says Saved. The icon carries
-   the tone (saved, not saved, failed) so the words can stay short; the full
-   account is in the tooltip. page-topbar.css lays it out in the island. */
+   beside it, at the column's foot. The icon carries the tone (saved, not
+   saved, failed) so the words can stay short; the full account is in the
+   tooltip. */
 .start-cloud {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -922,6 +989,10 @@
 
 .start-tile-open {
   display: grid;
+  /* One column the card's width: an auto column grew to the widest line's
+     min-content, so a recovery copy's longer date pushed its preview past
+     the card's edge and, at 16:10, taller than its neighbours'. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr;
   gap: 0;
   padding: 0;
@@ -1134,6 +1205,8 @@
 
 .start-tile-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 3px;
   /* The right edge is the actions button's. */
   padding: 9px 40px 10px var(--sp-3);
@@ -1153,11 +1226,13 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
+  min-width: 0;
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
 }
 
 .start-tile-meta time {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1694,16 +1769,15 @@
   .start-screen.is-fresh {
     grid-template-rows: auto auto auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'header  header'
+      'brand   body'
       'launch  body'
       'library body'
       '.       body'
-      '.       learn';
+      'account learn';
   }
 
-  /* The demos left the column for the stage; it hugs the two blocks left. */
-  .start-screen.is-fresh::before {
-    grid-row: 2 / 4;
+  .start-screen.is-fresh .start-column-foot {
+    align-self: end;
   }
 
   .start-screen.is-fresh .start-library {
@@ -1733,9 +1807,10 @@
     /* The shelf never shrinks below its content here: the page scrolls as
        a whole, and a track that could collapse would let the shelf spill
        over the demos beneath it. */
-    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto;
+    grid-template-rows: auto auto auto auto minmax(max-content, 1fr) auto;
     grid-template-areas:
-      'header'
+      'brand'
+      'account'
       'launch'
       'library'
       'body'
@@ -1852,4 +1927,471 @@
 .start-screen.dissolving {
   position: fixed;
   pointer-events: none;
+}
+
+/* ── Selection ───────────────────────────────────────────── */
+
+/* A part picked for a bulk action: the accent ring the focused card wears,
+   held, and a check in its corner. */
+.start-tile-project.is-selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.start-tile-project.is-selected .start-tile-thumb {
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg));
+}
+
+.start-tile-select {
+  position: relative;
+  z-index: 1;
+  grid-area: 1 / 1;
+  align-self: start;
+  justify-self: start;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin: 8px 0 0 8px;
+  padding: 0;
+  color: var(--color-on-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.start-tile-select:hover {
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-select[aria-checked='true'] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.start-tile-project:hover .start-tile-select,
+.start-tile-project:focus-within .start-tile-select,
+.start-tile-select[aria-checked='true'],
+.start-section:has(.is-selected) .start-tile-select {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .start-tile-select {
+    opacity: 1;
+  }
+}
+
+/* The pin steps right of the check, which takes the corner. */
+.start-tile-grid:not(.is-list) .start-tile-pin {
+  margin-left: 34px;
+}
+
+.start-tile-grid.is-list .start-tile-select {
+  position: absolute;
+  top: 22px;
+  left: 4px;
+  margin: 0;
+  transform: translateY(-50%);
+}
+
+/* What every selected part can have done to it, floating over the bottom of
+   the shelf like the workspace's islands. */
+.start-selection-bar {
+  position: fixed;
+  bottom: var(--sp-4);
+  left: 50%;
+  z-index: 20;
+  transform: translateX(-50%);
+  width: max-content;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 5px 6px 5px 12px;
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+
+.start-selection-count {
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.start-selection-link {
+  padding: 3px 6px;
+  color: var(--color-accent-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
+.start-selection-link:hover {
+  background: var(--color-accent-dim);
+}
+
+.start-selection-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--color-border-strong);
+}
+
+.start-selection-move {
+  position: relative;
+}
+
+.start-selection-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 9px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.start-selection-action:hover:not(:disabled),
+.start-selection-action[aria-expanded='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-selection-action.is-destructive,
+.start-selection-action.is-destructive:hover:not(:disabled) {
+  color: var(--color-error-text);
+}
+
+.start-selection-clear {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 2px;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.start-selection-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+/* The Move menu opens upward from its button, over the shelf. */
+.start-tile-menu.start-selection-menu {
+  grid-area: auto;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: auto;
+  max-height: min(320px, 50vh);
+  min-width: 200px;
+  max-width: 280px;
+  overflow-y: auto;
+}
+
+.start-selection-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Folders ─────────────────────────────────────────────── */
+
+/* A folder is a card with a tab: the same tile, so the shelf stays one grid,
+   but it reads as something that holds parts rather than as a part. */
+.start-tile-folder {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+}
+
+/* The tab rides in the grid's row gap, so a folder lines up with the parts
+   beside it. */
+.start-tile-folder::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: -1px;
+  width: 42%;
+  height: 7px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.start-tile-folder:has(.start-tile-open:focus-visible)::before,
+.start-tile-folder:hover::before {
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-folder .start-tile-name {
+  display: block;
+}
+
+.start-folder-thumb {
+  background: var(--color-surface-2);
+}
+
+.start-folder-empty-icon {
+  width: 34px;
+  height: 34px;
+  color: var(--color-text-dim);
+}
+
+/* How many parts it holds, on the preview's lower-left corner. */
+.start-folder-count {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  border: var(--border-thin);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Where a dragged part would go: a folder under it, or a part it is held
+   over (pending until the hold arms, then the accent). */
+.start-tile-project.is-drop-target,
+.start-tile-folder.is-drop-target::before {
+  border-color: var(--color-accent);
+}
+
+.start-tile-project.is-drop-target {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.start-tile-project.is-drop-pending {
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-merge-hint {
+  grid-area: 1 / 1;
+  align-self: center;
+  justify-self: center;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 30px;
+  padding: 5px 9px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--fs-xs);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.start-tile-project.is-drop-target .start-tile-merge-hint {
+  color: var(--color-selected-text);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent);
+}
+
+/* Renaming: the field lies over the name, outside the open button. */
+.start-folder-rename-slot {
+  display: block;
+  height: 1.4em;
+}
+
+.start-folder-rename-field {
+  position: relative;
+  z-index: 2;
+  grid-area: 1 / 1;
+  align-self: end;
+  margin: 0 36px 28px 8px;
+}
+
+.start-folder-rename {
+  width: 100%;
+  min-height: 26px;
+  padding: 2px 6px;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+/* The way back out of a folder, beside its name. */
+.start-crumb {
+  padding: 2px 6px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-lg);
+}
+
+.start-crumb:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-crumb-separator {
+  flex: none;
+  color: var(--color-text-dim);
+}
+
+.start-toolbar h2.start-folder-title {
+  min-width: 0;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-folder-notice {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.start-folder-empty {
+  color: var(--color-text-subtle);
+}
+
+/* The column's folder list, under the shelves: a drop target as well as a
+   way in. */
+.start-folders {
+  display: grid;
+  gap: 2px;
+  margin-top: var(--sp-3);
+}
+
+.start-folders-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.start-folders-new {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.start-folders-new:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-folders-hint {
+  margin: 0;
+  padding: 2px 8px 4px;
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+}
+
+.start-folders-list {
+  display: grid;
+  gap: 2px;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.start-folder-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.start-folder-link:hover:not(.is-active) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-folder-link.is-active {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+}
+
+.start-folder-link.is-active > svg:first-child {
+  color: var(--color-accent);
+}
+
+:root.is-tile-dragging .start-folder-link:hover {
+  border-color: var(--color-accent);
+}
+
+.start-folder-link-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-folder-link-pin {
+  flex: none;
+  color: var(--color-text-subtle);
+}
+
+@media (max-width: 900px) {
+  /* The narrow shelf strip has no room for a list; folders stay on the
+     shelf as tiles. */
+  .start-folders {
+    display: none;
+  }
+
+  .start-selection-bar {
+    bottom: var(--sp-2);
+    max-width: calc(100vw - 16px);
+  }
+
+  /* One scrolling page: the logo, then the account line with its two
+     actions beside it, then the rest. */
+  .start-brand {
+    padding: var(--sp-3) var(--sp-3) 0;
+  }
+
+  .start-column-foot {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    margin: 0;
+    padding: var(--sp-3) var(--sp-3) 0;
+    border-top: 0;
+  }
+
+  .start-column-action {
+    flex: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .start-column-foot {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .start-toolbar-tools .start-search {
+    flex: 1;
+    width: auto;
+  }
 }

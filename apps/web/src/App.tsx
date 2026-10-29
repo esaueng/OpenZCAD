@@ -13195,6 +13195,73 @@ export function App() {
     }
   }
 
+  /** Several parts onto one shelf, from the library's selection. */
+  async function handleMoveProjectsToShelf(
+    targets: ProjectSummary[],
+    status: ProjectStatus
+  ) {
+    let moved = 0;
+    let failure: unknown;
+    for (const project of targets) {
+      try {
+        await persistOrganization(project.projectId, (current) =>
+          applyOrganizationUpdate(current, { status })
+        );
+        moved += 1;
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    const what =
+      targets.length === 1
+        ? targets[0]!.name
+        : countLabel(moved, 'part', 'parts');
+    if (failure) {
+      setStatus(
+        errorMessage(
+          failure,
+          `Moved ${countLabel(moved, 'part', 'parts')}; ${targets.length - moved} could not be moved.`
+        )
+      );
+      return;
+    }
+    setStatus(
+      status === 'deleted'
+        ? `Moved ${what} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
+        : status === 'archived'
+          ? `Archived ${what}.`
+          : `Restored ${what}.`
+    );
+  }
+
+  /** Pins or unpins several parts, from the library's selection. */
+  async function handleSetProjectsPinned(
+    targets: ProjectSummary[],
+    pinned: boolean
+  ) {
+    let failure: unknown;
+    for (const project of targets) {
+      try {
+        await persistOrganization(project.projectId, (current) =>
+          applyOrganizationUpdate(current, { pinned })
+        );
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    const what =
+      targets.length === 1
+        ? targets[0]!.name
+        : countLabel(targets.length, 'part', 'parts');
+    setStatus(
+      failure
+        ? errorMessage(failure, `Could not update every part.`)
+        : pinned
+          ? `Pinned ${what}.`
+          : `Unpinned ${what}.`
+    );
+  }
+
   async function handleTogglePin(project: ProjectSummary) {
     try {
       const { pinned } = await persistOrganization(
@@ -13655,6 +13722,22 @@ export function App() {
     setProjects((current) =>
       current.filter((project) => !destroyed.has(project.projectId))
     );
+    // A destroyed project is in no account any more. A sample keeps its fixed
+    // id, so a reset one rebuilt later must not inherit the old copy's cloud
+    // standing (listed as saved, or written at the deleted version).
+    for (const projectId of destroyed) {
+      remoteVersionsRef.current.delete(projectId);
+    }
+    if (destroyed.size > 0) {
+      setCloudProjectIds((current) => {
+        if (![...destroyed].some((projectId) => current.has(projectId))) {
+          return current;
+        }
+        const next = new Set(current);
+        destroyed.forEach((projectId) => next.delete(projectId));
+        return next;
+      });
+    }
     if (destroyed.size > 0) {
       if (session) forgetShelfProjectNames(session.userId, destroyed);
       void import('./lib/savedViews').then(({ forgetSavedViews }) =>
@@ -13682,6 +13765,64 @@ export function App() {
       setStatus(`Deleted ${project.name} permanently.`);
     } catch (error) {
       setStatus(errorMessage(error, 'Could not delete the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Destroys the library's selection in the trash, after one confirm. */
+  async function handleDeleteProjectsForever(targets: ProjectSummary[]) {
+    if (targets.length === 1) {
+      await handleDeleteProjectForever(targets[0]!);
+      return;
+    }
+    if (
+      targets.length === 0 ||
+      (appSettings.general.confirmDestructiveActions &&
+        !window.confirm(
+          `Permanently delete ${countLabel(targets.length, 'project', 'projects')}? This cannot be undone.`
+        ))
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects(targets);
+      setStatus(
+        `Deleted ${countLabel(targets.length, 'project', 'projects')} permanently.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not delete every project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Discards this device's copy of a sample, edits and save states with it,
+   * so its next open builds the original again from its definition.
+   */
+  async function handleResetDemo(
+    definition: DemoDefinition,
+    project: ProjectSummary
+  ): Promise<boolean> {
+    const name = definition.name.replace('Demo · ', '');
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Reset the ${name} sample? Your changes to it are discarded; save a copy first to keep them.`
+      )
+    ) {
+      return false;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects([project]);
+      setStatus(`Reset ${name}. It opens as the original.`);
+      return true;
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not reset ${name}.`));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -26843,6 +26984,18 @@ export function App() {
             void handleMoveProjectToShelf(project, shelf)
           }
           onTogglePin={(project) => void handleTogglePin(project)}
+          onMoveManyToShelf={(targets, shelf) =>
+            void handleMoveProjectsToShelf(targets, shelf)
+          }
+          onSetPinnedMany={(targets, pinned) =>
+            void handleSetProjectsPinned(targets, pinned)
+          }
+          onDeleteManyForever={(targets) =>
+            void handleDeleteProjectsForever(targets)
+          }
+          onResetDemo={(definition, project) =>
+            handleResetDemo(definition, project)
+          }
           onReorder={(projectIds, pin) =>
             handleReorderProjects(projectIds, pin)
           }

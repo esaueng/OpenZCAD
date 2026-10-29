@@ -1148,3 +1148,547 @@ describe('StartScreen shelf filters, order and layout', () => {
     localStorage.removeItem('openzcad.start.layout');
   });
 });
+
+describe('StartScreen folders and selection', () => {
+  const parts: ProjectSummary[] = ['Alpha', 'Bravo', 'Charlie', 'Delta'].map(
+    (name, index) => ({
+      projectId: toProjectId(`project_${name.toLowerCase()}`),
+      name: `${name} plate`,
+      revisionCount: 1,
+      updatedAt: `2026-10-0${index + 1}T12:00:00.000Z`,
+      organization: { status: 'active', pinned: false, sortOrder: index }
+    })
+  );
+
+  afterEach(() => localStorage.clear());
+
+  function seedFolder(projectIds: string[], extra: object = {}) {
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'folder-1',
+            name: 'Fixtures',
+            projectIds,
+            pinned: false,
+            createdAt: '2026-10-29T00:00:00.000Z',
+            ...extra
+          }
+        ]
+      })
+    );
+  }
+
+  const names = () =>
+    Array.from(document.querySelectorAll('.start-tile-name')).map(
+      (element) => element.textContent
+    );
+
+  it('shows filed parts inside their folder, not loose on the shelf', () => {
+    seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
+    renderStartScreen({ projects: parts });
+    expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 parts' })
+    );
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Fixtures' })
+    ).toBeInTheDocument();
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+    // The crumb goes back out.
+    fireEvent.click(screen.getByRole('button', { name: 'Parts' }));
+    expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
+  });
+
+  it('looks through folders while searching', () => {
+    seedFolder([parts[1]!.projectId]);
+    renderStartScreen({ projects: parts });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search parts' }), {
+      target: { value: 'bravo' }
+    });
+    expect(names()).toEqual(['Bravo plate']);
+  });
+
+  it('pins a folder ahead of the parts', () => {
+    seedFolder([parts[0]!.projectId]);
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Pin folder Fixtures' })
+    );
+    const pinned = document.querySelector('[data-tile-group="pinned"]');
+    expect(
+      within(pinned as HTMLElement).getByText('Fixtures')
+    ).toBeInTheDocument();
+  });
+
+  it('selects a range and trashes it in one action', () => {
+    const onMoveManyToShelf = vi.fn();
+    const onOpen = vi.fn();
+    renderStartScreen({ projects: parts, onMoveManyToShelf, onOpen });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Charlie plate' }),
+      { shiftKey: true }
+    );
+    const bar = screen.getByRole('toolbar', { name: '3 parts selected' });
+    // While anything is picked, a click on a card picks it too.
+    fireEvent.click(screen.getByText('Delta plate'));
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(within(bar).getByText('4 selected')).toBeInTheDocument();
+    fireEvent.click(within(bar).getByRole('button', { name: 'Move to trash' }));
+    expect(onMoveManyToShelf).toHaveBeenCalledWith(parts, 'deleted');
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('files the selection in a new folder and names it', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Delta plate' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Move to' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+    const field = screen.getByRole('textbox', { name: 'Folder name' });
+    fireEvent.change(field, { target: { value: 'Holders' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(names()).toEqual(['Holders', 'Bravo plate', 'Charlie plate']);
+    expect(
+      screen.getByRole('button', { name: 'Open folder Holders, 2 parts' })
+    ).toBeInTheDocument();
+  });
+
+  it.each(['Archive', 'Trash'])(
+    'reveals a new folder created from %s',
+    (shelf) => {
+      renderStartScreen({ projects: parts });
+      fireEvent.click(
+        screen.getByRole('tab', { name: new RegExp(`^${shelf}`) })
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+      expect(screen.getByRole('tab', { name: /^Parts/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      expect(
+        screen.getByRole('textbox', { name: 'Folder name' })
+      ).toHaveFocus();
+    }
+  );
+
+  it.each(['search', 'filter'])(
+    'reveals a folder created from a selection with an active %s',
+    (view) => {
+      const pinnedParts = parts.map((part) => ({
+        ...part,
+        organization: {
+          ...part.organization!,
+          pinned: true
+        }
+      }));
+      renderStartScreen({ projects: pinnedParts });
+      if (view === 'search') {
+        fireEvent.change(
+          screen.getByRole('textbox', { name: 'Search parts' }),
+          {
+            target: { value: 'Alpha' }
+          }
+        );
+      } else {
+        fireEvent.click(
+          within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+            'button',
+            { name: /^Pinned/ }
+          )
+        );
+      }
+      fireEvent.click(
+        screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Move to' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+      expect(
+        screen.getByRole('textbox', { name: 'Folder name' })
+      ).toHaveFocus();
+      expect(screen.getByRole('textbox', { name: 'Search parts' })).toHaveValue(
+        ''
+      );
+      expect(
+        within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+          'button',
+          { name: /^All/ }
+        )
+      ).toHaveAttribute('aria-pressed', 'true');
+    }
+  );
+
+  it('skips disabled cover selection when navigating an empty folder menu', () => {
+    seedFolder([]);
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for folder Fixtures' })
+    );
+    expect(
+      screen.getByRole('menuitem', { name: 'Choose cover…' })
+    ).toBeDisabled();
+    const rename = screen.getByRole('menuitem', { name: 'Rename' });
+    const ungroup = screen.getByRole('menuitem', { name: 'Ungroup' });
+    rename.focus();
+    fireEvent.keyDown(rename, { key: 'ArrowDown' });
+    expect(ungroup).toHaveFocus();
+    fireEvent.keyDown(ungroup, { key: 'ArrowUp' });
+    expect(rename).toHaveFocus();
+  });
+
+  it.each(['Archive', 'Trash'])(
+    'keeps folder navigation counts tied to Parts on %s',
+    (shelf) => {
+      seedFolder(parts.map((part) => part.projectId));
+      renderStartScreen({
+        projects: parts.map((part, index) => ({
+          ...part,
+          organization: {
+            ...part.organization!,
+            status: index < 2 ? 'active' : index === 3 ? 'deleted' : 'archived'
+          }
+        }))
+      });
+      fireEvent.click(
+        screen.getByRole('tab', { name: new RegExp(`^${shelf}`) })
+      );
+      expect(
+        document.querySelector('.start-folder-link .start-shelf-count')
+      ).toHaveTextContent('2');
+      fireEvent.click(
+        document.querySelector<HTMLButtonElement>('.start-folder-link')!
+      );
+      expect(names()).toEqual(['Alpha plate', 'Bravo plate']);
+    }
+  );
+
+  it('clears the selection with Escape', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('offers a reset and a copy for a sample opened before', () => {
+    const demo = {
+      key: 'bracket',
+      projectId: toProjectId('proj_demo_mounting_bracket'),
+      name: 'Demo · Mounting Bracket',
+      tagline: 'L-bracket with boss and mounting holes',
+      revisions: ['A — one', 'B — two', 'C — three'] as [string, string, string]
+    };
+    const edited: ProjectSummary = {
+      projectId: demo.projectId,
+      name: demo.name,
+      revisionCount: 7,
+      updatedAt: '2026-10-29T12:00:00.000Z'
+    };
+    const onResetDemo = vi.fn().mockResolvedValue(true);
+    const onDuplicate = vi.fn();
+    const { rerender } = renderStartScreen({
+      demos: [demo],
+      projects: [localProject]
+    });
+    expect(
+      screen.queryByRole('button', { name: /Reset Mounting Bracket/ })
+    ).toBeNull();
+    rerender(
+      <StartScreen
+        {...startScreenProps({
+          demos: [demo],
+          projects: [localProject, edited],
+          onResetDemo,
+          onDuplicate
+        })}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Reset Mounting Bracket to the original'
+      })
+    );
+    expect(onResetDemo).toHaveBeenCalledWith(demo, edited);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save a copy of Mounting Bracket to your parts'
+      })
+    );
+    expect(onDuplicate).toHaveBeenCalledWith(edited);
+  });
+});
+
+describe('StartScreen selection edge cases', () => {
+  const parts: ProjectSummary[] = ['Echo', 'Foxtrot'].map((name, index) => ({
+    projectId: toProjectId(`project_${name.toLowerCase()}`),
+    name: `${name} block`,
+    revisionCount: 1,
+    updatedAt: `2026-10-0${index + 1}T12:00:00.000Z`
+  }));
+
+  it('closes the Move menu on Escape before dropping the selection', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Echo block' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Move to' }));
+    const item = screen.getByRole('menuitem', { name: 'New folder' });
+    fireEvent.keyDown(item, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Move to folder' })).toBeNull();
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('hides the bar when a search hides every selected part', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Echo block' })
+    );
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search parts' }), {
+      target: { value: 'foxtrot' }
+    });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    // The hidden pick does not carry onto the part still shown.
+    expect(
+      screen.getByRole('checkbox', { name: 'Select Foxtrot block' })
+    ).toHaveAttribute('aria-checked', 'false');
+  });
+});
+
+describe('StartScreen selection and dialogs', () => {
+  afterEach(() => localStorage.clear());
+
+  it('lets an open dialog take Escape without dropping the selection', async () => {
+    const loadProperties = vi.fn().mockResolvedValue(null);
+    renderStartScreen({ loadProperties });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: `Select ${localProject.name}` })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Project properties'
+    });
+    fireEvent.keyDown(
+      within(dialog).getByRole('button', { name: 'Close project properties' }),
+      { key: 'Escape' }
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('toolbar')).toBeInTheDocument();
+  });
+
+  it('offers each folder part as a cover button, the current one pressed', async () => {
+    const parts: ProjectSummary[] = ['Juliet', 'Kilo'].map((name) => ({
+      projectId: toProjectId(`project_${name.toLowerCase()}`),
+      name: `${name} plate`,
+      revisionCount: 1,
+      updatedAt: '2026-10-01T12:00:00.000Z'
+    }));
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'f1',
+            name: 'Plates',
+            projectIds: parts.map((part) => part.projectId),
+            pinned: false,
+            createdAt: ''
+          }
+        ]
+      })
+    );
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for folder Plates' })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Choose cover…' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Cover for Plates'
+    });
+    expect(within(dialog).queryByRole('radio')).toBeNull();
+    expect(
+      within(dialog).getByRole('button', {
+        name: 'Use Juliet plate as the cover'
+      })
+    ).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'Use Kilo plate as the cover'
+      })
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('StartScreen permanent deletion', () => {
+  it('keeps the selection when deleting forever is not carried out', () => {
+    const trashed: ProjectSummary[] = ['Lima', 'Mike'].map((name) => ({
+      projectId: toProjectId(`project_${name.toLowerCase()}`),
+      name: `${name} part`,
+      revisionCount: 1,
+      updatedAt: '2026-10-01T12:00:00.000Z',
+      organization: {
+        status: 'deleted',
+        pinned: false,
+        sortOrder: 0,
+        deletedAt: '2026-10-20T12:00:00.000Z'
+      }
+    }));
+    // A cancelled confirm: the handler is called and nothing is destroyed.
+    const onDeleteManyForever = vi.fn();
+    renderStartScreen({ projects: trashed, onDeleteManyForever });
+    fireEvent.click(screen.getByRole('tab', { name: /Trash/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Lima part' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Mike part' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete forever' }));
+    expect(onDeleteManyForever).toHaveBeenCalledWith(trashed);
+    expect(
+      screen.getByRole('toolbar', { name: '2 parts selected' })
+    ).toBeInTheDocument();
+  });
+});
+
+describe('StartScreen sample reset and folders', () => {
+  afterEach(() => localStorage.clear());
+
+  it('takes a reset sample out of any folder that still lists it', async () => {
+    const onResetDemo = vi.fn<() => Promise<boolean>>();
+    const demo = {
+      key: 'flange',
+      projectId: toProjectId('proj_demo_pipe_flange'),
+      name: 'Demo · Pipe Flange',
+      tagline: 'Revolve, bolt circle, chamfer',
+      revisions: ['A — one', 'B — two', 'C — three'] as [string, string, string]
+    };
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'f1',
+            name: 'Old',
+            projectIds: [demo.projectId, localProject.projectId],
+            coverProjectId: demo.projectId,
+            pinned: false,
+            createdAt: ''
+          }
+        ]
+      })
+    );
+    renderStartScreen({
+      demos: [demo],
+      projects: [
+        localProject,
+        {
+          projectId: demo.projectId,
+          name: demo.name,
+          revisionCount: 4,
+          updatedAt: '2026-10-29T12:00:00.000Z'
+        }
+      ],
+      onResetDemo
+    });
+    const reset = () =>
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Reset Pipe Flange to the original'
+        })
+      );
+    const members = () =>
+      (
+        JSON.parse(
+          localStorage.getItem('openzcad.library.folders.v1:device')!
+        ) as { folders: Array<{ projectIds: string[] }> }
+      ).folders[0]!.projectIds;
+    // Declined (or failed): the folder entry stays.
+    onResetDemo.mockResolvedValueOnce(false);
+    reset();
+    await waitFor(() => expect(onResetDemo).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(members()).toEqual([demo.projectId, localProject.projectId]);
+    onResetDemo.mockResolvedValueOnce(true);
+    reset();
+    await waitFor(() => expect(members()).toEqual([localProject.projectId]));
+    const stored = JSON.parse(
+      localStorage.getItem('openzcad.library.folders.v1:device')!
+    ) as { folders: Array<{ projectIds: string[]; coverProjectId?: string }> };
+    expect(stored.folders[0]!.projectIds).toEqual([localProject.projectId]);
+    expect(stored.folders[0]!.coverProjectId).toBeUndefined();
+  });
+});
+
+describe('StartScreen selection order', () => {
+  afterEach(() => localStorage.clear());
+
+  it('files picked parts in the order a folder shows them', () => {
+    const parts: ProjectSummary[] = ['November', 'Oscar'].map(
+      (name, index) => ({
+        projectId: toProjectId(`project_${name.toLowerCase()}`),
+        name: `${name} plate`,
+        revisionCount: 1,
+        updatedAt: '2026-10-01T12:00:00.000Z',
+        organization: { status: 'active', pinned: false, sortOrder: index }
+      })
+    );
+    // The folder's order is the reverse of the shelf's.
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          {
+            id: 'f1',
+            name: 'Plates',
+            projectIds: [parts[1]!.projectId, parts[0]!.projectId],
+            pinned: false,
+            createdAt: ''
+          }
+        ]
+      })
+    );
+    const onMoveManyToShelf = vi.fn();
+    renderStartScreen({ projects: parts, onMoveManyToShelf });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Plates, 2 parts' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select November plate' })
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Oscar plate' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(onMoveManyToShelf).toHaveBeenCalledWith(
+      [parts[1], parts[0]],
+      'archived'
+    );
+  });
+});
+
+describe('StartScreen move menu from a card', () => {
+  it('puts focus in the Move menu opened from a card menu', () => {
+    renderStartScreen();
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
+    const menu = screen.getByRole('menu', { name: 'Move to folder' });
+    expect(
+      within(menu).getByRole('menuitem', { name: 'New folder' })
+    ).toHaveFocus();
+  });
+});

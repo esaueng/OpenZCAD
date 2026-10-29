@@ -123,6 +123,7 @@
     "src/lib/featureValidation.test.ts",
     "src/lib/fieldParameterDefinitions.test.ts",
     "src/lib/livePreview.test.ts",
+    "src/lib/libraryFolders.test.ts",
     "src/lib/localProjectAutosave.test.ts",
     "src/lib/localProjectCopy.test.ts",
     "src/lib/localProjectStore.test.ts",
