@@ -113,3 +113,16 @@ describe('the first-run tour', () => {
     );
   });
 });
+
+describe('the instrument rail island', () => {
+  it('draws the hairline before the panels rail whatever stands between', () => {
+    // While sketching the relations sit between the viewer bar and the
+    // panels' buttons in the markup, so an adjacent-sibling `+` never
+    // matched and the merged rail lost its divider.
+    const css = sheet('quiet-stage.css');
+    expect(
+      rules(css, '.instrument-rail > .viewer-rail ~ .viewer-rail').join('\n')
+    ).toMatch(/border-top:/);
+    expect(css).not.toMatch(/\.viewer-rail\s*\+\s*\.viewer-rail/);
+  });
+});

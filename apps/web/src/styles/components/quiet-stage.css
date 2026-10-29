@@ -2085,7 +2085,9 @@ button.command-rail:disabled {
     box-shadow: none;
   }
 
-  .instrument-rail > .viewer-rail + .viewer-rail {
+  /* `~`, not `+`: while sketching the relations stand between the two
+     rails in the markup (drawn beside the rail, out of flow). */
+  .instrument-rail > .viewer-rail ~ .viewer-rail {
     border-top: var(--border-thin);
   }
 }
