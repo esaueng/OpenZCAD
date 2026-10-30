@@ -157,13 +157,13 @@ interface StartScreenProps {
   onRetrySync(projectId: string): void;
   onDismissSyncRun(): void;
   onMoveToShelf(project: ProjectSummary, status: ProjectStatus): void;
-  /** Several parts at once, reported as one change; loops when absent. */
+  /** Several projects at once, reported as one change; loops when absent. */
   onMoveManyToShelf?(projects: ProjectSummary[], status: ProjectStatus): void;
   onTogglePin(project: ProjectSummary): void;
-  /** Pins or unpins several parts at once; toggles each when absent. */
+  /** Pins or unpins several projects at once; toggles each when absent. */
   onSetPinnedMany?(projects: ProjectSummary[], pinned: boolean): void;
   /**
-   * The shelf's projects in their new order, front to back, and the part a
+   * The shelf's projects in their new order, front to back, and the project a
    * drag took into or out of the pinned group, if any.
    */
   onReorder(
@@ -200,7 +200,7 @@ interface StartScreenProps {
 
 const LOADING_PROJECT_TILES = 10;
 
-/** The Parts shelf's narrowing, beside its heading. */
+/** The Projects shelf's narrowing, beside its heading. */
 type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
 type ShelfSort = 'custom' | 'edited' | 'name';
 type ShelfLayout = 'grid' | 'list';
@@ -240,14 +240,14 @@ interface LibraryView {
   filter: ShelfFilter;
   sort: ShelfSort;
   query: string;
-  /** The folder open on the Parts shelf, if any. */
+  /** The folder open on the Projects shelf, if any. */
   folder: string | null;
 }
 
 /**
  * The shelf, filter, sort and search this tab last showed, so a reload (or a
- * trip into a part and back) returns to the same view, and its scroll
- * position with it. Per tab: a new tab starts on Parts. Anything unreadable
+ * trip into a project and back) returns to the same view, and its scroll
+ * position with it. Per tab: a new tab starts on Projects. Anything unreadable
  * falls back to the defaults.
  */
 function readLibraryView(): LibraryView {
@@ -305,9 +305,9 @@ function writeLibraryView(view: LibraryView) {
 const RECOVERY_SUFFIX = / \((?:Recovery|Local copy)\)(?: \(copy(?: \d+)?\))*$/;
 
 /**
- * The part a recovery copy was made from, by name: conflict recovery and
+ * The project a recovery copy was made from, by name: conflict recovery and
  * local-copy saves append "(Recovery)" or "(Local copy)", and duplicating one
- * appends "(copy)". Null for an ordinary part.
+ * appends "(copy)". Null for an ordinary project.
  */
 export function recoveryCopyOf(name: string): string | null {
   const match = RECOVERY_SUFFIX.exec(name);
@@ -331,7 +331,7 @@ export function formatLastEditedExact(updatedAt: string): string {
 }
 
 /**
- * The shelf's date for when a part was last edited: one absolute shape for
+ * The shelf's date for when a project was last edited: one absolute shape for
  * every tile ("Oct 4, 2026"). The shelf used to say "Today 4:05 PM" or
  * "Tue 4:05 PM" within the week and a numeric date beyond it, so one row
  * mixed two notations and neighbours could not be compared at a glance. The
@@ -351,7 +351,12 @@ const SHELVES: ReadonlyArray<{
   empty: string;
   Icon: typeof Box;
 }> = [
-  { status: 'active', label: 'Parts', empty: 'nothing saved yet', Icon: Box },
+  {
+    status: 'active',
+    label: 'Projects',
+    empty: 'nothing saved yet',
+    Icon: Box
+  },
   {
     status: 'archived',
     label: 'Archive',
@@ -370,11 +375,11 @@ const SHELVES: ReadonlyArray<{
 const LIBRARY_SCROLL_KEY = 'openzcad.start.scroll';
 const LIBRARY_SCROLLERS = ['.start-body'] as const;
 const REORDER_KEYS = 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown';
-/** How long a part is held over another's middle before they would merge. */
+/** How long a project is held over another's middle before they would merge. */
 const MERGE_HOLD_MS = 450;
 const FOLDER_KEY_PREFIX = 'folder:';
 
-/** A folder's tile id, kept apart from part ids on the same shelf. */
+/** A folder's tile id, kept apart from project ids on the same shelf. */
 function folderKey(folderId: string) {
   return `${FOLDER_KEY_PREFIX}${folderId}`;
 }
@@ -401,18 +406,18 @@ function focusTileMenuItem(
   }
 }
 
-/** One tile on the shelf: a folder or a part. */
+/** One tile on the shelf: a folder or a project. */
 interface ShelfItem {
   key: string;
   folder?: LibraryFolder;
   project?: ProjectSummary;
 }
 
-/** A part leaving the shelf from its own tile, and who inherits focus. */
+/** A project leaving the shelf from its own tile, and who inherits focus. */
 interface ShelfDeparture {
   projectId: string;
   shelf: ProjectStatus;
-  /** The parts after it, then the parts before it, nearest first. */
+  /** The projects after it, then the projects before it, nearest first. */
   successors: string[];
 }
 
@@ -494,7 +499,7 @@ export function StartScreen({
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [coverFolderId, setCoverFolderId] = useState<string | null>(null);
-  // Parts picked for a bulk action, by id; only those on screen count.
+  // Projects picked for a bulk action, by id; only those on screen count.
   const [selected, setSelected] = useState<ReadonlySet<string>>(
     () => new Set()
   );
@@ -519,9 +524,9 @@ export function StartScreen({
   const departure = useRef<ShelfDeparture | null>(null);
   const partsTitleRef = useRef<HTMLHeadingElement | null>(null);
   const screenRef = useRef<HTMLDivElement | null>(null);
-  // Opening a part crossfades into the workspace instead of cutting to it.
+  // Opening a project crossfades into the workspace instead of cutting to it.
   useDissolveOnUnmount(screenRef, START_SCREEN_DISSOLVE_MS);
-  // A reload, or a trip to a part and back, returns to the same place in the
+  // A reload, or a trip to a project and back, returns to the same place in the
   // library. The page shell scrolls on narrow screens, the body on wide ones.
   useScrollMemory(
     screenRef,
@@ -644,9 +649,9 @@ export function StartScreen({
   const localOnlyIds = new Set(
     localOnlyProjects.map((project) => project.projectId)
   );
-  // Recovery copies stay parts in their own right (they open, sync and
+  // Recovery copies stay projects in their own right (they open, sync and
   // trash like any other), but each original says how many it has, and the
-  // Needs attention filter gathers them with the parts that diverged or
+  // Needs attention filter gathers them with the projects that diverged or
   // failed to save.
   const recoveryCounts = new Map<string, number>();
   for (const project of shelfProjects) {
@@ -668,7 +673,7 @@ export function StartScreen({
     attention: needsAttention,
     local: (project) => localOnlyIds.has(project.projectId)
   };
-  // Folders live on the Parts shelf. A part in one is shown inside it, not
+  // Folders live on the Projects shelf. A project in one is shown inside it, not
   // loose on the shelf; a folder left open in a view that no longer has it
   // (ungrouped in another tab, say) reads as no folder.
   const folders = folderState.folders;
@@ -686,7 +691,7 @@ export function StartScreen({
     shelfProjects.map((project) => [project.projectId, project])
   );
   const shelfIds: ReadonlySet<string> = new Set(shelfById.keys());
-  /** A folder's parts on this shelf, in the folder's order. */
+  /** A folder's projects on this shelf, in the folder's order. */
   function folderMembers(folder: LibraryFolder): ProjectSummary[] {
     return folder.projectIds.flatMap((projectId) => {
       const project = shelfById.get(projectId);
@@ -696,10 +701,10 @@ export function StartScreen({
   // What the shelf is showing before any filter: one folder, or everything.
   const baseProjects = openFolder ? folderMembers(openFolder) : shelfProjects;
 
-  // Filters narrow the Parts shelf only; Archive and Trash are short lists.
+  // Filters narrow the Projects shelf only; Archive and Trash are short lists.
   const filterable = shelf === 'active';
   // "This device only" means something only against an account listing;
-  // signed out, or with the listing unreachable, it would hide every part.
+  // signed out, or with the listing unreachable, it would hide every project.
   const activeFilter: ShelfFilter =
     !filterable ||
     (filter === 'local' && !(signedIn && accountProjectListReached))
@@ -722,7 +727,7 @@ export function StartScreen({
         project.name.toLowerCase().includes(search)
       )
     : filteredProjects;
-  // Pinned parts stay at the front whatever the order: pinning is the one
+  // Pinned projects stay at the front whatever the order: pinning is the one
   // ordering a person chose on purpose.
   const matchingProjects =
     sort === 'custom'
@@ -736,8 +741,8 @@ export function StartScreen({
             ? b.updatedAt.localeCompare(a.updatedAt)
             : a.name.localeCompare(b.name, undefined, { numeric: true });
         });
-  // Folders gather parts only on the unfiltered shelf; a filter or a search
-  // looks through them, showing every matching part on its own.
+  // Folders gather projects only on the unfiltered shelf; a filter or a search
+  // looks through them, showing every matching project on its own.
   const foldering =
     shelf === 'active' && !openFolder && activeFilter === 'all' && !search;
   const looseProjects = foldering
@@ -761,9 +766,9 @@ export function StartScreen({
             : a.name.localeCompare(b.name, undefined, { numeric: true })
         );
 
-  // A part sent to another shelf takes its tile, and the focused control in
+  // A project sent to another shelf takes its tile, and the focused control in
   // it, off the page, which would leave focus on nothing. Once it is gone the
-  // next part takes focus (the previous one at the end, the shelf's heading
+  // next project takes focus (the previous one at the end, the shelf's heading
   // when it was the last) — unless focus already went somewhere on purpose.
   useEffect(() => {
     const leaving = departure.current;
@@ -808,7 +813,7 @@ export function StartScreen({
       .filter((project) => projectOrganization(project).pinned)
       .map((project) => project.projectId)
   );
-  // The tiles a drag moves among, folders (keyed apart from parts) first.
+  // The tiles a drag moves among, folders (keyed apart from projects) first.
   const reorderIds = [
     ...shownFolders.map((folder) => folderKey(folder.id)),
     ...looseProjects.map((project) => project.projectId)
@@ -817,9 +822,9 @@ export function StartScreen({
 
   /**
    * Saves a new order of the tiles on screen, and the tile a drag took into
-   * or out of Pinned. Folders keep their own order on this device; parts
-   * keep the shelf order, with the parts filed in folders after the loose
-   * ones (a folder orders its own parts).
+   * or out of Pinned. Folders keep their own order on this device; projects
+   * keep the shelf order, with the projects filed in folders after the loose
+   * ones (a folder orders its own projects).
    */
   function commitOrder(ids: string[], moved?: { id: string; group: string }) {
     if (sort !== 'custom') {
@@ -864,14 +869,14 @@ export function StartScreen({
     }
   }
 
-  /** Every selected part when the dragged one is among them, else just it. */
+  /** Every selected project when the dragged one is among them, else just it. */
   function draggedProjectIds(projectId: string): string[] {
     return selected.has(projectId)
       ? visibleProjectIds().filter((id) => selected.has(id))
       : [projectId];
   }
 
-  /** A drag onto Archive or Trash: the dragged parts (or picked ones) go. */
+  /** A drag onto Archive or Trash: the dragged projects (or picked ones) go. */
   function sendToShelf(projectIds: string[], status: ProjectStatus) {
     const chosen = projectIds.flatMap((projectId) => {
       const project = shelfProjects.find(
@@ -884,7 +889,7 @@ export function StartScreen({
     if (onMoveManyToShelf) onMoveManyToShelf(chosen, status);
     else chosen.forEach((project) => onMoveToShelf(project, status));
     const what =
-      chosen.length === 1 ? chosen[0]!.name : `${chosen.length} parts`;
+      chosen.length === 1 ? chosen[0]!.name : `${chosen.length} projects`;
     setNotice(
       status === 'deleted'
         ? `Moved ${what} to the trash. Restore it from Trash.`
@@ -898,8 +903,8 @@ export function StartScreen({
     const what =
       projectIds.length === 1
         ? (shelfProjects.find((project) => project.projectId === projectIds[0])
-            ?.name ?? '1 part')
-        : `${projectIds.length} parts`;
+            ?.name ?? '1 project')
+        : `${projectIds.length} projects`;
     setNotice(
       folder
         ? `Moved ${what} to ${folder.name}.`
@@ -925,7 +930,7 @@ export function StartScreen({
       : reorderIds,
     enabled: canReorder,
     tileRefs,
-    // Pinned parts and folders head the shelf as their own group: dragging
+    // Pinned projects and folders head the shelf as their own group: dragging
     // one into it pins it, and dragging one out unpins it. Inside a folder
     // there is just the folder.
     groupOf: (id) => {
@@ -935,11 +940,11 @@ export function StartScreen({
       }
       return !openFolder && pinnedIds.has(id) ? 'pinned' : 'parts';
     },
-    // Folders sit among folders and parts among parts.
+    // Folders sit among folders and projects among projects.
     canPlaceBeside: (dragged, target) =>
       Boolean(folderIdOf(dragged)) === Boolean(folderIdOf(target)),
     dropInto: (dragged, hit, pointer) => {
-      // Onto Archive or Trash in the column: the part goes to that shelf.
+      // Onto Archive or Trash in the column: the project goes to that shelf.
       const shelfTab = hit.closest<HTMLElement>('[data-drop-shelf]');
       if (shelfTab?.dataset.dropShelf) {
         return folderIdOf(dragged)
@@ -955,7 +960,7 @@ export function StartScreen({
           ? null
           : { target: folderKey(folder.dataset.dropFolder) };
       }
-      // Held over the middle of another loose part: the two become a folder.
+      // Held over the middle of another loose project: the two become a folder.
       const tile = hit.closest<HTMLElement>('[data-tile-id]');
       const target = tile?.dataset.tileId;
       if (!tile || !target || target === dragged || openFolder) return null;
@@ -963,7 +968,7 @@ export function StartScreen({
       const box = tile.getBoundingClientRect();
       // The middle half of the card, top to bottom, so a drag arriving from
       // the row above or below meets the merge zone first; its outer
-      // quarters place the part beside it.
+      // quarters place the project beside it.
       const fx = (pointer.x - box.left) / box.width;
       return fx > 0.25 && fx < 0.75
         ? { target: `merge:${target}`, delay: MERGE_HOLD_MS }
@@ -993,7 +998,7 @@ export function StartScreen({
     },
     onCommit: (ids, moved) => commitOrder(ids, moved)
   });
-  // A part on the move: Archive and Trash show they will take it.
+  // A project on the move: Archive and Trash show they will take it.
   const draggingPart =
     reorder.draggingId !== null && !folderIdOf(reorder.draggingId);
   /** Pinned as stored, or as a drag would leave it. */
@@ -1053,7 +1058,7 @@ export function StartScreen({
     setOpenMenu(null);
   }
 
-  /** Runs an action that takes the part off this shelf (see `departure`). */
+  /** Runs an action that takes the project off this shelf (see `departure`). */
   function leaveShelf(project: ProjectSummary, action: () => void) {
     const ids = matchingProjects.map((entry) => entry.projectId);
     const at = ids.indexOf(project.projectId);
@@ -1085,7 +1090,7 @@ export function StartScreen({
 
   // ── Selection ──────────────────────────────────────────────────────────
 
-  /** Parts on screen, in the order they are shown. */
+  /** Projects on screen, in the order they are shown. */
   function visibleProjectIds(): string[] {
     return shelfGroups.flatMap((group) =>
       group.items.flatMap((item) =>
@@ -1095,7 +1100,7 @@ export function StartScreen({
   }
 
   /**
-   * Adds or removes a part. With Shift, everything from the last part picked
+   * Adds or removes a project. With Shift, everything from the last project picked
    * to this one joins the selection instead.
    */
   function toggleSelected(projectId: string, range = false) {
@@ -1128,7 +1133,7 @@ export function StartScreen({
     selectionAnchor.current = null;
   }
 
-  /** Picked parts on screen, in the order shown (a folder's own order). */
+  /** Picked projects on screen, in the order shown (a folder's own order). */
   function selectedOnScreen(): ProjectSummary[] {
     return visibleProjectIds().flatMap((projectId) => {
       const project = selected.has(projectId)
@@ -1159,7 +1164,7 @@ export function StartScreen({
   function deleteSelectedForever() {
     const chosen = selectedOnScreen();
     // The selection stays: a cancelled confirm must not cost the pick, and
-    // destroyed parts leave the screen (and so the selection) on their own.
+    // destroyed projects leave the screen (and so the selection) on their own.
     setMoveMenuOpen(false);
     if (chosen.length === 0) return;
     if (onDeleteManyForever) onDeleteManyForever(chosen);
@@ -1168,8 +1173,8 @@ export function StartScreen({
   }
 
   // A selection is a mode: Escape leaves it, and ⌘A / Ctrl+A takes in every
-  // part on screen while focus is not in a field. (`selecting` counts only
-  // picked parts still on screen; it is set once the shelf is grouped.)
+  // project on screen while focus is not in a field. (`selecting` counts only
+  // picked projects still on screen; it is set once the shelf is grouped.)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
@@ -1262,7 +1267,7 @@ export function StartScreen({
     setNotice(
       count === 0
         ? `Removed ${folder.name}.`
-        : `Removed ${folder.name}; its ${count === 1 ? 'part is' : `${count} parts are`} back on the shelf.`
+        : `Removed ${folder.name}; its ${count === 1 ? 'project is' : `${count} projects are`} back on the shelf.`
     );
   }
 
@@ -1344,7 +1349,7 @@ export function StartScreen({
           className="start-tile-open"
           data-tile-drag=""
           disabled={busy}
-          aria-label={`Open folder ${folder.name}, ${members.length} ${members.length === 1 ? 'part' : 'parts'}`}
+          aria-label={`Open folder ${folder.name}, ${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
           aria-keyshortcuts={canReorder ? REORDER_KEYS : undefined}
           onClick={() => {
             if (!renaming) showFolder(folder.id);
@@ -1376,8 +1381,8 @@ export function StartScreen({
             <small className="start-tile-meta">
               <span className="start-tile-when">
                 {members.length === 0
-                  ? 'Empty — drop parts here'
-                  : `${members.length} ${members.length === 1 ? 'part' : 'parts'}${
+                  ? 'Empty — drop projects here'
+                  : `${members.length} ${members.length === 1 ? 'project' : 'projects'}${
                       edited ? ` · ${formatLastEdited(edited)}` : ''
                     }`}
               </span>
@@ -1561,7 +1566,7 @@ export function StartScreen({
             {project.name}
           </strong>
           <small className="start-tile-meta">
-            {/* Quiet marks for the part's standing traits, ahead of the date
+            {/* Quiet marks for the project's standing traits, ahead of the date
                 they qualify: how it is stored, where it lives, what it is. */}
             <span className="start-tile-when">
               {migrating && !encrypted ? (
@@ -1792,7 +1797,7 @@ export function StartScreen({
           </button>
         )}
 
-        {/* Picks the part for a bulk action. Shown on hover, and on every
+        {/* Picks the project for a bulk action. Shown on hover, and on every
             card once anything is picked. */}
         <button
           type="button"
@@ -1982,7 +1987,7 @@ export function StartScreen({
                     tabIndex={-1}
                     onClick={() => {
                       closeMenu(project.projectId);
-                      // The selection bar's Move menu, for just this part.
+                      // The selection bar's Move menu, for just this project.
                       setSelected(new Set([project.projectId]));
                       selectionAnchor.current = project.projectId;
                       setMoveMenuOpen(true);
@@ -2055,7 +2060,7 @@ export function StartScreen({
                     }
                   >
                     <ArchiveRestore size={13} aria-hidden="true" />
-                    Move to parts
+                    Move to projects
                   </button>
                 )}
                 <button
@@ -2100,7 +2105,7 @@ export function StartScreen({
 
         {trashed && (
           // The visible labels are short for the narrow footer; the names
-          // say which part, and match the menu's "Delete forever".
+          // say which project, and match the menu's "Delete forever".
           <div className="start-tile-footer">
             <button
               type="button"
@@ -2134,9 +2139,9 @@ export function StartScreen({
   const layoutCounts =
     loading && previousLayout ? previousLayout : filterCounts;
   const showFilters = filterable && (loading || shelfProjects.length > 0);
-  // Pinned parts and folders head the shelf as their own group when the
+  // Pinned projects and folders head the shelf as their own group when the
   // whole shelf is on screen. Partitioned by the flag, not sliced by count: a
-  // part created this session is prepended to the listing ahead of pinned
+  // project created this session is prepended to the listing ahead of pinned
   // ones. While a drag is under way, the tiles take the order it would drop
   // into. Folders lead each group.
   const dragPositions =
@@ -2170,7 +2175,7 @@ export function StartScreen({
     activeFilter === 'all' &&
     !search &&
     storedPinned > 0 &&
-    // With everything pinned the Parts group stays, empty, while the shelf
+    // With everything pinned the Projects group stays, empty, while the shelf
     // can be reordered: it is where a card is dragged to unpin it.
     (storedPinned < items.length || canReorder)
       ? [
@@ -2180,13 +2185,13 @@ export function StartScreen({
             items: orderedItems.filter(itemPinned)
           },
           {
-            label: 'Parts',
+            label: 'Projects',
             group: 'parts',
             items: orderedItems.filter((item) => !itemPinned(item))
           }
         ]
       : [{ label: null, items: orderedItems }];
-  // A filter or search that hides every picked part ends selection mode
+  // A filter or search that hides every picked project ends selection mode
   // rather than leaving a bar that acts on nothing.
   const selecting = selectedOnScreen().length > 0;
   const shownProjectCount = shelfGroups.reduce(
@@ -2231,13 +2236,13 @@ export function StartScreen({
   ]);
 
   // Matches the loaded shelf: an all-pinned shelf still heads its cards
-  // with Pinned, and its empty Parts group shows only mid-drag.
+  // with Pinned, and its empty Projects group shows only mid-drag.
   const loadingGroups =
     previousLayout && previousLayout.pinned > 0
       ? [
           { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
           {
-            label: 'Parts',
+            label: 'Projects',
             count: previousLayout.all - previousLayout.pinned,
             offset: previousLayout.pinned
           }
@@ -2260,7 +2265,7 @@ export function StartScreen({
   }
 
   // The account's view of the shelf, for the column's status card. Deleted
-  // parts are left out on both sides: they are on their way out, not work to
+  // projects are left out on both sides: they are on their way out, not work to
   // account for.
   const accountableProjects = userProjects.filter(
     (project) => projectOrganization(project).status !== 'deleted'
@@ -2271,7 +2276,7 @@ export function StartScreen({
   // With nothing saved yet the demos are the most useful thing on the page,
   // so they take the stage as full cards instead of a list in the column.
   const fresh = !loading && userProjects.length === 0;
-  // An empty Parts shelf is not an empty library when every part was
+  // An empty Projects shelf is not an empty library when every project was
   // archived or trashed: the shelf says where they went instead of
   // "nothing saved yet". Null when the library really is empty.
   const partsElsewhere =
@@ -2344,7 +2349,7 @@ export function StartScreen({
         Icon: CloudOff,
         text: 'On this device only',
         title:
-          'Parts stay on this device. Sign in to keep them across devices.',
+          'Projects stay on this device. Sign in to keep them across devices.',
         action: {
           text: 'Sign in',
           label: 'Sign in',
@@ -2366,8 +2371,8 @@ export function StartScreen({
       return {
         tone: 'warning',
         Icon: CloudAlert,
-        text: `${count} ${count === 1 ? 'part' : 'parts'} not saved`,
-        title: `${savedToAccountCount} of ${accountableProjects.length} parts are in your account; ${count === 1 ? 'one is' : `${count} are`} on this device only.`,
+        text: `${count} ${count === 1 ? 'project' : 'projects'} not saved`,
+        title: `${savedToAccountCount} of ${accountableProjects.length} projects are in your account; ${count === 1 ? 'one is' : `${count} are`} on this device only.`,
         progress: {
           saved: savedToAccountCount / accountableProjects.length,
           failed: 0
@@ -2391,8 +2396,8 @@ export function StartScreen({
         saved === 0
           ? 'Signed in'
           : saved === 1
-            ? '1 part saved'
-            : `All ${saved} parts saved`
+            ? '1 project saved'
+            : `All ${saved} projects saved`
     };
   }
 
@@ -2409,7 +2414,7 @@ export function StartScreen({
         .join(' ')}
     >
       {/* The column is the page's frame: the product at its head, on the
-          pixels the workspace's logo takes, and where the parts are kept at
+          pixels the workspace's logo takes, and where the projects are kept at
           its foot. No bar across the top: the library and Settings are
           pages, not a workspace, and the column says so. */}
       <header className="start-brand">
@@ -2442,7 +2447,7 @@ export function StartScreen({
           }}
           onKeyDown={(event) => {
             // The Enter that commits an IME composition (CJK input) is not
-            // a request to create the part from a half-typed name. Safari
+            // a request to create the project from a half-typed name. Safari
             // reports that keystroke with isComposing already false.
             if (event.nativeEvent.isComposing || event.keyCode === 229) {
               return;
@@ -2457,11 +2462,11 @@ export function StartScreen({
             }
           }}
         >
-          {/* The two ways to start: a new part, or a backup brought in. */}
+          {/* The two ways to start: a new project, or a backup brought in. */}
           <div className="start-launch-head">
             <h2 id="start-launch-title">
               <Plus size={15} aria-hidden="true" />
-              New part
+              New project
             </h2>
             {onImportProject && (
               <ProjectImportButton
@@ -2532,7 +2537,7 @@ export function StartScreen({
               aria-controls="start-shelf-panel"
               // One tab stop for the strip; the arrow keys move along it.
               tabIndex={shelf === entry.status ? 0 : -1}
-              // Archive and Trash take parts dragged off the Parts shelf.
+              // Archive and Trash take projects dragged off the Projects shelf.
               data-drop-shelf={
                 canReorder && entry.status !== 'active'
                   ? entry.status
@@ -2603,7 +2608,7 @@ export function StartScreen({
             </div>
             {folders.length === 0 ? (
               <p className="start-folders-hint">
-                Drag one part onto another to group them.
+                Drag one project onto another to group them.
               </p>
             ) : (
               <ul className="start-folders-list">
@@ -2667,7 +2672,7 @@ export function StartScreen({
           <div className="start-toolbar">
             <div className="start-toolbar-title">
               {openFolder && (
-                // The way back out, and a drop target that takes parts out
+                // The way back out, and a drop target that takes projects out
                 // of the folder.
                 <>
                   <button
@@ -2676,7 +2681,7 @@ export function StartScreen({
                     data-drop-root=""
                     onClick={() => showFolder(null)}
                   >
-                    Parts
+                    Projects
                   </button>
                   <ChevronRight
                     size={14}
@@ -2686,7 +2691,7 @@ export function StartScreen({
                 </>
               )}
               {/* Focusable from script only: it catches focus when the last
-                  part leaves the shelf (see `departure`). */}
+                  project leaves the shelf (see `departure`). */}
               <h2
                 id="start-parts-title"
                 ref={partsTitleRef}
@@ -2701,7 +2706,7 @@ export function StartScreen({
               {!(showFilters && !search) && (
                 <span className="start-section-note">
                   {loading
-                    ? 'Loading parts…'
+                    ? 'Loading projects…'
                     : openFolder && baseProjects.length === 0
                       ? 'empty'
                       : shelfProjects.length === 0
@@ -2711,7 +2716,7 @@ export function StartScreen({
                         : search
                           ? `${matchingProjects.length} of ${filteredProjects.length} match`
                           : `${baseProjects.length} ${
-                              baseProjects.length === 1 ? 'part' : 'parts'
+                              baseProjects.length === 1 ? 'project' : 'projects'
                             }`}
                 </span>
               )}
@@ -2721,7 +2726,7 @@ export function StartScreen({
               <div
                 className="start-filters"
                 role="group"
-                aria-label="Show parts"
+                aria-label="Show projects"
               >
                 {SHELF_FILTERS.filter(
                   (entry) =>
@@ -2762,8 +2767,8 @@ export function StartScreen({
                   <input
                     value={query}
                     type="text"
-                    aria-label="Search parts"
-                    placeholder="Search parts…"
+                    aria-label="Search projects"
+                    placeholder="Search projects…"
                     onChange={(event) => setQuery(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === 'Escape' && query) {
@@ -2789,7 +2794,7 @@ export function StartScreen({
 
                 {(layoutCounts.all > 1 || (loading && !previousLayout)) && (
                   <label className="start-sort">
-                    <span className="visually-hidden">Sort parts</span>
+                    <span className="visually-hidden">Sort projects</span>
                     <select
                       value={sort}
                       disabled={loading}
@@ -2832,7 +2837,7 @@ export function StartScreen({
           {shelf === 'deleted' && shelfProjects.length > 0 && (
             <div className="start-shelf-bar">
               <span className="start-shelf-hint">
-                Deleted parts are kept for {TRASH_RETENTION_DAYS} days, then
+                Deleted projects are kept for {TRASH_RETENTION_DAYS} days, then
                 destroyed.
               </span>
               <button
@@ -2854,7 +2859,7 @@ export function StartScreen({
               role="status"
               aria-label="Loading library"
             >
-              Loading your parts and account…
+              Loading your projects and account…
             </div>
           )}
           {loading && userProjects.length === 0 && (
@@ -2925,8 +2930,8 @@ export function StartScreen({
               <FolderOpen size={28} aria-hidden="true" />
               <strong>This folder is empty</strong>
               <span>
-                Drag parts onto it on the shelf, or select parts and use Move
-                to.
+                Drag projects onto it on the shelf, or select projects and use
+                Move to.
               </span>
             </div>
           )}
@@ -2984,9 +2989,9 @@ export function StartScreen({
             shelfProjects.length > 0 &&
             matchingProjects.length === 0 && (
               <p className="start-no-matches" role="status">
-                No parts here right now.
+                No projects here right now.
                 <button type="button" onClick={() => setFilter('all')}>
-                  Show all parts
+                  Show all projects
                 </button>
               </p>
             )}
@@ -2998,29 +3003,29 @@ export function StartScreen({
               </span>
               {shelf === 'active' && partsElsewhere ? (
                 <>
-                  <strong>No parts on this shelf</strong>
-                  <span>{`All your parts are in ${partsElsewhere}.`}</span>
+                  <strong>No projects on this shelf</strong>
+                  <span>{`All your projects are in ${partsElsewhere}.`}</span>
                 </>
               ) : shelf === 'active' ? (
                 <>
-                  <strong>No parts yet</strong>
+                  <strong>No projects yet</strong>
                   <span>
-                    Name one and press Create, or open a demo to see a part walk
-                    through its revisions.
+                    Name one and press Create, or open a demo to see a project
+                    walk through its revisions.
                   </span>
                 </>
               ) : shelf === 'archived' ? (
                 <>
                   <strong>Nothing archived.</strong>
                   <span>
-                    Archive a part to keep it without it crowding the grid.
+                    Archive a project to keep it without it crowding the grid.
                   </span>
                 </>
               ) : (
                 <>
                   <strong>Nothing in the trash.</strong>
                   <span>
-                    Deleted parts wait here for {TRASH_RETENTION_DAYS} days
+                    Deleted projects wait here for {TRASH_RETENTION_DAYS} days
                     before they are destroyed.
                   </span>
                 </>
@@ -3032,7 +3037,7 @@ export function StartScreen({
             shelfProjects.length > 0 &&
             matchingProjects.length === 0 && (
               <p className="start-no-matches" role="status">
-                No parts match “{query.trim()}”.
+                No projects match “{query.trim()}”.
                 <button type="button" onClick={() => setQuery('')}>
                   Clear search
                 </button>
@@ -3086,7 +3091,7 @@ export function StartScreen({
         <div className="start-learn-head">
           <h2 id="start-demos-title">Learn by example</h2>
           <span className="start-section-note">
-            each demo walks a part through revisions A → C
+            each demo walks a project through revisions A → C
           </span>
         </div>
         <div className="demo-list">
@@ -3144,8 +3149,8 @@ export function StartScreen({
                     <button
                       type="button"
                       className="demo-action"
-                      aria-label={`Save a copy of ${title} to your parts`}
-                      title="Save a copy to your parts"
+                      aria-label={`Save a copy of ${title} to your projects`}
+                      title="Save a copy to your projects"
                       disabled={busy}
                       onClick={() => onDuplicate(opened)}
                     >

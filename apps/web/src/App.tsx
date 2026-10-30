@@ -12453,8 +12453,8 @@ export function App() {
       // would overflow the status line with the very names that failed.
       setStatus(
         failed === 0
-          ? `Saved ${countLabel(saved, 'part', 'parts')} to your account.`
-          : `Saved ${countLabel(saved, 'part', 'parts')} · ${failed} could not be saved.`
+          ? `Saved ${countLabel(saved, 'project', 'projects')} to your account.`
+          : `Saved ${countLabel(saved, 'project', 'projects')} · ${failed} could not be saved.`
       );
     } catch {
       // The local writer already reported the failure and retained the model.
@@ -13195,7 +13195,7 @@ export function App() {
     }
   }
 
-  /** Several parts onto one shelf, from the library's selection. */
+  /** Several projects onto one shelf, from the library's selection. */
   async function handleMoveProjectsToShelf(
     targets: ProjectSummary[],
     status: ProjectStatus
@@ -13215,12 +13215,12 @@ export function App() {
     const what =
       targets.length === 1
         ? targets[0]!.name
-        : countLabel(moved, 'part', 'parts');
+        : countLabel(moved, 'project', 'projects');
     if (failure) {
       setStatus(
         errorMessage(
           failure,
-          `Moved ${countLabel(moved, 'part', 'parts')}; ${targets.length - moved} could not be moved.`
+          `Moved ${countLabel(moved, 'project', 'projects')}; ${targets.length - moved} could not be moved.`
         )
       );
       return;
@@ -13234,7 +13234,7 @@ export function App() {
     );
   }
 
-  /** Pins or unpins several parts, from the library's selection. */
+  /** Pins or unpins several projects, from the library's selection. */
   async function handleSetProjectsPinned(
     targets: ProjectSummary[],
     pinned: boolean
@@ -13252,10 +13252,10 @@ export function App() {
     const what =
       targets.length === 1
         ? targets[0]!.name
-        : countLabel(targets.length, 'part', 'parts');
+        : countLabel(targets.length, 'project', 'projects');
     setStatus(
       failure
-        ? errorMessage(failure, `Could not update every part.`)
+        ? errorMessage(failure, `Could not update every project.`)
         : pinned
           ? `Pinned ${what}.`
           : `Unpinned ${what}.`
@@ -26826,7 +26826,7 @@ export function App() {
     return (
       <StartupScreen
         projectName={openingProject}
-        backLabel={doc ? 'Cancel opening' : 'Back to parts'}
+        backLabel={doc ? 'Cancel opening' : 'Back to projects'}
         onBack={() => {
           beginProjectNavigation();
           setStatus('');

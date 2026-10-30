@@ -357,7 +357,7 @@ describe('StartScreen keyboard', () => {
     archive(alpha);
     show(parts.map(archived));
     expect(
-      screen.getByRole('heading', { level: 2, name: 'Parts' })
+      screen.getByRole('heading', { level: 2, name: 'Projects' })
     ).toHaveFocus();
   });
 
@@ -380,7 +380,7 @@ describe('StartScreen keyboard', () => {
 
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
     expect(tabs[0]).toHaveAttribute('aria-controls', panel.id);
-    expect(panel).toHaveAccessibleName('Parts 1');
+    expect(panel).toHaveAccessibleName('Projects 1');
 
     fireEvent.keyDown(tabs[0]!, { key: 'ArrowDown' });
     const archive = screen.getByRole('tab', { name: 'Archive 0' });
@@ -393,7 +393,7 @@ describe('StartScreen keyboard', () => {
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Trash 0' }), {
       key: 'ArrowRight'
     });
-    expect(screen.getByRole('tab', { name: 'Parts 1' })).toHaveFocus();
+    expect(screen.getByRole('tab', { name: 'Projects 1' })).toHaveFocus();
     expect(screen.getAllByRole('tab').map((tab) => tab.tabIndex)).toEqual([
       0, -1, -1
     ]);
@@ -401,7 +401,7 @@ describe('StartScreen keyboard', () => {
 });
 
 describe('StartScreen shelf wording', () => {
-  it('says where the parts went when the Parts shelf is empty but the library is not', () => {
+  it('says where the parts went when the Projects shelf is empty but the library is not', () => {
     renderStartScreen({
       projects: [
         {
@@ -411,11 +411,11 @@ describe('StartScreen shelf wording', () => {
       ]
     });
 
-    expect(screen.queryByText('No parts yet')).toBeNull();
+    expect(screen.queryByText('No projects yet')).toBeNull();
     expect(screen.queryByText('nothing saved yet')).toBeNull();
     expect(screen.getByText('none on this shelf')).toBeInTheDocument();
     expect(
-      screen.getByText('All your parts are in Archive.')
+      screen.getByText('All your projects are in Archive.')
     ).toBeInTheDocument();
   });
 
@@ -477,7 +477,7 @@ describe('StartScreen library discovery', () => {
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(0);
-      expect(screen.queryByText('No parts yet')).not.toBeInTheDocument();
+      expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
       localStorage.removeItem('openzcad.start.layout');
       sessionStorage.clear();
     }
@@ -516,7 +516,7 @@ describe('StartScreen library discovery', () => {
         [...container.querySelectorAll('.start-shelf-group')].map(
           (heading) => heading.textContent
         )
-      ).toEqual(['Pinned…', 'Parts…']);
+      ).toEqual(['Pinned…', 'Projects…']);
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(3);
@@ -524,8 +524,10 @@ describe('StartScreen library discovery', () => {
       expect(
         container.querySelectorAll('.start-tile-placeholder .start-tile-copies')
       ).toHaveLength(layout === 'list' ? 1 : 0);
-      expect(screen.getByRole('group', { name: 'Show parts' })).toBeVisible();
-      expect(screen.getByLabelText('Sort parts')).toBeDisabled();
+      expect(
+        screen.getByRole('group', { name: 'Show projects' })
+      ).toBeVisible();
+      expect(screen.getByLabelText('Sort projects')).toBeDisabled();
       expect(
         container.querySelectorAll('.start-tile-grid.is-list')
       ).toHaveLength(layout === 'list' ? 2 : 0);
@@ -548,14 +550,14 @@ describe('StartScreen library discovery', () => {
     expect(container.querySelector('.start-screen')).not.toHaveClass(
       'is-fresh'
     );
-    expect(screen.queryByText('No parts yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
     expect(screen.queryByText('On this device only')).not.toBeInTheDocument();
     expect(screen.getByText('Checking account…')).toBeVisible();
-    expect(screen.getByRole('tab', { name: 'Parts …' })).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Projects …' })).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Create project' })
     ).toBeDisabled();
-    expect(screen.getByLabelText('Search parts')).toBeVisible();
+    expect(screen.getByLabelText('Search projects')).toBeVisible();
   });
 
   it('shows first-run guidance only once discovery confirms an empty library', () => {
@@ -565,7 +567,7 @@ describe('StartScreen library discovery', () => {
     });
 
     expect(container.querySelector('.start-screen')).toHaveClass('is-fresh');
-    expect(screen.getByText('No parts yet')).toBeVisible();
+    expect(screen.getByText('No projects yet')).toBeVisible();
     expect(screen.getByText('On this device only')).toBeVisible();
     expect(
       screen.queryByRole('status', { name: 'Loading library' })
@@ -678,7 +680,7 @@ describe('StartScreen library shell', () => {
     });
 
     expect(container.querySelector('.start-screen.is-fresh')).not.toBeNull();
-    expect(screen.getByText('No parts yet')).toBeInTheDocument();
+    expect(screen.getByText('No projects yet')).toBeInTheDocument();
     unmount();
 
     renderStartScreen();
@@ -703,7 +705,7 @@ describe('StartScreen library shell', () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
-  it('offers Import beside New part, not in the column foot', () => {
+  it('offers Import beside New project, not in the column foot', () => {
     const { container } = renderStartScreen({ onImportProject: vi.fn() });
 
     const importButton = screen.getByRole('button', {
@@ -732,7 +734,7 @@ describe('StartScreen library shell', () => {
       'data-drop-shelf',
       'deleted'
     );
-    expect(screen.getByRole('tab', { name: /^Parts/ })).not.toHaveAttribute(
+    expect(screen.getByRole('tab', { name: /^Projects/ })).not.toHaveAttribute(
       'data-drop-shelf'
     );
   });
@@ -740,14 +742,14 @@ describe('StartScreen library shell', () => {
   it('names each shelf with its count in the column', () => {
     renderStartScreen();
 
-    expect(screen.getByRole('tab', { name: 'Parts 1' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: 'Projects 1' })).toHaveAttribute(
       'aria-selected',
       'true'
     );
     expect(screen.getByRole('tab', { name: 'Archive 0' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Trash 0' })).toBeInTheDocument();
     expect(
-      screen.getByRole('heading', { level: 2, name: 'Parts' })
+      screen.getByRole('heading', { level: 2, name: 'Projects' })
     ).toBeInTheDocument();
   });
 
@@ -769,7 +771,7 @@ describe('StartScreen library shell', () => {
     // say "1 / 2 saved" and "1 project is on this device only" one above
     // the other.
     const card = screen.getByRole('complementary', { name: 'Cloud sync' });
-    expect(within(card).getByText('1 part not saved')).toBeInTheDocument();
+    expect(within(card).getByText('1 project not saved')).toBeInTheDocument();
     expect(
       screen.getAllByRole('button', { name: /to my account/ })
     ).toHaveLength(1);
@@ -784,7 +786,7 @@ describe('StartScreen library shell', () => {
       cloudProjectIds: new Set([localProject.projectId])
     });
 
-    expect(screen.getByText('1 part saved')).toBeInTheDocument();
+    expect(screen.getByText('1 project saved')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /to my account/ })).toBeNull();
   });
 
@@ -827,7 +829,7 @@ describe('StartScreen library shell', () => {
     const onRetrySync = vi.fn();
     const onDismissSyncRun = vi.fn();
     renderStartScreen({
-      status: 'Saved 1 part · 1 could not be saved.',
+      status: 'Saved 1 project · 1 could not be saved.',
       onRetrySync,
       onDismissSyncRun,
       syncRun: [
@@ -871,7 +873,9 @@ describe('StartScreen scrolling project grid', () => {
 
     expect(screen.getByText('Part 11')).toBeInTheDocument();
     expect(screen.getByText('Part 96')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Show .*parts/ })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /Show .*projects/ })
+    ).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /^Part 96/ }));
     expect(onOpen).toHaveBeenCalledWith(toProjectId('scroll_project_96'));
   });
@@ -879,7 +883,7 @@ describe('StartScreen scrolling project grid', () => {
   it('searches the full list and restores every project after clearing', () => {
     renderStartScreen({ projects, signedIn: false });
 
-    fireEvent.change(screen.getByLabelText('Search parts'), {
+    fireEvent.change(screen.getByLabelText('Search projects'), {
       target: { value: 'Part 96' }
     });
     expect(screen.getByText('Part 96')).toBeInTheDocument();
@@ -1002,17 +1006,17 @@ describe('StartScreen shelf filters, order and layout', () => {
   it('comes back to the same shelf, sort and search in this tab', () => {
     const { unmount } = renderStartScreen({ projects });
     fireEvent.click(screen.getByRole('tab', { name: /^Archive/ }));
-    fireEvent.click(screen.getByRole('tab', { name: /^Parts/ }));
-    fireEvent.change(screen.getByLabelText('Sort parts'), {
+    fireEvent.click(screen.getByRole('tab', { name: /^Projects/ }));
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
       target: { value: 'name' }
     });
-    fireEvent.change(screen.getByLabelText('Search parts'), {
+    fireEvent.change(screen.getByLabelText('Search projects'), {
       target: { value: 'Bra' }
     });
     unmount();
     renderStartScreen({ projects });
-    expect(screen.getByLabelText('Sort parts')).toHaveValue('name');
-    expect(screen.getByLabelText('Search parts')).toHaveValue('Bra');
+    expect(screen.getByLabelText('Sort projects')).toHaveValue('name');
+    expect(screen.getByLabelText('Search projects')).toHaveValue('Bra');
     expect(tileNames()).toEqual(['Bracket', 'Bracket (Recovery)']);
   });
 
@@ -1061,7 +1065,7 @@ describe('StartScreen shelf filters, order and layout', () => {
       cloudProjectIds: new Set(projects.map((entry) => entry.projectId)),
       conflictedProjectIds: new Set([toProjectId('project_c')])
     });
-    const filters = screen.getByRole('group', { name: 'Show parts' });
+    const filters = screen.getByRole('group', { name: 'Show projects' });
     fireEvent.click(
       within(filters).getByRole('button', { name: /Needs attention/ })
     );
@@ -1077,7 +1081,7 @@ describe('StartScreen shelf filters, order and layout', () => {
     const props = startScreenProps({ projects, cloudProjectIds: new Set() });
     const { rerender } = render(<StartScreen {...props} />);
     fireEvent.click(
-      within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+      within(screen.getByRole('group', { name: 'Show projects' })).getByRole(
         'button',
         { name: /This device only/ }
       )
@@ -1086,7 +1090,7 @@ describe('StartScreen shelf filters, order and layout', () => {
     rerender(<StartScreen {...props} signedIn={false} />);
     expect(tileNames()).toHaveLength(projects.length);
     expect(
-      within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+      within(screen.getByRole('group', { name: 'Show projects' })).getByRole(
         'button',
         { name: /^All/ }
       )
@@ -1100,7 +1104,7 @@ describe('StartScreen shelf filters, order and layout', () => {
         name: 'Show Bracket with its 1 recovery copy'
       })
     );
-    expect(screen.getByLabelText('Search parts')).toHaveValue('Bracket');
+    expect(screen.getByLabelText('Search projects')).toHaveValue('Bracket');
     expect(tileNames().sort()).toEqual(['Bracket', 'Bracket (Recovery)']);
   });
 
@@ -1112,7 +1116,7 @@ describe('StartScreen shelf filters, order and layout', () => {
       ]
     });
     expect(reorderableCards()).toBeGreaterThan(0);
-    fireEvent.change(screen.getByLabelText('Sort parts'), {
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
       target: { value: 'name' }
     });
     expect(tileNames()).toEqual([
@@ -1122,7 +1126,7 @@ describe('StartScreen shelf filters, order and layout', () => {
       'Bracket (Recovery)',
       'Clamp'
     ]);
-    fireEvent.change(screen.getByLabelText('Sort parts'), {
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
       target: { value: 'edited' }
     });
     expect(tileNames()).toEqual([
@@ -1241,21 +1245,21 @@ describe('StartScreen folders and selection', () => {
     renderStartScreen({ projects: parts });
     expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
     fireEvent.click(
-      screen.getByRole('button', { name: 'Open folder Fixtures, 2 parts' })
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
     );
     expect(
       screen.getByRole('heading', { level: 2, name: 'Fixtures' })
     ).toBeInTheDocument();
     expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
     // The crumb goes back out.
-    fireEvent.click(screen.getByRole('button', { name: 'Parts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Projects' }));
     expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
   });
 
   it('looks through folders while searching', () => {
     seedFolder([parts[1]!.projectId]);
     renderStartScreen({ projects: parts });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search parts' }), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search projects' }), {
       target: { value: 'bravo' }
     });
     expect(names()).toEqual(['Bravo plate']);
@@ -1284,7 +1288,7 @@ describe('StartScreen folders and selection', () => {
       screen.getByRole('checkbox', { name: 'Select Charlie plate' }),
       { shiftKey: true }
     );
-    const bar = screen.getByRole('toolbar', { name: '3 parts selected' });
+    const bar = screen.getByRole('toolbar', { name: '3 projects selected' });
     // While anything is picked, a click on a card picks it too.
     fireEvent.click(screen.getByText('Delta plate'));
     expect(onOpen).not.toHaveBeenCalled();
@@ -1321,7 +1325,7 @@ describe('StartScreen folders and selection', () => {
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(names()).toEqual(['Holders', 'Bravo plate', 'Charlie plate']);
     expect(
-      screen.getByRole('button', { name: 'Open folder Holders, 2 parts' })
+      screen.getByRole('button', { name: 'Open folder Holders, 2 projects' })
     ).toBeInTheDocument();
   });
 
@@ -1333,7 +1337,7 @@ describe('StartScreen folders and selection', () => {
         screen.getByRole('tab', { name: new RegExp(`^${shelf}`) })
       );
       fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
-      expect(screen.getByRole('tab', { name: /^Parts/ })).toHaveAttribute(
+      expect(screen.getByRole('tab', { name: /^Projects/ })).toHaveAttribute(
         'aria-selected',
         'true'
       );
@@ -1356,17 +1360,16 @@ describe('StartScreen folders and selection', () => {
       renderStartScreen({ projects: pinnedParts });
       if (view === 'search') {
         fireEvent.change(
-          screen.getByRole('textbox', { name: 'Search parts' }),
+          screen.getByRole('textbox', { name: 'Search projects' }),
           {
             target: { value: 'Alpha' }
           }
         );
       } else {
         fireEvent.click(
-          within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
-            'button',
-            { name: /^Pinned/ }
-          )
+          within(
+            screen.getByRole('group', { name: 'Show projects' })
+          ).getByRole('button', { name: /^Pinned/ })
         );
       }
       fireEvent.click(
@@ -1377,11 +1380,11 @@ describe('StartScreen folders and selection', () => {
       expect(
         screen.getByRole('textbox', { name: 'Folder name' })
       ).toHaveFocus();
-      expect(screen.getByRole('textbox', { name: 'Search parts' })).toHaveValue(
-        ''
-      );
       expect(
-        within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+        screen.getByRole('textbox', { name: 'Search projects' })
+      ).toHaveValue('');
+      expect(
+        within(screen.getByRole('group', { name: 'Show projects' })).getByRole(
           'button',
           { name: /^All/ }
         )
@@ -1408,7 +1411,7 @@ describe('StartScreen folders and selection', () => {
   });
 
   it.each(['Archive', 'Trash'])(
-    'keeps folder navigation counts tied to Parts on %s',
+    'keeps folder navigation counts tied to Projects on %s',
     (shelf) => {
       seedFolder(parts.map((part) => part.projectId));
       renderStartScreen({
@@ -1484,7 +1487,7 @@ describe('StartScreen folders and selection', () => {
     expect(onResetDemo).toHaveBeenCalledWith(demo, edited);
     fireEvent.click(
       screen.getByRole('button', {
-        name: 'Save a copy of Mounting Bracket to your parts'
+        name: 'Save a copy of Mounting Bracket to your projects'
       })
     );
     expect(onDuplicate).toHaveBeenCalledWith(edited);
@@ -1519,7 +1522,7 @@ describe('StartScreen selection edge cases', () => {
       screen.getByRole('checkbox', { name: 'Select Echo block' })
     );
     expect(screen.getByRole('toolbar')).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search parts' }), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search projects' }), {
       target: { value: 'foxtrot' }
     });
     expect(screen.queryByRole('toolbar')).toBeNull();
@@ -1621,7 +1624,7 @@ describe('StartScreen permanent deletion', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete forever' }));
     expect(onDeleteManyForever).toHaveBeenCalledWith(trashed);
     expect(
-      screen.getByRole('toolbar', { name: '2 parts selected' })
+      screen.getByRole('toolbar', { name: '2 projects selected' })
     ).toBeInTheDocument();
   });
 });
@@ -1726,7 +1729,7 @@ describe('StartScreen selection order', () => {
     const onMoveManyToShelf = vi.fn();
     renderStartScreen({ projects: parts, onMoveManyToShelf });
     fireEvent.click(
-      screen.getByRole('button', { name: 'Open folder Plates, 2 parts' })
+      screen.getByRole('button', { name: 'Open folder Plates, 2 projects' })
     );
     fireEvent.click(
       screen.getByRole('checkbox', { name: 'Select November plate' })

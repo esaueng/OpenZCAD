@@ -56,7 +56,7 @@ export function SharePage({
         </div>
         <p className="share-page-guidance">
           {loading
-            ? 'Keep this page open. You can return to your parts at any time.'
+            ? 'Keep this page open. You can return to your projects at any time.'
             : state.guidance}
         </p>
         <div className="share-page-actions">
@@ -72,7 +72,7 @@ export function SharePage({
             </button>
           ) : null}
           <button className="secondary" type="button" onClick={onBack}>
-            Back to parts
+            Back to projects
           </button>
           {onReturnToModel && (
             <button

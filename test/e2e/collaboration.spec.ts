@@ -134,7 +134,7 @@ for (const fromPublicShare of [false, true]) {
     );
 
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     if (fromPublicShare) {
       await page.evaluate(() => {
         window.location.hash = `share=${'p'.repeat(43)}`;
@@ -250,7 +250,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       })
     );
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     await page.evaluate((token) => {
       window.location.hash = `invite=${token}`;
     }, invitationToken);
@@ -336,7 +336,7 @@ for (const stage of ['accept', 'document'] as const) {
       await route.fulfill({ json: document });
     });
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     await page.evaluate((token) => {
       window.location.hash = `invite=${token}`;
     }, invitationToken);
@@ -412,7 +412,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       })
     );
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     if (stage === 'public share') {
       await page.evaluate(() => {
         window.location.hash = `share=${'p'.repeat(43)}`;
@@ -527,7 +527,7 @@ test('allows signed-out invitation sign-in while a superseded share request is p
     });
   });
   await page.goto('/');
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
   await page.evaluate(() => {
     window.location.hash = `share=${'p'.repeat(43)}`;
   });
@@ -617,7 +617,7 @@ test('opens and switches public links in an already-open Settings tab', async ({
     });
   });
   await page.goto('/');
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.evaluate((token) => {
     window.location.hash = `share=${token}`;
@@ -657,7 +657,7 @@ for (const active of [false, true]) {
       });
     });
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     await page.evaluate(() => {
       window.location.hash = `share=${'c'.repeat(43)}`;
     });
@@ -681,7 +681,7 @@ for (const active of [false, true]) {
       await response;
       await page.waitForTimeout(250);
     }
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     await expect(
       page.getByRole('button', { name: 'Create project', exact: true })
     ).toBeEnabled();
@@ -755,7 +755,7 @@ for (const status of [404, 503]) {
       page.getByRole('button', { name: 'Rename project' })
     ).toBeVisible();
     await page.getByTitle('Back to projects').click();
-    await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 1' })).toBeVisible();
     let shareReads = 0;
     await page.route('**/api/share/*', (route) => {
       shareReads += 1;
@@ -772,9 +772,9 @@ for (const status of [404, 503]) {
             : 'Unavailable share'
       })
     ).toBeVisible();
-    await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
+    await page.getByRole('button', { name: 'Back to projects', exact: true }).click();
     await page
-      .getByRole('tabpanel', { name: 'Parts 1' })
+      .getByRole('tabpanel', { name: 'Projects 1' })
       .getByRole('button', { name: /^Local project after failed link/ })
       .click();
     await expect(page.locator('.breadcrumb')).toContainText(
@@ -825,7 +825,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
         );
       });
       await page.goto('/');
-      await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
       await page.evaluate(() => {
         window.location.hash = `share=${'f'.repeat(43)}`;
       });
@@ -836,7 +836,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
             .getByRole('status')
             .filter({ hasText: 'This share link is no longer available' })
         ).toBeVisible();
-      await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
+      await page.getByRole('button', { name: 'Back to projects', exact: true }).click();
       try {
         if (action === 'create') {
           await page.getByLabel('Project name').fill('New shelf project');
@@ -938,7 +938,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
     });
   });
   await page.goto('/');
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
   await page.evaluate(() => {
     window.location.hash = `share=${'c'.repeat(43)}`;
   });
@@ -950,7 +950,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
   // Let the old loader process its delayed response before checking that it
   // cannot replace the library after navigation has cancelled it.
   await page.waitForTimeout(250);
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Make a copy', exact: true })
   ).toHaveCount(0);
@@ -967,7 +967,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
   await page.evaluate(() => {
     window.location.hash = '';
   });
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Make a copy', exact: true })
   ).toHaveCount(0);
@@ -1003,7 +1003,7 @@ for (const departure of ['fragment', 'home'] as const) {
       });
     });
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     await page.evaluate(() => {
       window.location.hash = `share=${'a'.repeat(43)}`;
     });
@@ -1055,7 +1055,7 @@ test('makes a durable share copy without storing the owner snapshot', async ({
   ).toBeEnabled();
   expect(new URL(page.url()).hash).toBe('');
   await page.getByTitle('Back to projects').click();
-  await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Projects 1' })).toBeVisible();
   const ids = await page.evaluate(
     () =>
       new Promise<IDBValidKey[]>((resolve, reject) => {

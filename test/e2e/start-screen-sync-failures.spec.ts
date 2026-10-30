@@ -51,7 +51,7 @@ test('a long list of failed saves stays reachable in the cloud card', async ({
   await page.reload();
 
   const card = page.locator('.start-account');
-  await expect(card).toContainText('24 parts not saved');
+  await expect(card).toContainText('24 projects not saved');
   await page
     .getByRole('button', { name: 'Save them all to my account' })
     .click();
