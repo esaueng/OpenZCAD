@@ -12,6 +12,7 @@
   "extrude-in-place.spec.ts": 15,
   "extrude-through-all.spec.ts": 8,
   "feature-history.spec.ts": 21,
+  "gear.spec.ts": 15,
   "in-place-primitives.spec.ts": 15,
   "keyboard-focus-recovery.spec.ts": 8,
   "measure.spec.ts": 7,
