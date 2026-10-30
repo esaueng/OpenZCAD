@@ -471,8 +471,10 @@
         "cylinder": 1
       },
       "witnessedFaces": 7,
-      "witnessedEdges": 22,
+      "witnessedEdges": 24,
       "lineageNames": [
+        "boolean.edge.between.operand.0.import.step.face.32f720ef|operand.1.primitive.cylinder.face.wall",
+        "boolean.edge.between.operand.0.import.step.face.6c9068cb|operand.1.primitive.cylinder.face.wall",
         "boolean.edge.between.operand.0.import.step.face.c4a2df82|operand.1.primitive.cylinder.face.wall",
         "boolean.edge.between.operand.0.import.step.face.e37774ee|operand.1.primitive.cylinder.face.wall",
         "boolean.edge.operand.0.import.step.edge.06078148",
