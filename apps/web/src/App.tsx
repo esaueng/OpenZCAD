@@ -864,9 +864,9 @@ import type {
   FaceResizeCommit,
   NormalToFaceRequest
 } from './components/ModelViewer';
+import type { OrientationLink } from './components/viewer/orientationCube';
 import type {
   SelectionFilter,
-  AxisProjection,
   DisplayMode,
   PickDetail,
   SketchOverlay,
@@ -3459,7 +3459,7 @@ export function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
-  const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
+  const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
   const lastPickDetailRef = useRef<PickDetail | null>(null);
   /** Selection-first direct-manipulation mode machine (behind experiment flag). */

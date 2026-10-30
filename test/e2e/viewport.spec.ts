@@ -1651,18 +1651,20 @@ test('releasing an orbit eases out instead of stopping dead', async ({
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible();
 
-  // Every camera frame updates the orientation widget's SVG attributes, so
-  // mutation timestamps relative to pointerup separate "ease-out glide" from
-  // "slams to a halt" without reaching into renderer internals.
-  await page.evaluate(() => {
+  // Every frame that turns the camera reports its orientation, so frame
+  // timestamps relative to pointerup separate "ease-out glide" from "slams to
+  // a halt" without reaching into renderer internals.
+  await canvas.evaluate((element) => {
     const glide = { upAt: null as number | null, changes: [] as number[] };
     (window as unknown as { __glide: typeof glide }).__glide = glide;
-    const observer = new MutationObserver(() =>
-      glide.changes.push(performance.now())
-    );
-    for (const line of document.querySelectorAll('.orientation-widget line')) {
-      observer.observe(line, { attributes: true });
-    }
+    let last = '';
+    element.addEventListener('openzcad:e2e-camera-frame', (event) => {
+      const { orientation } = (event as CustomEvent<{ orientation: number[] }>)
+        .detail;
+      const key = orientation.join(',');
+      if (key !== last) glide.changes.push(performance.now());
+      last = key;
+    });
     window.addEventListener(
       'pointerup',
       () => {
@@ -1708,6 +1710,103 @@ test('releasing an orbit eases out instead of stopping dead', async ({
   expect(result.settleMs).toBeGreaterThan(60);
   // …but decisive, not a map viewer's coast past the chosen framing.
   expect(result.settleMs).toBeLessThan(1_200);
+});
+
+test('an orbit draws the view cube without touching the page', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Cube Overlay Part');
+  await page.getByRole('button', { name: 'New project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible();
+  const cube = page.locator('svg.orientation-cube');
+  // The viewer paints the cube into its own canvas; the SVG stays as the
+  // unpainted click, focus and accessibility surface.
+  await expect(cube).toHaveAttribute('data-overlay', 'viewer');
+  await expect(canvas).toHaveAttribute('data-e2e-cube-overlay', '88');
+  await expect(page.getByRole('button', { name: 'Front view' })).toBeVisible();
+
+  // Firefox repaints the whole page for any DOM change in a frame, and an
+  // orbit rewrote some forty cube attributes per frame: under CPU contention
+  // that repaint cost a 60 fps orbit about a quarter of its frames.
+  await cube.evaluate((svg) => {
+    const record = {
+      frames: 0,
+      writingFrames: [] as number[],
+      upAt: 0,
+      lastWriteAt: 0
+    };
+    (window as unknown as { __cubeOrbit: typeof record }).__cubeOrbit = record;
+    // A catch-up writes a few dozen attributes at once; what matters is how
+    // many of the camera's frames wrote anything at all.
+    new MutationObserver(() => {
+      if (record.writingFrames.at(-1) !== record.frames) {
+        record.writingFrames.push(record.frames);
+      }
+      record.lastWriteAt = performance.now();
+    }).observe(svg, { subtree: true, attributes: true, childList: true });
+    document
+      .querySelector('.viewer-host canvas')
+      ?.addEventListener('openzcad:e2e-camera-frame', () => {
+        record.frames += 1;
+      });
+    window.addEventListener(
+      'pointerup',
+      () => {
+        record.upAt = performance.now();
+      },
+      true
+    );
+  });
+
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('Viewer canvas is not laid out.');
+  }
+  const startX = bounds.x + bounds.width / 2;
+  const startY = bounds.y + bounds.height * 0.6;
+  await page.keyboard.down('Shift');
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  for (let step = 1; step <= 16; step += 1) {
+    await page.mouse.move(startX + step * 10, startY - step * 5);
+  }
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await page.waitForTimeout(1_000);
+
+  const orbit = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __cubeOrbit: {
+            frames: number;
+            writingFrames: number[];
+            upAt: number;
+            lastWriteAt: number;
+          };
+        }
+      ).__cubeOrbit
+  );
+  expect(orbit.frames).toBeGreaterThan(10);
+  // A catch-up when the first frame lands and one when the camera rests (a
+  // slow machine that stalls the drag past the settle time earns another),
+  // never one per frame.
+  expect(orbit.writingFrames.length).toBeLessThanOrEqual(
+    Math.max(3, orbit.frames / 4)
+  );
+  expect(orbit.lastWriteAt).toBeGreaterThan(orbit.upAt);
+
+  // At rest the hit layer is where the cube is drawn, so its faces still
+  // take a click.
+  await page
+    .getByRole('button', { name: /isometric view$/ })
+    .first()
+    .click();
+  await expect(page.getByRole('button', { name: 'Front view' })).toBeVisible();
 });
 
 test('Escape backs out of the sketch plane prompt', async ({ page }) => {

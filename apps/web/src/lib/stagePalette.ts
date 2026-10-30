@@ -65,6 +65,62 @@ export function readDatumColor(element: Element): string {
   return HEX.test(value) ? expandHex(value) : DARK_DATUM_COLOR;
 }
 
+/** The view cube's colours, as hex: what its stylesheet paints from. */
+export interface CubePalette {
+  glancing: string;
+  frontal: string;
+  hover: string;
+  seam: string;
+  label: string;
+  /** The keyboard focus stroke: the viewport's preselection blue. */
+  focus: string;
+  axisX: string;
+  axisY: string;
+  axisZ: string;
+}
+
+/** tokens.css's dark theme, and the fallback for any unreadable token. */
+export const DARK_CUBE_PALETTE: Readonly<CubePalette> = Object.freeze({
+  glancing: '#222a34',
+  frontal: '#3a4450',
+  hover: '#4a5767',
+  seam: '#12161a',
+  label: '#ebedef',
+  focus: '#81a9ff',
+  axisX: '#ef6a6a',
+  axisY: '#6fd66f',
+  axisZ: '#5f8fef'
+});
+
+const CUBE_TOKENS: Record<keyof CubePalette, string> = {
+  glancing: '--color-cube-glancing',
+  frontal: '--color-cube-frontal',
+  hover: '--color-cube-hover',
+  seam: '--color-cube-seam',
+  label: '--color-cube-label',
+  focus: '--color-preselect',
+  axisX: '--color-handle-x',
+  axisY: '--color-handle-y',
+  axisZ: '--color-handle-z'
+};
+
+/**
+ * The cube the viewer paints into its canvas (orientationCubeOverlay.ts)
+ * takes the same tokens the SVG cube's stylesheet does.
+ */
+export function readCubePalette(element: Element): CubePalette {
+  const styles = window.getComputedStyle(element);
+  const palette: CubePalette = { ...DARK_CUBE_PALETTE };
+  for (const [key, token] of Object.entries(CUBE_TOKENS) as [
+    keyof CubePalette,
+    string
+  ][]) {
+    const value = styles.getPropertyValue(token).trim();
+    if (HEX.test(value)) palette[key] = expandHex(value);
+  }
+  return palette;
+}
+
 /**
  * Calls `onChange` whenever the resolved theme may have changed: the
  * Appearance setting rewrites `data-theme` on the root, and under 'system'

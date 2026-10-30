@@ -2,7 +2,8 @@ import type { MutableRefObject } from 'react';
 import { fireEvent, render } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AxisProjection } from '@openzcad/viewport';
-import { OrientationWidget } from './OrientationWidget';
+import { HIT_LAYER_SETTLE_MS, OrientationWidget } from './OrientationWidget';
+import type { OrientationLink } from './viewer/orientationCube';
 
 const capturedPointers = new WeakMap<SVGElement, Set<number>>();
 const originalCaptureMethods = {
@@ -71,7 +72,7 @@ afterAll(() => {
 function renderWidget() {
   const orientationRef = {
     current: null
-  } as MutableRefObject<((axes: AxisProjection) => void) | null>;
+  } as MutableRefObject<OrientationLink | null>;
   const callbacks = {
     onSelectView: vi.fn(),
     onDragStart: vi.fn(),
@@ -310,7 +311,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 
     it('gives every drawn corner a target that reaches past it', () => {
       const { container, orientationRef } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
 
       const corners = visibleCorners(container);
       expect(corners.length).toBeGreaterThan(0);
@@ -326,7 +327,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 
     it('never lets the target fall short of the facet you can see', () => {
       const { container, orientationRef } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
 
       const corners = visibleCorners(container);
       expect(corners.length).toBe(4);
@@ -359,7 +360,7 @@ describe('OrientationWidget pointer lifecycle', () => {
       // then 17×21 and 24×20 px (11 Oct 2026 review, G14) against the 24 px
       // minimum pointer target.
       const { container, orientationRef } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
 
       const corners = visibleCorners(container);
       expect(corners.length).toBe(4);
@@ -376,7 +377,7 @@ describe('OrientationWidget pointer lifecycle', () => {
       // The corners' area comes off the faces; each must still own a
       // generous region round its centre, where its label is drawn.
       const { container, orientationRef } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
       const targets = visibleCorners(container).map(({ target }) =>
         polygonPoints(target)
       );
@@ -426,7 +427,7 @@ describe('OrientationWidget pointer lifecycle', () => {
       'never lets two corner targets claim one pixel (%s)',
       (_view, axes) => {
         const { container, orientationRef } = renderWidget();
-        orientationRef.current?.(axes);
+        orientationRef.current?.update(axes);
 
         const targets = visibleCorners(container).map(({ target }) =>
           polygonPoints(target)
@@ -445,7 +446,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 
     it('takes the click from the drawn facet as well as the deeper cut', () => {
       const { container, orientationRef, onSelectView } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
 
       const [corner] = visibleCorners(container);
       if (!corner) {
@@ -465,7 +466,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 
     it('takes the target away with the facet when a corner turns away', () => {
       const { container, orientationRef } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
 
       const facing = visibleCorners(container).map(
         ({ target }) => target.getAttribute('aria-label') ?? ''
@@ -474,7 +475,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 
       // Same screen basis, opposite depth: every corner that was turned toward
       // the camera is now turned away, and vice versa.
-      orientationRef.current?.({
+      orientationRef.current?.update({
         x: { ...ISOMETRIC.x, z: -ISOMETRIC.x.z },
         y: { ...ISOMETRIC.y, z: -ISOMETRIC.y.z },
         z: { ...ISOMETRIC.z, z: -ISOMETRIC.z.z }
@@ -494,7 +495,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 
     it('leaves the pointer with the target, not the facet it stands for', () => {
       const { container, orientationRef } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
 
       const [corner] = visibleCorners(container);
       expect(corner).toBeDefined();
@@ -510,7 +511,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 
     it('selects the isometric view from the target', () => {
       const { container, orientationRef, onSelectView } = renderWidget();
-      orientationRef.current?.(ISOMETRIC);
+      orientationRef.current?.update(ISOMETRIC);
 
       const [corner] = visibleCorners(container);
       if (!corner) {
@@ -527,7 +528,7 @@ describe('OrientationWidget pointer lifecycle', () => {
 describe('OrientationWidget controls', () => {
   it('keeps cube navigation without separate rotate buttons', () => {
     const { queryByRole, getByRole, orientationRef } = renderWidget();
-    orientationRef.current?.({
+    orientationRef.current?.update({
       x: { x: 0.70711, y: 0.40825, z: 0.57735 },
       y: { x: -0.70711, y: 0.40825, z: 0.57735 },
       z: { x: 0, y: -0.8165, z: 0.57735 }
@@ -537,5 +538,121 @@ describe('OrientationWidget controls', () => {
       getByRole('group', { name: 'Drag to rotate the view' })
     ).toBeDefined();
     expect(getByRole('button', { name: 'Right view' })).toBeDefined();
+  });
+});
+
+describe('OrientationWidget painted by the viewer', () => {
+  const ISOMETRIC: AxisProjection = {
+    x: { x: 0.70711, y: 0.40825, z: 0.57735 },
+    y: { x: -0.70711, y: 0.40825, z: 0.57735 },
+    z: { x: 0, y: -0.8165, z: 0.57735 }
+  };
+  /** The same view turned a little about the screen's vertical. */
+  const TURNED: AxisProjection = {
+    x: { x: 0.8, y: 0.35, z: 0.48 },
+    y: { x: -0.6, y: 0.45, z: 0.66 },
+    z: { x: 0, y: -0.8165, z: 0.57735 }
+  };
+
+  function attached() {
+    const widget = renderWidget();
+    const link = widget.orientationRef.current;
+    if (!link) throw new Error('the widget published no link');
+    const onChange = vi.fn();
+    const release = link.attachOverlay(onChange);
+    const svg = widget.container.querySelector('svg');
+    if (!svg) throw new Error('no cube SVG');
+    return { ...widget, link, onChange, release, svg };
+  }
+
+  it('stops painting the SVG while the viewer draws the cube', () => {
+    const { svg, release } = attached();
+    expect(svg.dataset.overlay).toBe('viewer');
+    release();
+    expect(svg.dataset.overlay).toBeUndefined();
+  });
+
+  it('writes nothing to the page while the camera keeps turning', () => {
+    vi.useFakeTimers();
+    try {
+      const { link, face } = attached();
+      // The first turn after a rest lands at once.
+      link.update(ISOMETRIC);
+      const resting = face.getAttribute('points');
+      expect(resting).toBeTruthy();
+
+      // Frames that follow it are an orbit: the hit layer holds still, which
+      // is the point — Firefox repaints the page for any DOM change.
+      link.update(TURNED);
+      vi.advanceTimersByTime(HIT_LAYER_SETTLE_MS / 2);
+      link.update(ISOMETRIC);
+      vi.advanceTimersByTime(HIT_LAYER_SETTLE_MS / 2);
+      link.update(TURNED);
+      expect(face.getAttribute('points')).toBe(resting);
+
+      // Once the camera rests, the facets are where they are drawn again.
+      vi.advanceTimersByTime(HIT_LAYER_SETTLE_MS);
+      expect(face.getAttribute('points')).not.toBe(resting);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('catches up the moment a pointer moves over the cube', () => {
+    vi.useFakeTimers();
+    try {
+      const { link, face } = attached();
+      link.update(ISOMETRIC);
+      const resting = face.getAttribute('points');
+      link.update(TURNED);
+      expect(face.getAttribute('points')).toBe(resting);
+
+      // A hand reaching for a cube still gliding to a view finds the facets
+      // where they are drawn, without waiting for the glide to end.
+      pointerMove(face, 9, 'mouse', 30, 30);
+      expect(face.getAttribute('points')).not.toBe(resting);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tells the viewer which facet the pointer is over', () => {
+    const { link, onChange, face, container } = attached();
+    link.update(ISOMETRIC);
+
+    fireEvent.pointerOver(face);
+    expect(link.highlight.hovered).toEqual({ kind: 'face', index: 0 });
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    // Either half of a corner's target lights the corner it stands for.
+    const target = container.querySelector<SVGPolygonElement>(
+      '.cube-corner-target:not([style*="none"]) .cube-corner-hit'
+    );
+    const visibleTarget = [
+      ...container.querySelectorAll<SVGPolygonElement>('.cube-corner-hit')
+    ].find((element) => element.style.display !== 'none');
+    fireEvent.pointerOver(visibleTarget ?? target ?? face);
+    expect(link.highlight.hovered?.kind).toBe('corner');
+
+    fireEvent.pointerLeave(container.querySelector('svg')!);
+    expect(link.highlight.hovered).toBeNull();
+    expect(onChange).toHaveBeenCalledTimes(3);
+  });
+
+  it('paints the SVG again, up to date, once the viewer lets go', () => {
+    vi.useFakeTimers();
+    try {
+      const { link, face, release } = attached();
+      link.update(ISOMETRIC);
+      const resting = face.getAttribute('points');
+      link.update(TURNED);
+      release();
+      expect(face.getAttribute('points')).not.toBe(resting);
+      // Unattached, every turn lands at once, as it always did.
+      link.update(ISOMETRIC);
+      expect(face.getAttribute('points')).toBe(resting);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
