@@ -261,7 +261,7 @@ export async function shareWithBob(
   await alice.keyboard.press('Escape');
   await expect(aliceSettings).toHaveCount(0);
   await alice.getByLabel('Project name').fill(PROJECT_NAME);
-  await alice.getByRole('button', { name: 'Create project' }).click();
+  await alice.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(alice, 'box');
   await expect(
     alice.getByRole('status', { name: 'Saved', exact: true })

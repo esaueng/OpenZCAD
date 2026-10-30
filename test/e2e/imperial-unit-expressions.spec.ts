@@ -25,7 +25,7 @@ async function createInchProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByLabel('Units').selectOption('inch');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText(name);

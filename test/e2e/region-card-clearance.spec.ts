@@ -42,7 +42,7 @@ async function openDocument(page: Page, document: ProjectDocument) {
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 }
 
 /** Where `point` is drawn, in page pixels. */

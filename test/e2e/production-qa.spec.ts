@@ -14,7 +14,7 @@ test('invalid primitive dimensions never enter saved history', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('QA dimension validation');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   // A box runs in place (U09): a typed size it cannot build is refused in
   // its bar, and the chip keeps the size it had.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
@@ -50,7 +50,7 @@ test('a missing export chunk leaves the workspace usable without reload', async 
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill('QA export recovery');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await page.getByText('File', { exact: true }).click();

@@ -20,7 +20,7 @@ async function openProject(page: Page, document: ProjectDocument) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('QA sweep facets');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText('QA sweep facets');

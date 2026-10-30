@@ -48,7 +48,7 @@ test('duplicates a Move step from its history menu', async ({ page }) => {
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const names = page.locator('.feature-row .feature-name');
   await expect(names).toHaveText(['Block', 'Move', 'Later'], {
     timeout: 30_000

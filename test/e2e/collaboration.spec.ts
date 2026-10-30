@@ -422,7 +422,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       ).toBeVisible();
     } else {
       await page.getByLabel('Project name').fill('Workspace retained');
-      await page.getByRole('button', { name: 'Create project' }).click();
+      await page.getByRole('button', { name: 'New project' }).click();
       await expect(
         page.getByRole('button', { name: 'Rename project' })
       ).toBeVisible();
@@ -549,7 +549,7 @@ test('allows signed-out invitation sign-in while a superseded share request is p
   ).toBeEnabled();
   await page.getByRole('button', { name: 'Not now', exact: true }).click();
   await expect(
-    page.getByRole('button', { name: 'Create project', exact: true })
+    page.getByRole('button', { name: 'New project', exact: true })
   ).toBeEnabled();
 });
 
@@ -683,7 +683,7 @@ for (const active of [false, true]) {
     }
     await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     await expect(
-      page.getByRole('button', { name: 'Create project', exact: true })
+      page.getByRole('button', { name: 'New project', exact: true })
     ).toBeEnabled();
     await expect(
       page.getByRole('button', { name: 'Make a copy', exact: true })
@@ -749,7 +749,7 @@ for (const status of [404, 503]) {
       .getByLabel('Project name')
       .fill('Local project after failed link');
     await page
-      .getByRole('button', { name: 'Create project', exact: true })
+      .getByRole('button', { name: 'New project', exact: true })
       .click();
     await expect(
       page.getByRole('button', { name: 'Rename project' })
@@ -841,7 +841,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
         if (action === 'create') {
           await page.getByLabel('Project name').fill('New shelf project');
           await page
-            .getByRole('button', { name: 'Create project', exact: true })
+            .getByRole('button', { name: 'New project', exact: true })
             .click();
         } else if (action === 'demo') {
           await page
@@ -955,7 +955,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
     page.getByRole('button', { name: 'Make a copy', exact: true })
   ).toHaveCount(0);
   await expect(
-    page.getByRole('button', { name: 'Create project', exact: true })
+    page.getByRole('button', { name: 'New project', exact: true })
   ).toBeEnabled();
   delay = false;
   await page.evaluate(() => {
@@ -1129,7 +1129,7 @@ test('saves incoming member updates through the room without refused account wri
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('button', { name: /Open project sharing/ })
   ).toContainText('Read-only');
@@ -1307,7 +1307,7 @@ test('publishes editor checkpoints through the room without an account revision 
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
   await page
-    .getByRole('button', { name: 'Create project', exact: true })
+    .getByRole('button', { name: 'New project', exact: true })
     .click();
   await expect(page.locator('.breadcrumb')).toContainText(document.name);
   await expect
@@ -1452,7 +1452,7 @@ test('keeps a shared-project viewer visibly read-only', { tag: '@ci-smoke' }, as
   await stubApi(page, { collaborationRole: 'viewer' });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Viewer Role Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const sharingButton = page.getByRole('button', {
     name: 'Open project sharing'
@@ -1519,7 +1519,7 @@ test('lets the project owner rename from View mode', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Owner View Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const workspaceMode = page.getByRole('group', { name: 'Workspace mode' });
   await workspaceMode.getByRole('button', { name: 'View' }).click();
@@ -1708,7 +1708,7 @@ test('uses a one-use native ticket for desktop collaboration without exposing a 
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Desktop Ticket Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await expect
     .poll(() =>
@@ -1745,7 +1745,7 @@ test('renders saved part geometry in the project thumbnail', async ({
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Thumbnail Box');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect.poll(() => hasCachedProjectThumbnail(page)).toBe(true);
@@ -1801,7 +1801,7 @@ test('restores a remembered local project without flashing the launcher', async 
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Boot Restore Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
     timeout: 15_000
   });
@@ -1869,7 +1869,7 @@ test('flushes the latest edit before returning to the project list', async ({
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Autosave Flush Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
     timeout: 15_000
   });
@@ -1932,7 +1932,7 @@ test('keeps anonymous CAD creation local without calling cloud projects', { tag:
     'On this device only'
   );
   await page.getByLabel('Project name').fill('Anonymous Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
     timeout: 15_000
   });

@@ -13,9 +13,7 @@ const fixture = 'samples/simple-block.stl';
 
 async function create(page: Page, name: string) {
   await page.getByLabel('Project name').fill(name);
-  await page
-    .getByRole('button', { name: 'Create project', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 }
 

@@ -26,7 +26,7 @@ for (const [tool, valueId, chip] of [
     await stubApi(page);
     await page.goto('/');
     await page.getByLabel('Project name').fill('Edge form preview');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
     await createPrimitiveInPlace(page, 'cylinder', {
       sizes: { radius: '14', height: '28' }
@@ -77,7 +77,7 @@ test('a fillet takes another edge after creation from its History row', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet retarget');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });
@@ -121,7 +121,7 @@ test('a new fillet takes a second edge clicked on its preview', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet two clicks');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });
@@ -157,7 +157,7 @@ test('a new fillet among several bodies can select all again after clearing', as
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet clear');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   for (const radius of ['14', '6']) {
     await createPrimitiveInPlace(page, 'cylinder', {
       sizes: { radius, height: '28' }
@@ -185,7 +185,7 @@ test('a new fillet keeps its edges lit across an undo', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet undo');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });
@@ -214,7 +214,7 @@ test('a box sweep during Fillet adds the edges it catches', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet sweep');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });

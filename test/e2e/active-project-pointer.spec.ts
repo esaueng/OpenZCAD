@@ -49,7 +49,7 @@ test('a project open keeps a reopen pointer written while it was in flight', asy
   );
 
   await page.getByLabel('Project name').fill('Pointer newcomer');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const topbar = page.locator('.topbar');
   await expect(topbar.getByText('Pointer newcomer')).toBeVisible({
     timeout: 30_000

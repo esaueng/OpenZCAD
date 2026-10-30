@@ -93,7 +93,7 @@ test('natural language selects a measured dimension, previews, applies and survi
   await page.goto('/');
   await expect(page).toHaveTitle('OpenZCAD');
   await page.getByLabel('Project name').fill('Measured plate');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   await page
     .getByLabel(/^Import FreeCAD, STEP or /)
@@ -160,7 +160,7 @@ test('analyzes independent raised features and runs their direct action without 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Embossed plate');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   await page
     .getByLabel(/^Import FreeCAD, STEP or /)

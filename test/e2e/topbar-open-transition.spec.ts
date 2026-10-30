@@ -168,7 +168,7 @@ test('opens a cloud project without the action row flashing stale states or refl
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Open Transition Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const actions = page
     .locator('.topbar')
     .getByRole('group', { name: 'Workspace actions' });

@@ -24,7 +24,7 @@ test('places a cylinder on a box from the position its Options name', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Primitive position');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();

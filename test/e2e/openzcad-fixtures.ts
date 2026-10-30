@@ -1294,7 +1294,7 @@ export async function waitForStillViewport(page: Page) {
 export async function createProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 }
 

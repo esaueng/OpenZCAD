@@ -37,7 +37,7 @@ test('commits the exact previewed fillet with the same feature IDs and no second
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet preview reuse');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });

@@ -114,7 +114,7 @@ async function open(
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
-    page.getByRole('button', { name: 'Import project…', exact: true }).click()
+    page.getByRole('button', { name: 'Import project', exact: true }).click()
   ]);
   await chooser.setFiles({
     name: 'composite-targets.openzcad',

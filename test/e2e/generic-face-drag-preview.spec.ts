@@ -55,7 +55,7 @@ test('a generic imported side drags the whole body and stays selected after the 
   await page.setViewportSize({ width: 1440, height: 1000 });
   const { document } = await roundedPlateDocument();
   await page.goto('/');
-  await page.getByRole('button', { name: 'Import project…' }).click();
+  await page.getByRole('button', { name: 'Import project' }).click();
   await page.getByLabel('Import project backup').setInputFiles({
     name: 'plate.openzcad',
     mimeType: 'application/json',
@@ -145,7 +145,7 @@ test('a typed offset previews over the ghost too, until it is applied', async ({
   await page.setViewportSize({ width: 1440, height: 1000 });
   const { document } = await roundedPlateDocument();
   await page.goto('/');
-  await page.getByRole('button', { name: 'Import project…' }).click();
+  await page.getByRole('button', { name: 'Import project' }).click();
   await page.getByLabel('Import project backup').setInputFiles({
     name: 'plate.openzcad',
     mimeType: 'application/json',

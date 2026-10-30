@@ -206,7 +206,7 @@ for (const failure of ['fetch', 'evaluation'] as const) {
     await stubAnonymousApi(page);
     await page.goto('/');
     await page.getByLabel('Project name').fill('Font preview recovery');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
     await page.getByRole('button', { name: 'Top (XY)' }).click();
     await expect(page.locator('.viewport-dock-grid')).toBeVisible();

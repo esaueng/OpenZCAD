@@ -27,7 +27,7 @@ test('selects all edges from the fillet card, previews joined corners, and survi
   await expect(page).toHaveTitle('OpenZCAD');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.getByLabel('Project name').fill('All-edge finish');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   // The preview counter counts highlighted edge bands; the eight spherical
@@ -125,7 +125,7 @@ test('plain-language all-edge fillets work without a provider and require exact 
   await expect(page).toHaveTitle('OpenZCAD');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.getByLabel('Project name').fill('Assistant all-edge finish');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await openAssistant(page);
@@ -188,7 +188,7 @@ for (const radius of [1, 10]) {
     await expect(page).toHaveTitle('OpenZCAD');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     await page.getByLabel('Project name').fill('Concave bracket');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
       name: 'bracket.step',
       mimeType: 'application/step',

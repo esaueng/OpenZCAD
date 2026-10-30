@@ -35,7 +35,7 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await page.goto('/');
   await expect(page).toHaveTitle('OpenZCAD');
   await page.getByLabel('Project name').fill('Rounded box resize');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '40', depth: '24', height: '10' }
   });

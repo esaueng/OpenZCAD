@@ -80,7 +80,7 @@ for (const filter of ['Face', 'Any'] as const) {
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto('/');
     await page.getByLabel('Project name').fill('Selection fixture');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await expect(
       page.getByRole('button', { name: 'Rename project' })
     ).toContainText('Selection fixture');

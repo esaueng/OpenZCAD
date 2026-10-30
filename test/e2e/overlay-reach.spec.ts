@@ -61,7 +61,7 @@ async function createBox(
   if (options.units) {
     await page.getByLabel('Units', { exact: true }).selectOption(options.units);
   }
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const [width, depth, height] = options.size ?? [];
   await createPrimitiveInPlace(
     page,

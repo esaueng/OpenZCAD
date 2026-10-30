@@ -22,7 +22,7 @@ async function openTopSketch(page: Page, name: string) {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(page.locator('.sketch-rail')).toBeVisible();

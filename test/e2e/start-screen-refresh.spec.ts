@@ -80,7 +80,7 @@ for (const viewport of [
       await expect(page.locator('.start-screen')).not.toHaveClass(/is-fresh/);
       await expect(page.locator('.start-account')).toContainText('Checking');
       await expect(
-        page.getByRole('button', { name: 'Create project' })
+        page.getByRole('button', { name: 'New project' })
       ).toBeDisabled();
       await expect(
         page.getByRole('button', { name: /^Open demo:/ }).first()
@@ -95,7 +95,7 @@ for (const viewport of [
         page.getByRole('status', { name: 'Loading library' })
       ).toBeVisible();
       await expect(
-        page.getByRole('button', { name: 'Create project' })
+        page.getByRole('button', { name: 'New project' })
       ).toBeDisabled();
     } finally {
       releaseSession();
@@ -111,7 +111,7 @@ for (const viewport of [
       'Name kept during refresh'
     );
     await expect(
-      page.getByRole('button', { name: 'Create project' })
+      page.getByRole('button', { name: 'New project' })
     ).toBeEnabled();
     expect(
       await page.evaluate(
@@ -155,9 +155,7 @@ test('failed account listing finishes refresh with the saved device library', as
   await expect(
     page.getByRole('status', { name: 'Loading library' })
   ).toHaveCount(0);
-  await expect(
-    page.getByRole('button', { name: 'Create project' })
-  ).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'New project' })).toBeEnabled();
 });
 
 for (const layout of ['grid', 'list']) {

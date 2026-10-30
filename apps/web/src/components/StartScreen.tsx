@@ -2438,7 +2438,7 @@ export function StartScreen({
         </button>
       </div>
 
-      <section className="start-launch" aria-labelledby="start-launch-title">
+      <section className="start-launch" aria-label="New project">
         <form
           className="start-launch-form"
           onSubmit={(event) => {
@@ -2462,12 +2462,18 @@ export function StartScreen({
             }
           }}
         >
-          {/* The two ways to start: a new project, or a backup brought in. */}
+          {/* The two ways to start: a new project, or a backup brought in.
+              New project is the form's one submit, so the card needs no
+              separate Create button under its fields. */}
           <div className="start-launch-head">
-            <h2 id="start-launch-title">
-              <Plus size={15} aria-hidden="true" />
+            <button
+              type="submit"
+              className="primary start-launch-create"
+              disabled={!canCreate}
+            >
+              <Plus size={14} aria-hidden="true" />
               New project
-            </h2>
+            </button>
             {onImportProject && (
               <ProjectImportButton
                 onImport={onImportProject}
@@ -2495,19 +2501,12 @@ export function StartScreen({
               aria-label="Units"
               onChange={(event) => setUnits(event.target.value as UnitSystem)}
             >
-              <option value="mm">Millimeters</option>
-              <option value="cm">Centimeters</option>
-              <option value="m">Meters</option>
-              <option value="inch">Inches</option>
+              <option value="mm">mm</option>
+              <option value="cm">cm</option>
+              <option value="m">m</option>
+              <option value="inch">in</option>
             </select>
           </label>
-          <button
-            type="submit"
-            className="primary start-launch-submit"
-            disabled={!canCreate}
-          >
-            Create project
-          </button>
           {nameTooLong ? (
             <small
               id="project-name-error"
@@ -3010,8 +3009,8 @@ export function StartScreen({
                 <>
                   <strong>No projects yet</strong>
                   <span>
-                    Name one and press Create, or open a demo to see a project
-                    walk through its revisions.
+                    Name one and press New project, or open a demo to see a
+                    project walk through its revisions.
                   </span>
                 </>
               ) : shelf === 'archived' ? (

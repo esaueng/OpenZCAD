@@ -26,7 +26,7 @@ test('Settings and Move open complete the first time', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('First use');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   // The warm-up runs when the page is first idle, at the latest 5 s in.
   await page.waitForTimeout(6_000);
@@ -97,7 +97,7 @@ test('Settings opened before the warm-up never shows an empty overlay', async ({
     requestAnimationFrame(sample);
   });
   await page.goto('/');
-  const create = page.getByRole('button', { name: 'Create project' });
+  const create = page.getByRole('button', { name: 'New project' });
   await expect(create).toBeVisible();
   const box = (await create.boundingBox())!;
   await page.getByRole('button', { name: 'Open settings' }).click();
@@ -130,7 +130,7 @@ test('Move launched before its panel loads keeps the selection card up', async (
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Early move');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await selectBodyFromObjects(page);
   const move = page.getByRole('button', {
@@ -172,7 +172,7 @@ test('a Move held for its panel is dropped when its selection is cleared', async
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Abandoned move');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await selectBodyFromObjects(page);
   await page
@@ -209,7 +209,7 @@ test('Save-Data loads no surface or command card speculatively', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Saving data');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   // A command is up with its chips (U09): within reach of the keypad, but
   // nobody opened it.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
@@ -234,7 +234,7 @@ test('a Move held for its panel is dropped when the project is replaced', async 
   });
   const createBoxProject = async (name: string) => {
     await page.getByLabel('Project name').fill(name);
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await createPrimitiveInPlace(page, 'box');
     await page.keyboard.press('Escape');
     await expect(page.locator('.selection-rail')).toHaveCount(0);
@@ -269,7 +269,7 @@ test('a Move held for its panel is dropped when Measure takes the lane', async (
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Measure instead');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await page.keyboard.press('Escape');
   await expect(page.locator('.selection-rail')).toHaveCount(0);
@@ -317,7 +317,7 @@ test('Settings still loading holds the keyboard as a modal', async ({
     await page.evaluate(() =>
       Boolean(
         [...document.querySelectorAll('button')]
-          .find((button) => button.textContent?.includes('Create project'))
+          .find((button) => button.textContent?.includes('New project'))
           ?.closest('[inert]')
       )
     )

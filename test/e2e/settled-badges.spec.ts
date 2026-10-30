@@ -43,7 +43,7 @@ async function armedBox(page: Page) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Settled badges');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '30', depth: '18', height: '24' }
   });

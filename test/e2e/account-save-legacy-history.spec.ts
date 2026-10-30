@@ -71,9 +71,7 @@ test('saves unopened legacy projects with undo history from the library', async 
     }
   });
   await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Create project' })
-  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New project' })).toBeVisible();
   await expect(page.locator('.start-account-text')).toHaveText('Signed in');
   await page.evaluate(async (snapshots) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -176,7 +174,7 @@ for (const destination of ['account', 'device', 'refused'] as const) {
     });
     await page.goto('/');
     await expect(
-      page.getByRole('button', { name: 'Create project' })
+      page.getByRole('button', { name: 'New project' })
     ).toBeVisible();
     await expect
       .poll(() =>

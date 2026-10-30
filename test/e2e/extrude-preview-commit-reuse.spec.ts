@@ -156,7 +156,7 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
 
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expectBodyCount(page, 1);
   await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
   await page.keyboard.press('e');

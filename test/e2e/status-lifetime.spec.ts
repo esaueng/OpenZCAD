@@ -19,7 +19,7 @@ test('status messages are retired by the next selection and expire on their own'
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Quiet Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
 
   const statusButton = page.locator('.workspace-toast-body');

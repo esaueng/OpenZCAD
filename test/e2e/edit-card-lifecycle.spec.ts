@@ -24,7 +24,7 @@ async function createProject(page: Page, name: string) {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 }
 
 function inspectorOf(page: Page) {

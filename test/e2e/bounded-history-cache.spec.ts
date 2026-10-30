@@ -89,7 +89,7 @@ test('edits a 33-feature history, refuses invalid geometry, undoes, redoes and e
   await page.goto('/');
   await expect(page).toHaveTitle(/OpenZCAD/);
   await page.getByLabel('Project name').fill('History verification');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText('History verification');

@@ -247,7 +247,7 @@ for (const [label, planeRef] of [
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
     await page.getByLabel('Project name').fill(document.name);
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
     await inspector

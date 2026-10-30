@@ -25,9 +25,7 @@ test.afterEach(async ({ page }, testInfo) => {
 
 async function create(page: Page, name: string) {
   await page.getByLabel('Project name').fill(name);
-  await page
-    .getByRole('button', { name: 'Create project', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
 }
 async function sketch(page: Page) {
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();

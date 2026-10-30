@@ -149,7 +149,7 @@ test('relays an encrypted edit between two browsers of the owner', async ({
     await expect(toggle).toBeChecked();
     await a.keyboard.press('Escape');
     await a.getByLabel('Project name').fill('Shared bracket');
-    await a.getByRole('button', { name: 'Create project' }).click();
+    await a.getByRole('button', { name: 'New project' }).click();
     await addBox(a);
     await expect(
       a.getByRole('status', { name: 'Saved', exact: true })

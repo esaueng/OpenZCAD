@@ -13,7 +13,7 @@ async function viewerAntialias(page: Page) {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Render profile');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible();
   return canvas.evaluate(

@@ -113,7 +113,7 @@ async function openFixture(page: Page, document: ProjectDocument) {
   await expect(page).toHaveTitle('OpenZCAD');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible(READ_TIMEOUT);
   await enterSketch(

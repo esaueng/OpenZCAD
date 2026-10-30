@@ -106,7 +106,7 @@ async function armChamferedTopCapOffset(page: Page) {
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Planar Live Preview');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });
@@ -997,7 +997,7 @@ test('streams an exact extrude preview while a region drag is held', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Region Live Preview');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });

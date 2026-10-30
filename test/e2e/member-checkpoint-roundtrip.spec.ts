@@ -358,7 +358,7 @@ test('restoring a device-only member point syncs the model without publishing pr
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await startNamedSave(page);
@@ -401,7 +401,7 @@ test('does not record a restore when the room changes while its saved revision l
   await server.install(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await startNamedSave(page);
@@ -508,7 +508,7 @@ test('branches a device-only member point while the account cannot be reached', 
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await startNamedSave(page);
@@ -553,7 +553,7 @@ for (const roomStored of [true, false]) {
     try {
       await page.goto('/');
       await page.getByLabel('Project name').fill(server.read().name);
-      await page.getByRole('button', { name: 'Create project' }).click();
+      await page.getByRole('button', { name: 'New project' }).click();
       await createPrimitiveInPlace(page, 'box');
       await expectBodyCount(page, 1);
       await expect(
@@ -645,7 +645,7 @@ test('a clicked member checkpoint survives buffered edits and restores through t
   await server.install(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(
@@ -717,7 +717,7 @@ test('a late member checkpoint leaves the newer share navigation and status unch
   await server.install(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(
@@ -783,7 +783,7 @@ for (const timing of ['after adoption', 'before broadcast'] as const) {
       try {
         await page.goto('/');
         await page.getByLabel('Project name').fill(server.read().name);
-        await page.getByRole('button', { name: 'Create project' }).click();
+        await page.getByRole('button', { name: 'New project' }).click();
         await createPrimitiveInPlace(page, 'box');
         await expectBodyCount(page, 1);
         await expect(
@@ -854,7 +854,7 @@ test('a committed member checkpoint fences buffered edits after a new lease repl
   try {
     await page.goto('/');
     await page.getByLabel('Project name').fill(server.read().name);
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 1);
     await expect(

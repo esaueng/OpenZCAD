@@ -374,7 +374,7 @@ test('keeps the failed workspace open on internal departure and retries before r
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText(name);
   await expect(
-    page.getByRole('button', { name: 'Create project', exact: true })
+    page.getByRole('button', { name: 'New project', exact: true })
   ).toHaveCount(0);
 
   const cancelDeparture = async () => {

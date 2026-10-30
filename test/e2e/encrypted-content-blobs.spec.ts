@@ -155,7 +155,7 @@ test('imports a STEP file into an encrypted project and resolves it in a fresh b
   await expect(settings).toHaveCount(0);
 
   await page.getByLabel('Project name').fill('Secret fixture');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
     name: 'secret-cube.step',
     mimeType: 'application/step',
@@ -263,7 +263,7 @@ test('duplicates an encrypted project and opens the copy in a fresh browser', as
   await expect(settings).toHaveCount(0);
 
   await page.getByLabel('Project name').fill('Secret original');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
     name: 'secret-cube.step',
     mimeType: 'application/step',
@@ -400,7 +400,7 @@ test('decrypts shelf names and thumbnails of an encrypted project in a fresh bro
   await expect(settings).toHaveCount(0);
 
   await page.getByLabel('Project name').fill('Secret shelf part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(

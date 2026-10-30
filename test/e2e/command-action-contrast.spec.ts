@@ -74,7 +74,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await stubApi(page, { panelLayout: null });
         await page.goto('/');
         await page.getByLabel('Project name').fill('Command action contrast');
-        await page.getByRole('button', { name: 'Create project' }).click();
+        await page.getByRole('button', { name: 'New project' }).click();
 
         await page.getByRole('button', { name: /^Box \(B\)/ }).click();
         const box = page.getByRole('group', { name: 'Box command' });
@@ -127,7 +127,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await stubApi(page, { panelLayout: null });
       await page.goto('/');
       await page.getByLabel('Project name').fill('Wrapped command feedback');
-      await page.getByRole('button', { name: 'Create project' }).click();
+      await page.getByRole('button', { name: 'New project' }).click();
       await page.getByRole('button', { name: /^Box \(B\)/ }).click();
       await page
         .getByRole('group', { name: 'Box command' })

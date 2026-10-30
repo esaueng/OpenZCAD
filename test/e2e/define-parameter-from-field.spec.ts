@@ -21,7 +21,7 @@ test('defines a parameter from the Box field that first names it', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Define from a field');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   await createPrimitiveInPlace(page, 'box');

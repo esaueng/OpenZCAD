@@ -13,7 +13,7 @@ test('the parameter eye hides and restores a Tweak control', async ({
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Parameter curation');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('New parameter name').fill('width_x');
   await page.getByLabel('New parameter expression').fill('300');
   await page.getByRole('button', { name: 'Add parameter' }).click();

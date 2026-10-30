@@ -165,7 +165,7 @@ async function openFixture(page: Page, document: ProjectDocument) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Authored feature' })
   ).toBeVisible();

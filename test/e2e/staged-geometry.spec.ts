@@ -85,7 +85,7 @@ test('Delete accepts the complete displayed fillet while its worker analysis cat
   await installAnalysisGate(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Delete complete fillet');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '10', height: '20' }
   });
@@ -159,7 +159,7 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Staged saved measurement');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
@@ -239,7 +239,7 @@ test('draws accepted geometry before analysis, then completes without reinstalli
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Staged geometry');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expectBodyCount(page, 0);
   await openPrimitiveReady(page, 'Box');
   await page.evaluate(() => {
@@ -348,7 +348,7 @@ test('an edge hook pick refused before analysis reports no selection, then lands
   await installAnalysisGate(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Staged edge pick');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expectBodyCount(page, 0);
   await openPrimitiveReady(page, 'Cylinder');
   await page.evaluate(() => {
@@ -404,7 +404,7 @@ test('acknowledges appearance edits without reinstalling on later selection', as
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Retained appearance');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expectBodyCount(page, 0);
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
@@ -447,7 +447,7 @@ test('blocks staged context actions and exports, then exports both completed bod
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Staged export');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expectBodyCount(page, 0);
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
@@ -537,7 +537,7 @@ test('shows current staged advisories and clears resolved diagnostics before ana
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Staged diagnostics');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expectBodyCount(page, 0);
   const diagnosticRows = page.locator('.diagnostic-row');
   const warningCount = page

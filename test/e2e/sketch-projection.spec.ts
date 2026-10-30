@@ -126,7 +126,7 @@ test('a linked projection follows an upstream resize and shows its deleted sourc
   const projectName = 'Projection';
   await page.goto('/');
   await page.getByLabel('Project name').fill(projectName);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const status = page.getByRole('contentinfo');

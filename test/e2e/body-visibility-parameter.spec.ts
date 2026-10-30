@@ -31,7 +31,7 @@ test('creates a body switch, toggles it in Tweak, and preserves it through undo 
   }).document;
   await page.goto('/');
   await page.getByLabel('Project name').fill('Switch test');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   // Wait for creation to finish before importing a different project. The
   // import guard intentionally preserves edits made during an in-flight load.
   await expect(

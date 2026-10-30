@@ -121,7 +121,7 @@ test('typing a new extrude distance keeps the preview until the new one lands', 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Profile' })
   ).toBeVisible();
@@ -156,7 +156,7 @@ test('applying a fillet radius never shows the unfilleted part', async ({
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet continuity');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   const canvas = page.locator('.viewer-host canvas');

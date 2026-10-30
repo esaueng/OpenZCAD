@@ -32,9 +32,7 @@ test('a failed replacement preserves the previous workspace and its pending assi
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill('My ongoing model');
-  await page
-    .getByRole('button', { name: 'Create project', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await openAssistant(page);
   await askAssistant(page, 'Add a 10 mm cube');
   await expect.poll(() => requested).toBe(true);
@@ -186,9 +184,9 @@ for (const link of [
       page.getByRole('heading', { name: 'This share link is incomplete' })
     ).toBeVisible();
     await expect(page.getByRole('tab', { name: /^Projects/ })).toHaveCount(0);
-    await expect(
-      page.getByRole('button', { name: 'Create project' })
-    ).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'New project' })).toHaveCount(
+      0
+    );
     await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(
       0
     );
@@ -371,9 +369,7 @@ test('an incomplete share takes precedence over automatic project restore', asyn
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('My existing part');
-  await page
-    .getByRole('button', { name: 'Create project', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await expect(page.locator('.breadcrumb')).toContainText('My existing part');
   await page.goto('/#share=');
   await page.reload();

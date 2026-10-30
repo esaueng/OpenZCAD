@@ -25,7 +25,7 @@ async function createProject(
   await stubApi(page, options);
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 }
 
 async function addBox(

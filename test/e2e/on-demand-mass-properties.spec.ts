@@ -60,7 +60,7 @@ test('queries mass only on disclosure and refreshes it after edit, undo and expo
     );
   await page.goto('/');
   await page.getByLabel('Project name').fill('Mass on demand');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();

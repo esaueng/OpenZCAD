@@ -114,7 +114,7 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Image export');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const viewport = page.getByRole('region', { name: '3D viewport' });
   await expect(viewport).toBeVisible();
 
@@ -309,7 +309,7 @@ for (const arc of [
     );
     await page.goto('/');
     await page.getByLabel('Project name').fill(document.name);
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await expect(
       page.locator('.feature-row .feature-name', { hasText: /^Arc$/ })
     ).toBeVisible();

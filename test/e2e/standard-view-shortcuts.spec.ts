@@ -4,7 +4,7 @@ import { expect, stubApi, test } from './openzcad-fixtures';
 async function createViewProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('toolbar', { name: 'Viewer bar' })).toBeVisible({
     timeout: 30_000
   });

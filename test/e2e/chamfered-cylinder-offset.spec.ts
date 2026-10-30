@@ -60,7 +60,7 @@ for (const fixture of [
     await stubApi(page, { panelLayout: MODEL_ONLY });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Import project…' }).click();
+    await page.getByRole('button', { name: 'Import project' }).click();
     await page.getByLabel('Import project backup').setInputFiles({
       name: 'rod.openzcad',
       mimeType: 'application/json',

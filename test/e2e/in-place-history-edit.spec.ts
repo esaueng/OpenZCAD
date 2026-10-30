@@ -80,7 +80,7 @@ async function openDocument(
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
     'data-e2e-rendered-bodies',
     bodies,

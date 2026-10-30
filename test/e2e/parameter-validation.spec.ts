@@ -95,7 +95,7 @@ for (const guarded of [true, false])
     });
     await page.goto('/');
     await page.getByLabel('Project name').fill('Validation');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await expect(
       page.getByRole('button', { name: 'Rename project' })
     ).toContainText('Validation');
