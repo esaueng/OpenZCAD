@@ -270,6 +270,24 @@ describe('featureValueSummary', () => {
     ).toBe('× 4');
   });
 
+  it('summarises a worm by its starts and a worm wheel by its worm', () => {
+    const gear = (data: Partial<FeatureData>) =>
+      feature({ featureKind: 'gear', ...data } as FeatureData);
+    expect(
+      featureValueSummary(gear({ gearType: 'worm', teeth: 1 }), {}, 'mm')
+    ).toBe('Worm, 1 start');
+    expect(
+      featureValueSummary(gear({ gearType: 'worm', teeth: 3 }), {}, 'mm')
+    ).toBe('Worm, 3 starts');
+    expect(
+      featureValueSummary(
+        gear({ gearType: 'worm-wheel', teeth: 30, mateTeeth: 2 }),
+        {},
+        'mm'
+      )
+    ).toBe('30 teeth, worm wheel for 2-start worm');
+  });
+
   it('returns null for kinds without one driving value', () => {
     expect(
       featureValueSummary(

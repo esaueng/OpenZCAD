@@ -1,7 +1,7 @@
 /**
- * M14 gear features: a new spur, helical, herringbone or straight bevel gear
- * body from the kernel's gear generator, or teeth cut along the whole length
- * of a body's cylindrical face.
+ * M14 gear features: a new spur, helical, herringbone or straight bevel gear,
+ * worm or worm wheel body from the kernel's gear generator, or teeth cut
+ * along the whole length of a body's cylindrical face.
  *
  * The kernel owns the gear: the involute, its certified flank fit, the
  * tooth-form checks and the boolean that cuts teeth into a body. This module
@@ -65,6 +65,23 @@ function bevelGearKernel(kernel: RemusKernel): BevelGearKernel {
     throw new Error('This kernel build has no bevel gear generator.');
   }
   return candidate as BevelGearKernel;
+}
+
+/** The worm entry points, on kernels from the worm release on. */
+interface WormGearKernel {
+  makeWormDetailed(spec: string): SolidOperationDetailedResult;
+  makeWormWheelDetailed(spec: string): SolidOperationDetailedResult;
+}
+
+function wormGearKernel(kernel: RemusKernel): WormGearKernel {
+  const candidate = kernel as unknown as Partial<WormGearKernel>;
+  if (
+    typeof candidate.makeWormDetailed !== 'function' ||
+    typeof candidate.makeWormWheelDetailed !== 'function'
+  ) {
+    throw new Error('This kernel build has no worm gear generator.');
+  }
+  return candidate as WormGearKernel;
 }
 
 function gearKernel(kernel: RemusKernel): GearKernel {
@@ -304,6 +321,8 @@ export function buildGearFeature(
         );
   if (data.gearType === 'bevel') {
     buildBevelGearBody(ctx, feature, data, toothForm, module, values);
+  } else if (data.gearType === 'worm' || data.gearType === 'worm-wheel') {
+    buildWormGearBody(ctx, feature, data, toothForm, module, values);
   } else if (data.targetBodyId === undefined) {
     buildNewGearBody(ctx, feature, data, toothForm, helical, module, values);
   } else {
@@ -388,6 +407,72 @@ function buildBevelGearBody(
     'Bevel gear'
   );
   validateGeneratedSolid(kernel, solid, 'Bevel gear');
+  raiseGearWarnings(ctx, feature, details);
+  result.shapes.set(feature.bodyId!, {
+    solids: [solid],
+    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+  });
+}
+
+/**
+ * A worm, or the helical wheel that meshes with one: the first cap on
+ * `origin`, along `axis`. A worm's `teeth` are its starts and its `pitch` the
+ * axial module; a wheel carries its worm's starts as `mateTeeth` and takes
+ * the worm's module, so its transverse module is that module. Neither has a
+ * profile shift; the command validation refuses one.
+ */
+function buildWormGearBody(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'gear'>,
+  toothForm: Record<string, number>,
+  module: number | undefined,
+  values: GearValues
+): void {
+  const { kernel, result } = ctx;
+  const worm = data.gearType === 'worm';
+  if (module === undefined || data.diameterFactor === undefined) {
+    throw new Error(
+      'A worm gear needs a pitch and the worm’s diameter factor.'
+    );
+  }
+  if (data.faceWidth === undefined || !data.origin || !data.axis) {
+    throw new Error('A new gear needs a face width, an origin and an axis.');
+  }
+  const { profileShift: _shift, teeth, ...form } = toothForm;
+  const axis = values.vector(data.axis, 'axis');
+  const width = values.resolve(data.faceWidth, 'face width');
+  let starts = teeth;
+  if (!worm) {
+    if (data.mateTeeth === undefined) {
+      throw new Error('A worm wheel needs its worm’s thread starts.');
+    }
+    starts = Math.round(values.resolve(data.mateTeeth, 'worm starts'));
+  }
+  const spec = {
+    module,
+    starts,
+    diameterFactor: values.resolve(data.diameterFactor, 'diameter factor'),
+    ...(worm ? { length: width } : { teeth, faceWidth: width }),
+    ...form,
+    ...(data.hand ? { hand: data.hand } : {}),
+    origin: values.vector(data.origin, 'origin'),
+    axis,
+    xDirection: gearXDirection(data, axis, values),
+    ...withNumber(
+      'boreDiameter',
+      values.optional(data.boreDiameter, 'bore diameter')
+    )
+  };
+  const label = worm ? 'Worm' : 'Worm wheel';
+  const generator = wormGearKernel(kernel);
+  const { solid, details } = unwrap(
+    worm
+      ? generator.makeWormDetailed(JSON.stringify(spec))
+      : generator.makeWormWheelDetailed(JSON.stringify(spec)),
+    label
+  );
+  validateGeneratedSolid(kernel, solid, label);
   raiseGearWarnings(ctx, feature, details);
   result.shapes.set(feature.bodyId!, {
     solids: [solid],

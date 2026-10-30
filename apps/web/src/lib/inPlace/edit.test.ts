@@ -281,6 +281,64 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toEqual(['pressureAngleDeg']);
   });
 
+  it('gear: a worm and its wheel keep their starts and diameter factor', () => {
+    const worm: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'worm',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 2,
+      diameterFactor: 'q',
+      hand: 'left',
+      faceWidth: 24,
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    };
+    const wheel: FeatureData = {
+      ...worm,
+      gearType: 'worm-wheel',
+      teeth: 30,
+      mateTeeth: 2,
+      faceWidth: 12
+    };
+    for (const data of [worm, wheel]) {
+      const node = feature(data, 'body_w' as BodyId);
+      const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+      expect(armed.seed.options).toMatchObject({
+        gearType: data.featureKind === 'gear' ? data.gearType : null,
+        hand: 'left'
+      });
+      const request = untouched(node)!;
+      if (request.tool !== 'gear') throw new Error('not a gear request');
+      // An untouched edit writes the gear back as stored.
+      expect(request.gear).toMatchObject({
+        teeth: data.featureKind === 'gear' ? data.teeth : null,
+        diameterFactor: 'q',
+        hand: 'left'
+      });
+      const saved = { featureId: node.featureId, name: node.name, data };
+      expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+        'clearData'
+      );
+    }
+    // A wheel turned back into a spur gear drops what only a worm gear takes.
+    const node = feature(wheel, 'body_w' as BodyId);
+    const request = untouched(node)!;
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    const {
+      mateTeeth: _mate,
+      diameterFactor: _q,
+      hand: _hand,
+      ...spur
+    } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data: wheel },
+        { tool: 'gear', gear: { ...spur, gearType: 'external' } }
+      )?.clearData
+    ).toEqual(['hand', 'mateTeeth', 'diameterFactor']);
+  });
+
   it('gear: a bevel gear keeps its mate and shaft angle, and drops them as a spur', () => {
     const data: FeatureData = {
       featureKind: 'gear',

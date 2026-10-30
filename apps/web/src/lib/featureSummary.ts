@@ -116,6 +116,16 @@ export function featureValueSummary(
     case 'gear': {
       const teeth = num(data.teeth);
       if (teeth === null) return null;
+      if (data.gearType === 'worm') {
+        return teeth === '1' ? 'Worm, 1 start' : `Worm, ${teeth} starts`;
+      }
+      if (data.gearType === 'worm-wheel') {
+        const starts =
+          data.mateTeeth === undefined ? null : num(data.mateTeeth);
+        return starts === null
+          ? `${teeth} teeth, worm wheel`
+          : `${teeth} teeth, worm wheel for ${starts}-start worm`;
+      }
       if (data.gearType === 'bevel') {
         const mate = data.mateTeeth === undefined ? null : num(data.mateTeeth);
         return mate === null

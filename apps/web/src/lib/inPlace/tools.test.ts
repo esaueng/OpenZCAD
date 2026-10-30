@@ -224,6 +224,96 @@ describe('face tools build the card state', () => {
     );
   });
 
+  it('gear: a worm sends its starts as teeth and a wheel as its mate', () => {
+    const spec = IN_PLACE_TOOL_SPECS.gear;
+    const slots: InPlaceSlots = {
+      ...EMPTY,
+      plane: {
+        kind: 'principal',
+        plane: 'XY',
+        origin: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 }
+      }
+    };
+    const ctx = { ...CTX, touched: ['helixAngleDeg', 'profileShift'] };
+    const values = {
+      teeth: 30,
+      module: 2,
+      faceWidth: 24,
+      starts: 2,
+      diameterFactor: 10,
+      mateTeeth: 40,
+      helixAngleDeg: 20,
+      profileShift: 0.3,
+      boreDiameter: 6
+    };
+    const options = {
+      gearType: 'worm',
+      sizing: 'module',
+      hand: 'left',
+      helix: 'herringbone'
+    };
+    const worm = spec.request(slots, values, options, ctx, {
+      boreDiameter: 6
+    });
+    expect(worm).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'worm',
+        teeth: 2,
+        pitch: 2,
+        diameterFactor: 10,
+        hand: 'left',
+        faceWidth: 24,
+        boreDiameter: 6
+      }
+    });
+    const wheel = spec.request(
+      slots,
+      values,
+      { ...options, gearType: 'worm-wheel' },
+      ctx,
+      { boreDiameter: 6 }
+    );
+    expect(wheel).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'worm-wheel',
+        teeth: 30,
+        mateTeeth: 2,
+        diameterFactor: 10,
+        hand: 'left'
+      }
+    });
+    for (const request of [worm, wheel]) {
+      const gear = request?.tool === 'gear' ? request.gear : null;
+      for (const field of [
+        'helixAngleDeg',
+        'herringbone',
+        'profileShift',
+        'shaftAngleDeg',
+        'rimDiameter'
+      ]) {
+        expect(gear).not.toHaveProperty(field);
+      }
+    }
+    expect(worm?.tool === 'gear' && worm.gear).not.toHaveProperty('mateTeeth');
+    // A right hand is left to its default until chosen.
+    const right = spec.request(
+      slots,
+      values,
+      { ...options, hand: 'right' },
+      CTX
+    );
+    expect(right?.tool === 'gear' && right.gear).not.toHaveProperty('hand');
+    // A worm's count chip is its starts, out at its tip circle.
+    const chips = spec
+      .handles(slots, { module: 2, diameterFactor: 10 }, CTX, options)
+      .filter((handle) => handle.kind === 'chip')
+      .map((handle) => handle.valueId);
+    expect(chips).toEqual(['starts', 'module']);
+  });
+
   it('gear: a bevel gear sends its mate and drops spur-only fields', () => {
     const spec = IN_PLACE_TOOL_SPECS.gear;
     const slots: InPlaceSlots = {

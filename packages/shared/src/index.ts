@@ -184,7 +184,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // refuse.
 // v41 adds M14 straight bevel gears (`gearType: 'bevel'`). An older client
 // would send the kernel a gear kind it has no builder for, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 41 as const;
+// v42 adds M14 worms and worm wheels (`gearType: 'worm' | 'worm-wheel'`,
+// `diameterFactor`), refused by older clients for the same reason.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 42 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -199,7 +201,8 @@ export type PlaneId = 'XY' | 'XZ' | 'YZ';
 export type CanonicalPlaneBasisRevision = 2;
 export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus';
 /** M14: which gear body a gear feature builds. */
-export type GearType = 'external' | 'internal' | 'rack' | 'bevel';
+export type GearType =
+  'external' | 'internal' | 'rack' | 'bevel' | 'worm' | 'worm-wheel';
 /** M14: how a gear's `pitch` is read. */
 export type GearSizing = 'module' | 'circular-pitch' | 'diametral-pitch';
 /** M14: how teeth on a cylinder are sized against it. */
@@ -1792,7 +1795,8 @@ export type FeatureData =
       /**
        * M14 (schema v40): an involute spur, helical or herringbone gear,
        * internal (ring) gear or straight rack, built by the kernel's gear
-       * generator; schema v41 adds straight bevel gears.
+       * generator; schema v41 adds straight bevel gears, schema v42 worms
+       * and worm wheels.
        *
        * Without `targetBodyId` the gear is a new body: its first cap is
        * centered on `origin`, it extrudes `faceWidth` along `axis`, and its
@@ -1819,6 +1823,7 @@ export type FeatureData =
        * cylinder's diameter.
        */
       pitch?: ParamValue;
+      /** The tooth count; a worm's thread starts. */
       teeth: ParamValue;
       /** New bodies only; teeth on a cylinder span the whole face. */
       faceWidth?: ParamValue;
@@ -1864,11 +1869,26 @@ export type FeatureData =
       mateTeeth?: ParamValue;
       /** Bevel gears: angle between the two gears' axes, degrees; absent is 90. */
       shaftAngleDeg?: ParamValue;
+      /**
+       * Worms and worm wheels: the worm's diameter factor `q`, its pitch
+       * diameter over the module. With the worm's starts `z₁` it sets the
+       * lead angle, `tan γ = z₁ / q` (at most 45°). Required on both.
+       *
+       * A worm (ISO/TR 10828 ZI form) is a thread of `teeth` starts whose
+       * `pitch` is the axial module and whose `faceWidth` is its length; its
+       * `backlash` thins the thread along the axis, and `hand` sets which way
+       * it winds. A worm wheel is the helical gear that meshes with it at
+       * 90°: `teeth` teeth, the worm's starts as `mateTeeth`, the worm's
+       * `pitch`, pressure angle, coefficients and `hand`, and helix angle γ.
+       * The pair touches at points (a crossed helical drive), not along
+       * lines as a hobbed throated wheel would.
+       */
+      diameterFactor?: ParamValue;
       /** New bodies: placement, see above. */
       origin?: ParametricVector3;
       axis?: ParametricVector3;
       xDirection?: ParametricVector3;
-      /** New external and bevel gears: concentric bore diameter. */
+      /** New external, bevel and worm gears: concentric bore diameter. */
       boreDiameter?: ParamValue;
       /** New internal gears: outer rim diameter (required). */
       rimDiameter?: ParamValue;
