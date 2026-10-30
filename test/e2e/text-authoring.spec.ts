@@ -47,7 +47,7 @@ async function startTopSketch(
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByLabel('Units').selectOption(units);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(

@@ -75,7 +75,7 @@ test('profile first geometry operation', async ({ page }) => {
   await client.send('Profiler.setSamplingInterval', { interval: 200 });
   await client.send('Profiler.start');
 
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Box \(B\)/ }).waitFor();
 
   await createPrimitiveInPlace(page, 'box');

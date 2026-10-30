@@ -40,9 +40,7 @@ async function ownedLocalWorkspace(page: Page, sharingEnabled = true) {
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Owned local workspace');
-  await page
-    .getByRole('button', { name: 'Create project', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await expect(page.locator('.breadcrumb')).toContainText(
     'Owned local workspace'
   );

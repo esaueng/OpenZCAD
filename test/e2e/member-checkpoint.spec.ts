@@ -96,7 +96,7 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.locator('.breadcrumb')).toContainText(document.name);
   await expect
     .poll(() =>

@@ -38,7 +38,7 @@ test('imports a normal STEP and uses the assistant to keep text together with an
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Lettered holder');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText('Lettered holder');

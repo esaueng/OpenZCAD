@@ -17,7 +17,7 @@ test('a gizmo rotation stores its pivot, and editing the angle keeps it', async 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Pivot');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '40', depth: '20', height: '10' }
@@ -68,7 +68,7 @@ test('a translation-only gizmo Move still stores its pivot', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Pivot slide');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '40', depth: '20', height: '10' }

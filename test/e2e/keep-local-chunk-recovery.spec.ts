@@ -113,9 +113,7 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
   await page.goto('/');
   await expect(page).toHaveTitle(/OpenZCAD/);
   await page.getByLabel('Project name').fill(local.name);
-  await page
-    .getByRole('button', { name: 'Create project', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await expectBodyCount(page, 1);
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled();
   const origin = await page.evaluate(() => performance.timeOrigin);

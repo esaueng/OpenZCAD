@@ -91,7 +91,7 @@ for (const projection of ['perspective', 'orthographic'] as const) {
     const { document } = await steppedCylinderDocument();
     await page.goto('/');
     await expect(page).toHaveTitle(/OpenZCAD/);
-    await page.getByRole('button', { name: 'Import project…' }).click();
+    await page.getByRole('button', { name: 'Import project' }).click();
     await page.getByLabel('Import project backup').setInputFiles({
       name: 'rod.openzcad',
       mimeType: 'application/json',

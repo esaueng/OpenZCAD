@@ -127,7 +127,7 @@ test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-s
   await expect(settings).toHaveCount(0);
 
   await page.getByLabel('Project name').fill('Secret bracket');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
@@ -233,7 +233,7 @@ test('shows no encryption indicator on a plaintext project', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Open bracket');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Rename project Open bracket' })

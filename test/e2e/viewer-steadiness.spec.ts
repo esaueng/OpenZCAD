@@ -46,7 +46,7 @@ async function newProject(page: Page, name: string) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 }
 
 async function addBox(page: Page) {

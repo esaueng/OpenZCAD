@@ -72,7 +72,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
     try {
       if (action === 'create') {
         await page.getByLabel('Project name').fill(expected);
-        await page.getByRole('button', { name: 'Create project' }).click();
+        await page.getByRole('button', { name: 'New project' }).click();
       } else if (action === 'demo') {
         await page
           .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
@@ -80,7 +80,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
       } else {
         const document = createProjectDocument(expected, toUserId('owner'));
         await page
-          .getByRole('button', { name: 'Import project…', exact: true })
+          .getByRole('button', { name: 'Import project', exact: true })
           .click();
         await page.getByLabel('Import project backup').setInputFiles({
           name: 'shelf-project.openzcad',
@@ -194,7 +194,7 @@ test('a newer share wins over a held restore that saves locally without opening'
   });
   await page.goto('/');
   await page
-    .getByRole('button', { name: 'Import project…', exact: true })
+    .getByRole('button', { name: 'Import project', exact: true })
     .click();
   await page.getByLabel('Import project backup').setInputFiles({
     name: 'superseded.openzcad',

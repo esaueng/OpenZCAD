@@ -165,7 +165,7 @@ for (const fault of ['missing', 'stalled', 'rejected'] as const) {
     try {
       await page.goto('/');
       await page.getByLabel('Project name').fill(document.name);
-      await page.getByRole('button', { name: 'Create project' }).click();
+      await page.getByRole('button', { name: 'New project' }).click();
       await expectBodyCount(page, 1);
       await expect(
         page.getByRole('status', { name: 'Saved', exact: true })

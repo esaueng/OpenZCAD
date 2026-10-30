@@ -135,7 +135,7 @@ test('asks before reading an encrypted project and stops on revocation', async (
   await expect(settings).toHaveCount(0);
 
   await page.getByLabel('Project name').fill('Secret bracket');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })

@@ -18,7 +18,7 @@ test('types a parameter as a length, mixes it with mm, and refuses a breaking re
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Typed parameters');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page.getByLabel('New parameter name').fill('w');

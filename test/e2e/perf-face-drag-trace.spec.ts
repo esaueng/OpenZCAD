@@ -107,7 +107,7 @@ async function startPage(page: Page, create = true) {
   await page.goto('/');
   if (!create) return;
   await page.getByLabel('Project name').fill('Face drag trace');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 }
 
 async function armPlanarFace(

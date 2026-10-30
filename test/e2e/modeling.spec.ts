@@ -44,7 +44,7 @@ test('suppresses features and rolls the timeline back as one undoable edit', { t
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Suppression Timeline');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   for (const kind of ['box', 'cylinder'] as const) {
     await createPrimitiveInPlace(page, kind);
@@ -100,7 +100,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', { t
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Cylinder Radius Drag');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
@@ -283,7 +283,7 @@ test('resizes a literal box by dragging an exact face', { tag: '@ci-smoke' }, as
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Direct Edit Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
@@ -335,7 +335,7 @@ test('a press-and-drag with the Line tool draws a segment instead of orbiting', 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Drag Line Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
@@ -376,7 +376,7 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Context Sketch Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
@@ -477,7 +477,7 @@ test('refuses suppression that would stale an attached sketch and allows pausing
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Stale Face Attachment');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
@@ -581,7 +581,7 @@ test('keeps face sketching available after a primitive direct edit', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Direct Edit Sketch Guard');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
@@ -692,7 +692,7 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Sketch Edge Regression');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
@@ -853,7 +853,7 @@ test('extrudes and edits one of multiple closed sketch regions', { tag: '@ci-smo
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Multi Region Extrude');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
@@ -989,7 +989,7 @@ test('resolves a negative free-plane extrude preview', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Negative Extrude Preview');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
@@ -1046,7 +1046,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Stored Extrude Operation');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
 
@@ -1131,7 +1131,7 @@ test('the Edit Sketch offer does not outlive the mode it was made in', async ({
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Edit Sketch offer');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
 
@@ -1181,7 +1181,7 @@ test('the Edit Sketch offer does not outlive its project', async ({
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Edit Sketch project');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 30_000 });
@@ -1211,7 +1211,7 @@ test('the Edit Sketch offer does not outlive its project', async ({
 
   await page.getByTitle('Back to projects').click();
   await page.getByLabel('Project name').fill('Edit Sketch next project');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(canvas).toBeVisible({ timeout: 30_000 });
   await expectBodyCount(page, 0);
   await expect(offer).toHaveCount(0);
@@ -1229,7 +1229,7 @@ test('fillets all twelve edges of a box in one exact feature', { tag: '@ci-smoke
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('All-edge Fillet');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
 
@@ -1269,7 +1269,7 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('One Body Radius');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   // Stated rather than inherited: this test drags the radius by a fixed screen
   // distance and asserts where it lands, so it owns its starting size.
@@ -1380,7 +1380,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Filleted Cylinder Resize');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'cylinder', {
@@ -1463,7 +1463,7 @@ for (const modifier of [
     await page
       .getByLabel('Project name')
       .fill(`${modifier.label} Cylinder Radius Drag`);
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
 
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
     await createPrimitiveInPlace(page, 'cylinder', {
@@ -1612,7 +1612,7 @@ test('preflights and splits a box into two live half bodies', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Split Halves');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '20', depth: '20', height: '20' }
@@ -1664,7 +1664,7 @@ test('preflights and drills a through hole into the top face', { tag: '@ci-smoke
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Drilled Block');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
 
@@ -1736,7 +1736,7 @@ test('preflights and creates an exact open-top shell', { tag: '@ci-smoke' }, asy
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Open Top Shell');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
 
@@ -1811,7 +1811,7 @@ for (const modifier of [
     });
     await page.goto('/');
     await page.getByLabel('Project name').fill(`Multi-edge ${modifier.label}`);
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
 
     await createPrimitiveInPlace(page, 'box');
 
@@ -1861,7 +1861,7 @@ test('a refused fillet size marks the handle and says why in the card', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refused fillet');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
     timeout: 30_000
@@ -1905,7 +1905,7 @@ test('the armed fillet handle rounds every shift-selected edge, not just the las
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Handle multi edge');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
 
@@ -1998,7 +1998,7 @@ test('applies an assistant-created sketch and same-proposal extrude', { tag: '@c
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Sketch Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
   await askAssistant(
     page,
@@ -2132,7 +2132,7 @@ test('resumes a clarified request from an OpenRouter Responses stream', async ({
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Assistant Clarification');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
   await askAssistant(page, 'Parameterize the selected imported body');
 
@@ -2200,7 +2200,7 @@ test('shows a stable failure when the assistant completes with invalid structure
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Failure Handling');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
   await askAssistant(page, 'Create a simple bottle bumper');
 
@@ -2292,7 +2292,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Selection Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
   await createPrimitiveInPlace(page, 'box');
 
@@ -2393,7 +2393,7 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Union Guard');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
@@ -2474,7 +2474,7 @@ test('preflights and applies the verified chamfered-shaft suggestion without an 
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Verified Chamfered Shaft');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
 
   await page
@@ -2594,7 +2594,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Cylinder Rims');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
   await createPrimitiveInPlace(page, 'cylinder');
   // The document feature lands before its asynchronously derived B-rep and
@@ -2648,7 +2648,7 @@ test('drops a STEP file on the viewport to import it', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Dropped Solid');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   const step = await readFile(
@@ -2695,7 +2695,7 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Imported Solid');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   // The import affordance is a hidden <input type=file> the File menu clicks.
@@ -2796,7 +2796,7 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refused Import');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   const undo = page.getByRole('button', { name: 'Undo' });
@@ -2917,7 +2917,7 @@ test('archives a browser-generated STEP export and lists the stored file', async
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Archived Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
@@ -2945,7 +2945,7 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
 
   // Create a project.
   await page.getByLabel('Project name').fill('E2E Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   // Define a parameter the box will use.
@@ -3127,7 +3127,7 @@ test('renames a parameter without stranding dependent expressions', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Rename Parameter');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await page.getByLabel('New parameter name').fill('width_x');
   await page.getByLabel('New parameter expression').fill('30');
@@ -3201,7 +3201,7 @@ test('exports a 3MF package through the mesh export dialog', { tag: '@ci-smoke' 
   await page.goto('/');
 
   await page.getByLabel('Project name').fill('Print Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await createPrimitiveInPlace(page, 'box');
@@ -3264,7 +3264,7 @@ test('mesh export keeps the keyboard, its scope and its verdict together', async
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Export Scope');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   // Default names: a rename would add undo steps this spec counts.
   await createPrimitiveInPlace(page, 'box');
   await createPrimitiveInPlace(page, 'box');
@@ -3332,7 +3332,7 @@ test('rejects a disconnected Union and succeeds after the gap is closed', { tag:
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Connected Union');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   await createPrimitiveInPlace(page, 'box', {
@@ -3393,7 +3393,7 @@ test('M opens the move gizmo overlay and applies an exact move', { tag: '@ci-smo
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Move Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
@@ -3438,7 +3438,7 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('One Card Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   for (const name of ['Lower', 'Upper']) {
     await createPrimitiveInPlace(page, 'box', { name: name });
@@ -3504,7 +3504,7 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Deferred History Edit');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box');
   // U09: the split is made in place (Right ghost plane slid to x = 5) and
@@ -3603,7 +3603,7 @@ test('opening a primitive history editor settles an unapplied Move before changi
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Deferred Primitive History Edit');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   for (const name of ['Original box', 'Other box']) {
     await createPrimitiveInPlace(page, 'box', {
@@ -3690,7 +3690,7 @@ test('opening Measure over an unapplied Move settles the card from the ruler and
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Deferred Measure');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   for (let index = 0; index < 2; index += 1) {
     await createPrimitiveInPlace(page, 'box');
   }
@@ -3754,7 +3754,7 @@ test('Remus resolves the former face-plane tangent-union refusal', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refusal Copy');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   // A box and the default cylinder, slid until its axis lies in the box's
   // y = 0 face plane. The previous kernel could not close this tangency;
@@ -3786,7 +3786,7 @@ test('Remus resolves the former small-radius tangent-union fallback', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Tangent Union');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   // A small cylinder with its axis in the box's y = 0 face plane used to
   // facet or fail. Remus keeps the same construction exact.
@@ -3819,7 +3819,7 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Panel Guards');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   // WF-10: a name nobody typed should say what the feature does. Switching the
   // operation used to leave "Union" on a subtract, so the history row, the body
@@ -3898,7 +3898,7 @@ test('each sketch plane label names the plane it actually opens', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Plane Names');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
 
@@ -3983,7 +3983,7 @@ test('Move is one UI: the gizmo names the feature and picks the body', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('One Move UI');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   // Two bodies and nothing selected — the case that used to open a different
@@ -4022,7 +4022,7 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Exact Rectangle');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
@@ -4094,7 +4094,7 @@ test('dragging the move gizmo streams live values and commits what was dragged',
   await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Move Drag Stream');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
@@ -4249,7 +4249,7 @@ test('imports an STL mesh and measures the body the worker rebuilt', { tag: '@ci
   await expect(page.getByLabel('Project name')).toBeVisible();
   expect(meshPayloadRequests).toEqual([]);
   await page.getByLabel('Project name').fill('Imported Mesh');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
   await expectBodyCount(page, 0);
   // The zero count comes from the document. The ready tone requires a
@@ -4324,7 +4324,7 @@ test('an STL import that outlives its project does not land in the next one', as
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Import Origin');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page
@@ -4337,7 +4337,7 @@ test('an STL import that outlives its project does not land in the next one', as
   // Leave for a different project while the upload is still in flight.
   await page.getByTitle('Back to projects').click();
   await page.getByLabel('Project name').fill('Somewhere Else');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   releaseUpload?.();
@@ -4433,7 +4433,7 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Print Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await createPrimitiveInPlace(page, 'box');
@@ -4557,7 +4557,7 @@ test('an archive that outlives its project stays out of the next project’s Fil
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Import Origin');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page
@@ -4570,7 +4570,7 @@ test('an archive that outlives its project stays out of the next project’s Fil
   // Leave mid-upload for a different project, then let the archive finish.
   await page.getByTitle('Back to projects').click();
   await page.getByLabel('Project name').fill('Somewhere Else');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
   releaseUpload?.();
 
@@ -4591,7 +4591,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Sketch On Generated Face');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
@@ -4697,7 +4697,7 @@ test('a refused boolean never lands in history and says why in the form', { tag:
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refused Boolean');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
@@ -4751,7 +4751,7 @@ test('an open sketch chain does not light the profile tools', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Open Chain Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });

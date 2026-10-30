@@ -53,7 +53,7 @@ test('dimensions a drawing view from the model and follows its Update', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Dimensioned');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {

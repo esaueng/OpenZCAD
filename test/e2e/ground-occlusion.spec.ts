@@ -17,7 +17,7 @@ for (const view of ['perspective', 'orthographic', 'below'] as const) {
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto('/');
     await page.getByLabel('Project name').fill('Ground occlusion');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await createPrimitiveInPlace(page, 'sphere');
     const canvas = page.locator('.viewer-host canvas');
     await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');

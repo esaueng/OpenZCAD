@@ -111,7 +111,7 @@ test('resumes rollback without resuming manually suppressed features and support
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('History recovery');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   for (const kind of ['box', 'cylinder', 'sphere'] as const) {
     await createPrimitiveInPlace(page, kind);
   }
@@ -298,7 +298,7 @@ test.describe('on a touch screen', () => {
     await stubApi(page);
     await page.goto('/');
     await page.getByLabel('Project name').fill('Touch history');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 1);
     expect(
@@ -418,7 +418,7 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Rename open shell');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   // U09: a new shell is made in place; editing it still opens its card.
   await createShellInPlace(page, {

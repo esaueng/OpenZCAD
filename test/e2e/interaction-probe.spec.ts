@@ -314,7 +314,7 @@ test('cylinder radius proxy probe', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Cylinder Radius Proxy Probe');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });

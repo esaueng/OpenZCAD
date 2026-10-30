@@ -449,7 +449,7 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
   await page
     .getByLabel('Project name')
     .fill('Imported face preview performance');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page
     .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles(resolve(process.env.OZ_PERF_FACE_STEP!));

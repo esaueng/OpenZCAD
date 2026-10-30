@@ -72,7 +72,7 @@ test('keeps exact geometry and undo through a save echo and reopens compatible s
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Save Flow');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
@@ -486,7 +486,7 @@ test('drains a pending account edit before opening a public share', async ({
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill('Account before navigation');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible();
@@ -536,7 +536,7 @@ test('drains a pending account edit before opening an invitation', async ({
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill('Account before invitation');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible();
@@ -573,7 +573,7 @@ for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
     );
     await page.goto('/');
     await page.getByLabel('Project name').fill('Pending save');
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await expect(
       page.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible();
@@ -611,11 +611,11 @@ for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
       } else {
         await page.getByTitle('Back to projects').click();
         await expect(
-          page.getByRole('button', { name: 'Create project' })
+          page.getByRole('button', { name: 'New project' })
         ).toBeVisible();
         if (action === 'switch') {
           await page.getByLabel('Project name').fill('Different project');
-          await page.getByRole('button', { name: 'Create project' }).click();
+          await page.getByRole('button', { name: 'New project' }).click();
           await expect(
             page.getByRole('button', { name: 'Rename project' })
           ).toContainText('Different project');
@@ -635,7 +635,7 @@ for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
       expect(await storedProjectNames(page)).not.toContain(shared.name);
     } else if (action === 'leave') {
       await expect(
-        page.getByRole('button', { name: 'Create project' })
+        page.getByRole('button', { name: 'New project' })
       ).toBeVisible();
       await expect(
         page.getByRole('button', { name: 'Rename project' })
@@ -795,7 +795,7 @@ test('does not write to the account when a project is only reopened', async ({
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Reopen Echo');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('group', { name: 'Workspace status', exact: true })
   ).toContainText('syncSynced', { timeout: SYNC_BUDGET_MS });
@@ -822,7 +822,7 @@ test('restores an unreadable account document from the confirmed device copy', a
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Repair Fixture');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
@@ -985,7 +985,7 @@ for (const uploadAvailable of [true, false]) {
     await page.goto('/');
     await page.getByLabel('Project name').fill('Imported repair fixture');
     await page
-      .getByRole('button', { name: 'Create project', exact: true })
+      .getByRole('button', { name: 'New project', exact: true })
       .click();
     await expect(
       page.getByRole('status', { name: 'Saved', exact: true })
@@ -1144,7 +1144,7 @@ test('does not restore an unreadable account document from an older device copy'
 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Older Repair Fixture');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
@@ -1188,7 +1188,7 @@ test('syncs View measurements to a second device without changing the CAD docume
 
     await pageA.goto('/');
     await pageA.getByLabel('Project name').fill('Measured Across Devices');
-    await pageA.getByRole('button', { name: 'Create project' }).click();
+    await pageA.getByRole('button', { name: 'New project' }).click();
     await createPrimitiveInPlace(pageA, 'box');
     await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
       timeout: SYNC_BUDGET_MS
@@ -1279,7 +1279,7 @@ for (const resolution of [
 
         await pageA.goto('/');
         await pageA.getByLabel('Project name').fill('Shared Bracket');
-        await pageA.getByRole('button', { name: 'Create project' }).click();
+        await pageA.getByRole('button', { name: 'New project' }).click();
         await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
           timeout: SYNC_BUDGET_MS
         });
@@ -1436,7 +1436,7 @@ test('resumes a workspace on another device and carries undo and redo back acros
     await cloud.install(b);
     await a.goto('/');
     await a.getByLabel('Project name').fill('History handoff');
-    await a.getByRole('button', { name: 'Create project' }).click();
+    await a.getByRole('button', { name: 'New project' }).click();
     await createPrimitiveInPlace(a, 'box');
     await expect
       .poll(() => cloud.project?.bodyOrder.length, { timeout: SYNC_BUDGET_MS })

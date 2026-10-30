@@ -41,7 +41,7 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Drawing sheet');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const inspector = inspectorOf(page);
   await createPrimitiveInPlace(page, 'box', {
@@ -210,7 +210,7 @@ test('exports the same bytes after a reload re-meshes the model', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Drawing bytes');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   // A broad, thin disc: its rim is faceted by the chordal deflection, not
   // the angular limit, so a different deflection samples it differently.
@@ -291,7 +291,7 @@ test('refuses a parameter-only undo or redo in the Draw workspace', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Draw undo guard');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('New parameter name').fill('w');
   await page.getByLabel('New parameter expression').fill('30');
   await page.getByRole('button', { name: 'Add parameter' }).click();
@@ -312,7 +312,7 @@ test('refuses a drawing-only undo in the View workspace', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('View undo guard');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
@@ -340,7 +340,7 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Drawing scope');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   for (const name of ['Lower', 'Upper']) {
     await createPrimitiveInPlace(page, 'box', { name: name });
     await expect(

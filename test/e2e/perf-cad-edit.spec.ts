@@ -332,7 +332,7 @@ test('measures an applied edit through worker response and viewport frame', asyn
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('CAD edit performance probe');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   // A new box runs in place (U09): its Done creates it.

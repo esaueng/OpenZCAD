@@ -19,7 +19,7 @@ test('dithers the studio gradient without flattening it', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Background Dither');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const grid = page.getByRole('button', { name: 'Toggle grid (G)' });
   await grid.click();

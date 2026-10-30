@@ -29,7 +29,7 @@ for (const width of [1440, 390]) {
     try {
       await page.goto('/');
       await page.getByLabel('Project name').fill('Loading placeholders');
-      await page.getByRole('button', { name: 'Create project' }).click();
+      await page.getByRole('button', { name: 'New project' }).click();
       const startup = page.getByRole('status', { name: 'Restoring workspace' });
       await expect(startup).toBeVisible();
       await expect(page.locator('.workspace-reveal')).toHaveAttribute('inert');

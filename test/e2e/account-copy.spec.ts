@@ -92,7 +92,7 @@ test('a signed-in Duplicate sends the copy the browser built', async ({
   const account = await accountProject(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Account copy source');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await addBox(page);
   await expect(
     page.getByRole('group', { name: 'Workspace status' })
@@ -130,7 +130,7 @@ test('a signed-in Branch sends the branch the browser built from the account sav
   const account = await accountProject(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Account branch source');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await addBox(page);
   await page.keyboard.press('ControlOrMeta+s');
   const savedRow = page.locator('.revision-row', { hasText: 'Manual save' });

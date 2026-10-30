@@ -19,12 +19,10 @@ async function seedDeviceProject(
   };
   await page.goto('/');
   await expect(
-    page.getByRole('button', { name: 'Create project', exact: true })
+    page.getByRole('button', { name: 'New project', exact: true })
   ).toBeVisible();
   await page.getByLabel('Project name').fill('Schema warmup');
-  await page
-    .getByRole('button', { name: 'Create project', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await page.getByTitle('Back to projects').click();
   await page.evaluate(
     async ({ source, summary, cached }) => {

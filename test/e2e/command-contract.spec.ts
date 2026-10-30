@@ -119,7 +119,7 @@ async function createCylinder(page: Page, project: string) {
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill(project);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
@@ -332,7 +332,7 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Contract hole');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   // One 5 mm hole through the top face: the bore is the body's only
   // cylindrical face, so the cylinder hook's wall read measures it.
@@ -554,7 +554,7 @@ test('one Escape leaves a region extrude for nothing selected, not a profile pro
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000

@@ -176,7 +176,7 @@ for (const width of [1440, 390]) {
         await page.goto('/', { waitUntil: 'domcontentloaded' });
         await expect(page).toHaveTitle('OpenZCAD');
         await expect(
-          page.getByRole('button', { name: 'Create project', exact: true })
+          page.getByRole('button', { name: 'New project', exact: true })
         ).toBeEnabled();
         await expect(
           page.getByRole('status', { name: 'Loading library' })
@@ -213,7 +213,7 @@ test('cached cards appear while account discovery is held, with actions still fe
       'Checking account'
     );
     await expect(
-      page.getByRole('button', { name: 'Create project', exact: true })
+      page.getByRole('button', { name: 'New project', exact: true })
     ).toBeDisabled();
   } finally {
     listing.release();
@@ -238,7 +238,7 @@ test('settings edited during startup survive a late account-settings response', 
   try {
     await page.goto('/');
     await expect(
-      page.getByRole('button', { name: 'Create project', exact: true })
+      page.getByRole('button', { name: 'New project', exact: true })
     ).toBeDisabled();
     await page
       .getByRole('button', { name: 'Open settings', exact: true })
@@ -315,7 +315,7 @@ for (const cachedNames of [false, true])
         await page.goto('/', { waitUntil: 'domcontentloaded' });
         await expect(page.locator('.start-tile-project')).toHaveCount(150);
         await expect(
-          page.getByRole('button', { name: 'Create project', exact: true })
+          page.getByRole('button', { name: 'New project', exact: true })
         ).toBeEnabled();
         await expect(
           page.getByRole('status', { name: 'Loading library' })
@@ -619,7 +619,7 @@ for (const changeMode of [false, true]) {
     });
     await page.goto('/');
     await expect(
-      page.getByRole('button', { name: 'Create project', exact: true })
+      page.getByRole('button', { name: 'New project', exact: true })
     ).toBeEnabled();
     await expect
       .poll(() =>

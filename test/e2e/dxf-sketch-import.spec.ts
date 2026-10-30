@@ -65,7 +65,7 @@ test('imports a DXF as an extrudable sketch, converting its units', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('DXF import');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({

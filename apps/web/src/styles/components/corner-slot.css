@@ -1,8 +1,8 @@
 /* The library's Settings and Settings' way back: one slot at the end of the
-   page's ruled head, on the workspace Settings button's line (16px down,
-   28px tall) with its right edge on the rule's end. The workspace floats its
+   page's head, on the workspace Settings button's line (16px down,
+   28px tall) with its right edge on the head's end. The workspace floats its
    button in an island over the model; a page has a head band, so the button
-   sits flat on it behind a divider, like the head's other tools. A page
+   sits flat on it, with no divider: the gap alone sets it apart. A page
    whose head sits over its own scroller sets --corner-scrollbar-w so the
    slot clears a classic scrollbar (overlay scrollbars take no width). */
 .corner-slot {
@@ -18,14 +18,7 @@
   gap: var(--sp-2);
 }
 
-.corner-slot::before {
-  content: '';
-  width: 1px;
-  height: 20px;
-  background: var(--color-border);
-}
-
-/* The width a library head holds clear for the divider and Settings. */
+/* The width a library head holds clear for Settings. */
 :root {
   --corner-slot-w: 92px;
 }
@@ -36,10 +29,12 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 0 7px;
+  padding: 0 10px;
   color: var(--color-text);
-  background: transparent;
-  border: 1px solid transparent;
+  /* Filled and outlined at rest, not only on hover: with no divider beside
+     it, a bare label read as a heading rather than a button. */
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
@@ -49,6 +44,5 @@
 }
 
 .corner-action:hover {
-  background: var(--color-surface-2);
-  border-color: var(--color-border);
+  background: var(--color-surface-hover);
 }

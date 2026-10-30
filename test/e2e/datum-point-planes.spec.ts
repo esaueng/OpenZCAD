@@ -141,7 +141,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
   const projectName = 'Point datum planes';
   await page.goto('/');
   await page.getByLabel('Project name').fill(projectName);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 

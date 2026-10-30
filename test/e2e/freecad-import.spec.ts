@@ -47,7 +47,7 @@ test('imports FreeCAD final solids through the picker with undo, visibility and 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('FreeCAD solids');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const picker = page.getByLabel('Import FreeCAD, STEP or a mesh file…');
   await expect(picker).toHaveAttribute('accept', /\.fcstd/);
   await picker.setInputFiles('test/fixtures/freecad/two-solids.FCStd');
@@ -101,7 +101,7 @@ test('imports FreeCAD final solids through the picker with undo, visibility and 
     await page.screenshot({ path: process.env.OZ_FREECAD_SCREENSHOT });
   await page.getByRole('button', { name: 'OpenZCAD Beta', exact: true }).click();
   await page.getByLabel('Project name').fill('QA next project');
-  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await expect(page.locator('.activity-pill')).toHaveCount(0);
 });
 
@@ -111,7 +111,7 @@ test('refuses a corrupt FreeCAD file without adding a body', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Bad FreeCAD archive');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('Import FreeCAD, STEP or a mesh file…').setInputFiles({
     name: 'bad.FCStd',
     mimeType: 'application/octet-stream',

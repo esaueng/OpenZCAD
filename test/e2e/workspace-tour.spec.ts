@@ -76,7 +76,7 @@ test('first-model tour rides the real workflow and never returns', async ({
   // proves Finish was persisted as a device habit rather than merely hidden.
   await page.getByTitle('Back to projects').click();
   await page.getByLabel('Project name').fill('Another Tour Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
   await expect(tour).toHaveCount(0);
 });
@@ -120,7 +120,7 @@ test('manual tour advance reveals the History control without moving keyboard fo
   await expect(tour).toHaveCount(0);
   await page.getByTitle('Back to projects').click();
   await page.getByLabel('Project name').fill('Another Keyboard Tour Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
   await expect(tour).toHaveCount(0);
 });

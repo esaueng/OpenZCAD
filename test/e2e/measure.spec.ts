@@ -21,7 +21,7 @@ async function createBox(page: Page, name: string) {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
@@ -309,7 +309,7 @@ test('measurements stay with their own project across a switch', async ({
 
   await page.getByTitle('Back to projects').click();
   await page.getByLabel('Project name').fill('Unmeasured Second Project');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await switchWorkspace(page, 'View');
   await armMeasure(page);
   await expect(

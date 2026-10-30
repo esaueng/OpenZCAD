@@ -55,7 +55,7 @@ test('keeps the rendered scene visible while a docked panel resizes', async ({
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Resize Render Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 

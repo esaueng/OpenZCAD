@@ -127,7 +127,7 @@ test('perf probe', async ({ page }) => {
   const clickAt = await page.evaluate(() => Math.round(performance.now()));
   const c0 = Date.now();
   await page.getByLabel('Project name').fill('Perf Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
   const coldCreate = Date.now() - c0;
 

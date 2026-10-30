@@ -66,7 +66,7 @@ async function openPlate(page: Page, projectName: string) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
     timeout: 30_000
   });

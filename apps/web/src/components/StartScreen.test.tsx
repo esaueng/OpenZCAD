@@ -554,9 +554,7 @@ describe('StartScreen library discovery', () => {
     expect(screen.queryByText('On this device only')).not.toBeInTheDocument();
     expect(screen.getByText('Checking account…')).toBeVisible();
     expect(screen.getByRole('tab', { name: 'Projects …' })).toBeVisible();
-    expect(
-      screen.getByRole('button', { name: 'Create project' })
-    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'New project' })).toBeDisabled();
     expect(screen.getByLabelText('Search projects')).toBeVisible();
   });
 
@@ -572,9 +570,7 @@ describe('StartScreen library discovery', () => {
     expect(
       screen.queryByRole('status', { name: 'Loading library' })
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Create project' })
-    ).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'New project' })).toBeEnabled();
   });
 });
 
@@ -709,7 +705,7 @@ describe('StartScreen library shell', () => {
     const { container } = renderStartScreen({ onImportProject: vi.fn() });
 
     const importButton = screen.getByRole('button', {
-      name: 'Import project…'
+      name: 'Import project'
     });
     expect(importButton.closest('.start-launch-head')).not.toBeNull();
     const foot = container.querySelector('.start-column-foot');

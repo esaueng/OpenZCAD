@@ -310,7 +310,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await page.goto('/');
   await expect(page).toHaveTitle(/OpenZCAD/);
   await page.getByLabel('Project name').fill('Private qualification');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
   writeFileSync(
     backupPath,

@@ -147,7 +147,7 @@ async function readDownload(download: Download): Promise<string> {
 async function createProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
 }
 

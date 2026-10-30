@@ -58,7 +58,7 @@ async function armedBox(page: Page, options: { hole?: boolean } = {}) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Face drag continuity');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '30', depth: '18', height: '24' }
   });
@@ -559,7 +559,7 @@ test('applying a fillet goes straight from its preview to the blend face', async
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet continuity');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect

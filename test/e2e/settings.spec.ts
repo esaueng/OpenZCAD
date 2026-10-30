@@ -157,7 +157,7 @@ test('keeps command names visible at the compact desktop breakpoint', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Palette Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const search = page.getByRole('combobox', { name: 'Search commands' });
   // A slash lists every command; more letters narrow it.
@@ -178,7 +178,7 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Top Bar Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
   const topbar = page.locator('.topbar');
@@ -232,7 +232,7 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Narrow Bar Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
   const actions = page.locator('.topbar').getByRole('group', {
@@ -316,10 +316,10 @@ test('opens new projects blank with the assistant collapsed', { tag: '@ci-smoke'
 
   await page.getByTitle('Back to projects').click();
   await expect(
-    page.getByRole('button', { name: 'Create project' })
+    page.getByRole('button', { name: 'New project' })
   ).toBeVisible();
   await page.getByLabel('Project name').fill('Second Blank Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   await expect(page.locator('.command-bar')).toBeVisible();
@@ -334,7 +334,7 @@ test('keeps every workspace surface inside a narrow viewport', { tag: '@ci-smoke
   await stubApi(page, { assistantEnabled: true });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Narrow Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await openAssistant(page);
 
   const selectors = [
@@ -422,7 +422,7 @@ test('refuses an invalid project name instead of working locally', async ({
   await page.getByLabel('Project name').fill('n'.repeat(201));
   await expect(page.getByRole('alert')).toContainText('at most 200 characters');
   await expect(
-    page.getByRole('button', { name: 'Create project' })
+    page.getByRole('button', { name: 'New project' })
   ).toBeDisabled();
 
   // A server-side rejection must surface too. It used to be swallowed into
@@ -436,7 +436,7 @@ test('refuses an invalid project name instead of working locally', async ({
       : route.fulfill({ json: { projects: [] } })
   );
   await page.getByLabel('Project name').fill('Rejected Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await expect(page.locator('.start-status')).toContainText(
     'at most 200 characters'
@@ -564,7 +564,7 @@ test('System follows a light OS on the start screen and in the workspace alike',
   expect(await pageGround(page)).toBe(LIGHT_GROUND);
 
   await page.getByLabel('Project name').fill('System Theme Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
   const island = page.locator('.topbar-island').first();
   const surface = () =>
@@ -600,7 +600,7 @@ test('turns project sharing off without disabling cloud saves', async ({
     0
   );
   await page.getByLabel('Project name').fill('Private Local Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('button', { name: 'Open project sharing' })
   ).toBeVisible();
@@ -703,7 +703,7 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('A11y Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
   const paletteInput = page.getByRole('combobox', { name: 'Search commands' });
@@ -751,7 +751,7 @@ test('launcher semantics, empty states, and demo cards hold at mobile width', as
     page.getByRole('heading', { level: 1, name: 'OpenZCAD' })
   ).toBeVisible();
   await page.getByLabel('Project name').fill('Search Fixture');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^OpenZCAD/ }).click();
   await page.getByLabel('Search projects').fill('no-match');
   await page.getByRole('tab', { name: 'Archive 0' }).click();
@@ -979,7 +979,7 @@ test('forcing mouse navigation makes a trackpad-style scroll zoom again', async 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Wheel Preference Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })

@@ -27,7 +27,7 @@ export function ProjectImportButton({
         onClick={() => input.current?.click()}
       >
         <Upload size={14} aria-hidden="true" />
-        <span>Import project…</span>
+        <span>Import project</span>
         {hint ? <small>{hint}</small> : null}
       </button>
       <input

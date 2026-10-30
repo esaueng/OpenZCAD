@@ -24,7 +24,7 @@ async function makePart(page: Page, name: string) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '60', depth: '60', height: '60' }
@@ -576,7 +576,7 @@ test('a manual Sketch-filter profile pick settles the body Move before taking it
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expectBodyCount(page, 1);
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await page.keyboard.press('Escape');

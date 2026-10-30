@@ -47,7 +47,7 @@ async function projectSavedWithOneBodyThenTwo(page: Page, name: string) {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
@@ -136,7 +136,7 @@ test('offers no action for a save state whose model is not stored', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Pruned History Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await page.keyboard.press('ControlOrMeta+s');
   await expect(revisionRow(page, 'Manual save')).toBeVisible();
@@ -183,7 +183,7 @@ test('offers no restore for the save the project is already sitting on', async (
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Current Save Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.keyboard.press('ControlOrMeta+s');
@@ -227,7 +227,7 @@ test('names a save point, and the name is what history shows', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Named Save Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
@@ -249,7 +249,7 @@ test('a named save can be restored by its name', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Named Restore Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
@@ -275,7 +275,7 @@ test('refuses an empty name rather than saving an unnamed one', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Empty Name Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
 
   await page.keyboard.press('ControlOrMeta+Shift+s');
@@ -299,7 +299,7 @@ test('marks a named save point with no account behind it', async ({ page }) => {
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Offline Named Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
@@ -333,7 +333,7 @@ test('the top-bar status chips only report, and saving lives on File', async ({
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Honest Chips Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expectSaveSettled(page);

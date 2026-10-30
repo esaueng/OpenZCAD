@@ -229,7 +229,7 @@ for (const [name, value] of [
     await page.goto('/');
     await page.getByLabel('Project name').fill(source.name);
     await page
-      .getByRole('button', { name: 'Create project', exact: true })
+      .getByRole('button', { name: 'New project', exact: true })
       .click();
     await expectBodyCount(page, 1);
     await page.getByRole('button', { name: 'Tweak', exact: true }).click();

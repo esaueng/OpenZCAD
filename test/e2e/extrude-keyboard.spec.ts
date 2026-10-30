@@ -66,7 +66,7 @@ for (const moveKeyboard of [false, true]) {
     });
     await page.goto('/');
     await page.getByLabel('Project name').fill(document.name);
-    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
     await expect(
       page.locator('.feature-row-main', { hasText: 'Profile' })
     ).toBeVisible();

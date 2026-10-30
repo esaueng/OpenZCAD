@@ -267,7 +267,7 @@ async function openDocument(page: Page, document: ProjectDocument) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 }
 
 /** The exported project document, which is what a save would write. */

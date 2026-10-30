@@ -253,7 +253,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   const projectName = 'Traced bracket';
   await page.goto('/');
   await page.getByLabel('Project name').fill(projectName);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
@@ -448,7 +448,7 @@ test('an image inserted with a flat face selected lies on that face', async ({
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Face image');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '20', depth: '20', height: '20' }
@@ -503,7 +503,7 @@ test('an image canceled while it is placed adds nothing', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Canceled image');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await insertImage(page);
   const imageBar = page.getByRole('group', { name: 'Image command' });

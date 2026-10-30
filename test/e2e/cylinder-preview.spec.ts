@@ -258,7 +258,7 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
   await page.getByLabel('Project name').fill('Rounded cylinder preview');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '70', height: '22' }
   });
@@ -424,7 +424,7 @@ for (const { name, build, sense } of [
     page.on('pageerror', (error) => errors.push(error.message));
     const { document } = await build();
     await page.goto('/');
-    await page.getByRole('button', { name: 'Import project…' }).click();
+    await page.getByRole('button', { name: 'Import project' }).click();
     // The chooser is driven through the same input used by the File menu.
     await page.getByLabel('Import project backup').setInputFiles({
       name: 'terminal-cap.openzcad',

@@ -205,7 +205,7 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   // One Escape can land while the toggle's save still holds focus.
   await closeSettings(alice);
   await alice.getByLabel('Project name').fill('Secret bracket');
-  await alice.getByRole('button', { name: 'Create project' }).click();
+  await alice.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(alice, 'box');
   await expect(
     alice.getByRole('status', { name: 'Saved', exact: true })

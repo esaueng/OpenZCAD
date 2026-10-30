@@ -72,7 +72,7 @@ async function open(page: Page, document: ProjectDocument) {
   await expect(page).toHaveTitle('OpenZCAD');
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
-    page.getByRole('button', { name: 'Import project…', exact: true }).click()
+    page.getByRole('button', { name: 'Import project', exact: true }).click()
   ]);
   await chooser.setFiles({
     name: 'QA-sketch-delete.openzcad',

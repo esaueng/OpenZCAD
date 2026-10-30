@@ -14,7 +14,7 @@ test('relation glyphs mark held geometry and follow the visibility choice', asyn
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Glyph display');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
@@ -88,7 +88,7 @@ test('relation glyphs keep clear of their anchors and each other, select on clic
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Glyph picking');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const rail = page.getByRole('toolbar', { name: 'Sketch tools' });

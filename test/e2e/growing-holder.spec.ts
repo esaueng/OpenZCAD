@@ -40,7 +40,7 @@ async function importHolder(
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill(project);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
   if (accountReady)
     await expect(page.locator('.save-state')).toHaveClass(/is-synced/);

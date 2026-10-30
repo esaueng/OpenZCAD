@@ -62,7 +62,7 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await expect
     .poll(async () => (await drawnDatums(canvas))[0]?.origin.z, {

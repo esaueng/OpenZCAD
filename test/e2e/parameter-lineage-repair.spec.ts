@@ -56,7 +56,7 @@ test('repairs legacy topology in Tweak and keeps parameter edits through reload'
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Parameter repair entry');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   // The new project finishes opening (and records itself as the active
   // project) asynchronously; seeding the session before that settles lets
   // the late write replace the seeded project id, and the reload then opens

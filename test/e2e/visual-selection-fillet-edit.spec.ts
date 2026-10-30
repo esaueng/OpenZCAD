@@ -87,7 +87,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet Select To Edit');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '10', height: '20' }
   });
@@ -243,7 +243,7 @@ test('Delete removes the fillet whose face is picked in the viewport', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet Delete Key');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '10', height: '20' }
   });
@@ -323,7 +323,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Box Fillet Evolution');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
@@ -454,7 +454,7 @@ test('resizes an imported analytic blend twice without reselection', async ({
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Imported Blend Boundary');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
     name: 'remus-fillet.step',
     mimeType: 'model/step',
@@ -549,7 +549,7 @@ test('still refuses an oversize radius after a slow blend preview', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Slow blend refusal');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect

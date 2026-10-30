@@ -19,7 +19,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Copy');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '20', depth: '10', height: '10' }
@@ -112,7 +112,7 @@ test('a coincident copy asks before a tool, history, measure or selection transi
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Coincident copy guard');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   // Exercise the transition guard after the viewport and command are ready.
@@ -197,7 +197,7 @@ test('keeps the applied copy visible until the exact worker publishes it', async
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Copy publication hold');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');

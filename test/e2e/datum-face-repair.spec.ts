@@ -106,7 +106,7 @@ test('re-picks a lost datum face, and Measure takes the click over while armed',
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', /./, {
     timeout: 60_000

@@ -40,7 +40,7 @@ async function importProject(page: Page, document: ProjectDocument) {
 
 async function createProject(page: Page, name: string) {
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText(name);

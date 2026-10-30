@@ -53,7 +53,7 @@ async function openDocument(page: Page, document: ProjectDocument) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   // Geometry attributes can be populated while the workspace is prepared
   // offscreen; camera shortcuts belong to the revealed viewport.
   await expect(page.locator('.viewer-host canvas')).toBeVisible({

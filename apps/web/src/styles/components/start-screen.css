@@ -122,7 +122,7 @@
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
 .start-screen {
-  --start-column-w: 256px;
+  --start-column-w: 304px;
   position: absolute;
   inset: 0;
   z-index: var(--z-start-screen);
@@ -234,7 +234,8 @@
 /* ── Column: launch form ─────────────────────────────────── */
 
 /* The one thing a visitor most often came to do sits first in the column as
-   a single card: a name, its units, one button. Creating stays one step. */
+   a single card: New project over a name and its units on one row.
+   Creating stays one step. */
 .start-launch {
   grid-area: launch;
   display: grid;
@@ -244,15 +245,26 @@
 
 .start-launch-form {
   display: grid;
-  gap: var(--sp-2);
+  /* The units track sizes to its longest option, so it never clips. */
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: var(--sp-2) 6px;
+  align-items: center;
   padding: 10px;
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-accent-border);
+  /* A faint accent tint, not an outline, sets the card apart from the
+     column: it reads as one panel without a ring drawn around it. */
+  background: color-mix(in srgb, var(--color-accent) 18%, var(--color-bg));
+  border: 0;
   border-radius: var(--radius-lg);
 }
 
-/* The card's head: New part, with Import beside it as the other way to
-   start. */
+/* The card's head: New project, the card's submit, with Import beside it as
+   the other way to start. */
+.start-launch-head,
+.start-launch-form .start-launch-error,
+.start-launch-hint {
+  grid-column: 1 / -1;
+}
+
 .start-launch-head {
   display: flex;
   align-items: center;
@@ -261,13 +273,13 @@
   min-width: 0;
 }
 
-.start-launch-form h2 {
+.start-launch-create {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin: 0 0 2px;
-  color: var(--color-text);
-  font-size: var(--fs-base);
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   white-space: nowrap;
 }
@@ -293,10 +305,6 @@
   border-color: var(--color-border);
 }
 
-.start-launch-form h2 svg {
-  color: var(--color-accent);
-}
-
 .start-field {
   display: grid;
   gap: 4px;
@@ -315,16 +323,17 @@
 .start-field select {
   width: 100%;
   min-height: 32px;
+  /* Sunk below the tinted card, edged in the same tint. */
   background: var(--color-bg);
+  border-color: color-mix(
+    in srgb,
+    var(--color-accent) 20%,
+    var(--color-border)
+  );
 }
 
 .start-field-name input {
   font-size: var(--fs-md);
-}
-
-.start-launch-submit {
-  min-height: 32px;
-  margin-top: 2px;
 }
 
 .start-launch-hint {
@@ -333,27 +342,9 @@
   line-height: 1.4;
 }
 
-/* In the column the launch card is two rows — name and units side by side,
-   then Create — so a once-a-session action stops taking a third of it. The
+/* In the column a once-a-session action should not take a third of it. The
    fields keep their accessible names; the labels and hint step aside. */
 @media (min-width: 901px) {
-  .start-launch-form {
-    grid-template-columns: minmax(0, 1fr) max-content;
-    column-gap: 6px;
-  }
-
-  .start-launch-head,
-  .start-field-name,
-  .start-launch-form .start-launch-error {
-    grid-column: 1 / -1;
-  }
-
-  .start-launch-submit {
-    margin-top: 0;
-    padding-inline: 9px;
-    white-space: nowrap;
-  }
-
   .start-launch-form .start-field-label,
   .start-launch-hint {
     display: none;
@@ -690,7 +681,7 @@
   gap: var(--sp-3);
 }
 
-/* Title, filters, order, search and layout on one ruled line: the parts you
+/* Title, filters, order, search and layout on one line: the parts you
    own are the page, so the controls that narrow them stay beside their
    heading rather than on a second row that pushes the grid down. In the
    column layout the line stays put while the shelf scrolls under it, so a
@@ -701,9 +692,10 @@
   align-items: center;
   gap: var(--sp-2) var(--sp-5);
   min-height: 40px;
-  /* Room on the rule's end for Settings, placed over it (corner-slot.css). */
+  /* Room on the line's end for Settings, placed over it (corner-slot.css).
+     No rule under it: the band's background already parts it from the
+     shelf, and a hairline only added noise beside Settings. */
   padding-right: calc(var(--corner-slot-w) + var(--sp-3));
-  border-bottom: var(--border-thin);
 }
 
 @media (min-width: 901px) {
@@ -723,8 +715,8 @@
   }
 }
 
-/* Text tabs on the toolbar's rule rather than a row of pills: the underline
-   is the selection, the count says what each one holds. */
+/* Text tabs rather than a row of pills: the underline is the selection, the
+   count says what each one holds. */
 .start-filters {
   display: flex;
   flex-wrap: wrap;
@@ -737,7 +729,6 @@
   align-items: center;
   gap: 6px;
   min-height: 40px;
-  margin-bottom: -1px;
   padding: 2px 1px 0;
   color: var(--color-text-subtle);
   font-size: var(--fs-sm);
@@ -1536,17 +1527,15 @@
   display: none;
 }
 
-/* Once the toolbar wraps, the rule belongs under the tabs, not the tools. */
+/* Once the toolbar wraps, the tabs take a row of their own above the tools. */
 @media (max-width: 900px) {
   /* Settings sits beside the logo here, above the shelf. */
   .start-toolbar {
     padding-right: 0;
-    border-bottom: 0;
   }
 
   .start-filters {
     flex-basis: 100%;
-    border-bottom: var(--border-thin);
   }
 
   .start-toolbar-tools {
@@ -1892,41 +1881,21 @@
     display: none;
   }
 
-  /* The launch card is one row — heading, name, units, create — so it costs
-     the shelf one control's height rather than a stacked form's. The fields
-     keep their accessible names (aria-label), so their visible labels and
-     the hint can go; an error still takes its own row. */
+  /* The launch card is two rows — New project, then name and units — so it
+     costs the shelf little height. The fields keep their accessible names
+     (aria-label), so their visible labels and the hint can go; an error
+     still takes its own row. */
   .start-launch {
     padding: var(--sp-3) var(--sp-3) 0;
   }
 
   .start-launch-form {
-    /* The units track sizes to its longest option, so it never clips. The
-       head (New part, Import) takes its own row over the fields. */
-    grid-template-columns: minmax(0, 1fr) max-content auto;
-    align-items: center;
     padding: 8px;
-  }
-
-  .start-launch-head {
-    grid-column: 1 / -1;
-  }
-
-  .start-launch-form h2 {
-    margin: 0 4px 0 2px;
   }
 
   .start-field-label,
   .start-launch-hint {
     display: none;
-  }
-
-  .start-launch-form .start-launch-error {
-    grid-column: 1 / -1;
-  }
-
-  .start-launch-submit {
-    margin-top: 0;
   }
 
   .start-library {
@@ -1971,17 +1940,6 @@
     min-height: auto;
     padding: 0 var(--sp-3) var(--sp-3);
     overflow: visible;
-  }
-}
-
-@media (max-width: 560px) {
-  /* Two rows on a phone: the name across the card, then units and create. */
-  .start-launch-form {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .start-field-name {
-    grid-column: 1 / -1;
   }
 }
 
@@ -2439,13 +2397,9 @@
     padding: var(--sp-3) var(--sp-3) 0;
   }
 
-  /* Beside the logo it needs no divider, and keeps the page's gutter. */
+  /* Beside the logo it keeps the page's gutter. */
   .start-screen > .corner-slot {
     right: var(--sp-3);
-  }
-
-  .start-screen > .corner-slot::before {
-    display: none;
   }
 
   .start-column-foot {

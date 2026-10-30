@@ -19,7 +19,7 @@ test('numbers the picked bodies in the viewport as an in-place boolean takes the
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Numbered Union');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
 
   for (const name of ['Lower', 'Upper']) {

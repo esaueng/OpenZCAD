@@ -111,7 +111,7 @@ async function createBoxProject(page: Page, name: string) {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
@@ -143,7 +143,7 @@ test('exposes the full measurement workbench in View mode', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Measurement Workbench');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   const workspaceMode = page.getByRole('group', { name: 'Workspace mode' });
   await workspaceMode.getByRole('button', { name: 'View' }).click();
@@ -443,7 +443,7 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Continuous Line Chain');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
@@ -490,7 +490,7 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Driving Angle');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('New parameter name').fill('angle_target');
   await page.getByLabel('New parameter expression').fill('60');
   await page.getByRole('button', { name: 'Add parameter' }).click();
@@ -693,7 +693,7 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Driving Radius');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('New parameter name').fill('radius_target');
   await page.getByLabel('New parameter expression').fill('7');
   await page.getByRole('button', { name: 'Add parameter' }).click();
@@ -789,7 +789,7 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Sketch HUD Cleanup');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
@@ -894,7 +894,7 @@ test('empty-state copy points at the tool rail beside the history', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Empty Copy');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   // Several panels carry a .sidebar-hint; match the History one by text.
   const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
@@ -927,7 +927,7 @@ test('shows profile readiness and preserves exact entity edits through extrude a
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Predictable plate');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   // The overview heads the palette flyout beside the rail.

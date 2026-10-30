@@ -57,7 +57,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Compound face offset');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   // Legacy documents intentionally retain their compound body. Fresh STEP
   // imports now create independent bodies and are covered in step-bodies.spec.
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);

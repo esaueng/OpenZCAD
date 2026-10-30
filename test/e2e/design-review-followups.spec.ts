@@ -55,7 +55,7 @@ async function openPart(page: Page) {
   );
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('toolbar', { name: 'Model panels' })).toBeVisible(
     { timeout: 30_000 }
   );

@@ -64,7 +64,7 @@ async function createBox(page: Page, name: string) {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 }
@@ -161,7 +161,7 @@ test('a standard view stays in the project it was chosen in', async ({
 
   await page.getByTitle('Back to projects').click();
   await page.getByLabel('Project name').fill('Next View Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   const next = directionOf(await settledCamera(canvas));

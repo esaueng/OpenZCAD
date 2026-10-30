@@ -21,7 +21,7 @@ test('commands, export formats and body rows are named by what they do', async (
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Named Controls');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
 
   // A primitive runs in place (U09): Done is named by its verb, and Enter is
   // its shortcut, not its title.
@@ -274,7 +274,7 @@ test('rail and row icons take a 24 px pointer target without taking a neighbourâ
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Target Sizes');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('New parameter name').fill('w');
   await page.getByLabel('New parameter expression').fill('30');
   await page.getByRole('button', { name: 'Add parameter' }).click();
