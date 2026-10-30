@@ -1,5 +1,5 @@
 /**
- * M14 gear features: a new spur or helical gear body from the kernel's gear
+ * M14 gear features: a new spur, helical or herringbone gear body from the kernel's gear
  * generator, or teeth cut along the whole length of a body's cylindrical face.
  *
  * The kernel owns the gear: the involute, its certified flank fit, the
@@ -270,8 +270,16 @@ export function buildGearFeature(
   // kernel without helical gears refuses the unknown field instead of
   // building a spur in its place.
   const helix = values.optional(data.helixAngleDeg, 'helix angle') ?? 0;
-  const helical: Record<string, number | string> =
-    helix === 0 ? {} : { helixAngle: helix, hand: data.hand ?? 'right' };
+  const helical: Record<string, number | string | boolean> =
+    helix === 0
+      ? {}
+      : {
+          helixAngle: helix,
+          hand: data.hand ?? 'right',
+          // Sent only when set, so a helical gear builds on a kernel without
+          // herringbone gears, which refuses the unknown field instead.
+          ...(data.herringbone ? { herringbone: true } : {})
+        };
   const module =
     data.pitch === undefined
       ? undefined
@@ -308,7 +316,7 @@ function buildNewGearBody(
   feature: FeatureNode,
   data: FeatureDataOf<'gear'>,
   toothForm: Record<string, number>,
-  helical: Record<string, number | string>,
+  helical: Record<string, number | string | boolean>,
   module: number | undefined,
   values: GearValues
 ): void {
@@ -367,7 +375,7 @@ function buildGearTeethOnBody(
   feature: FeatureNode,
   data: FeatureDataOf<'gear'>,
   toothForm: Record<string, number>,
-  helical: Record<string, number | string>,
+  helical: Record<string, number | string | boolean>,
   module: number | undefined,
   values: GearValues
 ): void {

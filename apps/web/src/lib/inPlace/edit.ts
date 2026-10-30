@@ -423,6 +423,7 @@ export function inPlaceEditSeed(
       value('phaseDeg', data.phaseDeg);
       value('helixAngleDeg', data.helixAngleDeg);
       if (data.hand) seed.options.hand = data.hand;
+      if (data.herringbone) seed.options.helix = 'herringbone';
       if (data.targetBodyId !== undefined) {
         const face =
           typeof data.faceHash === 'number'
@@ -937,6 +938,7 @@ export function inPlaceFeatureUpdate(
         'phaseDeg',
         'helixAngleDeg',
         'hand',
+        'herringbone',
         'xDirection',
         'boreDiameter',
         'rimDiameter',

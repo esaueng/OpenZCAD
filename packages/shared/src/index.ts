@@ -1788,8 +1788,9 @@ export type FeatureData =
     }
   | {
       /**
-       * M14 (schema v40): an involute spur or helical gear, internal (ring)
-       * gear or straight rack, built by the kernel's gear generator.
+       * M14 (schema v40): an involute spur, helical or herringbone gear,
+       * internal (ring) gear or straight rack, built by the kernel's gear
+       * generator.
        *
        * Without `targetBodyId` the gear is a new body: its first cap is
        * centered on `origin`, it extrudes `faceWidth` along `axis`, and its
@@ -1840,9 +1841,16 @@ export type FeatureData =
       helixAngleDeg?: ParamValue;
       /**
        * A helical gear's hand: a right hand turns counter-clockwise about
-       * `axis` as it advances along it. Absent is `'right'`.
+       * `axis` as it advances along it. Absent is `'right'`. A herringbone
+       * gear's hand is that of its start half.
        */
       hand?: GearHand;
+      /**
+       * Herringbone (double helical): the hand reverses at the middle of the
+       * face width, so the far cap lines up with the start cap. Needs a helix
+       * angle above 0. Absent is a single helix.
+       */
+      herringbone?: boolean;
       /** New bodies: placement, see above. */
       origin?: ParametricVector3;
       axis?: ParametricVector3;

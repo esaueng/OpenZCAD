@@ -120,7 +120,7 @@ export function featureValueSummary(
         data.helixAngleDeg === undefined ? '0' : num(data.helixAngleDeg);
       return helix === null || helix === '0'
         ? `${teeth} teeth`
-        : `${teeth} teeth, ${helix}° ${data.hand ?? 'right'} helix`;
+        : `${teeth} teeth, ${helix}° ${data.hand ?? 'right'} ${data.herringbone ? 'herringbone' : 'helix'}`;
     }
     case 'hole': {
       const diameter = num(data.diameter);

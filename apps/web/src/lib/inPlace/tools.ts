@@ -1767,6 +1767,21 @@ const GEAR_HAND_OPTION: OptionSpec = {
   initial: 'right'
 };
 
+/** A helical gear's helix: one hand, or both meeting at mid-width. */
+const GEAR_HELIX_OPTION: OptionSpec = {
+  id: 'helix',
+  label: 'Helix',
+  choices: [
+    { value: 'single', label: 'Single' },
+    {
+      value: 'herringbone',
+      label: 'Herringbone',
+      note: 'The hand reverses at mid-width, so the teeth meet in a V'
+    }
+  ],
+  initial: 'single'
+};
+
 /** Optional tooth-form fields: stored once set, else the kernel default. */
 const GEAR_FORM_FIELDS = [
   'pressureAngleDeg',
@@ -1784,7 +1799,12 @@ function gearToothFields(
   withPitch: boolean
 ): Pick<
   GearRequest,
-  'sizing' | 'pitch' | 'teeth' | 'hand' | (typeof GEAR_FORM_FIELDS)[number]
+  | 'sizing'
+  | 'pitch'
+  | 'teeth'
+  | 'hand'
+  | 'herringbone'
+  | (typeof GEAR_FORM_FIELDS)[number]
 > {
   const sizing =
     options.sizing === 'diametral-pitch' || options.sizing === 'circular-pitch'
@@ -1811,6 +1831,10 @@ function gearToothFields(
           hand: options.hand === 'left' ? ('left' as const) : ('right' as const)
         }
       : {};
+  const herringbone =
+    form.helixAngleDeg !== undefined && options.helix === 'herringbone'
+      ? { herringbone: true }
+      : {};
   return {
     sizing,
     ...(withPitch
@@ -1825,7 +1849,8 @@ function gearToothFields(
       : {}),
     teeth: values.teeth ?? 20,
     ...form,
-    ...hand
+    ...hand,
+    ...herringbone
   };
 }
 
@@ -1909,7 +1934,8 @@ const gear: InPlaceToolSpec = {
       initial: 'external'
     },
     GEAR_SIZING_OPTION,
-    GEAR_HAND_OPTION
+    GEAR_HAND_OPTION,
+    GEAR_HELIX_OPTION
   ],
   defaults(_slots, _ctx, numbers): Record<string, number> {
     // A rim that clears an internal gear's roots with four modules to spare.
@@ -2034,7 +2060,8 @@ const gearTeeth: InPlaceToolSpec = {
       initial: 'keep-diameter'
     },
     GEAR_SIZING_OPTION,
-    GEAR_HAND_OPTION
+    GEAR_HAND_OPTION,
+    GEAR_HELIX_OPTION
   ],
   hint(slots, options) {
     if (slots.faces.length === 0) {

@@ -350,6 +350,37 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toEqual(['helixAngleDeg', 'hand']);
   });
 
+  it('gear: a herringbone gear reopens as one and returns to a single helix', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 20,
+      fit: 'module',
+      helixAngleDeg: 25,
+      herringbone: true,
+      targetBodyId: BODY,
+      faceHash: 11
+    };
+    const armed = inPlaceEditSeed(feature(data, BODY), EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({ helix: 'herringbone' });
+    const request = untouched(feature(data, BODY))!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: { helixAngleDeg: 25, herringbone: true }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    const saved = { featureId: 'feature_g' as FeatureId, name: 'Gear', data };
+    expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+      'clearData'
+    );
+    const { herringbone: _herringbone, ...single } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(saved, { tool: 'gear', gear: single })?.clearData
+    ).toEqual(['herringbone']);
+  });
+
   it('hole: its stored position, anchor, step and expressions', () => {
     const data: FeatureData = {
       featureKind: 'hole',

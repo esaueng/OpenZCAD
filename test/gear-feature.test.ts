@@ -103,6 +103,14 @@ describe('gear command validation', () => {
     }
   });
 
+  it('accepts a herringbone gear', () => {
+    expect(() =>
+      commandFactories
+        .gearBody({ ...valid, helixAngleDeg: 30, herringbone: true })
+        .validate(document)
+    ).not.toThrow();
+  });
+
   it.each([
     ['fractional teeth', { teeth: 20.5 }],
     ['too few teeth', { teeth: 2 }],
@@ -118,6 +126,12 @@ describe('gear command validation', () => {
     ['negative helix', { helixAngleDeg: -5 }],
     ['helical rack', { gearType: 'rack' as const, helixAngleDeg: 10 }],
     ['unknown hand', { helixAngleDeg: 10, hand: 'up' as never }],
+    ['herringbone spur', { herringbone: true }],
+    ['herringbone at 0°', { helixAngleDeg: 0, herringbone: true }],
+    [
+      'herringbone rack',
+      { gearType: 'rack' as const, helixAngleDeg: 10, herringbone: true }
+    ],
     ['fit on a new body', { fit: 'module' as const }]
   ])('refuses %s', (_label, overrides) => {
     expect(() =>
@@ -174,6 +188,25 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
     const mirrored = (await adapter.syncDocument(left.document))
       .bodyRepresentations[left.bodyId]!;
     expect(mirrored.volume).toBeCloseTo(body.volume, 6);
+  });
+
+  it('builds a herringbone gear with both halves named', async () => {
+    const herringbone = newGear({ helixAngleDeg: 20, herringbone: true });
+    const derived = await adapter.syncDocument(herringbone.document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[herringbone.bodyId]!;
+    const names = body.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    expect(names).toContain('gear.face.tooth[0].flank.plus.start-half');
+    expect(names).toContain('gear.face.tooth[0].flank.plus.end-half');
+    expect(names.filter((name) => name?.includes('.flank.'))).toHaveLength(80);
+    expect(new Set(names).size).toBe(names.length);
+    // Every transverse section is the single helical gear's: same volume.
+    const single = newGear({ helixAngleDeg: 20 });
+    const helical = (await adapter.syncDocument(single.document))
+      .bodyRepresentations[single.bodyId]!;
+    expect(Math.abs(body.volume / helical.volume - 1)).toBeLessThan(1e-6);
   });
 
   it('reads a diametral pitch per inch in an inch document', async () => {

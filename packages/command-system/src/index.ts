@@ -1134,6 +1134,18 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
       throw new Error('A rack cannot be helical.');
     }
   }
+  if (input.herringbone !== undefined) {
+    if (typeof input.herringbone !== 'boolean') {
+      throw new Error('Gear herringbone must be true or false.');
+    }
+    const helix =
+      input.helixAngleDeg === undefined
+        ? 0
+        : value('helix angle', input.helixAngleDeg);
+    if (input.herringbone && !(helix > 0)) {
+      throw new Error('A herringbone gear needs a helix angle above 0°.');
+    }
+  }
   if (
     input.hand !== undefined &&
     input.hand !== 'right' &&
