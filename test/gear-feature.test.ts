@@ -161,9 +161,10 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
     const body = derived.bodyRepresentations[right.bodyId]!;
     // A normal module of 2: tip diameter 20·2/cos β + 2·2.
     const tip = (20 * 2) / Math.cos(beta) + 4;
+    // The kernel's box over swept NURBS flanks is conservative, so this only
+    // separates the transverse tip (46.57) from a normal-module one (44).
     const box = body.bbox;
-    expect(box.max.x - box.min.x).toBeLessThanOrEqual(tip + 1e-6);
-    expect(box.max.x - box.min.x).toBeGreaterThan(tip - 0.5);
+    expect(Math.abs(box.max.x - box.min.x - tip)).toBeLessThan(0.05);
     const names = body.topology!.faces.map(
       (face) => face.reference?.lineageName
     );
