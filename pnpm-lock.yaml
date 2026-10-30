@@ -302,11 +302,11 @@ importers:
         specifier: 0.8.3
         version: 0.8.3
       remus-wasm:
-        specifier: github:esaueng/remus#0c8461f1b508856a6c438dbe93c7dee16eab1a42&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42#path:/crates/wasm/pkg
+        specifier: github:esaueng/remus#6bd57a88ccf2c4bd91324759729966617e6b3abc&path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc#path:/crates/wasm/pkg
       remus-wasm-io:
-        specifier: github:esaueng/remus#0c8461f1b508856a6c438dbe93c7dee16eab1a42&path:/crates/wasm-io/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42#path:/crates/wasm-io/pkg
+        specifier: github:esaueng/remus#6bd57a88ccf2c4bd91324759729966617e6b3abc&path:/crates/wasm-io/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc#path:/crates/wasm-io/pkg
 
   packages/mls: {}
 
@@ -1984,13 +1984,13 @@ packages:
     resolution: {integrity: sha512-6tDA8g98We0zd0GvVeMT9arEOnTw9qM03L9cJXaCjrip1OO764RDBLBfrB4cwzNGDj5OA5ioymC9GkizgWJDUg==}
     engines: {node: '>=8'}
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42#path:/crates/wasm-io/pkg:
-    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42}
-    version: 2026.1.91
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc#path:/crates/wasm-io/pkg:
+    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc}
+    version: 2026.1.92
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42}
-    version: 2026.1.91
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc}
+    version: 2026.1.92
 
   rolldown@1.2.14:
     resolution: {integrity: sha512-eTBTTqMR6uHKLgcUqpJP8ntzDI6V4LYA8negAMBEI7gkgVvOdrx6VsvS2Ym+83KhOPdLCHWJu0w7UQFJZhHKNw==}
@@ -3718,9 +3718,9 @@ snapshots:
       indent-string: 4.0.0
       strip-indent: 3.0.0
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42#path:/crates/wasm-io/pkg: {}
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc#path:/crates/wasm-io/pkg: {}
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/0c8461f1b508856a6c438dbe93c7dee16eab1a42#path:/crates/wasm/pkg: {}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/6bd57a88ccf2c4bd91324759729966617e6b3abc#path:/crates/wasm/pkg: {}
 
   rolldown@1.2.14:
     dependencies:
