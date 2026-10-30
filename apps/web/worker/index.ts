@@ -1691,6 +1691,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (pathname === LIBRARY_FOLDERS_ROUTE) {
+    if (!isCloudflareFeatureEnabled(env, 'LIBRARY_FOLDER_SYNC_ENABLED')) {
+      return json(
+        {
+          error: 'Cloud folder sync is not enabled on this deployment.',
+          code: 'LIBRARY_FOLDERS_DISABLED'
+        },
+        501
+      );
+    }
     if (!(await isLibraryFolderStorageReady(env.DB))) {
       return json(
         {

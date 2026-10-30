@@ -80,6 +80,7 @@ import {
   MAX_FOLDER_NAME_LENGTH,
   type LibraryFolder
 } from '../lib/libraryFolders';
+import { useLibraryFolderCloudSync } from '../lib/libraryFolderCloudSync';
 import { LibrarySelectionBar } from './LibrarySelectionBar';
 import {
   bucketProjectsByShelf,
@@ -496,6 +497,7 @@ export function StartScreen({
     writeLibraryView({ shelf, filter, sort, query, folder: openFolderId });
   }, [shelf, filter, sort, query, openFolderId]);
   const [folderState, updateFolders] = useLibraryFolders(thumbnailAccountId);
+  useLibraryFolderCloudSync(thumbnailAccountId, folderState);
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [coverFolderId, setCoverFolderId] = useState<string | null>(null);
