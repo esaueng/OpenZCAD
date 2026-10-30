@@ -381,6 +381,103 @@ export interface FatLineOptions {
   depthWrite?: boolean;
   /** Viewport size the shader rasterizes against; keep it in sync on resize. */
   resolution?: FatLineResolution;
+  /**
+   * World distance the line is drawn toward the camera, for depth only. See
+   * `fatLineDepthBiasForExtent`; zero for lines that are not drawn on a solid.
+   */
+  depthBias?: number;
+}
+
+/**
+ * How far an edge drawn on a solid is pulled toward the camera, as a fraction
+ * of the body's extent.
+ *
+ * An edge and the faces either side of it are tessellated separately, each
+ * within the display chord error (`DISPLAY_LINEAR_DEFLECTION_RATIO`, 2e-4 of
+ * the extent). Where a face's chord lies outside the edge's — any curved
+ * neighbour, a chamfer cone or a fillet — the edge sits up to twice that
+ * behind the face, and the face's one-unit polygon offset is many orders too
+ * small to cover it. The depth test then hid stretches of every edge on a
+ * curved surface: idle edges read as dashed, and a selected rim lost whole
+ * arcs at close zoom. Pulled forward by four times the worst case, they draw
+ * whole, while an edge genuinely behind the part — further back than a fifth
+ * of a percent of the body — still hides.
+ */
+export const FAT_LINE_DEPTH_BIAS_RATIO = 2e-3;
+
+export function fatLineDepthBiasForExtent(extent: number): number {
+  return Number.isFinite(extent) && extent > 0
+    ? extent * FAT_LINE_DEPTH_BIAS_RATIO
+    : 0;
+}
+
+const DEPTH_BIAS_UNIFORM_ANCHOR = 'uniform vec2 resolution;';
+const DEPTH_BIAS_VIEW_ANCHOR =
+  'vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );';
+
+/**
+ * LineMaterial's vertex shader with a `depthBias` uniform.
+ *
+ * Perspective moves each end along its own view ray, which leaves its screen
+ * position and pixel width exactly where they were; orthographic moves it
+ * along view z, which has the same property there. Only depth changes, so a
+ * biased line still lies on its edge to the pixel.
+ */
+const DEPTH_BIASED_LINE_VERTEX_SHADER = (() => {
+  const source = new LineMaterial().vertexShader;
+  if (
+    !source.includes(DEPTH_BIAS_UNIFORM_ANCHOR) ||
+    !source.includes(DEPTH_BIAS_VIEW_ANCHOR)
+  ) {
+    throw new Error('LineMaterial shader changed: depth bias anchors missing.');
+  }
+  return source
+    .replace(
+      DEPTH_BIAS_UNIFORM_ANCHOR,
+      `${DEPTH_BIAS_UNIFORM_ANCHOR}\n\t\tuniform float depthBias;`
+    )
+    .replace(
+      DEPTH_BIAS_VIEW_ANCHOR,
+      `${DEPTH_BIAS_VIEW_ANCHOR}
+			if ( depthBias > 0.0 ) {
+				if ( projectionMatrix[ 2 ][ 3 ] == - 1.0 ) {
+					start.xyz *= max( 1.0 - depthBias / max( length( start.xyz ), 1e-6 ), 0.5 );
+					end.xyz *= max( 1.0 - depthBias / max( length( end.xyz ), 1e-6 ), 0.5 );
+				} else {
+					start.z += depthBias;
+					end.z += depthBias;
+				}
+			}`
+    );
+})();
+
+/**
+ * The stencil bit a translucent line uses to draw each pixel once.
+ *
+ * A LineSegments2 batch is one quad per segment with a round cap at each end,
+ * so neighbouring segments overlap at every joint. Opaque, that is invisible;
+ * at the x-ray twins' 0.34 opacity each overlap blends twice and the line
+ * reads as a string of beads. The first fragment to reach a sample marks this
+ * bit and every later one from a marked sample is dropped. Bit 1 belongs to
+ * the opaque bodies (`OPAQUE_BODY_STENCIL`); everything that reads it masks
+ * this one out, and the stencil buffer is cleared with each frame.
+ *
+ * Alpha to coverage goes off with it. At a third of full opacity it turns the
+ * line body into a sparse coverage mask that, blended at the same alpha on
+ * top, all but vanished — measured on the flange's hidden hub rim, only the
+ * doubled caps survived, so a hidden edge drew as a row of dots.
+ */
+const TRANSLUCENT_LINE_STENCIL = 2;
+
+/** Makes a translucent fat line blend once per pixel instead of per segment. */
+export function drawFatLineOncePerPixel(material: LineMaterial) {
+  material.alphaToCoverage = false;
+  material.stencilWrite = true;
+  material.stencilRef = TRANSLUCENT_LINE_STENCIL;
+  material.stencilFunc = THREE.NotEqualStencilFunc;
+  material.stencilFuncMask = TRANSLUCENT_LINE_STENCIL;
+  material.stencilWriteMask = TRANSLUCENT_LINE_STENCIL;
+  material.stencilZPass = THREE.ReplaceStencilOp;
 }
 
 /**
@@ -430,6 +527,9 @@ export function createFatLineMaterial(options: FatLineOptions): LineMaterial {
     // independently tessellated quad mask another overlay drawn later.
     depthWrite: options.depthWrite ?? false
   });
+  // Every fat line carries the uniform, so they all share one program.
+  material.vertexShader = DEPTH_BIASED_LINE_VERTEX_SHADER;
+  material.uniforms.depthBias = { value: Math.max(options.depthBias ?? 0, 0) };
   material.resolution.set(
     Math.max(options.resolution?.width ?? 1, 1),
     Math.max(options.resolution?.height ?? 1, 1)

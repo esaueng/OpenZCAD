@@ -5,10 +5,13 @@ import {
   computeFitPose,
   createAxesGizmo,
   createBodyMaterial,
+  createFatLineMaterial,
   createGradientBackdrop,
   createShadowCatcher,
   createStudioGrid,
   DARK_STAGE_PALETTE,
+  FAT_LINE_DEPTH_BIAS_RATIO,
+  fatLineDepthBiasForExtent,
   shouldShowGroundShadow,
   sameBodyPickingTopology,
   sameBodyRenderGeometry,
@@ -672,5 +675,36 @@ describe('boxFullyInView', () => {
     camera.zoom = 5;
     camera.updateProjectionMatrix();
     expect(boxFullyInView(box, camera)).toBe(false);
+  });
+});
+
+describe('fat line depth bias', () => {
+  it('scales with the body and is zero without one', () => {
+    expect(fatLineDepthBiasForExtent(90)).toBeCloseTo(
+      90 * FAT_LINE_DEPTH_BIAS_RATIO
+    );
+    expect(fatLineDepthBiasForExtent(0)).toBe(0);
+    expect(fatLineDepthBiasForExtent(Number.NaN)).toBe(0);
+  });
+
+  it('gives every fat line the uniform, defaulting to no bias', () => {
+    // One shader for every fat line keeps them on one program; only lines
+    // drawn on a solid set a non-zero value.
+    const plain = createFatLineMaterial({ color: 0xffffff, linewidth: 1 });
+    const biased = createFatLineMaterial({
+      color: 0xffffff,
+      linewidth: 1,
+      depthBias: 0.18
+    });
+
+    expect(plain.uniforms.depthBias?.value).toBe(0);
+    expect(biased.uniforms.depthBias?.value).toBe(0.18);
+    expect(biased.vertexShader).toBe(plain.vertexShader);
+    expect(plain.vertexShader).toContain('uniform float depthBias;');
+    // The bias is applied in view space, before projection, so screen
+    // position and pixel width are untouched.
+    expect(plain.vertexShader.indexOf('depthBias > 0.0')).toBeLessThan(
+      plain.vertexShader.indexOf('vec4 clipStart')
+    );
   });
 });
