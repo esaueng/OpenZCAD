@@ -333,6 +333,15 @@ export {
   type ProjectPreferences
 } from './account-records';
 export {
+  LIBRARY_FOLDERS_KEY_INFO,
+  LIBRARY_FOLDERS_VERSION_1,
+  MAX_LIBRARY_FOLDERS_PLAINTEXT_BYTES,
+  openLibraryFolders,
+  readLibraryFoldersHeader,
+  sealLibraryFolders,
+  type LibraryFoldersHeader
+} from './library-folders';
+export {
   MAX_DELEGATED_DEVICES,
   MAX_SHARE_AUTHORITY_BYTES,
   MAX_SHARE_AUTHORITY_LIFETIME_MS,
