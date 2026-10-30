@@ -93,6 +93,16 @@ describe('gear command validation', () => {
     expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(40);
   });
 
+  it('accepts a helical gear of either hand', () => {
+    for (const hand of ['right', 'left'] as const) {
+      expect(() =>
+        commandFactories
+          .gearBody({ ...valid, helixAngleDeg: 45, hand })
+          .validate(document)
+      ).not.toThrow();
+    }
+  });
+
   it.each([
     ['fractional teeth', { teeth: 20.5 }],
     ['too few teeth', { teeth: 2 }],
@@ -104,6 +114,10 @@ describe('gear command validation', () => {
     ['internal without rim', { gearType: 'internal' as const }],
     ['bore on a rack', { gearType: 'rack' as const, boreDiameter: 3 }],
     ['rack phase', { gearType: 'rack' as const, phaseDeg: 5 }],
+    ['helix above 45°', { helixAngleDeg: 46 }],
+    ['negative helix', { helixAngleDeg: -5 }],
+    ['helical rack', { gearType: 'rack' as const, helixAngleDeg: 10 }],
+    ['unknown hand', { helixAngleDeg: 10, hand: 'up' as never }],
     ['fit on a new body', { fit: 'module' as const }]
   ])('refuses %s', (_label, overrides) => {
     expect(() =>
@@ -137,6 +151,28 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
     expect(names.has('gear.face.root[7]')).toBe(true);
     expect(names.has('gear.face.cap.start')).toBe(true);
     expect(names.has(undefined)).toBe(false);
+  });
+
+  it('builds a helical gear on its transverse pitch circle', async () => {
+    const beta = (20 * Math.PI) / 180;
+    const right = newGear({ helixAngleDeg: 20 });
+    const derived = await adapter.syncDocument(right.document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[right.bodyId]!;
+    // A normal module of 2: tip diameter 20·2/cos β + 2·2.
+    const tip = (20 * 2) / Math.cos(beta) + 4;
+    const box = body.bbox;
+    expect(box.max.x - box.min.x).toBeLessThanOrEqual(tip + 1e-6);
+    expect(box.max.x - box.min.x).toBeGreaterThan(tip - 0.5);
+    const names = body.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    expect(names.filter((name) => name?.includes('.flank.'))).toHaveLength(40);
+    // Mirrored hands sweep the same section: the same volume.
+    const left = newGear({ helixAngleDeg: 20, hand: 'left' });
+    const mirrored = (await adapter.syncDocument(left.document))
+      .bodyRepresentations[left.bodyId]!;
+    expect(mirrored.volume).toBeCloseTo(body.volume, 6);
   });
 
   it('reads a diametral pitch per inch in an inch document', async () => {

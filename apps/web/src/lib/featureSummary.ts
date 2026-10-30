@@ -115,7 +115,12 @@ export function featureValueSummary(
     }
     case 'gear': {
       const teeth = num(data.teeth);
-      return teeth === null ? null : `${teeth} teeth`;
+      if (teeth === null) return null;
+      const helix =
+        data.helixAngleDeg === undefined ? '0' : num(data.helixAngleDeg);
+      return helix === null || helix === '0'
+        ? `${teeth} teeth`
+        : `${teeth} teeth, ${helix}° ${data.hand ?? 'right'} helix`;
     }
     case 'hole': {
       const diameter = num(data.diameter);

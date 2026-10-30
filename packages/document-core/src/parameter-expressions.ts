@@ -186,7 +186,12 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
         rewrite,
         'number'
       );
-      fields(data, ['pressureAngleDeg', 'phaseDeg'], rewrite, 'angle');
+      fields(
+        data,
+        ['pressureAngleDeg', 'phaseDeg', 'helixAngleDeg'],
+        rewrite,
+        'angle'
+      );
       vector(data.origin, rewrite, 'length');
       vector(data.axis, rewrite, null);
       vector(data.xDirection, rewrite, null);

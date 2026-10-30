@@ -421,6 +421,8 @@ export function inPlaceEditSeed(
       value('profileShift', data.profileShift);
       value('backlash', data.backlash);
       value('phaseDeg', data.phaseDeg);
+      value('helixAngleDeg', data.helixAngleDeg);
+      if (data.hand) seed.options.hand = data.hand;
       if (data.targetBodyId !== undefined) {
         const face =
           typeof data.faceHash === 'number'
@@ -933,6 +935,8 @@ export function inPlaceFeatureUpdate(
         'profileShift',
         'backlash',
         'phaseDeg',
+        'helixAngleDeg',
+        'hand',
         'xDirection',
         'boreDiameter',
         'rimDiameter',

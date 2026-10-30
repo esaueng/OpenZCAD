@@ -1,6 +1,6 @@
 /**
- * M14 gear features: a new gear body from the kernel's gear generator, or
- * teeth cut along the whole length of a body's cylindrical face.
+ * M14 gear features: a new spur or helical gear body from the kernel's gear
+ * generator, or teeth cut along the whole length of a body's cylindrical face.
  *
  * The kernel owns the gear: the involute, its certified flank fit, the
  * tooth-form checks and the boolean that cuts teeth into a body. This module
@@ -266,6 +266,12 @@ export function buildGearFeature(
     ),
     ...withNumber('phase', values.optional(data.phaseDeg, 'phase'))
   };
+  // A spur gear sends no helix fields, so it builds on any gear kernel; a
+  // kernel without helical gears refuses the unknown field instead of
+  // building a spur in its place.
+  const helix = values.optional(data.helixAngleDeg, 'helix angle') ?? 0;
+  const helical: Record<string, number | string> =
+    helix === 0 ? {} : { helixAngle: helix, hand: data.hand ?? 'right' };
   const module =
     data.pitch === undefined
       ? undefined
@@ -275,9 +281,17 @@ export function buildGearFeature(
           document.units
         );
   if (data.targetBodyId === undefined) {
-    buildNewGearBody(ctx, feature, data, toothForm, module, values);
+    buildNewGearBody(ctx, feature, data, toothForm, helical, module, values);
   } else {
-    buildGearTeethOnBody(ctx, feature, data, toothForm, module, values);
+    buildGearTeethOnBody(
+      ctx,
+      feature,
+      data,
+      toothForm,
+      helical,
+      module,
+      values
+    );
   }
 }
 
@@ -294,6 +308,7 @@ function buildNewGearBody(
   feature: FeatureNode,
   data: FeatureDataOf<'gear'>,
   toothForm: Record<string, number>,
+  helical: Record<string, number | string>,
   module: number | undefined,
   values: GearValues
 ): void {
@@ -321,6 +336,7 @@ function buildNewGearBody(
     module,
     faceWidth: values.resolve(data.faceWidth, 'face width'),
     ...toothForm,
+    ...helical,
     origin: values.vector(data.origin, 'origin'),
     axis,
     xDirection,
@@ -351,6 +367,7 @@ function buildGearTeethOnBody(
   feature: FeatureNode,
   data: FeatureDataOf<'gear'>,
   toothForm: Record<string, number>,
+  helical: Record<string, number | string>,
   module: number | undefined,
   values: GearValues
 ): void {
@@ -395,6 +412,7 @@ function buildGearTeethOnBody(
     fit: fit === 'module' ? 'module' : 'keepDiameter',
     ...(fit === 'module' ? { module } : {}),
     ...toothForm,
+    ...helical,
     ...(data.xDirection
       ? { xDirection: values.vector(data.xDirection, 'x direction') }
       : {})

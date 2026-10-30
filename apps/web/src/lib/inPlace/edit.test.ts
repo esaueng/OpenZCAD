@@ -313,6 +313,43 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('gear: a helical gear keeps its helix angle and hand', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 20,
+      fit: 'module',
+      helixAngleDeg: 'helix',
+      hand: 'left',
+      targetBodyId: BODY,
+      faceHash: 11
+    };
+    const armed = inPlaceEditSeed(feature(data, BODY), EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({ hand: 'left' });
+    const request = untouched(feature(data, BODY))!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: { helixAngleDeg: 'helix', hand: 'left' }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: 'feature_g' as FeatureId, name: 'Gear', data },
+        request
+      )
+    ).not.toHaveProperty('clearData');
+    // Back to a spur gear: the helix and its hand are cleared together.
+    const { helixAngleDeg: _helix, hand: _hand, ...spur } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: 'feature_g' as FeatureId, name: 'Gear', data },
+        { tool: 'gear', gear: spur }
+      )?.clearData
+    ).toEqual(['helixAngleDeg', 'hand']);
+  });
+
   it('hole: its stored position, anchor, step and expressions', () => {
     const data: FeatureData = {
       featureKind: 'hole',

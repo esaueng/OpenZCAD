@@ -1059,6 +1059,8 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
 
 /** M14: the most teeth the kernel's gear generator builds. */
 const MAX_GEAR_TEETH = 1000;
+/** M14: the steepest helix angle the kernel's gear generator builds. */
+const MAX_GEAR_HELIX_DEG = 45;
 
 /**
  * Structural checks for a gear feature. Whether the tooth form is buildable
@@ -1120,6 +1122,24 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     if (input.gearType === 'rack' && phase !== 0) {
       throw new Error('A rack takes no phase; place it with its origin.');
     }
+  }
+  if (input.helixAngleDeg !== undefined) {
+    const helix = value('helix angle', input.helixAngleDeg);
+    if (!(helix >= 0 && helix <= MAX_GEAR_HELIX_DEG)) {
+      throw new Error(
+        `Gear helix angle must be from 0° to ${MAX_GEAR_HELIX_DEG}°.`
+      );
+    }
+    if (input.gearType === 'rack' && helix !== 0) {
+      throw new Error('A rack cannot be helical.');
+    }
+  }
+  if (
+    input.hand !== undefined &&
+    input.hand !== 'right' &&
+    input.hand !== 'left'
+  ) {
+    throw new Error('Gear hand must be right or left.');
   }
 
   if (input.targetBodyId !== undefined) {

@@ -202,6 +202,8 @@ export type GearType = 'external' | 'internal' | 'rack';
 export type GearSizing = 'module' | 'circular-pitch' | 'diametral-pitch';
 /** M14: how teeth on a cylinder are sized against it. */
 export type GearFit = 'keep-diameter' | 'module';
+/** M14: which way a helical gear's teeth wind as they advance along its axis. */
+export type GearHand = 'right' | 'left';
 export type FeatureKind =
   | 'primitive'
   | 'sketch'
@@ -1761,8 +1763,8 @@ export type FeatureData =
     }
   | {
       /**
-       * M14 (schema v40): an involute spur gear, internal (ring) gear or
-       * straight rack, built by the kernel's gear generator.
+       * M14 (schema v40): an involute spur or helical gear, internal (ring)
+       * gear or straight rack, built by the kernel's gear generator.
        *
        * Without `targetBodyId` the gear is a new body: its first cap is
        * centered on `origin`, it extrudes `faceWidth` along `axis`, and its
@@ -1804,6 +1806,18 @@ export type FeatureData =
       rootFillet?: ParamValue;
       /** Turn of the first tooth about the axis, degrees; absent is 0. */
       phaseDeg?: ParamValue;
+      /**
+       * Helix angle at the pitch circle, degrees in [0, 45]; absent or 0 is a
+       * spur gear. Above 0 the gear is helical (ISO 21771): `pitch`, the
+       * pressure angle and the coefficients are normal-section values, and
+       * the teeth wind `hand` along the axis. Racks take none.
+       */
+      helixAngleDeg?: ParamValue;
+      /**
+       * A helical gear's hand: a right hand turns counter-clockwise about
+       * `axis` as it advances along it. Absent is `'right'`.
+       */
+      hand?: GearHand;
       /** New bodies: placement, see above. */
       origin?: ParametricVector3;
       axis?: ParametricVector3;

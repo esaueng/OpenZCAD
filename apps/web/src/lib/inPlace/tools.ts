@@ -1730,15 +1730,50 @@ const GEAR_TOOTH_VALUES: ValueSpec[] = [
     min: 0,
     inOptions: true
   },
-  { id: 'phaseDeg', label: 'Phase', unit: 'angle', initial: 0, inOptions: true }
+  {
+    id: 'phaseDeg',
+    label: 'Phase',
+    unit: 'angle',
+    initial: 0,
+    inOptions: true
+  },
+  {
+    id: 'helixAngleDeg',
+    label: 'Helix angle',
+    unit: 'angle',
+    initial: 0,
+    min: 0,
+    max: 45,
+    inOptions: true
+  }
 ];
+
+/** A helical gear's hand; read only while the helix angle is above 0. */
+const GEAR_HAND_OPTION: OptionSpec = {
+  id: 'hand',
+  label: 'Hand',
+  choices: [
+    {
+      value: 'right',
+      label: 'Right',
+      note: 'Teeth twist like a right-hand screw thread'
+    },
+    {
+      value: 'left',
+      label: 'Left',
+      note: 'Teeth twist like a left-hand screw thread'
+    }
+  ],
+  initial: 'right'
+};
 
 /** Optional tooth-form fields: stored once set, else the kernel default. */
 const GEAR_FORM_FIELDS = [
   'pressureAngleDeg',
   'profileShift',
   'backlash',
-  'phaseDeg'
+  'phaseDeg',
+  'helixAngleDeg'
 ] as const;
 
 /** The size and form fields of a gear request, from the bar's values. */
@@ -1749,7 +1784,7 @@ function gearToothFields(
   withPitch: boolean
 ): Pick<
   GearRequest,
-  'sizing' | 'pitch' | 'teeth' | (typeof GEAR_FORM_FIELDS)[number]
+  'sizing' | 'pitch' | 'teeth' | 'hand' | (typeof GEAR_FORM_FIELDS)[number]
 > {
   const sizing =
     options.sizing === 'diametral-pitch' || options.sizing === 'circular-pitch'
@@ -1768,6 +1803,14 @@ function gearToothFields(
       form[field] = value;
     }
   }
+  // The hand is stored with a helix once chosen, or as it was stored.
+  const hand =
+    form.helixAngleDeg !== undefined &&
+    (options.hand === 'left' || saved?.hand !== undefined)
+      ? {
+          hand: options.hand === 'left' ? ('left' as const) : ('right' as const)
+        }
+      : {};
   return {
     sizing,
     ...(withPitch
@@ -1781,7 +1824,8 @@ function gearToothFields(
         }
       : {}),
     teeth: values.teeth ?? 20,
-    ...form
+    ...form,
+    ...hand
   };
 }
 
@@ -1846,7 +1890,11 @@ const gear: InPlaceToolSpec = {
       id: 'gearType',
       label: 'Gear',
       choices: [
-        { value: 'external', label: 'Spur' },
+        {
+          value: 'external',
+          label: 'External',
+          note: 'Spur, or helical with a helix angle'
+        },
         {
           value: 'internal',
           label: 'Internal (ring)',
@@ -1860,7 +1908,8 @@ const gear: InPlaceToolSpec = {
       ],
       initial: 'external'
     },
-    GEAR_SIZING_OPTION
+    GEAR_SIZING_OPTION,
+    GEAR_HAND_OPTION
   ],
   defaults(_slots, _ctx, numbers): Record<string, number> {
     // A rim that clears an internal gear's roots with four modules to spare.
@@ -1984,7 +2033,8 @@ const gearTeeth: InPlaceToolSpec = {
       ],
       initial: 'keep-diameter'
     },
-    GEAR_SIZING_OPTION
+    GEAR_SIZING_OPTION,
+    GEAR_HAND_OPTION
   ],
   hint(slots, options) {
     if (slots.faces.length === 0) {
