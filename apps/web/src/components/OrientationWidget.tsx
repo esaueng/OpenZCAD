@@ -8,10 +8,21 @@ import {
 import {
   VIEW_LABELS,
   type AxisProjection,
-  type CubeCorner,
   type StandardView,
   type ViewTarget
 } from '@openzcad/viewport';
+import {
+  AXIS_KEYS,
+  CORNERS,
+  CUBE_SIZE,
+  FACES,
+  projectCube,
+  type AxisKey,
+  type CubeFacet,
+  type CubeHighlight,
+  type CubePoint,
+  type OrientationLink
+} from './viewer/orientationCube';
 
 const AXIS_COLORS = {
   x: 'var(--color-handle-x)',
@@ -19,237 +30,16 @@ const AXIS_COLORS = {
   z: 'var(--color-handle-z)'
 };
 
-/**
- * SVG size, center and pixels per cube half-edge. The box hugs the cube: its
- * silhouette reaches at most sqrt(3) half-edges (~36 px) from the center, and
- * the triad tips that reach past the box overhang with `overflow: visible`
- * rather than earning padding on every side.
- */
-const SIZE = 88;
-const CX = SIZE / 2;
-const CY = SIZE / 2;
-const SCALE = 21;
-/** Fraction of a half-edge cut off each corner for the isometric facets. */
-const BEVEL = 0.42;
-/**
- * The same cut, taken deeper, for the corners' invisible click target.
- *
- * A drawn bevel facet is tiny: measured on the running widget the corner
- * turned most toward the camera covers ~67 px² and the glancing ones ~21 px²,
- * against ~960 px² for a face — a 14:1 ratio, so the isometric views are the
- * hardest thing on the cube to hit and the easiest to miss. Growing the drawn
- * bevel to fix that would restyle the cube, so only the target grows: it is
- * the part of the cube's surface this deeper cut takes off the corner — the
- * facet plus a triangle on each adjacent face that shows. Deeper cuts stay
- * disjoint between corners for any bevel below 1, so no two corners can ever
- * compete for the same pixel; the area comes off the faces instead, which
- * can spare it.
- *
- * The depth is set by the 24 px minimum pointer target: the corner turned
- * toward the camera spans 1.5 cut-depths of foreshortened edge vertically,
- * so at 0.8 it measured 24×20 px in the isometric view. At 0.96 it is
- * 28×25, and every face keeps the diamond between its edge midpoints —
- * just over half its area, its label at the centre.
- */
-const CORNER_HIT_BEVEL = 0.96;
-/**
- * How far, in px, a corner's target reaches past the cube's silhouette.
- *
- * A corner on the silhouette has a face turned away, so its target is the
- * surface you can see on one side of the apex and nothing on the other: in
- * the isometric view those targets measured 10×17 and 20×6 px. The target
- * runs out through the apex into the empty margin instead, so it keeps at
- * least 24 px on both axes there (17×21 at a 6 px reach). The silhouette
- * corners' apexes stand at least a cube edge apart on screen, so the reaches
- * never meet; the SVG draws overflow, so a reach past its box still hits.
- */
-const CORNER_HIT_OVERHANG = 12;
-/**
- * The triad is anchored on the cube corner the model origin projects to, and
- * its arms run along the cube edges — through the far corners at 2 half-edges
- * — before overhanging into free space, letters at the tips.
- */
-const TRIAD_ORIGIN: Vec3 = [-1, -1, -1];
-const ARM_TO = 2.5;
-const ARM_LABEL_AT = 2.85;
-
-type Vec3 = readonly [number, number, number];
-
-/**
- * One cube face: its outward normal and the in-plane frame its label is drawn
- * in. `u`/`v` are screen-right/screen-up when the face is viewed head-on in
- * its own standard view, so the label reads upright exactly when you arrive.
- */
-interface FaceSpec {
-  view: StandardView;
-  opposite: StandardView;
-  normal: Vec3;
-  u: Vec3;
-  v: Vec3;
-}
-
-const FACES: FaceSpec[] = [
-  {
-    view: 'right',
-    opposite: 'left',
-    normal: [1, 0, 0],
-    u: [0, 1, 0],
-    v: [0, 0, 1]
-  },
-  {
-    view: 'left',
-    opposite: 'right',
-    normal: [-1, 0, 0],
-    u: [0, -1, 0],
-    v: [0, 0, 1]
-  },
-  {
-    view: 'back',
-    opposite: 'front',
-    normal: [0, 1, 0],
-    u: [-1, 0, 0],
-    v: [0, 0, 1]
-  },
-  {
-    view: 'front',
-    opposite: 'back',
-    normal: [0, -1, 0],
-    u: [1, 0, 0],
-    v: [0, 0, 1]
-  },
-  {
-    view: 'top',
-    opposite: 'bottom',
-    normal: [0, 0, 1],
-    u: [1, 0, 0],
-    v: [0, 1, 0]
-  },
-  // Bottom mirrors top left-to-right: both poles share screen-up +Y (the
-  // cameraUpForDirection convention), and looking up flips only screen-right.
-  {
-    view: 'bottom',
-    opposite: 'top',
-    normal: [0, 0, -1],
-    u: [-1, 0, 0],
-    v: [0, 1, 0]
-  }
-];
-
-/**
- * Face outline with its corners cut for the bevel facets, in the face's
- * `(u, v)` plane. Each square corner is replaced by the two points `BEVEL`
- * short of it, so the octagons and corner triangles tile the cube exactly.
- */
-const FACE_OUTLINE: readonly (readonly [number, number])[] = (() => {
-  const b = 1 - BEVEL;
-  return [
-    [b, 1],
-    [-b, 1],
-    [-1, b],
-    [-1, -b],
-    [-b, -1],
-    [b, -1],
-    [1, -b],
-    [1, b]
-  ];
-})();
-
-/**
- * One bevelled corner facet: a large click target for the isometric view out
- * of that octant. The triangle's vertices sit `BEVEL` short of the corner
- * along each of its three edges, splicing into the faces' cut corners.
- */
-interface CornerSpec {
-  corner: CubeCorner;
-  normal: Vec3;
-  points: readonly Vec3[];
-  /**
-   * Where the deeper cut crosses each of the corner's three edges, by axis:
-   * the click target's outline, never painted. Edge `i` runs along axis `i`.
-   */
-  hitPoints: readonly [Vec3, Vec3, Vec3];
-  /**
-   * The outward normal of the face between edges `i` and `i + 1` (mod 3),
-   * which is the face across the third axis.
-   */
-  faceNormals: readonly [Vec3, Vec3, Vec3];
-  label: string;
-}
-
-/** The triangle left when `bevel` of each half-edge is cut off one corner. */
-function cornerFacet(
-  sx: number,
-  sy: number,
-  sz: number,
-  bevel: number
-): readonly [Vec3, Vec3, Vec3] {
-  const b = 1 - bevel;
-  return [
-    [sx * b, sy, sz],
-    [sx, sy * b, sz],
-    [sx, sy, sz * b]
-  ];
-}
-
-const CORNERS: CornerSpec[] = ([-1, 1] as const).flatMap((sx) =>
-  ([-1, 1] as const).flatMap((sy) =>
-    ([-1, 1] as const).map((sz): CornerSpec => {
-      const n = 1 / Math.sqrt(3);
-      return {
-        corner: [sx, sy, sz],
-        normal: [sx * n, sy * n, sz * n],
-        points: cornerFacet(sx, sy, sz, BEVEL),
-        hitPoints: cornerFacet(sx, sy, sz, CORNER_HIT_BEVEL),
-        faceNormals: [
-          [0, 0, sz],
-          [sx, 0, 0],
-          [0, sy, 0]
-        ],
-        // "isometric" between the octant and "view" keeps every corner name
-        // distinct from the face names under substring accessible-name
-        // matching: "top front right view" would otherwise contain "right
-        // view".
-        label: `${sz > 0 ? 'Top' : 'Bottom'} ${sy > 0 ? 'back' : 'front'} ${
-          sx > 0 ? 'right' : 'left'
-        } isometric view`
-      };
-    })
-  )
-);
-
-/**
- * Which two cube faces each triad arm's edge belongs to. An arm is drawn over
- * the cube while either face shows — the edge is then on the visible surface
- * — and drops behind the opaque faces otherwise, so the silhouette clips it
- * and only its overhang past the cube stays visible.
- */
-const ARM_FACES: Record<'x' | 'y' | 'z', readonly [Vec3, Vec3]> = {
-  x: [
-    [0, -1, 0],
-    [0, 0, -1]
-  ],
-  y: [
-    [-1, 0, 0],
-    [0, 0, -1]
-  ],
-  z: [
-    [-1, 0, 0],
-    [0, -1, 0]
-  ]
-};
-
-const AXIS_VECTORS: Record<'x' | 'y' | 'z', Vec3> = {
-  x: [1, 0, 0],
-  y: [0, 1, 0],
-  z: [0, 0, 1]
-};
-
-/** Below this facing ratio a facet is a sliver not worth drawing or clicking. */
-const FACING_EPSILON = 0.03;
-/** Above this the face is head-on, and clicking it flips to the far side. */
-const HEAD_ON = 0.999;
 /** Preserve facet clicks through normal pointer wobble, then commit to orbit. */
 const DRAG_THRESHOLD_PX = 4;
+
+/**
+ * How long the camera must rest before the unpainted hit layer catches up
+ * with it, once the viewer draws the cube. Long enough that an orbit's frames
+ * never write to the page, short enough that the facets are where they look
+ * before a hand can travel to them.
+ */
+export const HIT_LAYER_SETTLE_MS = 120;
 
 interface CubeDragState {
   pointerId: number;
@@ -270,6 +60,30 @@ function shade(polygon: SVGPolygonElement, facing: number) {
   polygon.style.setProperty('--cube-facing', facing.toFixed(3));
 }
 
+/** Which facet an element inside the cube answers for, if any. */
+function facetOf(target: EventTarget | null): CubeFacet | null {
+  if (!(target instanceof Element)) return null;
+  const element = target.closest<SVGElement>('[data-facet]');
+  const [kind, index] = element?.dataset.facet?.split(':') ?? [];
+  return (kind === 'face' || kind === 'corner') && index !== undefined
+    ? { kind, index: Number(index) }
+    : null;
+}
+
+/** Keyboard focus, which draws the focus stroke; a click's focus does not. */
+function showsFocusRing(target: EventTarget) {
+  try {
+    return target instanceof Element && target.matches(':focus-visible');
+  } catch {
+    // An engine without the selector shows no ring, like the stylesheet.
+    return false;
+  }
+}
+
+function sameFacet(a: CubeFacet | null, b: CubeFacet | null) {
+  return a?.kind === b?.kind && a?.index === b?.index;
+}
+
 /**
  * View cube in the viewport's upper-right: a truncated cube whose six faces
  * are the standard views and whose eight bevelled corner facets are the
@@ -285,6 +99,10 @@ function shade(polygon: SVGPolygonElement, facing: number) {
  * is exactly what the imperative viewport exists to avoid. That includes the
  * triad's occlusion: arms hop between a layer under the opaque facets and one
  * over them by reparenting, not by re-rendering.
+ *
+ * Once the viewer paints the cube into its own canvas (`attachOverlay`), the
+ * SVG stops painting and writes nothing while the camera moves: it catches up
+ * when the camera rests, or the moment a pointer moves over it.
  */
 export function OrientationWidget({
   orientationRef,
@@ -293,12 +111,13 @@ export function OrientationWidget({
   onDrag,
   onDragEnd
 }: {
-  orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  orientationRef: MutableRefObject<OrientationLink | null>;
   onSelectView(view: ViewTarget): void;
   onDragStart(): void;
   onDrag(deltaX: number, deltaY: number): void;
   onDragEnd(): void;
 }) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const faceRefs = useRef<(SVGPolygonElement | null)[]>([]);
   const faceLabelRefs = useRef<(SVGTextElement | null)[]>([]);
   const cornerRefs = useRef<(SVGPolygonElement | null)[]>([]);
@@ -326,10 +145,30 @@ export function OrientationWidget({
     z: useRef<SVGTextElement | null>(null)
   };
   /** Which layer each arm currently sits in; null until the first frame. */
-  const armOnSurface = useRef<Record<'x' | 'y' | 'z', boolean | null>>({
+  const armOnSurface = useRef<Record<AxisKey, boolean | null>>({
     x: null,
     y: null,
     z: null
+  });
+  /**
+   * The hit layer's bookkeeping while the viewer paints the cube: the axes
+   * it has not caught up with yet, and what to tell the viewer when the
+   * hover or focus moves.
+   */
+  const hitLayer = useRef<{
+    pending: AxisProjection | null;
+    lastPush: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    overlayChanged: (() => void) | null;
+    highlight: CubeHighlight;
+    apply: ((axes: AxisProjection) => void) | null;
+  }>({
+    pending: null,
+    lastPush: -Infinity,
+    timer: null,
+    overlayChanged: null,
+    highlight: { hovered: null, focusVisible: null },
+    apply: null
   });
 
   useEffect(() => {
@@ -377,103 +216,60 @@ export function OrientationWidget({
     };
   }, [finishPointerDrag]);
 
-  useEffect(() => {
-    orientationRef.current = (axes) => {
-      const sx = (p: Vec3) =>
-        p[0] * axes.x.x + p[1] * axes.y.x + p[2] * axes.z.x;
-      const sy = (p: Vec3) =>
-        p[0] * axes.x.y + p[1] * axes.y.y + p[2] * axes.z.y;
-      const depth = (p: Vec3) =>
-        p[0] * axes.x.z + p[1] * axes.y.z + p[2] * axes.z.z;
-      const px = (p: Vec3) => CX + SCALE * sx(p);
-      const py = (p: Vec3) => CY + SCALE * sy(p);
-      const outline = (points: readonly Vec3[]) =>
-        points.map((point) => `${px(point)},${py(point)}`).join(' ');
-      /**
-       * The surface the deeper cut takes off a corner, as it shows: walking
-       * the three edge crossings, a face that shows is crossed in a straight
-       * line (its share is the triangle between the line and the corner),
-       * and a face turned away is skipped by running out through the apex,
-       * pushed `CORNER_HIT_OVERHANG` past the silhouette. An edge between
-       * two turned-away faces points into the screen and adds nothing.
-       */
-      const cornerTargetOutline = (corner: CornerSpec) => {
-        const shows = corner.faceNormals.map(
-          (normal) => depth(normal) > FACING_EPSILON
-        );
-        const outX = sx(corner.normal);
-        const outY = sy(corner.normal);
-        const reach = Math.hypot(outX, outY);
-        const push = reach > 1e-6 ? CORNER_HIT_OVERHANG / reach : 0;
-        const apex = `${px(corner.corner) + outX * push},${
-          py(corner.corner) + outY * push
-        }`;
-        const points: string[] = [];
-        corner.hitPoints.forEach((point, edge) => {
-          const before = shows[(edge + 2) % 3];
-          const after = shows[edge];
-          if (before || after) {
-            points.push(`${px(point)},${py(point)}`);
-          }
-          if (!after && points.at(-1) !== apex) {
-            points.push(apex);
-          }
-        });
-        if (points.length > 1 && points[0] === points.at(-1)) {
-          points.pop();
-        }
-        return points.join(' ');
-      };
+  /** Brings the hit layer up to the camera now, if it is behind. */
+  const catchUp = useCallback(() => {
+    const state = hitLayer.current;
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    const axes = state.pending;
+    state.pending = null;
+    if (axes) state.apply?.(axes);
+  }, []);
 
-      FACES.forEach((face, index) => {
+  useEffect(() => {
+    const state = hitLayer.current;
+    const apply = (axes: AxisProjection) => {
+      const projection = projectCube(axes);
+      const outline = (points: readonly CubePoint[]) =>
+        points.map((point) => `${point.x},${point.y}`).join(' ');
+
+      FACES.forEach((_face, index) => {
         const polygon = faceRefs.current[index];
         const label = faceLabelRefs.current[index];
         if (!polygon || !label) {
           return;
         }
-        const facing = depth(face.normal);
-        if (facing < FACING_EPSILON) {
+        const face = projection.faces[index];
+        if (!face) {
           polygon.style.display = 'none';
           label.style.display = 'none';
           return;
         }
         polygon.style.display = '';
         label.style.display = '';
-        const { normal: n, u, v } = face;
-        polygon.setAttribute(
-          'points',
-          outline(
-            FACE_OUTLINE.map(([a, b]): Vec3 => [
-              n[0] + a * u[0] + b * v[0],
-              n[1] + a * u[1] + b * v[1],
-              n[2] + a * u[2] + b * v[2]
-            ])
-          )
-        );
+        polygon.setAttribute('points', outline(face.outline));
         // The cube is lit by facing angle alone: full-on facets are lightest.
-        shade(polygon, facing);
-        // An orthographic projection of a planar face is exactly a 2D affine
-        // map, so the label lies on the face via a single matrix: text-right
-        // along u, text-up along v (negated — SVG y grows downward).
-        label.setAttribute(
-          'transform',
-          `matrix(${sx(u)}, ${sy(u)}, ${-sx(v)}, ${-sy(v)}, ${px(n)}, ${py(n)})`
-        );
-        const action = facing > HEAD_ON ? face.opposite : face.view;
-        if (faceActions.current[index] !== action) {
-          faceActions.current[index] = action;
-          polygon.setAttribute('aria-label', `${VIEW_LABELS[action]} view`);
+        shade(polygon, face.facing);
+        label.setAttribute('transform', `matrix(${face.label.join(', ')})`);
+        if (faceActions.current[index] !== face.action) {
+          faceActions.current[index] = face.action;
+          polygon.setAttribute(
+            'aria-label',
+            `${VIEW_LABELS[face.action]} view`
+          );
         }
       });
 
-      CORNERS.forEach((corner, index) => {
+      CORNERS.forEach((_corner, index) => {
         const polygon = cornerRefs.current[index];
         const hit = cornerHitRefs.current[index];
         if (!polygon || !hit) {
           return;
         }
-        const facing = depth(corner.normal);
-        if (facing < FACING_EPSILON) {
+        const corner = projection.corners[index];
+        if (!corner) {
           polygon.style.display = 'none';
           // The target hides with its facet: an invisible triangle over a
           // corner that has turned away would swallow clicks meant for the
@@ -483,12 +279,12 @@ export function OrientationWidget({
         }
         polygon.style.display = '';
         hit.style.display = '';
-        polygon.setAttribute('points', outline(corner.points));
-        shade(polygon, facing);
-        hit.setAttribute('points', cornerTargetOutline(corner));
+        polygon.setAttribute('points', outline(corner.outline));
+        shade(polygon, corner.facing);
+        hit.setAttribute('points', outline(corner.target));
       });
 
-      for (const key of ['x', 'y', 'z'] as const) {
+      for (const key of AXIS_KEYS) {
         const group = armGroupRefs[key].current;
         const line = armLineRefs[key].current;
         const label = armLabelRefs[key].current;
@@ -497,45 +293,108 @@ export function OrientationWidget({
         if (!group || !line || !label || !under || !over) {
           continue;
         }
-        const [faceA, faceB] = ARM_FACES[key];
-        const onSurface =
-          depth(faceA) > FACING_EPSILON || depth(faceB) > FACING_EPSILON;
-        if (armOnSurface.current[key] !== onSurface) {
-          armOnSurface.current[key] = onSurface;
-          (onSurface ? over : under).appendChild(group);
+        const arm = projection.arms[key];
+        if (armOnSurface.current[key] !== arm.onSurface) {
+          armOnSurface.current[key] = arm.onSurface;
+          (arm.onSurface ? over : under).appendChild(group);
         }
-        const axis = AXIS_VECTORS[key];
-        const tip: Vec3 = [
-          TRIAD_ORIGIN[0] + axis[0] * ARM_TO,
-          TRIAD_ORIGIN[1] + axis[1] * ARM_TO,
-          TRIAD_ORIGIN[2] + axis[2] * ARM_TO
-        ];
-        const letter: Vec3 = [
-          TRIAD_ORIGIN[0] + axis[0] * ARM_LABEL_AT,
-          TRIAD_ORIGIN[1] + axis[1] * ARM_LABEL_AT,
-          TRIAD_ORIGIN[2] + axis[2] * ARM_LABEL_AT
-        ];
-        line.setAttribute('x1', String(px(TRIAD_ORIGIN)));
-        line.setAttribute('y1', String(py(TRIAD_ORIGIN)));
-        line.setAttribute('x2', String(px(tip)));
-        line.setAttribute('y2', String(py(tip)));
-        // +3 re-centers the letter vertically: text-anchor handles x, but
-        // SVG has no dominant-baseline shorthand old enough to trust here.
-        label.setAttribute('x', String(px(letter)));
-        label.setAttribute('y', String(py(letter) + 3));
-        // An axis pointing at the camera collapses its arm to a dot on the
-        // corner; fade it out rather than leave a letter floating there.
-        const dir = axes[key];
-        const planar = Math.hypot(dir.x, dir.y);
-        const opacity = Math.min(Math.max((planar - 0.3) / 0.25, 0), 1);
-        line.setAttribute('opacity', String(opacity));
-        label.setAttribute('opacity', String(opacity));
+        line.setAttribute('x1', String(arm.from.x));
+        line.setAttribute('y1', String(arm.from.y));
+        line.setAttribute('x2', String(arm.to.x));
+        line.setAttribute('y2', String(arm.to.y));
+        label.setAttribute('x', String(arm.letter.x));
+        label.setAttribute('y', String(arm.letter.y));
+        line.setAttribute('opacity', String(arm.opacity));
+        label.setAttribute('opacity', String(arm.opacity));
       }
     };
-    return () => {
-      orientationRef.current = null;
+    state.apply = apply;
+
+    const link: OrientationLink = {
+      update(axes) {
+        if (!state.overlayChanged) {
+          // The SVG is what you see: it follows every frame.
+          apply(axes);
+          return;
+        }
+        // Painted by the viewer: the first push after a rest lands at once,
+        // so a single programmatic turn is never late, and a stream of them
+        // waits for the camera to settle.
+        const now = performance.now();
+        const resting = now - state.lastPush > HIT_LAYER_SETTLE_MS;
+        state.lastPush = now;
+        state.pending = axes;
+        if (resting && state.timer === null) {
+          catchUp();
+          return;
+        }
+        if (state.timer !== null) clearTimeout(state.timer);
+        state.timer = setTimeout(catchUp, HIT_LAYER_SETTLE_MS);
+      },
+      get element() {
+        return svgRef.current;
+      },
+      get highlight() {
+        return state.highlight;
+      },
+      attachOverlay(onChange) {
+        const svg = svgRef.current;
+        state.overlayChanged = onChange;
+        if (svg) svg.dataset.overlay = 'viewer';
+        // The overlay draws over the SVG's box, so anything that moves the
+        // box without resizing the canvas has to ask for a frame: the docks
+        // write their widths onto an ancestor's style, the inspector and the
+        // column layout are classes, and the rail stack grows with its rows.
+        const ancestors = new MutationObserver(onChange);
+        for (
+          let node = svg?.parentElement ?? null;
+          node && node !== document.documentElement;
+          node = node.parentElement
+        ) {
+          ancestors.observe(node, {
+            attributes: true,
+            attributeFilter: ['class', 'style']
+          });
+        }
+        const resize =
+          typeof ResizeObserver === 'undefined'
+            ? null
+            : new ResizeObserver(() => onChange());
+        if (svg?.parentElement) resize?.observe(svg.parentElement);
+        return () => {
+          ancestors.disconnect();
+          resize?.disconnect();
+          if (state.overlayChanged === onChange) {
+            state.overlayChanged = null;
+            catchUp();
+            if (svg) delete svg.dataset.overlay;
+          }
+        };
+      }
     };
-  }, []);
+    orientationRef.current = link;
+    return () => {
+      if (state.timer !== null) clearTimeout(state.timer);
+      state.timer = null;
+      state.pending = null;
+      state.apply = null;
+      if (orientationRef.current === link) orientationRef.current = null;
+    };
+  }, [catchUp]);
+
+  /** Tells the viewer which facet to light, when that changes. */
+  function setHighlight(next: Partial<CubeHighlight>) {
+    const state = hitLayer.current;
+    const merged = { ...state.highlight, ...next };
+    if (
+      sameFacet(merged.hovered, state.highlight.hovered) &&
+      sameFacet(merged.focusVisible, state.highlight.focusVisible)
+    ) {
+      return;
+    }
+    state.highlight = merged;
+    state.overlayChanged?.();
+  }
 
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
     if (event.button !== 0 || dragRef.current) {
@@ -567,7 +426,13 @@ export function OrientationWidget({
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
     const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
+    if (!drag) {
+      // A hand reaching for the cube while it still turns (a view glide just
+      // started by a click) finds the facets where they are drawn.
+      catchUp();
+      return;
+    }
+    if (drag.pointerId !== event.pointerId) {
       return;
     }
     if (
@@ -610,11 +475,12 @@ export function OrientationWidget({
           children are presentational, which hid the face and corner buttons
           inside it from some screen readers. */}
       <svg
+        ref={svgRef}
         role="group"
         className="orientation-cube"
-        viewBox={`0 0 ${SIZE} ${SIZE}`}
-        width={SIZE}
-        height={SIZE}
+        viewBox={`0 0 ${CUBE_SIZE} ${CUBE_SIZE}`}
+        width={CUBE_SIZE}
+        height={CUBE_SIZE}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={(event) => finishPointerDrag(event.pointerId, false, true)}
@@ -624,19 +490,31 @@ export function OrientationWidget({
         onLostPointerCapture={(event) =>
           finishPointerDrag(event.pointerId, true, false)
         }
+        onPointerOver={(event) =>
+          setHighlight({ hovered: facetOf(event.target) })
+        }
+        onPointerLeave={() => setHighlight({ hovered: null })}
+        onFocus={(event) =>
+          setHighlight({
+            focusVisible: showsFocusRing(event.target)
+              ? facetOf(event.target)
+              : null
+          })
+        }
+        onBlur={() => setHighlight({ focusVisible: null })}
       >
         <title>Drag to rotate the view</title>
         {/* Occluded triad arms live under the opaque facets, which is what
             clips them to the cube's silhouette: only overhang shows. */}
         <g className="orientation-triad" ref={underLayerRef}>
-          {(['x', 'y', 'z'] as const).map((key) => (
+          {AXIS_KEYS.map((key) => (
             <g key={key} ref={armGroupRefs[key]}>
               <line
                 ref={armLineRefs[key]}
-                x1={CX}
-                y1={CY}
-                x2={CX}
-                y2={CY}
+                x1={CUBE_SIZE / 2}
+                y1={CUBE_SIZE / 2}
+                x2={CUBE_SIZE / 2}
+                y2={CUBE_SIZE / 2}
                 stroke={AXIS_COLORS[key]}
                 strokeWidth="2.2"
                 strokeLinecap="round"
@@ -644,8 +522,8 @@ export function OrientationWidget({
               <text
                 ref={armLabelRefs[key]}
                 className="orientation-axis-label"
-                x={CX}
-                y={CY}
+                x={CUBE_SIZE / 2}
+                y={CUBE_SIZE / 2}
                 fill={AXIS_COLORS[key]}
                 aria-hidden="true"
               >
@@ -661,6 +539,7 @@ export function OrientationWidget({
                 faceRefs.current[index] = element;
               }}
               className="cube-face"
+              data-facet={`face:${index}`}
               style={{ display: 'none' }}
               role="button"
               tabIndex={0}
@@ -698,6 +577,7 @@ export function OrientationWidget({
           <g
             className="cube-corner-target"
             key={corner.label}
+            data-facet={`corner:${index}`}
             onClick={() => {
               selectFacet({ corner: corner.corner });
             }}

@@ -37,7 +37,6 @@ import {
   type OffsetHandleTarget
 } from './ModelViewer';
 import type {
-  AxisProjection,
   ExactSectionRegionDisplay,
   MovePreview,
   MoveSnap,
@@ -60,6 +59,7 @@ import {
   type ViewportGeometry
 } from '../lib/sectionOutline';
 import { OrientationWidget } from './OrientationWidget';
+import type { OrientationLink } from './viewer/orientationCube';
 import {
   ViewportScaleIndicator,
   type ViewportScaleSink,
@@ -223,7 +223,7 @@ interface ViewerShellProps {
    */
   onBodiesDrawnElsewhere?(bodyIds: string[]): void;
   onWheelDeviceLearned?(device: WheelDevice): void;
-  orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  orientationRef: MutableRefObject<OrientationLink | null>;
   selectionFilter: SelectionFilter;
   onBoxSelect(bodyIds: string[]): void;
   /** See `ModelViewerProps.onBoxSelectTopology`. */
