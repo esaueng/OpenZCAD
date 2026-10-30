@@ -27,8 +27,8 @@ WebAssembly.Instance = class extends Instance {
       if (value instanceof WebAssembly.Memory) memories.push(value);
   }
 };
-const { BrepKernel } = require(process.argv[1]);
-const kernel = new BrepKernel();
+const { RemusKernel } = require(process.argv[1]);
+const kernel = new RemusKernel();
 const solid = kernel.makeBox(2, 3, 4);
 const mesh = kernel.tessellateSolidGroupedBinary(solid, 0.06);
 const positions = mesh.takePositions();

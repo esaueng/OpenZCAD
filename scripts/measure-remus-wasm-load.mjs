@@ -168,7 +168,7 @@ export function resolvePackageArtifact(packageDirectory) {
 }
 
 /**
- * The wasm-bindgen glue that drives `__wbindgen_start` and the `BrepKernel`
+ * The wasm-bindgen glue that drives `__wbindgen_start` and the `RemusKernel`
  * constructor. The production bundle inlines it into a worker chunk, so the
  * harness takes it from the package and refuses a package whose WASM is not
  * byte-identical to the measured asset: glue and module must match.
@@ -287,10 +287,14 @@ const HARNESS_PAGE =
  * helper fetches the asset and calls `WebAssembly.instantiateStreaming` (the
  * path that compiles while downloading and that Chromium's compiled-module
  * cache serves), wasm-bindgen's entry runs `__wbindgen_start`, and the
- * adapter constructs the first `BrepKernel`. The glue module is imported
+ * adapter constructs the first `RemusKernel`. The glue module is imported
  * before the clock starts; it ships in a JavaScript chunk with its own budget.
  */
 const HARNESS_MODULE = `import * as glue from './${GLUE_FILE}';
+
+// A baseline package from before remus-wasm 2026.1.87 exports the class only
+// under its old name, so a pin comparison across the rename still measures it.
+const Kernel = glue.RemusKernel ?? glue.BrepKernel;
 
 export async function measureKernelReady(url) {
   performance.clearResourceTimings();
@@ -311,7 +315,7 @@ export async function measureKernelReady(url) {
   glue.__wbg_set_wasm(instance.exports);
   instance.exports.__wbindgen_start();
   const startedMs = performance.now() - start;
-  const kernel = new glue.BrepKernel();
+  const kernel = new Kernel();
   const readyMs = performance.now() - start;
   kernel.free();
   const resource = performance.getEntriesByName(url).at(-1);
@@ -396,7 +400,7 @@ function timed(run) {
  * the samples in which it ran first.
  */
 export function measureFirstOperations(order) {
-  const kernel = new glue.BrepKernel();
+  const kernel = new Kernel();
   try {
     const runSolid = () => [
       timed(() => solidWorkload(kernel)),
@@ -1089,8 +1093,8 @@ export function markdownSection(report) {
     `### Kernel load time: ${profile} profile`,
     '',
     baseline
-      ? `\`remus-wasm\` ${baseline} (current pin) against ${candidate}, ${runs} alternating samples each, p50/p95 of kernel-ready (fetch, \`instantiateStreaming\`, \`__wbindgen_start\`, \`new BrepKernel()\`).`
-      : `\`remus-wasm\` ${candidate}, ${runs} samples, p50/p95 of kernel-ready (fetch, \`instantiateStreaming\`, \`__wbindgen_start\`, \`new BrepKernel()\`).`,
+      ? `\`remus-wasm\` ${baseline} (current pin) against ${candidate}, ${runs} alternating samples each, p50/p95 of kernel-ready (fetch, \`instantiateStreaming\`, \`__wbindgen_start\`, \`new RemusKernel()\`).`
+      : `\`remus-wasm\` ${candidate}, ${runs} samples, p50/p95 of kernel-ready (fetch, \`instantiateStreaming\`, \`__wbindgen_start\`, \`new RemusKernel()\`).`,
     ''
   ];
   const header = baseline
@@ -1383,12 +1387,12 @@ export async function runBenchmark(args) {
       network: profile.network,
       statistics: 'midpoint median; nearest-rank p95',
       kernelReady:
-        'fetch + WebAssembly.instantiateStreaming + __wbindgen_start + new BrepKernel(), the production worker path; glue imported before the clock starts',
+        'fetch + WebAssembly.instantiateStreaming + __wbindgen_start + new RemusKernel(), the production worker path; glue imported before the clock starts',
       kernelReadyCold:
         'fresh Chromium profile: empty HTTP cache, no compiled-module cache',
       kernelReadyWarm: `new document in the same profile after ${args.warmSettleMs} ms settle: HTTP cache hit, compiled-module cache when Chromium wrote one`,
       firstOperation: args.firstOperations
-        ? "after kernel-ready in the same document: a fresh BrepKernel runs makeBox + makeCylinder + cut + two-edge fillet + tessellateSolid + volume twice and a constrained GCS sketch build-and-solve twice, in an order that alternates every two samples; each workload's first-call statistics come only from samples where it ran first; first minus second call approximates lazy compilation plus first-touch"
+        ? "after kernel-ready in the same document: a fresh RemusKernel runs makeBox + makeCylinder + cut + two-edge fillet + tessellateSolid + volume twice and a constrained GCS sketch build-and-solve twice, in an order that alternates every two samples; each workload's first-call statistics come only from samples where it ran first; first minus second call approximates lazy compilation plus first-touch"
         : null,
       comparison: baseline
         ? 'baseline and candidate samples alternate, each in its own fresh profile and origin'
