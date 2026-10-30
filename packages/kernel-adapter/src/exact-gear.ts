@@ -1,6 +1,7 @@
 /**
- * M14 gear features: a new spur, helical or herringbone gear body from the kernel's gear
- * generator, or teeth cut along the whole length of a body's cylindrical face.
+ * M14 gear features: a new spur, helical, herringbone or straight bevel gear
+ * body from the kernel's gear generator, or teeth cut along the whole length
+ * of a body's cylindrical face.
  *
  * The kernel owns the gear: the involute, its certified flank fit, the
  * tooth-form checks and the boolean that cuts teeth into a body. This module
@@ -51,6 +52,19 @@ interface GearKernel {
     face: number,
     spec: string
   ): SolidOperationDetailedResult;
+}
+
+/** The bevel gear entry point, on kernels from the bevel release on. */
+interface BevelGearKernel {
+  makeBevelGearDetailed(spec: string): SolidOperationDetailedResult;
+}
+
+function bevelGearKernel(kernel: RemusKernel): BevelGearKernel {
+  const candidate = kernel as unknown as Partial<BevelGearKernel>;
+  if (typeof candidate.makeBevelGearDetailed !== 'function') {
+    throw new Error('This kernel build has no bevel gear generator.');
+  }
+  return candidate as BevelGearKernel;
 }
 
 function gearKernel(kernel: RemusKernel): GearKernel {
@@ -288,7 +302,9 @@ export function buildGearFeature(
           values.resolve(data.pitch, 'pitch'),
           document.units
         );
-  if (data.targetBodyId === undefined) {
+  if (data.gearType === 'bevel') {
+    buildBevelGearBody(ctx, feature, data, toothForm, module, values);
+  } else if (data.targetBodyId === undefined) {
     buildNewGearBody(ctx, feature, data, toothForm, helical, module, values);
   } else {
     buildGearTeethOnBody(
@@ -311,6 +327,74 @@ function withNumber(
   return value === undefined ? {} : { [key]: value };
 }
 
+/** The first cap's x direction: as stored, else perpendicular to the axis. */
+function gearXDirection(
+  data: FeatureDataOf<'gear'>,
+  axis: [number, number, number],
+  values: GearValues
+): [number, number, number] {
+  if (data.xDirection) {
+    return values.vector(data.xDirection, 'x direction');
+  }
+  const direction = defaultGearXDirection({
+    x: axis[0],
+    y: axis[1],
+    z: axis[2]
+  });
+  return [direction.x, direction.y, direction.z];
+}
+
+/**
+ * A straight bevel gear: its heel cap on `origin`, tapering along `axis`
+ * toward the pitch cone's apex. The bevel spec has no profile shift or root
+ * fillet; the command validation refuses those on a bevel gear.
+ */
+function buildBevelGearBody(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'gear'>,
+  toothForm: Record<string, number>,
+  module: number | undefined,
+  values: GearValues
+): void {
+  const { kernel, result } = ctx;
+  if (module === undefined || data.mateTeeth === undefined) {
+    throw new Error('A bevel gear needs a pitch and its mate’s tooth count.');
+  }
+  if (data.faceWidth === undefined || !data.origin || !data.axis) {
+    throw new Error('A new gear needs a face width, an origin and an axis.');
+  }
+  const { profileShift: _shift, rootFillet: _fillet, ...bevelForm } = toothForm;
+  const axis = values.vector(data.axis, 'axis');
+  const spec = {
+    module,
+    mateTeeth: Math.round(values.resolve(data.mateTeeth, 'mate teeth')),
+    faceWidth: values.resolve(data.faceWidth, 'face width'),
+    ...bevelForm,
+    ...withNumber(
+      'shaftAngle',
+      values.optional(data.shaftAngleDeg, 'shaft angle')
+    ),
+    origin: values.vector(data.origin, 'origin'),
+    axis,
+    xDirection: gearXDirection(data, axis, values),
+    ...withNumber(
+      'boreDiameter',
+      values.optional(data.boreDiameter, 'bore diameter')
+    )
+  };
+  const { solid, details } = unwrap(
+    bevelGearKernel(kernel).makeBevelGearDetailed(JSON.stringify(spec)),
+    'Bevel gear'
+  );
+  validateGeneratedSolid(kernel, solid, 'Bevel gear');
+  raiseGearWarnings(ctx, feature, details);
+  result.shapes.set(feature.bodyId!, {
+    solids: [solid],
+    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+  });
+}
+
 function buildNewGearBody(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -328,17 +412,7 @@ function buildNewGearBody(
     throw new Error('A new gear needs a face width, an origin and an axis.');
   }
   const axis = values.vector(data.axis, 'axis');
-  let xDirection: [number, number, number];
-  if (data.xDirection) {
-    xDirection = values.vector(data.xDirection, 'x direction');
-  } else {
-    const direction = defaultGearXDirection({
-      x: axis[0],
-      y: axis[1],
-      z: axis[2]
-    });
-    xDirection = [direction.x, direction.y, direction.z];
-  }
+  const xDirection = gearXDirection(data, axis, values);
   const spec = {
     kind: data.gearType,
     module,

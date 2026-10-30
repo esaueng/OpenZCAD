@@ -183,13 +183,20 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       );
       fields(
         data,
-        ['teeth', 'profileShift', 'addendum', 'dedendum', 'rootFillet'],
+        [
+          'teeth',
+          'mateTeeth',
+          'profileShift',
+          'addendum',
+          'dedendum',
+          'rootFillet'
+        ],
         rewrite,
         'number'
       );
       fields(
         data,
-        ['pressureAngleDeg', 'phaseDeg', 'helixAngleDeg'],
+        ['pressureAngleDeg', 'phaseDeg', 'helixAngleDeg', 'shaftAngleDeg'],
         rewrite,
         'angle'
       );

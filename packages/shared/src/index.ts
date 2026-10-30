@@ -182,7 +182,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v40 adds M14 gear features (`featureKind: 'gear'`). An older client has no
 // builder for the kind and would drop the gear body on rebuild, so it must
 // refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 40 as const;
+// v41 adds M14 straight bevel gears (`gearType: 'bevel'`). An older client
+// would send the kernel a gear kind it has no builder for, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 41 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -197,7 +199,7 @@ export type PlaneId = 'XY' | 'XZ' | 'YZ';
 export type CanonicalPlaneBasisRevision = 2;
 export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus';
 /** M14: which gear body a gear feature builds. */
-export type GearType = 'external' | 'internal' | 'rack';
+export type GearType = 'external' | 'internal' | 'rack' | 'bevel';
 /** M14: how a gear's `pitch` is read. */
 export type GearSizing = 'module' | 'circular-pitch' | 'diametral-pitch';
 /** M14: how teeth on a cylinder are sized against it. */
@@ -1790,7 +1792,7 @@ export type FeatureData =
       /**
        * M14 (schema v40): an involute spur, helical or herringbone gear,
        * internal (ring) gear or straight rack, built by the kernel's gear
-       * generator.
+       * generator; schema v41 adds straight bevel gears.
        *
        * Without `targetBodyId` the gear is a new body: its first cap is
        * centered on `origin`, it extrudes `faceWidth` along `axis`, and its
@@ -1851,11 +1853,22 @@ export type FeatureData =
        * angle above 0. Absent is a single helix.
        */
       herringbone?: boolean;
+      /**
+       * Bevel gears: the mating gear's tooth count, which with the shaft
+       * angle sets the pitch cone (`tan δ = sin Σ / (z₂/z₁ + cos Σ)`).
+       * Required on a bevel gear. A bevel gear's `pitch`, pressure angle,
+       * addendum and dedendum are heel (outer end) values, its `faceWidth`
+       * runs along the pitch cone, and its teeth taper from the first cap
+       * (the heel) toward the cone apex along `axis`.
+       */
+      mateTeeth?: ParamValue;
+      /** Bevel gears: angle between the two gears' axes, degrees; absent is 90. */
+      shaftAngleDeg?: ParamValue;
       /** New bodies: placement, see above. */
       origin?: ParametricVector3;
       axis?: ParametricVector3;
       xDirection?: ParametricVector3;
-      /** New external gears: concentric bore diameter. */
+      /** New external and bevel gears: concentric bore diameter. */
       boreDiameter?: ParamValue;
       /** New internal gears: outer rim diameter (required). */
       rimDiameter?: ParamValue;

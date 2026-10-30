@@ -90,7 +90,7 @@ describe('gear command validation', () => {
     );
     expect(feature?.kind === 'feature' && feature.featureKind).toBe('gear');
     // A gear needs the v40 schema; an older client must refuse it.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(40);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(40);
   });
 
   it('accepts a helical gear of either hand', () => {
@@ -109,6 +109,42 @@ describe('gear command validation', () => {
         .gearBody({ ...valid, helixAngleDeg: 30, herringbone: true })
         .validate(document)
     ).not.toThrow();
+  });
+
+  it('accepts a bevel gear, which needs the v41 schema', () => {
+    const bevel: GearInput = {
+      ...valid,
+      gearType: 'bevel',
+      mateTeeth: 40,
+      shaftAngleDeg: 70,
+      boreDiameter: 8
+    };
+    expect(() =>
+      commandFactories.gearBody(bevel).validate(document)
+    ).not.toThrow();
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(41);
+  });
+
+  it.each([
+    ['bevel without a mate', {}],
+    ['bevel with 3 teeth', { teeth: 3 }],
+    ['bevel mate with 3 teeth', { mateTeeth: 3 }],
+    ['fractional mate teeth', { mateTeeth: 40.5 }],
+    ['shaft angle of 0°', { shaftAngleDeg: 0 }],
+    ['shaft angle of 180°', { shaftAngleDeg: 180 }],
+    ['bevel profile shift', { profileShift: 0.2 }],
+    ['bevel root fillet', { rootFillet: 0.3 }],
+    ['helical bevel', { helixAngleDeg: 10 }],
+    ['bevel rim', { rimDiameter: 60 }],
+    ['bevel fit', { fit: 'module' as const }]
+  ])('refuses a %s', (label, overrides) => {
+    const bevel: GearInput = {
+      ...valid,
+      gearType: 'bevel',
+      ...(label === 'bevel without a mate' ? {} : { mateTeeth: 40 }),
+      ...overrides
+    };
+    expect(() => commandFactories.gearBody(bevel).validate(document)).toThrow();
   });
 
   it.each([
@@ -132,7 +168,9 @@ describe('gear command validation', () => {
       'herringbone rack',
       { gearType: 'rack' as const, helixAngleDeg: 10, herringbone: true }
     ],
-    ['fit on a new body', { fit: 'module' as const }]
+    ['fit on a new body', { fit: 'module' as const }],
+    ['mate teeth off a bevel gear', { mateTeeth: 40 }],
+    ['shaft angle off a bevel gear', { shaftAngleDeg: 90 }]
   ])('refuses %s', (_label, overrides) => {
     expect(() =>
       commandFactories.gearBody({ ...valid, ...overrides }).validate(document)
@@ -207,6 +245,72 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
     const helical = (await adapter.syncDocument(single.document))
       .bodyRepresentations[single.bodyId]!;
     expect(Math.abs(body.volume / helical.volume - 1)).toBeLessThan(1e-6);
+  });
+
+  it('builds a bevel gear tapering from its heel toward the cone apex', async () => {
+    const bevel = newGear({
+      gearType: 'bevel',
+      mateTeeth: 40,
+      faceWidth: 8,
+      boreDiameter: 10
+    });
+    const derived = await adapter.syncDocument(bevel.document);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.featureWarnings ?? []).toEqual([]);
+    const body = derived.bodyRepresentations[bevel.bodyId]!;
+    // tan δ = 1/2 for a right-angle 20:40 pair; outer cone distance
+    // A = 20 / sin δ, heel-plane tip radius A·cos δ·tan(δ + atan(2/A)).
+    const delta = Math.atan(0.5);
+    const outer = 20 / Math.sin(delta);
+    const tip =
+      outer * Math.cos(delta) * Math.tan(delta + Math.atan(2 / outer));
+    const box = body.bbox;
+    // Flat heel and toe caps: the axial extent is the face width's
+    // projection onto the axis, exactly.
+    expect(box.min.z).toBeCloseTo(0, 9);
+    expect(box.max.z).toBeCloseTo(8 * Math.cos(delta), 9);
+    // The kernel's box over NURBS flanks is conservative.
+    expect(Math.abs(box.max.x - box.min.x - 2 * tip)).toBeLessThan(0.05);
+    // Every section is the heel outline scaled toward the apex, so the
+    // volume lies between the tapered root and tip cones' frusta, less the
+    // bore.
+    const apex = outer * Math.cos(delta);
+    const scale = 1 - 8 / outer;
+    const frustum = (radius: number) =>
+      ((Math.PI * radius ** 2 * apex) / 3) * (1 - scale ** 3);
+    const root = apex * Math.tan(delta - Math.atan(2.5 / outer));
+    const bore = Math.PI * 25 * 8 * Math.cos(delta);
+    expect(body.volume).toBeGreaterThan(frustum(root) - bore);
+    expect(body.volume).toBeLessThan(frustum(tip) - bore);
+    const names = body.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    for (const name of [
+      'gear.face.cap.start',
+      'gear.face.cap.end',
+      'gear.face.bore',
+      'gear.face.tooth[0].flank.plus',
+      'gear.face.tooth[19].tip',
+      'gear.face.root[0]'
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(names).not.toContain(undefined);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('refuses a bevel gear whose face width reaches the apex', async () => {
+    const long = await adapter.syncDocument(
+      newGear({ gearType: 'bevel', mateTeeth: 40, faceWidth: 60 }).document
+    );
+    const refusal = long.featureWarnings!.find(
+      (warning) => warning.kind === 'build-failed'
+    );
+    expect(refusal?.kernelRefusal).toMatchObject({
+      family: 'gear',
+      code: 'gear:invalid-parameter'
+    });
+    expect(refusal?.message).toMatch(/apex/);
   });
 
   it('reads a diametral pitch per inch in an inch document', async () => {
