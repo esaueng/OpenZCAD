@@ -190,6 +190,16 @@ import {
   saveProjectMeasurements
 } from './projectMeasurements';
 import {
+  isLibraryFolderStorageReady,
+  LIBRARY_FOLDERS_ROUTE,
+  LibraryFolderRequestError,
+  LibraryFolderRevisionConflictError,
+  loadLibraryFolderSet,
+  MAX_LIBRARY_FOLDER_RECORD_CHARS,
+  parseSaveLibraryFolderSetRequest,
+  saveLibraryFolderSet
+} from './libraryFolderSets';
+import {
   assistantConsentRoute,
   E2EE_DEFAULT_ON_CODE,
   E2EE_MIGRATION_CODES,
@@ -1680,6 +1690,45 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(updated);
   }
 
+  if (pathname === LIBRARY_FOLDERS_ROUTE) {
+    if (!(await isLibraryFolderStorageReady(env.DB))) {
+      return json(
+        {
+          error:
+            'Cloud folder sync is unavailable. Folders remain saved on this device.',
+          code: 'LIBRARY_FOLDERS_UNAVAILABLE'
+        },
+        503
+      );
+    }
+    if (request.method === 'GET') {
+      return json(await loadLibraryFolderSet(env.DB!, userId));
+    }
+    if (request.method === 'PUT') {
+      const input = parseSaveLibraryFolderSetRequest(
+        await readJsonBody(request, MAX_LIBRARY_FOLDER_RECORD_CHARS * 4 + 1024)
+      );
+      // Folder names are the owner's words: an account whose projects must
+      // be encrypted (decision D2, slice 8-1) stores them sealed only.
+      if (
+        input.format === 1 &&
+        (isE2eeDefaultOn(env, session.email ?? undefined) ||
+          (isE2eeProjectsEnabled(env, session.email ?? undefined) &&
+            (await accountRequiresEncryptedProjects(env.DB, userId))))
+      ) {
+        return json(
+          {
+            error:
+              'This account encrypts its library. Update OpenZCAD to sync folders.',
+            code: 'LIBRARY_FOLDERS_ENCRYPTION_REQUIRED'
+          },
+          409
+        );
+      }
+      return json(await saveLibraryFolderSet(env.DB!, userId, input));
+    }
+  }
+
   if (pathname === '/api/settings/assistant-credential') {
     if (request.method === 'PUT') {
       const token = parseAssistantCredential(await readJsonBody(request));
@@ -2761,6 +2810,19 @@ async function dispatchApiRequest(
     }
     if (error instanceof ProjectStorageUploadError) {
       return json({ error: error.message, code: 'STORAGE_ASSET_INVALID' }, 400);
+    }
+    if (error instanceof LibraryFolderRequestError) {
+      return json({ error: error.message, code: error.code }, error.status);
+    }
+    if (error instanceof LibraryFolderRevisionConflictError) {
+      return json(
+        {
+          error: error.message,
+          code: 'LIBRARY_FOLDERS_REVISION_CONFLICT',
+          current: error.current
+        },
+        409
+      );
     }
     if (error instanceof ProjectMeasurementRequestError) {
       return json({ error: error.message }, error.status);

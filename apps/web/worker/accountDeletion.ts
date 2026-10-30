@@ -30,6 +30,7 @@ import type {
 } from '@openzcad/cloudflare-adapters';
 import type { PersistenceService } from '@openzcad/persistence';
 import { authEmailRateLimitBucket } from './auth';
+import { libraryFolderErasureStatements } from './libraryFolderSets';
 import {
   isAccountErasureReady,
   isProjectObjectStorageReady
@@ -487,6 +488,9 @@ export async function deleteAccountData(
           ...(e2eeTables.length > 0
             ? await contactErasureStatements(db, session.userId)
             : []),
+          // Library folders are profile data (migration 0045), when the
+          // table exists.
+          ...(await libraryFolderErasureStatements(db, session.userId)),
           // Assistant consents (migration 0041), when the table exists.
           ...(await assistantConsentErasureStatements(db, session.userId)),
           // Encrypted invitations this account received, its KeyPackages
