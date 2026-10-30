@@ -51,6 +51,26 @@ const renderedWorldBounds = (page: Page) =>
       })
   );
 
+const expectNoLegacyOffsetOverlay = async (page: Page) => {
+  const names = await page.locator('.viewer-host canvas').evaluate(
+    (element) =>
+      new Promise<string[]>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              resolve: (state: { offsetWorldObjects: string[] }) =>
+                resolve(state.offsetWorldObjects)
+            }
+          })
+        );
+      })
+  );
+  expect(names).toContain('offset-change-arrow');
+  expect(names).not.toContain('offset-change-band');
+  expect(names).not.toContain('offset-change-walls');
+  expect(names).not.toContain('offset-change-cut-outline');
+};
+
 /**
  * Chamfers keep this fixture on the exact-preview path. Plain and rounded
  * cylinders use a viewport preview and rebuild only on release; their drag
@@ -562,6 +582,20 @@ test('keeps generic face geometry unchanged while the exact offset rebuild is pe
   // waiting: that moves unrelated geometry and disagrees with the kernel.
   await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
   expect(await renderedWorldBounds(page)).toEqual(before);
+  await expectNoLegacyOffsetOverlay(page);
+  // Reverse the drag while the worker is still pending: the removed-material
+  // overlay used to reappear here in coral as well as green when pulling.
+  await page.mouse.move(
+    start.x - handle.dx * handle.pixelsPerUnit * 2,
+    start.y - handle.dy * handle.pixelsPerUnit * 2,
+    { steps: 1 }
+  );
+  await expectNoLegacyOffsetOverlay(page);
+  await test.info().attach('face-offset-worker-pending', {
+    body: await page.screenshot(),
+    contentType: 'image/png'
+  });
+
   await expect(
     page.getByText('Preview · exact on release', { exact: true })
   ).not.toBeVisible();
