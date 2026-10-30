@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   toBodyId,
   toFeatureId,
@@ -16,6 +17,7 @@ import {
 } from '../pick/edges';
 import { SELECTION_SEMANTICS } from './semantics';
 import { createBodyEdgeOverlay } from './edgeOverlay';
+import { FAT_LINE_DEPTH_BIAS_RATIO } from './scene';
 import { applyDisplayMode } from '../scene/objects';
 
 const BODY_ID = toBodyId('body-1');
@@ -646,5 +648,64 @@ describe('BodyEdgeOverlay allocation', () => {
     overlay.setSelected([selection('edge-0')]);
     expect(instanceBufferFloats(selected)).toBe(grown);
     expect(instanceCountOf(selected)).toBe(7);
+  });
+});
+
+describe('edge overlay depth and x-ray rendering', () => {
+  function fatLines(overlay: THREE.Object3D) {
+    const lines: THREE.Mesh<THREE.BufferGeometry, LineMaterial>[] = [];
+    overlay.traverse((child) => {
+      if ((child as THREE.Mesh).material instanceof LineMaterial) {
+        lines.push(child as THREE.Mesh<THREE.BufferGeometry, LineMaterial>);
+      }
+    });
+    return lines;
+  }
+
+  it('pulls every edge line toward the camera by a fraction of the body extent', () => {
+    // An edge and its neighbouring faces are tessellated separately, so on a
+    // curved neighbour the edge's chords sit just behind the face's. Without
+    // the bias the depth test hid stretches of a selected rim; the fixture's
+    // points span 3 units, the bias follows that span.
+    const overlay = makeOverlay();
+    const lines = fatLines(overlay);
+
+    expect(lines).toHaveLength(7);
+    for (const line of lines) {
+      expect(line.material.uniforms.depthBias?.value, line.name).toBeCloseTo(
+        3 * FAT_LINE_DEPTH_BIAS_RATIO
+      );
+    }
+  });
+
+  it('draws the x-ray twins once per pixel and leaves the visible tiers alone', () => {
+    // Translucent segments overlap at every joint; blended twice there, a
+    // hidden edge read as a row of beads. Alpha to coverage at a third of
+    // full opacity left only those beads.
+    const lines = fatLines(makeOverlay());
+    const hidden = lines.filter((line) => line.name.endsWith('-hidden'));
+    const visible = lines.filter((line) => !line.name.endsWith('-hidden'));
+
+    expect(hidden.map((line) => line.name).sort()).toEqual([
+      'body-edge-hover-hidden',
+      'body-edge-selected-hidden',
+      'body-face-boundary-selected-hidden'
+    ]);
+    for (const line of hidden) {
+      expect(line.material.stencilWrite, line.name).toBe(true);
+      expect(line.material.stencilFunc, line.name).toBe(
+        THREE.NotEqualStencilFunc
+      );
+      expect(line.material.stencilZPass, line.name).toBe(
+        THREE.ReplaceStencilOp
+      );
+      // Bit 1 is the opaque bodies' coverage; the twins must not touch it.
+      expect(line.material.stencilWriteMask & 1, line.name).toBe(0);
+      expect(line.material.alphaToCoverage, line.name).toBe(false);
+    }
+    for (const line of visible) {
+      expect(line.material.stencilWrite, line.name).toBe(false);
+      expect(line.material.alphaToCoverage, line.name).toBe(true);
+    }
   });
 });

@@ -22,6 +22,8 @@ import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
 import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
+  drawFatLineOncePerPixel,
+  fatLineDepthBiasForExtent,
   type FatLineResolution,
   VIEWPORT_RENDER_ORDER
 } from './scene';
@@ -120,6 +122,21 @@ function replacePositions(line: LineSegments2, positions: readonly number[]) {
   line.geometry.computeBoundingBox();
   line.geometry.computeBoundingSphere();
   line.visible = positions.length > 0;
+}
+
+/** The largest axis span of every sampled edge point. */
+function edgePointExtent(edges: readonly { points: readonly number[] }[]) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const edge of edges) {
+    for (let index = 0; index < edge.points.length; index += 1) {
+      const axis = index % 3;
+      const value = edge.points[index]!;
+      if (value < min[axis]!) min[axis] = value;
+      if (value > max[axis]!) max[axis] = value;
+    }
+  }
+  return Math.max(0, ...[0, 1, 2].map((axis) => max[axis]! - min[axis]!));
 }
 
 function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>) {
@@ -284,6 +301,8 @@ export class BodyEdgeOverlay extends THREE.Group {
   /** The X-ray display: translucent faces, every edge drawn. */
   private xrayView = false;
   private bodySelected = false;
+  /** See `fatLineDepthBiasForExtent`: these lines all lie on the body. */
+  private readonly depthBias: number;
 
   constructor(
     body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'>,
@@ -294,6 +313,9 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.topology = body.topology;
     this.name = 'body-edge-overlay';
     this.userData.bodyId = this.bodyId;
+    this.depthBias = fatLineDepthBiasForExtent(
+      edgePointExtent(body.topology?.edges ?? [])
+    );
 
     const idlePositions: number[] = [];
     const ownership: EdgeSegmentOwner[] = [];
@@ -339,7 +361,8 @@ export class BodyEdgeOverlay extends THREE.Group {
         color: EDGE_IDLE_COLOR,
         linewidth: EDGE_IDLE_WIDTH,
         opacity: EDGE_IDLE_OPACITY,
-        resolution
+        resolution,
+        depthBias: this.depthBias
       }
     );
     this.idleEdges.name = 'body-edge';
@@ -415,7 +438,8 @@ export class BodyEdgeOverlay extends THREE.Group {
             color: EDGE_WIREFRAME_COLOR,
             linewidth: EDGE_IDLE_WIDTH,
             opacity: 1,
-            resolution
+            resolution,
+            depthBias: this.depthBias
           })
         : null;
     if (this.seamEdges) {
@@ -474,10 +498,13 @@ export class BodyEdgeOverlay extends THREE.Group {
       color,
       linewidth,
       opacity: options.opacity ?? 1,
-      resolution
+      resolution,
+      depthBias: this.depthBias
     });
     if (options.depthFunc !== undefined) {
       overlay.material.depthFunc = options.depthFunc;
+      // The x-ray twin is the translucent one; see drawFatLineOncePerPixel.
+      drawFatLineOncePerPixel(overlay.material);
     }
     // The buffer is allocated at full capacity so later updates never
     // reallocate, but an overlay starts empty. Without this the batch reports
