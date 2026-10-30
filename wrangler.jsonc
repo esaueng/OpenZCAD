@@ -49,6 +49,9 @@
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
     "PROJECT_PERSONAL_SYNC_ENABLED": "true",
+    // Library folders sync through the account (migration 0045). Until that
+    // migration is applied the route answers 503 and folders stay per device.
+    "LIBRARY_FOLDER_SYNC_ENABLED": "true",
     // Every authenticated beta account may set up encryption and opt in.
     // E2EE_CANARY_EMAILS remains an optional fallback if global keys close.
     "E2EE_KEYS_ENABLED": "true",
