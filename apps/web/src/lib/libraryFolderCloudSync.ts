@@ -15,6 +15,7 @@ import {
   type FolderSet
 } from './libraryFolderSync';
 import { watchLibraryFreshness } from './libraryRefresh';
+import { unlockedAccount } from './e2ee/unlockedKeys';
 
 /**
  * Keeps the library's folders in step with the account copy
@@ -29,9 +30,11 @@ import { watchLibraryFreshness } from './libraryRefresh';
  * back against the revision it read, and shows the merged folders. A write
  * another device beat is merged again and retried.
  *
- * Only the plaintext record (format 1) is exchanged. An account whose
- * projects are encrypted keeps its folders on each device until the sealed
- * format exists; this module never sends their names.
+ * How the record is written is the codec's business. An account whose
+ * projects are encrypted seals its folders under the account key (format 2,
+ * `e2ee/sealedLibraryFolders.ts`, ADR-024 amendment 2026-10-30) and never
+ * sends their names in plaintext; any other account stores the plaintext
+ * set (format 1).
  */
 export interface LibraryFolderSnapshot {
   /** 0 while the account has never stored folders. */
@@ -43,7 +46,7 @@ export interface LibraryFolderSnapshot {
 
 export interface SaveLibraryFolderRequest {
   expectedRevision: number;
-  format: 1;
+  format: 1 | 2;
   record: string;
 }
 
@@ -56,6 +59,51 @@ interface SyncRecord {
 export type FolderSaveResult =
   { saved: LibraryFolderSnapshot } | { conflict: LibraryFolderSnapshot };
 
+/**
+ * What a codec makes of the account copy:
+ * - `set`: the folders it holds;
+ * - `replace`: a copy this device should overwrite with its own folders: one
+ *   sealed under an account key this device has replaced, or one older than
+ *   a copy this device already opened (a rollback). Every device keeps its
+ *   whole set, so the overwrite loses nothing the next merge cannot restore;
+ * - `unsupported`: a copy this device must leave alone (a newer client's
+ *   format, or one that fails authentication).
+ */
+export type RemoteFolders =
+  | { kind: 'set'; set: FolderSet }
+  | { kind: 'replace' }
+  | { kind: 'unsupported' };
+
+export interface FolderRecordCodec {
+  readonly format: 1 | 2;
+  decode(snapshot: LibraryFolderSnapshot): Promise<RemoteFolders>;
+  /** `commit` runs once the account has accepted the record. */
+  encode(set: FolderSet): Promise<{ record: string; commit(): void }>;
+}
+
+/** The plaintext record: the canonical folder-set JSON. */
+export function decodePlaintextFolders(record: string | null): RemoteFolders {
+  if (record === null) return { kind: 'unsupported' };
+  try {
+    const set = parseFolderSet(JSON.parse(record));
+    return set ? { kind: 'set', set } : { kind: 'unsupported' };
+  } catch {
+    return { kind: 'unsupported' };
+  }
+}
+
+export const plaintextFolderCodec: FolderRecordCodec = {
+  format: 1,
+  decode: (snapshot) =>
+    Promise.resolve(
+      snapshot.format === 1
+        ? decodePlaintextFolders(snapshot.record)
+        : { kind: 'unsupported' }
+    ),
+  encode: (set) =>
+    Promise.resolve({ record: canonicalFolderJson(set), commit: () => {} })
+};
+
 export interface FolderSyncHost {
   readDevice(): LibraryFolders;
   writeDevice(state: LibraryFolders): void;
@@ -63,6 +111,12 @@ export interface FolderSyncHost {
   writeRecord(record: SyncRecord): void;
   load(): Promise<LibraryFolderSnapshot>;
   save(request: SaveLibraryFolderRequest): Promise<FolderSaveResult>;
+  /**
+   * How this device reads and writes the account copy, chosen after the
+   * first read so a deployment without folder sync costs one request. Null
+   * while it cannot sync yet (an encrypted account whose keys are locked).
+   */
+  codec(): Promise<FolderRecordCodec | null>;
   now(): number;
 }
 
@@ -71,12 +125,18 @@ export interface FolderSyncHost {
  * - `unsupported`: the account copy is one this device cannot read (sealed,
  *   or from a newer client); nothing was written.
  * - `contended`: other devices kept writing first; the next sync retries.
+ * - `waiting`: this device cannot sync yet (locked keys); nothing changed.
  */
-export type FolderSyncOutcome = 'synced' | 'unsupported' | 'contended';
+export type FolderSyncOutcome =
+  'synced' | 'unsupported' | 'contended' | 'waiting';
 
 const MAX_ATTEMPTS = 3;
 
 /** JSON with sorted keys, so equal sets compare equal however they were built. */
+export function canonicalFolderJson(value: unknown): string {
+  return canonical(value);
+}
+
 function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, entry: unknown) =>
     entry && typeof entry === 'object' && !Array.isArray(entry)
@@ -113,37 +173,40 @@ export async function syncLibraryFolders(
   }
 
   let remote = await host.load();
+  const codec = await host.codec();
+  if (!codec) return 'waiting';
   for (let attempt = 1; ; attempt += 1) {
     let remoteSet: FolderSet | null = null;
     if (remote.revision > 0) {
-      if (remote.format !== 1 || remote.record === null) return 'unsupported';
-      try {
-        remoteSet = parseFolderSet(JSON.parse(remote.record));
-      } catch {
-        remoteSet = null;
-      }
+      const decoded = await codec.decode(remote);
       // Never overwrite a copy this client cannot read.
-      if (!remoteSet) return 'unsupported';
+      if (decoded.kind === 'unsupported') return 'unsupported';
+      if (decoded.kind === 'set') remoteSet = decoded.set;
     }
     const merged = pruneFolderSet(
       remoteSet ? mergeFolderSets(local, remoteSet) : local,
       host.now()
     );
     let revision = remote.revision;
+    // A readable copy in another format (plaintext from before the account
+    // encrypted) is rewritten even when its folders already agree.
     const unchanged = remoteSet
-      ? canonical(merged) === canonical(remoteSet)
-      : isEmpty(merged);
+      ? remote.format === codec.format &&
+        canonical(merged) === canonical(remoteSet)
+      : remote.revision === 0 && isEmpty(merged);
     if (!unchanged) {
+      const encoded = await codec.encode(merged);
       const result = await host.save({
         expectedRevision: remote.revision,
-        format: 1,
-        record: canonical(merged)
+        format: codec.format,
+        record: encoded.record
       });
       if ('conflict' in result) {
         if (attempt >= MAX_ATTEMPTS) return 'contended';
         remote = result.conflict;
         continue;
       }
+      encoded.commit();
       revision = result.saved.revision;
     }
     finish(host, device, merged, revision);
@@ -228,7 +291,9 @@ function errorCode(error: unknown): string | undefined {
 
 export function browserFolderSyncHost(
   accountId: string,
-  api: FolderApi
+  api: FolderApi,
+  codec: () => Promise<FolderRecordCodec | null> = () =>
+    Promise.resolve(plaintextFolderCodec)
 ): FolderSyncHost {
   const deviceKey = folderStorageKey(accountId);
   const recordKey = folderSyncRecordKey(accountId);
@@ -249,6 +314,7 @@ export function browserFolderSyncHost(
         throw error;
       }
     },
+    codec,
     now: () => Date.now()
   };
 }
@@ -256,12 +322,35 @@ export function browserFolderSyncHost(
 /** Accounts that stopped syncing folders during this visit. */
 const stoppedAccounts = new Set<string>();
 /**
- * Whether this account may send plaintext folder names, asked once per visit
- * and only before the first write: reading the account copy reveals nothing.
+ * Whether this account encrypts, asked once per visit and only after the
+ * first read answered. An unanswerable check counts as encrypting, so
+ * plaintext names never leave the device on a guess.
  */
-const writeAllowed = new Map<string, Promise<boolean>>();
+const encrypting = new Map<string, Promise<boolean>>();
 
-class FolderSyncStopped extends Error {}
+const SEQUENCE_PREFIX = 'openzcad.library.folders.sequence.v1';
+
+/** The highest sealed-record sequence this device opened or wrote. */
+function sequencePins(accountId: string) {
+  const key = `${SEQUENCE_PREFIX}:${accountId}`;
+  return {
+    read(): number {
+      try {
+        const value = Number(globalThis.localStorage?.getItem(key) ?? 0);
+        return Number.isSafeInteger(value) && value > 0 ? value : 0;
+      } catch {
+        return 0;
+      }
+    },
+    write(sequence: number) {
+      try {
+        globalThis.localStorage?.setItem(key, String(sequence));
+      } catch {
+        // Without the pin, a rollback is caught only within this visit.
+      }
+    }
+  };
+}
 
 /**
  * Syncs the signed-in account's folders while the library is shown: on
@@ -292,30 +381,27 @@ export function useLibraryFolderCloudSync(
       running = (async () => {
         try {
           const { api, encryptsNewProjects } = await import('./api');
-          const host = browserFolderSyncHost(accountId, api);
-          const save = host.save;
-          host.save = async (request) => {
-            // Plaintext names must not leave a device whose account
-            // encrypts its projects; an unanswerable check counts as yes.
-            let allowed = writeAllowed.get(accountId);
-            if (!allowed) {
-              allowed = encryptsNewProjects().then(
-                (encrypts) => !encrypts,
-                () => false
-              );
-              writeAllowed.set(accountId, allowed);
+          const host = browserFolderSyncHost(accountId, api, async () => {
+            let encrypts = encrypting.get(accountId);
+            if (!encrypts) {
+              encrypts = encryptsNewProjects().catch(() => true);
+              encrypting.set(accountId, encrypts);
             }
-            if (!(await allowed) || cancelled) throw new FolderSyncStopped();
-            return save(request);
-          };
+            if (!(await encrypts)) return plaintextFolderCodec;
+            const account = unlockedAccount(accountId);
+            if (!account || cancelled) return null;
+            const { sealedFolderCodec } =
+              await import('./e2ee/sealedLibraryFolders');
+            return sealedFolderCodec({
+              accountKey: account.accountKey,
+              userId: accountId,
+              pins: sequencePins(accountId)
+            });
+          });
           const outcome = await syncLibraryFolders(host);
           if (outcome === 'unsupported') stop();
         } catch (error) {
-          if (
-            error instanceof FolderSyncStopped ||
-            STOP_CODES.has(errorCode(error) ?? '')
-          )
-            stop();
+          if (STOP_CODES.has(errorCode(error) ?? '')) stop();
           // Anything else (offline, a server error) waits for the next try.
         }
       })();

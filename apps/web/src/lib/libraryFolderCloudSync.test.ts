@@ -9,7 +9,9 @@ import {
 } from './libraryFolders';
 import {
   browserFolderSyncHost,
+  plaintextFolderCodec,
   syncLibraryFolders,
+  type FolderRecordCodec,
   type FolderSyncHost,
   type LibraryFolderSnapshot,
   type SaveLibraryFolderRequest
@@ -63,7 +65,8 @@ function server() {
 /** One browser: its shelf, its sync record and a clock. */
 function device(
   remote: ReturnType<typeof server>,
-  initial: LibraryFolders = { folders: [] }
+  initial: LibraryFolders = { folders: [] },
+  codec: FolderRecordCodec | null = plaintextFolderCodec
 ) {
   let shelf = initial;
   let record: ReturnType<FolderSyncHost['readRecord']> = null;
@@ -85,6 +88,7 @@ function device(
       return snapshot;
     },
     save: (request) => remote.save(request),
+    codec: () => Promise.resolve(codec),
     now: () => clock
   };
   return {

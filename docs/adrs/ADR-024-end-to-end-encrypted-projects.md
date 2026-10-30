@@ -19,7 +19,8 @@ Layer Security (RFC 9420) through `mls-rs`; see
 [Signed roster](#signed-roster) and [Epoch rotation](#epoch-rotation), are
 marked superseded. They stay as the record of the review findings that shaped
 the MLS policy rules. Everything else in this record stands, as refined by the
-[amendment of 2026-10-24](#amendment-2026-10-24-project-data).
+[amendment of 2026-10-24](#amendment-2026-10-24-project-data) and extended by
+the [amendment of 2026-10-30](#amendment-2026-10-30-library-folders).
 
 ## Context
 
@@ -825,8 +826,8 @@ numbers and save cadence, presence during live editing, schema versions,
 the envelope header fields, and each user's device list: device labels, when
 devices and unlock methods were added or removed, and their public keys.
 Project names, checkpoint names, revision reasons,
-upload file names, thumbnails, measurements, workspace view state and archived
-exports are encrypted. R2 keys use opaque ids only.
+upload file names, thumbnails, measurements, workspace view state, archived
+exports and library folders are encrypted. R2 keys use opaque ids only.
 
 ### AI assistant
 
@@ -1330,3 +1331,50 @@ above; the settled product decisions are unchanged.
   state rejoins a group by External Commit, using the rejoin PSK wrapped
   under the account key. KeyPackages are deferred to Phase 5, where
   invitations need them.
+
+## Amendment 2026-10-30: library folders
+
+Library folders group projects on the shelf. Until now they stayed in each
+browser's storage; they now sync through the account
+(`/api/library-folders`, migration 0045). Folder names are the owner's own
+words, so an account whose projects are encrypted stores its folders sealed
+under the account key. These points extend the record above; nothing in it
+changes.
+
+- **One sealed record per account.** The whole folder set (names, pins,
+  covers, order, membership and the merge stamps) is one record, sealed with
+  AES-256-GCM under a key derived from the account key by HKDF-SHA-256 with
+  an empty salt and the info label `OpenZCAD E2EE v1 library folders key`.
+  The label is distinct from every other account-key derivation, so this key
+  never opens or authenticates anything else.
+- **Layout.** A version byte (1), the account-key commitment of the key that
+  sealed it (32 bytes, the value the device list already publishes), a
+  sequence number (4 bytes), a fresh random 96-bit IV, then the ciphertext and
+  tag. The additional data is the label `OpenZCAD E2EE v1 library folders`, a
+  NUL, the user id, a NUL and the whole header, so the commitment and the
+  sequence cannot be changed and the record cannot move to another account.
+  Plaintext is at most 190 KiB, which keeps the base64url record under the
+  Worker's 256 KiB cap.
+- **Rollback.** Each browser pins the highest sequence it opened or wrote and
+  writes the next one. A record below the pin is treated as rolled back: the
+  browser overwrites it with its own set at a higher sequence. Every browser
+  keeps its whole set and merges per field by stamp, so the overwrite loses
+  nothing that the next merge cannot restore.
+- **Account-key rotation.** A record whose commitment names another account
+  key was sealed before a rotation. A browser holding the current key cannot
+  open it and overwrites it with its own set, as for a rollback. Folder
+  changes made only on a removed device are lost, which matches
+  [Key lifecycle](#key-lifecycle): rotation protects what comes after.
+- **Refusals.** A record that fails authentication, or has a version this
+  build does not know, is left untouched and sync stops for the visit; a
+  browser never overwrites what it cannot read for a reason other than those
+  two.
+- **What the server sees.** Ciphertext length, write times, revision count
+  and the commitment, which the device list already shows. Project ids in
+  membership are inside the ciphertext. A plaintext folder record left from
+  before the account encrypted is read once and rewritten sealed.
+- **Worker enforcement.** The Worker cannot read a sealed record. It refuses
+  a plaintext record from an account whose projects must be encrypted, as it
+  refuses a plaintext project (decision D2).
+- **Review.** This is a new account-key derivation and record format, so the
+  Phase 8 outside review covers it with the other account records.
