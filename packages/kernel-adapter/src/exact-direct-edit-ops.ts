@@ -14,6 +14,7 @@ import { type Vec3 } from '@openzcad/geometry';
 import {
   type DirectEditOperation,
   type FaceGeometry,
+  type RecordedBlendCarrier,
   type FaceWitnessV1,
   type FaceTopologyReferenceV5,
   type FeatureId
@@ -21,9 +22,12 @@ import {
 import type { DxfFaceSelector, ExactShape } from './exact-types';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import {
+  blendCarrierSnapshot,
   classifyThroughHoleFace,
   measureFaceGeometry,
+  measureOwnedFaceGeometry,
   requireBlendRegion,
+  type BlendCarrierSnapshot,
   requireThroughHole,
   type ThroughHoleGeometry
 } from './exact-measure';
@@ -1393,6 +1397,96 @@ export function removeFaceFeature(
   return output;
 }
 
+/**
+ * Whether a measured band is the recorded one: same surface class and radius,
+ * and the same carrier up to sign. A cylinder band is pinned by its axis line
+ * rather than its midpoint, because removing a neighbouring band can lengthen
+ * it; a torus is pinned by its centre, which nothing around it moves.
+ */
+function sameBlendCarrier(
+  measured: BlendCarrierSnapshot,
+  recorded: RecordedBlendCarrier
+): boolean {
+  if (
+    measured.surfaceClass !== recorded.surfaceClass ||
+    Math.abs(measured.radius - recorded.radius) >
+      Math.max(recorded.radius * 1e-5, 1e-9)
+  ) {
+    return false;
+  }
+  const axis = normalized(recorded.axis);
+  if (!axis || Math.abs(dot(measured.axis, axis)) < 1 - 1e-6) return false;
+  const tolerance = Math.max(recorded.radius * 1e-5, 1e-6);
+  const offset = subtract(measured.center, recorded.center);
+  return recorded.surfaceClass === 'torus'
+    ? length(offset) <= tolerance
+    : length(subtract(offset, scale(axis, dot(offset, axis)))) <= tolerance;
+}
+
+function formatBlend(blend: RecordedBlendCarrier): string {
+  return `R${Number(blend.radius.toPrecision(6))} ${blend.surfaceClass} blend`;
+}
+
+/**
+ * Remove every recorded blend band, one region per kernel call, each found
+ * again on the solid the previous removal returned. The seed face must be one
+ * of them, which proves the edit still lands on the body it was authored for;
+ * a recorded band that no longer exists refuses the whole edit rather than
+ * quietly removing fewer than were asked for.
+ */
+function removeBlends(
+  kernel: RemusKernel,
+  solid: number,
+  seed: number,
+  operation: Extract<DirectEditOperation, { kind: 'remove-blends' }>
+): number {
+  const seedCarrier = requireBlendRegion(kernel, solid, seed);
+  const seedIndex = operation.blends.findIndex((blend) =>
+    sameBlendCarrier(seedCarrier, blend)
+  );
+  if (seedIndex < 0) {
+    throw new Error('The selected blend is not one of the recorded blends.');
+  }
+  const pending = [
+    operation.blends[seedIndex]!,
+    ...operation.blends.filter((_, index) => index !== seedIndex)
+  ];
+  let output = solid;
+  for (const blend of pending) {
+    const matches = Array.from(kernel.getSolidFaces(output)).filter((face) => {
+      if (surfaceTypeOf(kernel, face) !== blend.surfaceClass) return false;
+      const carrier = blendCarrierSnapshot(
+        measureOwnedFaceGeometry(kernel, output, face)
+      );
+      return carrier !== null && sameBlendCarrier(carrier, blend);
+    });
+    if (matches.length === 0) {
+      throw new Error(
+        `The ${formatBlend(blend)} could not be found on the body any more.`
+      );
+    }
+    // One band split across several faces is one region: removing it from
+    // any member removes them all.
+    const region = requireBlendRegion(kernel, output, matches[0]!);
+    try {
+      output = kernel.resizeBlend(output, matches[0]!, region.radius, 0);
+    } catch (error) {
+      throw new Error(
+        `Removing the ${formatBlend(blend)} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }.`,
+        { cause: error }
+      );
+    }
+  }
+  requireValidSolid(
+    kernel,
+    output,
+    'Removing the blends does not produce a valid solid.'
+  );
+  return output;
+}
+
 function resolveFaceDistanceEndpoint(
   kernel: RemusKernel,
   target: ExactShape,
@@ -1692,6 +1786,9 @@ export function applyDirectEdit(
     return {
       solids: [removeFaceFeature(kernel, solid, face, geometry, operation)]
     };
+  }
+  if (operation.kind === 'remove-blends') {
+    return { solids: [removeBlends(kernel, solid, face, operation)] };
   }
 
   if (operation.kind === 'offset-face') {

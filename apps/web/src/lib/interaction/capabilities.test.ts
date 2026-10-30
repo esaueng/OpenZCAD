@@ -188,6 +188,48 @@ describe('selectionCapabilities', () => {
     expect(preferredCapability(capabilities)?.action).toBe('edit-fillet');
   });
 
+  it('offers Remove All Fillets on an imported body with several rounds', () => {
+    const target = {
+      surfaceType: 'other' as const,
+      hash: 2,
+      blendRadius: 2,
+      canResizeImportedBlend: true
+    };
+    const single = selectionCapabilities({
+      kind: 'face',
+      target: { ...target, removableBlendCount: 1 }
+    });
+    expect(single.map((capability) => capability.action)).toEqual([
+      'edit-fillet',
+      'remove-fillet'
+    ]);
+    const several = selectionCapabilities({
+      kind: 'face',
+      target: { ...target, removableBlendCount: 3 }
+    });
+    expect(several.map((capability) => capability.action)).toEqual([
+      'edit-fillet',
+      'remove-fillet',
+      'remove-all-fillets'
+    ]);
+    expect(several.at(-1)?.note).toBe(
+      'Removes all 3 rounds on this body in one step.'
+    );
+    // A native Fillet is history: its features come off by deletion.
+    expect(
+      selectionCapabilities({
+        kind: 'face',
+        target: {
+          surfaceType: 'other',
+          hash: 2,
+          blendRadius: 2,
+          filletFeatureId: 'feature_fillet' as never,
+          removableBlendCount: 3
+        }
+      }).map((capability) => capability.action)
+    ).toEqual(['edit-fillet', 'remove-fillet']);
+  });
+
   it('offers only a proven imported blend removal', () => {
     expect(
       selectionCapabilities({

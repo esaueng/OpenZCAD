@@ -187,6 +187,41 @@ export function importedBlendSnapshot(
   return null;
 }
 
+function sameBlendCarrier(
+  left: ImportedBlendSnapshot,
+  right: ImportedBlendSnapshot
+): boolean {
+  const tolerance = Math.max(left.radius * 1e-5, 1e-6);
+  return (
+    left.surfaceClass === right.surfaceClass &&
+    Math.abs(left.radius - right.radius) <= tolerance &&
+    Math.abs(dot(left.axis, right.axis)) >= 1 - 1e-6 &&
+    (left.surfaceClass === 'torus'
+      ? length(subtract(left.center, right.center)) <= tolerance
+      : distanceToAxis(left.center, right.center, right.axis) <= tolerance)
+  );
+}
+
+/**
+ * The distinct analytic blend carriers on a body, in face order. A band the
+ * kernel split across several faces is one carrier, removed once.
+ */
+export function importedBlendCarriers(
+  faces: readonly FaceTopology[]
+): ImportedBlendSnapshot[] {
+  const carriers: ImportedBlendSnapshot[] = [];
+  for (const face of faces) {
+    const snapshot = importedBlendSnapshot(face);
+    if (
+      snapshot &&
+      !carriers.some((carrier) => sameBlendCarrier(carrier, snapshot))
+    ) {
+      carriers.push(snapshot);
+    }
+  }
+  return carriers;
+}
+
 /** Re-select a resized imported band by analytic carrier identity, never hash. */
 export function resolveImportedBlendFace(
   faces: readonly FaceTopology[],
@@ -196,7 +231,11 @@ export function resolveImportedBlendFace(
   const snapshot = importedBlendSnapshot(source);
   const carrierMatches = (face: FaceTopology): boolean => {
     const candidate = importedBlendSnapshot(face);
-    if (!snapshot || !candidate || candidate.surfaceClass !== snapshot.surfaceClass) {
+    if (
+      !snapshot ||
+      !candidate ||
+      candidate.surfaceClass !== snapshot.surfaceClass
+    ) {
       return false;
     }
     const tolerance = Math.max(snapshot.radius * 1e-5, 1e-6);
