@@ -361,6 +361,15 @@
 
 .start-brand .brand {
   margin: 0;
+  /* The workspace's narrow-window rule (responsive.css) cuts the brand to
+     its mark to make room for the project name; the library has no project
+     name beside it, so the wordmark stays at every width. */
+  gap: 7px;
+  font-size: var(--fs-md);
+}
+
+.start-brand .brand .beta-tag {
+  display: inline-flex;
 }
 
 /* The column's foot: where the parts are kept. */
@@ -508,6 +517,37 @@
 
 .start-field-name input {
   font-size: var(--fs-md);
+}
+
+/* Drawn rather than native: each engine put its own arrow flush against the
+   right border (Firefox's read as clipped), and the box sized to the text
+   left no room for it. The chevron is the label's, masked so it follows the
+   theme's text colour. */
+.start-field-units {
+  position: relative;
+}
+
+.start-field-units select {
+  appearance: none;
+  padding: 0 28px 0 10px;
+  cursor: pointer;
+}
+
+/* Centred on the 32px select from the label's foot, so the visible label
+   above it on narrow screens does not move it. */
+.start-field-units::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  bottom: 13px;
+  width: 10px;
+  height: 6px;
+  background: var(--color-text-muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  pointer-events: none;
 }
 
 .start-launch-hint {
@@ -851,6 +891,7 @@
 /* ── Section toolbar ─────────────────────────────────────── */
 
 .start-section {
+  container: start-section / inline-size;
   display: grid;
   gap: var(--sp-3);
 }
@@ -1701,13 +1742,188 @@
   display: none;
 }
 
-/* Once the toolbar wraps, the tabs take a row of their own above the tools. */
+/* One line above phone width: title, filters and tools stay together and
+   condense as the shelf narrows instead of wrapping. Wrapped, the tools hung
+   mid-row under neither the title nor Settings. */
+@media (min-width: 561px) {
+  .start-toolbar {
+    flex-wrap: nowrap;
+    gap: var(--sp-2) var(--sp-4);
+  }
+
+  /* The search field gives way first; title and filters shrink only once
+     it has folded (below). */
+  .start-toolbar-title {
+    flex: none;
+    flex-wrap: nowrap;
+  }
+
+  .start-toolbar h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .start-section-note {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .start-filters {
+    flex: none;
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .start-filter {
+    white-space: nowrap;
+  }
+
+  .start-toolbar-tools {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+
+  .start-toolbar-tools .start-search {
+    flex: 0 1 280px;
+    width: auto;
+    min-width: 120px;
+  }
+}
+
+/* Condensed: search and sort fold to icons. The search field opens leftward
+   over the filters while it has focus or a query, so the line never moves. */
+@container start-section (max-width: 760px) {
+  @media (min-width: 561px) {
+    .start-toolbar {
+      gap: var(--sp-2) var(--sp-3);
+    }
+
+    .start-toolbar-title {
+      flex: 0 1 auto;
+    }
+
+    /* A shelf with every filter beside a long folder name scrolls its
+       filters rather than pushing the tools off the line. */
+    .start-filters {
+      flex: 0 1 auto;
+      gap: 0 var(--sp-3);
+    }
+
+    .start-toolbar-tools {
+      gap: var(--sp-1);
+    }
+
+    .start-toolbar-tools .start-search {
+      --start-search-open: min(240px, 70cqw);
+      flex: none;
+      width: 30px;
+      min-width: 30px;
+      height: 30px;
+    }
+
+    .start-search > svg,
+    .start-search-clear {
+      z-index: 4;
+    }
+
+    .start-search input {
+      position: absolute;
+      right: 0;
+      width: 30px;
+      padding-right: 0;
+      cursor: pointer;
+    }
+
+    .start-search input::placeholder {
+      color: transparent;
+    }
+
+    .start-search:focus-within input,
+    .start-search:has(input:not(:placeholder-shown)) input {
+      z-index: 3;
+      width: var(--start-search-open);
+      padding-right: 26px;
+      cursor: text;
+    }
+
+    .start-search:focus-within input::placeholder {
+      color: var(--color-text-subtle);
+    }
+
+    .start-search:focus-within > svg,
+    .start-search:has(input:not(:placeholder-shown)) > svg {
+      left: calc(30px - var(--start-search-open) + 9px);
+    }
+
+    .start-sort {
+      position: relative;
+      display: grid;
+    }
+
+    .start-sort select {
+      appearance: none;
+      width: 30px;
+      padding: 0;
+      color: transparent;
+      cursor: pointer;
+    }
+
+    .start-sort option {
+      color: var(--color-text);
+    }
+
+    /* The sort arrows, drawn over the folded select. */
+    .start-sort::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: 14px;
+      height: 14px;
+      background: var(--color-text-subtle);
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21 16-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21 16-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      pointer-events: none;
+    }
+  }
+}
+
+/* Tightest: the shelf's own name steps aside, since the open shelf is already
+   marked beside it (the column, or the tab strip above). A folder keeps its
+   name, which ellipsizes. Clipped, not removed: it takes focus when the
+   last project leaves the shelf. */
+@container start-section (max-width: 640px) {
+  @media (min-width: 561px) {
+    .start-toolbar h2:not(.start-folder-title) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+
+    /* With only the clipped name in it, the title box would still hold a
+       gap before the filters. */
+    .start-toolbar-title:not(:has(.start-crumb, .start-section-note)) {
+      display: contents;
+    }
+  }
+}
+
+/* Settings sits beside the logo below 900px, above the shelf. */
 @media (max-width: 900px) {
-  /* Settings sits beside the logo here, above the shelf. */
   .start-toolbar {
     padding-right: 0;
   }
+}
 
+/* A phone wraps: the tabs take a row of their own above the tools. */
+@media (max-width: 560px) {
   .start-filters {
     flex-basis: 100%;
   }
@@ -2587,5 +2803,12 @@
   .start-toolbar-tools .start-search {
     flex: 1;
     width: auto;
+  }
+
+  /* Two cards a row on a phone: at the 180px minimum a 390px screen held
+     one, each preview taller than half the screen. Large keeps its size. */
+  .start-tile-grid.is-small,
+  .start-tile-grid.is-medium {
+    --start-tile-min: 140px;
   }
 }
