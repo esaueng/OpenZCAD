@@ -285,6 +285,49 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
     expect(names.filter((name) => name?.includes('.flank.'))).toHaveLength(40);
   });
 
+  it('cuts herringbone teeth along a cylinder with both halves named', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shaft', toUserId('user_gear')),
+      {
+        name: 'Blank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 6 }
+      }
+    );
+    const blankId = base.bodyOrder[0]!;
+    const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+      blankId
+    ]!;
+    const side = blank.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    const cut = gearBody(base, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      helixAngleDeg: 15,
+      hand: 'left',
+      herringbone: true,
+      targetBodyId: blankId,
+      faceHash: side.hash,
+      ...(side.reference ? { faceReference: side.reference } : {})
+    });
+    const derived = await adapter.syncDocument(cut.document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[cut.bodyId]!;
+    // Keeping the diameter turns no material outside the Ø22 tip circle.
+    expect(body.bbox.max.x - body.bbox.min.x).toBeLessThan(22 + 0.05);
+    const names = body.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    const flanks = names.filter((name) => name?.includes('.flank.'));
+    expect(flanks).toHaveLength(80);
+    expect(flanks.filter((name) => name?.endsWith('.end-half'))).toHaveLength(
+      40
+    );
+  });
+
   it('refuses teeth that would not fit the picked cylinder', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Shaft', toUserId('user_gear')),

@@ -189,6 +189,41 @@ describe('face tools build the card state', () => {
     });
   });
 
+  it('gear teeth: a herringbone helix on a boss is sent with its hand', () => {
+    const spec = IN_PLACE_TOOL_SPECS['gear-teeth'];
+    const { normal: _planar, ...rest } = TOP;
+    const boss: FacePick = { ...rest, surfaceType: 'cylinder' };
+    const slots = { ...EMPTY, faces: [boss] };
+    const options = {
+      side: 'outside',
+      fit: 'keep-diameter',
+      sizing: 'module',
+      hand: 'left',
+      helix: 'herringbone'
+    };
+    const ctx = { ...CTX, touched: ['helixAngleDeg'] };
+    expect(
+      spec.request(slots, { teeth: 20, helixAngleDeg: 25 }, options, ctx)
+    ).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'external',
+        teeth: 20,
+        helixAngleDeg: 25,
+        hand: 'left',
+        herringbone: true,
+        targetBodyId: 'body_a',
+        faceHash: 11
+      }
+    });
+    // Without a helix angle there is no herringbone to send.
+    const flat = spec.request(slots, { teeth: 20 }, options, CTX);
+    expect(flat).toMatchObject({ tool: 'gear' });
+    expect(flat?.tool === 'gear' && flat.gear).not.toHaveProperty(
+      'herringbone'
+    );
+  });
+
   it('draft: the pull direction comes from Options', () => {
     const spec = IN_PLACE_TOOL_SPECS.draft;
     const request = spec.request(

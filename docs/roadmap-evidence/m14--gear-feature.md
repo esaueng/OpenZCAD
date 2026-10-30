@@ -22,7 +22,8 @@ refusal, teeth on a Ø22 cylinder equal to the standalone m 1 gear's volume,
 cylinder-too-small refusal, helix-angle and hand validation, a 20° helical
 gear's transverse tip diameter, 40 named flanks and equal volumes for both
 hands, a herringbone gear's 80 half-named flanks and its volume equal to the
-single helix's) and `apps/web/src/lib/inPlace/edit.test.ts` (untouched edits of a new
+single helix's, herringbone teeth on a Ø22 boss keeping its diameter with 80
+half-named flanks) and `apps/web/src/lib/inPlace/edit.test.ts` (untouched edits of a new
 gear, of teeth on a body, of a helical and of a herringbone gear write back
 as stored; returning to spur clears the helix and hand, and to a single helix
 clears `herringbone`).
