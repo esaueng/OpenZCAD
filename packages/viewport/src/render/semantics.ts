@@ -22,7 +22,14 @@ export const SELECTION_SEMANTICS = {
     /** Idle edge contrast when no shaded face sits behind the topology. */
     wireframeEdge: 0xb0bcd4,
     edgeWidth: 1.4,
-    edgeOpacity: 0.92
+    edgeOpacity: 0.92,
+    /**
+     * An edge whose faces meet tangentially, such as a fillet's rim, in the
+     * shaded view. Drawn at full strength, a filleted shoulder read as four
+     * hard rings across what the shading shows as one smooth surface; this
+     * faint, it still marks where a pick will land without claiming a corner.
+     */
+    tangentEdgeOpacity: 0.3
   },
   /** Under the pointer, not yet committed to. */
   hover: {
