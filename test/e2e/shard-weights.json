@@ -141,6 +141,7 @@
   "standard-view-shortcuts.spec.ts": 28,
   "start-screen-chunk-recovery.spec.ts": 18,
   "start-screen-refresh.spec.ts": 2,
+  "start-screen-responsive.spec.ts": 4,
   "start-screen-sync-failures.spec.ts": 3,
   "start-screen-update-notice.spec.ts": 1,
   "start-tile-reorder.spec.ts": 3,
