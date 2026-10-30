@@ -326,6 +326,7 @@ export function isBooleanEvolutionProbeEligible(
  */
 const EXPLICIT_LINEAGE_CONSUMERS: ReadonlySet<string> = new Set([
   'hole',
+  'gear',
   'shell',
   'draft',
   'thicken',
@@ -354,6 +355,7 @@ const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
   'pattern',
   'split',
   'hole',
+  'gear',
   'direct-edit',
   'imported-step',
   'imported-mesh',
@@ -504,6 +506,7 @@ function persistedReferenceNamesProducer(
     const data = feature.data;
     switch (data.featureKind) {
       case 'hole':
+      case 'gear':
         if (data.faceReference?.producingFeatureId === producer) return true;
         break;
       case 'shell':

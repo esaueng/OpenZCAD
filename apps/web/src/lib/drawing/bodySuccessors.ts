@@ -29,7 +29,16 @@ export function drawingBodyReplacements(
         const targets = successors.get(data.targetBodyId) ?? [];
         targets.push(node.bodyId);
         successors.set(data.targetBodyId, targets);
+        break;
       }
+      case 'gear':
+        // Teeth cut into a body replace it, as a hole does.
+        if (data.targetBodyId !== undefined) {
+          const targets = successors.get(data.targetBodyId) ?? [];
+          targets.push(node.bodyId);
+          successors.set(data.targetBodyId, targets);
+        }
+        break;
     }
   }
   const replacements: { from: BodyId; to: BodyId }[] = [];

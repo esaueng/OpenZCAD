@@ -164,6 +164,8 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     case 'fillet':
     case 'chamfer':
       return data.featureKind;
+    case 'gear':
+      return data.targetBodyId === undefined ? 'gear' : 'gear-teeth';
     case 'boolean':
       return data.operation;
     case 'pattern':
@@ -403,6 +405,63 @@ export function inPlaceEditSeed(
       value('positionV', data.position.v);
       seed.options.depthMode = data.depthMode;
       seed.options.style = data.style;
+      break;
+    }
+    case 'gear': {
+      const pitchValue =
+        data.sizing === 'diametral-pitch'
+          ? 'diametralPitch'
+          : data.sizing === 'circular-pitch'
+            ? 'circularPitch'
+            : 'module';
+      seed.options.sizing = data.sizing;
+      value(pitchValue, data.pitch);
+      value('teeth', data.teeth);
+      value('pressureAngleDeg', data.pressureAngleDeg);
+      value('profileShift', data.profileShift);
+      value('backlash', data.backlash);
+      value('phaseDeg', data.phaseDeg);
+      if (data.targetBodyId !== undefined) {
+        const face =
+          typeof data.faceHash === 'number'
+            ? ctx.face(data.targetBodyId, data.faceHash, data.faceReference)
+            : null;
+        if (face) seed.slots.faces.push(face);
+        else missing.push('face');
+        seed.options.side = data.gearType === 'internal' ? 'inside' : 'outside';
+        seed.options.fit = data.fit ?? 'keep-diameter';
+        break;
+      }
+      seed.options.gearType = data.gearType;
+      value('faceWidth', data.faceWidth);
+      value('boreDiameter', data.boreDiameter);
+      value('rimDiameter', data.rimDiameter);
+      // The stored placement as a saved plane: kept as stored, expressions
+      // and all, until another plane is picked.
+      const resolved = (vector: ParametricVector3 | undefined) => {
+        if (!vector) return null;
+        const x = ctx.evaluate(vector.x);
+        const y = ctx.evaluate(vector.y);
+        const z = ctx.evaluate(vector.z);
+        return x === null || y === null || z === null ? null : { x, y, z };
+      };
+      const origin = resolved(data.origin);
+      const normal = resolved(data.axis);
+      if (origin && normal && data.origin && data.axis) {
+        const text = (vector: ParametricVector3) => ({
+          x: String(vector.x),
+          y: String(vector.y),
+          z: String(vector.z)
+        });
+        seed.slots.plane = {
+          kind: 'saved',
+          origin,
+          normal,
+          fields: { origin: text(data.origin), normal: text(data.axis) }
+        };
+      } else {
+        missing.push('plane');
+      }
       break;
     }
     case 'shell':
@@ -865,6 +924,30 @@ export function inPlaceFeatureUpdate(
         },
         ...(request.guide ? {} : { clearData: ['guide'] })
       };
+    case 'gear': {
+      if (saved.featureKind !== 'gear') return null;
+      // Optional fields the edit no longer sets go back to their defaults.
+      const optional = [
+        'pitch',
+        'pressureAngleDeg',
+        'profileShift',
+        'backlash',
+        'phaseDeg',
+        'xDirection',
+        'boreDiameter',
+        'rimDiameter',
+        'fit'
+      ] as const;
+      const clear = optional.filter(
+        (key) => saved[key] !== undefined && request.gear[key] === undefined
+      );
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'gear', ...request.gear },
+        ...(clear.length > 0 ? { clearData: [...clear] } : {})
+      };
+    }
     case 'helical-sweep':
       return {
         featureId,

@@ -113,6 +113,10 @@ export function featureValueSummary(
       const turns = num(data.turns);
       return turns === null ? null : `${turns} turns`;
     }
+    case 'gear': {
+      const teeth = num(data.teeth);
+      return teeth === null ? null : `${teeth} teeth`;
+    }
     case 'hole': {
       const diameter = num(data.diameter);
       if (diameter === null) {

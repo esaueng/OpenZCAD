@@ -179,7 +179,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // client would revolve the sketch's first object instead, so it must refuse.
 // v39 adds explicit drawing body replacements to drawing.sheet.update commands.
 // Older clients must refuse instead of replaying only the new fingerprint.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 39 as const;
+// v40 adds M14 gear features (`featureKind: 'gear'`). An older client has no
+// builder for the kind and would drop the gear body on rebuild, so it must
+// refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 40 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -193,6 +196,12 @@ export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
 export type CanonicalPlaneBasisRevision = 2;
 export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus';
+/** M14: which gear body a gear feature builds. */
+export type GearType = 'external' | 'internal' | 'rack';
+/** M14: how a gear's `pitch` is read. */
+export type GearSizing = 'module' | 'circular-pitch' | 'diametral-pitch';
+/** M14: how teeth on a cylinder are sized against it. */
+export type GearFit = 'keep-diameter' | 'module';
 export type FeatureKind =
   | 'primitive'
   | 'sketch'
@@ -213,6 +222,7 @@ export type FeatureKind =
   | 'pattern'
   | 'split'
   | 'hole'
+  | 'gear'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
@@ -1750,6 +1760,71 @@ export type FeatureData =
       positionAnchor?: 'centroid';
     }
   | {
+      /**
+       * M14 (schema v40): an involute spur gear, internal (ring) gear or
+       * straight rack, built by the kernel's gear generator.
+       *
+       * Without `targetBodyId` the gear is a new body: its first cap is
+       * centered on `origin`, it extrudes `faceWidth` along `axis`, and its
+       * first tooth points along `xDirection` turned `phaseDeg` about the
+       * axis (a rack runs along `xDirection` with its teeth pointing along
+       * `axis × xDirection`).
+       *
+       * With `targetBodyId` the teeth are cut along the whole length of that
+       * body's cylindrical face (`faceHash`, anchored by `faceReference`): a
+       * boss takes external teeth, a bore internal ones, and the body is
+       * consumed. The face's own length is the face width.
+       */
+      featureKind: 'gear';
+      gearType: GearType;
+      /**
+       * How `pitch` is read: a module (length), a circular pitch (length) or
+       * a diametral pitch (teeth per inch of pitch diameter, a number, in
+       * every unit system). Stored as entered and never converted.
+       */
+      sizing: GearSizing;
+      /**
+       * The tooth size. Absent only on a cylinder with `fit`
+       * `'keep-diameter'`, where the kernel solves the module from the
+       * cylinder's diameter.
+       */
+      pitch?: ParamValue;
+      teeth: ParamValue;
+      /** New bodies only; teeth on a cylinder span the whole face. */
+      faceWidth?: ParamValue;
+      /** Degrees; absent is 20. */
+      pressureAngleDeg?: ParamValue;
+      /** Profile shift coefficient; absent is 0. */
+      profileShift?: ParamValue;
+      /** Circumferential tooth thinning at the pitch circle; absent is 0. */
+      backlash?: ParamValue;
+      /** Multiples of the module; absent are the ISO 53 1.0, 1.25, 0.38. */
+      addendum?: ParamValue;
+      dedendum?: ParamValue;
+      rootFillet?: ParamValue;
+      /** Turn of the first tooth about the axis, degrees; absent is 0. */
+      phaseDeg?: ParamValue;
+      /** New bodies: placement, see above. */
+      origin?: ParametricVector3;
+      axis?: ParametricVector3;
+      xDirection?: ParametricVector3;
+      /** New external gears: concentric bore diameter. */
+      boreDiameter?: ParamValue;
+      /** New internal gears: outer rim diameter (required). */
+      rimDiameter?: ParamValue;
+      /** New racks: root line to back face; absent is two modules. */
+      backDepth?: ParamValue;
+      /** Teeth on a cylinder: the consumed body and its cylindrical face. */
+      targetBodyId?: BodyId;
+      faceHash?: number;
+      faceReference?: FaceTopologyReferenceV5;
+      /**
+       * Teeth on a cylinder: keep the cylinder's diameter as the tip (or
+       * inner tip) diameter, or use `pitch`. Absent is `'keep-diameter'`.
+       */
+      fit?: GearFit;
+    }
+  | {
       featureKind: 'split';
       /** Consumed: the two halves replace the input body. */
       targetBodyId: BodyId;
@@ -3033,7 +3108,7 @@ export interface FeatureWarning {
    * a second one beside it.
    */
   kernelRefusal?: {
-    family: 'boolean' | 'validation' | 'healing' | 'import' | 'blend';
+    family: 'boolean' | 'validation' | 'healing' | 'import' | 'blend' | 'gear';
     operation?: string;
     category: string;
     code: string;
@@ -4793,6 +4868,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   pattern: '#38bdf8',
   split: '#f472b6',
   hole: '#fb923c',
+  gear: '#c084fc',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',

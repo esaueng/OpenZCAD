@@ -232,6 +232,87 @@ describe('which in-place command edits a stored feature', () => {
 });
 
 describe('an untouched edit writes the feature back as stored', () => {
+  it('gear: a new gear keeps its placement, pitch expression and form', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 'wall',
+      teeth: 24,
+      faceWidth: 8,
+      pressureAngleDeg: 25,
+      origin: { x: 1, y: 2, z: 'wall' },
+      axis: { x: 0, y: 0, z: 1 },
+      xDirection: { x: 0, y: 1, z: 0 }
+    };
+    const node = feature(data, 'body_b' as BodyId);
+    expect(inPlaceToolForFeature(data)).toBe('gear');
+    const request = untouched(node)!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'external',
+        sizing: 'module',
+        pitch: 'wall',
+        teeth: 24,
+        faceWidth: 8,
+        pressureAngleDeg: 25,
+        origin: { x: 1, y: 2, z: 'wall' },
+        axis: { x: 0, y: 0, z: 1 },
+        xDirection: { x: 0, y: 1, z: 0 }
+      }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    // Unset form fields stay unset: the kernel default, not a copy of it.
+    expect(request.gear).not.toHaveProperty('profileShift');
+    expect(request.gear).not.toHaveProperty('rimDiameter');
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update).not.toHaveProperty('clearData');
+    // Dropping the stored pressure angle clears it rather than keeping it.
+    const { pressureAngleDeg: _dropped, ...rest } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        { tool: 'gear', gear: rest }
+      )?.clearData
+    ).toEqual(['pressureAngleDeg']);
+  });
+
+  it('gear: teeth on a body reopen on their face with the stored fit', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'internal',
+      sizing: 'diametral-pitch',
+      pitch: 16,
+      teeth: 40,
+      fit: 'module',
+      targetBodyId: BODY,
+      faceHash: 11
+    };
+    expect(inPlaceToolForFeature(data)).toBe('gear-teeth');
+    const armed = inPlaceEditSeed(feature(data, BODY), EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({
+      side: 'inside',
+      fit: 'module',
+      sizing: 'diametral-pitch'
+    });
+    expect(untouched(feature(data, BODY))).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'internal',
+        sizing: 'diametral-pitch',
+        pitch: 16,
+        teeth: 40,
+        fit: 'module',
+        targetBodyId: BODY,
+        faceHash: 11
+      }
+    });
+  });
+
   it('hole: its stored position, anchor, step and expressions', () => {
     const data: FeatureData = {
       featureKind: 'hole',

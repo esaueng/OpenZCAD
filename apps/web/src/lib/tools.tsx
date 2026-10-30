@@ -5,6 +5,7 @@ import {
   Box,
   Combine,
   Cone,
+  Cog,
   CopyPlus,
   Cylinder,
   Drill,
@@ -63,6 +64,8 @@ export type ToolId =
   | 'draft'
   | 'thicken'
   | 'hole'
+  | 'gear'
+  | 'gear-teeth'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -218,6 +221,18 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'edges-faces',
     hint: 'Drill a simple, counterbore, or countersink hole into a face'
   },
+  gear: {
+    label: 'Gear',
+    icon: icon(<Cog size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'Add an involute spur gear, internal gear or rack on a plane'
+  },
+  'gear-teeth': {
+    label: 'Gear teeth',
+    icon: icon(<Cog size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Cut gear teeth along a cylindrical boss or bore'
+  },
   shell: {
     label: 'Shell',
     icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
@@ -329,7 +344,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'datum-plane',
         'datum-axis',
         'reference-image',
-        ...PRIMITIVE_TOOLS
+        ...PRIMITIVE_TOOLS,
+        'gear'
       ]
     },
     {
@@ -344,6 +360,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'fillet',
         'chamfer',
         'hole',
+        'gear-teeth',
         'shell',
         'draft',
         'thicken',
@@ -416,7 +433,8 @@ export function toolDisabledReason(
       tool === 'solid-offset' ||
       tool === 'draft' ||
       tool === 'thicken' ||
-      tool === 'hole') &&
+      tool === 'hole' ||
+      tool === 'gear-teeth') &&
     !avail.exactGeometryReady
   ) {
     return 'Waiting for exact geometry';
@@ -455,7 +473,8 @@ export function toolDisabledReason(
       tool === 'solid-offset' ||
       tool === 'draft' ||
       tool === 'thicken' ||
-      tool === 'hole') &&
+      tool === 'hole' ||
+      tool === 'gear-teeth') &&
     avail.liveBodyCount < 1
   ) {
     return 'Needs a body';

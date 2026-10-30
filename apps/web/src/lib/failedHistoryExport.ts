@@ -37,6 +37,8 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
       return data.copy ? [] : [data.targetBodyId];
     case 'split':
       return data.keepOriginal === true ? [] : [data.targetBodyId];
+    case 'gear':
+      return data.targetBodyId !== undefined ? [data.targetBodyId] : [];
     case 'hole':
     case 'shell':
     case 'solid-offset':

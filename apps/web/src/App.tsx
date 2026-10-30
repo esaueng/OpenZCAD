@@ -16610,6 +16610,36 @@ export function App() {
           ...(detail?.point ? { point: { ...detail.point } } : {})
         });
       }
+      if (
+        selection?.kind === 'face' &&
+        command.spec?.wantsPlane &&
+        !command.spec.bodyMode &&
+        !command.spec.faceMode
+      ) {
+        // A command that takes only a plane (a new gear) stands on a flat
+        // face as clicked, the way a Mirror's plane does.
+        const geometry = (
+          previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+          representations[selection.bodyId]
+        )?.topology?.faces.find(
+          (candidate) =>
+            candidate.topologyId === selection.topologyId ||
+            (selection.hash !== undefined && candidate.hash === selection.hash)
+        )?.geometry;
+        const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+        if (
+          geometry?.normal &&
+          on &&
+          geometry.surfaceType.toLowerCase() === 'plane'
+        ) {
+          return command.pickPlane({
+            kind: 'face',
+            origin: on,
+            normal: geometry.normal
+          });
+        }
+        return false;
+      }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
           selection.bodyId,
@@ -20551,6 +20581,13 @@ export function App() {
           radius: request.radius,
           pitch: request.pitch,
           turns: request.turns
+        });
+      case 'gear':
+        // Teeth cut into a body keep that body's name; a new gear is numbered.
+        return commandFactories.gearBody({
+          name,
+          ...(request.gear.targetBodyId === undefined ? { bodyName } : {}),
+          ...request.gear
         });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation

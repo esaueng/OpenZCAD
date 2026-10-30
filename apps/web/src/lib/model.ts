@@ -183,6 +183,7 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   mirror: 'Mirror',
   split: 'Split',
   hole: 'Hole',
+  gear: 'Gear',
   shell: 'Shell',
   'solid-offset': 'Solid offset',
   draft: 'Draft',

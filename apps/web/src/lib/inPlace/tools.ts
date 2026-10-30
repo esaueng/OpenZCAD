@@ -70,6 +70,8 @@ export type InPlaceToolId =
   | 'sweep'
   | 'helical-sweep'
   | 'hole'
+  | 'gear'
+  | 'gear-teeth'
   | 'shell'
   | 'thicken'
   | 'solid-offset'
@@ -97,6 +99,8 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'sweep',
   'helical-sweep',
   'hole',
+  'gear',
+  'gear-teeth',
   'shell',
   'thicken',
   'solid-offset',
@@ -324,6 +328,12 @@ export type InPlaceAxisRef =
   | { type: 'datum-axis'; datumFeatureId: FeatureId }
   | { type: 'new-axis'; definition: DatumAxisDefinition };
 
+/** A gear feature's fields, as {@link InPlaceRequest} carries them. */
+export type GearRequest = Omit<
+  Extract<FeatureData, { featureKind: 'gear' }>,
+  'featureKind'
+>;
+
 /** What to build, without names or ids; App turns it into the command. */
 export type InPlaceRequest =
   | {
@@ -419,6 +429,11 @@ export type InPlaceRequest =
       axisRef?: InPlaceAxisRef;
       /** A linear pattern's own repeat vector, replacing `axis`. */
       direction?: ParametricVector3;
+    }
+  | {
+      /** An M14 gear, as the feature stores it. */
+      tool: 'gear';
+      gear: GearRequest;
     }
   | {
       /** A primitive and its placement, as the card's Create built them. */
@@ -616,7 +631,8 @@ export interface InPlaceToolSpec {
     options: Record<string, string>;
     values: Record<string, number>;
   };
-  faceFilter?: 'planar';
+  /** `planar` refuses curved faces; `cylindrical` takes cylinders only. */
+  faceFilter?: 'planar' | 'cylindrical';
   /**
    * While this option has this value, a click places a point (a draft's
    * clicked hinge): a picked face clicked again keeps its place in the set
@@ -1634,6 +1650,394 @@ function normalHandle(
     }
   ];
 }
+
+const GEAR_SIZING_OPTION: OptionSpec = {
+  id: 'sizing',
+  label: 'Size by',
+  choices: [
+    { value: 'module', label: 'Module' },
+    { value: 'circular-pitch', label: 'Circular pitch' },
+    {
+      value: 'diametral-pitch',
+      label: 'Diametral pitch',
+      note: 'Teeth per inch of pitch diameter, in every unit system'
+    }
+  ],
+  initial: 'module'
+};
+
+/** Tooth size and form, shared by both gear commands. */
+const GEAR_TOOTH_VALUES: ValueSpec[] = [
+  {
+    id: 'teeth',
+    label: 'Teeth',
+    unit: 'count',
+    initial: 20,
+    integer: true,
+    min: 1,
+    max: 1000
+  },
+  {
+    id: 'module',
+    label: 'Module',
+    unit: 'length',
+    initial: 2,
+    min: 0,
+    exclusive: 'min'
+  },
+  {
+    id: 'circularPitch',
+    label: 'Circular pitch',
+    unit: 'length',
+    initial: 2 * Math.PI,
+    min: 0,
+    exclusive: 'min',
+    inOptions: true
+  },
+  {
+    id: 'diametralPitch',
+    label: 'Diametral pitch',
+    unit: 'count',
+    initial: 10,
+    min: 0,
+    exclusive: 'min',
+    inOptions: true
+  },
+  {
+    id: 'pressureAngleDeg',
+    label: 'Pressure angle',
+    unit: 'angle',
+    initial: 20,
+    min: 0,
+    max: 45,
+    exclusive: 'min',
+    inOptions: true
+  },
+  {
+    id: 'profileShift',
+    label: 'Profile shift',
+    unit: 'count',
+    initial: 0,
+    min: -2,
+    max: 2,
+    inOptions: true
+  },
+  {
+    id: 'backlash',
+    label: 'Backlash',
+    unit: 'length',
+    initial: 0,
+    min: 0,
+    inOptions: true
+  },
+  { id: 'phaseDeg', label: 'Phase', unit: 'angle', initial: 0, inOptions: true }
+];
+
+/** Optional tooth-form fields: stored once set, else the kernel default. */
+const GEAR_FORM_FIELDS = [
+  'pressureAngleDeg',
+  'profileShift',
+  'backlash',
+  'phaseDeg'
+] as const;
+
+/** The size and form fields of a gear request, from the bar's values. */
+function gearToothFields(
+  values: Record<string, ParamValue>,
+  options: Record<string, string>,
+  ctx: InPlaceContext,
+  withPitch: boolean
+): Pick<
+  GearRequest,
+  'sizing' | 'pitch' | 'teeth' | (typeof GEAR_FORM_FIELDS)[number]
+> {
+  const sizing =
+    options.sizing === 'diametral-pitch' || options.sizing === 'circular-pitch'
+      ? options.sizing
+      : 'module';
+  const saved = ctx.saved?.featureKind === 'gear' ? ctx.saved : null;
+  const touched = new Set(ctx.touched ?? []);
+  const form: Partial<Record<(typeof GEAR_FORM_FIELDS)[number], ParamValue>> =
+    {};
+  for (const field of GEAR_FORM_FIELDS) {
+    const value = values[field];
+    if (
+      value !== undefined &&
+      (touched.has(field) || saved?.[field] !== undefined)
+    ) {
+      form[field] = value;
+    }
+  }
+  return {
+    sizing,
+    ...(withPitch
+      ? {
+          pitch:
+            sizing === 'module'
+              ? (values.module ?? 2)
+              : sizing === 'circular-pitch'
+                ? (values.circularPitch ?? 2 * Math.PI)
+                : (values.diametralPitch ?? 10)
+        }
+      : {}),
+    teeth: values.teeth ?? 20,
+    ...form
+  };
+}
+
+/** Where a gear on a plane stands: its center, axis and a radial direction. */
+function gearFrame(
+  plane: PlanePick | null
+): { origin: Vector3; normal: Vector3; radial: Vector3 } | null {
+  if (!plane || plane.kind === 'datum') return null;
+  const normal = unit(plane.normal);
+  const seed =
+    Math.abs(normal.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const along = dot(seed, normal);
+  const radial = unit({
+    x: seed.x - normal.x * along,
+    y: seed.y - normal.y * along,
+    z: seed.z - normal.z * along
+  });
+  return { origin: plane.origin, normal, radial };
+}
+
+/**
+ * A new gear (M14) standing on a plane: its first cap on the plane, its
+ * axis along the plane's normal.
+ */
+const gear: InPlaceToolSpec = {
+  id: 'gear',
+  title: 'Gear',
+  profileMode: 'none',
+  wantsPlane: true,
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    ...GEAR_TOOTH_VALUES,
+    {
+      id: 'faceWidth',
+      label: 'Face width',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: 'min'
+    },
+    {
+      id: 'boreDiameter',
+      label: 'Bore',
+      unit: 'length',
+      initial: 0,
+      min: 0,
+      inOptions: true
+    },
+    {
+      id: 'rimDiameter',
+      label: 'Rim diameter',
+      unit: 'length',
+      initial: 52,
+      min: 0,
+      exclusive: 'min',
+      inOptions: true
+    }
+  ],
+  options: [
+    {
+      id: 'gearType',
+      label: 'Gear',
+      choices: [
+        { value: 'external', label: 'Spur' },
+        {
+          value: 'internal',
+          label: 'Internal (ring)',
+          note: 'Teeth on the inside of a rim'
+        },
+        {
+          value: 'rack',
+          label: 'Rack',
+          note: 'Straight teeth along the plane'
+        }
+      ],
+      initial: 'external'
+    },
+    GEAR_SIZING_OPTION
+  ],
+  defaults(_slots, _ctx, numbers): Record<string, number> {
+    // A rim that clears an internal gear's roots with four modules to spare.
+    const module = numbers.module ?? 2;
+    const teeth = numbers.teeth ?? 20;
+    return { rimDiameter: module * (teeth + 10.5) };
+  },
+  hint(slots) {
+    if (!slots.plane) {
+      return 'Pick where the gear stands: a ghost plane or a flat face';
+    }
+    if (slots.plane.kind === 'datum') {
+      return 'A gear stands on a ghost plane or a flat face';
+    }
+    return `Drag the face width; tap teeth and module to type · ${FINISH}`;
+  },
+  ready: (slots) => gearFrame(slots.plane) !== null,
+  request(slots, values, options, ctx, numbers) {
+    const frame = gearFrame(slots.plane);
+    if (!frame) return null;
+    const gearType =
+      options.gearType === 'internal' || options.gearType === 'rack'
+        ? options.gearType
+        : 'external';
+    // An edited gear's own placement goes back as stored, expressions and
+    // all, until another plane is picked.
+    const saved =
+      ctx.saved?.featureKind === 'gear' && slots.plane?.kind === 'saved'
+        ? ctx.saved
+        : null;
+    const bore = numbers?.boreDiameter ?? 0;
+    return {
+      tool: 'gear',
+      gear: {
+        gearType,
+        ...gearToothFields(values, options, ctx, true),
+        faceWidth: values.faceWidth ?? 10,
+        origin: saved?.origin ? { ...saved.origin } : { ...frame.origin },
+        axis: saved?.axis ? { ...saved.axis } : { ...frame.normal },
+        ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {}),
+        ...(gearType === 'external' && bore > 0
+          ? { boreDiameter: values.boreDiameter ?? bore }
+          : {}),
+        ...(gearType === 'internal'
+          ? { rimDiameter: values.rimDiameter ?? 52 }
+          : {})
+      }
+    };
+  },
+  handles(slots, values) {
+    const frame = gearFrame(slots.plane);
+    if (!frame) return [];
+    const { origin, normal, radial } = frame;
+    const base = keyOf('gear', origin.x, origin.y, origin.z);
+    const reach = ((values.module ?? 2) * ((values.teeth ?? 20) + 2)) / 2;
+    const at = (by: number): Vector3 => ({
+      x: origin.x + radial.x * by,
+      y: origin.y + radial.y * by,
+      z: origin.z + radial.z * by
+    });
+    return [
+      {
+        valueId: 'faceWidth',
+        kind: 'linear',
+        key: `${base}:faceWidth`,
+        params: { origin, direction: normal }
+      },
+      {
+        valueId: 'teeth',
+        kind: 'chip',
+        key: `${base}:teeth`,
+        params: { anchor: at(reach * 1.15) }
+      },
+      {
+        valueId: 'module',
+        kind: 'chip',
+        key: `${base}:module`,
+        params: { anchor: at(-reach * 1.15) }
+      }
+    ];
+  }
+};
+
+/**
+ * Gear teeth (M14) cut along the whole length of a body's cylindrical face:
+ * outside teeth on a boss, inside teeth in a bore.
+ */
+const gearTeeth: InPlaceToolSpec = {
+  id: 'gear-teeth',
+  title: 'Gear teeth',
+  profileMode: 'none',
+  faceMode: 'one',
+  faceFilter: 'cylindrical',
+  wantsAxis: false,
+  wantsPath: false,
+  values: GEAR_TOOTH_VALUES,
+  options: [
+    {
+      id: 'side',
+      label: 'Teeth',
+      choices: [
+        { value: 'outside', label: 'Outside (a boss)' },
+        { value: 'inside', label: 'Inside (a bore)' }
+      ],
+      initial: 'outside'
+    },
+    {
+      id: 'fit',
+      label: 'Fit',
+      choices: [
+        {
+          value: 'keep-diameter',
+          label: 'Keep the diameter',
+          note: 'The tips stay on the cylinder; the module follows the teeth'
+        },
+        {
+          value: 'module',
+          label: 'Set the module',
+          note: 'A boss is turned down, a bore opened up, to fit'
+        }
+      ],
+      initial: 'keep-diameter'
+    },
+    GEAR_SIZING_OPTION
+  ],
+  hint(slots, options) {
+    if (slots.faces.length === 0) {
+      return 'Pick a cylindrical face: a boss for outside teeth, a bore for inside';
+    }
+    return options?.fit === 'module'
+      ? `Tap teeth and module to type; the teeth run the whole face · ${FINISH}`
+      : `Tap teeth to type; the teeth run the whole face · ${FINISH}`;
+  },
+  ready: (slots) => slots.faces.length > 0,
+  request(slots, values, options, ctx) {
+    const face = slots.faces[0];
+    if (!face) return null;
+    const byModule = options.fit === 'module';
+    return {
+      tool: 'gear',
+      gear: {
+        gearType: options.side === 'inside' ? 'internal' : 'external',
+        ...gearToothFields(values, options, ctx, byModule),
+        ...(byModule ? { fit: 'module' as const } : {}),
+        targetBodyId: face.bodyId,
+        faceHash: face.hash,
+        ...(face.reference ? { faceReference: face.reference } : {})
+      }
+    };
+  },
+  handles(slots, _values, _ctx, options) {
+    const face = slots.faces[0];
+    const anchor = face?.point ?? face?.centroid ?? face?.center;
+    if (!face || !anchor) return [];
+    const base = keyOf('gear-teeth', face.bodyId, face.hash);
+    return [
+      {
+        valueId: 'teeth',
+        kind: 'chip',
+        key: `${base}:teeth`,
+        params: { anchor }
+      },
+      ...(options.fit === 'module'
+        ? [
+            {
+              valueId: 'module',
+              kind: 'chip' as const,
+              key: `${base}:module`,
+              params: {
+                anchor: { x: anchor.x, y: anchor.y, z: anchor.z + 1 }
+              }
+            }
+          ]
+        : [])
+    ];
+  }
+};
 
 const hole: InPlaceToolSpec = {
   id: 'hole',
@@ -3849,6 +4253,8 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   sweep,
   'helical-sweep': helicalSweep,
   hole,
+  gear,
+  'gear-teeth': gearTeeth,
   shell,
   thicken,
   'solid-offset': solidOffset,
