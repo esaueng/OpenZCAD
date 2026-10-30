@@ -15,45 +15,92 @@
 
 .startup-card {
   display: grid;
+  /* minmax(0, …) so a long part name ellipsizes instead of widening the card. */
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
-  gap: var(--sp-3);
-  max-width: 360px;
+  width: min(360px, 100%);
   padding: var(--sp-5);
   text-align: center;
   color: var(--color-text-muted);
   font-size: var(--fs-base);
 }
 
-.startup-card svg {
-  width: 44px;
-  height: 44px;
-  color: var(--color-accent);
-}
-
-.startup-card strong {
-  color: var(--color-text);
-  font-size: var(--fs-lg);
+.startup-wordmark {
+  margin-top: var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-md);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
   text-transform: none;
 }
 
-.startup-card [role='status'] {
+.startup-status {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3);
+  gap: var(--sp-1);
+  width: 100%;
+  margin-top: var(--sp-5);
 }
 
-.startup-card p {
-  margin: 0;
+/* A long part name stays on one line; the full name is in its tooltip. */
+.startup-title {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Keyed on its text, so each new stage rises in rather than swapping. */
+.startup-detail {
   color: var(--color-text-subtle);
   font-size: var(--fs-sm);
   line-height: 1.5;
+  animation: startup-detail-in var(--dur-slow) var(--ease-out);
+}
+
+.startup-detail.is-offline {
+  color: var(--color-warning);
+}
+
+/* Opening or restoring, building the model, loading the panels. */
+.startup-steps {
+  display: flex;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.startup-steps li {
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-border-strong);
+  transition: background var(--dur-base);
+}
+
+.startup-steps li.is-done {
+  background: var(--color-accent);
+}
+
+.startup-steps li.is-active {
+  background: var(--color-accent);
+  animation: startup-step 1200ms ease-in-out infinite alternate;
+}
+
+.startup-hint {
+  margin: var(--sp-3) 0 0;
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+  animation: startup-detail-in var(--dur-slow) var(--ease-out);
 }
 
 .startup-card button {
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-5);
   padding: var(--sp-2) var(--sp-3);
   color: var(--color-text-muted);
   border: var(--border-thin);
@@ -71,12 +118,139 @@
   visibility: hidden;
 }
 
-.startup-progress {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--color-accent-dim);
-  border-top-color: var(--color-accent);
-  border-radius: 50%;
+/* ── Building mark ──
+   One 3.2s cycle (BUILD_CYCLE_MS in StartupScreen.tsx): the outline is
+   sketched, the front face fills, the top and side faces extrude out along
+   the mark's depth axis (24, −16), the finished part holds, then it clears
+   back to the faint sketch. Every layer shares --startup-phase, a negative
+   delay that keeps the cycle continuous across screen handoffs. The resting
+   styles are the finished mark, which is what reduced motion shows. */
+.startup-mark {
+  width: 64px;
+  height: 64px;
+  overflow: visible;
+}
+
+.startup-mark-ghost {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-opacity: 0.22;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.startup-mark-sketch {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  opacity: 0;
+}
+
+.startup-mark > .startup-mark-sketch {
+  animation: startup-sketch 3200ms cubic-bezier(0.45, 0, 0.25, 1)
+    var(--startup-phase, 0ms) infinite both;
+}
+
+.startup-mark > .startup-mark-front {
+  animation: startup-front 3200ms ease var(--startup-phase, 0ms) infinite both;
+}
+
+.startup-mark > .startup-mark-face {
+  animation: startup-extrude 3200ms var(--ease-out) var(--startup-phase, 0ms)
+    infinite both;
+}
+
+/* Sides follow the tops a beat later, so the depth reads as built. */
+.startup-mark > .startup-mark-face.is-side {
+  animation-delay: calc(var(--startup-phase, 0ms) + 140ms);
+}
+
+@keyframes startup-sketch {
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 1;
+  }
+  32%,
+  58% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  72%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes startup-front {
+  0%,
+  24% {
+    opacity: 0;
+  }
+  40%,
+  84% {
+    opacity: 1;
+  }
+  96%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes startup-extrude {
+  0%,
+  38% {
+    opacity: 0;
+    transform: translate(-9px, 6px);
+  }
+  56%,
+  84% {
+    opacity: 1;
+    transform: none;
+  }
+  96%,
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+@keyframes startup-step {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes startup-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+/* The tokens.css collapse would land the loop on its cleared last frame;
+   stop it instead so the finished mark stays up. The active step rests lit. */
+[data-reduced-motion='true'] .startup-mark > .startup-mark-sketch,
+[data-reduced-motion='true'] .startup-mark > .startup-mark-front,
+[data-reduced-motion='true'] .startup-mark > .startup-mark-face,
+[data-reduced-motion='true'] .startup-steps li.is-active {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-mark > .startup-mark-sketch,
+  .startup-mark > .startup-mark-front,
+  .startup-mark > .startup-mark-face,
+  .startup-steps li.is-active {
+    animation: none;
+  }
 }
 
 /* Keep the canvas at its final size while its first frame and panels load. */

@@ -28310,6 +28310,7 @@ export function App() {
     <WorkspaceAppShell
       covered={sharePage !== null}
       projectId={doc.projectId}
+      projectName={doc.name}
       loadingReady={
         displayedGeometryComplete ||
         viewerBodies.length > 0 ||

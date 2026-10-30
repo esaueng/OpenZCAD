@@ -354,12 +354,15 @@ test(
     });
     try {
       await card.click();
+      const opening = page.getByRole('status', {
+        name: 'Opening project',
+        exact: true
+      });
+      await expect(opening).toBeVisible();
       await expect(
-        page.getByRole('status', { name: 'Opening project', exact: true })
+        opening.getByText('Selected bracket', { exact: true })
       ).toBeVisible();
-      await expect(
-        page.getByText('Opening Selected bracket…', { exact: true })
-      ).toBeVisible();
+      await expect(opening.getByText('Checking saved copies')).toBeVisible();
       await expect.poll(() => reads).toBe(1);
       await expect(page.locator('.start-screen')).toHaveCount(0);
       await page.screenshot({
