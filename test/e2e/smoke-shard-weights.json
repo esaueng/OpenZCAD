@@ -23,6 +23,7 @@
   "settings.spec.ts": 8,
   "sketch-modify-tools.spec.ts": 9,
   "sketch-move.spec.ts": 11,
+  "start-screen-responsive.spec.ts": 3,
   "start-screen-sync-failures.spec.ts": 4,
   "start-tile-reorder.spec.ts": 2,
   "text-authoring.spec.ts": 7,
