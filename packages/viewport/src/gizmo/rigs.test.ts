@@ -6,7 +6,6 @@ import {
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
-  edgeHandlePlacement,
   offsetHandlePlacement,
   sweepGhostLayout
 } from './rigs';
@@ -36,29 +35,6 @@ describe('placement is pure', () => {
     );
     expect(Number.isNaN(direction.x)).toBe(false);
     expect(Number.isNaN(direction.z)).toBe(false);
-  });
-
-  it('anchors an edge handle at the polyline midpoint, pointing outward', () => {
-    const placement = edgeHandlePlacement([0, 0, 0, 10, 0, 0, 20, 0, 0], {
-      x: 10,
-      y: 0,
-      z: -5
-    });
-    expect(placement?.origin).toEqual({ x: 10, y: 0, z: 0 });
-    expect(placement?.direction).toEqual({ x: 0, y: 0, z: 1 });
-  });
-
-  it('rejects a polyline too short to have a midpoint', () => {
-    expect(edgeHandlePlacement([0, 0, 0], { x: 0, y: 0, z: 0 })).toBeNull();
-  });
-
-  it('falls back to +Z when the edge sits on the body centre', () => {
-    const placement = edgeHandlePlacement([0, 0, 0, 1, 0, 0, 2, 0, 0], {
-      x: 1,
-      y: 0,
-      z: 0
-    });
-    expect(placement?.direction).toEqual({ x: 0, y: 0, z: 1 });
   });
 });
 
@@ -255,28 +231,47 @@ describe('the offset-face rig', () => {
 });
 
 describe('the edge-radius rig', () => {
-  it('orients its radius ring in the supplied blend radial plane', () => {
+  it('stands a double-headed pin on the bisector it is given', () => {
     const rig = buildEdgeRadiusHandle({
       origin: { x: 1, y: 2, z: 3 },
       direction: { x: 1, y: 0, z: 0 }
     });
-    const ring = rig.group.children[1]!;
-    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(ring.quaternion);
-    expect(normal.x).toBeCloseTo(1, 12);
-    expect(normal.y).toBeCloseTo(0, 12);
-    expect(normal.z).toBeCloseTo(0, 12);
+    // Local +Y is the arrow's axis, as on every pin.
+    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      rig.group.quaternion
+    );
+    expect(axis.x).toBeCloseTo(1, 12);
+    expect(axis.y).toBeCloseTo(0, 12);
+    const cones = rig.group.children.filter(
+      (child) =>
+        child instanceof THREE.Mesh &&
+        child.geometry instanceof THREE.ConeGeometry
+    );
+    expect(cones).toHaveLength(2);
     rig.dispose();
   });
-  it('records its value without moving the sphere off the edge', () => {
+
+  it('rides the blend surface by its travel, chip and all', () => {
+    const rig = buildEdgeRadiusHandle({
+      origin: { x: 4, y: 0, z: 0 },
+      direction: { x: -1, y: 0, z: 0 },
+      travel: 0.5
+    });
+    rig.setValue(3);
+    expect(rig.value()).toBe(3);
+    expect(rig.group.position.x).toBeCloseTo(2.5, 12);
+    expect(rig.chipAnchor(2).x).toBeCloseTo(2.5, 12);
+    // The anchor and direction describe the gesture, not the current pose.
+    expect(rig.origin.x).toBe(4);
+  });
+
+  it('stays on the edge without a travel', () => {
     const rig = buildEdgeRadiusHandle({
       origin: { x: 4, y: 0, z: 0 },
       direction: { x: 1, y: 0, z: 0 }
     });
     rig.setValue(3);
-    expect(rig.value()).toBe(3);
-    // A blend grows around the edge, so the handle stays on it.
     expect(rig.group.position.x).toBe(4);
-    expect(rig.chipAnchor(2).x).toBe(4);
   });
 });
 
@@ -577,26 +572,26 @@ describe('the edge-radius rig', () => {
       origin: { x: 0, y: 0, z: 0 },
       direction: { x: 0, y: 0, z: 1 }
     });
-    const sphere = rig.group.children.find(
+    const shaft = rig.group.children.find(
       (child) =>
         child instanceof THREE.Mesh &&
-        child.geometry instanceof THREE.SphereGeometry &&
+        child.geometry instanceof THREE.CylinderGeometry &&
         child.userData.directHandle !== true
-    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-    expect(sphere).toBeDefined();
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+    expect(shaft).toBeDefined();
 
     rig.setHot?.(true);
     rig.step?.(1000);
     rig.setWarning?.(true);
-    expect(sphere.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+    expect(shaft.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
     expect(rig.group.userData.previewWarning).toBe(true);
     // Hover ticks must not soften a refused value back to the hot colour.
     rig.step?.(16);
-    expect(sphere.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
+    expect(shaft.material.color.getHex()).toBe(HANDLE_WARNING_COLOR);
 
     rig.setWarning?.(false);
     rig.step?.(1000);
-    expect(sphere.material.color.getHex()).not.toBe(HANDLE_WARNING_COLOR);
+    expect(shaft.material.color.getHex()).not.toBe(HANDLE_WARNING_COLOR);
     expect(rig.group.userData.previewWarning).toBe(false);
   });
 });

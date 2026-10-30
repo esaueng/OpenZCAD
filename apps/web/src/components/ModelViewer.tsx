@@ -83,7 +83,7 @@ import {
   BOX_SELECT_MIN_PX,
   rectFromDrag,
   edgeRunSelections,
-  edgeHandlePlacement,
+  edgeBlendFrame,
   offsetHandlePlacement,
   screenDragAxis,
   screenDragValue,
@@ -1058,6 +1058,8 @@ export interface ModelViewerProps {
   onEdgeCancel(): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
   onOpenEdgeKeypad(currentSize: number): boolean;
+  /** The edge tag tapped: switch the armed edges between fillet and chamfer. */
+  onToggleEdgeOp?(): void;
   /** Semantic lifecycle signal for direct-manipulation drags. */
   onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   /** Region-detected sketch rendering (curves + orange hover fills). */
@@ -1804,7 +1806,15 @@ function sameCylinderHandleTarget(
   );
 }
 
-type EdgeRigPlacement = NonNullable<EdgeHandleTarget['placement']>;
+/**
+ * Where the live edge rig stands. `travel` is how far the blend's surface
+ * moves along the arrow per unit value for the armed operation; absent, the
+ * arrow stays put (a face-backed edit, or an edge whose faces could not be
+ * read).
+ */
+type EdgeRigPlacement = NonNullable<EdgeHandleTarget['placement']> & {
+  travel?: number;
+};
 
 /** Whether two edge handles round the same edge with the same tool. */
 function sameEdgeHandleTarget(
@@ -1824,7 +1834,11 @@ function sameEdgeRigPlacement(a: EdgeRigPlacement, b: EdgeRigPlacement) {
     Math.abs(u.x - v.x) < 1e-9 &&
     Math.abs(u.y - v.y) < 1e-9 &&
     Math.abs(u.z - v.z) < 1e-9;
-  return near(a.origin, b.origin) && near(a.direction, b.direction);
+  return (
+    near(a.origin, b.origin) &&
+    near(a.direction, b.direction) &&
+    Math.abs((a.travel ?? 0) - (b.travel ?? 0)) < 1e-9
+  );
 }
 
 function bodyExtentBehind(
@@ -2102,6 +2116,7 @@ export function ModelViewer({
   onEdgeCommit,
   onEdgeCancel,
   onOpenEdgeKeypad,
+  onToggleEdgeOp,
   onDirectManipulationChange,
   sketchViews,
   selectedProfileIds,
@@ -2334,6 +2349,8 @@ export function ModelViewer({
   onEdgeCancelRef.current = onEdgeCancel;
   const onOpenEdgeKeypadRef = useRef(onOpenEdgeKeypad);
   onOpenEdgeKeypadRef.current = onOpenEdgeKeypad;
+  const onToggleEdgeOpRef = useRef(onToggleEdgeOp);
+  onToggleEdgeOpRef.current = onToggleEdgeOp;
   const onDirectManipulationChangeRef = useRef(onDirectManipulationChange);
   onDirectManipulationChangeRef.current = onDirectManipulationChange;
   const edgeHandleOpRef = useRef<'fillet' | 'chamfer'>('fillet');
@@ -2349,6 +2366,16 @@ export function ModelViewer({
     placement: EdgeRigPlacement;
   } | null>(null);
   const edgeDragActiveRef = useRef(false);
+  /**
+   * Where the last edge click landed, so the fillet arrow stands where the
+   * edge was picked rather than at an arbitrary sample — on a closed rim the
+   * polyline's middle is often round the back of the part.
+   */
+  const lastEdgePickRef = useRef<{
+    bodyId: string;
+    topologyId: string;
+    point: { x: number; y: number; z: number };
+  } | null>(null);
   const sketchModeRef = useRef(sketchMode);
   sketchModeRef.current = sketchMode;
   const onSelectRegionRef = useRef(onSelectRegion);
@@ -4391,6 +4418,20 @@ export function ModelViewer({
     radiusLabelChip.addEventListener('click', (event) => {
       // On an offset line the tag is the Total/Offset switch; on a radius
       // line it names the dimension and opens exact entry like the value.
+      // On an edge it is the Fillet/Chamfer switch, which a face-backed
+      // edit (labelled, and only ever a fillet) does not offer.
+      if (
+        edgeRigRef.current &&
+        !offsetRigRef.current &&
+        !cylinderRadiusRigRef.current &&
+        !edgeHandleRef.current?.label &&
+        onToggleEdgeOpRef.current
+      ) {
+        event.stopPropagation();
+        // A drag in flight owns the value; the switch waits for release.
+        if (!edgeDragActiveRef.current) onToggleEdgeOpRef.current();
+        return;
+      }
       const offsetRig = offsetRigRef.current;
       if (offsetRig && !cylinderRadiusRigRef.current) {
         event.stopPropagation();
@@ -6232,6 +6273,17 @@ export function ModelViewer({
       if (result) {
         cameraRig.pivotOn(result.hit.point);
       }
+      if (
+        result?.selection?.kind === 'edge' &&
+        result.selection.topologyId &&
+        detail
+      ) {
+        lastEdgePickRef.current = {
+          bodyId: result.selection.bodyId,
+          topologyId: result.selection.topologyId,
+          point: detail.point
+        };
+      }
       onSelectTopologyRef.current(
         result?.selection ?? null,
         event.shiftKey,
@@ -6915,7 +6967,10 @@ export function ModelViewer({
       // below it, so a hole growing under the hand swapped between dark
       // chips over the handle and white tags laid along the bore mid-drag.
       // One layout, placed clear of the pin, keeps the grab target bare.
-      const dimensionChipBesidePin = rig?.kind === 'cylinder-radius';
+      // The edge arrow's label hangs beside it the same way: centred on the
+      // arrow it covered the very thing the hand was reaching for.
+      const dimensionChipBesidePin =
+        rig?.kind === 'cylinder-radius' || rig?.kind === 'edge-radius';
       if (rig?.kind === 'cylinder-radius') {
         rig.setSpanMode?.(cylinderDimensionModeRef.current);
       }
@@ -7071,6 +7126,31 @@ export function ModelViewer({
           rig.worldGroup.getObjectByName('offset-change-arrow')?.visible ===
             true
         );
+      } else if (e2eCanvasHooksEnabled && rig?.kind === 'edge-radius') {
+        // The arrow is centred on the blend point: grab its middle.
+        const hitScreen = projectToScreen(
+          rig.group.position,
+          context.activeCamera,
+          canvasWidth(),
+          canvasHeight()
+        );
+        const dragDirection = screenDirectionFor(
+          rig.group.position,
+          rig.direction
+        );
+        if (hitScreen) {
+          renderer.domElement.dataset.e2eHandleX = String(hitScreen.x);
+          renderer.domElement.dataset.e2eHandleY = String(hitScreen.y);
+          renderer.domElement.dataset.e2eHandleDx = String(
+            dragDirection.directionX
+          );
+          renderer.domElement.dataset.e2eHandleDy = String(
+            dragDirection.directionY
+          );
+          renderer.domElement.dataset.e2eHandlePixelsPerUnit = String(
+            dragDirection.pixelsPerUnit
+          );
+        }
       }
       if (rig?.kind === 'cylinder-radius') {
         // Drawing-annotation typography: the units render small after the
@@ -7186,21 +7266,30 @@ export function ModelViewer({
         );
         const offsetSpan =
           offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
+        const edgeTag =
+          rig?.kind === 'edge-radius' && !edgeHandleRef.current?.label
+            ? edgeHandleOpRef.current === 'fillet'
+              ? 'Fillet ▾'
+              : 'Chamfer ▾'
+            : null;
         if (
           rig?.kind === 'cylinder-radius' ||
+          edgeTag !== null ||
           (rig?.kind === 'offset-face' &&
             offsetSpan !== null &&
             offsetSpan !== undefined)
         ) {
-          // Beside the pin the tag stays reachable — the Total/Offset
-          // switch, or the Diameter/Radius name that also opens exact
-          // entry — flush against the value chip's left edge.
+          // Beside the pin the tag stays reachable — the Total/Offset or
+          // Fillet/Chamfer switch, or the Diameter/Radius name that also
+          // opens exact entry — flush against the value chip's left edge.
           radiusLabelChip.textContent =
-            rig.kind === 'cylinder-radius'
+            rig?.kind === 'cylinder-radius'
               ? (tagText ?? '')
-              : offsetChipModeRef.current === 'total'
-                ? 'Total ▾'
-                : 'Offset ▾';
+              : edgeTag !== null
+                ? edgeTag
+                : offsetChipModeRef.current === 'total'
+                  ? 'Total ▾'
+                  : 'Offset ▾';
           if (pinScreenAt) {
             // The pair reads tag then value and stays clear of the pin: on
             // the pin's right it starts just past the pin, on its left it
@@ -9637,18 +9726,23 @@ export function ModelViewer({
           .filter((hit) => hit.object.userData.directHandle === true);
         if (edgeHits.length > 0) {
           const screen = screenDirectionFor(
-            armedEdgeRig.origin,
+            armedEdgeRig.group.position,
             armedEdgeRig.direction
           );
+          const travel = edgeRigBuiltRef.current?.placement.travel;
           edgeDrag = {
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
             directionX: screen.directionX,
             directionY: screen.directionY,
-            // The radial direction only signs the drag; the head-on scale
-            // keeps radius sensitivity predictable at every view angle.
-            pixelsPerUnit: screen.fallbackPixelsPerUnit,
+            // An arrow riding the blend's surface moves `travel` per unit of
+            // value, so the value scales by it and the arrow stays under the
+            // pointer. A fixed arrow only signs the drag; the head-on scale
+            // keeps its sensitivity predictable at every view angle.
+            pixelsPerUnit: travel
+              ? screen.pixelsPerUnit * travel
+              : screen.fallbackPixelsPerUnit,
             initialValue: armedEdgeRig.value()
           };
           edgeDragActiveRef.current = true;
@@ -10819,13 +10913,15 @@ export function ModelViewer({
       }
       const edgeRig = edgeRigRef.current;
       if (edgeRig) {
+        // The same pin as the face and cylinder arrows, at their size.
         const rigScale =
-          moveGizmoWorldScale(worldPerPixelAt(edgeRig.group.position)) * 0.4;
+          moveGizmoWorldScale(worldPerPixelAt(edgeRig.group.position)) * 0.55;
         if (edgeRig.step?.(dt * 1000)) {
           rigsAnimating = true;
         }
         edgeRig.group.scale.setScalar(rigScale);
         edgeRig.group.userData.gizmoScale = rigScale;
+        edgeRig.orient?.(context.activeCamera);
       }
       for (const { rig: commandRig } of commandRigsRef.current.values()) {
         if (!commandRig) continue;
@@ -12665,18 +12761,58 @@ export function ModelViewer({
     const body = bodies.find(
       (candidate) => candidate.bodyId === edgeHandle.bodyId
     );
-    let placement = edgeHandle.placement ?? null;
+    let placement: EdgeRigPlacement | null = edgeHandle.placement ?? null;
     if (!placement) {
-      const edge = body?.topology?.edges.find(
+      const topology = body?.topology;
+      const edge = topology?.edges.find(
         (candidate) => candidate.topologyId === edgeHandle.topologyId
       );
-      if (body && edge) {
+      if (body && topology && edge) {
         const center = {
           x: (body.bbox.min.x + body.bbox.max.x) / 2,
           y: (body.bbox.min.y + body.bbox.max.y) / 2,
           z: (body.bbox.min.z + body.bbox.max.z) / 2
         };
-        placement = edgeHandlePlacement(edge.points, center);
+        // Stand where the edge was clicked; failing that, where the arrow
+        // already stood on this edge, so a re-arm or a landed preview does
+        // not walk it along the rim.
+        const pick = lastEdgePickRef.current;
+        const stood =
+          built &&
+          built.handle.bodyId === edgeHandle.bodyId &&
+          built.handle.topologyId === edgeHandle.topologyId
+            ? built.placement
+            : null;
+        const near =
+          pick &&
+          pick.bodyId === edgeHandle.bodyId &&
+          pick.topologyId === edgeHandle.topologyId
+            ? pick.point
+            : (stood?.origin ?? null);
+        const adjacent = new Set(edge.adjacentFaceHashes ?? []);
+        const camera = context.activeCamera.position;
+        const frame = edgeBlendFrame({
+          points: edge.points,
+          vertices: body.mesh.vertices,
+          indices: body.mesh.indices,
+          faces: topology.faces
+            .filter((face) => adjacent.has(face.hash))
+            .map((face) => ({
+              key: face.hash,
+              triangleStart: face.triangleStart,
+              triangleCount: face.triangleCount
+            })),
+          bodyCenter: center,
+          near,
+          viewer: { x: camera.x, y: camera.y, z: camera.z }
+        });
+        if (frame) {
+          placement = {
+            origin: frame.origin,
+            direction: frame.direction,
+            ...(frame.travel ? { travel: frame.travel[edgeHandle.op] } : {})
+          };
+        }
       }
     }
     // The same edge armed again — the keypad opening, a preview landing, a
@@ -12717,6 +12853,8 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
+    // Placed at its value at once: a re-armed arrow stands on the blend it
+    // already made rather than sliding in from the sharp edge.
     rig.setValue(edgeHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
     if (sameTarget) rig.appear?.();
