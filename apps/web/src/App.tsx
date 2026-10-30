@@ -28640,6 +28640,7 @@ export function App() {
                 : selectedEdges
             }
             pickListEnabled={appSettings.experiments.directManipulation}
+            frameRateOverlay={appSettings.experiments.frameRateOverlay}
             settings={viewerSettings}
             fitSignal={fitSignal}
             autoFrame={autoFrame}

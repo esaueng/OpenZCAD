@@ -636,6 +636,38 @@ describe('application settings', () => {
     expect(parsed.settings.files.cloudAutosave).toBe(true);
   });
 
+  it('keeps the frame rate overlay off unless it was turned on', () => {
+    expect(DEFAULT_APP_SETTINGS.experiments.frameRateOverlay).toBe(false);
+    // Settings written before the switch existed read as off.
+    expect(
+      normalizeAppSettings({ experiments: { directManipulation: false } })
+        .experiments
+    ).toEqual({ directManipulation: false, frameRateOverlay: false });
+    expect(
+      normalizeAppSettings({ experiments: { frameRateOverlay: 'yes' } })
+        .experiments.frameRateOverlay
+    ).toBe(false);
+
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.experiments.frameRateOverlay = true;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings },
+        'development'
+      ).settings.experiments.frameRateOverlay
+    ).toBe(true);
+    const older = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      experiments: Record<string, unknown>;
+    };
+    delete older.experiments.frameRateOverlay;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: older },
+        'development'
+      ).settings.experiments.frameRateOverlay
+    ).toBe(false);
+  });
+
   it('round-trips shortcut remaps through device storage', () => {
     const remapped = defaultAppSettings();
     remapped.keymap = {

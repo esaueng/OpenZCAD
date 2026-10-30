@@ -441,7 +441,11 @@ export function parseUpdateAppSettingsRequest(
         directManipulation:
           typeof experiments.directManipulation === 'boolean'
             ? experiments.directManipulation
-            : true
+            : true,
+        frameRateOverlay:
+          typeof experiments.frameRateOverlay === 'boolean'
+            ? experiments.frameRateOverlay
+            : false
       },
       keymap: {
         overrides: normalizeKeymapOverrides(keymap.overrides)

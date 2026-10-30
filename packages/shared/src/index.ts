@@ -4195,6 +4195,11 @@ export interface AppSettings {
   experiments: {
     /** Selection-first direct manipulation: click geometry, drag handles. */
     directManipulation: boolean;
+    /**
+     * A frame-rate readout in the viewport's top-left corner: frames per
+     * second, frame time and draw load, for diagnosing a slow viewer.
+     */
+    frameRateOverlay: boolean;
   };
   /**
    * The user's shortcut remaps, by command id; a command without an entry
@@ -4320,7 +4325,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     customInstructions: ''
   },
   experiments: {
-    directManipulation: true
+    directManipulation: true,
+    frameRateOverlay: false
   },
   keymap: {
     overrides: {}
