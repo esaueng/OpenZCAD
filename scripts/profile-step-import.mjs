@@ -220,7 +220,7 @@ function runChild(filePath, withMesh) {
   const memBytes = () => memory?.buffer.byteLength ?? null;
 
   const bytes = fs.readFileSync(filePath);
-  const kernel = new remus.BrepKernel();
+  const kernel = new remus.RemusKernel();
   const io = new remusIo.RemusIo();
   const importStep = (...budget) =>
     kernel.deserializeSolids(io.importStep(bytes, ...budget));

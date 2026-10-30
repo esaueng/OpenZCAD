@@ -1,5 +1,5 @@
 export {
-  BrepKernel as RemusKernel,
+  RemusKernel,
   OperationCancellationToken,
   type CancellableBooleanResult,
   type CancellableOperationStatus,

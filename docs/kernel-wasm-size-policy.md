@@ -76,7 +76,7 @@ gates once the measurement is stable on CI hardware.
 `scripts/measure-remus-wasm-load.mjs` (`pnpm perf:remus-wasm`) times
 **kernel-ready**: fetch the kernel asset, `WebAssembly.instantiateStreaming`
 (as `vite-plugin-wasm` does for an `application/wasm` response), wasm-bindgen's
-`__wbindgen_start`, and the first `new BrepKernel()`. The wasm-bindgen glue is
+`__wbindgen_start`, and the first `new RemusKernel()`. The wasm-bindgen glue is
 imported before the clock starts; it ships in a JavaScript chunk under the
 JavaScript budgets. The harness takes that glue from the installed
 `remus-wasm` package and refuses to run when the package's WASM is not
@@ -101,7 +101,7 @@ byte-identical to the measured asset.
 - V8 compiles WebAssembly lazily, so kernel-ready covers decoding, validation
   and instantiation; functions compile on first call, inside the first
   operation. `--first-operation` measures that cost: after kernel-ready, in
-  the same document, a fresh `BrepKernel` runs a representative edit
+  the same document, a fresh `RemusKernel` runs a representative edit
   (`makeBox`, `makeCylinder`, `cut`, a two-edge `fillet`, `tessellateSolid`,
   `volume`) twice and builds and solves a constrained GCS sketch twice. The
   first call minus the second approximates lazy compilation plus first-touch

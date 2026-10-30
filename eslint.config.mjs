@@ -55,7 +55,21 @@ export default tseslint.config(
       ],
       "@typescript-eslint/require-await": "off",
       "@typescript-eslint/unbound-method": "off",
-      "@typescript-eslint/no-empty-object-type": "off"
+      "@typescript-eslint/no-empty-object-type": "off",
+      // remus-wasm 2026.1.87 renamed the class; the old name is a deprecated
+      // alias that a later Remus release removes.
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "remus-wasm",
+              importNames: ["BrepKernel"],
+              message: "Use RemusKernel; BrepKernel is a deprecated alias."
+            }
+          ]
+        }
+      ]
     }
   },
   {

@@ -33,9 +33,11 @@ not imported by the production adapter or emitted into the application bundle.
 
 - Kernel updates resolve from `esaueng/remus`, use a Remus-named updater, and
   still require the full geometry, parity, browser, bundle, and desktop gates.
-- The exact API seam remains intentionally narrow. Remus currently exports the
-  compatible `BrepKernel` JavaScript class, which OpenZCAD aliases as
-  `RemusKernel` rather than leaking that implementation name through the app.
+- The exact API seam remains intentionally narrow. Remus exports the kernel as
+  the `RemusKernel` JavaScript class (renamed from `BrepKernel` in
+  `remus-wasm` 2026.1.87, esaueng/remus#1358), and OpenZCAD re-exports it under
+  that name. The deprecated `BrepKernel` alias is not used, and lint rejects
+  importing it.
 - Two upstream behavior changes are pinned explicitly: flattened curved-text
   booleans now meet their closed-form volume checks, while a shallow circular
   union now returns a watertight faceted result instead of refusing. The latter
