@@ -48,6 +48,11 @@ export async function exportAccountData(
       [session.userId]
     ],
     [
+      'library_folder_sets',
+      'SELECT format, revision, record, updated_at FROM library_folder_sets WHERE user_id = ?',
+      [session.userId]
+    ],
+    [
       'user_ai_credentials',
       'SELECT token_hint, updated_at, last_validated_at FROM user_ai_credentials WHERE user_id = ?',
       [session.userId]
