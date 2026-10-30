@@ -47,6 +47,8 @@ function startsBody(feature: FeatureNode): boolean {
         feature.data.targetBodyId === undefined ||
         feature.data.operation === 'new-body'
       );
+    case 'gear':
+      return feature.data.targetBodyId === undefined;
     default:
       return false;
   }

@@ -156,6 +156,8 @@ import {
   helicalSweepProfile,
   holeBody,
   type HoleInput,
+  gearBody,
+  type GearInput,
   type ImportedMeshInput,
   type ImportedStepInput,
   importMeshBody,
@@ -310,6 +312,7 @@ export type CommandKind =
   | 'feature.datum-plane'
   | 'feature.datum-axis'
   | 'feature.hole'
+  | 'feature.gear'
   | 'feature.shell'
   | 'feature.solid-offset'
   | 'feature.draft'
@@ -383,6 +386,7 @@ export type AnyCommand =
   | CommandDefinition<LoftInput>
   | CommandDefinition<SweepInput>
   | CommandDefinition<HelicalSweepInput>
+  | CommandDefinition<GearInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<MirrorInput>
@@ -1053,6 +1057,195 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   }
 }
 
+/** M14: the most teeth the kernel's gear generator builds. */
+const MAX_GEAR_TEETH = 1000;
+/** M14: the steepest helix angle the kernel's gear generator builds. */
+const MAX_GEAR_HELIX_DEG = 45;
+
+/**
+ * Structural checks for a gear feature. Whether the tooth form is buildable
+ * (a pointed tip, a closed root land, a cylinder too small) is the kernel's
+ * call and surfaces as its typed refusal at rebuild.
+ */
+function validateGearInput(document: ProjectDocument, input: GearInput): void {
+  const value = (label: string, param: ParamValue): number => {
+    const resolved = resolvedModelingValue(document, label, param);
+    if (!Number.isFinite(resolved)) {
+      throw new Error(`Gear ${label} must be finite.`);
+    }
+    return resolved;
+  };
+  const positive = (label: string, param: ParamValue): number => {
+    const resolved = value(label, param);
+    if (!(resolved > 0)) {
+      throw new Error(`Gear ${label} must be greater than zero.`);
+    }
+    return resolved;
+  };
+  const teeth = value('teeth', input.teeth);
+  const minTeeth =
+    input.gearType === 'internal' ? 6 : input.gearType === 'rack' ? 1 : 3;
+  if (
+    Math.abs(teeth - Math.round(teeth)) > 1e-9 ||
+    teeth < minTeeth ||
+    teeth > MAX_GEAR_TEETH
+  ) {
+    throw new Error(
+      `Gear teeth must be a whole number from ${minTeeth} to ${MAX_GEAR_TEETH}.`
+    );
+  }
+  if (input.pressureAngleDeg !== undefined) {
+    const angle = value('pressure angle', input.pressureAngleDeg);
+    if (!(angle > 0 && angle <= 45)) {
+      throw new Error('Gear pressure angle must be above 0° and at most 45°.');
+    }
+  }
+  if (input.backlash !== undefined && value('backlash', input.backlash) < 0) {
+    throw new Error('Gear backlash must not be negative.');
+  }
+  if (input.addendum !== undefined) positive('addendum', input.addendum);
+  if (input.dedendum !== undefined) positive('dedendum', input.dedendum);
+  if (
+    input.rootFillet !== undefined &&
+    value('root fillet', input.rootFillet) < 0
+  ) {
+    throw new Error('Gear root fillet must not be negative.');
+  }
+  if (input.profileShift !== undefined) {
+    const shift = value('profile shift', input.profileShift);
+    if (input.gearType === 'rack' && shift !== 0) {
+      throw new Error('A rack has no profile shift.');
+    }
+  }
+  if (input.phaseDeg !== undefined) {
+    const phase = value('phase', input.phaseDeg);
+    if (input.gearType === 'rack' && phase !== 0) {
+      throw new Error('A rack takes no phase; place it with its origin.');
+    }
+  }
+  if (input.helixAngleDeg !== undefined) {
+    const helix = value('helix angle', input.helixAngleDeg);
+    if (!(helix >= 0 && helix <= MAX_GEAR_HELIX_DEG)) {
+      throw new Error(
+        `Gear helix angle must be from 0° to ${MAX_GEAR_HELIX_DEG}°.`
+      );
+    }
+    if (input.gearType === 'rack' && helix !== 0) {
+      throw new Error('A rack cannot be helical.');
+    }
+  }
+  if (input.herringbone !== undefined) {
+    if (typeof input.herringbone !== 'boolean') {
+      throw new Error('Gear herringbone must be true or false.');
+    }
+    const helix =
+      input.helixAngleDeg === undefined
+        ? 0
+        : value('helix angle', input.helixAngleDeg);
+    if (input.herringbone && !(helix > 0)) {
+      throw new Error('A herringbone gear needs a helix angle above 0°.');
+    }
+  }
+  if (
+    input.hand !== undefined &&
+    input.hand !== 'right' &&
+    input.hand !== 'left'
+  ) {
+    throw new Error('Gear hand must be right or left.');
+  }
+
+  if (input.targetBodyId !== undefined) {
+    validateBodyTarget(document, input.targetBodyId);
+    if (typeof input.faceHash !== 'number') {
+      throw new Error('Gear teeth on a body need its cylindrical face.');
+    }
+    if (input.gearType === 'rack') {
+      throw new Error('A rack cannot be cut into a cylinder.');
+    }
+    for (const [label, present] of [
+      ['face width', input.faceWidth],
+      ['origin', input.origin],
+      ['axis', input.axis],
+      ['x direction', input.xDirection],
+      ['bore diameter', input.boreDiameter],
+      ['rim diameter', input.rimDiameter],
+      ['back depth', input.backDepth]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(
+          `Gear teeth on a body take their ${label} from the body.`
+        );
+      }
+    }
+    if (input.fit === 'module') {
+      if (input.pitch === undefined) {
+        throw new Error('A gear sized by module needs a pitch.');
+      }
+      positive('pitch', input.pitch);
+    } else if (input.pitch !== undefined) {
+      throw new Error(
+        "A gear that keeps the cylinder's diameter solves its own pitch."
+      );
+    }
+    return;
+  }
+
+  if (input.fit !== undefined) {
+    throw new Error('Only teeth on a body choose a fit.');
+  }
+  if (input.pitch === undefined) {
+    throw new Error('A new gear needs a pitch.');
+  }
+  positive('pitch', input.pitch);
+  if (input.faceWidth === undefined) {
+    throw new Error('A new gear needs a face width.');
+  }
+  positive('face width', input.faceWidth);
+  if (input.origin === undefined || input.axis === undefined) {
+    throw new Error('A new gear needs an origin and an axis.');
+  }
+  for (const [label, component] of [
+    ['origin X', input.origin.x],
+    ['origin Y', input.origin.y],
+    ['origin Z', input.origin.z]
+  ] as const) {
+    value(label, component);
+  }
+  const axisLength = Math.hypot(
+    value('axis X', input.axis.x),
+    value('axis Y', input.axis.y),
+    value('axis Z', input.axis.z)
+  );
+  if (!(axisLength > 1e-12)) {
+    throw new Error('Gear axis must be non-zero.');
+  }
+  if (input.xDirection !== undefined) {
+    value('x direction X', input.xDirection.x);
+    value('x direction Y', input.xDirection.y);
+    value('x direction Z', input.xDirection.z);
+  }
+  if (input.boreDiameter !== undefined) {
+    if (input.gearType !== 'external') {
+      throw new Error('Only an external gear takes a bore.');
+    }
+    positive('bore diameter', input.boreDiameter);
+  }
+  if (input.gearType === 'internal') {
+    if (input.rimDiameter === undefined) {
+      throw new Error('An internal gear needs a rim diameter.');
+    }
+    positive('rim diameter', input.rimDiameter);
+  } else if (input.rimDiameter !== undefined) {
+    throw new Error('Only an internal gear takes a rim.');
+  }
+  if (input.backDepth !== undefined) {
+    if (input.gearType !== 'rack') {
+      throw new Error('Only a rack takes a back depth.');
+    }
+    positive('back depth', input.backDepth);
+  }
+}
+
 function validatePositiveModelingValue(
   document: ProjectDocument,
   label: string,
@@ -1274,6 +1467,11 @@ function validateModelingFeatureUpdate(
         ...feature.data
       });
       break;
+    case 'gear': {
+      const { featureKind: _kind, ...gear } = feature.data;
+      validateGearInput(preview, { name: feature.name, ...gear });
+      break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -1821,6 +2019,16 @@ export const commandFactories = {
       withIds,
       (document) => holeBody(document, withIds).document,
       (document) => validateHoleInput(document, withIds)
+    );
+  },
+  gearBody(payload: GearInput): CommandDefinition<GearInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.gear',
+      payload.targetBodyId === undefined ? 'Add gear' : 'Cut gear teeth',
+      withIds,
+      (document) => gearBody(document, withIds).document,
+      (document) => validateGearInput(document, withIds)
     );
   },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
@@ -2836,6 +3044,11 @@ class LocalBodyScope {
         case 'pattern':
         case 'hole':
           this.consumed.set(data.targetBodyId, consumedByHistory);
+          break;
+        case 'gear':
+          if (data.targetBodyId !== undefined) {
+            this.consumed.set(data.targetBodyId, consumedByHistory);
+          }
           break;
         case 'split':
           if (data.keepOriginal !== true) {
@@ -4760,6 +4973,9 @@ export function replayCommands(
         break;
       case 'feature.hole':
         next = holeBody(next, command.payload as HoleInput).document;
+        break;
+      case 'feature.gear':
+        next = gearBody(next, command.payload as GearInput).document;
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;

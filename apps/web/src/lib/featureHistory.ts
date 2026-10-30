@@ -131,6 +131,9 @@ export function featureHistory(document: ProjectDocument) {
         body(data.targetBodyId);
         for (const ref of featureDatumAxisRefs(data)) datum(ref.datumFeatureId);
         break;
+      case 'gear':
+        if (data.targetBodyId !== undefined) body(data.targetBodyId);
+        break;
       case 'primitive':
       case 'imported-mesh':
       case 'imported-step':

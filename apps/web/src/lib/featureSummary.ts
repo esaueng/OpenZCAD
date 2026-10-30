@@ -113,6 +113,15 @@ export function featureValueSummary(
       const turns = num(data.turns);
       return turns === null ? null : `${turns} turns`;
     }
+    case 'gear': {
+      const teeth = num(data.teeth);
+      if (teeth === null) return null;
+      const helix =
+        data.helixAngleDeg === undefined ? '0' : num(data.helixAngleDeg);
+      return helix === null || helix === '0'
+        ? `${teeth} teeth`
+        : `${teeth} teeth, ${helix}° ${data.hand ?? 'right'} ${data.herringbone ? 'herringbone' : 'helix'}`;
+    }
     case 'hole': {
       const diameter = num(data.diameter);
       if (diameter === null) {

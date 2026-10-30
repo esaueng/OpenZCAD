@@ -385,6 +385,19 @@ function sameProfile(a: ProfilePick, b: ProfilePick): boolean {
   );
 }
 
+/**
+ * Whether a tool's face filter takes this face. A face whose surface is not
+ * known yet is taken; the kernel refuses it at preview if it must.
+ */
+function faceFilterAccepts(
+  filter: InPlaceToolSpec['faceFilter'],
+  face: FacePick
+): boolean {
+  if (filter === undefined || face.surfaceType === undefined) return true;
+  const surface = face.surfaceType.toLowerCase();
+  return filter === 'planar' ? surface === 'plane' : surface === 'cylinder';
+}
+
 export function useInPlaceCommand(
   options: UseInPlaceCommandOptions
 ): InPlaceCommand {
@@ -1330,11 +1343,7 @@ export function useInPlaceCommand(
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.faceMode) return false;
-    if (
-      toolSpec.faceFilter === 'planar' &&
-      face.surfaceType !== undefined &&
-      face.surfaceType.toLowerCase() !== 'plane'
-    ) {
+    if (!faceFilterAccepts(toolSpec.faceFilter, face)) {
       return false;
     }
     setSession((latest) => {
@@ -1384,11 +1393,8 @@ export function useInPlaceCommand(
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || toolSpec?.faceMode !== 'many') return null;
-    const accepted = faces.filter(
-      (face) =>
-        toolSpec.faceFilter !== 'planar' ||
-        face.surfaceType === undefined ||
-        face.surfaceType.toLowerCase() === 'plane'
+    const accepted = faces.filter((face) =>
+      faceFilterAccepts(toolSpec.faceFilter, face)
     );
     const next = mergeSweptFaces(current.slots.faces, accepted);
     const merged = { ...current, slots: { ...current.slots, faces: next } };

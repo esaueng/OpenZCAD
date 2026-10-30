@@ -232,6 +232,155 @@ describe('which in-place command edits a stored feature', () => {
 });
 
 describe('an untouched edit writes the feature back as stored', () => {
+  it('gear: a new gear keeps its placement, pitch expression and form', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 'wall',
+      teeth: 24,
+      faceWidth: 8,
+      pressureAngleDeg: 25,
+      origin: { x: 1, y: 2, z: 'wall' },
+      axis: { x: 0, y: 0, z: 1 },
+      xDirection: { x: 0, y: 1, z: 0 }
+    };
+    const node = feature(data, 'body_b' as BodyId);
+    expect(inPlaceToolForFeature(data)).toBe('gear');
+    const request = untouched(node)!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'external',
+        sizing: 'module',
+        pitch: 'wall',
+        teeth: 24,
+        faceWidth: 8,
+        pressureAngleDeg: 25,
+        origin: { x: 1, y: 2, z: 'wall' },
+        axis: { x: 0, y: 0, z: 1 },
+        xDirection: { x: 0, y: 1, z: 0 }
+      }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    // Unset form fields stay unset: the kernel default, not a copy of it.
+    expect(request.gear).not.toHaveProperty('profileShift');
+    expect(request.gear).not.toHaveProperty('rimDiameter');
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update).not.toHaveProperty('clearData');
+    // Dropping the stored pressure angle clears it rather than keeping it.
+    const { pressureAngleDeg: _dropped, ...rest } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        { tool: 'gear', gear: rest }
+      )?.clearData
+    ).toEqual(['pressureAngleDeg']);
+  });
+
+  it('gear: teeth on a body reopen on their face with the stored fit', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'internal',
+      sizing: 'diametral-pitch',
+      pitch: 16,
+      teeth: 40,
+      fit: 'module',
+      targetBodyId: BODY,
+      faceHash: 11
+    };
+    expect(inPlaceToolForFeature(data)).toBe('gear-teeth');
+    const armed = inPlaceEditSeed(feature(data, BODY), EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({
+      side: 'inside',
+      fit: 'module',
+      sizing: 'diametral-pitch'
+    });
+    expect(untouched(feature(data, BODY))).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'internal',
+        sizing: 'diametral-pitch',
+        pitch: 16,
+        teeth: 40,
+        fit: 'module',
+        targetBodyId: BODY,
+        faceHash: 11
+      }
+    });
+  });
+
+  it('gear: a helical gear keeps its helix angle and hand', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 20,
+      fit: 'module',
+      helixAngleDeg: 'helix',
+      hand: 'left',
+      targetBodyId: BODY,
+      faceHash: 11
+    };
+    const armed = inPlaceEditSeed(feature(data, BODY), EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({ hand: 'left' });
+    const request = untouched(feature(data, BODY))!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: { helixAngleDeg: 'helix', hand: 'left' }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: 'feature_g' as FeatureId, name: 'Gear', data },
+        request
+      )
+    ).not.toHaveProperty('clearData');
+    // Back to a spur gear: the helix and its hand are cleared together.
+    const { helixAngleDeg: _helix, hand: _hand, ...spur } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: 'feature_g' as FeatureId, name: 'Gear', data },
+        { tool: 'gear', gear: spur }
+      )?.clearData
+    ).toEqual(['helixAngleDeg', 'hand']);
+  });
+
+  it('gear: a herringbone gear reopens as one and returns to a single helix', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 20,
+      fit: 'module',
+      helixAngleDeg: 25,
+      herringbone: true,
+      targetBodyId: BODY,
+      faceHash: 11
+    };
+    const armed = inPlaceEditSeed(feature(data, BODY), EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({ helix: 'herringbone' });
+    const request = untouched(feature(data, BODY))!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: { helixAngleDeg: 25, herringbone: true }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    const saved = { featureId: 'feature_g' as FeatureId, name: 'Gear', data };
+    expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+      'clearData'
+    );
+    const { herringbone: _herringbone, ...single } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(saved, { tool: 'gear', gear: single })?.clearData
+    ).toEqual(['herringbone']);
+  });
+
   it('hole: its stored position, anchor, step and expressions', () => {
     const data: FeatureData = {
       featureKind: 'hole',

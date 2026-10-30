@@ -237,6 +237,10 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
     case 'pattern':
       source = data.targetBodyId;
       break;
+    case 'gear':
+      // Teeth cut into a body replace it; a new gear has no source.
+      source = data.targetBodyId ?? null;
+      break;
     case 'extrude':
       source =
         (data.operation ?? 'new-body') === 'new-body'
@@ -353,6 +357,9 @@ function featureScopeForBodies(
         break;
       case 'helical-sweep':
         neededSketches.add(data.profile.sketchId);
+        break;
+      case 'gear':
+        if (data.targetBodyId !== undefined) neededBodies.add(data.targetBodyId);
         break;
       case 'boolean':
         data.targetBodyIds.forEach((bodyId) => neededBodies.add(bodyId));
@@ -639,6 +646,7 @@ function nativeCandidates(
         break;
       case 'hole':
       case 'split':
+      case 'gear':
         // In scope so the walk reaches the bodies they consume, but their
         // own dimensions are not proposed yet, like the group above.
         break;

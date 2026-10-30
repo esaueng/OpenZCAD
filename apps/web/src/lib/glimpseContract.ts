@@ -48,6 +48,7 @@ export const CAD_OPERATIONS = [
   'feature.datum-plane',
   'feature.datum-axis',
   'feature.hole',
+  'feature.gear',
   'feature.shell',
   'feature.solid-offset',
   'feature.draft',

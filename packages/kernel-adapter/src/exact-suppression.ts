@@ -56,6 +56,9 @@ export function suppressedFeaturePassThroughSource(
     case 'chamfer':
     case 'pattern':
       return data.targetBodyId;
+    case 'gear':
+      // Teeth cut into a body replace it; a new gear has no input body.
+      return data.targetBodyId ?? null;
     case 'extrude':
       return (data.operation ?? 'new-body') === 'new-body'
         ? null

@@ -1,4 +1,5 @@
 import { faceReferenceRepairCandidate } from './exact-reference-resolution';
+import { buildGearFeature } from './exact-gear';
 import {
   carryAnalyticFaces,
   holeLineage,
@@ -3340,6 +3341,9 @@ export function buildFeature(
       break;
     case 'hole':
       buildHoleFeature(ctx, feature, feature.data);
+      break;
+    case 'gear':
+      buildGearFeature(ctx, feature, feature.data);
       break;
     case 'split':
       buildSplitFeature(ctx, feature, feature.data);

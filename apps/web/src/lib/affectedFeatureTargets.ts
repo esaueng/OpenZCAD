@@ -36,6 +36,7 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'boolean',
   'split',
   'hole',
+  'gear',
   'transform',
   'mirror',
   'shell',
@@ -252,6 +253,11 @@ export function affectedFeatureTargets(
           featureDatumAxisRefs(data).some((ref) =>
             affectedDatums.has(ref.datumFeatureId)
           );
+        break;
+      case 'gear':
+        affected =
+          data.targetBodyId !== undefined &&
+          affectedBodies.has(data.targetBodyId);
         break;
       case 'primitive':
       case 'imported-mesh':

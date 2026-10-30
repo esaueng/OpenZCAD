@@ -166,6 +166,37 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data, ['countersinkAngleDeg'], rewrite, 'angle');
       fields(data.position, ['u', 'v'], rewrite, 'length');
       return;
+    case 'gear':
+      // A diametral pitch is teeth per inch of pitch diameter: a number in
+      // every unit system. A module or circular pitch is a length.
+      fields(
+        data,
+        ['pitch'],
+        rewrite,
+        data.sizing === 'diametral-pitch' ? 'number' : 'length'
+      );
+      fields(
+        data,
+        ['faceWidth', 'backlash', 'boreDiameter', 'rimDiameter', 'backDepth'],
+        rewrite,
+        'length'
+      );
+      fields(
+        data,
+        ['teeth', 'profileShift', 'addendum', 'dedendum', 'rootFillet'],
+        rewrite,
+        'number'
+      );
+      fields(
+        data,
+        ['pressureAngleDeg', 'phaseDeg', 'helixAngleDeg'],
+        rewrite,
+        'angle'
+      );
+      vector(data.origin, rewrite, 'length');
+      vector(data.axis, rewrite, null);
+      vector(data.xDirection, rewrite, null);
+      return;
     case 'shell':
     case 'thicken':
       fields(data, ['thickness'], rewrite, 'length');

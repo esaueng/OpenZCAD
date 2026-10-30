@@ -538,6 +538,19 @@ export interface HoleInput {
   ids?: BodyFeatureIds;
 }
 
+/**
+ * M14: a gear feature's input — its {@link FeatureData} fields plus the
+ * command's name, optional preallocated ids and the new body's name.
+ */
+export type GearInput = Omit<
+  Extract<FeatureData, { featureKind: 'gear' }>,
+  'featureKind'
+> & {
+  name: string;
+  ids?: BodyFeatureIds;
+  bodyName?: string;
+};
+
 export interface SplitInput {
   name: string;
   /** Consumed, unless `keepOriginal`: the two halves replace it. */
@@ -3421,6 +3434,7 @@ function addBodyResultFeature(
     | 'pattern'
     | 'mirror'
     | 'hole'
+    | 'gear'
     | 'shell'
     | 'solid-offset'
     | 'loft'
@@ -3437,6 +3451,7 @@ function addBodyResultFeature(
         | 'pattern'
         | 'mirror'
         | 'hole'
+        | 'gear'
         | 'shell'
         | 'solid-offset'
         | 'loft'
@@ -3575,6 +3590,25 @@ export function holeBody(
     'hole',
     deepClone({ featureKind: 'hole', targetBodyId, ...parameters }),
     input.ids
+  );
+}
+
+/**
+ * Adds an M14 gear: a new gear body, or teeth cut into `targetBodyId`'s
+ * cylindrical face, which consumes that body.
+ */
+export function gearBody(
+  document: ProjectDocument,
+  input: GearInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, ids, bodyName, ...parameters } = input;
+  return addBodyResultFeature(
+    document,
+    name,
+    'gear',
+    deepClone({ featureKind: 'gear', ...parameters }),
+    ids,
+    bodyName
   );
 }
 
@@ -4613,6 +4647,33 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'count2',
     'axisRef'
   ],
+  gear: [
+    'gearType',
+    'sizing',
+    'pitch',
+    'teeth',
+    'faceWidth',
+    'pressureAngleDeg',
+    'profileShift',
+    'backlash',
+    'addendum',
+    'dedendum',
+    'rootFillet',
+    'phaseDeg',
+    'helixAngleDeg',
+    'hand',
+    'herringbone',
+    'origin',
+    'axis',
+    'xDirection',
+    'boreDiameter',
+    'rimDiameter',
+    'backDepth',
+    'targetBodyId',
+    'faceHash',
+    'faceReference',
+    'fit'
+  ],
   'direct-edit': ['targetBodyId', 'operation'],
   'imported-step': [
     'artifactId',
@@ -4655,7 +4716,28 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // U09: clearing a revolve's region returns it to the first-object profile.
   revolve: ['axisRef', 'profile'],
   pattern: ['axisRef'],
-  transform: ['axisRotation']
+  transform: ['axisRotation'],
+  // M14: every tooth-form override falls back to its documented default;
+  // `pitch` may go only where the gear keeps a cylinder's diameter, which
+  // the gear validation enforces.
+  gear: [
+    'pitch',
+    'pressureAngleDeg',
+    'profileShift',
+    'backlash',
+    'addendum',
+    'dedendum',
+    'rootFillet',
+    'phaseDeg',
+    'helixAngleDeg',
+    'hand',
+    'herringbone',
+    'xDirection',
+    'boreDiameter',
+    'rimDiameter',
+    'backDepth',
+    'fit'
+  ]
 };
 
 /**
