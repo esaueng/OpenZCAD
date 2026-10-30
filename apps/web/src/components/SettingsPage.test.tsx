@@ -1021,6 +1021,42 @@ describe('settings advanced section', () => {
     expect(value.textContent).toMatch(/^Remus /);
   });
 
+  it('turns the frame rate overlay on, off by default', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderSettings(null, { onChange });
+
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    const toggle = screen.getByRole('checkbox', {
+      name: 'Frame rate overlay'
+    });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+
+    const next = onChange.mock.calls[0]![0] as AppSettings;
+    expect(next.experiments.frameRateOverlay).toBe(true);
+    // The neighbouring switch in the same group is carried, not reset.
+    expect(next.experiments.directManipulation).toBe(true);
+  });
+
+  it('finds the frame rate overlay by searching for fps', async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    const field = screen.getByLabelText('Find a setting');
+    await user.type(field, 'fps');
+
+    expect(screen.getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    expect(
+      screen.getByRole('checkbox', { name: 'Frame rate overlay' })
+    ).toBeInTheDocument();
+    // Settings restores the last search; leave none for the next test.
+    await user.clear(field);
+  });
+
   it('finds it by searching for the kernel', async () => {
     const user = userEvent.setup();
     renderSettings();

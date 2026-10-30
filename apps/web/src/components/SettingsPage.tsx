@@ -2540,7 +2540,7 @@ export function SettingsPage({
           {active === 'advanced' && anyMatch && (
             <Section
               title="Advanced"
-              intro="Editing fallback, build details, and reset."
+              intro="Editing fallback, diagnostics, build details, and reset."
             >
               <Group title="Editing">
                 <SettingRow
@@ -2555,6 +2555,25 @@ export function SettingsPage({
                         experiments: {
                           ...settings.experiments,
                           directManipulation
+                        }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
+              <Group title="Diagnostics">
+                <SettingRow
+                  title="Frame rate overlay"
+                  hint="Frames per second, frame time, render CPU time and draw load in the viewport’s top-left corner."
+                >
+                  <Toggle
+                    checked={settings.experiments.frameRateOverlay}
+                    label="Frame rate overlay"
+                    onChange={(frameRateOverlay) =>
+                      patch({
+                        experiments: {
+                          ...settings.experiments,
+                          frameRateOverlay
                         }
                       })
                     }

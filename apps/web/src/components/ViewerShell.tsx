@@ -66,6 +66,8 @@ import {
   ViewportGridReadout,
   type SketchGridReadoutSink
 } from './ViewportScaleIndicator';
+import { ViewportFrameStats } from './ViewportFrameStats';
+import type { FrameStatsSink } from '../lib/frameStats';
 import type {
   ArtifactId,
   BodyRepresentation,
@@ -145,6 +147,8 @@ interface ViewerShellProps {
   previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
   pickListEnabled: boolean;
+  /** Settings → Advanced → Frame rate overlay, in the top-left corner. */
+  frameRateOverlay?: boolean;
   settings: ViewerSettings;
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
@@ -415,6 +419,7 @@ export function ViewerShell({
   previewFaceHighlights,
   selectedEdges,
   pickListEnabled,
+  frameRateOverlay = false,
   settings,
   fitSignal,
   autoFrame = null,
@@ -632,6 +637,7 @@ export function ViewerShell({
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
+  const frameStatsRef = useRef<FrameStatsSink | null>(null);
   // The selection chip is a viewport label now, and the viewer rewrites the
   // live diameter in its own labels; nothing React-rendered carries one.
   const cylinderRadiusLabelSetterRef = useRef<
@@ -749,6 +755,7 @@ export function ViewerShell({
         orientationDragRef={orientationDragRef}
         scaleIndicatorRef={scaleIndicatorRef}
         sketchGridReadoutRef={sketchGridReadoutRef}
+        frameStatsRef={frameStatsRef}
         onSelectTopology={onSelectTopology}
         topologyPicksHeld={topologyPicksHeld}
         onSelectEdgeChain={onSelectEdgeChain}
@@ -948,6 +955,7 @@ export function ViewerShell({
       {modeOverlay}
       {/* Upright at the model's left edge, or along the foot on a phone. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
+      {frameRateOverlay && <ViewportFrameStats sinkRef={frameStatsRef} />}
     </section>
   );
 }

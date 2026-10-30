@@ -300,6 +300,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Editing mode, diagnostics, and reset',
     settings: [
       'Direct manipulation',
+      'Frame rate overlay',
       'Geometry kernel',
       'Kernel version',
       'Document authority',
@@ -315,6 +316,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'export formats',
       'face drag',
       'offset handle',
+      'fps',
+      'frames per second',
+      'performance',
       'reset settings',
       'restore defaults'
     ]

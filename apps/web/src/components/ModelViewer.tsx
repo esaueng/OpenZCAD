@@ -1,4 +1,5 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
+import type { FrameStatsSink } from '../lib/frameStats';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
   useEffect,
@@ -950,6 +951,11 @@ export interface ModelViewerProps {
   sketchGridReadoutRef?: MutableRefObject<
     ((label: string | null) => void) | null
   >;
+  /**
+   * Imperative sink for every drawn frame's timing and draw load, filled
+   * only while the frame rate overlay is showing.
+   */
+  frameStatsRef?: MutableRefObject<FrameStatsSink | null>;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -2063,6 +2069,7 @@ export function ModelViewer({
   orientationDragRef,
   scaleIndicatorRef,
   sketchGridReadoutRef,
+  frameStatsRef,
   onSelectTopology,
   topologyPicksHeld = false,
   onSelectEdgeChain,
@@ -10890,6 +10897,15 @@ export function ModelViewer({
       } else {
         renderStarted = performance.now();
         renderer.render(scene, context.activeCamera);
+      }
+      const frameStatsSink = frameStatsRef?.current;
+      if (frameStatsSink) {
+        frameStatsSink({
+          at: now,
+          renderMs: performance.now() - renderStarted,
+          drawCalls: renderer.info.render.calls,
+          triangles: renderer.info.render.triangles
+        });
       }
       traceFaceDrag('frame', {
         ms: performance.now() - frameStarted,

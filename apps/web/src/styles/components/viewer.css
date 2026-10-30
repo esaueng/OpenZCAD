@@ -116,6 +116,47 @@
   white-space: nowrap;
 }
 
+/* Settings → Advanced → Frame rate overlay. Drawn on the stage like the
+   scale rule, so it reads the stage ink and never takes a pointer. Below
+   the floating top bar and clear of a panel docked on the left. */
+.viewport-frame-stats {
+  position: absolute;
+  top: var(--stage-top, 10px);
+  left: calc(var(--island-gap, 10px) + var(--left-dock-w, 0px));
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-viewport-bg) 82%, transparent);
+  color: var(--color-stage-ink-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viewport-frame-stats-rate {
+  color: var(--color-stage-ink);
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+}
+
+.viewport-frame-stats[data-idle] .viewport-frame-stats-rate {
+  color: var(--color-stage-ink-muted);
+}
+
+.viewer-shell canvas.viewport-frame-stats-graph {
+  display: block;
+  width: 90px !important;
+  height: 24px !important;
+  margin-top: 2px;
+}
+
 /* Top-right orientation widget. The utility rail used to stack beneath it;
    it now sits centred against the right edge as `.viewer-rail`. */
 .viewer-rail-stack {

@@ -145,6 +145,7 @@ const REFS = [
   'orientationDragRef',
   'scaleIndicatorRef',
   'sketchGridReadoutRef',
+  'frameStatsRef',
   'keypadAnchorRef',
   'offsetSetterRef',
   'cylinderRadiusLabelSetterRef',
