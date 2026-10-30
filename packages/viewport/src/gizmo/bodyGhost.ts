@@ -92,7 +92,8 @@ export function createBodyGhost(
   let edges: LineSegments2 | null = null;
   const points: number[] = [];
   body.traverse((child) => {
-    if (child.name !== 'body-edge') return;
+    if (child.name !== 'body-edge' && child.name !== 'body-edge-tangent')
+      return;
     const lines = child as THREE.Mesh;
     const start = lines.geometry?.getAttribute('instanceStart');
     const finish = lines.geometry?.getAttribute('instanceEnd');

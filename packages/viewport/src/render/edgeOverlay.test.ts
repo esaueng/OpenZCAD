@@ -670,7 +670,7 @@ describe('edge overlay depth and x-ray rendering', () => {
     const overlay = makeOverlay();
     const lines = fatLines(overlay);
 
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(8);
     for (const line of lines) {
       expect(line.material.uniforms.depthBias?.value, line.name).toBeCloseTo(
         3 * FAT_LINE_DEPTH_BIAS_RATIO
@@ -681,14 +681,18 @@ describe('edge overlay depth and x-ray rendering', () => {
   it('draws the x-ray twins once per pixel and leaves the visible tiers alone', () => {
     // Translucent segments overlap at every joint; blended twice there, a
     // hidden edge read as a row of beads. Alpha to coverage at a third of
-    // full opacity left only those beads.
+    // full opacity left only those beads. The faint tangent batch is
+    // translucent for the same reason.
     const lines = fatLines(makeOverlay());
-    const hidden = lines.filter((line) => line.name.endsWith('-hidden'));
-    const visible = lines.filter((line) => !line.name.endsWith('-hidden'));
+    const onceEach = (line: (typeof lines)[number]) =>
+      line.name.endsWith('-hidden') || line.name === 'body-edge-tangent';
+    const hidden = lines.filter(onceEach);
+    const visible = lines.filter((line) => !onceEach(line));
 
     expect(hidden.map((line) => line.name).sort()).toEqual([
       'body-edge-hover-hidden',
       'body-edge-selected-hidden',
+      'body-edge-tangent',
       'body-face-boundary-selected-hidden'
     ]);
     for (const line of hidden) {
