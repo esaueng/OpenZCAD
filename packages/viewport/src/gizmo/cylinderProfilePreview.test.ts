@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { createFatLineSegments } from '../render/scene';
 import {
+  createBoreProfilePreview,
   createCylinderProfilePreview,
   createLinearProfilePreview
 } from './cylinderProfilePreview';
@@ -198,4 +199,90 @@ describe('linear profile preview', () => {
       expect(source[0]).toBe(0);
     }
   );
+});
+
+describe('bore profile preview', () => {
+  // A 10 mm bore through z 0..20, with a 1 mm round where it opens on the top
+  // cap (z 20..21), inside a body whose outer wall sits at radius 30.
+  const bore = {
+    axisStart: { x: 0, y: 0, z: 0 },
+    axisEnd: { x: 0, y: 0, z: 20 },
+    radius: 10,
+    rimStart: 0,
+    rimEnd: 1
+  };
+  const rimAt = (angle: number) => [
+    10 + 1 - Math.cos(angle),
+    0,
+    20 + Math.sin(angle)
+  ];
+  const borePoints = [
+    // wall: bottom, middle, top
+    10,
+    0,
+    0,
+    0,
+    10,
+    10,
+    10,
+    0,
+    20,
+    // rim round, and where it meets the cap
+    ...rimAt(Math.PI / 4),
+    11,
+    0,
+    21,
+    // cap interior and outer wall
+    20,
+    0,
+    21,
+    30,
+    0,
+    21,
+    30,
+    0,
+    0,
+    // the bottom cap's outer corner, inside nothing
+    0,
+    30,
+    0
+  ];
+
+  it('pushes the wall and its rim round out and leaves the body', () => {
+    const object = objectAtPoints(borePoints);
+    const original = coordinates(object);
+    const preview = createBoreProfilePreview(object, bore)!;
+    expect(preview).not.toBeNull();
+    for (const delta of [3, -4]) {
+      expect(preview.apply(delta)).toBe(true);
+      const p = object.geometry.getAttribute('position');
+      expect(p.getX(0)).toBeCloseTo(10 + delta, 5);
+      expect(p.getZ(0)).toBeCloseTo(0, 5);
+      expect(p.getY(1)).toBeCloseTo(10 + delta, 5);
+      expect(p.getZ(1)).toBeCloseTo(10, 5);
+      expect(p.getX(2)).toBeCloseTo(10 + delta, 5);
+      // The round keeps its cross-section about a centre that moved with it.
+      expect(Math.hypot(p.getX(3) - (11 + delta), p.getZ(3) - 20)).toBeCloseTo(
+        1,
+        5
+      );
+      expect(p.getX(4)).toBeCloseTo(11 + delta, 5);
+      expect(p.getZ(4)).toBeCloseTo(21, 5);
+      for (const index of [5, 6, 7, 8]) {
+        expect([p.getX(index), p.getY(index), p.getZ(index)]).toEqual(
+          original.slice(index * 3, index * 3 + 3)
+        );
+      }
+    }
+    preview.restore();
+    expect(coordinates(object)).toEqual(original);
+  });
+
+  it('refuses a radius at or below zero and a body with no bore points', () => {
+    const preview = createBoreProfilePreview(objectAtPoints(borePoints), bore)!;
+    expect(preview.apply(-10)).toBe(false);
+    expect(
+      createBoreProfilePreview(objectAtPoints([30, 0, 0, 0, 30, 5]), bore)
+    ).toBeNull();
+  });
 });

@@ -1,5 +1,5 @@
 import type { OperationPhase } from './interaction/machine';
-import { renderLabelSegments } from './liveLabels';
+import { renderLabelSegments, tagLiveDiameterDetail } from './liveLabels';
 import type {
   SelectionCalloutContent,
   SelectionCalloutOperation
@@ -174,6 +174,9 @@ function fill(
     const detail = owner.createElement('span');
     detail.className = 'selection-callout-detail';
     detail.textContent = content.detail;
+    if (content.detailDiameter) {
+      tagLiveDiameterDetail(detail, content.detailDiameter);
+    }
     children.push(detail);
   }
   // Armed is the chip's resting state, and the lit verb already says which

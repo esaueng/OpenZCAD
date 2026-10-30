@@ -52,6 +52,71 @@ export function createCylinderProfilePreview(
   );
 }
 
+/**
+ * A bore inside a larger body: the wall, plus the rounded rim at either end
+ * (`rimStart`/`rimEnd` are their widths along the axis, 0 for a sharp rim).
+ */
+export interface BorePreviewProfile {
+  axisStart: Vector3;
+  axisEnd: Vector3;
+  radius: number;
+  rimStart: number;
+  rimEnd: number;
+}
+
+/**
+ * Pushes a bore's wall and rim blends radially and leaves the rest of the
+ * body where it is. The cap a rim opens through keeps its outer boundary and
+ * stays planar, since every point moves in a plane square to the axis; a
+ * blend keeps its cross-section, as the exact resize keeps it. Anything not
+ * on the wall or a rim band — a counterbore's other step, a floor's interior
+ * — stays put, so the projection never invents motion the edit would not make.
+ */
+export function createBoreProfilePreview(
+  object: THREE.Object3D,
+  profile: BorePreviewProfile
+): CylinderProfilePreview | null {
+  const axis = new THREE.Vector3().copy(profile.axisEnd).sub(profile.axisStart);
+  const span = axis.length();
+  const radius = profile.radius;
+  if (span <= 1e-9 || !(radius > 1e-9)) return null;
+  axis.divideScalar(span);
+  const tolerance = 1e-4 * Math.max(radius, span, 1);
+  const rimStart = Math.max(0, profile.rimStart);
+  const rimEnd = Math.max(0, profile.rimEnd);
+  let moving = 0;
+  const preview = createProfilePreview(
+    object,
+    (point) => {
+      point.sub(profile.axisStart);
+      const axial = point.dot(axis);
+      point.addScaledVector(axis, -axial);
+      const distance = point.length();
+      const onWall =
+        Math.abs(distance - radius) <= tolerance &&
+        axial >= -tolerance &&
+        axial <= span + tolerance;
+      const inRim = (width: number, from: number) =>
+        width > 0 &&
+        distance >= radius - tolerance &&
+        distance <= radius + width + tolerance &&
+        axial >= from - tolerance &&
+        axial <= from + width + tolerance;
+      if (
+        distance > 1e-9 &&
+        (onWall || inRim(rimStart, -rimStart) || inRim(rimEnd, span))
+      ) {
+        point.divideScalar(distance);
+        moving += 1;
+      } else {
+        point.set(0, 0, 0);
+      }
+    },
+    radius
+  );
+  return preview && moving > 0 ? preview : null;
+}
+
 /** The two planes bounding the straight span; material beyond them moves rigidly. */
 export interface LinearPreviewProfile {
   axisStart: Vector3;

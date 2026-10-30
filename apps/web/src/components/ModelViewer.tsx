@@ -107,6 +107,7 @@ import {
   computeFitPose,
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
+  createBoreProfilePreview,
   createCylinderProfilePreview,
   createLinearProfilePreview,
   createStepStretchPreview,
@@ -114,6 +115,7 @@ import {
   type BodyGhost,
   type LinearPreviewProfile,
   type StepPreviewProfile,
+  type BorePreviewProfile,
   type CylinderPreviewProfile,
   type CylinderProfilePreview,
   faceTrianglesCentroid,
@@ -262,6 +264,7 @@ import {
   type RegionPickData
 } from './viewer/regionOverlay';
 import {
+  boreRimAnchor,
   snapCylinderRadius,
   radiusFromRadialDelta
 } from '../lib/interaction/cylinderRadius';
@@ -478,6 +481,10 @@ function orientedStepPreview(
 /** An explicit cylindrical-wall radius handle with an immutable world axis. */
 export interface CylinderRadiusHandleTarget {
   profilePreview?: CylinderPreviewProfile;
+  /** A hole's wall and rim rounds, projected in the viewport while it drags. */
+  boreProfilePreview?: BorePreviewProfile;
+  /** A hole's handle sits on the rim the camera looks into, not the pick. */
+  concavity?: 'hole' | 'boss';
   bodyId: string;
   topologyId: string;
   point: { x: number; y: number; z: number };
@@ -3351,7 +3358,7 @@ export function ModelViewer({
     function restoreCylinderRadiusProxy() {
       const proxy = cylinderRadiusProxy;
       if (!proxy) {
-        cylinderRadiusLabelSetterRef.current?.(null);
+        updateCylinderRadiusLabels(null);
         delete renderer.domElement.dataset.e2eCylinderProxyRadius;
         return;
       }
@@ -3376,21 +3383,28 @@ export function ModelViewer({
 
     function beginCylinderRadiusProxy(target: CylinderRadiusHandleTarget) {
       restoreCylinderRadiusProxy();
-      if (!target.smoothPreview && !target.profilePreview) {
+      if (
+        !target.smoothPreview &&
+        !target.profilePreview &&
+        !target.boreProfilePreview
+      ) {
         return;
       }
       const object = context.objectsByBodyId.get(target.bodyId);
       if (!object) {
         return;
       }
-      const profile =
-        !target.smoothPreview && target.profilePreview
+      const profile = target.smoothPreview
+        ? null
+        : target.profilePreview
           ? createCylinderProfilePreview(
               object,
               target.profilePreview,
               'radius'
             )
-          : null;
+          : target.boreProfilePreview
+            ? createBoreProfilePreview(object, target.boreProfilePreview)
+            : null;
       if (!target.smoothPreview && !profile) return;
       object.updateMatrix();
       cylinderRadiusProxy = {
@@ -3419,6 +3433,10 @@ export function ModelViewer({
       requestedAt = performance.now()
     ): boolean {
       if (!cylinderRadiusProxy) {
+        // No viewport projection (a wall the exact preview owns): the
+        // labels still follow the hand. Returning first left the bar's
+        // "Ø24.5" beside the handle's live "Ø 22" for the whole drag.
+        updateCylinderRadiusLabels(radius);
         return false;
       }
       cylinderRadiusProxy.pendingRadius = radius;
@@ -12477,7 +12495,10 @@ export function ModelViewer({
     // still installed, so restore the held proxy before re-arming the handle.
     cylinderRadiusProxyControllerRef.current?.restore();
     const rig = buildCylinderRadiusHandle({
-      origin: cylinderRadiusHandle.point,
+      origin:
+        cylinderRadiusHandle.concavity === 'hole'
+          ? boreRimAnchor(cylinderRadiusHandle, context.camera.position)
+          : cylinderRadiusHandle.point,
       direction: cylinderRadiusHandle.radialDirection,
       originalRadius: cylinderRadiusHandle.originalRadius
     });
