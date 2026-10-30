@@ -108,7 +108,7 @@ def required_objects(db):
     migrations = [row[0] for row in db.execute('SELECT name FROM d1_migrations ORDER BY name')]
     if not migrations or any(not re.fullmatch(r'00[0-4][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
         raise SnapshotError('Unsupported migration ledger.')
-    if max(int(name[:4]) for name in migrations) > 44:
+    if max(int(name[:4]) for name in migrations) > 45:
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)
     reviewed = sorted(path.name for path in
