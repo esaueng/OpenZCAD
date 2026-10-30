@@ -13,7 +13,10 @@ import {
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { useSettledFlag } from '../hooks/useSettledFlag';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
-import { renderLabelSegments } from '../lib/liveLabels';
+import {
+  LIVE_DIAMETER_DETAIL_ATTRIBUTE,
+  renderLabelSegments
+} from '../lib/liveLabels';
 import type {
   SelectionCalloutContent,
   SelectionCalloutOperation,
@@ -227,10 +230,13 @@ function PhaseMarker({
  */
 export function SelectionReadout({
   label,
-  detail
+  detail,
+  detailDiameter
 }: {
   label: readonly LabelSegment[] | null;
   detail?: string | undefined;
+  /** When `detail` is a diameter: a radius drag rewrites it in place. */
+  detailDiameter?: { diameter: number; units: string } | undefined;
 }) {
   const nameRef = useRef<HTMLSpanElement>(null);
   // Segmented like every other spelling of a pick, so a cylinder-radius drag
@@ -241,7 +247,21 @@ export function SelectionReadout({
   return (
     <span className="selection-readout" role="group" aria-label="Picked">
       <span className="selection-callout-name" ref={nameRef} />
-      {detail && <span className="selection-callout-detail">{detail}</span>}
+      {detail && (
+        <span
+          className="selection-callout-detail"
+          {...(detailDiameter
+            ? {
+                [LIVE_DIAMETER_DETAIL_ATTRIBUTE]: String(
+                  detailDiameter.diameter
+                ),
+                'data-units': detailDiameter.units
+              }
+            : {})}
+        >
+          {detail}
+        </span>
+      )}
     </span>
   );
 }

@@ -20,10 +20,17 @@ import {
 import { currentRenderProfile } from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
 import {
+  readCubePalette,
   readDatumColor,
   readStagePalette,
   watchStageTheme
 } from '../lib/stagePalette';
+import { projectCube, type OrientationLink } from './viewer/orientationCube';
+import {
+  OrientationCubeOverlay,
+  readCubeFonts,
+  type CubeBox
+} from './viewer/orientationCubeOverlay';
 import { mark, measure, timed } from '../lib/perf';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { recordEditPhase } from '../lib/editTrace';
@@ -108,6 +115,7 @@ import {
   computeFitPose,
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
+  createBoreProfilePreview,
   createCylinderProfilePreview,
   createLinearProfilePreview,
   createStepStretchPreview,
@@ -115,6 +123,7 @@ import {
   type BodyGhost,
   type LinearPreviewProfile,
   type StepPreviewProfile,
+  type BorePreviewProfile,
   type CylinderPreviewProfile,
   type CylinderProfilePreview,
   faceTrianglesCentroid,
@@ -263,6 +272,7 @@ import {
   type RegionPickData
 } from './viewer/regionOverlay';
 import {
+  boreRimAnchor,
   snapCylinderRadius,
   radiusFromRadialDelta
 } from '../lib/interaction/cylinderRadius';
@@ -479,6 +489,10 @@ function orientedStepPreview(
 /** An explicit cylindrical-wall radius handle with an immutable world axis. */
 export interface CylinderRadiusHandleTarget {
   profilePreview?: CylinderPreviewProfile;
+  /** A hole's wall and rim rounds, projected in the viewport while it drags. */
+  boreProfilePreview?: BorePreviewProfile;
+  /** A hole's handle sits on the rim the camera looks into, not the pick. */
+  concavity?: 'hole' | 'boss';
   bodyId: string;
   topologyId: string;
   point: { x: number; y: number; z: number };
@@ -936,7 +950,7 @@ export interface ModelViewerProps {
   /** Scroll-wheel auto-detection just proved a different pointing device. */
   onWheelDeviceLearned?(device: WheelDevice): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
-  orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  orientationRef: MutableRefObject<OrientationLink | null>;
   /** Imperative bridge from the SVG view cube into the live camera rig. */
   orientationDragRef: MutableRefObject<OrientationDragControls | null>;
   /** Imperative sink for the zoom-aware scale without React frame updates. */
@@ -2843,8 +2857,29 @@ export function ModelViewer({
         readStagePalette(host)
       );
     paintStage();
+    // The view cube, drawn into this canvas over the widget's unpainted SVG
+    // (viewer/orientationCubeOverlay.ts). Attached in the frame loop, since
+    // the widget can mount, remount or go after this effect has run.
+    const cubeOverlay = new OrientationCubeOverlay(readCubePalette(host));
+    let cubeLink: OrientationLink | null = null;
+    let releaseCubeLink: (() => void) | null = null;
+    /** The camera's axes as the cube last saw them; pushed again on attach. */
+    let cubeAxes: AxisProjection | null = null;
+    let cubeLinkFresh = false;
+    /** Where the cube's box sat when this frame began, before any writes. */
+    let cubeBox: CubeBox | null = null;
+    // The labels are rasterised once; the web font arriving after that
+    // would leave them in the fallback face.
+    const onCubeFontsLoaded = () => {
+      const element = cubeLink?.element;
+      if (!element) return;
+      cubeOverlay.setFonts(readCubeFonts(element));
+      requestRender();
+    };
+    document.fonts?.addEventListener?.('loadingdone', onCubeFontsLoaded);
     const stopWatchingTheme = watchStageTheme(() => {
       paintStage();
+      cubeOverlay.setPalette(readCubePalette(host));
       // Datum planes and axes take the theme's datum colour too.
       const datumColor = readDatumColor(host);
       datumPlaneRigRef.current?.setColor(datumColor);
@@ -3385,7 +3420,7 @@ export function ModelViewer({
     function restoreCylinderRadiusProxy() {
       const proxy = cylinderRadiusProxy;
       if (!proxy) {
-        cylinderRadiusLabelSetterRef.current?.(null);
+        updateCylinderRadiusLabels(null);
         delete renderer.domElement.dataset.e2eCylinderProxyRadius;
         return;
       }
@@ -3410,21 +3445,28 @@ export function ModelViewer({
 
     function beginCylinderRadiusProxy(target: CylinderRadiusHandleTarget) {
       restoreCylinderRadiusProxy();
-      if (!target.smoothPreview && !target.profilePreview) {
+      if (
+        !target.smoothPreview &&
+        !target.profilePreview &&
+        !target.boreProfilePreview
+      ) {
         return;
       }
       const object = context.objectsByBodyId.get(target.bodyId);
       if (!object) {
         return;
       }
-      const profile =
-        !target.smoothPreview && target.profilePreview
+      const profile = target.smoothPreview
+        ? null
+        : target.profilePreview
           ? createCylinderProfilePreview(
               object,
               target.profilePreview,
               'radius'
             )
-          : null;
+          : target.boreProfilePreview
+            ? createBoreProfilePreview(object, target.boreProfilePreview)
+            : null;
       if (!target.smoothPreview && !profile) return;
       object.updateMatrix();
       cylinderRadiusProxy = {
@@ -3453,6 +3495,10 @@ export function ModelViewer({
       requestedAt = performance.now()
     ): boolean {
       if (!cylinderRadiusProxy) {
+        // No viewport projection (a wall the exact preview owns): the
+        // labels still follow the hand. Returning first left the bar's
+        // "Ø24.5" beside the handle's live "Ø 22" for the whole drag.
+        updateCylinderRadiusLabels(radius);
         return false;
       }
       cylinderRadiusProxy.pendingRadius = radius;
@@ -10734,6 +10780,31 @@ export function ModelViewer({
     function animate(now: number) {
       animationFrame = null;
       const frameStarted = performance.now();
+      // The view cube's widget can remount with the chrome; follow whichever
+      // link is current, and push it the camera at once so its hit layer is
+      // not waiting for the next turn.
+      const link = orientationRef.current;
+      if (link !== cubeLink) {
+        releaseCubeLink?.();
+        cubeLink = link;
+        releaseCubeLink = link?.attachOverlay(requestRender) ?? null;
+        cubeLinkFresh = true;
+        if (link?.element) cubeOverlay.setFonts(readCubeFonts(link.element));
+      }
+      // Measured before this frame writes anything, so the read finds layout
+      // already clean instead of forcing it.
+      const cubeElement = cubeLink?.element;
+      if (cubeElement) {
+        const cube = cubeElement.getBoundingClientRect();
+        const canvasBox = renderer.domElement.getBoundingClientRect();
+        cubeBox = {
+          left: cube.left - canvasBox.left,
+          top: cube.top - canvasBox.top,
+          width: cube.width
+        };
+      } else {
+        cubeBox = null;
+      }
       if (e2eCanvasHooksEnabled) {
         framesDrawn += 1;
         renderer.domElement.dataset.e2eFrames = String(framesDrawn);
@@ -10839,6 +10910,12 @@ export function ModelViewer({
       );
 
       selection.step(dt);
+      // The cube's facets fade to their hover fill like the SVG's did.
+      if (cubeLink) cubeOverlay.setHighlight(cubeLink.highlight);
+      const cubeAnimating = cubeOverlay.step(
+        dt * 1000,
+        reducesMotion(reducedMotionRef.current)
+      );
       // Edge highlight tiers ease on the overlays themselves, so each body
       // steps its own; any still moving keeps the loop awake below.
       let edgesAnimating = false;
@@ -10976,6 +11053,28 @@ export function ModelViewer({
       if (drawnElsewhere) {
         onBodiesDrawnElsewhereRef.current?.(drawnElsewhere);
       }
+      // Push camera orientation to the view widget only when it changes, or
+      // when a new widget has just attached.
+      const orientationCamera = context.activeCamera;
+      if (
+        cubeLinkFresh ||
+        !cubeAxes ||
+        !orientationCamera.quaternion.equals(lastQuaternion)
+      ) {
+        lastQuaternion.copy(orientationCamera.quaternion);
+        const inverse = orientationCamera.quaternion.clone().invert();
+        const project = (axis: THREE.Vector3) => {
+          const view = axis.clone().applyQuaternion(inverse);
+          return { x: view.x, y: -view.y, z: view.z };
+        };
+        cubeAxes = {
+          x: project(new THREE.Vector3(1, 0, 0)),
+          y: project(new THREE.Vector3(0, 1, 0)),
+          z: project(new THREE.Vector3(0, 0, 1))
+        };
+        cubeLink?.update(cubeAxes);
+        cubeLinkFresh = false;
+      }
       let renderStarted = performance.now();
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
@@ -11034,7 +11133,10 @@ export function ModelViewer({
               at: now,
               distance,
               orthographicZoom: orthographic.zoom,
-              zooming
+              zooming,
+              // Which way the camera faces, so a spec can tell an orbit's
+              // frames from frames that only repaint.
+              orientation: context.activeCamera.quaternion.toArray()
             }
           })
         );
@@ -11051,6 +11153,14 @@ export function ModelViewer({
           textures: renderer.info.memory.textures
         });
         lastPerfFrameAt = now;
+      }
+      // After the frame's statistics, which describe the model's scene: the
+      // cube is drawn over it, into the same canvas, as the last word.
+      if (cubeBox && cubeAxes) {
+        cubeOverlay.render(renderer, projectCube(cubeAxes), cubeBox);
+        if (e2eCanvasHooksEnabled) {
+          renderer.domElement.dataset.e2eCubeOverlay = String(cubeBox.width);
+        }
       }
       updateDimensionLabels(context, canvasWidth(), canvasHeight());
       labelRenderer.render(scene, context.activeCamera);
@@ -11092,30 +11202,13 @@ export function ModelViewer({
         canvasHeight()
       );
 
-      // Push camera orientation to the view widget only when it changes.
-      const orientationCamera = context.activeCamera;
-      if (!orientationCamera.quaternion.equals(lastQuaternion)) {
-        lastQuaternion.copy(orientationCamera.quaternion);
-        const sink = orientationRef.current;
-        if (sink) {
-          const inverse = orientationCamera.quaternion.clone().invert();
-          const project = (axis: THREE.Vector3) => {
-            const view = axis.clone().applyQuaternion(inverse);
-            return { x: view.x, y: -view.y, z: view.z };
-          };
-          sink({
-            x: project(new THREE.Vector3(1, 0, 0)),
-            y: project(new THREE.Vector3(0, 1, 0)),
-            z: project(new THREE.Vector3(0, 0, 1))
-          });
-        }
-      }
       const hoverAnimating = selection.isSettling;
       loopWasAnimating =
         tweening ||
         zooming ||
         controlsChanged ||
         hoverAnimating ||
+        cubeAnimating ||
         edgesAnimating ||
         rigsAnimating ||
         retiringOverlaysRef.current.length > 0 ||
@@ -11150,6 +11243,12 @@ export function ModelViewer({
       retireCommandDragRef.current = null;
       areaObserver.disconnect();
       stopWatchingTheme();
+      document.fonts?.removeEventListener?.('loadingdone', onCubeFontsLoaded);
+      // The SVG paints the cube again for as long as it outlives this canvas.
+      releaseCubeLink?.();
+      releaseCubeLink = null;
+      cubeLink = null;
+      cubeOverlay.dispose();
       renderer.domElement.removeEventListener(
         'pointermove',
         handlePointerMove,
@@ -12589,7 +12688,10 @@ export function ModelViewer({
     // still installed, so restore the held proxy before re-arming the handle.
     cylinderRadiusProxyControllerRef.current?.restore();
     const rig = buildCylinderRadiusHandle({
-      origin: cylinderRadiusHandle.point,
+      origin:
+        cylinderRadiusHandle.concavity === 'hole'
+          ? boreRimAnchor(cylinderRadiusHandle, context.camera.position)
+          : cylinderRadiusHandle.point,
       direction: cylinderRadiusHandle.radialDirection,
       originalRadius: cylinderRadiusHandle.originalRadius
     });

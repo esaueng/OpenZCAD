@@ -19,6 +19,26 @@ import { formatDiameter, type LabelSegment } from './topologyLabels';
  */
 export const LIVE_DIAMETER_ATTRIBUTE = 'data-live-diameter';
 
+/**
+ * Marks a measurement line ("Ø 24 mm") whose diameter a drag rewrites. Its
+ * value is the document diameter; `data-units` keeps the unit it printed.
+ */
+export const LIVE_DIAMETER_DETAIL_ATTRIBUTE = 'data-live-diameter-detail';
+
+/** A measurement line's spelling of a diameter, as the readout prints it. */
+export function formatDiameterDetail(diameter: number, units: string): string {
+  return `Ø ${Math.round(diameter * 100) / 100} ${units}`;
+}
+
+/** Tags a measurement line so a drag can rewrite its diameter in place. */
+export function tagLiveDiameterDetail(
+  element: HTMLElement,
+  value: { diameter: number; units: string }
+): void {
+  element.setAttribute(LIVE_DIAMETER_DETAIL_ATTRIBUTE, String(value.diameter));
+  element.dataset.units = value.units;
+}
+
 /** Fills `element` with `segments`, tagging the live-diameter node. */
 export function renderLabelSegments(
   element: HTMLElement,
@@ -55,5 +75,18 @@ export function setLiveDiameter(
       continue;
     }
     node.textContent = formatDiameter(value);
+  }
+  // The measurement line beside the name: a hole's name carries no number
+  // ("Through hole"), so without this the bar held the old size for the
+  // whole of a drag the viewport projected.
+  for (const node of root.querySelectorAll<HTMLElement>(
+    `[${LIVE_DIAMETER_DETAIL_ATTRIBUTE}]`
+  )) {
+    const value =
+      diameter ?? Number(node.getAttribute(LIVE_DIAMETER_DETAIL_ATTRIBUTE));
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    node.textContent = formatDiameterDetail(value, node.dataset.units ?? '');
   }
 }

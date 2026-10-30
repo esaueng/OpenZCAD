@@ -24,6 +24,14 @@
   user-select: none;
 }
 
+/* The viewer paints the cube into its own canvas (orientationCubeOverlay.ts),
+   so this SVG is only the cube's click, focus and accessibility surface:
+   unpainted, but still hit-tested and focusable, which `opacity` leaves
+   alone and `visibility` would not. */
+.orientation-cube[data-overlay='viewer'] {
+  opacity: 0;
+}
+
 .cube-face,
 .cube-corner,
 .cube-corner-hit {
