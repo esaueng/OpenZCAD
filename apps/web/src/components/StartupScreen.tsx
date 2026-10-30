@@ -14,7 +14,7 @@ export function StartupScreen({
   onBack,
   loadingChunks = false,
   projectName,
-  backLabel = 'Back to parts'
+  backLabel = 'Back to projects'
 }: {
   onBack?(): void;
   loadingChunks?: boolean;

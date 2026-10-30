@@ -103,13 +103,13 @@ test(
       .toEqual(['Reorder pair', names[1]]);
 
     await page
-      .getByRole('button', { name: 'Open folder Reorder pair, 2 parts' })
+      .getByRole('button', { name: 'Open folder Reorder pair, 2 projects' })
       .click();
     await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);
     // The folder outlives a reload: it is kept on this device.
     await page.reload();
     await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);
-    await page.getByRole('button', { name: 'Parts', exact: true }).click();
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
     await expect
       .poll(() => cardOrder(page))
       .toEqual(['Reorder pair', names[1]]);
@@ -121,7 +121,7 @@ test('selects several cards and trashes them together', async ({ page }) => {
   await page
     .getByRole('checkbox', { name: `Select ${names[2]}` })
     .click({ modifiers: ['Shift'] });
-  const bar = page.getByRole('toolbar', { name: '3 parts selected' });
+  const bar = page.getByRole('toolbar', { name: '3 projects selected' });
   await expect(bar).toBeVisible();
   await bar.getByRole('button', { name: 'Move to trash' }).click();
   await expect(page.locator('.start-tile-project')).toHaveCount(0);
@@ -163,7 +163,7 @@ test('drops a dragged card on Trash', async ({ page }) => {
 test('reorders under Last edited and keeps the arrangement', async ({
   page
 }) => {
-  const sort = page.getByLabel('Sort parts');
+  const sort = page.getByLabel('Sort projects');
   await sort.selectOption('edited');
   await dragCard(page, names[0]!, names[2]!);
   await page.mouse.up();
@@ -293,10 +293,10 @@ test.describe('with a pinned part', () => {
         page.getByRole('button', { name: `Unpin ${name}`, exact: true })
       ).toBeAttached();
     }
-    // With every part pinned, Parts is still there to drag one back into.
+    // With every project pinned, Projects is still there to drag one back into.
     // (Its heading and drop target appear only mid-drag.)
     await expect(
-      page.locator('.start-shelf-group', { hasText: /^Parts/ })
+      page.locator('.start-shelf-group', { hasText: /^Projects/ })
     ).toHaveCount(0);
     await dragCard(page, names[0]!, names[2]!);
     const partsZone = page.locator('[data-tile-group="parts"]');

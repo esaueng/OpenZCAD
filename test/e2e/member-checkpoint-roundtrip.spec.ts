@@ -685,7 +685,7 @@ test('a clicked member checkpoint survives buffered edits and restores through t
       const other = await fresh.newPage();
       await server.install(other);
       await other.goto(new URL('/', page.url()).toString());
-      await expect(other.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+      await expect(other.getByRole('tab', { name: 'Projects 1' })).toBeVisible();
       await other
         .locator('.start-tile-open', { hasText: server.read().name })
         .click();
@@ -954,7 +954,7 @@ for (const [sendTiming, ackFault, sourceArchived] of [
     }
     try {
       await page.goto('/');
-      await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'Projects 1' })).toBeVisible();
       await page.evaluate(
         ({ checksumSha256, text }) =>
           new Promise<void>((resolve, reject) => {

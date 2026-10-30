@@ -131,7 +131,7 @@ describe('coordinated workspace reveal', () => {
       </WorkspaceLoading>
     );
     expect(screen.getByText(/You’re offline/)).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Back to parts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
     expect(onBack).toHaveBeenCalledOnce();
   });
 
@@ -159,7 +159,9 @@ describe('coordinated workspace reveal', () => {
       screen.getByText('Preparing your model and workspace')
     ).toBeVisible();
     expect(screen.queryByText(/Connect to finish/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Back to parts' })).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Back to projects' })
+    ).toBeEnabled();
   });
 
   it('releases a failed panel to its recovery UI instead of keeping the splash', async () => {

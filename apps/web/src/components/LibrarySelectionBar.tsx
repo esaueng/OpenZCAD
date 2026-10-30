@@ -16,8 +16,8 @@ import type { ProjectStatus } from '@openzcad/shared';
 import type { LibraryFolder } from '../lib/libraryFolders';
 
 /**
- * What can be done to every selected part at once, floating over the shelf
- * while anything is selected. The actions follow the shelf: parts can be
+ * What can be done to every selected project at once, floating over the shelf
+ * while anything is selected. The actions follow the shelf: projects can be
  * filed, pinned, archived or trashed; archived ones restored or trashed;
  * trashed ones restored or destroyed.
  */
@@ -41,12 +41,12 @@ export function LibrarySelectionBar({
   onDeleteForever
 }: {
   count: number;
-  /** Parts on screen, for "Select all". */
+  /** Projects on screen, for "Select all". */
   total: number;
   shelf: ProjectStatus;
   busy: boolean;
   folders: readonly LibraryFolder[];
-  /** The folder being shown, whose parts can be taken back out. */
+  /** The folder being shown, whose projects can be taken back out. */
   inFolderId: string | null;
   allPinned: boolean;
   moveMenuOpen: boolean;
@@ -86,7 +86,7 @@ export function LibrarySelectionBar({
       globalThis.document.removeEventListener('pointerdown', dismiss, true);
   }, [moveMenuOpen, onMoveMenuOpenChange]);
 
-  const plural = count === 1 ? 'part' : 'parts';
+  const plural = count === 1 ? 'project' : 'projects';
   const targets = folders.filter((folder) => folder.id !== inFolderId);
   return (
     <div
@@ -228,7 +228,7 @@ export function LibrarySelectionBar({
           ) : (
             <ArchiveRestore size={13} aria-hidden="true" />
           )}
-          {shelf === 'deleted' ? 'Restore' : 'Move to parts'}
+          {shelf === 'deleted' ? 'Restore' : 'Move to projects'}
         </button>
       )}
       {shelf === 'deleted' ? (
