@@ -301,9 +301,6 @@ function ringPresenceFor(across: number): number {
   );
 }
 
-const EDGE_HANDLE_RADIUS = 0.16;
-const EDGE_HIT_RADIUS = 0.65;
-
 /** Pure: where the offset arrow sits and points for a face pick. */
 export function offsetHandlePlacement(
   point: HandleVec3,
@@ -316,39 +313,6 @@ export function offsetHandlePlacement(
       x: normal.x / magnitude,
       y: normal.y / magnitude,
       z: normal.z / magnitude
-    }
-  };
-}
-
-/** Pure: sphere placement for an edge polyline (xyz-interleaved samples). */
-export function edgeHandlePlacement(
-  points: number[],
-  bodyCenter: HandleVec3
-): { origin: HandleVec3; direction: HandleVec3 } | null {
-  if (points.length < 6) {
-    return null;
-  }
-  const middle = Math.floor(points.length / 3 / 2) * 3;
-  const origin = {
-    x: points[middle]!,
-    y: points[middle + 1]!,
-    z: points[middle + 2]!
-  };
-  const outward = {
-    x: origin.x - bodyCenter.x,
-    y: origin.y - bodyCenter.y,
-    z: origin.z - bodyCenter.z
-  };
-  const magnitude = Math.hypot(outward.x, outward.y, outward.z);
-  if (magnitude < 1e-9) {
-    return { origin, direction: { x: 0, y: 0, z: 1 } };
-  }
-  return {
-    origin,
-    direction: {
-      x: outward.x / magnitude,
-      y: outward.y / magnitude,
-      z: outward.z / magnitude
     }
   };
 }
@@ -853,41 +817,43 @@ export function buildCylinderRadiusHandle(
   };
 }
 
-/**
- * A sphere at the reference edge's midpoint. Unlike the offset arrow the
- * visual does not travel: the blend radius grows around the edge, so moving
- * the handle away from it would misreport where the material goes.
- */
-export function buildEdgeRadiusHandle(params: {
+export interface EdgeRadiusRigParams {
   origin: HandleVec3;
   direction: HandleVec3;
-}): DragRig {
+  /**
+   * How far the blend's edge on the face moves along `direction` per unit of
+   * value (`edgeBlendFrame`'s `travel`). Given, the arrow rides it as the
+   * value changes; absent, it stays where it was placed.
+   */
+  travel?: number;
+}
+
+/**
+ * The fillet/chamfer arrow: the same solid double-headed pin as the face and
+ * cylinder rigs, lying across the edge on one of its faces. With a `travel`
+ * it walks along that face with the line where the blend meets it, so the
+ * arrow marks where the rounding starts and stays under the hand.
+ */
+export function buildEdgeRadiusHandle(params: EdgeRadiusRigParams): DragRig {
   const kind = 'edge-radius';
   const origin = toVector3(params.origin);
   const direction = toVector3(params.direction).normalize();
+  const travel = params.travel ?? 0;
 
   const group = new THREE.Group();
   group.name = `${kind}-handle`;
   group.position.copy(origin);
+  group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
   // Empty, but still part of the contract: consumers add both groups to the
   // scene, so both have to come back out on dispose.
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
-  const sphere = new THREE.Mesh(
-    new THREE.SphereGeometry(EDGE_HANDLE_RADIUS, 20, 14),
-    handleMaterial()
-  );
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(EDGE_HANDLE_RADIUS * 1.7, 0.02, 8, 32),
-    handleMaterial(0.55)
-  );
-  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
-  const hit = createHitMesh(
-    new THREE.SphereGeometry(EDGE_HIT_RADIUS, 8, 6),
-    kind
-  );
-  addHandleParts(group, [sphere, ring, hit]);
+  const pin = solidPinParts(kind);
+  const arrowParts = [...pin.arrow, pin.hit];
+  addHandleParts(group, arrowParts);
+  addHandleParts(group, [pin.halo]);
+  pin.halo.renderOrder = HANDLE_RENDER_ORDER - 1;
 
   const presence = createRigPresence([group, worldGroup]);
   let warned = false;
@@ -900,8 +866,11 @@ export function buildEdgeRadiusHandle(params: {
           new THREE.Color(HANDLE_HOT_COLOR),
           presence.hotness()
         );
-    for (const part of [sphere, ring]) {
-      if (
+    for (const part of arrowParts) {
+      if (part.material instanceof THREE.MeshStandardMaterial) {
+        part.material.color.copy(color);
+        part.material.emissive.copy(color);
+      } else if (
         part.material instanceof THREE.MeshBasicMaterial &&
         part.material.visible
       ) {
@@ -911,6 +880,9 @@ export function buildEdgeRadiusHandle(params: {
   };
 
   let current = 0;
+  const place = () => {
+    group.position.copy(origin).addScaledVector(direction, current * travel);
+  };
 
   return {
     kind,
@@ -922,11 +894,20 @@ export function buildEdgeRadiusHandle(params: {
       if (!presence.step(dtMs)) {
         return false;
       }
+      presence.rebase(pin.halo.material, PIN_HALO_OPACITY * presence.hotness());
       paintParts();
       return true;
     },
     setHot(hot: boolean) {
       presence.setHot(hot);
+    },
+    orient(camera: THREE.Camera) {
+      const across = orientPin(group, direction, camera);
+      presence.rebase(
+        pin.ringMaterial,
+        PIN_RING_OPACITY * ringPresenceFor(across)
+      );
+      orderByDepth(pin.solids, camera);
     },
     appear() {
       presence.showNow();
@@ -940,6 +921,7 @@ export function buildEdgeRadiusHandle(params: {
     },
     setValue(value: number) {
       current = value;
+      place();
     },
     value() {
       return current;
@@ -950,7 +932,7 @@ export function buildEdgeRadiusHandle(params: {
       group.userData.previewWarning = warning;
     },
     chipAnchor() {
-      return origin.clone();
+      return group.position.clone();
     },
     dispose() {
       disposeRigGroups(group, worldGroup);

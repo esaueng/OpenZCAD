@@ -196,9 +196,18 @@ describe('the step describes the operation actually armed', () => {
     );
   });
 
+  it('points at the edge arrow and names the value typing sets', () => {
+    expect(commandPrompt(edgeState('armed', 'fillet', 1))?.step).toBe(
+      'Drag the arrow to set the fillet on edge, or type a radius'
+    );
+    expect(commandPrompt(edgeState('armed', 'chamfer', 2))?.step).toBe(
+      'Drag the arrow to set the chamfer on 2 edges, or type a distance'
+    );
+  });
+
   it('describes the armed fillet handle and its R0 removal path', () => {
     expect(commandPrompt(faceState('armed', 'edit-fillet'))?.step).toBe(
-      'Drag the radial handle to edit the fillet, or type an exact radius · R0 removes it'
+      'Drag the arrow to edit the fillet, or type an exact radius · R0 removes it'
     );
   });
 

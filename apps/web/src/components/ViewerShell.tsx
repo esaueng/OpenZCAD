@@ -277,6 +277,7 @@ interface ViewerShellProps {
   onEdgeCommit(size: number): void;
   onEdgeCancel(): void;
   onOpenEdgeKeypad(currentSize: number): boolean;
+  onToggleEdgeOp?(): void;
   onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   sketchMode: SketchModeState | null;
   /** Where the text card's live outline sits; the card's Place reads it. */
@@ -481,6 +482,7 @@ export function ViewerShell({
   onEdgeCommit,
   onEdgeCancel,
   onOpenEdgeKeypad,
+  onToggleEdgeOp,
   onDirectManipulationChange,
   sketchMode,
   sketchTextAnchorRef,
@@ -804,6 +806,7 @@ export function ViewerShell({
         onEdgeCommit={onEdgeCommit}
         onEdgeCancel={onEdgeCancel}
         onOpenEdgeKeypad={onOpenEdgeKeypad}
+        onToggleEdgeOp={onToggleEdgeOp}
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
         sketchTextAnchorRef={sketchTextAnchorRef}

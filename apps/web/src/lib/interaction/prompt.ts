@@ -57,7 +57,7 @@ function armedStep(state: InteractionState): string {
       case 'resize-cylinder-radius':
         return 'Drag the radial handle to adjust the radius, or type an exact radius';
       case 'edit-fillet':
-        return 'Drag the radial handle to edit the fillet, or type an exact radius · R0 removes it';
+        return 'Drag the arrow to edit the fillet, or type an exact radius · R0 removes it';
       case 'remove-face-feature':
         return 'Remove this proven imported blend, or pick another face';
       case 'offset-face':
@@ -78,7 +78,8 @@ function armedStep(state: InteractionState): string {
   if (state.mode === 'edges') {
     const count = state.edges.length;
     const noun = count === 1 ? 'edge' : `${count} edges`;
-    return `Drag the handle to set the ${state.op} on ${noun}, or type a value`;
+    const value = state.op === 'fillet' ? 'radius' : 'distance';
+    return `Drag the arrow to set the ${state.op} on ${noun}, or type a ${value}`;
   }
   if (state.mode === 'region') {
     return state.targets.length > 1

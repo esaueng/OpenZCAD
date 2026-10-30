@@ -1481,7 +1481,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       )?.note;
       const hint =
         state.op === 'edit-fillet'
-          ? 'Drag the radial handle or tap R to edit · set R0 to remove.'
+          ? 'Drag the arrow or tap R to edit · set R0 to remove.'
           : state.op === 'remove-face-feature'
             ? `R${state.target.blendRadius ?? '?'} is read-only; this imported blend can be removed.`
             : state.op === 'resize-cylinder-radius'

@@ -9238,8 +9238,7 @@ export function App() {
           z: (box.min.z + box.max.z) / 2
         }
       : { x: 0, y: 0, z: 0 };
-    // As the edge's own blend handle stands (`edgeHandlePlacement`): the
-    // polyline's middle sample, pointing away from the body's middle.
+    // The polyline's middle sample, pointing away from the body's middle.
     const at = Math.floor(points.length / 3 / 2) * 3;
     const middle =
       points.length >= 6
@@ -28769,6 +28768,16 @@ export function App() {
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
+            onToggleEdgeOp={() => {
+              if (
+                interaction.mode === 'edges' &&
+                interaction.phase !== 'validating'
+              ) {
+                handleSelectionAction(
+                  interaction.op === 'fillet' ? 'chamfer' : 'fillet'
+                );
+              }
+            }}
             onDirectManipulationChange={(dragging, source) => {
               if (source === 'move') {
                 return;

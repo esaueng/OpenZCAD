@@ -406,6 +406,9 @@ function projectExpectedAnchor(
   };
 }
 
+/** `PIN_CHIP_GAP_PX` in ModelViewer: how far a pin's label hangs off it. */
+const PIN_CHIP_GAP_PX = 44;
+
 async function expectAnchorMatchesProjection(
   canvas: Locator,
   chip: Locator,
@@ -427,15 +430,28 @@ async function expectAnchorMatchesProjection(
     bounds.width,
     bounds.height
   );
-  expect(anchor!.screen.x).toBeCloseTo(expected.x, 1);
-  expect(anchor!.screen.y).toBeCloseTo(expected.y, 1);
-  const style = await chip.evaluate((element) => ({
-    left: Number.parseFloat(element.style.left),
-    top: Number.parseFloat(element.style.top)
+  // The arrow stands on the anchor; its label hangs a fixed gap beside it.
+  const pin = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY)
   }));
-  expect(style.left).toBeCloseTo(anchor!.screen.x, 3);
-  expect(style.top).toBeCloseTo(anchor!.screen.y, 3);
-  return anchor!;
+  expect(pin.x).toBeCloseTo(expected.x, 1);
+  expect(pin.y).toBeCloseTo(expected.y, 1);
+  expect(
+    Math.hypot(anchor!.screen.x - pin.x, anchor!.screen.y - pin.y)
+  ).toBeCloseTo(PIN_CHIP_GAP_PX, 1);
+  // ...and never over the arrow it names.
+  const placed = await chip.evaluate((element: HTMLElement) => ({
+    left: Number.parseFloat(element.style.left),
+    top: Number.parseFloat(element.style.top),
+    width: element.offsetWidth,
+    height: element.offsetHeight
+  }));
+  expect(
+    Math.abs(placed.left - pin.x) > placed.width / 2 ||
+      Math.abs(placed.top - pin.y) > placed.height / 2
+  ).toBe(true);
+  return { ...anchor!, screen: pin };
 }
 
 test('accepts exact visual selection and direct editing on the seeded boss', async ({

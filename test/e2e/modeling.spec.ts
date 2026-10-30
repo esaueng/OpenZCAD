@@ -1842,7 +1842,7 @@ for (const modifier of [
       page.getByRole('region', { name: /^(Fillet|Chamfer) operation$/ })
     ).toHaveCount(0);
     await expect(page.getByRole('contentinfo')).not.toContainText(
-      /Drag the handle to set the (fillet|chamfer)/
+      /Drag the arrow to set the (fillet|chamfer)/
     );
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
     expect(consoleErrors).toEqual([]);

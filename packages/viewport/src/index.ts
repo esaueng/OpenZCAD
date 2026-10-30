@@ -53,6 +53,7 @@ export * from './gizmo/linearRig';
 export * from './gizmo/faceSweepProfile';
 export * from './gizmo/move';
 export * from './gizmo/screenDragAxis';
+export * from './gizmo/edgeBlendFrame';
 export * from './gizmo/centerAlign';
 export * from './gizmo/moveTransform';
 export * from './gizmo/cylinderRadiusPreview';
