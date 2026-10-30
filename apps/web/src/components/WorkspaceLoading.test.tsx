@@ -141,9 +141,7 @@ describe('coordinated workspace reveal', () => {
     expect(
       screen.getByRole('status', { name: 'Restoring workspace' })
     ).toBeVisible();
-    expect(
-      screen.getByText('Preparing your model and workspace')
-    ).toBeVisible();
+    expect(screen.getByText('Loading your last project')).toBeVisible();
     expect(screen.queryByText(/Connect to finish/)).toBeNull();
   });
 
@@ -155,9 +153,7 @@ describe('coordinated workspace reveal', () => {
         <p>Cached model</p>
       </WorkspaceLoading>
     );
-    expect(
-      screen.getByText('Preparing your model and workspace')
-    ).toBeVisible();
+    expect(screen.getByText('Building the model')).toBeVisible();
     expect(screen.queryByText(/Connect to finish/)).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Back to projects' })

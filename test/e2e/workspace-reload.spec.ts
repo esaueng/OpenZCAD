@@ -94,9 +94,7 @@ test('offline boot keeps restoring a saved local workspace without a connection 
       page.getByRole('status', { name: 'Restoring workspace' })
     ).toBeVisible();
     await context.setOffline(true);
-    await expect(
-      page.getByText('Preparing your model and workspace')
-    ).toBeVisible();
+    await expect(page.getByText('Loading your last project')).toBeVisible();
     await expect(page.getByText(/Connect to finish/)).toHaveCount(0);
     await expect(page.locator('.startup-card button')).toBeHidden();
   } finally {

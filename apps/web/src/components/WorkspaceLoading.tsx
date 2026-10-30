@@ -13,12 +13,14 @@ import { AppShell } from './AppShell';
 
 export function WorkspaceAppShell({
   projectId,
+  projectName,
   loadingReady,
   onLoadingBack,
   covered = false,
   ...props
 }: ComponentProps<typeof AppShell> & {
   projectId: string;
+  projectName?: string;
   loadingReady: boolean;
   covered?: boolean;
   onLoadingBack(): void;
@@ -26,6 +28,7 @@ export function WorkspaceAppShell({
   return (
     <WorkspaceLoading
       key={projectId}
+      projectName={projectName}
       ready={loadingReady}
       covered={covered}
       onBack={onLoadingBack}
@@ -51,11 +54,13 @@ export function WorkspacePending() {
 /** Mount at the final size, prepare offscreen, and reveal once per project. */
 export function WorkspaceLoading({
   ready,
+  projectName,
   onBack,
   covered = false,
   children
 }: {
   ready: boolean;
+  projectName?: string;
   covered?: boolean;
   onBack(): void;
   children: ReactNode;
@@ -87,7 +92,12 @@ export function WorkspaceLoading({
         {children}
       </div>
       {!revealed && !covered && (
-        <StartupScreen onBack={onBack} loadingChunks={pending > 0} />
+        <StartupScreen
+          projectName={projectName}
+          stage={ready ? 'panels' : 'model'}
+          onBack={onBack}
+          loadingChunks={pending > 0}
+        />
       )}
     </PendingWorkspace.Provider>
   );

@@ -2,6 +2,7 @@
   "viewBox": "0 0 100 100",
   "compactViewBox": "2 2 96 96",
   "silhouette": "M2 22 26 6H98V30L53 60H98V78L74 94H2V70L47 40H2Z",
+  "frontFace": "M2 22H74V46L29 76H74V94H2V70L47 40H2Z",
   "colors": {
     "front": "#3b82f6",
     "top": "#93c5fd",
