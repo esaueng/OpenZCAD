@@ -2856,6 +2856,76 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
+  it('resizes a bore by less than the kernel sleeve threshold', async () => {
+    // The kernel refuses a sleeve thinner than roughly 8% of the radius under
+    // its exact-only policy; a hole adjusted by a few tenths fell inside that
+    // band on every size. The adapter reaches such sizes through a farther
+    // one, each step exact.
+    const withBlock = addPrimitiveFeature(
+      createProjectDocument('Fine bore', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 40, depth: 10 }
+      }
+    );
+    const blockId = withBlock.bodyOrder.at(-1)!;
+    const withDrill = addPrimitiveFeature(withBlock, {
+      name: 'Drill',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 6, height: 10 }
+    });
+    const drillId = withDrill.bodyOrder.at(-1)!;
+    const positioned = transformBody(withDrill, {
+      name: 'Center drill',
+      targetBodyId: drillId,
+      translation: { x: 20, y: 20, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const document = new CommandManager(positioned).execute(
+      commandFactories.booleanBodies({
+        name: 'Drilled block',
+        operation: 'subtract',
+        targetBodyIds: [blockId, drillId]
+      })
+    );
+    const resultId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    const bore = derived.bodyRepresentations[resultId]?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(bore?.geometry?.radius).toBeCloseTo(6, 4);
+
+    for (const radius of [5.8, 6.25]) {
+      const resized = directEditBody(document, {
+        name: 'Resize Hole',
+        targetBodyId: resultId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: bore!.hash,
+          sourceRadius: bore!.geometry!.radius!,
+          sourceAxisStart: bore!.geometry!.axisStart!,
+          sourceAxisEnd: bore!.geometry!.axisEnd!,
+          concavity: 'hole',
+          radius
+        }
+      }).document;
+      const result = await adapter.syncDocument(resized);
+      expect(result.warnings).toEqual([]);
+      const walls = result.bodyRepresentations[
+        resultId
+      ]?.topology?.faces.filter(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      );
+      expect(walls).toHaveLength(1);
+      expect(walls?.[0]?.geometry?.radius).toBeCloseTo(radius, 4);
+      expect(result.bodyRepresentations[resultId]?.volume).toBeCloseTo(
+        40 * 40 * 10 - Math.PI * radius * radius * 10,
+        0
+      );
+    }
+  });
+
   it('shrinks a coaxial through-hole without faceting the analytic shell', async () => {
     const withCylinder = addPrimitiveFeature(
       createProjectDocument('Coaxial bore resize', toUserId('user_exact')),

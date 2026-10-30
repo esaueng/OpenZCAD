@@ -3,7 +3,10 @@ import type {
   FaceTopology,
   Vector3
 } from '@openzcad/shared';
-import type { CylinderPreviewProfile } from '@openzcad/viewport';
+import type {
+  BorePreviewProfile,
+  CylinderPreviewProfile
+} from '@openzcad/viewport';
 import { geometryTolerance } from '@openzcad/geometry';
 
 const SNAP_MIN_PIXELS = 8;
@@ -447,4 +450,101 @@ export function cylinderPreviewProfile(
     } else return null;
   }
   return caps === 2 ? { axisStart, axisEnd, radius, coreRadius } : null;
+}
+
+/**
+ * The bore a hole-wall drag reshapes in the viewport: its wall and the width
+ * of a round on either rim. A rim round is a coaxial torus centred at the
+ * wall's end whose tube sits outside the bore (major − minor = radius); the
+ * exact resize carries it outward with the wall, so the projection does too.
+ */
+export function borePreviewProfile(
+  body: BodyRepresentation | undefined,
+  wall: { axisStart: Vector3; axisEnd: Vector3; radius: number }
+): BorePreviewProfile | null {
+  const { axisStart, axisEnd, radius } = wall;
+  const difference = {
+    x: axisEnd.x - axisStart.x,
+    y: axisEnd.y - axisStart.y,
+    z: axisEnd.z - axisStart.z
+  };
+  const span = length(difference);
+  const axis = normalized(difference);
+  const tolerance = Math.max(radius, span, 1) * 1e-6;
+  if (!axis || !(radius > tolerance) || !(span > tolerance)) return null;
+  let rimStart = 0;
+  let rimEnd = 0;
+  for (const face of body?.topology?.faces ?? []) {
+    const geometry = face.geometry;
+    if (
+      geometry?.surfaceType !== 'torus' ||
+      !geometry.torusCenter ||
+      !geometry.majorRadius ||
+      !geometry.minorRadius ||
+      Math.abs(geometry.majorRadius - geometry.minorRadius - radius) > tolerance
+    ) {
+      continue;
+    }
+    const center = {
+      x: geometry.torusCenter.x - axisStart.x,
+      y: geometry.torusCenter.y - axisStart.y,
+      z: geometry.torusCenter.z - axisStart.z
+    };
+    const axial = dot(center, axis);
+    const offAxis = length({
+      x: center.x - axis.x * axial,
+      y: center.y - axis.y * axial,
+      z: center.z - axis.z * axial
+    });
+    if (offAxis > tolerance) continue;
+    if (Math.abs(axial) <= tolerance) {
+      rimStart = Math.max(rimStart, geometry.minorRadius);
+    } else if (Math.abs(axial - span) <= tolerance) {
+      rimEnd = Math.max(rimEnd, geometry.minorRadius);
+    }
+  }
+  return { axisStart, axisEnd, radius, rimStart, rimEnd };
+}
+
+/**
+ * Where a bore's radius handle sits: on the rim of the end the camera looks
+ * into, at the azimuth that was picked. The pick itself lies somewhere down
+ * the wall; a handle left there sat inside the visible rim, and since the
+ * drag is scaled at the handle's depth the rim nearer the camera outran the
+ * hand.
+ */
+export function boreRimAnchor(
+  wall: {
+    point: Vector3;
+    radialDirection: Vector3;
+    axisStart: Vector3;
+    axisEnd: Vector3;
+    originalRadius: number;
+  },
+  eye: Vector3
+): Vector3 {
+  const axis = normalized({
+    x: wall.axisEnd.x - wall.axisStart.x,
+    y: wall.axisEnd.y - wall.axisStart.y,
+    z: wall.axisEnd.z - wall.axisStart.z
+  });
+  if (!axis) return wall.point;
+  const along = dot(wall.radialDirection, axis);
+  const radial = normalized({
+    x: wall.radialDirection.x - axis.x * along,
+    y: wall.radialDirection.y - axis.y * along,
+    z: wall.radialDirection.z - axis.z * along
+  });
+  if (!radial) return wall.point;
+  const facing = (end: Vector3, sign: number) =>
+    sign * dot({ x: eye.x - end.x, y: eye.y - end.y, z: eye.z - end.z }, axis);
+  const end =
+    facing(wall.axisEnd, 1) >= facing(wall.axisStart, -1)
+      ? wall.axisEnd
+      : wall.axisStart;
+  return {
+    x: end.x + radial.x * wall.originalRadius,
+    y: end.y + radial.y * wall.originalRadius,
+    z: end.z + radial.z * wall.originalRadius
+  };
 }

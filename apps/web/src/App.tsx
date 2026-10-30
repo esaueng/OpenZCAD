@@ -684,6 +684,7 @@ import {
   selectionFeature,
   selectionSetFeature
 } from './lib/selectionFeature';
+import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -692,6 +693,7 @@ import {
   isValidCylinderRadius,
   sameCylinderAxis,
   supportsRadialCylinderPreview,
+  borePreviewProfile,
   cylinderPreviewProfile
 } from './lib/interaction/cylinderRadius';
 import {
@@ -1479,7 +1481,11 @@ import {
   withCachedShelfNames
 } from './lib/projectShelfNames';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
-import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
+import {
+  GEOMETRY_PREVIEW_SCHEDULING,
+  LivePreview,
+  type LivePreviewOptions
+} from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { createPrimitiveCommand } from './lib/primitivePlacement';
@@ -1783,6 +1789,8 @@ const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 const PANEL_PENDING_DELAY_MS = 400;
 /** How long a rebuild runs before the tool palette reads it as waiting. */
 const TOOLS_WAITING_DELAY_MS = 400;
+/** How long a hole's radius handle rests before the kernel checks the size. */
+const CYLINDER_RADIUS_REST_MS = 250;
 /**
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
@@ -4108,48 +4116,67 @@ export function App() {
         `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`
     );
   }
+  /**
+   * The radius the hand holds right now. A refusal for any other value
+   * arrived after the hand moved on; showing it flashed the chip amber and a
+   * red toast between two sizes that both built.
+   */
+  const cylinderRadiusHandValue = useRef<number | null>(null);
+  const cylinderRadiusExact = {
+    build: (radius: number) => {
+      const plan = buildCylinderRadiusCommand(radius);
+      const base = managerRef.current?.document;
+      const current = interactionRef.current;
+      if (!plan || !base || current.mode !== 'face') return null;
+      return {
+        selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
+        document: plan.command.apply(base),
+        command: plan.command,
+        radius,
+        bodyId: current.target.bodyId as BodyId,
+        label: plan.command.label,
+        baseProjectId: base.projectId,
+        baseVersion: base.version,
+        ...(plan.sourceFeatureId
+          ? {
+              validationTargets: affectedFeatureTargets(
+                base,
+                plan.sourceFeatureId
+              )
+            }
+          : {})
+      };
+    },
+    derive: async (candidate, signal) => {
+      // Radius/hole gestures read the owned cylinder semantics while they
+      // stream. Keep their complete picking topology until that contract
+      // can be prepared independently from recognition.
+      const derived = await geometry.previewGeometry(candidate.document, {
+        signal
+      });
+      const rejection = offsetPreviewRejection({
+        ...candidate,
+        derived,
+        documentMoved: !previewBaseIsCurrent(candidate)
+      });
+      if (rejection) throw new Error(rejection.message);
+      return derived;
+    },
+    isCurrent: previewSelectionIsCurrent
+  } satisfies Pick<
+    LivePreviewOptions<RadiusPreviewCandidate, GeometryReadyState>,
+    'build' | 'derive' | 'isCurrent'
+  >;
+  function reportRadiusPreviewFailure(error: unknown, value: number) {
+    if (value !== cylinderRadiusHandValue.current) return;
+    reportPreviewFailure(
+      errorMessage(error, 'Exact radius preview failed.'),
+      value
+    );
+  }
   const cylinderRadiusPreview = useRef(
     new LivePreview<RadiusPreviewCandidate, GeometryReadyState>({
-      build: (radius) => {
-        const plan = buildCylinderRadiusCommand(radius);
-        const base = managerRef.current?.document;
-        const current = interactionRef.current;
-        if (!plan || !base || current.mode !== 'face') return null;
-        return {
-          selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
-          document: plan.command.apply(base),
-          command: plan.command,
-          radius,
-          bodyId: current.target.bodyId as BodyId,
-          label: plan.command.label,
-          baseProjectId: base.projectId,
-          baseVersion: base.version,
-          ...(plan.sourceFeatureId
-            ? {
-                validationTargets: affectedFeatureTargets(
-                  base,
-                  plan.sourceFeatureId
-                )
-              }
-            : {})
-        };
-      },
-      derive: async (candidate, signal) => {
-        // Radius/hole gestures read the owned cylinder semantics while they
-        // stream. Keep their complete picking topology until that contract
-        // can be prepared independently from recognition.
-        const derived = await geometry.previewGeometry(candidate.document, {
-          signal
-        });
-        const rejection = offsetPreviewRejection({
-          ...candidate,
-          derived,
-          documentMoved: !previewBaseIsCurrent(candidate)
-        });
-        if (rejection) throw new Error(rejection.message);
-        return derived;
-      },
-      isCurrent: previewSelectionIsCurrent,
+      ...cylinderRadiusExact,
       publish: (preview) => {
         if (preview) recoverPreviewInteraction();
         reusableRadiusPreview.current = preview
@@ -4166,15 +4193,38 @@ export function App() {
             : null
         );
       },
-      onFailure: ({ error, value }) =>
-        reportPreviewFailure(
-          errorMessage(error, 'Exact radius preview failed.'),
-          value
-        ),
+      onFailure: ({ error, value }) => reportRadiusPreviewFailure(error, value),
       ...GEOMETRY_PREVIEW_SCHEDULING,
       presentationTimeMs: () => previewPresentationMs.current
     })
   ).current;
+  /**
+   * A hole drags as a viewport projection, so nothing exact runs per snap.
+   * Once the hand rests, this rebuilds the held size off screen: a size the
+   * kernel refuses shows its refusal while the hand is still on it, instead
+   * of only after release. It never publishes geometry over the projection.
+   */
+  const cylinderRadiusRestCheck = useRef(
+    new LivePreview<RadiusPreviewCandidate, GeometryReadyState>({
+      ...cylinderRadiusExact,
+      publish: (preview) => {
+        if (!preview) return;
+        if (preview.document.radius === cylinderRadiusHandValue.current) {
+          recoverPreviewInteraction();
+        }
+      },
+      onFailure: ({ error, value }) => reportRadiusPreviewFailure(error, value),
+      ...GEOMETRY_PREVIEW_SCHEDULING
+    })
+  ).current;
+  const cylinderRadiusRestTimer = useRef<number | null>(null);
+  function stopCylinderRadiusRestCheck() {
+    if (cylinderRadiusRestTimer.current !== null) {
+      window.clearTimeout(cylinderRadiusRestTimer.current);
+      cylinderRadiusRestTimer.current = null;
+    }
+    cylinderRadiusRestCheck.clear();
+  }
 
   /**
    * Exact planar push/pull preview. Validation and display finish while volume
@@ -4509,6 +4559,7 @@ export function App() {
     derive: (document) => geometry.syncOnce(document),
     commit: (command, derived) => executeCommand(command, derived),
     onValidationStart: (value) => {
+      stopCylinderRadiusRestCheck();
       cylinderRadiusPreview.stop();
       offsetPreview.stop();
       const document = managerRef.current?.document;
@@ -7475,6 +7526,7 @@ export function App() {
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
+    detailDiameter?: { diameter: number; units: string };
   } | null>(() => {
     if (!doc || tool === 'sketch' || currentGeometrySnapshot !== null) {
       return null;
@@ -7582,7 +7634,8 @@ export function App() {
         const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: textLabelSegments('Through hole'),
-          detail: value
+          detail: value,
+          detailDiameter: { diameter: geometry.diameter, units }
         };
       }
       const label = topologySelectionLabelSegments(namingBody, namingTopology);
@@ -7592,6 +7645,9 @@ export function App() {
         geometry?.surfaceType === 'cylinder' ? geometry.diameter : undefined;
       return {
         label,
+        ...(cylinderDiameter !== undefined
+          ? { detailDiameter: { diameter: cylinderDiameter, units } }
+          : {}),
         detail:
           cylinderDiameter !== undefined
             ? `Ø ${round(cylinderDiameter)} ${units}`
@@ -8138,7 +8194,10 @@ export function App() {
       // Several bodies are counted in the name; the verbs say what they
       // are for.
       ...(selectionSummary.detail && selectedBodyIds.length < 2
-        ? { detail: selectionSummary.detail }
+        ? {
+            detail: selectionSummary.detail,
+            detailDiameter: selectionSummary.detailDiameter
+          }
         : {}),
       verbs,
       pickKey: calloutPickKey,
@@ -22681,7 +22740,25 @@ export function App() {
       doc && primitiveCylinderRadiusAncestor(doc, target.bodyId as BodyId)
         ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
         : null;
+    const vector = (value: readonly [number, number, number]) => ({
+      x: value[0],
+      y: value[1],
+      z: value[2]
+    });
+    // A hole drags as a viewport projection of its bore; the exact kernel
+    // checks the size once the hand rests and on release. Rebuilding the
+    // whole body on every snap made the rim trail the hand in jumps.
+    const bore =
+      target.concavity === 'hole'
+        ? borePreviewProfile(representations[target.bodyId as BodyId], {
+            axisStart: vector(target.axisStart),
+            axisEnd: vector(target.axisEnd),
+            radius: target.radius
+          })
+        : null;
     return {
+      ...(bore ? { boreProfilePreview: bore } : {}),
+      ...(target.concavity ? { concavity: target.concavity } : {}),
       ...(profile &&
       target.concavity === 'boss' &&
       sameCylinderAxis(
@@ -22752,6 +22829,7 @@ export function App() {
   } | null>(null);
   useEffect(() => {
     cylinderRadiusPreview.clear();
+    stopCylinderRadiusRestCheck();
     const carried = carriedCylinderModeRef.current;
     // Between the commit handing the body back and the wall being picked
     // again there is no wall: keep the carried mode for it.
@@ -22786,6 +22864,40 @@ export function App() {
     ) {
       return null;
     }
+    // A second drag of the wall the last feature resized rewrites that
+    // feature, so one hole adjusted in several drags stays one history row.
+    const fold =
+      typeof radius === 'number'
+        ? cylinderResizeFold(
+            base,
+            {
+              bodyId: target.bodyId,
+              radius: target.radius,
+              axisStart: {
+                x: target.axisStart[0],
+                y: target.axisStart[1],
+                z: target.axisStart[2]
+              },
+              axisEnd: {
+                x: target.axisEnd[0],
+                y: target.axisEnd[1],
+                z: target.axisEnd[2]
+              },
+              concavity: target.concavity
+            },
+            radius
+          )
+        : null;
+    const foldedCommand = (name: string) =>
+      fold
+        ? commandFactories.updateFeature(
+            {
+              featureId: fold.featureId,
+              data: { featureKind: 'direct-edit', operation: fold.operation }
+            },
+            name
+          )
+        : null;
 
     if (
       target.featureType === 'through-hole' &&
@@ -22795,27 +22907,29 @@ export function App() {
         typeof radius === 'number' ? radius * 2 : `(${radius}) * 2`;
       return {
         edit: 'through-hole',
-        command: commandFactories.directEditBody({
-          name: 'Resize Through Hole',
-          targetBodyId: target.bodyId as BodyId,
-          operation: {
-            kind: 'resize-through-hole',
-            faceHash: target.hash,
-            ...(target.reference ? { faceReference: target.reference } : {}),
-            sourceDiameter: target.diameter,
-            sourceAxisStart: {
-              x: target.axisStart[0],
-              y: target.axisStart[1],
-              z: target.axisStart[2]
-            },
-            sourceAxisEnd: {
-              x: target.axisEnd[0],
-              y: target.axisEnd[1],
-              z: target.axisEnd[2]
-            },
-            diameter
-          }
-        })
+        command:
+          foldedCommand('Resize Through Hole') ??
+          commandFactories.directEditBody({
+            name: 'Resize Through Hole',
+            targetBodyId: target.bodyId as BodyId,
+            operation: {
+              kind: 'resize-through-hole',
+              faceHash: target.hash,
+              ...(target.reference ? { faceReference: target.reference } : {}),
+              sourceDiameter: target.diameter,
+              sourceAxisStart: {
+                x: target.axisStart[0],
+                y: target.axisStart[1],
+                z: target.axisStart[2]
+              },
+              sourceAxisEnd: {
+                x: target.axisEnd[0],
+                y: target.axisEnd[1],
+                z: target.axisEnd[2]
+              },
+              diameter
+            }
+          })
       };
     }
 
@@ -22855,30 +22969,32 @@ export function App() {
 
     return {
       edit: 'cylindrical-face',
-      command: commandFactories.directEditBody({
-        // The history row and the command card read the same name, so a
-        // feature is called the same thing while it runs and afterwards.
-        name: radialFaceOperationName(target),
-        targetBodyId: target.bodyId as BodyId,
-        operation: {
-          kind: 'resize-cylindrical-face',
-          faceHash: target.hash,
-          ...(target.reference ? { faceReference: target.reference } : {}),
-          sourceRadius: target.radius,
-          sourceAxisStart: {
-            x: target.axisStart[0],
-            y: target.axisStart[1],
-            z: target.axisStart[2]
-          },
-          sourceAxisEnd: {
-            x: target.axisEnd[0],
-            y: target.axisEnd[1],
-            z: target.axisEnd[2]
-          },
-          concavity: target.concavity,
-          radius
-        }
-      })
+      command:
+        foldedCommand(radialFaceOperationName(target)) ??
+        commandFactories.directEditBody({
+          // The history row and the command card read the same name, so a
+          // feature is called the same thing while it runs and afterwards.
+          name: radialFaceOperationName(target),
+          targetBodyId: target.bodyId as BodyId,
+          operation: {
+            kind: 'resize-cylindrical-face',
+            faceHash: target.hash,
+            ...(target.reference ? { faceReference: target.reference } : {}),
+            sourceRadius: target.radius,
+            sourceAxisStart: {
+              x: target.axisStart[0],
+              y: target.axisStart[1],
+              z: target.axisStart[2]
+            },
+            sourceAxisEnd: {
+              x: target.axisEnd[0],
+              y: target.axisEnd[1],
+              z: target.axisEnd[2]
+            },
+            concavity: target.concavity,
+            radius
+          }
+        })
     };
   }
 
@@ -22893,6 +23009,12 @@ export function App() {
     ) {
       return;
     }
+    cylinderRadiusHandValue.current = radius;
+    stopCylinderRadiusRestCheck();
+    // A refusal belongs to the size it was given for. The hand has left that
+    // size, so the gesture is live again; the next size the kernel refuses
+    // says so when the hand rests on it.
+    recoverPreviewInteraction();
     // Back at the starting size the part is simply itself again. Asking the
     // kernel to rebuild it there is refused ("must differ from its current
     // diameter"), which flagged a drag that merely passed its start as
@@ -22914,10 +23036,20 @@ export function App() {
       // transform during drag. Drop any older worker result so it cannot flash
       // over that proxy; release still validates one exact kernel rebuild.
       cylinderRadiusPreview.clear();
+      if (current.target.concavity === 'hole') {
+        cylinderRadiusRestTimer.current = window.setTimeout(() => {
+          cylinderRadiusRestTimer.current = null;
+          if (cylinderRadiusHandValue.current === radius) {
+            cylinderRadiusRestCheck.request(radius);
+          }
+        }, CYLINDER_RADIUS_REST_MS);
+      }
     }
   }
 
   function handleCylinderRadiusCancel() {
+    cylinderRadiusHandValue.current = null;
+    stopCylinderRadiusRestCheck();
     cylinderRadiusPreview.clear();
     reusableRadiusPreview.current = null;
     setPreviewDeferred(false);
@@ -23873,6 +24005,12 @@ export function App() {
     regionExtrudePreview.clear();
     offsetPreview.clear();
     cylinderRadiusPreview.clear();
+    cylinderRadiusRestCheck.clear();
+    if (cylinderRadiusRestTimer.current !== null) {
+      window.clearTimeout(cylinderRadiusRestTimer.current);
+      cylinderRadiusRestTimer.current = null;
+    }
+    cylinderRadiusHandValue.current = null;
     edgePreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
@@ -23882,7 +24020,13 @@ export function App() {
     setRenderedOffsetPreview(null);
     setLastValidPreview(null);
     setPreviewBlendFaces([]);
-  }, [regionExtrudePreview, offsetPreview, cylinderRadiusPreview, edgePreview]);
+  }, [
+    regionExtrudePreview,
+    offsetPreview,
+    cylinderRadiusPreview,
+    cylinderRadiusRestCheck,
+    edgePreview
+  ]);
 
   // A preview must never outlive the command that made it. Whatever returns
   // a command to idle — Escape, the card's ×, a toolbar command, a click on
@@ -30074,6 +30218,7 @@ export function App() {
                 <SelectionReadout
                   label={railPick.label}
                   detail={railPick.detail}
+                  detailDiameter={railPick.detailDiameter}
                 />
               ) : null
             }

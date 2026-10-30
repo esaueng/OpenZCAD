@@ -2106,7 +2106,17 @@ export function applyDirectEdit(
   // sweeps back through material — so growing and shrinking are the same
   // call. The recorded `concavity` is now only a record of what the gesture
   // meant, and shrinking no longer has to fail closed.
-  const output = kernel.resizeCylindricalFace(solid, face, newRadius);
+  const output = resizeCylindricalFaceExactly(
+    kernel,
+    solid,
+    face,
+    geometry.radius,
+    newRadius,
+    geometry.axisStart,
+    axisDir,
+    axisTolerance,
+    operation.concavity
+  );
   if (kernel.validateSolidRelaxed(output) !== 0) {
     throw new Error(
       `Resizing the face to radius ${newRadius} does not produce a valid solid.`
@@ -2139,6 +2149,91 @@ export function applyDirectEdit(
     );
   }
   return { solids: [output] };
+}
+
+/** Relative change below which the kernel's resize sleeve may be refused. */
+const SLEEVE_BAND = 0.15;
+
+/**
+ * `resizeCylindricalFace`, reaching a size close to the current one by way of
+ * a farther one.
+ *
+ * The kernel's sleeve boolean refuses any change smaller than roughly 8% of
+ * the radius (measured on bored cylinders at r = 4, 8 and 12.25: the refused
+ * band is the same fraction each time, with or without rim blends). Every
+ * fine adjustment of a hole landed in that band. Two exact resizes — away
+ * past the band, then back to the size asked for — each clear it and end on
+ * the same analytic wall. A hole steps inward
+ * first, a boss outward, since that direction only adds material and cannot
+ * reach other geometry; the other direction is the fallback.
+ */
+function resizeCylindricalFaceExactly(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  fromRadius: number,
+  toRadius: number,
+  axisPoint: Vec3,
+  axisDirection: Vec3,
+  axisTolerance: number,
+  concavity: 'hole' | 'boss'
+): number {
+  try {
+    return kernel.resizeCylindricalFace(solid, face, toRadius);
+  } catch (error) {
+    // Only a change inside the band is worth a detour. The refusal is told
+    // by size, not by its wording: the kernel reports it as an exact-only
+    // refusal or, when the boolean hands back the untouched solid, through
+    // its volume gate, and either sentence may change in any release.
+    if (Math.abs(toRadius - fromRadius) > SLEEVE_BAND * fromRadius) throw error;
+    const inward = [0.85, 0.7].map(
+      (factor) => factor * Math.min(fromRadius, toRadius)
+    );
+    const outward = [1.15, 1.3].map(
+      (factor) => factor * Math.max(fromRadius, toRadius)
+    );
+    const waypoints =
+      concavity === 'hole'
+        ? [...inward, ...outward]
+        : [...outward, ...inward];
+    for (const waypoint of waypoints) {
+      try {
+        const via = kernel.resizeCylindricalFace(solid, face, waypoint);
+        const wall = Array.from(kernel.getSolidFaces(via)).filter((handle) => {
+          const measured = measureFaceGeometry(kernel, handle);
+          if (
+            measured?.surfaceType !== 'cylinder' ||
+            measured.radius === undefined ||
+            !measured.axisStart ||
+            Math.abs(measured.radius - waypoint) > axisTolerance
+          ) {
+            return false;
+          }
+          const toAxis = {
+            x: measured.axisStart.x - axisPoint.x,
+            y: measured.axisStart.y - axisPoint.y,
+            z: measured.axisStart.z - axisPoint.z
+          };
+          const along =
+            toAxis.x * axisDirection.x +
+            toAxis.y * axisDirection.y +
+            toAxis.z * axisDirection.z;
+          return (
+            Math.hypot(
+              toAxis.x - axisDirection.x * along,
+              toAxis.y - axisDirection.y * along,
+              toAxis.z - axisDirection.z * along
+            ) <= axisTolerance
+          );
+        });
+        if (wall.length !== 1) continue;
+        return kernel.resizeCylindricalFace(via, wall[0]!, toRadius);
+      } catch {
+        // This waypoint is blocked; the other direction may not be.
+      }
+    }
+    throw error;
+  }
 }
 
 /**

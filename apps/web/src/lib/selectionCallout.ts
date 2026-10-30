@@ -93,6 +93,8 @@ export interface SelectionCalloutContent {
   pickKey?: string;
   /** The key measurement: area or diameter, length, or overall size. */
   detail?: string;
+  /** When `detail` is a diameter, its value, so a drag can rewrite it live. */
+  detailDiameter?: { diameter: number; units: string } | undefined;
   verbs: readonly SelectionCalloutVerb[];
   /**
    * Where the chip hangs: over the selected body, or over the geometry a

@@ -10,6 +10,8 @@ import {
   sameCylinderAxis,
   snapCylinderRadius,
   supportsRadialCylinderPreview,
+  borePreviewProfile,
+  boreRimAnchor,
   cylinderPreviewProfile
 } from './cylinderRadius';
 import type { BodyRepresentation, FaceTopology } from '@openzcad/shared';
@@ -339,5 +341,64 @@ describe('hole diameter drag', () => {
       findResizedCylinderFace([...faces, band], axisStart, axisEnd, 2)
         ?.topologyId
     ).toBe('bore');
+  });
+});
+
+describe('hole radius handle', () => {
+  const wall = {
+    axisStart: { x: 0, y: 0, z: 0 },
+    axisEnd: { x: 0, y: 0, z: 20 },
+    radius: 10
+  };
+
+  it('measures the round on each rim of the bore', () => {
+    const rim = (z: number, minor: number) =>
+      face(`rim-${z}`, 'torus', {
+        torusCenter: { x: 0, y: 0, z },
+        majorRadius: 10 + minor,
+        minorRadius: minor
+      });
+    expect(
+      borePreviewProfile(bodyWithFaces([rim(20, 1), rim(0, 0.5)]), wall)
+    ).toEqual({ ...wall, rimStart: 0.5, rimEnd: 1 });
+    // A boss round (major + minor = radius), an off-axis torus and a round
+    // at mid-wall are not this bore's rims.
+    expect(
+      borePreviewProfile(
+        bodyWithFaces([
+          face('boss', 'torus', {
+            torusCenter: { x: 0, y: 0, z: 20 },
+            majorRadius: 9,
+            minorRadius: 1
+          }),
+          face('off', 'torus', {
+            torusCenter: { x: 3, y: 0, z: 20 },
+            majorRadius: 11,
+            minorRadius: 1
+          }),
+          rim(10, 1)
+        ]),
+        wall
+      )
+    ).toEqual({ ...wall, rimStart: 0, rimEnd: 0 });
+  });
+
+  it('sits on the rim the camera looks into, at the picked azimuth', () => {
+    const picked = {
+      ...wall,
+      point: { x: 0, y: 10, z: 7 },
+      radialDirection: { x: 0, y: 1, z: 0 },
+      originalRadius: 10
+    };
+    expect(boreRimAnchor(picked, { x: 5, y: -40, z: 90 })).toEqual({
+      x: 0,
+      y: 10,
+      z: 20
+    });
+    expect(boreRimAnchor(picked, { x: 5, y: -40, z: -60 })).toEqual({
+      x: 0,
+      y: 10,
+      z: 0
+    });
   });
 });
