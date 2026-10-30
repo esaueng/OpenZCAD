@@ -1366,19 +1366,29 @@ describe('settings privacy and data section', () => {
     ).toBeVisible();
   });
 
-  it('keeps all cloud deletion functions together on Privacy & data', () => {
+  it('keeps all cloud deletion functions together on Privacy & data', async () => {
+    const user = userEvent.setup();
     renderSettings(readyHealth, { initialSection: 'privacy', session });
+    const scope = screen.getByRole('radiogroup', { name: 'What to delete' });
 
+    // One button, relabelled and re-explained by the chosen scope.
     expect(
       screen.getByRole('button', { name: 'Delete projects' })
     ).toBeEnabled();
+    expect(screen.getByText(/Your profile stays/)).toBeVisible();
+    await user.click(within(scope).getByText('Profile'));
     expect(
       screen.getByRole('button', { name: 'Delete profile' })
     ).toBeEnabled();
+    expect(screen.getByText(/Projects stay, owned anonymously/)).toBeVisible();
+    await user.click(within(scope).getByText('Everything'));
     expect(
       screen.getByRole('button', { name: 'Delete all data' })
     ).toBeEnabled();
-    expect(screen.getByText(/cloud deletions below never touch/)).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Delete projects' })
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Cloud deletion never touches it/)).toBeVisible();
   });
 
   it('keeps the file meter in range when the account is over its allowance', async () => {
@@ -1472,6 +1482,11 @@ describe('settings privacy and data section', () => {
       onDeleteCloudData
     });
 
+    await user.click(
+      within(
+        screen.getByRole('radiogroup', { name: 'What to delete' })
+      ).getByText('Everything')
+    );
     await user.click(screen.getByRole('button', { name: 'Delete all data' }));
     const dialog = await screen.findByRole('dialog', {
       name: 'Delete all cloud data?'
@@ -1524,7 +1539,8 @@ describe('settings privacy and data section', () => {
     ).toBeVisible();
   });
 
-  it('keeps profile deletion available when project object storage is unavailable', () => {
+  it('keeps profile deletion available when project object storage is unavailable', async () => {
+    const user = userEvent.setup();
     renderSettings(
       {
         ...readyHealth,
@@ -1533,18 +1549,25 @@ describe('settings privacy and data section', () => {
       },
       { initialSection: 'privacy', session }
     );
+    const scope = screen.getByRole('radiogroup', { name: 'What to delete' });
     expect(
       screen.getByRole('button', { name: 'Delete projects' })
     ).toBeDisabled();
     expect(
+      screen.getByText(/Profile-only deletion remains available/)
+    ).toBeVisible();
+    await user.click(within(scope).getByText('Everything'));
+    expect(
       screen.getByRole('button', { name: 'Delete all data' })
     ).toBeDisabled();
+    await user.click(within(scope).getByText('Profile'));
     expect(
       screen.getByRole('button', { name: 'Delete profile' })
     ).toBeEnabled();
+    // The notice is about projects, so it leaves with them.
     expect(
-      screen.getByText(/Profile-only deletion remains available/)
-    ).toBeVisible();
+      screen.queryByText(/Profile-only deletion remains available/)
+    ).not.toBeInTheDocument();
   });
 });
 
