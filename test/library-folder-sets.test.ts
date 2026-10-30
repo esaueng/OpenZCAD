@@ -160,6 +160,7 @@ describe('/api/library-folders', () => {
     ENVIRONMENT: 'development' as const,
     AUTH_MODE: 'development' as const,
     DB: d1,
+    LIBRARY_FOLDER_SYNC_ENABLED: 'true',
     ...extra
   });
   const put = (body: unknown) =>
@@ -191,6 +192,21 @@ describe('/api/library-folders', () => {
     expect(await malformed.json()).toMatchObject({
       code: 'LIBRARY_FOLDERS_INVALID'
     });
+  });
+
+  it('stays closed unless the deployment enables folder sync', async () => {
+    const d1 = withUsers('user_beta_dev');
+    for (const request of [new Request(route), put(save(0))]) {
+      const response = await worker.fetch(
+        request,
+        env(d1, { LIBRARY_FOLDER_SYNC_ENABLED: 'false' })
+      );
+      expect(response.status).toBe(501);
+      expect(await response.json()).toMatchObject({
+        code: 'LIBRARY_FOLDERS_DISABLED'
+      });
+    }
+    expect((await loadLibraryFolderSet(d1, 'user_beta_dev')).revision).toBe(0);
   });
 
   it('answers 503 before the migration is applied', async () => {

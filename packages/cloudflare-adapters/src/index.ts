@@ -214,6 +214,11 @@ export interface CloudflareEnv {
    */
   PROJECT_PERSONAL_SYNC_ENABLED?: string;
   /**
+   * Syncs library folders through the account (migration 0045). Off until the
+   * client sync has run in beta; folders stay on each device meanwhile.
+   */
+  LIBRARY_FOLDER_SYNC_ENABLED?: string;
+  /**
    * Comma-separated authenticated email allowlist for the collaboration
    * canary. Missing or empty stays closed; keep this in Worker secrets.
    */
@@ -351,6 +356,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'PROJECT_SHARING_ENABLED',
   'PROJECT_EDIT_LEASES_ENFORCED',
   'PROJECT_PERSONAL_SYNC_ENABLED',
+  'LIBRARY_FOLDER_SYNC_ENABLED',
   'E2EE_KEYS_ENABLED',
   'E2EE_PROJECTS_ENABLED',
   'E2EE_MIGRATION_ENABLED',
