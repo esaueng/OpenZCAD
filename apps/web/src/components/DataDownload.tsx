@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import type { AppSettings, AuthSession } from '@openzcad/shared';
 import type { DataExportSummary } from '../lib/dataExportTypes';
+import { SettingRow, Toggle } from './settingsControls';
 
 export function DataDownload({
   settings,
@@ -88,94 +89,105 @@ export function DataDownload({
   }
 
   return (
-    <div className="data-download">
-      <label className="data-download-option">
-        <input
-          type="checkbox"
+    <>
+      <SettingRow
+        title="Download your data"
+        hint={
+          session && cloudFunctionsEnabled
+            ? 'Local and cloud projects, history, files, settings and profile. One unencrypted ZIP, up to 512 MB.'
+            : 'This device’s projects, files and settings. One unencrypted ZIP, up to 512 MB.'
+        }
+      >
+        <button
+          className="secondary"
+          type="button"
+          disabled={busy || preparing}
+          onClick={() => void download()}
+          aria-busy={preparing}
+        >
+          <Download size={14} aria-hidden="true" />
+          {preparing ? 'Preparing download…' : 'Download all data'}
+        </button>
+      </SettingRow>
+      <SettingRow
+        title="Include original import files"
+        hint="Rebuild data is always included."
+      >
+        <Toggle
+          label="Include original import files"
           checked={includeOriginalImports}
           disabled={busy || preparing}
-          onChange={(event) => setIncludeOriginalImports(event.target.checked)}
+          onChange={setIncludeOriginalImports}
         />
-        <span>Include original import files</span>
-      </label>
-      <p className="data-download-feedback">
-        Rebuild data is always included. This adds extra originals to project
-        backups.
-      </p>
-      <label className="data-download-option">
-        <input
-          type="checkbox"
+      </SettingRow>
+      <SettingRow
+        title="Include device recovery data"
+        hint="Browser recovery records. Off is smaller and faster."
+      >
+        <Toggle
+          label="Include extra device recovery data"
           checked={includeDeviceSnapshot}
           disabled={busy || preparing}
-          onChange={(event) => setIncludeDeviceSnapshot(event.target.checked)}
+          onChange={setIncludeDeviceSnapshot}
         />
-        <span>Include extra device recovery data</span>
-      </label>
-      <p className="data-download-feedback">
-        Adds browser recovery records, including any originals they hold. Turn
-        off for a smaller, faster download.
-      </p>
-      <button
-        className="secondary"
-        type="button"
-        disabled={busy || preparing}
-        onClick={() => void download()}
-        aria-busy={preparing}
-      >
-        <Download size={14} aria-hidden="true" />
-        {preparing ? 'Preparing download…' : 'Download all data'}
-      </button>
-      {progress ? (
-        <p className="data-download-feedback" role="status">
-          {progress}
-        </p>
-      ) : null}
-      {error ? (
-        <p className="data-download-feedback" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {summary &&
-      (summary.skippedProjects.length > 0 ||
-        summary.omittedSections.length > 0) ? (
-        <details className="data-download-omissions" open>
-          <summary>Not included in this download</summary>
-          {summary.skippedProjects.length > 0 ? (
-            <>
+      </SettingRow>
+      {progress || error || summary ? (
+        <div className="data-download">
+          {progress ? (
+            <p className="data-download-feedback" role="status">
+              {progress}
+            </p>
+          ) : null}
+          {error ? (
+            <p className="data-download-feedback" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {summary &&
+          (summary.skippedProjects.length > 0 ||
+            summary.omittedSections.length > 0) ? (
+            <details className="data-download-omissions" open>
+              <summary>Not included in this download</summary>
+              {summary.skippedProjects.length > 0 ? (
+                <>
+                  <p>
+                    Open these projects from Projects, then choose File → Export
+                    project to download them manually.
+                  </p>
+                  <ul aria-label="Project backups not included">
+                    {summary.skippedProjects.map((project) => (
+                      <li key={`${project.scope}:${project.projectId}`}>
+                        <strong>{project.name}</strong>
+                        <span>
+                          {project.scope === 'local'
+                            ? 'Local copy'
+                            : 'Cloud copy'}{' '}
+                          · {project.projectId}
+                        </span>
+                        <span>{project.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+              {summary.omittedSections.length > 0 ? (
+                <ul aria-label="Other data not included">
+                  {summary.omittedSections.map((section) => (
+                    <li key={section.name}>
+                      <strong>{section.name}</strong>
+                      <span>{section.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               <p>
-                Open these projects from Projects, then choose File → Export
-                project to download them manually.
+                This list is also in NOT-INCLUDED.txt and manifest.json inside
+                your ZIP.
               </p>
-              <ul aria-label="Project backups not included">
-                {summary.skippedProjects.map((project) => (
-                  <li key={`${project.scope}:${project.projectId}`}>
-                    <strong>{project.name}</strong>
-                    <span>
-                      {project.scope === 'local' ? 'Local copy' : 'Cloud copy'}{' '}
-                      · {project.projectId}
-                    </span>
-                    <span>{project.reason}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
+            </details>
           ) : null}
-          {summary.omittedSections.length > 0 ? (
-            <ul aria-label="Other data not included">
-              {summary.omittedSections.map((section) => (
-                <li key={section.name}>
-                  <strong>{section.name}</strong>
-                  <span>{section.reason}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          <p>
-            This list is also in NOT-INCLUDED.txt and manifest.json inside your
-            ZIP.
-          </p>
-        </details>
+        </div>
       ) : null}
-    </div>
+    </>
   );
 }

@@ -126,29 +126,23 @@ function StopPanel({
   return (
     <Group title="Stop encrypting a project" note="Beta">
       <Notice tone="warning">
-        Stopping encryption stores the project’s content readable by the
-        OpenZCAD server again: this browser decrypts its current version, every
-        save state, its files, name, measurements and view state, uploads them
-        unencrypted, and then deletes the encrypted copy. Anyone who can read
-        the server’s storage could read the project from then on. This is a tool
-        for beta testers and will be removed.
+        Makes a project readable by the OpenZCAD server again. A beta tool that
+        will be removed.
+        <details className="setting-details">
+          <summary>Requirements</summary>
+          <ul className="encryption-requirements">
+            <li>
+              Only a project nobody else can open qualifies: remove its members,
+              pending invitations and share links first.
+            </li>
+            <li>“Encrypt new projects” must be off.</li>
+            <li>
+              While it runs the project opens read-only. Keep this tab open; if
+              it closes, starting again picks up where it left off.
+            </li>
+          </ul>
+        </details>
       </Notice>
-      <div className="encryption-migration-notes">
-        <ul>
-          <li>
-            Only a project nobody else can open qualifies: remove its members,
-            pending invitations and share links first.
-          </li>
-          <li>
-            Your account must not encrypt new projects (Encrypt new projects,
-            above, off).
-          </li>
-          <li>
-            While it runs the project opens read-only. Keep this tab open; if it
-            closes, starting again picks up where it left off.
-          </li>
-        </ul>
-      </div>
       {encryptsNew ? (
         <Notice tone="warning" role="status">
           Your account encrypts new projects, so it cannot hold a plaintext one.

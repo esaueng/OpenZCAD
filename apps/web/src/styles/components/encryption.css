@@ -60,6 +60,10 @@
   padding: var(--sp-2) 0;
 }
 
+.encryption-approve > .settings-button-row {
+  padding-inline: var(--sp-4);
+}
+
 .encryption-camera video {
   width: 220px;
   border-radius: 6px;
@@ -152,4 +156,12 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+}
+
+/* Stop encrypting's preconditions, folded under its warning. */
+.encryption-requirements {
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
 }

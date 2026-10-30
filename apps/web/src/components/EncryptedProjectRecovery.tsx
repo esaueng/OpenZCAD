@@ -112,7 +112,7 @@ export function EncryptedProjectRecovery({
       {projects === null ? (
         <SettingRow
           title="Reset a project’s encryption group"
-          hint="Only for a project nobody else uses, when none of your devices can open its keys any more."
+          hint="For a project only you use, when no device can open it."
         >
           <button
             className="secondary"

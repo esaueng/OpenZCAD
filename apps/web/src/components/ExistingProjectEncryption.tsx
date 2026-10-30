@@ -143,42 +143,6 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
 
   return (
     <Group title="Encrypt existing projects">
-      <div className="encryption-migration-notes">
-        <p>
-          Encrypting a project moves it to end-to-end encrypted storage: this
-          browser encrypts its current version, every save state and its files,
-          and then the plaintext copy is deleted from your account.
-        </p>
-        <ul>
-          <li>
-            Export an <strong>.openzcad</strong> backup of each project first
-            (File › Export project).
-          </li>
-          <li>
-            If you lose access to your keys (every device and your recovery
-            key), encrypted cloud data cannot be recovered, by you or by us.
-          </li>
-          <li>
-            Plaintext copies may persist for up to 30 days in backups (database
-            point-in-time recovery and live-session recovery) before they
-            expire.
-          </li>
-          <li>
-            A shared project is encrypted once every member has set up
-            encryption and you have compared codes with each of them. They are
-            added back with their current roles. Its share links and pending
-            invitations stop working; you can create encrypted ones afterwards.
-          </li>
-          <li>
-            Original mesh files and image snapshots stored with a project are
-            not carried over.
-          </li>
-          <li>
-            While a project is being encrypted it opens read-only. Close it in
-            other tabs and on other devices first.
-          </li>
-        </ul>
-      </div>
       {state.error ? (
         <Notice
           tone="warning"
@@ -217,7 +181,8 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
               ? `${finishing} project${finishing === 1 ? '' : 's'} still finishing encryption`
               : 'All your projects are encrypted'
         }
-        hint="Oldest first, one at a time."
+        hint="Back up first: without your keys, encrypted data is gone for good."
+        details={{ summary: 'What changes', body: <MigrationNotes /> }}
       >
         {state.running ? (
           <button
@@ -256,6 +221,47 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
         ))}
       </div>
     </Group>
+  );
+}
+
+/** What encrypting does, one click away from the button that starts it. */
+function MigrationNotes() {
+  return (
+    <div className="encryption-migration-notes">
+      <p>
+        Encrypting a project moves it to end-to-end encrypted storage: this
+        browser encrypts its current version, every save state and its files,
+        and then the plaintext copy is deleted from your account.
+      </p>
+      <ul>
+        <li>
+          Export an <strong>.openzcad</strong> backup of each project first
+          (File › Export project).
+        </li>
+        <li>
+          If you lose access to your keys (every device and your recovery key),
+          encrypted cloud data cannot be recovered, by you or by us.
+        </li>
+        <li>
+          Plaintext copies may persist for up to 30 days in backups (database
+          point-in-time recovery and live-session recovery) before they expire.
+        </li>
+        <li>
+          A shared project is encrypted once every member has set up encryption
+          and you have compared codes with each of them. They are added back
+          with their current roles. Its share links and pending invitations stop
+          working; you can create encrypted ones afterwards.
+        </li>
+        <li>
+          Original mesh files and image snapshots stored with a project are not
+          carried over.
+        </li>
+        <li>
+          While a project is being encrypted it opens read-only. Close it in
+          other tabs and on other devices first.
+        </li>
+      </ul>
+    </div>
   );
 }
 

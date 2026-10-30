@@ -287,6 +287,62 @@ export function NumberSetting({
   );
 }
 
+/**
+ * The first row of a page whose state decides what the rest offers: one
+ * headline saying where things stand, a sentence on what it means, and the
+ * next step. `tone` colours the icon so the state reads before the words.
+ */
+export function Summary({
+  icon,
+  tone,
+  title,
+  children,
+  action,
+  alert = false
+}: {
+  icon: ReactNode;
+  tone?: 'good' | 'warning' | 'off';
+  title: string;
+  children?: ReactNode;
+  action?: ReactNode;
+  /** Announce the sentence at once: a state that needs the user now. */
+  alert?: boolean;
+}) {
+  return (
+    <div className={`settings-summary${tone ? ` ${tone}` : ''}`}>
+      <span className="settings-summary-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <div className="setting-copy">
+        <strong className="settings-summary-title">{title}</strong>
+        {children ? (
+          <small role={alert ? 'alert' : undefined}>{children}</small>
+        ) : null}
+      </div>
+      {action ? <div className="setting-control">{action}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Groups a page rarely needs, folded under one line so the everyday ones
+ * stay short. Closed until asked for; nothing inside is lost.
+ */
+export function MoreGroups({
+  title,
+  children
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="settings-more">
+      <summary>{title}</summary>
+      <div className="settings-more-body">{children}</div>
+    </details>
+  );
+}
+
 /** A full-width message inside a card: a state the user should know about. */
 export function Notice({
   tone = 'warning',

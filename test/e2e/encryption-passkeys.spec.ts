@@ -255,9 +255,7 @@ test('disables passkeys when WebAuthn is unavailable', async ({
     settings.getByRole('button', { name: 'Add passkey', exact: true })
   ).toBeDisabled();
   await expect(
-    settings.getByText(
-      'Passkeys are unavailable here. Use your recovery key or another device.'
-    )
+    settings.getByText('Not available in this browser.', { exact: true })
   ).toBeVisible();
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
 });
