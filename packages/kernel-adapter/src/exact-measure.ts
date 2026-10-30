@@ -19,6 +19,7 @@ import {
   GEOMETRY_EPSILON,
   add,
   cross,
+  dot,
   finiteVec3,
   length,
   normalized,
@@ -130,6 +131,84 @@ export function withFaceGeometryMemo<T>(
   }
 }
 
+/**
+ * The axis of a torus face, read off the surface when the kernel's analytic
+ * parameters leave it out (the pinned build reports only centre and radii).
+ *
+ * Every point of a torus sits one minor radius along its normal from the
+ * spine circle, and that circle lies in the plane square to the axis through
+ * the centre. Sampled spine points therefore span that plane, and the axis
+ * is their cross product. The sign is fixed so the largest component is
+ * positive; callers compare axes up to sign. A patch too narrow to span the
+ * plane, or any sample off the stated torus, leaves the axis unproven.
+ */
+function torusAxisFromSurface(
+  kernel: RemusKernel,
+  face: number,
+  center: Vec3,
+  majorRadius: number,
+  minorRadius: number
+): Vec3 | null {
+  const tolerance = Math.max(majorRadius, minorRadius) * 1e-6;
+  const spine: Vec3[] = [];
+  try {
+    const [uMin, uMax, vMin, vMax] = Array.from(kernel.getSurfaceDomain(face));
+    if (![uMin, uMax, vMin, vMax].every(Number.isFinite)) return null;
+    for (const s of [0.1, 0.5, 0.9]) {
+      for (const t of [0.1, 0.5, 0.9]) {
+        const u = uMin! + (uMax! - uMin!) * s;
+        const v = vMin! + (vMax! - vMin!) * t;
+        const point = finiteVec3(
+          Array.from(kernel.evaluateSurface(face, u, v))
+        );
+        const rawNormal = finiteVec3(
+          Array.from(kernel.evaluateSurfaceNormal(face, u, v))
+        );
+        const normal = rawNormal ? normalized(rawNormal) : null;
+        if (!point || !normal) return null;
+        // The normal's orientation follows the face, so try both sides.
+        const onSpine = [1, -1]
+          .map((sign) => add(point, scale(normal, sign * minorRadius)))
+          .find(
+            (candidate) =>
+              Math.abs(length(subtract(candidate, center)) - majorRadius) <=
+              tolerance
+          );
+        if (!onSpine) return null;
+        spine.push(subtract(onSpine, center));
+      }
+    }
+  } catch {
+    return null;
+  }
+  let best: Vec3 | null = null;
+  let bestLength = 0;
+  for (let i = 0; i < spine.length; i++) {
+    for (let j = i + 1; j < spine.length; j++) {
+      const candidate = cross(spine[i]!, spine[j]!);
+      const candidateLength = length(candidate);
+      if (candidateLength > bestLength) {
+        best = candidate;
+        bestLength = candidateLength;
+      }
+    }
+  }
+  // Spine samples less than ~0.5° apart do not fix the plane well enough.
+  if (!best || bestLength < majorRadius * majorRadius * 1e-2) return null;
+  const axis = normalized(best)!;
+  if (
+    spine.some(
+      (offset) => Math.abs(dot(offset, axis)) > Math.max(tolerance, 1e-9)
+    )
+  ) {
+    return null;
+  }
+  const dominant = [axis.x, axis.y, axis.z].reduce((left, right) =>
+    Math.abs(right) > Math.abs(left) ? right : left
+  );
+  return dominant < 0 ? scale(axis, -1) : axis;
+}
+
 export function measureFaceGeometry(
   kernel: RemusKernel,
   face: number
@@ -224,8 +303,11 @@ function measureFaceGeometryOnce(
       geometry.torusCenter = center;
       geometry.majorRadius = majorRadius;
       geometry.minorRadius = minorRadius;
-      if (axis) {
-        geometry.axis = axis;
+      const provenAxis =
+        axis ??
+        torusAxisFromSurface(kernel, face, center, majorRadius, minorRadius);
+      if (provenAxis) {
+        geometry.axis = provenAxis;
       }
     }
     return geometry;

@@ -707,6 +707,7 @@ import {
 import {
   blendRadialDirection,
   canRemoveImportedBlendFace,
+  importedBlendCarriers,
   importedBlendSnapshot,
   newBlendFaceSelections,
   resolveFilletBlendFace,
@@ -17058,6 +17059,9 @@ export function App() {
         ...(importedBlend
           ? {
               canResizeImportedBlend: true,
+              removableBlendCount: importedBlendCarriers(
+                representations[selection.bodyId]?.topology?.faces ?? []
+              ).length,
               blendSurfaceClass: importedBlend.surfaceClass,
               blendCenter: [
                 importedBlend.center.x,
@@ -23201,7 +23205,11 @@ export function App() {
         return null;
       }
       return commandFactories.directEditBody({
-        name: 'Resize Imported Blend',
+        // Remove Fillet commits radius zero; history should say so.
+        name:
+          typeof size === 'number' && size <= 1e-9
+            ? 'Remove Imported Blend'
+            : 'Resize Imported Blend',
         targetBodyId: target.bodyId as BodyId,
         operation: {
           kind: 'resize-blend',
@@ -23399,6 +23407,42 @@ export function App() {
       },
       ...affectedFeatureTargets(base, feature.featureId).slice(1)
     ];
+  }
+
+  /**
+   * Strip every analytic round off an imported body in one direct edit. The
+   * picked band seeds it, so the edit is anchored like any other; the rest
+   * are recorded by carrier and found again after each removal.
+   */
+  function handleRemoveAllImportedBlends(target: FaceTarget) {
+    if (!requireDisplayedGeometryComplete()) {
+      return;
+    }
+    const bodyId = target.bodyId as BodyId;
+    const faces =
+      managerRef.current?.document.derived.bodyRepresentations[bodyId]?.topology
+        ?.faces;
+    const blends = faces ? importedBlendCarriers(faces) : [];
+    if (target.hash === undefined || blends.length === 0) {
+      return;
+    }
+    edgePreview.stop();
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: 'Remove All Imported Blends',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'remove-blends',
+          faceHash: target.hash,
+          ...(target.reference ? { faceReference: target.reference } : {}),
+          blends
+        }
+      }),
+      bodyId,
+      `Removed ${blends.length} imported ${blends.length === 1 ? 'blend' : 'blends'}.`,
+      0,
+      () => edgePreview.clear()
+    );
   }
 
   /** Commit a native history fillet or an exact imported-band direct edit. */
@@ -23880,6 +23924,7 @@ export function App() {
         action === 'fillet' ||
         action === 'chamfer' ||
         action === 'remove-fillet' ||
+        action === 'remove-all-fillets' ||
         action === 'remove-face-feature') &&
       !requireExactGeometryReady()
     ) {
@@ -23895,6 +23940,10 @@ export function App() {
       interaction.op === 'edit-fillet'
     ) {
       handleFilletFaceCommit(0);
+      return;
+    }
+    if (action === 'remove-all-fillets' && interaction.mode === 'face') {
+      handleRemoveAllImportedBlends(interaction.target);
       return;
     }
     if (

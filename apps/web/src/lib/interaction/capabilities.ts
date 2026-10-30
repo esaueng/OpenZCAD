@@ -16,6 +16,7 @@ export type SelectionActionId =
   | 'resize-radial-face'
   | 'edit-fillet'
   | 'remove-fillet'
+  | 'remove-all-fillets'
   | 'remove-face-feature'
   | 'sketch-on-face'
   | 'fillet'
@@ -54,6 +55,11 @@ export interface FaceCapabilityTarget {
   canResizeImportedBlend?: boolean;
   /** Imported defeature is exposed only when its planar gate is proven. */
   canRemoveFaceFeature?: boolean;
+  /**
+   * Distinct analytic blends on an imported body, the picked one included,
+   * that one body-wide removal can find again by carrier.
+   */
+  removableBlendCount?: number;
 }
 
 export type CapabilitySelection =
@@ -94,9 +100,25 @@ export function selectionCapabilities(
         Number.isFinite(target.blendRadius) &&
         target.blendRadius > 0
       ) {
+        const count = target.removableBlendCount ?? 0;
         return [
           enabled('edit-fillet', 'Edit Fillet', 'radius', 'exact-worker', true),
-          enabled('remove-fillet', 'Remove Fillet', undefined, 'exact-worker')
+          enabled('remove-fillet', 'Remove Fillet', undefined, 'exact-worker'),
+          // Only an imported body: native fillets are history, and deleting
+          // their features is how those come off.
+          ...(target.canResizeImportedBlend && count > 1
+            ? [
+                {
+                  ...enabled(
+                    'remove-all-fillets',
+                    'Remove All Fillets',
+                    undefined,
+                    'exact-worker'
+                  ),
+                  note: `Removes all ${count} rounds on this body in one step.`
+                }
+              ]
+            : [])
         ];
       }
       if (target.canRemoveFaceFeature) {
