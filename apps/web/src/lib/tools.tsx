@@ -25,6 +25,7 @@ import {
   RotateCw,
   Scaling,
   Scissors,
+  Settings,
   Shapes,
   Slice,
   Spline,
@@ -229,7 +230,7 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   },
   'gear-teeth': {
     label: 'Gear teeth',
-    icon: icon(<Cog size={16} aria-hidden="true" />),
+    icon: icon(<Settings size={16} aria-hidden="true" />),
     group: 'edges-faces',
     hint: 'Cut gear teeth along a cylindrical boss or bore'
   },
