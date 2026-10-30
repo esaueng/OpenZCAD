@@ -435,6 +435,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // App.tsx is in the entry chunk and needs only this walk, which
+        // imports nothing but types; the package index would bring three.
+        '@openzcad/viewport/edge-chain': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/pick/edgeChain.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/viewport/input-bindings': fileURLToPath(
           new URL(
             '../../packages/viewport/src/input/bindings.ts',

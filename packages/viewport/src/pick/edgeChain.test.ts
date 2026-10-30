@@ -5,7 +5,12 @@ import {
   type EdgeTopology,
   type EdgeTopologyReferenceV5
 } from '@openzcad/shared';
-import { edgeRunFrom, edgeRunSelections } from './edgeChain';
+import {
+  closedCircleLoopFrom,
+  closedCircleLoopSelections,
+  edgeRunFrom,
+  edgeRunSelections
+} from './edgeChain';
 
 /** An edge from a polyline given as [x, y, z] points. */
 function edge(topologyId: string, points: number[][]): EdgeTopology {
@@ -462,5 +467,130 @@ describe('the run index', () => {
       'gapped'
     ]);
     expect(edgeRunFrom(edges, 'a')).toEqual(['a']);
+  });
+});
+
+describe('a circle split into arcs', () => {
+  /** An arc sampled finely, as the kernel samples a display arc. */
+  function fineArc(
+    topologyId: string,
+    radius: number,
+    startDeg: number,
+    endDeg: number,
+    vertexIds?: [number, number],
+    exact = false
+  ): EdgeTopology {
+    const sampled = arc(topologyId, [3, -2], radius, startDeg, endDeg, 32);
+    return {
+      ...sampled,
+      ...(vertexIds ? { vertexIds } : {}),
+      ...(exact
+        ? {
+            curve: {
+              type: 'CIRCLE',
+              circle: {
+                center: { x: 3, y: -2, z: 0 },
+                axis: { x: 0, y: 0, z: -1 },
+                radius
+              }
+            }
+          }
+        : {})
+    };
+  }
+
+  it('takes both halves of a circle a STEP exporter split in two', () => {
+    // The reported bottle: one round rim, two half-circle edges, and a click
+    // that lit and selected only half of it.
+    const edges = [
+      fineArc('upper', 10, 0, 180, [1, 2], true),
+      fineArc('lower', 10, 180, 360, [2, 1], true)
+    ];
+    expect(closedCircleLoopFrom(edges, 'upper').sort()).toEqual([
+      'lower',
+      'upper'
+    ]);
+    expect(closedCircleLoopFrom(edges, 'lower').sort()).toEqual([
+      'lower',
+      'upper'
+    ]);
+  });
+
+  it('recognises the circle from the samples when the halves are splines', () => {
+    // No `curve.circle`: an exporter that writes circles as B-splines.
+    const edges = [
+      fineArc('a', 4, 30, 150),
+      fineArc('b', 4, 150, 270),
+      fineArc('c', 4, 270, 390)
+    ];
+    expect(closedCircleLoopFrom(edges, 'b')).toHaveLength(3);
+  });
+
+  it('keeps a single arc when the pieces do not go all the way round', () => {
+    const edges = [
+      fineArc('a', 10, 0, 120, [1, 2]),
+      fineArc('b', 10, 120, 240, [2, 3])
+    ];
+    expect(closedCircleLoopFrom(edges, 'a')).toEqual(['a']);
+  });
+
+  it('keeps a single edge of a smooth loop that is not one circle', () => {
+    // A rounded-rectangle rim is a closed tangent run, but a click on one of
+    // its lines must not take its corner arcs.
+    const r = 2;
+    const edges = [
+      edge('bottom', [
+        [2, 0, 0],
+        [8, 0, 0]
+      ]),
+      arc('br', [8, 2], r, -90, 0, 16),
+      edge('right', [
+        [10, 2, 0],
+        [10, 8, 0]
+      ]),
+      arc('tr', [8, 8], r, 0, 90, 16),
+      edge('top', [
+        [8, 10, 0],
+        [2, 10, 0]
+      ]),
+      arc('tl', [2, 8], r, 90, 180, 16),
+      edge('left', [
+        [0, 8, 0],
+        [0, 2, 0]
+      ]),
+      arc('bl', [2, 2], r, 180, 270, 16)
+    ];
+    expect(edgeRunFrom(edges, 'br')).toHaveLength(8);
+    expect(closedCircleLoopFrom(edges, 'br')).toEqual(['br']);
+    expect(closedCircleLoopFrom(edges, 'bottom')).toEqual(['bottom']);
+  });
+
+  it('does not join a neighbouring circle of another radius', () => {
+    const edges = [
+      fineArc('a', 10, 0, 180, [1, 2]),
+      fineArc('b', 10.5, 180, 360, [2, 1])
+    ];
+    expect(closedCircleLoopFrom(edges, 'a')).toEqual(['a']);
+  });
+
+  it('publishes every identity of every piece', () => {
+    const selections = closedCircleLoopSelections(
+      [
+        { ...fineArc('upper', 10, 0, 180, [1, 2], true), hash: 7 },
+        { ...fineArc('lower', 10, 180, 360, [2, 1], true), hash: 8 }
+      ],
+      'upper',
+      toBodyId('body-1')
+    );
+    expect(
+      selections.map(({ topologyId, hash, kind }) => ({
+        topologyId,
+        hash,
+        kind
+      }))
+    ).toEqual([
+      { topologyId: 'upper', hash: 7, kind: 'edge' },
+      { topologyId: 'lower', hash: 8, kind: 'edge' }
+    ]);
   });
 });

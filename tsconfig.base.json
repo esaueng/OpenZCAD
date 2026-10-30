@@ -34,6 +34,9 @@
         "./packages/ai-contracts/src/auto-parameterize.ts"
       ],
       "@openzcad/viewport": ["./packages/viewport/src/index.ts"],
+      "@openzcad/viewport/edge-chain": [
+        "./packages/viewport/src/pick/edgeChain.ts"
+      ],
       "@openzcad/viewport/input-bindings": [
         "./packages/viewport/src/input/bindings.ts"
       ],

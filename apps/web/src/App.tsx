@@ -675,6 +675,7 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
@@ -16554,6 +16555,25 @@ export function App() {
     );
   }
 
+  /**
+   * What a click on `selection` picks: the whole circle when it is one arc of
+   * a circle the body holds in pieces (see `closedCircleLoopSelections`),
+   * otherwise the selection itself.
+   */
+  function wholeCircleOf(selection: TopologySelection): TopologySelection[] {
+    const edges =
+      selection.kind === 'edge'
+        ? representations[selection.bodyId]?.topology?.edges
+        : undefined;
+    if (!edges || !selection.topologyId) return [selection];
+    const loop = closedCircleLoopSelections(
+      edges,
+      selection.topologyId,
+      selection.bodyId
+    );
+    return loop.length > 1 ? loop : [selection];
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -16566,8 +16586,28 @@ export function App() {
       // under it.
       const command = inPlaceRef.current;
       if (selection?.kind === 'edge' && command.spec?.edgeMode) {
-        const edge = inPlaceEdgeForSelection(selection);
-        return edge ? command.pickEdge(edge) : true;
+        const pieces = wholeCircleOf(selection);
+        if (pieces.length === 1) {
+          const edge = inPlaceEdgeForSelection(selection);
+          return edge ? command.pickEdge(edge) : true;
+        }
+        const picks: EdgePick[] = [];
+        for (const piece of pieces) {
+          const edge = inPlaceEdgeForSelection(piece);
+          if (!edge) return true;
+          picks.push(edge);
+        }
+        // The whole circle goes in or comes out together, as one edge would.
+        const held = command.slots.edges.filter(
+          (edge) => edge.bodyId === picks[0]!.bodyId
+        );
+        const pickedHashes = new Set(picks.map((edge) => edge.hash));
+        const rest = held.filter((edge) => !pickedHashes.has(edge.hash));
+        return command.setEdges(
+          held.some((edge) => edge.hash === picks[0]!.hash)
+            ? rest
+            : [...rest, ...picks]
+        );
       }
       // A datum's sources: a face is a plane or a cylinder's axis, an edge
       // is its nearer end or (for an Axis) the edge itself.
@@ -17148,25 +17188,37 @@ export function App() {
       const sameBody = selectedEdges.every(
         (edge) => edge.bodyId === selection.bodyId
       );
-      if (appSettings.experiments.directManipulation) {
-        // Selection-first: picking edges arms the fillet/chamfer handle.
-        dispatchInteraction({
-          type: 'select-edge',
-          selection,
-          additive: additive && sameBody
-        });
-      }
+      const pieces = wholeCircleOf(selection);
+      const pieceIds = new Set(pieces.map((piece) => piece.topologyId));
       const alreadySelected = selectedEdges.some(
         (edge) => edge.topologyId === selection.topologyId
       );
-      const nextEdges =
-        additive && sameBody
-          ? alreadySelected
-            ? selectedEdges.filter(
-                (edge) => edge.topologyId !== selection.topologyId
-              )
-            : [...selectedEdges, selection]
-          : [selection];
+      const toggling = additive && sameBody;
+      if (appSettings.experiments.directManipulation) {
+        // Selection-first: picking edges arms the fillet/chamfer handle. The
+        // machine toggles by hash, so a toggle sends only the pieces whose
+        // state it changes.
+        const isSelected = (piece: TopologySelection) =>
+          selectedEdges.some((edge) => edge.topologyId === piece.topologyId);
+        const changing = toggling
+          ? pieces.filter((piece) => isSelected(piece) === alreadySelected)
+          : pieces;
+        changing.forEach((piece, index) => {
+          dispatchInteraction({
+            type: 'select-edge',
+            selection: piece,
+            additive: toggling || index > 0
+          });
+        });
+      }
+      const unchanged = selectedEdges.filter(
+        (edge) => !pieceIds.has(edge.topologyId)
+      );
+      const nextEdges = toggling
+        ? alreadySelected
+          ? unchanged
+          : [...unchanged, ...pieces]
+        : pieces;
       setSelectedEdges(nextEdges);
       setSelectedBodyIds([selection.bodyId]);
       setSelectedTopology(

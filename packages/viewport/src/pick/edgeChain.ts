@@ -589,3 +589,187 @@ export function edgeRunSelections(
     };
   });
 }
+
+/**
+ * How far, relative to the radius, two edges' circles may differ and still be
+ * the same circle — and how far a sampled point may sit off it.
+ *
+ * Display polylines are evaluated on the exact curve, so a true circle's
+ * samples agree to ~1e-12; a STEP exporter's B-spline stand-in for one is
+ * typically within 1e-6. 1e-4 admits both and nothing that is visibly a
+ * different curve.
+ */
+const SAME_CIRCLE_TOLERANCE = 1e-4;
+
+/** Fraction of the circumference the pieces may fall short by and still close. */
+const CLOSED_LOOP_TOLERANCE = 0.01;
+
+interface Circle {
+  center: Vec3;
+  /** Unit normal of the circle's plane; unoriented. */
+  axis: Vec3;
+  radius: number;
+}
+
+function sub(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function add(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+function scaled(v: Vec3, factor: number): Vec3 {
+  return [v[0] * factor, v[1] * factor, v[2] * factor];
+}
+
+function lengthOf(v: Vec3): number {
+  return Math.hypot(v[0], v[1], v[2]);
+}
+
+/**
+ * The circle through three points, or null when they are (nearly) collinear:
+ * centre = a + (|u|²(v × w) + |v|²(w × u)) / 2|w|², with u = b − a,
+ * v = c − a and w = u × v.
+ */
+function circumcircle(a: Vec3, b: Vec3, c: Vec3): Circle | null {
+  const u = sub(b, a);
+  const v = sub(c, a);
+  const w = cross(u, v);
+  const wLengthSq = dot(w, w);
+  const scale = Math.max(dot(u, u), dot(v, v));
+  if (scale <= 0 || wLengthSq <= scale * scale * 1e-12) {
+    return null;
+  }
+  const offset = scaled(
+    add(scaled(cross(v, w), dot(u, u)), scaled(cross(w, u), dot(v, v))),
+    1 / (2 * wLengthSq)
+  );
+  return {
+    center: add(a, offset),
+    axis: scaled(w, 1 / Math.sqrt(wLengthSq)),
+    radius: lengthOf(offset)
+  };
+}
+
+/**
+ * The circle an edge lies on: the kernel's exact record where it publishes
+ * one, otherwise the circle through the polyline's ends and middle — but only
+ * if every sampled point lies on it, so a spline that merely bends is never
+ * taken for an arc.
+ */
+function edgeCircle(edge: EdgeTopology): Circle | null {
+  const exact = edge.curve?.type === 'CIRCLE' ? edge.curve.circle : undefined;
+  if (exact && exact.radius > 0) {
+    return {
+      center: [exact.center.x, exact.center.y, exact.center.z],
+      axis: [exact.axis.x, exact.axis.y, exact.axis.z],
+      radius: exact.radius
+    };
+  }
+  const count = Math.floor(edge.points.length / 3);
+  if (count < 3) {
+    return null;
+  }
+  const fitted = circumcircle(
+    pointAt(edge.points, 0),
+    pointAt(edge.points, Math.floor(count / 2)),
+    pointAt(edge.points, count - 1)
+  );
+  if (!fitted) {
+    return null;
+  }
+  const tolerance = fitted.radius * SAME_CIRCLE_TOLERANCE;
+  for (let index = 0; index < count; index += 1) {
+    const offset = sub(pointAt(edge.points, index), fitted.center);
+    const height = dot(offset, fitted.axis);
+    if (
+      Math.abs(height) > tolerance ||
+      Math.abs(lengthOf(offset) - fitted.radius) > tolerance
+    ) {
+      return null;
+    }
+  }
+  return fitted;
+}
+
+function sameCircle(a: Circle, b: Circle): boolean {
+  const tolerance = Math.max(a.radius, b.radius) * SAME_CIRCLE_TOLERANCE;
+  return (
+    Math.abs(a.radius - b.radius) <= tolerance &&
+    lengthOf(sub(a.center, b.center)) <= tolerance &&
+    1 - Math.abs(dot(a.axis, b.axis)) <= SAME_CIRCLE_TOLERANCE
+  );
+}
+
+function polylineLength(points: readonly number[]): number {
+  let total = 0;
+  for (let index = 3; index + 2 < points.length; index += 3) {
+    total += Math.hypot(
+      points[index]! - points[index - 3]!,
+      points[index + 1]! - points[index - 2]!,
+      points[index + 2]! - points[index - 1]!
+    );
+  }
+  return total;
+}
+
+/**
+ * The pieces of a whole circle that `seedTopologyId` is one arc of, in order
+ * around it — or just the seed when it is not.
+ *
+ * Many STEP exporters split every circle into two half arcs (a periodic curve
+ * needs a seam vertex somewhere), and some write the halves as B-splines. On
+ * screen that is still one round rim, and clicking it lit and selected half a
+ * ring; a fillet would have rounded half the lip. So a click takes the whole
+ * circle — but only a circle: every piece must lie on the seed's circle and
+ * the pieces must go all the way round. A filleted box rim, also a smooth run,
+ * is not one curve and still needs the deliberate double click.
+ */
+export function closedCircleLoopFrom(
+  edges: EdgeTopology[],
+  seedTopologyId: string
+): string[] {
+  const byId = new Map(edges.map((edge) => [edge.topologyId, edge]));
+  const seed = byId.get(seedTopologyId);
+  const circle = seed ? edgeCircle(seed) : null;
+  if (!seed || !circle) {
+    return seed ? [seedTopologyId] : [];
+  }
+  const pieces = edgeRunFrom(edges, seedTopologyId).filter((topologyId) => {
+    const candidate = byId.get(topologyId);
+    const candidateCircle = candidate ? edgeCircle(candidate) : null;
+    return candidateCircle !== null && sameCircle(circle, candidateCircle);
+  });
+  if (pieces.length < 2) {
+    return [seedTopologyId];
+  }
+  const swept = pieces.reduce((total, topologyId) => {
+    const piece = byId.get(topologyId)!;
+    return total + (piece.length ?? polylineLength(piece.points));
+  }, 0);
+  const circumference = 2 * Math.PI * circle.radius;
+  return Math.abs(swept - circumference) <=
+    circumference * CLOSED_LOOP_TOLERANCE
+    ? pieces
+    : [seedTopologyId];
+}
+
+/** `closedCircleLoopFrom` as selections; see `edgeRunSelections`. */
+export function closedCircleLoopSelections(
+  edges: EdgeTopology[],
+  seedTopologyId: string,
+  bodyId: BodyId
+): TopologySelection[] {
+  const byId = new Map(edges.map((edge) => [edge.topologyId, edge]));
+  return closedCircleLoopFrom(edges, seedTopologyId).map((topologyId) => {
+    const edge = byId.get(topologyId);
+    return {
+      bodyId,
+      kind: 'edge' as const,
+      topologyId,
+      hash: edge?.hash,
+      ...(edge?.reference ? { reference: edge.reference } : {})
+    };
+  });
+}
