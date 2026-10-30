@@ -3,27 +3,26 @@ import type { HandleVec3 } from './DragRig';
 /**
  * Where a fillet/chamfer arrow stands on an edge, and which way it points.
  *
- * The arrow lies on one of the two faces that meet at the edge, across the
- * edge, and marks where the blend meets that face: its tangent line for a
- * fillet, its setback for a chamfer. As the value grows that line walks away
- * from the edge, and `travel` says how far per unit — exactly one on a square
- * edge, so the arrow moves with the hand. Of the two faces it takes the one
- * that lies most across the screen, so the arrow is not seen end on; a frame
- * rebuilt for the same edge keeps the face it had.
+ * The arrow stands on the edge along the bisector of the two faces that meet
+ * there — 45° to each on a square edge — the way the blend's own surface
+ * moves as it grows: into the material at an outside (convex) edge, out into
+ * the corner at an inside (concave) one. `travel` is how far the middle of
+ * the fillet arc, or of the chamfer flat, moves along the bisector per unit
+ * of value, so the arrow can ride the blend and stay under the hand.
  *
  * Normals come from the display mesh, not the exact surfaces: the mesh is the
  * one thing every face has, analytic or not, and facets only tilt the arrow
  * by a chord's angle. `travel` is therefore approximate on curved faces, and
- * floored at {@link MIN_EDGE_TRAVEL} so a nearly tangent edge does not turn a
- * pixel of drag into a huge radius — there the arrow runs a little ahead of
- * the true tangent line instead.
+ * bounded by {@link MIN_EDGE_TRAVEL} and {@link MAX_EDGE_TRAVEL} so a nearly
+ * flat or knife edge does not turn a pixel of drag into a huge or a vanishing
+ * value — there the arrow sits a little off the true blend surface instead.
  */
 export interface EdgeBlendFrame {
   origin: HandleVec3;
-  /** Unit direction across the edge, in the chosen face, away from it. */
+  /** Unit bisector of the faces, the way a growing blend's surface moves. */
   direction: HandleVec3;
   /**
-   * Tangent-line travel per unit value along `direction`, by operation.
+   * Blend-surface travel per unit value along `direction`, by operation.
    * Absent when the two faces at the edge could not be read; the arrow then
    * stays on the edge and points away from the body's middle.
    */
@@ -53,13 +52,8 @@ export interface EdgeBlendFrameInput {
    * and a closed one the point nearest `viewer`.
    */
   near?: HandleVec3 | null;
-  /**
-   * The camera position: a closed edge with no `near` stands nearest it,
-   * and the arrow takes the face that lies most across the view from it.
-   */
+  /** The camera position, for a closed edge with no `near`. */
   viewer?: HandleVec3 | null;
-  /** The arrow's previous direction on this edge; the nearest face wins. */
-  prefer?: HandleVec3 | null;
 }
 
 /** Bounds on travel per unit value; see {@link EdgeBlendFrame}. */
@@ -246,44 +240,30 @@ export function edgeBlendFrame(
     faceNearEdge(input, faces, anchor.point, anchor.tangent)
   );
   if (!first || !second) return fallback;
-  // Each face's direction across the edge: in its plane, away from the
-  // edge, toward the face's own triangles beside the anchor.
-  const across = [first, second].map((face) => {
-    let away = cross(face.normal, anchor.tangent);
-    if (dot(away, sub(face.inside, anchor.point)) < 0) away = scale(away, -1);
-    const size = length(away);
-    return size > 1e-9 ? scale(away, 1 / size) : null;
-  });
-  if (!across[0] || !across[1]) return fallback;
-  const prefer = input.prefer ? fromVec(input.prefer) : null;
-  const sight = input.viewer ? sub(anchor.point, fromVec(input.viewer)) : null;
-  const sightLength = sight ? length(sight) : 0;
-  const score = (away: V) => {
-    if (prefer) return dot(away, prefer);
-    if (sight && sightLength > 1e-9) {
-      // How much of the arrow lies across the screen.
-      const along = dot(away, sight) / sightLength;
-      return 1 - along * along;
-    }
-    return 0;
-  };
-  const direction =
-    score(across[1]) > score(across[0]) + 1e-9 ? across[1] : across[0];
-  // θ between the face normals; the blended wedge spans π − θ, and a fillet
-  // of radius r meets each face r·tan(θ/2) from the edge.
+  const sum = add(first.normal, second.normal);
+  const sumLength = length(sum);
+  // Faces folded flat onto each other (a knife edge) have no bisector.
+  if (sumLength < 1e-6) return fallback;
+  // Each face's inside lies behind the other's plane at an outside edge. A
+  // mesh wound inside out flips both normals and this test together, so the
+  // direction it picks is the same either way.
+  const behind =
+    dot(sub(first.inside, anchor.point), second.normal) +
+    dot(sub(second.inside, anchor.point), first.normal);
+  const direction = scale(sum, (behind < 0 ? -1 : 1) / sumLength);
+  // θ between the face normals; the blended wedge spans π − θ.
   const cosTheta = Math.min(1, Math.max(-1, dot(first.normal, second.normal)));
   const halfTheta = Math.acos(cosTheta) / 2;
+  const bounded = (travel: number) =>
+    Math.min(MAX_EDGE_TRAVEL, Math.max(MIN_EDGE_TRAVEL, travel));
   return {
     origin,
     direction: toVec(direction),
     travel: {
-      // Capped too: a knife edge's tangent runs off to infinity.
-      fillet: Math.min(
-        MAX_EDGE_TRAVEL,
-        Math.max(MIN_EDGE_TRAVEL, Math.tan(halfTheta))
-      ),
-      // A symmetric chamfer's distance is its setback along each face.
-      chamfer: 1
+      // The arc's middle sits r / cos(θ/2) − r from the sharp edge.
+      fillet: bounded(1 / Math.cos(halfTheta) - 1),
+      // The flat's middle sits d · sin(θ/2) from it.
+      chamfer: bounded(Math.sin(halfTheta))
     }
   };
 }

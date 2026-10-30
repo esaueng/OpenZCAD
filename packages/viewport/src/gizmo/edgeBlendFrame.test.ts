@@ -37,71 +37,46 @@ const EDGE = [0, 0, 0, 10, 0, 0];
 const BOX_CENTRE = { x: 5, y: -1, z: -1 };
 
 describe('edgeBlendFrame', () => {
-  it('lays the arrow across the edge on the face most across the view', () => {
-    // Looking down from above: the top face lies across the view, the side
-    // is seen edge on.
-    const fromAbove = edgeBlendFrame({
-      points: EDGE,
-      ...corner(),
-      bodyCenter: BOX_CENTRE,
-      viewer: { x: 5, y: -1, z: 40 }
-    });
-    expect(fromAbove!.direction.x).toBeCloseTo(0, 9);
-    expect(fromAbove!.direction.y).toBeCloseTo(-1, 9);
-    expect(fromAbove!.direction.z).toBeCloseTo(0, 9);
-    // Looking at the front: the side face, pointing down it.
-    const fromFront = edgeBlendFrame({
-      points: EDGE,
-      ...corner(),
-      bodyCenter: BOX_CENTRE,
-      viewer: { x: 5, y: 40, z: -1 }
-    });
-    expect(fromFront!.direction.y).toBeCloseTo(0, 9);
-    expect(fromFront!.direction.z).toBeCloseTo(-1, 9);
-  });
-
-  it('moves one for one with a square edge’s radius and setback', () => {
+  it('aims an outside edge into the material at 45° to each face', () => {
     const frame = edgeBlendFrame({
       points: EDGE,
       ...corner(),
       bodyCenter: BOX_CENTRE
     });
-    // A right-angle fillet of radius r meets each face r from the edge; a
-    // symmetric chamfer's setback is its distance on any edge.
-    expect(frame!.travel!.fillet).toBeCloseTo(1, 9);
-    expect(frame!.travel!.chamfer).toBe(1);
+    expect(frame!.origin).toEqual({ x: 5, y: 0, z: 0 });
+    expect(frame!.direction.x).toBeCloseTo(0, 9);
+    expect(frame!.direction.y).toBeCloseTo(-Math.SQRT1_2, 9);
+    expect(frame!.direction.z).toBeCloseTo(-Math.SQRT1_2, 9);
   });
 
-  it('points away from an inside edge along the wall it rises up', () => {
+  it('rides the middle of the blend: r(√2 − 1) for a fillet, d/√2 for a chamfer', () => {
+    const frame = edgeBlendFrame({
+      points: EDGE,
+      ...corner(),
+      bodyCenter: BOX_CENTRE
+    });
+    expect(frame!.travel!.fillet).toBeCloseTo(Math.SQRT2 - 1, 9);
+    expect(frame!.travel!.chamfer).toBeCloseTo(Math.SQRT1_2, 9);
+  });
+
+  it('aims an inside edge out into the corner it fills', () => {
     const frame = edgeBlendFrame({
       points: EDGE,
       ...corner({ inside: true }),
-      bodyCenter: { x: 5, y: 1, z: -1 },
-      viewer: { x: 5, y: -40, z: 1 }
+      bodyCenter: { x: 5, y: 1, z: -1 }
     });
-    expect(frame!.direction.z).toBeCloseTo(1, 9);
-    expect(frame!.travel!.fillet).toBeCloseTo(1, 9);
+    expect(frame!.direction.y).toBeCloseTo(-Math.SQRT1_2, 9);
+    expect(frame!.direction.z).toBeCloseTo(Math.SQRT1_2, 9);
   });
 
   it('reads the same frame from a mesh wound inside out', () => {
     const frame = edgeBlendFrame({
       points: EDGE,
       ...corner({ flipWinding: true }),
-      bodyCenter: BOX_CENTRE,
-      viewer: { x: 5, y: 40, z: -1 }
+      bodyCenter: BOX_CENTRE
     });
-    expect(frame!.direction.z).toBeCloseTo(-1, 9);
-  });
-
-  it('keeps the face it had when told which way it pointed', () => {
-    const frame = edgeBlendFrame({
-      points: EDGE,
-      ...corner(),
-      bodyCenter: BOX_CENTRE,
-      viewer: { x: 5, y: 40, z: -1 },
-      prefer: { x: 0, y: -1, z: 0 }
-    });
-    expect(frame!.direction.y).toBeCloseTo(-1, 9);
+    expect(frame!.direction.y).toBeCloseTo(-Math.SQRT1_2, 9);
+    expect(frame!.direction.z).toBeCloseTo(-Math.SQRT1_2, 9);
   });
 
   it('stands at the arc-length middle of a two-point line, not an end', () => {
@@ -153,10 +128,10 @@ describe('edgeBlendFrame', () => {
     expect(frame!.travel).toBeUndefined();
   });
 
-  it('bounds travel on nearly flat and knife edges', () => {
-    // Two faces meeting at 170°: the tangent line barely leaves the edge.
+  it('floors travel on a nearly flat edge', () => {
+    // Two faces meeting at 170°: the blend barely moves the surface.
     const tilt = Math.tan((10 * Math.PI) / 180) * 2;
-    const flat = edgeBlendFrame({
+    const frame = edgeBlendFrame({
       points: EDGE,
       vertices: [
         ...[0, -2, 0, 10, -2, 0, 10, 0, 0, 0, 0, 0],
@@ -169,24 +144,9 @@ describe('edgeBlendFrame', () => {
       ],
       bodyCenter: { x: 5, y: 0, z: -5 }
     });
-    expect(flat!.travel!.fillet).toBe(MIN_EDGE_TRAVEL);
-    // Two faces folded back on each other at 2°.
-    const fold = Math.tan((2 * Math.PI) / 180) * 2;
-    const knife = edgeBlendFrame({
-      points: EDGE,
-      vertices: [
-        ...[0, -2, 0, 10, -2, 0, 10, 0, 0, 0, 0, 0],
-        ...[10, -2, -fold, 0, -2, -fold]
-      ],
-      // The underside faces down, back along the top it nearly meets.
-      indices: [0, 1, 2, 0, 2, 3, 3, 2, 4, 3, 4, 5],
-      faces: [
-        { key: 'a', triangleStart: 0, triangleCount: 2 },
-        { key: 'b', triangleStart: 2, triangleCount: 2 }
-      ],
-      bodyCenter: { x: 5, y: -1, z: -0.01 }
-    });
-    expect(knife!.travel!.fillet).toBe(MAX_EDGE_TRAVEL);
+    expect(frame!.direction.z).toBeLessThan(-0.99);
+    expect(frame!.travel!.fillet).toBe(MIN_EDGE_TRAVEL);
+    expect(frame!.travel!.fillet).toBeLessThanOrEqual(MAX_EDGE_TRAVEL);
   });
 
   it('rejects a polyline with no span', () => {

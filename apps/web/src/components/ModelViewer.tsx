@@ -1801,8 +1801,8 @@ function sameCylinderHandleTarget(
 }
 
 /**
- * Where the live edge rig stands. `travel` is how far the blend's edge on the
- * arrow's face moves per unit value for the armed operation; absent, the
+ * Where the live edge rig stands. `travel` is how far the blend's surface
+ * moves along the arrow per unit value for the armed operation; absent, the
  * arrow stays put (a face-backed edit, or an edge whose faces could not be
  * read).
  */
@@ -9729,7 +9729,7 @@ export function ModelViewer({
             startY: event.clientY,
             directionX: screen.directionX,
             directionY: screen.directionY,
-            // An arrow riding the blend's edge moves `travel` per unit of
+            // An arrow riding the blend's surface moves `travel` per unit of
             // value, so the value scales by it and the arrow stays under the
             // pointer. A fixed arrow only signs the drag; the head-on scale
             // keeps its sensitivity predictable at every view angle.
@@ -12759,7 +12759,7 @@ export function ModelViewer({
         };
         // Stand where the edge was clicked; failing that, where the arrow
         // already stood on this edge, so a re-arm or a landed preview does
-        // not walk it along the rim or swap it to the other face.
+        // not walk it along the rim.
         const pick = lastEdgePickRef.current;
         const stood =
           built &&
@@ -12788,8 +12788,7 @@ export function ModelViewer({
             })),
           bodyCenter: center,
           near,
-          viewer: { x: camera.x, y: camera.y, z: camera.z },
-          prefer: stood?.direction ?? null
+          viewer: { x: camera.x, y: camera.y, z: camera.z }
         });
         if (frame) {
           placement = {

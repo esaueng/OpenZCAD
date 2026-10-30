@@ -821,18 +821,19 @@ export interface EdgeRadiusRigParams {
   origin: HandleVec3;
   direction: HandleVec3;
   /**
-   * How far the blend's edge on the face moves along `direction` per unit of
-   * value (`edgeBlendFrame`'s `travel`). Given, the arrow rides it as the
-   * value changes; absent, it stays where it was placed.
+   * How far the blend's surface moves along `direction` per unit of value
+   * (`edgeBlendFrame`'s `travel`). Given, the arrow rides it as the value
+   * changes; absent, it stays where it was placed.
    */
   travel?: number;
 }
 
 /**
  * The fillet/chamfer arrow: the same solid double-headed pin as the face and
- * cylinder rigs, lying across the edge on one of its faces. With a `travel`
- * it walks along that face with the line where the blend meets it, so the
- * arrow marks where the rounding starts and stays under the hand.
+ * cylinder rigs, standing on the edge along the faces' bisector. With a
+ * `travel` it rides the middle of the blend as the value grows — pushed into
+ * an outside corner, drawn out of an inside one — so the arrow sits where the
+ * material now ends and stays under the hand that drags it.
  */
 export function buildEdgeRadiusHandle(params: EdgeRadiusRigParams): DragRig {
   const kind = 'edge-radius';
