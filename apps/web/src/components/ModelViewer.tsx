@@ -69,7 +69,6 @@ import {
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
-  faceSweepProfile,
   bodiesInBox,
   topologyInBox,
   boxSelectMode,
@@ -1753,66 +1752,6 @@ const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
  * mesh: the far end of the dimension an offset handle draws. Exact for the
  * mesh as drawn; null when nothing lies behind the face.
  */
-/**
- * A planar face's boundary loops in world space, recovered from the body's
- * display mesh: what the offset rig sweeps into the band of wall a push or
- * pull adds or removes. Null when the face is not in the mesh or its
- * triangles do not close into loops, and the rig then draws no band.
- */
-function faceBoundaryLoops(
-  body: THREE.Object3D,
-  topologyId: string
-): HandleVec3[][] | null {
-  const indexed: THREE.Mesh<THREE.BufferGeometry>[] = [];
-  body.traverse((child) => {
-    if (
-      child instanceof THREE.Mesh &&
-      (child.geometry as THREE.BufferGeometry).getIndex()
-    ) {
-      indexed.push(child as THREE.Mesh<THREE.BufferGeometry>);
-    }
-  });
-  const found = indexed[0];
-  if (!found) {
-    return null;
-  }
-  const topology = (
-    found.userData as {
-      topology?: {
-        faces: {
-          topologyId: string;
-          triangleStart: number;
-          triangleCount: number;
-        }[];
-      };
-    }
-  ).topology;
-  const face = topology?.faces.find(
-    (candidate) => candidate.topologyId === topologyId
-  );
-  const position = found.geometry.getAttribute('position');
-  const index = found.geometry.getIndex();
-  if (!face || !position || !index) {
-    return null;
-  }
-  const profile = faceSweepProfile(
-    position.array,
-    index.array,
-    face.triangleStart,
-    face.triangleCount
-  );
-  if (!profile) {
-    return null;
-  }
-  found.updateWorldMatrix(true, false);
-  const world = new THREE.Vector3();
-  return profile.loops.map((loop) =>
-    loop.map((point) => {
-      world.set(point.x, point.y, point.z).applyMatrix4(found.matrixWorld);
-      return { x: world.x, y: world.y, z: world.z };
-    })
-  );
-}
 
 /**
  * Whether two offset handles arm the same face the same way. Preview profiles
@@ -5606,6 +5545,7 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           resolve?: (value: {
+            offsetWorldObjects: string[];
             sectionCaps: {
               triangles: number;
               bounds: { min: number[]; max: number[] };
@@ -5741,7 +5681,14 @@ export function ModelViewer({
       // Counted per region by the viewport itself, so each entry reports its
       // own boundary curves rather than the group's total.
       const exactSections = exactSectionSnapshot(bodyGroup);
+      const offsetWorldObjects: string[] = [];
+      scene.traverse((object) => {
+        if (object.name === 'offset-face-handle-world') {
+          object.traverse((part) => offsetWorldObjects.push(part.name));
+        }
+      });
       detail.resolve({
+        offsetWorldObjects,
         sectionCaps,
         exactSections,
         bodyFaces,
@@ -12644,30 +12591,9 @@ export function ModelViewer({
         built.handle.bodyId === offsetHandle.bodyId &&
         built.handle.topologyId === offsetHandle.topologyId
     );
-    // The band starts at the face's old level. A rig re-armed after a preview
-    // landed reads the moved face from the rendered body, so the loops go
-    // back onto the plane the gesture started from (the pick point stays on
-    // the original face; the face only ever moves along its normal).
-    const loops = body
-      ? faceBoundaryLoops(body, offsetHandle.topologyId)?.map((loop) =>
-          loop.map((point) => {
-            const lift =
-              (point.x - placement.origin.x) * placement.direction.x +
-              (point.y - placement.origin.y) * placement.direction.y +
-              (point.z - placement.origin.z) * placement.direction.z;
-            return {
-              x: point.x - placement.direction.x * lift,
-              y: point.y - placement.direction.y * lift,
-              z: point.z - placement.direction.z * lift
-            };
-          })
-        )
-      : null;
     const rig = buildOffsetFaceHandle({
       ...placement,
-      ghostGeometry: null,
-      pixelRatio: context.renderer.getPixelRatio(),
-      ...(loops ? { band: { loops } } : {})
+      ghostGeometry: null
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);

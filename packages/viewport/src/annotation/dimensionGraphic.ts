@@ -141,8 +141,7 @@ export function createDimensionLineMaterial(
  * instanced buffer, and three never frees the GPU buffer of the one they
  * replace. `update` runs every drawn frame for each dimension on screen, so
  * that orphaned two GL buffers a frame per line — six for a measurement with
- * its witness ticks. The buffers are built once here and written in place,
- * as `changeBand` does.
+ * its witness ticks. The buffers are built once here and written in place.
  */
 function segmentWriter(line: Line2) {
   const geometry = line.geometry;

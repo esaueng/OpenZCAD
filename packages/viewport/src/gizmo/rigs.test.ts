@@ -188,72 +188,23 @@ describe('the offset-face rig', () => {
     expect(ringLine.material.color.getHex()).toBe(0xff644d);
   });
 
-  it('hides its band while the body shows the change itself', () => {
-    const rig = buildOffsetFaceHandle({
-      origin: { x: 2, y: 2, z: 3 },
-      direction: { x: 0, y: 0, z: 1 },
-      ghostGeometry: null,
-      band: {
-        loops: [
-          [
-            { x: 0, y: 0, z: 3 },
-            { x: 4, y: 0, z: 3 },
-            { x: 4, y: 4, z: 3 },
-            { x: 0, y: 4, z: 3 }
-          ]
-        ]
+  it.each([false, true])(
+    'keeps face offsets free of overlay geometry when the body preview is %s',
+    (shown) => {
+      const rig = offsetRig();
+      rig.setChangeShownByBody?.(shown);
+      for (const value of [4, -3, 0, 2]) {
+        rig.setValue(value);
+        rig.setWarning?.(value < 0);
+        expect(rig.worldGroup.children.map((child) => child.name)).toEqual([
+          'offset-change-arrow',
+          'offset-old-level'
+        ]);
+        expect(rig.group.position.z).toBeCloseTo(3 + value, 6);
       }
-    });
-    const band = rig.worldGroup.getObjectByName('offset-change-band')!;
-    rig.setValue(2);
-    expect(band.visible).toBe(true);
-    rig.setChangeShownByBody?.(true);
-    expect(band.visible).toBe(false);
-    rig.setChangeShownByBody?.(false);
-    expect(band.visible).toBe(true);
-  });
-
-  it('sweeps the face outline into a band of the change, green adding and coral cutting', () => {
-    const square = [
-      { x: 0, y: 0, z: 3 },
-      { x: 4, y: 0, z: 3 },
-      { x: 4, y: 4, z: 3 },
-      { x: 0, y: 4, z: 3 }
-    ];
-    const rig = buildOffsetFaceHandle({
-      origin: { x: 2, y: 2, z: 3 },
-      direction: { x: 0, y: 0, z: 1 },
-      ghostGeometry: null,
-      band: { loops: [square] }
-    });
-    const walls = rig.worldGroup.getObjectByName(
-      'offset-change-walls'
-    ) as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
-    const outline = rig.worldGroup.getObjectByName(
-      'offset-change-cut-outline'
-    )!;
-    expect(walls.visible).toBe(false);
-
-    rig.setValue(2);
-    expect(walls.visible).toBe(true);
-    expect(outline.visible).toBe(false);
-    const positions = walls.geometry.getAttribute('position');
-    const heights = Array.from({ length: positions.count }, (_, index) =>
-      positions.getZ(index)
-    );
-    // The old level stays put and the far edge moves with the value.
-    expect(new Set(heights)).toEqual(new Set([3, 5]));
-    expect(
-      (walls.material.uniforms.stripe!.value as THREE.Color).getHex()
-    ).toBe(0x5bc794);
-
-    rig.setValue(-1.5);
-    expect(outline.visible).toBe(true);
-    expect(
-      (walls.material.uniforms.stripe!.value as THREE.Color).getHex()
-    ).toBe(0xdd7362);
-    rig.dispose();
-  });
+      rig.dispose();
+    }
+  );
 
   it('keeps world-space parts out of the rescaled group', () => {
     const rig = buildOffsetFaceHandle({
