@@ -31,7 +31,7 @@ const STEP: Record<StartupStage, number> = {
 
 const DETAIL: Record<StartupStage, string> = {
   opening: 'Checking saved copies',
-  restoring: 'Loading your last part',
+  restoring: 'Loading your last project',
   model: 'Building the model',
   panels: 'Loading tools and panels'
 };
@@ -91,7 +91,7 @@ export function StartupScreen({
   loadingChunks = false,
   projectName,
   stage = projectName ? 'opening' : 'restoring',
-  backLabel = 'Back to parts'
+  backLabel = 'Back to projects'
 }: {
   onBack?(): void;
   loadingChunks?: boolean;
@@ -149,7 +149,7 @@ export function StartupScreen({
           ))}
         </ol>
         {slow && !offline && (
-          <p className="startup-hint">Complex parts take longer to rebuild.</p>
+          <p className="startup-hint">Complex models take longer to rebuild.</p>
         )}
         <button type="button" onClick={onBack} disabled={!onBack}>
           {backLabel}

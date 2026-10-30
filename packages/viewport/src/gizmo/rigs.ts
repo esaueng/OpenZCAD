@@ -12,7 +12,7 @@ import {
 } from './DragRig';
 import { createDimensionGraphic } from '../annotation/dimensionGraphic';
 import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
-import { createChangeBand, createLevelRing } from './changeBand';
+import { createLevelRing } from './levelRing';
 import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 
@@ -359,14 +359,6 @@ export interface OffsetFaceRigParams {
   /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
   /**
-   * The face's boundary loops at its old level (outer first, then holes),
-   * when they are known. The rig sweeps them by the current value into the
-   * band of wall the offset adds or removes, so only the change is coloured.
-   */
-  band?: { loops: HandleVec3[][] };
-  /** Device pixels per CSS pixel, for the band's hatching pitch. */
-  pixelRatio?: number;
-  /**
    * A profile to sweep along the drag direction instead of a flat ghost. The
    * rig extrudes it by the current value every frame, so the volume the
    * gesture adds or removes tracks the hand while the exact kernel catches up.
@@ -492,9 +484,7 @@ function createSweepGhost(
  * The face-offset handle: a pin on the face normal that rides the face to its
  * new level, both ways, with a dashed white dimension on the same axis back
  * to the old level that the value label rides, a dashed ring at the old level
- * (coral when cutting), and, when the face's outline is known, the band of
- * wall the change adds or removes. A body that shows the change itself hides
- * the band (`setChangeShownByBody`).
+ * (coral when cutting). The body preview shows the geometry change itself.
  */
 export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const kind = 'offset-face';
@@ -537,13 +527,6 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   oldLevel.object.position.copy(origin);
   oldLevel.object.quaternion.copy(group.quaternion);
   worldGroup.add(oldLevel.object);
-  const band = params.band
-    ? createChangeBand(params.band.loops, direction, params.pixelRatio)
-    : null;
-  if (band) {
-    worldGroup.add(band.object);
-  }
-
   const sweep = params.sweep ? createSweepGhost(params.sweep, direction) : null;
   if (sweep) {
     worldGroup.add(sweep.mesh);
@@ -663,8 +646,6 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
           ? SELECTION_SEMANTICS.change.cut
           : SELECTION_SEMANTICS.change.oldLevel
       );
-      band?.update(value);
-      if (band) band.object.visible = !bodyShowsChange;
       if (ghost) {
         ghost.visible = engaged && !bodyShowsChange;
       }
@@ -702,7 +683,6 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     },
     dispose() {
       changeArrow.dispose();
-      band?.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };

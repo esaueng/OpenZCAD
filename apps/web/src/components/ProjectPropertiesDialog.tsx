@@ -61,7 +61,7 @@ export function ProjectPropertiesDialog({
   }, [project, loadProperties, attempt]);
 
   const organization = projectOrganization(project);
-  const shelf = { active: 'Parts', archived: 'Archive', deleted: 'Trash' }[
+  const shelf = { active: 'Projects', archived: 'Archive', deleted: 'Trash' }[
     organization.status
   ];
   const rows: Array<[string, ReactNode]> = [

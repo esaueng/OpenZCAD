@@ -38,7 +38,7 @@ describe('startup screen', () => {
     render(<StartupScreen />);
     const status = screen.getByRole('status', { name: 'Restoring workspace' });
     expect(status).toHaveTextContent('Restoring workspace');
-    expect(status).toHaveTextContent('Loading your last part');
+    expect(status).toHaveTextContent('Loading your last project');
   });
 
   it('shows the offline notice in place of the stage', () => {

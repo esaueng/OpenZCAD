@@ -243,7 +243,9 @@ test('a failed startup session lookup in another tab preserves authenticated for
     })
   );
   await second.goto('/');
-  await expect(second.getByText('No parts yet', { exact: true })).toBeVisible();
+  await expect(
+    second.getByText('No projects yet', { exact: true })
+  ).toBeVisible();
   await expect(
     second.getByRole('status', { name: 'Loading library' })
   ).toHaveCount(0);

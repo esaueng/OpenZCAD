@@ -1189,7 +1189,7 @@ export function SettingsPage({
                 </SettingRow>
                 <SettingRow
                   title="Library card size"
-                  hint="How large parts show in the library's grid."
+                  hint="How large projects show in the library's grid."
                 >
                   <Segmented
                     label="Library card size"

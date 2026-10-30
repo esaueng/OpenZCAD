@@ -369,7 +369,7 @@ test(
         path: testInfo.outputPath('project-opening.png')
       });
       await page
-        .getByRole('button', { name: 'Back to parts', exact: true })
+        .getByRole('button', { name: 'Back to projects', exact: true })
         .click();
       await expect(card).toBeVisible();
       await card.click();
@@ -545,7 +545,7 @@ for (const store of ['projects', 'projectSync']) {
         page.getByRole('status', { name: 'Opening project', exact: true })
       ).toBeVisible();
       await page
-        .getByRole('button', { name: 'Back to parts', exact: true })
+        .getByRole('button', { name: 'Back to projects', exact: true })
         .click();
       await expect(card.first()).toBeVisible();
     } finally {

@@ -42,7 +42,7 @@ for (const width of [1440, 390]) {
       ).toHaveCount(0);
       await expect(page.getByText('Loading 3D viewport…')).toHaveCount(0);
       await expect(
-        page.getByRole('button', { name: 'Back to parts' })
+        page.getByRole('button', { name: 'Back to projects' })
       ).toBeVisible();
       await page.keyboard.press('b');
       await expect(
@@ -94,7 +94,7 @@ test('offline boot keeps restoring a saved local workspace without a connection 
       page.getByRole('status', { name: 'Restoring workspace' })
     ).toBeVisible();
     await context.setOffline(true);
-    await expect(page.getByText('Loading your last part')).toBeVisible();
+    await expect(page.getByText('Loading your last project')).toBeVisible();
     await expect(page.getByText(/Connect to finish/)).toHaveCount(0);
     await expect(page.locator('.startup-card button')).toBeHidden();
   } finally {

@@ -45,7 +45,7 @@ for (const viewport of [
     const cards = page.locator('.start-tile-project');
     await expect(cards).toHaveCount(96);
     await expect(
-      page.getByRole('button', { name: /Show .*parts/ })
+      page.getByRole('button', { name: /Show .*projects/ })
     ).toHaveCount(0);
     await expect(cards.first().locator('img')).toBeVisible();
     expect(requestedPreviews.size).toBeLessThan(96);
@@ -71,7 +71,7 @@ for (const viewport of [
       )
     ).toBe(true);
 
-    await page.getByLabel('Search parts').fill('Library part 96');
+    await page.getByLabel('Search projects').fill('Library part 96');
     await expect(cards).toHaveCount(1);
     await expect(cards.first()).toContainText('Library part 96');
     await page.getByRole('button', { name: 'Clear search' }).click();

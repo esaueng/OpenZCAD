@@ -42,7 +42,7 @@ for (const viewport of [
       new MutationObserver(() => {
         const launcher = document.querySelector('.start-screen');
         if (!launcher) return;
-        for (const text of ['No parts yet', 'On this device only']) {
+        for (const text of ['No projects yet', 'On this device only']) {
           if (launcher.textContent?.includes(text))
             browserWindow.__libraryFlashes.push(text);
         }
@@ -104,7 +104,9 @@ for (const viewport of [
     await expect(
       page.locator('.start-tile-open', { hasText: 'Refresh bracket' })
     ).toBeVisible();
-    await expect(page.locator('.start-account')).toContainText('1 part saved');
+    await expect(page.locator('.start-account')).toContainText(
+      '1 project saved'
+    );
     await expect(page.getByLabel('Project name')).toHaveValue(
       'Name kept during refresh'
     );
@@ -261,7 +263,9 @@ for (const width of [1440, 390]) {
       await route.fulfill({ json: { projects: [] } });
     });
     await page.goto('/');
-    await expect(page.getByText('No parts yet', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('No projects yet', { exact: true })
+    ).toBeVisible();
     gate = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -271,13 +275,15 @@ for (const width of [1440, 390]) {
         page.getByRole('status', { name: 'Loading library' })
       ).toBeVisible();
       await expect(page.locator('.start-tile-placeholder')).toHaveCount(0);
-      await expect(page.getByText('No parts yet', { exact: true })).toHaveCount(
-        0
-      );
+      await expect(
+        page.getByText('No projects yet', { exact: true })
+      ).toHaveCount(0);
     } finally {
       release();
     }
-    await expect(page.getByText('No parts yet', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('No projects yet', { exact: true })
+    ).toBeVisible();
     await expect(page.locator('.start-tile-placeholder')).toHaveCount(0);
   });
 }

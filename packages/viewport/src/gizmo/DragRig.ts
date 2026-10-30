@@ -57,9 +57,8 @@ export interface DragRig {
    */
   valueFromRay?(ray: THREE.Ray, previous: number): number | null;
   /**
-   * Hides the rig's own drawing of the change (a face offset's hatched band)
-   * while the body itself shows it, as a deformed solid over a ghost of the
-   * part as it was.
+   * Hides the rig's reference/sweep ghost while the body preview shows the
+   * geometry change itself.
    */
   setChangeShownByBody?(shown: boolean): void;
   /**

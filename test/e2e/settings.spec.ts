@@ -753,13 +753,13 @@ test('launcher semantics, empty states, and demo cards hold at mobile width', as
   await page.getByLabel('Project name').fill('Search Fixture');
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^OpenZCAD/ }).click();
-  await page.getByLabel('Search parts').fill('no-match');
+  await page.getByLabel('Search projects').fill('no-match');
   await page.getByRole('tab', { name: 'Archive 0' }).click();
 
   await expect(
     page.getByText('Nothing archived.', { exact: false })
   ).toBeVisible();
-  await expect(page.getByText('No parts match', { exact: false })).toHaveCount(
+  await expect(page.getByText('No projects match', { exact: false })).toHaveCount(
     0
   );
 

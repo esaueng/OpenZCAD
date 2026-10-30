@@ -58,13 +58,13 @@ for (const action of ['create', 'demo', 'import'] as const) {
       });
     });
     await page.goto('/');
-    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
     await page.evaluate(() => {
       window.location.hash = `share=${'s'.repeat(43)}`;
     });
     await expect.poll(() => requested).toBe(true);
     await expect(page.getByRole('main', { name: 'Shared model' })).toBeVisible();
-    await page.getByRole('button', { name: 'Back to parts', exact: true }).click();
+    await page.getByRole('button', { name: 'Back to projects', exact: true }).click();
     const expected =
       action === 'demo'
         ? 'Demo · Mounting Bracket'
@@ -107,7 +107,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
         release();
         await response;
         await page.waitForTimeout(250);
-        await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+        await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
         await expect(
           page.getByRole('button', { name: 'Make a copy', exact: true })
         ).toHaveCount(0);
@@ -266,7 +266,7 @@ test('a newer share wins over a held restore that saves locally without opening'
       expect.objectContaining({ name: imported.name })
     ]);
     await page.getByTitle('Back to projects').click();
-    await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Projects 1' })).toBeVisible();
     await expect(
       page.locator('.start-tile-open', { hasText: imported.name })
     ).toHaveCount(1);
