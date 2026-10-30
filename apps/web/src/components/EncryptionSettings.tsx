@@ -4,7 +4,8 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore
+  useSyncExternalStore,
+  type ReactNode
 } from 'react';
 import {
   Copy,
@@ -12,7 +13,9 @@ import {
   KeyRound,
   QrCode,
   RefreshCcw,
+  ShieldAlert,
   ShieldCheck,
+  ShieldOff,
   Trash2
 } from 'lucide-react';
 import {
@@ -73,7 +76,15 @@ import {
   requestKeySessionRecheck,
   subscribeKeySessionVersion
 } from '../lib/e2ee/keySession';
-import { Group, Notice, SettingRow, Status } from './settingsControls';
+import {
+  Group,
+  MoreGroups,
+  Notice,
+  SettingRow,
+  Status,
+  Summary,
+  Toggle
+} from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
 import { StopProjectEncryption } from './StopProjectEncryption';
@@ -197,31 +208,38 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
   }
 
   const shared = { ctx, busy, run, setFlow, flow };
+  const unlocked = state.kind === 'ready' && state.account.unlocked;
   return (
     <div className="encryption-settings">
       {error ? (
-        <Notice tone="warning" role="alert">
-          {error}
-        </Notice>
+        <Group>
+          <Notice tone="warning" role="alert">
+            {error}
+          </Notice>
+        </Group>
       ) : null}
       {state.kind === 'fork' ? (
-        <Group title="Device list">
-          <Notice
+        <Group>
+          <Summary
+            icon={<ShieldAlert size={18} />}
             tone="warning"
-            role="alert"
+            title="Device list did not verify"
             action={<RetryButton onClick={() => void reload()} />}
+            alert
           >
-            {state.message} Nothing was unlocked. If this keeps happening,
-            compare your fingerprint on another device before trusting this one.
+            {state.message} Nothing was unlocked.
+          </Summary>
+          <Notice tone="warning">
+            If this keeps happening, compare your fingerprint on another device
+            before trusting this one.
           </Notice>
         </Group>
       ) : state.kind === 'not-set-up' ? (
         <>
-          <EncryptedInvitations ready={false} />
           {flow?.kind === 'setup' ? (
             <RecoveryKeyFlow
               {...shared}
-              title="Save your recovery key"
+              title="Set up encryption"
               finishLabel="Finish setup"
               onFinish={(secret) =>
                 setUpEncryption(ctx, {
@@ -231,78 +249,82 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
               }
             />
           ) : (
-            <Group title="Set up">
-              <SettingRow
-                title="End-to-end encryption"
-                hint="Create your account keys and save a recovery key. Existing projects stay as they are until you encrypt them."
+            <Group>
+              <Summary
+                icon={<ShieldOff size={18} />}
+                tone="off"
+                title="Encryption is off"
+                action={
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setFlow({ kind: 'setup' })}
+                  >
+                    <ShieldCheck size={14} aria-hidden="true" />
+                    Set up encryption
+                  </button>
+                }
               >
-                <button
-                  className="primary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setFlow({ kind: 'setup' })}
-                >
-                  <ShieldCheck size={14} aria-hidden="true" />
-                  Set up encryption
-                </button>
-              </SettingRow>
+                Turn it on so only your devices can read your cloud projects.
+              </Summary>
             </Group>
           )}
+          <EncryptedInvitations ready={false} />
         </>
       ) : (
-        <>
-          <AccountPanel
-            {...shared}
-            account={state.account}
-            identityChanged={state.kind === 'identity-changed'}
-            onReload={reload}
-          />
-          {state.kind === 'ready' ? (
-            <EncryptedInvitations ready={state.account.unlocked} />
-          ) : null}
-          {state.kind === 'ready' ? (
-            <EncryptionContacts
-              keys={ctx}
-              account={state.account}
-              Scanner={QrScanner}
-              onConfirmFromDevice={
-                state.account.device &&
-                (state.account.deviceStatus === 'certified' ||
-                  state.account.deviceStatus === 'approved')
-                  ? () =>
-                      void run(async () => {
-                        // The approval exchange hands this device the
-                        // approver's contacts head (ADR-024).
-                        const next = await requestApproval(
-                          ctx,
-                          state.account,
-                          state.account.device?.label ??
-                            defaultDeviceLabel(navigator.userAgent)
-                        );
-                        setFlow({ kind: 'request', step: next });
-                      })
-                  : undefined
-              }
-            />
-          ) : null}
-        </>
+        <AccountPanel
+          {...shared}
+          account={state.account}
+          identityChanged={state.kind === 'identity-changed'}
+          onReload={reload}
+          projects={
+            <>
+              {state.kind === 'ready' ? (
+                <EncryptedInvitations ready={state.account.unlocked} />
+              ) : null}
+              <ProjectEncryptionPreference
+                userId={userId}
+                unlocked={unlocked}
+              />
+              <ExistingProjectEncryption userId={userId} unlocked={unlocked} />
+            </>
+          }
+          people={
+            <>
+              {state.kind === 'ready' ? (
+                <EncryptionContacts
+                  keys={ctx}
+                  account={state.account}
+                  Scanner={QrScanner}
+                  onConfirmFromDevice={
+                    state.account.device &&
+                    (state.account.deviceStatus === 'certified' ||
+                      state.account.deviceStatus === 'approved')
+                      ? () =>
+                          void run(async () => {
+                            // The approval exchange hands this device the
+                            // approver's contacts head (ADR-024).
+                            const next = await requestApproval(
+                              ctx,
+                              state.account,
+                              state.account.device?.label ??
+                                defaultDeviceLabel(navigator.userAgent)
+                            );
+                            setFlow({ kind: 'request', step: next });
+                          })
+                      : undefined
+                  }
+                />
+              ) : null}
+              <AssistantAccessSettings userId={userId} unlocked={unlocked} />
+            </>
+          }
+          advanced={
+            <StopProjectEncryption userId={userId} unlocked={unlocked} />
+          }
+        />
       )}
-      <ProjectEncryptionPreference
-        userId={userId}
-        unlocked={state.kind === 'ready' && state.account.unlocked}
-      />
-      <ExistingProjectEncryption
-        userId={userId}
-        unlocked={state.kind === 'ready' && state.account.unlocked}
-      />
-      <StopProjectEncryption
-        userId={userId}
-        unlocked={state.kind === 'ready' && state.account.unlocked}
-      />
-      <AssistantAccessSettings
-        userId={userId}
-        unlocked={state.kind === 'ready' && state.account.unlocked}
-      />
     </div>
   );
 }
@@ -385,15 +407,78 @@ async function readRecoveryKey(text: string): Promise<Bytes> {
   }
 }
 
+/** Where this device stands, in one headline and one sentence. */
+function deviceSummary(
+  account: AccountView,
+  identityChanged: boolean
+): { tone: 'good' | 'warning'; title: string; text: string; alert?: true } {
+  const label = account.device?.label ?? 'This device';
+  if (identityChanged)
+    return {
+      tone: 'warning',
+      title: 'Keys changed elsewhere',
+      text: 'Your keys were replaced on another device. Approve this one again from there, or enter the new recovery key.',
+      alert: true
+    };
+  if (account.unlockError)
+    return {
+      tone: 'warning',
+      title: 'Locked on this device',
+      text: `This device could not unlock your keys: ${account.unlockError}`,
+      alert: true
+    };
+  switch (account.deviceStatus) {
+    case 'certified':
+      return {
+        tone: 'good',
+        title: 'Encryption is on',
+        text: `${label} can open and sign your encrypted projects.`
+      };
+    case 'approved':
+      return {
+        tone: 'warning',
+        title: 'Read-only on this device',
+        text: `${label} can open encrypted projects. Certify it with your recovery key to make changes to your keys.`
+      };
+    case 'pending':
+      return {
+        tone: 'warning',
+        title: 'Waiting for approval',
+        text: 'Approve this device from one that is already unlocked.'
+      };
+    case 'removed':
+      return {
+        tone: 'warning',
+        title: 'Removed from your account',
+        text: 'This device’s keys no longer open anything new.'
+      };
+    default:
+      return {
+        tone: 'warning',
+        title: 'Locked on this device',
+        text: 'Approve it from another device, or use your recovery key.'
+      };
+  }
+}
+
 function AccountPanel({
   account,
   identityChanged,
   onReload,
+  projects,
+  people,
+  advanced,
   ...shared
 }: Shared & {
   account: AccountView;
   identityChanged: boolean;
   onReload(): Promise<boolean>;
+  /** Invitations and the project switches, shown once the keys are set out. */
+  projects: ReactNode;
+  /** Contacts and assistant access. */
+  people: ReactNode;
+  /** Rare, beta-only project tools, folded with the other recovery tools. */
+  advanced: ReactNode;
 }) {
   const { ctx, busy, run, flow, setFlow } = shared;
   const thisDevice = account.device;
@@ -408,39 +493,75 @@ function AccountPanel({
     projectRemovalStep(ctx, (outcome) =>
       setRemovalLeft(removalNotice(outcome))
     );
+  const summary = deviceSummary(account, identityChanged);
+  const enrolled =
+    account.deviceStatus === 'certified' || account.deviceStatus === 'approved';
   return (
     <>
-      {removalLeft ? <Notice tone="warning">{removalLeft}</Notice> : null}
-      {identityChanged ? (
-        <Notice tone="warning" role="alert">
-          Your encryption keys were replaced on another device, so this device
-          no longer trusts them. Approve it again from that device by choosing
-          Compare codes there, or enter the new recovery key.
-        </Notice>
-      ) : null}
-      {account.unlockError ? (
-        <Notice tone="warning" role="alert">
-          This device could not unlock your keys: {account.unlockError}
-        </Notice>
-      ) : null}
-      <Group title="This account">
+      <Group>
+        <Summary
+          icon={
+            summary.tone === 'good' ? (
+              <ShieldCheck size={18} />
+            ) : (
+              <ShieldAlert size={18} />
+            )
+          }
+          tone={summary.tone}
+          title={summary.title}
+          alert={summary.alert}
+          action={
+            <>
+              <DeviceStatusBadge account={account} />
+              {account.deviceStatus === 'approved' &&
+              flow?.kind !== 'recover' ? (
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setFlow({ kind: 'recover' })}
+                >
+                  <KeyRound size={14} aria-hidden="true" />
+                  Use recovery key
+                </button>
+              ) : null}
+              {thisDevice && account.deviceStatus === 'removed' ? (
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      await forgetThisDevice(ctx);
+                      return loadEncryption(ctx);
+                    })
+                  }
+                >
+                  Forget this device’s keys
+                </button>
+              ) : null}
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => void onReload()}
+              >
+                <RefreshCcw size={13} aria-hidden="true" />
+                Refresh
+              </button>
+            </>
+          }
+        >
+          {summary.text}
+        </Summary>
+        {removalLeft ? <Notice tone="warning">{removalLeft}</Notice> : null}
         <SettingRow
           title="Your fingerprint"
-          hint="What people compare to verify you. It changes only if you replace your recovery key."
+          hint="People compare it to verify you."
         >
           <code className="encryption-code" aria-label="Your fingerprint">
             {account.fingerprint}
           </code>
-        </SettingRow>
-        <SettingRow
-          title="This device"
-          hint={
-            thisDevice && account.deviceStatus !== 'none'
-              ? thisDevice.label
-              : 'No keys on this device yet.'
-          }
-        >
-          <DeviceStatusBadge account={account} />
         </SettingRow>
       </Group>
 
@@ -450,28 +571,9 @@ function AccountPanel({
         flow?.kind === 'request' &&
         (flow.step.step === 'waiting' || flow.step.step === 'compare')
       ) &&
-      (account.deviceStatus === 'certified' ||
-        account.deviceStatus === 'approved') ? null : (
+      enrolled ? null : (
         <EnrollPanel {...shared} account={account} />
       )}
-      {account.deviceStatus === 'approved' && flow?.kind !== 'recover' ? (
-        <Group title="Certify this device">
-          <SettingRow
-            title="Certify with your recovery key"
-            hint="Approved devices can read but not sign. Your recovery key certifies this one."
-          >
-            <button
-              className="secondary"
-              type="button"
-              disabled={busy}
-              onClick={() => setFlow({ kind: 'recover' })}
-            >
-              <KeyRound size={14} aria-hidden="true" />
-              Use recovery key
-            </button>
-          </SettingRow>
-        </Group>
-      ) : null}
       {flow?.kind === 'recover' ? (
         <RecoveryKeyEntry
           {...shared}
@@ -487,12 +589,11 @@ function AccountPanel({
           }
         />
       ) : null}
-
       {account.deviceStatus !== 'certified' && canUsePasskey ? (
         <Group title="Unlock with a passkey">
           <SettingRow
             title="Use your passkey"
-            hint="Choose a passkey for this account to unlock and certify this browser."
+            hint="Unlocks and certifies this browser."
           >
             <button
               className="secondary"
@@ -513,95 +614,58 @@ function AccountPanel({
           </SettingRow>
         </Group>
       ) : null}
-      {certified ? (
-        <EncryptedProjectRecovery
-          ctx={ctx}
-          account={account}
-          canUsePasskey={canUsePasskey}
-        />
-      ) : null}
+
+      {certified ? <ApprovalsPanel {...shared} account={account} /> : null}
+
+      {projects}
+
       <Group title="Devices" note={`${account.list.devices.length} certified`}>
-        {account.list.devices.map((device) => (
+        {[...account.list.devices]
+          .sort(
+            (a, b) =>
+              Number(b.deviceId === thisDevice?.deviceId) -
+              Number(a.deviceId === thisDevice?.deviceId)
+          )
+          .map((device) => (
+            <SettingRow
+              key={device.deviceId}
+              title={device.label}
+              hint={`Added ${formatDate(device.addedAt)}`}
+            >
+              {device.deviceId === thisDevice?.deviceId ? (
+                <Status tone="good">This device</Status>
+              ) : (
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy || !certified}
+                  aria-label={`Remove ${device.label}`}
+                  onClick={() =>
+                    setFlow({
+                      kind: 'remove',
+                      deviceId: device.deviceId,
+                      label: device.label
+                    })
+                  }
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                  Remove
+                </button>
+              )}
+            </SettingRow>
+          ))}
+        {certified ? (
           <SettingRow
-            key={device.deviceId}
-            title={device.label}
-            hint={`Added ${formatDate(device.addedAt)}${
-              device.deviceId === thisDevice?.deviceId ? ' · This device' : ''
-            }`}
-          >
-            {device.deviceId === thisDevice?.deviceId ? (
-              <Status tone="good">This device</Status>
-            ) : (
-              <button
-                className="secondary"
-                type="button"
-                disabled={busy || !certified}
-                aria-label={`Remove ${device.label}`}
-                onClick={() =>
-                  setFlow({
-                    kind: 'remove',
-                    deviceId: device.deviceId,
-                    label: device.label
-                  })
-                }
-              >
-                <Trash2 size={14} aria-hidden="true" />
-                Remove
-              </button>
-            )}
-          </SettingRow>
-        ))}
+            title="Add a device"
+            hint="On the new device, open Settings › Encryption and choose Ask for approval. Its request appears here."
+          />
+        ) : null}
       </Group>
-      <Group
-        title="Read-only devices"
-        note={`${account.approvedDevices.length} approved`}
-      >
-        {account.approvedDevices.map((device) => (
-          <SettingRow
-            key={device.deviceId}
-            title={device.label}
-            hint={`Approved ${formatDate(device.approvedAt)}`}
-          >
-            <Status tone="warning">Read-only</Status>
-          </SettingRow>
-        ))}
-        <SettingRow
-          title="Revoke read-only access"
-          hint="Replaces your account and encryption keys. All read-only devices must be approved again; certified devices keep working."
-        >
-          <button
-            className="secondary"
-            type="button"
-            disabled={busy || !certified}
-            onClick={() => setFlow({ kind: 'revoke-read-only' })}
-          >
-            Revoke read-only devices
-          </button>
-        </SettingRow>
-      </Group>
-      {flow?.kind === 'revoke-read-only' ? (
-        <RecoveryKeyEntry
-          {...shared}
-          title="Revoke read-only devices"
-          intro="All read-only devices will need approval again. Certified devices keep working."
-          actionLabel="Revoke read-only access"
-          danger
-          onSubmit={(secret) =>
-            revokeReadOnlyDevices(ctx, account, secret, projectStep())
-          }
-          onPasskey={
-            canUsePasskey
-              ? () =>
-                  revokeReadOnlyDevices(ctx, account, 'passkey', projectStep())
-              : undefined
-          }
-        />
-      ) : null}
       {flow?.kind === 'remove' ? (
         <RecoveryKeyEntry
           {...shared}
           title={`Remove ${flow.label}`}
-          intro="Removing a device replaces your account key and encryption key, so it cannot open anything new. Certified devices keep working. Read-only devices must be approved again."
+          intro="Your keys are replaced so it cannot open anything new. Read-only devices must be approved again."
           actionLabel="Remove device"
           danger
           onSubmit={(secret) =>
@@ -621,65 +685,136 @@ function AccountPanel({
           }
         />
       ) : null}
-
-      <Group title="Unlock methods">
-        <SettingRow
-          title="Device key"
-          hint="Kept in this browser, where script cannot read it. Each device unlocks with its own."
+      {account.approvedDevices.length > 0 ? (
+        <Group
+          title="Read-only devices"
+          note={`${account.approvedDevices.length} approved`}
         >
-          <Status tone={account.unlocked ? 'good' : 'warning'}>
-            {account.unlocked ? 'Unlocked' : 'Locked'}
-          </Status>
-        </SettingRow>
-        <SettingRow
-          title="Recovery key"
-          hint={`Set up ${formatDate(account.createdAt)}. It opens your keys on any device and certifies new ones.`}
-        >
-          <Status tone="good">Confirmed</Status>
-        </SettingRow>
-        <SettingRow
-          title="Passkeys"
-          hint={
-            passkeysAvailable()
-              ? 'Requires a passkey that supports PRF. Your recovery key authorizes adding one.'
-              : 'Passkeys are unavailable here. Use your recovery key or another device.'
-          }
-        >
-          <button
-            className="secondary"
-            type="button"
-            disabled={busy || !certified || !passkeysAvailable()}
-            onClick={() => setFlow({ kind: 'add-passkey' })}
-          >
-            Add passkey
-          </button>
-        </SettingRow>
-        {passkeys.map((target, index) => (
+          {account.approvedDevices.map((device) => (
+            <SettingRow
+              key={device.deviceId}
+              title={device.label}
+              hint={`Approved ${formatDate(device.approvedAt)}`}
+            >
+              <Status tone="warning">Read-only</Status>
+            </SettingRow>
+          ))}
           <SettingRow
-            key={target.targetId}
-            title={`Passkey ${index + 1}`}
-            hint={`Added ${formatDate(target.addedAt)} · ${target.targetId.slice(3, 15)}`}
+            title="Revoke read-only access"
+            hint="Replaces your keys. Certified devices keep working."
           >
             <button
               className="secondary"
               type="button"
               disabled={busy || !certified}
-              aria-label={`Remove passkey ${index + 1}`}
-              onClick={() =>
-                setFlow({ kind: 'remove-passkey', targetId: target.targetId })
-              }
+              onClick={() => setFlow({ kind: 'revoke-read-only' })}
             >
-              Remove
+              Revoke read-only devices
             </button>
           </SettingRow>
-        ))}
-      </Group>
+        </Group>
+      ) : null}
+      {flow?.kind === 'revoke-read-only' ? (
+        <RecoveryKeyEntry
+          {...shared}
+          title="Revoke read-only devices"
+          intro="All read-only devices will need approval again. Certified devices keep working."
+          actionLabel="Revoke read-only access"
+          danger
+          onSubmit={(secret) =>
+            revokeReadOnlyDevices(ctx, account, secret, projectStep())
+          }
+          onPasskey={
+            canUsePasskey
+              ? () =>
+                  revokeReadOnlyDevices(ctx, account, 'passkey', projectStep())
+              : undefined
+          }
+        />
+      ) : null}
+
+      {flow?.kind === 'replace' && certified ? (
+        <RecoveryKeyFlow
+          {...shared}
+          title="Replace recovery key"
+          intro="This also replaces your identity: other devices must be approved again, and contacts must verify your new fingerprint."
+          finishLabel="Replace recovery key"
+          askOldKey
+          onFinish={(secret, oldSecret) =>
+            replaceRecoveryKey(ctx, account, secret, oldSecret)
+          }
+        />
+      ) : enrolled && !identityChanged ? (
+        <Group title="Keys">
+          <SettingRow title="Device key" hint="Stored in this browser only.">
+            <Status tone={account.unlocked ? 'good' : 'warning'}>
+              {account.unlocked ? 'Unlocked' : 'Locked'}
+            </Status>
+          </SettingRow>
+          <SettingRow
+            title="Recovery key"
+            hint={`Saved ${formatDate(account.createdAt)}. Unlocks any device.`}
+          >
+            <div className="encryption-actions">
+              <Status tone="good">Confirmed</Status>
+              {certified ? (
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy}
+                  title="Replace a lost or exposed recovery key"
+                  onClick={() => setFlow({ kind: 'replace' })}
+                >
+                  <KeyRound size={14} aria-hidden="true" />
+                  Replace…
+                </button>
+              ) : null}
+            </div>
+          </SettingRow>
+          <SettingRow
+            title="Passkeys"
+            hint={
+              passkeysAvailable()
+                ? 'Unlock with a passkey that supports PRF.'
+                : 'Not available in this browser.'
+            }
+          >
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy || !certified || !passkeysAvailable()}
+              onClick={() => setFlow({ kind: 'add-passkey' })}
+            >
+              Add passkey
+            </button>
+          </SettingRow>
+          {passkeys.map((target, index) => (
+            <SettingRow
+              key={target.targetId}
+              title={`Passkey ${index + 1}`}
+              hint={`Added ${formatDate(target.addedAt)} · ${target.targetId.slice(3, 15)}`}
+            >
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy || !certified}
+                aria-label={`Remove passkey ${index + 1}`}
+                onClick={() =>
+                  setFlow({ kind: 'remove-passkey', targetId: target.targetId })
+                }
+              >
+                Remove
+              </button>
+            </SettingRow>
+          ))}
+        </Group>
+      ) : null}
       {flow?.kind === 'add-passkey' ? (
         <RecoveryKeyEntry
           {...shared}
           title="Add a passkey"
           actionLabel="Create passkey"
-          intro="Save a passkey for encryption unlock. If enrollment fails, remove the newly saved passkey from your provider before trying again. Your recovery key remains available."
+          intro="If creating it fails, delete the new passkey from your provider before trying again."
           onSubmit={(secret) => addPasskey(ctx, account, secret)}
         />
       ) : null}
@@ -689,7 +824,7 @@ function AccountPanel({
           title="Remove passkey"
           actionLabel="Remove passkey"
           danger
-          intro="This replaces your account and encryption keys. The removed passkey cannot open future keys. Delete it from your passkey provider separately."
+          intro="Replaces your keys. Delete the passkey from your provider separately."
           onSubmit={(secret) =>
             removePasskey(ctx, account, flow.targetId, secret, projectStep())
           }
@@ -708,67 +843,24 @@ function AccountPanel({
         />
       ) : null}
 
-      {certified ? <ApprovalsPanel {...shared} account={account} /> : null}
+      {/* Contacts sign with this device's keys; a locked one has none yet. */}
+      {enrolled && !identityChanged ? people : null}
 
-      {certified ? (
-        flow?.kind === 'replace' ? (
-          <RecoveryKeyFlow
-            {...shared}
-            title="Your new recovery key"
-            intro="Replacing your recovery key also replaces your identity. Every other device must be approved again, and everyone who verified you must verify your new fingerprint."
-            finishLabel="Replace recovery key"
-            askOldKey
-            onFinish={(secret, oldSecret) =>
-              replaceRecoveryKey(ctx, account, secret, oldSecret)
-            }
-          />
-        ) : (
-          <Group title="Recovery">
-            <SettingRow
-              title="Replace recovery key"
-              hint="For a lost or exposed key. This replaces your identity: other devices must be approved again and contacts must verify you again."
-            >
-              <button
-                className="secondary"
-                type="button"
-                disabled={busy}
-                onClick={() => setFlow({ kind: 'replace' })}
-              >
-                <KeyRound size={14} aria-hidden="true" />
-                Replace…
-              </button>
-            </SettingRow>
-          </Group>
-        )
-      ) : null}
-
-      <PreviousKeySets previous={account.previous} />
-      <div className="settings-button-row">
-        <button
-          className="secondary"
-          type="button"
-          disabled={busy}
-          onClick={() => void onReload()}
-        >
-          <RefreshCcw size={13} aria-hidden="true" />
-          Refresh
-        </button>
-        {thisDevice && account.deviceStatus === 'removed' ? (
-          <button
-            className="secondary"
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                await forgetThisDevice(ctx);
-                return loadEncryption(ctx);
-              })
-            }
-          >
-            Forget this device’s keys
-          </button>
-        ) : null}
-      </div>
+      {certified || account.previous.length > 0 ? (
+        <MoreGroups title="Recovery and beta tools">
+          {certified ? (
+            <EncryptedProjectRecovery
+              ctx={ctx}
+              account={account}
+              canUsePasskey={canUsePasskey}
+            />
+          ) : null}
+          {advanced}
+          <PreviousKeySets previous={account.previous} />
+        </MoreGroups>
+      ) : (
+        advanced
+      )}
     </>
   );
 }
@@ -839,7 +931,7 @@ function EnrollPanel({
         {step.step === 'waiting' ? (
           <SettingRow
             title="Scan this code"
-            hint="On a device that is already unlocked, open Settings › Encryption and approve this one: scan the code, type it, or choose Compare codes."
+            hint="On an unlocked device, open Settings › Encryption and scan it, or choose Compare codes."
           >
             <ScanCodeDisplay code={step.scanCode} />
           </SettingRow>
@@ -911,7 +1003,7 @@ function EnrollPanel({
       {account.device?.approval ? (
         <SettingRow
           title="Continue your approval request"
-          hint="Resume the request already started on this device."
+          hint="Pick up where this device left off."
         >
           <button
             className="secondary"
@@ -935,7 +1027,7 @@ function EnrollPanel({
       ) : null}
       <SettingRow
         title="Approve from another device"
-        hint="Show a code to scan or compare on a device that is already unlocked."
+        hint="Recommended. An unlocked device scans or compares a code."
       >
         <button
           className="primary"
@@ -954,7 +1046,7 @@ function EnrollPanel({
       </SettingRow>
       <SettingRow
         title="Use your recovery key"
-        hint="Unlocks and certifies this device on its own. Approve from another unlocked device when possible: it also confirms the latest device list. A recovery key alone cannot prove the list is up to date on a fresh browser."
+        hint="Works alone, but cannot confirm your device list is current."
       >
         <button
           className="secondary"
@@ -1018,16 +1110,9 @@ function ApprovalsPanel({
     };
   }, [ctx]);
 
+  if (approvals.length === 0) return null;
   return (
-    <Group title="Approve a new device">
-      {approvals.length === 0 ? (
-        <SettingRow
-          title="Approval requests"
-          hint="A device that asks for approval appears here. It needs your account to be signed in on it first."
-        >
-          <Status>None waiting</Status>
-        </SettingRow>
-      ) : null}
+    <Group title="Devices asking to join" note={`${approvals.length} waiting`}>
       {approvals.map((approval) =>
         approving?.approval.id === approval.id ? (
           <ApproveDevice
@@ -1170,7 +1255,7 @@ function ApproveDevice({
       {mode === 'scan' ? (
         <SettingRow
           title="Code from the new device"
-          hint="Scan the QR code it shows, or type the code under it."
+          hint="Scan its QR code, or type the code under it."
         >
           <div className="encryption-scan-entry">
             <input
@@ -1203,7 +1288,7 @@ function ApproveDevice({
       )}
       <SettingRow
         title="Certify the new device"
-        hint="Optional. Without it the device can read but not sign until it certifies itself."
+        hint="Optional. Without it, the device is read-only."
       >
         <input
           className="settings-text-wide"
@@ -1390,13 +1475,16 @@ function RecoveryKeyFlow({
     });
 
   return (
-    <Group title={title}>
+    <Group
+      title={title}
+      note={confirming ? 'Step 2 of 2 · Confirm' : 'Step 1 of 2 · Save'}
+    >
       {intro ? <Notice tone="warning">{intro}</Notice> : null}
       {!confirming ? (
         <>
           <SettingRow
             title="Your recovery key"
-            hint="Your only way back if you lose every device. OpenZCAD cannot recover it, and support cannot see your projects."
+            hint="Your only way back if you lose every device. Nobody, including OpenZCAD, can recover it."
           >
             <div className="encryption-recovery">
               <code className="encryption-code" aria-label="Recovery key">
@@ -1424,13 +1512,12 @@ function RecoveryKeyFlow({
           </SettingRow>
           <SettingRow
             title="I saved my recovery key"
-            hint="In a password manager or on paper, somewhere other than this device."
+            hint="In a password manager or on paper, not only on this device."
           >
-            <input
-              type="checkbox"
+            <Toggle
               checked={saved}
-              aria-label="I saved my recovery key"
-              onChange={(event) => setSaved(event.target.checked)}
+              label="I saved my recovery key"
+              onChange={setSaved}
             />
           </SettingRow>
           <div className="settings-button-row">
@@ -1455,7 +1542,7 @@ function RecoveryKeyFlow({
         <>
           <SettingRow
             title="Confirm recovery key"
-            hint="Type or paste the key you saved."
+            hint="Paste or type the key you saved."
           >
             <input
               className="settings-text-wide"
@@ -1479,7 +1566,7 @@ function RecoveryKeyFlow({
           {askOldKey ? (
             <SettingRow
               title="Current recovery key"
-              hint="Optional. If you still have it, it signs the hand-over to your new identity; otherwise this device signs it."
+              hint="Optional. Signs the hand-over to your new key."
             >
               <input
                 className="settings-text-wide"
@@ -1539,7 +1626,7 @@ function RecoveryKeyEntry({
       {intro ? <Notice tone="info">{intro}</Notice> : null}
       <SettingRow
         title="Recovery key to confirm"
-        hint="Opens your identity key for this one change, then it is forgotten."
+        hint="Used for this change only, then forgotten."
       >
         <input
           className="settings-text-wide"
@@ -1605,7 +1692,7 @@ function RecoveryKeyEntry({
 function PreviousKeySets({ previous }: { previous: AccountView['previous'] }) {
   if (previous.length === 0) return null;
   return (
-    <Group title="Devices from replaced keys" note="Not trusted; approve again">
+    <Group title="Devices from replaced keys" note="Approve again to trust">
       {previous.flatMap((set) =>
         set.devices.map((device) => (
           <SettingRow

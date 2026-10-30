@@ -189,27 +189,23 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Keys, devices, and recovery',
     group: 'Cloud and data',
     settings: [
-      'End-to-end encryption',
       'Your fingerprint',
-      'This device',
-      'Certify with your recovery key',
       'Enter your recovery key',
       'Use your passkey',
+      'Add a device',
       'Revoke read-only access',
       'Revoke read-only devices',
+      'Replace recovery key',
       'Device key',
       'Recovery key',
       'Passkeys',
       'Add a passkey',
       'Remove passkey',
-      'Your new recovery key',
-      'Replace recovery key',
       'Scan this code',
       'Compare these digits',
       'Continue your approval request',
       'Approve from another device',
       'Use your recovery key',
-      'Approval requests',
       'Code from the new device',
       'Compare the codes',
       'Certify the new device',
@@ -229,7 +225,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'passkey',
       'prf',
       'fingerprint',
-      'recovery'
+      'recovery',
+      'end-to-end encryption',
+      'certify',
+      'approval requests'
     ]
   },
   {
@@ -268,16 +267,15 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Privacy policy, analytics and data deletion',
     group: 'Cloud and data',
     settings: [
-      'Privacy policy',
       'Usage analytics',
       'Diagnostic report',
       'Cloud account statistics',
+      'Privacy policy',
       'Download your data',
+      'Include original import files',
+      'Include device recovery data',
       'Local project data',
-      'Cloud data',
-      'Delete all cloud projects',
-      'Delete cloud profile',
-      'Delete all cloud data'
+      'Cloud data'
     ],
     searchTerms: [
       'privacy policy',
@@ -291,7 +289,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'delete projects',
       'erase cloud',
       'remove profile',
-      'permanent deletion'
+      'permanent deletion',
+      'delete all cloud data',
+      'delete cloud profile'
     ]
   },
   {
@@ -300,6 +300,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Editing mode, diagnostics, and reset',
     settings: [
       'Direct manipulation',
+      'Frame rate overlay',
       'Geometry kernel',
       'Kernel version',
       'Document authority',
@@ -315,6 +316,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'export formats',
       'face drag',
       'offset handle',
+      'fps',
+      'frames per second',
+      'performance',
       'reset settings',
       'restore defaults'
     ]

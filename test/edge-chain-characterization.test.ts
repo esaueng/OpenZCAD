@@ -22,7 +22,9 @@
 import { describe, expect, it } from 'vitest';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { brepEdgeCurve } from '@openzcad/kernel-adapter/exact';
+import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
+  closedCircleLoopFrom,
   edgeRunFrom,
   type EdgeChainOptions
 } from '../packages/viewport/src/pick/edgeChain';
@@ -410,6 +412,69 @@ describe('what the edge walk does', { timeout: 120_000 }, () => {
       .filter((edge) => edge.points.length / 3 > 2)
       .map((edge) => edge.points.length / 3);
     expect(rimPointCounts).toEqual([113, 113]);
+  });
+
+  it('takes a whole rim that the kernel holds as several arcs', () => {
+    // Two half revolutions fused keep every circle in pieces — four quarter
+    // arcs here — the topology split-circle STEP imports arrive with. A click
+    // on any piece takes them all, and only them; the lines down the wall
+    // where the halves meet stay single.
+    const profile = [
+      [0, 0],
+      [9, 0],
+      [9, 26],
+      [0, 26]
+    ];
+    const half = () =>
+      kernel.revolve(
+        kernel.makePlanarFaceFromWire(
+          kernel.makeWire(
+            Uint32Array.from(
+              profile.map(([r, z], index) => {
+                const next = profile[(index + 1) % profile.length]!;
+                return kernel.makeLineEdge(r!, 0, z!, next[0]!, 0, next[1]!);
+              })
+            ),
+            true
+          )
+        ),
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        180
+      );
+    const fused = kernel.fuse(
+      half(),
+      kernel.copyAndTransformSolid(
+        half(),
+        transformMatrix({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 180 })
+      )
+    );
+    const edges = publishedEdges(kernel, [fused]);
+    const rimArcs = atHeight(edges, 26).filter(
+      (edge) => edge.curve?.type === 'CIRCLE'
+    );
+    expect(rimArcs).toHaveLength(4);
+    for (const arc of rimArcs) {
+      expect(closedCircleLoopFrom(edges, arc.topologyId).sort()).toEqual(
+        rimArcs.map((candidate) => candidate.topologyId).sort()
+      );
+      // Without the exact record, as a B-spline import would publish it.
+      expect(
+        closedCircleLoopFrom(
+          edges.map(({ curve: _curve, ...rest }) => rest),
+          arc.topologyId
+        )
+      ).toHaveLength(4);
+    }
+    for (const line of edges.filter((edge) => edge.curve?.type === 'LINE')) {
+      expect(closedCircleLoopFrom(edges, line.topologyId)).toEqual([
+        line.topologyId
+      ]);
+    }
   });
 
   it('takes a run of eight on the body the viewport e2e double-clicks', () => {

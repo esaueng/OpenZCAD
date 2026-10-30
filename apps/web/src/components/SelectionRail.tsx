@@ -1,6 +1,7 @@
 import {
   Anchor,
   ArrowUpFromDot,
+  BrushCleaning,
   Diameter,
   Eraser,
   Info,
@@ -36,6 +37,7 @@ const ACTION_ICONS: Record<SelectionActionId, ReactNode> = {
   'resize-radial-face': <Diameter size={16} aria-hidden="true" />,
   'edit-fillet': TOOL_META.fillet.icon,
   'remove-fillet': <Eraser size={16} aria-hidden="true" />,
+  'remove-all-fillets': <BrushCleaning size={16} aria-hidden="true" />,
   'remove-face-feature': <Eraser size={16} aria-hidden="true" />,
   'sketch-on-face': TOOL_META.sketch.icon,
   fillet: TOOL_META.fillet.icon,

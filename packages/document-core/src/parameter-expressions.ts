@@ -91,6 +91,7 @@ function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
       fields(data, ['newRadius'], rewrite, 'length');
       return;
     case 'remove-face-feature':
+    case 'remove-blends':
       return;
     default:
       data satisfies never;

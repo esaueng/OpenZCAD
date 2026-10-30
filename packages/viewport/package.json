@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./edge-chain": "./src/pick/edgeChain.ts",
     "./input-bindings": "./src/input/bindings.ts",
     "./move-transform": "./src/gizmo/moveTransform.ts",
     "./types": "./src/types.ts"

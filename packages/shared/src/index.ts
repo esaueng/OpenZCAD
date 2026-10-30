@@ -595,7 +595,32 @@ export type DirectEditOperation =
        * leaves the source solid unchanged until the parameter moves.
        */
       parameterBinding?: true;
+    }
+  | {
+      /**
+       * Remove every analytic blend band the body carried when the edit was
+       * authored, restoring each sharp edge. The face fields name one of the
+       * bands (the seed, resolved like any other direct edit); the rest are
+       * found by their exact carriers rather than face hashes, because
+       * removing one band changes its neighbours' boundaries while every
+       * other carrier stays put.
+       */
+      kind: 'remove-blends';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      /** Every band to remove, the seed's carrier included. */
+      blends: RecordedBlendCarrier[];
     };
+
+/** Exact analytic carrier of one blend band, as `resize-blend` records it. */
+export interface RecordedBlendCarrier {
+  surfaceClass: 'torus' | 'cylinder';
+  radius: number;
+  /** Torus centre or a point on the cylinder axis. */
+  center: Vector3;
+  /** Unoriented unit carrier axis. */
+  axis: Vector3;
+}
 
 export interface BaseNode {
   id: EntityId;
@@ -4259,6 +4284,11 @@ export interface AppSettings {
   experiments: {
     /** Selection-first direct manipulation: click geometry, drag handles. */
     directManipulation: boolean;
+    /**
+     * A frame-rate readout in the viewport's top-left corner: frames per
+     * second, frame time and draw load, for diagnosing a slow viewer.
+     */
+    frameRateOverlay: boolean;
   };
   /**
    * The user's shortcut remaps, by command id; a command without an entry
@@ -4384,7 +4414,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     customInstructions: ''
   },
   experiments: {
-    directManipulation: true
+    directManipulation: true,
+    frameRateOverlay: false
   },
   keymap: {
     overrides: {}

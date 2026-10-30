@@ -358,6 +358,11 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       directManipulation: boolean(
         experiments.directManipulation,
         defaults.experiments.directManipulation
+      ),
+      // Absent from settings written before it existed.
+      frameRateOverlay: boolean(
+        experiments.frameRateOverlay,
+        defaults.experiments.frameRateOverlay
       )
     },
     keymap: {

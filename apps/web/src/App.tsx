@@ -675,6 +675,7 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
@@ -707,6 +708,7 @@ import {
 import {
   blendRadialDirection,
   canRemoveImportedBlendFace,
+  importedBlendCarriers,
   importedBlendSnapshot,
   newBlendFaceSelections,
   resolveFilletBlendFace,
@@ -9238,8 +9240,7 @@ export function App() {
           z: (box.min.z + box.max.z) / 2
         }
       : { x: 0, y: 0, z: 0 };
-    // As the edge's own blend handle stands (`edgeHandlePlacement`): the
-    // polyline's middle sample, pointing away from the body's middle.
+    // The polyline's middle sample, pointing away from the body's middle.
     const at = Math.floor(points.length / 3 / 2) * 3;
     const middle =
       points.length >= 6
@@ -16553,6 +16554,25 @@ export function App() {
     );
   }
 
+  /**
+   * What a click on `selection` picks: the whole circle when it is one arc of
+   * a circle the body holds in pieces (see `closedCircleLoopSelections`),
+   * otherwise the selection itself.
+   */
+  function wholeCircleOf(selection: TopologySelection): TopologySelection[] {
+    const edges =
+      selection.kind === 'edge'
+        ? representations[selection.bodyId]?.topology?.edges
+        : undefined;
+    if (!edges || !selection.topologyId) return [selection];
+    const loop = closedCircleLoopSelections(
+      edges,
+      selection.topologyId,
+      selection.bodyId
+    );
+    return loop.length > 1 ? loop : [selection];
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -16565,8 +16585,28 @@ export function App() {
       // under it.
       const command = inPlaceRef.current;
       if (selection?.kind === 'edge' && command.spec?.edgeMode) {
-        const edge = inPlaceEdgeForSelection(selection);
-        return edge ? command.pickEdge(edge) : true;
+        const pieces = wholeCircleOf(selection);
+        if (pieces.length === 1) {
+          const edge = inPlaceEdgeForSelection(selection);
+          return edge ? command.pickEdge(edge) : true;
+        }
+        const picks: EdgePick[] = [];
+        for (const piece of pieces) {
+          const edge = inPlaceEdgeForSelection(piece);
+          if (!edge) return true;
+          picks.push(edge);
+        }
+        // The whole circle goes in or comes out together, as one edge would.
+        const held = command.slots.edges.filter(
+          (edge) => edge.bodyId === picks[0]!.bodyId
+        );
+        const pickedHashes = new Set(picks.map((edge) => edge.hash));
+        const rest = held.filter((edge) => !pickedHashes.has(edge.hash));
+        return command.setEdges(
+          held.some((edge) => edge.hash === picks[0]!.hash)
+            ? rest
+            : [...rest, ...picks]
+        );
       }
       // A datum's sources: a face is a plane or a cylinder's axis, an edge
       // is its nearer end or (for an Axis) the edge itself.
@@ -17088,6 +17128,9 @@ export function App() {
         ...(importedBlend
           ? {
               canResizeImportedBlend: true,
+              removableBlendCount: importedBlendCarriers(
+                representations[selection.bodyId]?.topology?.faces ?? []
+              ).length,
               blendSurfaceClass: importedBlend.surfaceClass,
               blendCenter: [
                 importedBlend.center.x,
@@ -17174,25 +17217,37 @@ export function App() {
       const sameBody = selectedEdges.every(
         (edge) => edge.bodyId === selection.bodyId
       );
-      if (appSettings.experiments.directManipulation) {
-        // Selection-first: picking edges arms the fillet/chamfer handle.
-        dispatchInteraction({
-          type: 'select-edge',
-          selection,
-          additive: additive && sameBody
-        });
-      }
+      const pieces = wholeCircleOf(selection);
+      const pieceIds = new Set(pieces.map((piece) => piece.topologyId));
       const alreadySelected = selectedEdges.some(
         (edge) => edge.topologyId === selection.topologyId
       );
-      const nextEdges =
-        additive && sameBody
-          ? alreadySelected
-            ? selectedEdges.filter(
-                (edge) => edge.topologyId !== selection.topologyId
-              )
-            : [...selectedEdges, selection]
-          : [selection];
+      const toggling = additive && sameBody;
+      if (appSettings.experiments.directManipulation) {
+        // Selection-first: picking edges arms the fillet/chamfer handle. The
+        // machine toggles by hash, so a toggle sends only the pieces whose
+        // state it changes.
+        const isSelected = (piece: TopologySelection) =>
+          selectedEdges.some((edge) => edge.topologyId === piece.topologyId);
+        const changing = toggling
+          ? pieces.filter((piece) => isSelected(piece) === alreadySelected)
+          : pieces;
+        changing.forEach((piece, index) => {
+          dispatchInteraction({
+            type: 'select-edge',
+            selection: piece,
+            additive: toggling || index > 0
+          });
+        });
+      }
+      const unchanged = selectedEdges.filter(
+        (edge) => !pieceIds.has(edge.topologyId)
+      );
+      const nextEdges = toggling
+        ? alreadySelected
+          ? unchanged
+          : [...unchanged, ...pieces]
+        : pieces;
       setSelectedEdges(nextEdges);
       setSelectedBodyIds([selection.bodyId]);
       setSelectedTopology(
@@ -23238,7 +23293,11 @@ export function App() {
         return null;
       }
       return commandFactories.directEditBody({
-        name: 'Resize Imported Blend',
+        // Remove Fillet commits radius zero; history should say so.
+        name:
+          typeof size === 'number' && size <= 1e-9
+            ? 'Remove Imported Blend'
+            : 'Resize Imported Blend',
         targetBodyId: target.bodyId as BodyId,
         operation: {
           kind: 'resize-blend',
@@ -23436,6 +23495,42 @@ export function App() {
       },
       ...affectedFeatureTargets(base, feature.featureId).slice(1)
     ];
+  }
+
+  /**
+   * Strip every analytic round off an imported body in one direct edit. The
+   * picked band seeds it, so the edit is anchored like any other; the rest
+   * are recorded by carrier and found again after each removal.
+   */
+  function handleRemoveAllImportedBlends(target: FaceTarget) {
+    if (!requireDisplayedGeometryComplete()) {
+      return;
+    }
+    const bodyId = target.bodyId as BodyId;
+    const faces =
+      managerRef.current?.document.derived.bodyRepresentations[bodyId]?.topology
+        ?.faces;
+    const blends = faces ? importedBlendCarriers(faces) : [];
+    if (target.hash === undefined || blends.length === 0) {
+      return;
+    }
+    edgePreview.stop();
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: 'Remove All Imported Blends',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'remove-blends',
+          faceHash: target.hash,
+          ...(target.reference ? { faceReference: target.reference } : {}),
+          blends
+        }
+      }),
+      bodyId,
+      `Removed ${blends.length} imported ${blends.length === 1 ? 'blend' : 'blends'}.`,
+      0,
+      () => edgePreview.clear()
+    );
   }
 
   /** Commit a native history fillet or an exact imported-band direct edit. */
@@ -23917,6 +24012,7 @@ export function App() {
         action === 'fillet' ||
         action === 'chamfer' ||
         action === 'remove-fillet' ||
+        action === 'remove-all-fillets' ||
         action === 'remove-face-feature') &&
       !requireExactGeometryReady()
     ) {
@@ -23932,6 +24028,10 @@ export function App() {
       interaction.op === 'edit-fillet'
     ) {
       handleFilletFaceCommit(0);
+      return;
+    }
+    if (action === 'remove-all-fillets' && interaction.mode === 'face') {
+      handleRemoveAllImportedBlends(interaction.target);
       return;
     }
     if (
@@ -28628,6 +28728,7 @@ export function App() {
                 : selectedEdges
             }
             pickListEnabled={appSettings.experiments.directManipulation}
+            frameRateOverlay={appSettings.experiments.frameRateOverlay}
             settings={viewerSettings}
             fitSignal={fitSignal}
             autoFrame={autoFrame}
@@ -28806,6 +28907,16 @@ export function App() {
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
+            onToggleEdgeOp={() => {
+              if (
+                interaction.mode === 'edges' &&
+                interaction.phase !== 'validating'
+              ) {
+                handleSelectionAction(
+                  interaction.op === 'fillet' ? 'chamfer' : 'fillet'
+                );
+              }
+            }}
             onDirectManipulationChange={(dragging, source) => {
               if (source === 'move') {
                 return;

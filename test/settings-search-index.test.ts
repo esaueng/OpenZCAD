@@ -65,6 +65,7 @@ function componentTitles(name: string): Map<string, string[]> {
 
 const SPLICED = new Map([
   ...componentTitles('AnalyticsConsent.tsx'),
+  ...componentTitles('DataDownload.tsx'),
   ...componentTitles('EncryptionSettings.tsx')
 ]);
 

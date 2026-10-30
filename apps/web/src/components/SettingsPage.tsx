@@ -374,6 +374,90 @@ const CREDENTIAL_OPTIONS: readonly SegmentOption<
   { value: 'personal', label: 'Personal token' }
 ];
 
+const DELETION_OPTIONS: readonly SegmentOption<AccountDeletionScope>[] = [
+  { value: 'projects', label: 'Projects' },
+  { value: 'profile', label: 'Profile' },
+  { value: 'all', label: 'Everything' }
+];
+
+/** What each deletion removes, so the choice explains itself as it changes. */
+const DELETION_SCOPES: Record<
+  AccountDeletionScope,
+  { title: string; hint: string; action: string; needsProjects: boolean }
+> = {
+  projects: {
+    title: 'Delete all cloud projects',
+    hint: 'Every project you own, with its revisions and files. Your profile stays.',
+    action: 'Delete projects',
+    needsProjects: true
+  },
+  profile: {
+    title: 'Delete cloud profile',
+    hint: 'Your profile, synced settings, AI credential and sessions. Projects stay, owned anonymously.',
+    action: 'Delete profile',
+    needsProjects: false
+  },
+  all: {
+    title: 'Delete all cloud data',
+    hint: 'Profile and every project. Collaborators lose access.',
+    action: 'Delete all data',
+    needsProjects: true
+  }
+};
+
+/**
+ * Settings › Privacy & data › Delete cloud data: one choice of what to delete
+ * and one button, rather than three rows of near-identical warnings. The
+ * dialog behind the button still confirms before anything is removed.
+ */
+function CloudDeletion({
+  health,
+  busy,
+  onDelete
+}: {
+  health: HealthResponse | null;
+  busy: boolean;
+  onDelete(scope: AccountDeletionScope): void;
+}) {
+  const [scope, setScope] = useState<AccountDeletionScope>('projects');
+  const chosen = DELETION_SCOPES[scope];
+  const serverReady = health?.accountErasureReady === true;
+  const ready =
+    serverReady &&
+    (!chosen.needsProjects || health?.projectErasureReady === true);
+  return (
+    <Group title="Delete cloud data" tone="danger">
+      {!serverReady ? (
+        <Notice>Cloud data deletion isn’t available on this server yet.</Notice>
+      ) : !ready ? (
+        <Notice>
+          Project deletion is unavailable until storage cleanup is ready.
+          Profile-only deletion remains available.
+        </Notice>
+      ) : null}
+      <SettingRow title="What to delete">
+        <Segmented
+          label="What to delete"
+          value={scope}
+          options={DELETION_OPTIONS}
+          onChange={(next) => setScope(next)}
+        />
+      </SettingRow>
+      <SettingRow title={chosen.title} hint={`${chosen.hint} Can’t be undone.`}>
+        <button
+          className="secondary danger"
+          type="button"
+          disabled={busy || !ready}
+          onClick={() => onDelete(scope)}
+        >
+          <Trash2 size={14} aria-hidden="true" />
+          {chosen.action}
+        </button>
+      </SettingRow>
+    </Group>
+  );
+}
+
 function providerDefaults(provider: AppSettings['assistant']['provider']) {
   if (provider === 'openai') {
     return { model: 'gpt-6-luna', baseUrl: '' };
@@ -2405,7 +2489,7 @@ export function SettingsPage({
             encryptionAvailable && (
               <Section
                 title="Encryption"
-                intro="Beta. End-to-end encryption for cloud projects. The server stores your account keys only wrapped. Existing projects can be encrypted after setup."
+                intro="Beta. Encrypted cloud projects can be read only on your devices."
               >
                 <ErrorBoundary label="Encryption settings">
                   <Suspense
@@ -2422,11 +2506,22 @@ export function SettingsPage({
             )}
 
           {active === 'privacy' && anyMatch && (
-            <Section title="Privacy & data" intro="What leaves this device.">
-              <Group title="Policy">
+            <Section
+              title="Privacy & data"
+              intro="What leaves this device, and how to take it back."
+            >
+              <Group title="Analytics">
+                <AnalyticsConsent />
+                {session && !desktopApp ? (
+                  <CloudStatisticsConsent
+                    key={session.userId}
+                    accountKey={session.userId}
+                    cloudEnabled={cloudFunctionsEnabled}
+                  />
+                ) : null}
                 <SettingRow
                   title="Privacy policy"
-                  hint="What the hosted service collects, stores and shares."
+                  hint="What the hosted service collects and shares."
                 >
                   <ExternalAnchor
                     className="secondary"
@@ -2437,102 +2532,36 @@ export function SettingsPage({
                   </ExternalAnchor>
                 </SettingRow>
               </Group>
-              <Group title="Analytics">
-                <AnalyticsConsent />
-                {session && !desktopApp ? (
-                  <CloudStatisticsConsent
-                    key={session.userId}
-                    accountKey={session.userId}
-                    cloudEnabled={cloudFunctionsEnabled}
-                  />
-                ) : null}
-              </Group>
               <Group title="Your data">
-                <SettingRow
-                  title="Download your data"
-                  hint={
-                    session && cloudFunctionsEnabled
-                      ? 'Local and cloud projects, history, files, settings, and profile. Unencrypted ZIP; up to 512 MB.'
-                      : 'Device projects, files, and settings in an unencrypted ZIP. Sign in for cloud data. Up to 512 MB.'
-                  }
-                >
-                  <DataDownload
-                    settings={settings}
-                    session={session}
-                    cloudFunctionsEnabled={cloudFunctionsEnabled}
-                    busy={busy}
-                  />
-                </SettingRow>
+                <DataDownload
+                  settings={settings}
+                  session={session}
+                  cloudFunctionsEnabled={cloudFunctionsEnabled}
+                  busy={busy}
+                />
                 <SettingRow
                   title="Local project data"
                   hint={
                     session
-                      ? 'Stays in this browser; delete it from the Trash on the start screen. The cloud deletions below never touch it.'
-                      : 'Stays in this browser; delete it from the Trash on the start screen.'
+                      ? 'Stays in this browser until you empty it from Trash. Cloud deletion never touches it.'
+                      : 'Stays in this browser until you empty it from Trash.'
                   }
-                />
+                >
+                  <Status>This device</Status>
+                </SettingRow>
                 {session ? null : (
                   <SettingRow
                     title="Cloud data"
-                    hint="Sign in to review or delete cloud data."
+                    hint="Sign in to download or delete cloud data."
                   />
                 )}
               </Group>
               {session ? (
-                <Group title="Delete cloud data" tone="danger">
-                  {health?.accountErasureReady !== true ? (
-                    <Notice>
-                      Cloud data deletion isn’t available on this server yet.
-                    </Notice>
-                  ) : health?.projectErasureReady !== true ? (
-                    <Notice>
-                      Project deletion is unavailable until storage cleanup is
-                      ready. Profile-only deletion remains available.
-                    </Notice>
-                  ) : null}
-                  <SettingRow
-                    title="Delete all cloud projects"
-                    hint="Every project you own, with its revisions and files. Your profile stays."
-                  >
-                    <button
-                      className="secondary danger"
-                      type="button"
-                      disabled={busy || health?.projectErasureReady !== true}
-                      onClick={() => setDeletionScope('projects')}
-                    >
-                      <Trash2 size={14} aria-hidden="true" />
-                      Delete projects
-                    </button>
-                  </SettingRow>
-                  <SettingRow
-                    title="Delete cloud profile"
-                    hint="Your email profile, synced settings, AI credential, and sessions. Projects stay, owned anonymously."
-                  >
-                    <button
-                      className="secondary danger"
-                      type="button"
-                      disabled={busy || health?.accountErasureReady !== true}
-                      onClick={() => setDeletionScope('profile')}
-                    >
-                      <Trash2 size={14} aria-hidden="true" />
-                      Delete profile
-                    </button>
-                  </SettingRow>
-                  <SettingRow
-                    title="Delete all cloud data"
-                    hint="Profile and every project. Collaborators lose access. Can’t be undone."
-                  >
-                    <button
-                      className="secondary danger"
-                      type="button"
-                      disabled={busy || health?.projectErasureReady !== true}
-                      onClick={() => setDeletionScope('all')}
-                    >
-                      <Trash2 size={14} aria-hidden="true" />
-                      Delete all data
-                    </button>
-                  </SettingRow>
-                </Group>
+                <CloudDeletion
+                  health={health}
+                  busy={busy}
+                  onDelete={setDeletionScope}
+                />
               ) : null}
             </Section>
           )}
@@ -2540,7 +2569,7 @@ export function SettingsPage({
           {active === 'advanced' && anyMatch && (
             <Section
               title="Advanced"
-              intro="Editing fallback, build details, and reset."
+              intro="Editing fallback, diagnostics, build details, and reset."
             >
               <Group title="Editing">
                 <SettingRow
@@ -2555,6 +2584,25 @@ export function SettingsPage({
                         experiments: {
                           ...settings.experiments,
                           directManipulation
+                        }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
+              <Group title="Diagnostics">
+                <SettingRow
+                  title="Frame rate overlay"
+                  hint="Frames per second, frame time, render CPU time and draw load in the viewport’s top-left corner."
+                >
+                  <Toggle
+                    checked={settings.experiments.frameRateOverlay}
+                    label="Frame rate overlay"
+                    onChange={(frameRateOverlay) =>
+                      patch({
+                        experiments: {
+                          ...settings.experiments,
+                          frameRateOverlay
                         }
                       })
                     }

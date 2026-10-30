@@ -944,6 +944,10 @@ function applyDirectEdit(
     throw new Error(
       'OCCT parity reference does not implement imported blend resizing.'
     );
+  } else if (operation.kind === 'remove-blends') {
+    throw new Error(
+      'OCCT parity reference does not implement imported blend removal.'
+    );
   } else if (
     operation.kind === 'resize-imported-blind-hole' ||
     operation.kind === 'resize-imported-counterbore' ||

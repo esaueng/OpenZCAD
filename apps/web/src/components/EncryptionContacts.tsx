@@ -180,14 +180,14 @@ export function EncryptionContacts({
               ) : undefined
             }
           >
-            No other device of yours has confirmed this device’s contacts list,
-            so people you verified elsewhere show as seen here. Confirm it from
-            another of your devices, or compare codes with them again.
+            No other device of yours has confirmed this contacts list yet, so
+            people you verified elsewhere show as seen. Confirm it from another
+            of your devices.
           </Notice>
         ) : null}
         <SettingRow
           title="Your contact code"
-          hint="People who verify you compare this with you. It changes when you add or remove a device."
+          hint="Read it to people who verify you. Changes with your devices."
         >
           {own ? (
             <ContactCode
@@ -200,7 +200,7 @@ export function EncryptionContacts({
         {book && book.contacts.length === 0 ? (
           <SettingRow
             title="No contacts yet"
-            hint="People you share a project or an invitation with appear here."
+            hint="People you share with appear here."
           />
         ) : null}
         {book?.contacts.map((contact) => (

@@ -19,9 +19,12 @@ import {
 import { shouldRenderTopologyEdge } from '../scene/objects';
 import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
+import { tangentEdgeIds } from './tangentEdges';
 import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
+  drawFatLineOncePerPixel,
+  fatLineDepthBiasForExtent,
   type FatLineResolution,
   VIEWPORT_RENDER_ORDER
 } from './scene';
@@ -46,6 +49,12 @@ interface EdgeBatchUserData {
   edgeBatch?: BodyEdgeOverlay;
 }
 
+/** One resting batch's segments, and the edge PickService resolves each to. */
+interface IdleBatch {
+  positions: number[];
+  ownership: EdgeSegmentOwner[];
+}
+
 export interface BatchedEdgeTarget {
   batch: BodyEdgeOverlay;
   owner: EdgeSegmentOwner;
@@ -56,6 +65,7 @@ const FACE_BOUNDARY_SELECTED_COLOR = SELECTION_SEMANTICS.selected.boundary;
 const FACE_BOUNDARY_SELECTED_WIDTH = SELECTION_SEMANTICS.selected.boundaryWidth;
 const BODY_SELECTED_EDGE_WIDTH = SELECTION_SEMANTICS.selected.bodyEdgeWidth;
 const HIDDEN_EDGE_OPACITY = 0.34;
+const TANGENT_EDGE_OPACITY = SELECTION_SEMANTICS.idle.tangentEdgeOpacity;
 
 function edgeKey(owner: Pick<EdgeSegmentOwner, 'bodyId' | 'topologyId'>) {
   return `${owner.bodyId}:${owner.topologyId}`;
@@ -120,6 +130,21 @@ function replacePositions(line: LineSegments2, positions: readonly number[]) {
   line.geometry.computeBoundingBox();
   line.geometry.computeBoundingSphere();
   line.visible = positions.length > 0;
+}
+
+/** The largest axis span of every sampled edge point. */
+function edgePointExtent(edges: readonly { points: readonly number[] }[]) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const edge of edges) {
+    for (let index = 0; index < edge.points.length; index += 1) {
+      const axis = index % 3;
+      const value = edge.points[index]!;
+      if (value < min[axis]!) min[axis] = value;
+      if (value > max[axis]!) max[axis] = value;
+    }
+  }
+  return Math.max(0, ...[0, 1, 2].map((axis) => max[axis]! - min[axis]!));
 }
 
 function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>) {
@@ -246,14 +271,18 @@ class PresenceTier {
 /**
  * One body's exact edge display.
  *
- * All resting topology edges share `idleEdges`, which caps their resting
- * rendering at one draw call. Hover, committed edge selection, and selected
- * face boundaries use stable normally hidden batches whose geometry attributes
- * are updated in place; changing selection never touches the body's face
- * geometry or materials.
+ * Resting topology edges share two batches, which caps their resting
+ * rendering at two draw calls: `idleEdges` for sharp edges and
+ * `idleTangentEdges` for tangent ones (see `tangentEdgeIds`), which the shaded
+ * view draws quieter because they lie inside what reads as one smooth surface.
+ * Hover, committed edge selection, and selected face boundaries use stable
+ * normally hidden batches whose geometry attributes are updated in place;
+ * changing selection never touches the body's face geometry or materials.
  */
 export class BodyEdgeOverlay extends THREE.Group {
   readonly idleEdges: LineSegments2;
+  /** Tangent edges: a fillet's rims. Fainter than `idleEdges` when shaded. */
+  readonly idleTangentEdges: LineSegments2;
   readonly hoverEdges: LineSegments2;
   readonly hoverHiddenEdges: LineSegments2;
   readonly selectedEdges: LineSegments2;
@@ -262,8 +291,10 @@ export class BodyEdgeOverlay extends THREE.Group {
   readonly selectedFaceBoundaryHiddenEdges: LineSegments2;
   /** Seam-only fallback so an all-seam body still draws in wireframe. */
   readonly seamEdges: LineSegments2 | null;
-  /** Raycast segment index to exact topology identity. */
+  /** Raycast segment index in `idleEdges` to exact topology identity. */
   readonly ownershipBySegment: readonly EdgeSegmentOwner[];
+  /** The same for `idleTangentEdges`. */
+  readonly tangentOwnershipBySegment: readonly EdgeSegmentOwner[];
 
   private readonly bodyId: TopologySelection['bodyId'];
   private readonly topology: GeometryBodyRepresentation['topology'];
@@ -284,9 +315,16 @@ export class BodyEdgeOverlay extends THREE.Group {
   /** The X-ray display: translucent faces, every edge drawn. */
   private xrayView = false;
   private bodySelected = false;
+  /** See `fatLineDepthBiasForExtent`: these lines all lie on the body. */
+  private readonly depthBias: number;
 
+  /**
+   * @param body Its `mesh`, when given, is what tells tangent edges from
+   *   sharp ones; without it every edge draws sharp.
+   */
   constructor(
-    body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'>,
+    body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'> &
+      Partial<Pick<GeometryBodyRepresentation, 'mesh'>>,
     resolution?: FatLineResolution
   ) {
     super();
@@ -294,9 +332,16 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.topology = body.topology;
     this.name = 'body-edge-overlay';
     this.userData.bodyId = this.bodyId;
+    this.depthBias = fatLineDepthBiasForExtent(
+      edgePointExtent(body.topology?.edges ?? [])
+    );
 
-    const idlePositions: number[] = [];
-    const ownership: EdgeSegmentOwner[] = [];
+    const tangentIds =
+      body.mesh && body.topology
+        ? tangentEdgeIds(body.mesh, body.topology)
+        : new Set<string>();
+    const sharp: IdleBatch = { positions: [], ownership: [] };
+    const tangent: IdleBatch = { positions: [], ownership: [] };
     // Seams are construction boundaries, not features, so they stay out of the
     // shaded view. But a sphere and a torus have NOTHING else — every edge they
     // own is a seam — so filtering them out left those bodies drawing nothing
@@ -325,34 +370,25 @@ export class BodyEdgeOverlay extends THREE.Group {
         continue;
       }
       this.entriesByKey.set(edgeKey(owner), { owner, positions });
-      idlePositions.push(...positions);
+      const batch = tangentIds.has(edge.topologyId) ? tangent : sharp;
+      batch.positions.push(...positions);
       const segmentCount = positions.length / 6;
       for (let index = 0; index < segmentCount; index += 1) {
-        ownership.push(owner);
+        batch.ownership.push(owner);
       }
     }
-    this.ownershipBySegment = ownership;
+    this.ownershipBySegment = sharp.ownership;
+    this.tangentOwnershipBySegment = tangent.ownership;
 
-    this.idleEdges = createFatLineSegments(
-      idlePositions.length > 0 ? idlePositions : EMPTY_SEGMENT,
-      {
-        color: EDGE_IDLE_COLOR,
-        linewidth: EDGE_IDLE_WIDTH,
-        opacity: EDGE_IDLE_OPACITY,
-        resolution
-      }
+    this.idleEdges = this.createIdleBatch('body-edge', sharp, resolution);
+    this.idleTangentEdges = this.createIdleBatch(
+      'body-edge-tangent',
+      tangent,
+      resolution
     );
-    this.idleEdges.name = 'body-edge';
-    this.idleEdges.renderOrder = VIEWPORT_RENDER_ORDER.BODY_EDGE;
-    this.idleEdges.visible = idlePositions.length > 0;
-    this.idleEdges.userData = {
-      bodyId: body.bodyId,
-      // `prioritizeVisibleEdgeHit` deliberately recognizes this as an edge;
-      // PickService then resolves the individual segment through the batch.
-      topologyKind: 'edge',
-      edgeBatch: this,
-      ownershipBySegment: this.ownershipBySegment
-    };
+    // Drawn translucent in the shaded view, where every segment joint would
+    // otherwise blend twice and bead the line.
+    drawFatLineOncePerPixel(this.idleTangentEdges.material);
 
     this.hoverEdges = this.createOverlay(
       'body-edge-hover',
@@ -410,12 +446,13 @@ export class BodyEdgeOverlay extends THREE.Group {
     // absent from `ownershipBySegment`, so no seam can be mistaken for a
     // feature edge by anything downstream.
     this.seamEdges =
-      idlePositions.length === 0 && seamPositions.length > 0
+      this.entriesByKey.size === 0 && seamPositions.length > 0
         ? createFatLineSegments(seamPositions, {
             color: EDGE_WIREFRAME_COLOR,
             linewidth: EDGE_IDLE_WIDTH,
             opacity: 1,
-            resolution
+            resolution,
+            depthBias: this.depthBias
           })
         : null;
     if (this.seamEdges) {
@@ -450,8 +487,10 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.hoverTier.apply();
     this.selectedTier.apply();
     this.faceBoundaryTier.apply();
+    this.applyIdleStyle();
     this.add(
       this.idleEdges,
+      this.idleTangentEdges,
       this.hoverHiddenEdges,
       this.hoverEdges,
       this.selectedHiddenEdges,
@@ -459,6 +498,35 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.selectedFaceBoundaryHiddenEdges,
       this.selectedFaceBoundaryEdges
     );
+  }
+
+  private createIdleBatch(
+    name: string,
+    batch: IdleBatch,
+    resolution?: FatLineResolution
+  ) {
+    const line = createFatLineSegments(
+      batch.positions.length > 0 ? batch.positions : EMPTY_SEGMENT,
+      {
+        color: EDGE_IDLE_COLOR,
+        linewidth: EDGE_IDLE_WIDTH,
+        opacity: EDGE_IDLE_OPACITY,
+        resolution,
+        depthBias: this.depthBias
+      }
+    );
+    line.name = name;
+    line.renderOrder = VIEWPORT_RENDER_ORDER.BODY_EDGE;
+    line.visible = batch.positions.length > 0;
+    line.userData = {
+      bodyId: this.bodyId,
+      // `prioritizeVisibleEdgeHit` deliberately recognizes this as an edge;
+      // PickService then resolves the individual segment through the batch.
+      topologyKind: 'edge',
+      edgeBatch: this,
+      ownershipBySegment: batch.ownership
+    };
+    return line;
   }
 
   private createOverlay(
@@ -474,10 +542,13 @@ export class BodyEdgeOverlay extends THREE.Group {
       color,
       linewidth,
       opacity: options.opacity ?? 1,
-      resolution
+      resolution,
+      depthBias: this.depthBias
     });
     if (options.depthFunc !== undefined) {
       overlay.material.depthFunc = options.depthFunc;
+      // The x-ray twin is the translucent one; see drawFatLineOncePerPixel.
+      drawFatLineOncePerPixel(overlay.material);
     }
     // The buffer is allocated at full capacity so later updates never
     // reallocate, but an overlay starts empty. Without this the batch reports
@@ -495,9 +566,19 @@ export class BodyEdgeOverlay extends THREE.Group {
     return overlay;
   }
 
-  ownerAtSegment(segmentIndex: number | null | undefined) {
+  /** The edge a raycast hit on one of the idle batches landed on. */
+  ownerAtSegment(
+    segmentIndex: number | null | undefined,
+    batch: THREE.Object3D = this.idleEdges
+  ) {
+    const ownership =
+      batch === this.idleTangentEdges
+        ? this.tangentOwnershipBySegment
+        : batch === this.idleEdges
+          ? this.ownershipBySegment
+          : [];
     return typeof segmentIndex === 'number'
-      ? (this.ownershipBySegment[segmentIndex] ?? null)
+      ? (ownership[segmentIndex] ?? null)
       : null;
   }
 
@@ -594,9 +675,9 @@ export class BodyEdgeOverlay extends THREE.Group {
 
   /**
    * Outlines the whole body when it is a selected body — the input to a
-   * union, subtract, intersect or move. The idle batch is restyled in place
-   * rather than copied into the selected batch, so a 20k-edge import costs
-   * nothing more than three material writes.
+   * union, subtract, intersect or move. The idle batches are restyled in
+   * place rather than copied into the selected batch, so a 20k-edge import
+   * costs nothing more than six material writes.
    */
   setBodySelected(selected: boolean) {
     if (this.bodySelected === selected) {
@@ -624,12 +705,14 @@ export class BodyEdgeOverlay extends THREE.Group {
     ];
     const visible = tiers.map((line) => line.visible);
     for (const line of tiers) line.visible = false;
-    const material = this.idleEdges.material;
-    const idle = {
-      color: material.color.getHex(),
-      linewidth: material.linewidth,
-      opacity: material.opacity
-    };
+    const idle = [this.idleEdges, this.idleTangentEdges].map(
+      ({ material }) => ({
+        material,
+        color: material.color.getHex(),
+        linewidth: material.linewidth,
+        opacity: material.opacity
+      })
+    );
     const bodySelected = this.bodySelected;
     if (bodySelected) {
       this.bodySelected = false;
@@ -640,9 +723,11 @@ export class BodyEdgeOverlay extends THREE.Group {
       tiers.forEach((line, index) => {
         line.visible = visible[index]!;
       });
-      material.color.setHex(idle.color);
-      material.linewidth = idle.linewidth;
-      material.opacity = idle.opacity;
+      for (const { material, color, linewidth, opacity } of idle) {
+        material.color.setHex(color);
+        material.linewidth = linewidth;
+        material.opacity = opacity;
+      }
     };
   }
 
@@ -678,6 +763,7 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.displayMode = mode;
     for (const line of [
       this.idleEdges,
+      this.idleTangentEdges,
       this.hoverEdges,
       this.hoverHiddenEdges,
       this.selectedEdges,
@@ -691,24 +777,37 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.refreshVisibility();
   }
 
+  /**
+   * A tangent edge differs from a sharp one only at rest in the shaded view.
+   * Wireframe and X-ray have no shading to carry the smooth surface, so there
+   * the edges are all of the structure and draw in one ink; a selected body
+   * outlines every edge alike.
+   */
   private applyIdleStyle() {
-    const material = this.idleEdges.material;
-    if (this.bodySelected) {
-      material.color.setHex(EDGE_SELECTED_COLOR);
-      material.linewidth = BODY_SELECTED_EDGE_WIDTH;
-      material.opacity = 1;
-      return;
-    }
     const inked = this.displayMode === 'wireframe' || this.xrayView;
-    material.color.setHex(inked ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR);
-    material.linewidth = EDGE_IDLE_WIDTH;
-    material.opacity = inked ? 1 : EDGE_IDLE_OPACITY;
+    for (const line of [this.idleEdges, this.idleTangentEdges]) {
+      const material = line.material;
+      if (this.bodySelected) {
+        material.color.setHex(EDGE_SELECTED_COLOR);
+        material.linewidth = BODY_SELECTED_EDGE_WIDTH;
+        material.opacity = 1;
+        continue;
+      }
+      material.color.setHex(inked ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR);
+      material.linewidth = EDGE_IDLE_WIDTH;
+      material.opacity = inked
+        ? 1
+        : line === this.idleTangentEdges
+          ? TANGENT_EDGE_OPACITY
+          : EDGE_IDLE_OPACITY;
+    }
   }
 
   /** Keeps all three stable fat-line materials correct after a resize. */
   setResolution(resolution: FatLineResolution) {
     for (const line of [
       this.idleEdges,
+      this.idleTangentEdges,
       this.hoverEdges,
       this.hoverHiddenEdges,
       this.selectedEdges,
@@ -764,6 +863,8 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.visible = this.displayMode === 'wireframe';
     }
     this.idleEdges.visible = showEdges && this.ownershipBySegment.length > 0;
+    this.idleTangentEdges.visible =
+      showEdges && this.tangentOwnershipBySegment.length > 0;
     // Both are gated on presence rather than key count, so a tier's x-ray
     // twin survives its own fade-out, which runs after the keys are gone.
     this.selectedEdges.visible = showEdges && this.selectedTier.drawable;
@@ -781,7 +882,7 @@ export class BodyEdgeOverlay extends THREE.Group {
 }
 
 export function createBodyEdgeOverlay(
-  body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'>,
+  body: ConstructorParameters<typeof BodyEdgeOverlay>[0],
   resolution?: FatLineResolution
 ) {
   return new BodyEdgeOverlay(body, resolution);
@@ -793,7 +894,7 @@ export function batchedEdgeTarget(
   segmentIndex: number | null | undefined
 ): BatchedEdgeTarget | null {
   const batch = (object.userData as EdgeBatchUserData).edgeBatch;
-  const owner = batch?.ownerAtSegment(segmentIndex);
+  const owner = batch?.ownerAtSegment(segmentIndex, object);
   return batch && owner ? { batch, owner } : null;
 }
 

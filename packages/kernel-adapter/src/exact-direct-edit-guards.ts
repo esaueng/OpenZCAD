@@ -266,6 +266,30 @@ export function assertDirectEditOperation(
         throw new Error('Direct-edit parameter binding is invalid.');
       }
       return;
+    case 'remove-blends':
+      if (!Array.isArray(value.blends) || value.blends.length === 0) {
+        throw new Error('Direct-edit blend list must not be empty.');
+      }
+      for (const [index, entry] of (value.blends as unknown[]).entries()) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          throw new Error(`Direct-edit blend ${index + 1} is invalid.`);
+        }
+        const blend = entry as Record<string, unknown>;
+        if (
+          blend.surfaceClass !== 'torus' &&
+          blend.surfaceClass !== 'cylinder'
+        ) {
+          throw new Error('Direct-edit blend surface class is invalid.');
+        }
+        if (assertFiniteDirectEditNumber(blend.radius, 'blend radius') <= 0) {
+          throw new Error(
+            'Direct-edit blend radius must be greater than zero.'
+          );
+        }
+        assertDirectEditVector(blend.center, 'blend center');
+        assertDirectEditVector(blend.axis, 'blend axis');
+      }
+      return;
     default:
       throw new Error('Direct-edit operation kind is not supported.');
   }

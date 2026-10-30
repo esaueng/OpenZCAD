@@ -143,9 +143,9 @@ test('certifies a new device approved by its full-hash scan code', { tag: '@ci-s
     expect(code).toMatch(/^OZD1:[0-9A-Z]{52}$/);
 
     // The approver sees the request and checks the code it scans or types.
-    await expect(settings.getByText('None waiting')).toHaveCount(0, {
-      timeout: 10_000
-    });
+    await expect(
+      settings.getByText('Devices asking to join', { exact: true })
+    ).toBeVisible({ timeout: 10_000 });
     await settings.getByRole('button', { name: 'Scan code' }).click();
     await settings
       .getByLabel('Code from the new device')
@@ -246,9 +246,9 @@ test('two approval tabs retain one staged device and can both unlock it', async 
     await expect(
       settings.getByRole('button', { name: 'Refresh', exact: true })
     ).toBeEnabled();
-    await expect(settings.getByText('None waiting')).toHaveCount(0, {
-      timeout: 10_000
-    });
+    await expect(
+      settings.getByText('Devices asking to join', { exact: true })
+    ).toBeVisible({ timeout: 10_000 });
     await settings.getByRole('button', { name: 'Scan code' }).click();
     await settings.getByLabel('Code from the new device').fill(code);
     await settings
@@ -487,12 +487,13 @@ test('approves read-only after both devices show the same six digits', async ({
 }) => {
   const server = createE2eeServer();
   const { settings, seeded } = await approverWith(page, server);
+  // Nothing to revoke until a read-only device exists.
   await expect(
     settings.getByRole('button', {
       name: 'Revoke read-only devices',
       exact: true
     })
-  ).toBeEnabled();
+  ).toHaveCount(0);
   const phone = await secondDevice(browser, server);
   try {
     const phoneSettings = await openEncryptionSettings(phone.page);

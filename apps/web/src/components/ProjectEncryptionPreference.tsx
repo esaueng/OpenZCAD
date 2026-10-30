@@ -165,8 +165,8 @@ export function ProjectEncryptionPreference({
             : state?.kind === 'refused'
               ? 'Unknown: the stored setting was not trusted.'
               : CAN_CREATE_ENCRYPTED
-                ? 'New cloud projects are end-to-end encrypted. Existing projects stay as they are; the assistant is off on encrypted projects for now.'
-                : 'While this is on, your account accepts only end-to-end encrypted new projects, which this version of OpenZCAD cannot create yet. Existing projects stay as they are.'
+                ? 'Applies to new cloud projects. The assistant asks before reading one.'
+                : 'This version cannot create encrypted projects yet, so new cloud projects are refused while it is on.'
         }
       >
         <Toggle

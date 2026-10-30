@@ -256,6 +256,8 @@ test('encrypts an existing project, resumes after a reload, and opens it', async
   let settings = await openEncryptionSettings(page);
   const panel = settings.getByText('Encrypt existing projects');
   await expect(panel).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  // The full notes sit one click from the button that starts it.
+  await settings.getByText('What changes', { exact: true }).click();
   await expect(settings.getByText(/up to 30 days in backups/)).toBeVisible();
   await expect(settings.getByText('1 project not encrypted')).toBeVisible();
   await settings.getByRole('button', { name: 'Encrypt projects' }).click();

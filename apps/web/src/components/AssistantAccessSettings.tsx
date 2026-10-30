@@ -171,15 +171,18 @@ export function AssistantAccessSettings({
           {error}
         </Notice>
       ) : null}
-      {allowed.length === 0 && untrusted.length === 0 ? (
-        <SettingRow
-          title="Encrypted projects the assistant may read"
-          hint="None. The assistant asks before it reads an encrypted project."
-          compact
-        >
-          <Status>None</Status>
-        </SettingRow>
-      ) : null}
+      <SettingRow
+        title="Encrypted projects the assistant may read"
+        hint="It asks first, one project at a time."
+        details={{
+          summary: 'What the server sees',
+          body: ASSISTANT_CONSENT_TRANSIT
+        }}
+      >
+        <Status tone={allowed.length ? 'warning' : undefined}>
+          {allowed.length ? `${allowed.length} allowed` : 'None'}
+        </Status>
+      </SettingRow>
       {allowed.map((entry) => (
         <SettingRow
           key={entry.projectId}
@@ -218,7 +221,6 @@ export function AssistantAccessSettings({
           </button>
         </SettingRow>
       ))}
-      <Notice tone="info">{ASSISTANT_CONSENT_TRANSIT}</Notice>
     </Group>
   );
 }
