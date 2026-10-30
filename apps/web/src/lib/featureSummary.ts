@@ -116,6 +116,12 @@ export function featureValueSummary(
     case 'gear': {
       const teeth = num(data.teeth);
       if (teeth === null) return null;
+      if (data.gearType === 'bevel') {
+        const mate = data.mateTeeth === undefined ? null : num(data.mateTeeth);
+        return mate === null
+          ? `${teeth} teeth, bevel`
+          : `${teeth} teeth, bevel to ${mate}`;
+      }
       const helix =
         data.helixAngleDeg === undefined ? '0' : num(data.helixAngleDeg);
       return helix === null || helix === '0'

@@ -281,6 +281,42 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toEqual(['pressureAngleDeg']);
   });
 
+  it('gear: a bevel gear keeps its mate and shaft angle, and drops them as a spur', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'bevel',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 20,
+      mateTeeth: 'mate',
+      shaftAngleDeg: 70,
+      faceWidth: 8,
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    };
+    const node = feature(data, 'body_b' as BodyId);
+    expect(inPlaceToolForFeature(data)).toBe('gear');
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({ gearType: 'bevel' });
+    const request = untouched(node)!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: { gearType: 'bevel', mateTeeth: 'mate', shaftAngleDeg: 70 }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    const saved = { featureId: node.featureId, name: node.name, data };
+    expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+      'clearData'
+    );
+    const { mateTeeth: _mate, shaftAngleDeg: _shaft, ...spur } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(saved, {
+        tool: 'gear',
+        gear: { ...spur, gearType: 'external' }
+      })?.clearData
+    ).toEqual(['mateTeeth', 'shaftAngleDeg']);
+  });
+
   it('gear: teeth on a body reopen on their face with the stored fit', () => {
     const data: FeatureData = {
       featureKind: 'gear',

@@ -224,6 +224,71 @@ describe('face tools build the card state', () => {
     );
   });
 
+  it('gear: a bevel gear sends its mate and drops spur-only fields', () => {
+    const spec = IN_PLACE_TOOL_SPECS.gear;
+    const slots: InPlaceSlots = {
+      ...EMPTY,
+      plane: {
+        kind: 'principal',
+        plane: 'XY',
+        origin: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 }
+      }
+    };
+    const options = {
+      gearType: 'bevel',
+      sizing: 'module',
+      hand: 'left',
+      helix: 'herringbone'
+    };
+    const ctx = {
+      ...CTX,
+      touched: ['helixAngleDeg', 'profileShift', 'shaftAngleDeg']
+    };
+    const values = {
+      teeth: 20,
+      module: 2,
+      faceWidth: 8,
+      mateTeeth: 40,
+      shaftAngleDeg: 70,
+      helixAngleDeg: 20,
+      profileShift: 0.3,
+      boreDiameter: 10,
+      rimDiameter: 60
+    };
+    const request = spec.request(slots, values, options, ctx, {
+      boreDiameter: 10
+    });
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'bevel',
+        teeth: 20,
+        pitch: 2,
+        mateTeeth: 40,
+        shaftAngleDeg: 70,
+        faceWidth: 8,
+        boreDiameter: 10,
+        axis: { x: 0, y: 0, z: 1 }
+      }
+    });
+    const gear = request?.tool === 'gear' ? request.gear : null;
+    for (const field of [
+      'helixAngleDeg',
+      'hand',
+      'herringbone',
+      'profileShift',
+      'rimDiameter'
+    ]) {
+      expect(gear).not.toHaveProperty(field);
+    }
+    // An untouched shaft angle is left to its 90° default.
+    const square = spec.request(slots, values, options, CTX);
+    expect(square?.tool === 'gear' && square.gear).not.toHaveProperty(
+      'shaftAngleDeg'
+    );
+  });
+
   it('draft: the pull direction comes from Options', () => {
     const spec = IN_PLACE_TOOL_SPECS.draft;
     const request = spec.request(

@@ -436,6 +436,8 @@ export function inPlaceEditSeed(
         break;
       }
       seed.options.gearType = data.gearType;
+      value('mateTeeth', data.mateTeeth);
+      value('shaftAngleDeg', data.shaftAngleDeg);
       value('faceWidth', data.faceWidth);
       value('boreDiameter', data.boreDiameter);
       value('rimDiameter', data.rimDiameter);
@@ -939,6 +941,8 @@ export function inPlaceFeatureUpdate(
         'helixAngleDeg',
         'hand',
         'herringbone',
+        'mateTeeth',
+        'shaftAngleDeg',
         'xDirection',
         'boreDiameter',
         'rimDiameter',

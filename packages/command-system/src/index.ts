@@ -1061,6 +1061,8 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
 const MAX_GEAR_TEETH = 1000;
 /** M14: the steepest helix angle the kernel's gear generator builds. */
 const MAX_GEAR_HELIX_DEG = 45;
+/** M14: the fewest teeth on either gear of a bevel pair. */
+const MIN_BEVEL_TEETH = 4;
 
 /**
  * Structural checks for a gear feature. Whether the tooth form is buildable
@@ -1082,17 +1084,63 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     }
     return resolved;
   };
-  const teeth = value('teeth', input.teeth);
-  const minTeeth =
-    input.gearType === 'internal' ? 6 : input.gearType === 'rack' ? 1 : 3;
-  if (
-    Math.abs(teeth - Math.round(teeth)) > 1e-9 ||
-    teeth < minTeeth ||
-    teeth > MAX_GEAR_TEETH
+  const bevel = input.gearType === 'bevel';
+  const toothCount = (label: string, param: ParamValue, min: number): void => {
+    const count = value(label, param);
+    if (
+      Math.abs(count - Math.round(count)) > 1e-9 ||
+      count < min ||
+      count > MAX_GEAR_TEETH
+    ) {
+      throw new Error(
+        `Gear ${label} must be a whole number from ${min} to ${MAX_GEAR_TEETH}.`
+      );
+    }
+  };
+  toothCount(
+    'teeth',
+    input.teeth,
+    input.gearType === 'internal'
+      ? 6
+      : input.gearType === 'rack'
+        ? 1
+        : bevel
+          ? MIN_BEVEL_TEETH
+          : 3
+  );
+  if (bevel) {
+    if (input.mateTeeth === undefined) {
+      throw new Error('A bevel gear needs its mate’s tooth count.');
+    }
+    toothCount('mate teeth', input.mateTeeth, MIN_BEVEL_TEETH);
+    if (input.shaftAngleDeg !== undefined) {
+      const shaft = value('shaft angle', input.shaftAngleDeg);
+      if (!(shaft > 0 && shaft < 180)) {
+        throw new Error('Gear shaft angle must be above 0° and below 180°.');
+      }
+    }
+    // The straight bevel form has no shift, fillet or helix, and is a new
+    // body only.
+    for (const [label, present] of [
+      ['profile shift', input.profileShift],
+      ['root fillet', input.rootFillet],
+      ['helix angle', input.helixAngleDeg],
+      ['hand', input.hand],
+      ['herringbone', input.herringbone],
+      ['rim diameter', input.rimDiameter],
+      ['back depth', input.backDepth],
+      ['target body', input.targetBodyId],
+      ['fit', input.fit]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(`A bevel gear takes no ${label}.`);
+      }
+    }
+  } else if (
+    input.mateTeeth !== undefined ||
+    input.shaftAngleDeg !== undefined
   ) {
-    throw new Error(
-      `Gear teeth must be a whole number from ${minTeeth} to ${MAX_GEAR_TEETH}.`
-    );
+    throw new Error('Only a bevel gear takes a mate and a shaft angle.');
   }
   if (input.pressureAngleDeg !== undefined) {
     const angle = value('pressure angle', input.pressureAngleDeg);
@@ -1225,8 +1273,8 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     value('x direction Z', input.xDirection.z);
   }
   if (input.boreDiameter !== undefined) {
-    if (input.gearType !== 'external') {
-      throw new Error('Only an external gear takes a bore.');
+    if (input.gearType !== 'external' && !bevel) {
+      throw new Error('Only an external or bevel gear takes a bore.');
     }
     positive('bore diameter', input.boreDiameter);
   }

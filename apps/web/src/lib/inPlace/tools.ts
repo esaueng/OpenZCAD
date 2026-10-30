@@ -1908,6 +1908,26 @@ const gear: InPlaceToolSpec = {
       min: 0,
       exclusive: 'min',
       inOptions: true
+    },
+    {
+      id: 'mateTeeth',
+      label: 'Mate teeth',
+      unit: 'count',
+      initial: 20,
+      integer: true,
+      min: 4,
+      max: 1000,
+      inOptions: true
+    },
+    {
+      id: 'shaftAngleDeg',
+      label: 'Shaft angle',
+      unit: 'angle',
+      initial: 90,
+      min: 0,
+      max: 180,
+      exclusive: true,
+      inOptions: true
     }
   ],
   options: [
@@ -1929,6 +1949,11 @@ const gear: InPlaceToolSpec = {
           value: 'rack',
           label: 'Rack',
           note: 'Straight teeth along the plane'
+        },
+        {
+          value: 'bevel',
+          label: 'Bevel',
+          note: 'Straight teeth tapering to a cone apex, to mesh at a shaft angle'
         }
       ],
       initial: 'external'
@@ -1957,7 +1982,9 @@ const gear: InPlaceToolSpec = {
     const frame = gearFrame(slots.plane);
     if (!frame) return null;
     const gearType =
-      options.gearType === 'internal' || options.gearType === 'rack'
+      options.gearType === 'internal' ||
+      options.gearType === 'rack' ||
+      options.gearType === 'bevel'
         ? options.gearType
         : 'external';
     // An edited gear's own placement goes back as stored, expressions and
@@ -1967,11 +1994,41 @@ const gear: InPlaceToolSpec = {
         ? ctx.saved
         : null;
     const bore = numbers?.boreDiameter ?? 0;
+    const toothFields = gearToothFields(values, options, ctx, true);
+    if (gearType === 'bevel') {
+      // The straight bevel form has no shift and no helix.
+      const {
+        profileShift: _shift,
+        helixAngleDeg: _helix,
+        hand: _hand,
+        herringbone: _herringbone,
+        ...bevelFields
+      } = toothFields;
+      return {
+        tool: 'gear',
+        gear: {
+          gearType,
+          ...bevelFields,
+          mateTeeth: values.mateTeeth ?? 20,
+          ...(values.shaftAngleDeg !== undefined &&
+          (ctx.touched?.includes('shaftAngleDeg') ||
+            (ctx.saved?.featureKind === 'gear' &&
+              ctx.saved.shaftAngleDeg !== undefined))
+            ? { shaftAngleDeg: values.shaftAngleDeg }
+            : {}),
+          faceWidth: values.faceWidth ?? 10,
+          origin: saved?.origin ? { ...saved.origin } : { ...frame.origin },
+          axis: saved?.axis ? { ...saved.axis } : { ...frame.normal },
+          ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {}),
+          ...(bore > 0 ? { boreDiameter: values.boreDiameter ?? bore } : {})
+        }
+      };
+    }
     return {
       tool: 'gear',
       gear: {
         gearType,
-        ...gearToothFields(values, options, ctx, true),
+        ...toothFields,
         faceWidth: values.faceWidth ?? 10,
         origin: saved?.origin ? { ...saved.origin } : { ...frame.origin },
         axis: saved?.axis ? { ...saved.axis } : { ...frame.normal },
