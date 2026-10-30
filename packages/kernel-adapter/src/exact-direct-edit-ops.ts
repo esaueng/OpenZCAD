@@ -34,6 +34,8 @@ import {
   fillThroughHole,
   tryExactAnalyticCylinderCapOffset
 } from './exact-cylinder-ops';
+import { applyEdgeModifier } from './exact-edge-modifiers';
+import { brepEdgeCurve } from './exact-brep';
 import { recognizeImportedFeatureOnSolid } from './imported-feature-query';
 import type {
   BlindCylindricalHoleProof,
@@ -358,6 +360,249 @@ function enlargeThroughHole(
   }
 }
 
+/**
+ * Where a circular edge sits on the hole axis — its axial distance from
+ * `origin` and its radius — or `null` unless the kernel proves it lies on a
+ * circle centred on that axis in a plane square to it. Arcs count: a boolean
+ * can leave a rim split into pieces.
+ */
+function coaxialEdgeCircle(
+  kernel: RemusKernel,
+  edge: number,
+  origin: Vec3,
+  axis: Vec3,
+  tolerance: number
+): { at: number; radius: number } | null {
+  const circle = brepEdgeCurve(
+    kernel,
+    edge,
+    Array.from(kernel.tessellateEdge(edge, tolerance))
+  )?.circle;
+  if (!circle || Math.abs(Math.abs(dot(circle.axis, axis)) - 1) > 1e-6) {
+    return null;
+  }
+  const offset = subtract(circle.center, origin);
+  const at = dot(offset, axis);
+  if (length(subtract(offset, scale(axis, at))) > tolerance) return null;
+  return { at, radius: circle.radius };
+}
+
+/**
+ * A fillet rounding one mouth of a through-hole: a torus coaxial with the
+ * bore, running from the bore's end circle out onto an end face.
+ */
+interface ThroughHoleRimFillet {
+  /** Axial distance from `axisStart` of the end face the fillet runs onto. */
+  faceAt: number;
+  radius: number;
+}
+
+/**
+ * The fillets on a through-hole's mouths. A torus touching the bore that
+ * cannot be read as one makes the answer `null`, and the plain resize runs as
+ * it always has. Chamfered mouths are not listed: a countersink keeps its
+ * diameter when the bore under it changes.
+ */
+function throughHoleRimFillets(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  geometry: ThroughHoleGeometry,
+  tolerance: number
+): ThroughHoleRimFillet[] | null {
+  const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+  if (!axis) return null;
+  const boreEdges = new Set(kernel.getFaceEdges(face));
+  const fillets: ThroughHoleRimFillet[] = [];
+  for (const neighbour of kernel.getSolidFaces(solid)) {
+    if (
+      neighbour === face ||
+      surfaceTypeOf(kernel, neighbour) !== 'torus' ||
+      !kernel.getFaceEdges(neighbour).some((edge) => boreEdges.has(edge))
+    ) {
+      continue;
+    }
+    const circles = Array.from(kernel.getFaceEdges(neighbour))
+      .map((edge) => ({
+        bore: boreEdges.has(edge),
+        circle: coaxialEdgeCircle(
+          kernel,
+          edge,
+          geometry.axisStart,
+          axis,
+          tolerance
+        )
+      }))
+      .filter((entry) => entry.circle !== null);
+    const inner = circles.find((entry) => entry.bore)?.circle;
+    const outer = circles.find((entry) => !entry.bore)?.circle;
+    if (!inner || !outer) return null;
+    const boreEnd =
+      Math.abs(inner.at) <= tolerance
+        ? 0
+        : Math.abs(inner.at - geometry.axialLength) <= tolerance
+          ? geometry.axialLength
+          : null;
+    const radius = outer.radius - geometry.radius;
+    if (
+      boreEnd === null ||
+      Math.abs(inner.radius - geometry.radius) > tolerance ||
+      radius <= tolerance ||
+      // A quarter round: as far down the bore as it reaches across the face.
+      Math.abs(Math.abs(outer.at - boreEnd) - radius) > tolerance
+    ) {
+      return null;
+    }
+    fillets.push({ faceAt: outer.at, radius });
+  }
+  return fillets;
+}
+
+/**
+ * Resize a through-hole whose mouths are filleted, keeping each fillet's
+ * radius on the new rim.
+ *
+ * The plain resize only rebuilds the bore wall, so a narrower bore left the
+ * old fillet standing at the old diameter as a groove around it, and a fuse
+ * that met the fillet could refuse outright ("does not fit this body"). The
+ * fillets are removed first, which leaves a sharp hole that runs face to
+ * face; that hole is resized the plain way, and its new rims are filleted
+ * again at their original radii.
+ */
+function resizeFilletedThroughHole(
+  kernel: RemusKernel,
+  solid: number,
+  geometry: ThroughHoleGeometry,
+  fillets: ThroughHoleRimFillet[],
+  operation: Extract<DirectEditOperation, { kind: 'resize-through-hole' }>,
+  scope: Record<string, number>,
+  radius: number,
+  tolerance: number
+): number {
+  const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart))!;
+  // Remus removes one connected blend region per call, so the two mouths go
+  // one at a time, each found again on the solid the last removal returned.
+  let sharp = solid;
+  for (const fillet of fillets) {
+    const torus = Array.from(kernel.getSolidFaces(sharp)).find(
+      (candidate) =>
+        surfaceTypeOf(kernel, candidate) === 'torus' &&
+        Array.from(kernel.getFaceEdges(candidate)).some((edge) => {
+          const circle = coaxialEdgeCircle(
+            kernel,
+            edge,
+            geometry.axisStart,
+            axis,
+            tolerance
+          );
+          return (
+            circle !== null &&
+            Math.abs(circle.at - fillet.faceAt) <= tolerance &&
+            Math.abs(circle.radius - geometry.radius - fillet.radius) <=
+              tolerance
+          );
+        })
+    );
+    if (torus === undefined) {
+      throw new Error('The hole’s rim fillet could not be found again.');
+    }
+    try {
+      sharp = (
+        JSON.parse(
+          kernel.removeBlendsJournaled(sharp, Uint32Array.from([torus]))
+        ) as { solid: number }
+      ).solid;
+    } catch (error) {
+      throw new Error(
+        `The hole’s rim fillet could not be set aside to resize the hole: ${
+          error instanceof Error ? error.message : String(error)
+        }.`,
+        { cause: error }
+      );
+    }
+  }
+  const bore = Array.from(kernel.getSolidFaces(sharp)).find((candidate) => {
+    const measured = measureFaceGeometry(kernel, candidate);
+    return (
+      measured?.surfaceType === 'cylinder' &&
+      measured.radius !== undefined &&
+      measured.axisStart !== undefined &&
+      Math.abs(measured.radius - geometry.radius) <= tolerance &&
+      classifyThroughHoleFace(kernel, sharp, candidate, measured).status ===
+        'through-hole' &&
+      length(
+        subtract(
+          subtract(measured.axisStart, geometry.axisStart),
+          scale(
+            axis,
+            dot(subtract(measured.axisStart, geometry.axisStart), axis)
+          )
+        )
+      ) <= tolerance
+    );
+  });
+  if (bore === undefined) {
+    throw new Error(
+      'Setting the rim fillet aside did not leave a through-hole to resize.'
+    );
+  }
+  let output = resizeThroughHole(
+    kernel,
+    sharp,
+    bore,
+    operation,
+    scope,
+    true
+  ).solid;
+
+  for (const size of new Set(fillets.map((fillet) => fillet.radius))) {
+    const sized = fillets.filter((fillet) => fillet.radius === size);
+    // Read after every pass: a fillet replaces the solid and its handles.
+    const rims = Array.from(kernel.getSolidEdges(output)).filter((edge) => {
+      const circle = coaxialEdgeCircle(
+        kernel,
+        edge,
+        geometry.axisStart,
+        axis,
+        tolerance
+      );
+      return (
+        circle !== null &&
+        Math.abs(circle.radius - radius) <= tolerance &&
+        sized.some((fillet) => Math.abs(circle.at - fillet.faceAt) <= tolerance)
+      );
+    });
+    const rounded =
+      rims.length > 0
+        ? applyEdgeModifier(
+            kernel,
+            output,
+            rims,
+            'fillet',
+            size,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            true
+          )
+        : null;
+    if (rounded === null) {
+      throw new Error(
+        `The hole’s R${formatSize(size)} rim fillet does not fit a Ø${formatSize(radius * 2)} hole.`
+      );
+    }
+    output = rounded;
+  }
+  return output;
+}
+
+/** Document units, so no unit suffix: the same numbers the user typed. */
+function formatSize(value: number): string {
+  return String(Number(value.toFixed(4)));
+}
+
 export function resizeThroughHole(
   kernel: RemusKernel,
   solid: number,
@@ -400,44 +645,72 @@ export function resizeThroughHole(
     geometry.axialLength * 0.02,
     diameter * 0.01
   );
-  const newBore = cylinderAlongAxis(
-    kernel,
-    geometry.axisStart,
-    geometry.axisEnd,
-    radius,
-    extension
+  const rimTolerance = Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    geometry.axialLength * 1e-5,
+    geometry.radius * 1e-5
   );
+  const rimFillets =
+    throughHoleRimFillets(kernel, solid, face, geometry, rimTolerance) ?? [];
   let output: number;
   let boundedCutter = false;
-  try {
-    if (radius > geometry.radius) {
-      const cut = enlargeThroughHole(kernel, solid, geometry, radius, newBore);
-      output = cut.solid;
-      boundedCutter = cut.boundedCutter;
-    } else {
-      output = exactFuse(
-        kernel,
-        solid,
-        exactCut(
+  if (rimFillets.length > 0) {
+    output = resizeFilletedThroughHole(
+      kernel,
+      solid,
+      geometry,
+      rimFillets,
+      operation,
+      scope,
+      radius,
+      rimTolerance
+    );
+  } else {
+    const newBore = cylinderAlongAxis(
+      kernel,
+      geometry.axisStart,
+      geometry.axisEnd,
+      radius,
+      extension
+    );
+    try {
+      if (radius > geometry.radius) {
+        const cut = enlargeThroughHole(
           kernel,
-          cylinderAlongAxis(
-            kernel,
-            geometry.axisStart,
-            geometry.axisEnd,
-            geometry.radius
-          ),
+          solid,
+          geometry,
+          radius,
           newBore
-        )
+        );
+        output = cut.solid;
+        boundedCutter = cut.boundedCutter;
+      } else {
+        output = exactFuse(
+          kernel,
+          solid,
+          exactCut(
+            kernel,
+            cylinderAlongAxis(
+              kernel,
+              geometry.axisStart,
+              geometry.axisEnd,
+              geometry.radius
+            ),
+            newBore
+          )
+        );
+      }
+    } catch (error) {
+      throw new Error(
+        `Through-hole diameter ${diameter} does not fit this body: ${
+          exactBooleanRefusalReason(error) ??
+          (error instanceof Error
+            ? error.message
+            : 'the kernel rejected the cut')
+        }.`,
+        { cause: error }
       );
     }
-  } catch (error) {
-    throw new Error(
-      `Through-hole diameter ${diameter} does not fit this body: ${
-        exactBooleanRefusalReason(error) ??
-        (error instanceof Error ? error.message : 'the kernel rejected the cut')
-      }.`,
-      { cause: error }
-    );
   }
   unifyAndRequireValidSolid(
     kernel,
@@ -476,6 +749,7 @@ export function resizeThroughHole(
   // cylindrical-face resize narrows the wall in place; take it only when the
   // boolean demonstrably kept the old bore, and hold it to the same gates.
   if (
+    rimFillets.length === 0 &&
     radius < geometry.radius &&
     !hasRadius(coaxialRadii, radius) &&
     hasRadius(coaxialRadii, geometry.radius)
