@@ -140,7 +140,7 @@ for (const [name, normal, axis, amount] of [
                   face: canvas.dataset.e2eSelectedFace ?? null,
                   chipVisible:
                     !chip.hidden && getComputedStyle(chip).display !== 'none',
-                  value: chip.textContent!.replace(/\s+/g, ' ').trim(),
+                  value: chip.textContent.replace(/\s+/g, ' ').trim(),
                   rotated: chip.style.getPropertyValue('--chip-rotate') !== '',
                   emissives: state.bodyFaces.map((face) => face.emissive),
                   bounds: state.bodyFaces.flatMap((face) =>
