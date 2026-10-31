@@ -154,7 +154,8 @@ async function pointOverFace(
   throw new Error(`No viewport point selects face ${topologyId}.`);
 }
 
-for (const action of ['Cancel', 'Close panel']) {
+// The edit's bar is its only surface: there is no card to close it from.
+for (const action of ['Cancel']) {
   test(`closing an armed extrude editor with ${action} restores viewport selection`, async ({
     page
   }, testInfo) => {

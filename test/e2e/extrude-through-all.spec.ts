@@ -14,7 +14,8 @@ import {
   chooseBarOption,
   editExtrudeFromHistory,
   chooseInPlaceOption,
-  extrudeBar
+  extrudeBar,
+  expectFeatureMeasurement
 } from './openzcad-fixtures';
 
 /**
@@ -87,9 +88,11 @@ test('switches a blind cut to through all and back through undo', async ({
   const pocket = page
     .locator('.feature-row-main', { hasText: 'Pocket' })
     .last();
-  const panel = page.locator('.panel-body');
+  const pocketRow = page.locator('.feature-row:not(.is-sketch)', {
+    has: pocket
+  });
+  await expectFeatureMeasurement(page, pocketRow, '15700');
   let edit = await editExtrudeFromHistory(page, pocket);
-  await expect(panel).toContainText('15700');
 
   await chooseBarOption(edit, 'Extent', 'Through all');
   // Through all takes no distance.
@@ -105,10 +108,10 @@ test('switches a blind cut to through all and back through undo', async ({
   // A successful edit closes; reopen it to read what was committed.
   await expect(edit).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  edit = await editExtrudeFromHistory(page, pocket);
   // 40 × 40 × 10 less a 10 × 10 hole through all 10, and the edit reopens
   // on what was stored rather than the dormant distance.
-  await expect(panel).toContainText('15000', { timeout: 30_000 });
+  await expectFeatureMeasurement(page, pocketRow, '15000');
+  edit = await editExtrudeFromHistory(page, pocket);
   await expect(barChoice(edit, 'Extent', 'Through all')).toHaveAttribute(
     'aria-checked',
     'true'
@@ -124,7 +127,8 @@ test('switches a blind cut to through all and back through undo', async ({
     'aria-checked',
     'true'
   );
-  await expect(panel).toContainText('15700', { timeout: 30_000 });
+  await edit.getByRole('button', { name: 'Cancel' }).click();
+  await expectFeatureMeasurement(page, pocketRow, '15700');
 });
 
 test('creates a cut through all straight from a sketch', { tag: '@ci-smoke' }, async ({ page }) => {
@@ -198,10 +202,14 @@ test('creates a cut through all straight from a sketch', { tag: '@ci-smoke' }, a
   );
   await expectBodyCount(page, 1);
   const cut = page.locator('.feature-row-main', { hasText: 'Extrude' });
+  // The row re-arms the edit, whose bar is the whole edit; the readout is
+  // the row menu's Measurements.
+  await expectFeatureMeasurement(
+    page,
+    page.locator('.feature-row', { has: cut }),
+    '15000'
+  );
   const edit = await editExtrudeFromHistory(page, cut);
-  await expect(page.locator('.panel-body')).toContainText('15000', {
-    timeout: 30_000
-  });
   await expect(barChoice(edit, 'Extent', 'Through all')).toHaveAttribute(
     'aria-checked',
     'true'

@@ -15,7 +15,8 @@ import {
   pickObjectsBody,
   barChoice,
   chooseBarOption,
-  editExtrudeFromHistory
+  editExtrudeFromHistory,
+  expectFeatureMeasurement
 } from './openzcad-fixtures';
 
 /**
@@ -89,11 +90,13 @@ test('subtracts while keeping the base body, then reopens the choice', async ({
     .locator('.feature-row-main', { hasText: 'Subtract' })
     .last();
   // U09 phase 7: the row re-arms the Subtract in place, its choice in
-  // Options; the pinned row still reads out the result.
+  // Options; the row's Measurements read out the result.
+  await expectFeatureMeasurement(
+    page,
+    page.locator('.feature-row', { has: subtract }),
+    '750'
+  );
   await subtract.click();
-  await expect(page.locator('.panel-body')).toContainText('750', {
-    timeout: 30_000
-  });
   const editBar = page.getByRole('group', { name: 'Edit Subtract command' });
   await editBar.locator('summary').click();
   await expect(editBar.getByRole('radio', { name: 'First' })).toHaveAttribute(
@@ -150,10 +153,12 @@ test('switches an extrude to Intersect with the block it crosses', async ({
   const column = page
     .locator('.feature-row-main', { hasText: 'Column' })
     .last();
-  const panel = page.locator('.panel-body');
-  let edit = await editExtrudeFromHistory(page, column);
+  const columnRow = page.locator('.feature-row:not(.is-sketch)', {
+    has: column
+  });
   // 10 × 10 × 20 as a new body.
-  await expect(panel).toContainText('2000', { timeout: 30_000 });
+  await expectFeatureMeasurement(page, columnRow, '2000');
+  let edit = await editExtrudeFromHistory(page, column);
   await chooseBarOption(edit, 'Operation', 'Intersect');
   await chooseBarOption(edit, 'Target body', 'Block Body');
   await edit.getByRole('button', { name: 'Done' }).click();
@@ -163,8 +168,8 @@ test('switches an extrude to Intersect with the block it crosses', async ({
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000
   });
+  await expectFeatureMeasurement(page, columnRow, '1000');
   edit = await editExtrudeFromHistory(page, column);
-  await expect(panel).toContainText('1000', { timeout: 30_000 });
   await expect(barChoice(edit, 'Operation', 'Intersect')).toHaveAttribute(
     'aria-checked',
     'true'

@@ -195,7 +195,11 @@ test('Move applies to a hidden sketch from the unapplied-Move dialog', async ({
 
   await expect(ask).toHaveCount(0);
   await expect(move).toHaveCount(0);
-  await expect(inspector.getByRole('heading', { name: 'Plate' })).toBeVisible();
+  // Plate opens as its in-place Extrude edit, with no card beside it.
+  await expect(
+    page.getByRole('group', { name: 'Edit Plate command' })
+  ).toBeVisible();
+  await expect(inspector).toHaveCount(0);
   await expect
     .poll(() => readProfileCenterX(page, projectId), { timeout: 15_000 })
     .toBe(20);

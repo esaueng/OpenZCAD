@@ -1258,6 +1258,33 @@ export async function featureCardFromHistory(page: Page, row: Locator) {
 }
 
 /**
+ * Reads `text` in a feature's measurements, from its History row's menu, and
+ * closes the readout again so a later row click re-arms the edit.
+ */
+export async function expectFeatureMeasurement(
+  page: Page,
+  row: Locator,
+  text: string
+) {
+  const inspector = await featureCardFromHistory(page, row);
+  await expect(inspector).toContainText(text, { timeout: 30_000 });
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+}
+
+/**
+ * Deletes a feature from its History row's menu. An in-place edit has no
+ * card, so its row is where a feature being edited is deleted.
+ */
+export async function deleteFeatureFromHistory(page: Page, row: Locator) {
+  await revealModelPanel(page, 'History');
+  await row.scrollIntoViewIfNeeded();
+  await row.hover();
+  await row.getByRole('button', { name: /^More actions for / }).click();
+  await page.getByRole('menuitem', { name: /^Delete/ }).click();
+}
+
+/**
  * Opens the last-built body's measurements the way a user reads them: from
  * the last live feature's History row (a pick, from the viewport or an
  * Objects row, opens no card). Returns the Feature inspector, whose card

@@ -213,10 +213,12 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   );
   await expectBodyCount(page, 1);
   const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
-  await expect(
-    barChoice(await editExtrudeFromHistory(page, extrusion), 'Operation', 'Cut')
-  ).toHaveAttribute('aria-checked', 'true');
-  await page.getByRole('button', { name: 'Close panel' }).click();
+  const edit = await editExtrudeFromHistory(page, extrusion);
+  await expect(barChoice(edit, 'Operation', 'Cut')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await edit.getByRole('button', { name: 'Cancel' }).click();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(extrusion).toHaveCount(0);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();

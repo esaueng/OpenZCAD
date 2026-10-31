@@ -7,7 +7,8 @@ import {
   test,
   stubApi,
   setSelectionFilter,
-  enterCommandValue
+  enterCommandValue,
+  deleteFeatureFromHistory
 } from './openzcad-fixtures';
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
 
@@ -222,10 +223,11 @@ for (const filter of ['Face', 'Any'] as const) {
     );
     await page.getByRole('menuitem', { name: /Edit Fillet edges/ }).click();
     await expect(radiusChip).toHaveText('R 5 mm');
-    await inspector.getByLabel('More actions').click();
-    await inspector
-      .getByRole('button', { name: 'Delete feature', exact: true })
-      .click();
+    // The armed edit has no card; its pinned row's menu deletes it.
+    await deleteFeatureFromHistory(
+      page,
+      page.locator('.feature-row.selected')
+    );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect
       .poll(async () => (await blend(canvas, 2))?.producingFeatureId)
