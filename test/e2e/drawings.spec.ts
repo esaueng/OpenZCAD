@@ -127,7 +127,9 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
   );
   expect(svg).toContain('stroke-dasharray="3 1.5"');
 
-  // The fence: widen the box in Build, and the sheet goes stale.
+  // The fence: widen the box in Build, and the sheet goes stale. It keeps
+  // the drawing it made of the narrower box, usable and exportable, until
+  // the explicit Update.
   await mode(page, 'Build').click();
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   await inspector.getByRole('textbox', { name: 'Width (X)' }).fill('45');
@@ -141,8 +143,9 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
       timeout: 20_000
     }
   );
-  await expect(drawings.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
-  await expect(canvas.locator('.drawing-view.is-placeholder')).toHaveCount(4);
+  await expect(drawings.getByRole('button', { name: 'Export PDF' })).toBeEnabled();
+  await expect(canvas.locator('.drawing-view.is-placeholder')).toHaveCount(0);
+  await expect(drawings.locator('.drawing-banner')).toHaveCount(0);
 
   await banner.getByRole('button', { name: 'Update' }).click();
   await expect(banner).toHaveCount(0);
