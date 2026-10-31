@@ -118,3 +118,46 @@ describe('start screen shelf line and Settings', () => {
     );
   });
 });
+
+describe('start screen column and shelf edge', () => {
+  it('runs the column flush to the window edge, without an island gap', () => {
+    // 31 Oct 2026: a 10px gap and a floating island framed the column.
+    expect(rule(css, '.start-screen')).toMatch(
+      /grid-template-columns:\s*var\(--start-column-w\)\s+minmax\(0,\s*1fr\)/
+    );
+    const panel = rule(css, '.start-screen::before');
+    expect(panel).not.toMatch(/margin:/);
+    expect(panel).not.toMatch(/border-radius:/);
+    expect(panel).toMatch(/border-right:/);
+  });
+
+  it('sticks group labels under the line on a wide window', () => {
+    // 31 Oct 2026: cards were sliced off on a hard edge under the tabs.
+    const wide = [...css.matchAll(/@media\s*\(min-width:\s*901px\)\s*\{/g)]
+      .map((match) => css.slice(match.index))
+      .find((rest) =>
+        /\.start-shelf-group\s*\{[^}]*position:\s*sticky/.test(
+          rest.slice(0, 2000)
+        )
+      );
+    expect(wide).toBeDefined();
+    expect(rule(css, '.start-shelf-group[data-stuck]::after')).toMatch(
+      /opacity:\s*1/
+    );
+  });
+});
+
+describe('workspace reveal', () => {
+  it('hides the loading workspace without taking it out of layout', () => {
+    // 31 Oct 2026: `display: none` here left a new project's workspace
+    // blank for good, since the ready state only restores visibility.
+    for (const selector of [
+      '.workspace-reveal',
+      ".workspace-reveal[aria-hidden='true']"
+    ]) {
+      const declarations = rule(css, selector);
+      expect(declarations).toMatch(/visibility:\s*hidden/);
+      expect(declarations).not.toMatch(/display:\s*none/);
+    }
+  });
+});

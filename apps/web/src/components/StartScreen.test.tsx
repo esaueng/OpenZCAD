@@ -1874,3 +1874,63 @@ describe('StartScreen move menu from a card', () => {
     ).toHaveFocus();
   });
 });
+
+describe('StartScreen sidebar and shelf edge', () => {
+  const pinnedAndLoose = () => [
+    {
+      ...localProject,
+      name: 'Pinned part',
+      organization: { status: 'active' as const, pinned: true, sortOrder: 0 }
+    },
+    { ...localProject, projectId: toProjectId('loose'), name: 'Loose part' }
+  ];
+
+  it('quiets the pins inside the labelled Pinned group only', () => {
+    // The group's label already says its cards are pinned; a permanent pin
+    // badge on each repeated it.
+    const { container } = renderStartScreen({ projects: pinnedAndLoose() });
+    const grids = [
+      ...container.querySelectorAll('.start-body .start-tile-grid')
+    ];
+    expect(grids).toHaveLength(2);
+    expect(grids[0]).toHaveClass('is-pinned-group');
+    expect(grids[1]).not.toHaveClass('is-pinned-group');
+  });
+
+  it('drops the count from an empty shelf', () => {
+    const { container } = renderStartScreen();
+    const count = (status: string) =>
+      container.querySelector(`#start-shelf-tab-${status} .start-shelf-count`);
+    expect(count('active')).not.toHaveClass('is-zero');
+    expect(count('archived')).toHaveClass('is-zero');
+    // Hidden from sight only: the tab still announces an empty shelf.
+    expect(screen.getByRole('tab', { name: 'Archive 0' })).toBeInTheDocument();
+  });
+
+  it('flags a scrolled shelf and the group label stuck under its line', () => {
+    const { container } = renderStartScreen({ projects: pinnedAndLoose() });
+    const body = container.querySelector<HTMLElement>('.start-body')!;
+    const section = container.querySelector('.start-section')!;
+    const [pinnedLabel] = container.querySelectorAll('.start-shelf-group');
+    expect(section).not.toHaveAttribute('data-scrolled');
+
+    body.scrollTop = 40;
+    fireEvent.scroll(body);
+    expect(section).toHaveAttribute('data-scrolled');
+    // happy-dom lays nothing out, so every label reads as at the top.
+    expect(pinnedLabel).toHaveAttribute('data-stuck');
+    expect(section).toHaveAttribute('data-label-stuck');
+
+    body.scrollTop = 0;
+    fireEvent.scroll(body);
+    expect(section).not.toHaveAttribute('data-scrolled');
+    expect(pinnedLabel).not.toHaveAttribute('data-stuck');
+    expect(section).not.toHaveAttribute('data-label-stuck');
+  });
+
+  it('shortens Import beside New project but keeps its full name', () => {
+    renderStartScreen({ onImportProject: vi.fn() });
+    const importButton = screen.getByRole('button', { name: 'Import project' });
+    expect(importButton).toHaveTextContent(/^Import$/);
+  });
+});

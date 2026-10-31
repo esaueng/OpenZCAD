@@ -207,8 +207,8 @@
 
   /* A framed drawing of the demo's part, so each entry reads as a model. */
   .start-screen:not(.is-fresh) .demo-card-icon {
-    width: 32px;
-    height: 32px;
+    width: 26px;
+    height: 26px;
     color: var(--color-text-muted);
     background: var(--color-bg);
     border: var(--border-thin);

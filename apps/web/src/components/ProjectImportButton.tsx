@@ -6,7 +6,8 @@ export function ProjectImportButton({
   disabled = false,
   className = 'topbar-menu-item',
   hint,
-  title
+  title,
+  shortLabel
 }: {
   onImport(file: File): void;
   disabled?: boolean;
@@ -15,6 +16,9 @@ export function ProjectImportButton({
   hint?: string;
   /** A tooltip, for where the label is clipped down to the icon. */
   title?: string;
+  /** A shorter visible label where the context already says "project";
+   *  the button keeps its full name for assistive technology. */
+  shortLabel?: string;
 }) {
   const input = useRef<HTMLInputElement>(null);
   return (
@@ -24,10 +28,11 @@ export function ProjectImportButton({
         className={className}
         disabled={disabled}
         title={title}
+        aria-label={shortLabel ? 'Import project' : undefined}
         onClick={() => input.current?.click()}
       >
         <Upload size={14} aria-hidden="true" />
-        <span>Import project</span>
+        <span>{shortLabel ?? 'Import project'}</span>
         {hint ? <small>{hint}</small> : null}
       </button>
       <input
