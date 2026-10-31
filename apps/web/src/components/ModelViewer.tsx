@@ -3307,6 +3307,16 @@ export function ModelViewer({
     const rightClickGesture = new RightClickGestureTracker();
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
+    /**
+     * Whether each of the last two primary releases ended a gesture — a
+     * handle, camera, sweep or sketch drag — rather than a selection click.
+     * The browser counts a quick second press as a click however far it then
+     * travels, so clicking a face and at once dragging its arrow ended in a
+     * double-click that took the whole body: the handle, ghost and preview
+     * dropped and the unedited part flashed lavender until the commit put
+     * the face back. Only two clicks make a double-click.
+     */
+    let gestureReleases: [boolean, boolean] = [false, false];
     /** Last canvas pointer, used by the Alt+Down keyboard trigger. */
     let lastPickListPointer: PointerEvent | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
@@ -6290,6 +6300,8 @@ export function ModelViewer({
     }
 
     function selectAtPointer(event: PointerEvent) {
+      // The release that got here was a click, not the end of a gesture.
+      gestureReleases[1] = false;
       const facesOnly = facePickOnlyRef.current;
       const stack = facesOnly
         ? picker
@@ -10012,6 +10024,8 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      // A gesture until a selection click claims it (`selectAtPointer`).
+      if (event.button === 0) gestureReleases = [gestureReleases[1], true];
       if (
         sketchMovePointerGate.release(event.pointerId) ||
         sketchMovePointerRole(
@@ -10783,6 +10797,7 @@ export function ModelViewer({
     };
     document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     const handleDoubleClick = (event: MouseEvent) => {
+      if (gestureReleases[0] || gestureReleases[1]) return;
       depthCycle = null;
       // Double-clicking an edge takes the whole smooth run it belongs to.
       // Rounding a lip means selecting every edge around it, and a filleted
