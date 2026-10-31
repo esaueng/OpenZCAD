@@ -242,12 +242,12 @@ test('a drawing follows a finishing body on explicit Update and saves from Draw'
     timeout: 30_000
   });
   await mode(page, 'Draw').click();
-  const banner = drawings.locator('.drawing-banner');
-  await expect(banner).toContainText('Finishing features replaced a body');
-  await expect(
-    drawings.getByRole('button', { name: 'Export PDF' })
-  ).toBeDisabled();
-  await banner.getByRole('button', { name: 'Update' }).click();
+  // The sheet keeps its drawing of the unfilleted body and offers Update.
+  const outdated = drawings.locator('.drawing-sync.is-outdated');
+  await expect(outdated).toContainText('Finishing features replaced a body');
+  await expect(sheet.locator('.drawing-view.is-placeholder')).toHaveCount(0);
+  await outdated.getByRole('button', { name: 'Update' }).click();
+  await expect(outdated).toHaveCount(0);
   await expect(sheet.locator('.drawing-view.is-placeholder')).toHaveCount(0, {
     timeout: 30_000
   });
@@ -261,9 +261,9 @@ test('a drawing follows a finishing body on explicit Update and saves from Draw'
     path: testInfo.outputPath('drawing-after-fillet-update.png')
   });
   await page.keyboard.press('ControlOrMeta+z');
-  await expect(banner).toContainText('Finishing features replaced a body');
+  await expect(outdated).toContainText('Finishing features replaced a body');
   await page.keyboard.press('ControlOrMeta+Shift+z');
-  await expect(banner).toHaveCount(0);
+  await expect(outdated).toHaveCount(0);
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Saved on this device'

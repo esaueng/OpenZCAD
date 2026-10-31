@@ -150,9 +150,11 @@ import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
  * serialize — one page transform for preview and export.
  *
  * The model fence: a sheet remembers a fingerprint of the bodies it draws.
- * When the model no longer matches it, the sheet says so, draws its views as
- * outlines only and refuses export until an explicit Update rebinds it. It
- * never quietly redraws a sheet someone may already have handed off.
+ * When the model no longer matches it, the sheet says so and offers an
+ * explicit Update; it never quietly redraws a sheet someone may already have
+ * handed off. Until then it keeps the drawing it last made of that model —
+ * views, dimensions and export included — when this session has one, and
+ * draws outlines only when it does not.
  */
 export interface DrawingWorkspaceProps {
   document: ProjectDocument;
@@ -278,15 +280,44 @@ function viewStateBytes(entry: ViewState): number {
 let retainedProjections: {
   projectId: string;
   cache: Map<string, ViewState>;
+  kept: Map<DrawingSheetId, KeptDrawing[]>;
 } | null = null;
 
-function projectionCacheFor(projectId: string): Map<string, ViewState> {
-  if (retainedProjections?.projectId !== projectId)
-    retainedProjections = { projectId, cache: new Map() };
-  return retainedProjections.cache;
+/**
+ * Kept drawings per sheet, newest first: the one before the latest Update
+ * as well, so undoing the Update brings that drawing back.
+ */
+const KEPT_DRAWINGS_PER_SHEET = 2;
+
+/**
+ * A sheet's last complete drawing: its views' projections by view intent and
+ * the bodies its dimensions measured, under the fingerprint it was drawn at.
+ * A sheet whose model has since changed keeps drawing, dimensioning and
+ * exporting from it until an Update rebinds the sheet to the current model.
+ */
+interface KeptDrawing {
+  fingerprint: string;
+  bodies: DrawingWorkspaceProps['bodies'];
+  projections: Map<string, ViewProjection>;
 }
 
-/** Forgets the retained projections; for tests. */
+function retainedFor(projectId: string) {
+  if (retainedProjections?.projectId !== projectId)
+    retainedProjections = { projectId, cache: new Map(), kept: new Map() };
+  return retainedProjections;
+}
+
+function projectionCacheFor(projectId: string): Map<string, ViewState> {
+  return retainedFor(projectId).cache;
+}
+
+function keptDrawingsFor(
+  projectId: string
+): Map<DrawingSheetId, KeptDrawing[]> {
+  return retainedFor(projectId).kept;
+}
+
+/** Forgets the retained projections and kept drawings; for tests. */
 export function resetRetainedProjections(): void {
   retainedProjections = null;
 }
@@ -1211,13 +1242,38 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         : null,
     [document, sheet, bodies, props.geometryPending, fingerprints]
   );
-  const projections = useViewProjections(
+  const liveProjections = useViewProjections(
     sheet,
     wanted,
     status,
     document,
     props.requestTessellation
   );
+  const keptDrawings = keptDrawingsFor(document.projectId);
+  // A sheet whose model changed keeps the drawing it last made of the model
+  // it is fenced to, so it stays usable until someone chooses to Update it.
+  // Not while the model rebuilds: that may yet turn out to match the sheet.
+  const keptDrawing =
+    sheet &&
+    (status?.kind === 'stale' ||
+      status?.kind === 'replaced' ||
+      status?.kind === 'missing')
+      ? (keptDrawings
+          .get(sheet.sheetId)
+          ?.find((entry) => entry.fingerprint === sheet.source.fingerprint) ??
+        null)
+      : null;
+  const projections = useMemo(() => {
+    if (!keptDrawing || !sheet) return liveProjections;
+    const states = new Map<DrawingViewId, ViewState>();
+    for (const view of sheet.views) {
+      const projection = keptDrawing.projections.get(viewIntentKey(view));
+      if (projection) states.set(view.viewId, { state: 'ready', projection });
+    }
+    return states;
+  }, [keptDrawing, sheet, liveProjections]);
+  /** The bodies the drawing on screen measures: the kept model's, if kept. */
+  const drawBodies = keptDrawing?.bodies ?? bodies;
   const liveBodies = useMemo(
     () =>
       document.bodyOrder.filter((id) => {
@@ -1264,52 +1320,65 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         : [],
     [shownSheet, projections]
   );
-  // The last complete drawing of each sheet seen this session, by view
-  // intent. While the model rebuilds the sheet shows it faded instead of
-  // empty outlines; it is only ever seen, never picked from, annotated or
-  // exported, since it is not the model the document now holds.
-  const lastDrawn = useRef(
-    new Map<DrawingSheetId, Map<string, ViewProjection>>()
-  );
+  // Each complete drawing of a ready sheet is kept, by view intent, with the
+  // bodies it measured: it outlives this workspace, so a model edit made in
+  // Build leaves the sheet as it was drawn until someone Updates it. Views
+  // drawn earlier of the same model stay kept, so toggling one back costs
+  // nothing.
   useEffect(() => {
     if (!shownSheet || status?.kind !== 'ready') return;
     if (drawnViews.length !== shownSheet.views.length) return;
-    lastDrawn.current.set(
-      shownSheet.sheetId,
-      new Map(
-        drawnViews.map(({ view, projection }) => [
-          viewIntentKey(view),
-          projection
-        ])
-      )
+    const previous = keptDrawings.get(shownSheet.sheetId) ?? [];
+    const projections = new Map(
+      previous.find((entry) => entry.fingerprint === status.fingerprint)
+        ?.projections
     );
-  }, [shownSheet, status, drawnViews]);
+    for (const { view, projection } of drawnViews)
+      projections.set(viewIntentKey(view), projection);
+    keptDrawings.set(
+      shownSheet.sheetId,
+      [
+        { fingerprint: status.fingerprint, bodies, projections },
+        ...previous.filter((entry) => entry.fingerprint !== status.fingerprint)
+      ].slice(0, KEPT_DRAWINGS_PER_SHEET)
+    );
+  }, [shownSheet, status, drawnViews, bodies, keptDrawings]);
+  // While the model rebuilds the sheet shows its last drawing faded instead
+  // of empty outlines; it is only ever seen, never picked from, annotated or
+  // exported, since the rebuild may not leave the model it was drawn from.
   const ghostViews: ComposedView[] = useMemo(() => {
     if (!shownSheet || status?.kind !== 'pending') return [];
-    const last = lastDrawn.current.get(shownSheet.sheetId);
+    const last = keptDrawings.get(shownSheet.sheetId)?.[0]?.projections;
     if (!last) return [];
     return shownSheet.views.flatMap((view) => {
       const projection = last.get(viewIntentKey(view));
       return projection ? [{ view, projection }] : [];
     });
-  }, [shownSheet, status]);
-  // Every annotation against the current model. Only a ready sheet draws
-  // or reports them: a stale one has not been redrawn from this model. A
-  // leader whose edge its view no longer draws at all is broken too.
+  }, [shownSheet, status, keptDrawings]);
+  // Every annotation against the model the sheet draws: the current one, or
+  // the kept one of a sheet not yet updated. Only a drawn sheet draws or
+  // reports them. A leader whose edge its view no longer draws at all is
+  // broken too.
   const resolutions = useMemo(
     () =>
       shownSheet
         ? markHiddenLeaders(
             shownSheet,
-            resolveSheetAnnotations(shownSheet, bodies, document.units),
+            resolveSheetAnnotations(shownSheet, drawBodies, document.units),
             drawnViews,
             document.units,
-            bodies
+            drawBodies
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, bodies, document.units, drawnViews]
+    [shownSheet, drawBodies, document.units, drawnViews]
   );
-  const sheetReady = status?.kind === 'ready';
+  /** Drawn and usable: matches the model, or keeps its earlier drawing. */
+  const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
+  /** Drawn from an earlier model than the document's: Update redraws it. */
+  const outdated =
+    status?.kind === 'stale' ||
+    status?.kind === 'replaced' ||
+    status?.kind === 'missing';
   // A tool picks from one sheet's drawn model: a sheet that stops being
   // ready (a collaborator's model edit, a rebuild), or another sheet taking
   // its place (an undo, a delete, a collaborator's edit), ends it rather
@@ -1566,7 +1635,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
 
   const exportSheet = async (format: 'pdf' | 'svg') => {
-    if (!sheet || status?.kind !== 'ready') return;
+    if (!sheet || !sheetReady) return;
     const viewStates = sheet.views.map((view) => {
       const state = projections.get(view.viewId);
       return state?.state === 'ready'
@@ -1902,7 +1971,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const cached = pickCache.current;
     if (
       cached &&
-      cached.bodies === bodies &&
+      cached.bodies === drawBodies &&
       cached.views.length === drawnViews.length &&
       cached.views.every(
         (entry, index) =>
@@ -1913,8 +1982,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return cached;
     const entry = {
       views: drawnViews,
-      bodies,
-      edges: pickableEdges(shownSheet, drawnViews, bodies, document.units),
+      bodies: drawBodies,
+      edges: pickableEdges(shownSheet, drawnViews, drawBodies, document.units),
       drawn: drawnLines(shownSheet, drawnViews, document.units)
     };
     pickCache.current = entry;
@@ -1984,7 +2053,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       placementMm
     );
     if (!annotation) return;
-    const refusal = draftRefusal(annotation, view, bodies, document.units);
+    const refusal = draftRefusal(annotation, view, drawBodies, document.units);
     if (refusal) {
       props.onStatus(refusal);
       setTool(startAnnotationTool(finished.kind));
@@ -2019,7 +2088,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     const view = sheet.views.find((entry) => entry.viewId === repaired.viewId);
-    const refusal = draftRefusal(repaired, view, bodies, document.units);
+    const refusal = draftRefusal(repaired, view, drawBodies, document.units);
     if (refusal) {
       props.onStatus(refusal);
       return;
@@ -2053,7 +2122,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       hit,
       at.point,
       viewAt(at.point),
-      bodies
+      drawBodies
     );
     if (!result.ok) {
       props.onStatus(result.message);
@@ -2190,16 +2259,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const paper = drawingPaperMm(sheet.paper);
   const message = statusMessage(status);
   const offPaper = offPaperReason();
-  const exportReason =
-    status.kind !== 'ready'
-      ? message
-      : sheet.views.some(
-            (view) => projections.get(view.viewId)?.state !== 'ready'
-          )
-        ? 'Drawing the views…'
-        : brokenCount > 0
-          ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
-          : offPaper;
+  const exportReason = !sheetReady
+    ? message
+    : sheet.views.some(
+          (view) => projections.get(view.viewId)?.state !== 'ready'
+        )
+      ? outdated
+        ? 'Update the sheet to draw every view, then export.'
+        : 'Drawing the views…'
+      : brokenCount > 0
+        ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
+        : offPaper;
   // Not blocking: on the paper, but over the border or the title block.
   const layoutWarning = (() => {
     const names = sheet.views
@@ -2338,7 +2408,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       shownSheet,
       draft,
       drawnViews,
-      bodies,
+      drawBodies,
       document.units
     );
   })();
@@ -2367,15 +2437,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ? props.rebuildProgress
       : null;
   // Not blocking export by itself, so never a live status: the sheet's
-  // banner and the export refusal stay the only ones.
+  // status chip and the export refusal stay the only ones.
   const syncLabel =
     status.kind !== 'ready'
       ? null
       : exportReason === 'Drawing the views…'
         ? 'Drawing the views…'
         : 'Matches the model';
+  const canUpdate = status.kind === 'stale' || status.kind === 'replaced';
   const exportBlocked =
-    !message &&
+    (!message || keptDrawing !== null) &&
     (brokenCount > 0 || (exportReason !== null && exportReason === offPaper));
   const selection: 'annotation' | 'view' | null = selectedAnnotation
     ? 'annotation'
@@ -2432,6 +2503,76 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               <span className="drawing-sync">
                 <span className="drawing-sync-dot" aria-hidden="true" />
                 {syncLabel}
+              </span>
+            )}
+            {status.kind === 'pending' && (
+              <span
+                className="drawing-sync is-pending"
+                role="status"
+                title={message ?? undefined}
+              >
+                <span className="drawing-sync-dot" aria-hidden="true" />
+                {progress
+                  ? `Rebuilding ${progress.name} (${progress.index} of ${progress.total})`
+                  : 'Model updating…'}
+                {progress && progress.total > 0 && (
+                  <span
+                    className="drawing-progress"
+                    role="progressbar"
+                    aria-label="Model rebuild"
+                    aria-valuemin={0}
+                    aria-valuemax={progress.total}
+                    aria-valuenow={progress.index}
+                  >
+                    <span
+                      className="drawing-progress-fill"
+                      style={{
+                        width: `${Math.min(100, (100 * progress.index) / progress.total)}%`
+                      }}
+                    />
+                  </span>
+                )}
+                {/* The whole sentence for assistive tech; the pill shows
+                    its gist. */}
+                <span className="visually-hidden">
+                  {progress
+                    ? `. ${ghost ? 'Showing the last drawing until the views redraw.' : 'The views redraw when it finishes.'}`
+                    : `. ${message}`}
+                </span>
+              </span>
+            )}
+            {canUpdate && (
+              <span
+                className="drawing-sync is-outdated"
+                role="status"
+                title={message ?? undefined}
+              >
+                <span className="drawing-sync-dot" aria-hidden="true" />
+                {status.kind === 'replaced'
+                  ? 'Bodies replaced'
+                  : 'Model changed'}
+                <span className="visually-hidden">
+                  {`. ${message}${keptDrawing ? ' Until then it shows the drawing of the earlier model.' : ''}`}
+                </span>
+                <button
+                  type="button"
+                  className="drawing-sync-update"
+                  disabled={!editable}
+                  title={
+                    editDisabledReason ??
+                    'Redraw this sheet from the current model'
+                  }
+                  onClick={() =>
+                    updateSheet({
+                      source: { fingerprint: status.fingerprint },
+                      ...(status.kind === 'replaced'
+                        ? { bodyReplacements: status.replacements }
+                        : {})
+                    })
+                  }
+                >
+                  <RefreshCw size={12} aria-hidden="true" /> Update
+                </button>
               </span>
             )}
             <div
@@ -2498,7 +2639,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 type="button"
                 className="primary"
                 disabled={exportReason !== null}
-                title={exportReason ?? 'Export this sheet as a vector PDF'}
+                title={
+                  exportReason ??
+                  (outdated
+                    ? 'Export this sheet as drawn, before the latest model change'
+                    : 'Export this sheet as a vector PDF')
+                }
                 onClick={() => void exportSheet('pdf')}
               >
                 <FileDown size={13} aria-hidden="true" /> Export PDF
@@ -2508,7 +2654,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 className="secondary"
                 aria-label="Export SVG"
                 disabled={exportReason !== null}
-                title={exportReason ?? 'Export this sheet as SVG'}
+                title={
+                  exportReason ??
+                  (outdated
+                    ? 'Export this sheet as SVG, as drawn before the latest model change'
+                    : 'Export this sheet as SVG')
+                }
                 onClick={() => void exportSheet('svg')}
               >
                 SVG
@@ -2516,47 +2667,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             </div>
           </div>
         </div>
-        {message ? (
-          <div className={`drawing-banner is-${status.kind}`} role="status">
-            <span>
-              {progress
-                ? `Rebuilding the model: ${progress.name} (${progress.index} of ${progress.total}). ${ghost ? 'Showing the last drawing until the views redraw.' : 'The views redraw when it finishes.'}`
-                : message}
-            </span>
-            {progress && progress.total > 0 && (
-              <span
-                className="drawing-progress"
-                role="progressbar"
-                aria-label="Model rebuild"
-                aria-valuemin={0}
-                aria-valuemax={progress.total}
-                aria-valuenow={progress.index}
-              >
-                <span
-                  className="drawing-progress-fill"
-                  style={{
-                    width: `${Math.min(100, (100 * progress.index) / progress.total)}%`
-                  }}
-                />
-              </span>
-            )}
-            {(status.kind === 'stale' || status.kind === 'replaced') && (
-              <button
-                type="button"
-                className="primary"
-                disabled={!editable}
-                onClick={() =>
-                  updateSheet({
-                    source: { fingerprint: status.fingerprint },
-                    ...(status.kind === 'replaced'
-                      ? { bodyReplacements: status.replacements }
-                      : {})
-                  })
-                }
-              >
-                <RefreshCw size={13} aria-hidden="true" /> Update
-              </button>
-            )}
+        {status.kind === 'missing' ? (
+          <div className="drawing-banner is-missing" role="status">
+            <span>{message}</span>
           </div>
         ) : exportBlocked ? (
           <div className="drawing-banner is-blocked" role="status">
@@ -2685,9 +2798,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   >
                     {state?.state === 'error'
                       ? `${label} — ${state.message}`
-                      : ready || status.kind !== 'ready'
+                      : ready
                         ? label
-                        : `${label} — drawing…`}
+                        : status.kind === 'ready'
+                          ? `${label} — drawing…`
+                          : canUpdate
+                            ? `${label} — update to draw`
+                            : label}
                   </text>
                   <rect
                     className="drawing-view-hit"
