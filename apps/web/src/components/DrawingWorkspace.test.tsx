@@ -29,7 +29,10 @@ import {
   drawingSourceFingerprint,
   projectionBodyInput
 } from '../lib/drawing/sheetSources';
-import type { ProjectionBodyInput } from '../lib/drawing/projectView';
+import {
+  projectView,
+  type ProjectionBodyInput
+} from '../lib/drawing/projectView';
 import type * as SheetSources from '../lib/drawing/sheetSources';
 
 // Pass-through, counted: fingerprinting is the costly step a drag must skip.
@@ -345,6 +348,156 @@ describe('DrawingWorkspace', () => {
       );
       expect(project).toHaveBeenCalledTimes(2);
       expect(canvas.textContent).not.toMatch(/worker stopped/);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('draws each view as soon as it is projected, before the rest of the sheet', async () => {
+    const project = vi
+      .spyOn(DrawingProjectionClient.prototype, 'project')
+      .mockImplementationOnce((inputs, views, onView) => {
+        // The first view lands; the others are still being projected.
+        const first = views[0]!;
+        onView?.(first.key, {
+          ok: true,
+          projection: projectView({
+            orientation: first.orientation,
+            hiddenLines: first.hiddenLines,
+            bodies: first.bodyIds.map((id) => inputs[id]!)
+          })
+        });
+        return new Promise(() => {});
+      });
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      setup({ sheet: starter(fingerprint) });
+      const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+      await waitFor(() =>
+        expect(
+          canvas.querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(3)
+      );
+      expect(
+        canvas.querySelectorAll('.drawing-strokes.is-visible polyline').length
+      ).toBeGreaterThan(0);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('keeps the projections when Draw closes and reopens on the same project', async () => {
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const sheet = starter(fingerprint);
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document: ProjectDocument = {
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [sheet] }
+      };
+      const requestTessellation = vi.fn(
+        displayTessellation({ [bodyId]: cube() })
+      );
+      const workspace = (shown: ProjectDocument) => (
+        <DrawingWorkspace
+          document={shown}
+          bodies={{ [bodyId]: cube() }}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          requestTessellation={requestTessellation}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const settled = () =>
+        waitFor(() =>
+          expect(
+            screen
+              .getByRole('application', { name: 'Sheet Sheet 1' })
+              .querySelectorAll('.drawing-view.is-placeholder')
+          ).toHaveLength(0)
+        );
+      const first = render(workspace(document));
+      await settled();
+      expect(project).toHaveBeenCalledTimes(1);
+      // Off to Build and back: every view is drawn at once, with no
+      // tessellation or projection.
+      first.unmount();
+      const second = render(workspace(document));
+      expect(
+        screen
+          .getByRole('application', { name: 'Sheet Sheet 1' })
+          .querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0);
+      expect(project).toHaveBeenCalledTimes(1);
+      expect(requestTessellation).toHaveBeenCalledTimes(1);
+      second.unmount();
+      // Another project keeps nothing of this one's.
+      const other = createProjectDocument('Other', toUserId('test'));
+      render(
+        workspace({
+          ...other,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [sheet] }
+        })
+      );
+      await settled();
+      expect(project).toHaveBeenCalledTimes(2);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('asks again for views whose projection was cut off when Draw closed', async () => {
+    const original = DrawingProjectionClient.prototype.project;
+    const project = vi
+      .spyOn(DrawingProjectionClient.prototype, 'project')
+      // The first workspace closes while its views are still projecting.
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockImplementation(function (this: DrawingProjectionClient, ...args) {
+        return original.apply(this, args);
+      });
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document: ProjectDocument = {
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [starter(fingerprint)] }
+      };
+      const workspace = () => (
+        <DrawingWorkspace
+          document={document}
+          bodies={{ [bodyId]: cube() }}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation({ [bodyId]: cube() })}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const first = render(workspace());
+      await waitFor(() => expect(project).toHaveBeenCalledTimes(1));
+      first.unmount();
+      render(workspace());
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole('application', { name: 'Sheet Sheet 1' })
+            .querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(0)
+      );
+      expect(project).toHaveBeenCalledTimes(2);
     } finally {
       project.mockRestore();
     }

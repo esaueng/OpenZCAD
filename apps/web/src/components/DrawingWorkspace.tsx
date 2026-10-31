@@ -245,6 +245,30 @@ function viewStateBytes(entry: ViewState): number {
   return bytes;
 }
 
+/**
+ * The projections of the project last drawn, kept while Draw is closed. The
+ * workspace mounts only in Draw, so leaving it for Build and coming back
+ * would otherwise project every view again, which on a detailed part takes
+ * seconds. Keys name the model state and the view's intent, so an edit made
+ * in the meantime simply misses; the open sheet's pruning bounds the rest.
+ * Opening another project starts empty.
+ */
+let retainedProjections: {
+  projectId: string;
+  cache: Map<string, ViewState>;
+} | null = null;
+
+function projectionCacheFor(projectId: string): Map<string, ViewState> {
+  if (retainedProjections?.projectId !== projectId)
+    retainedProjections = { projectId, cache: new Map() };
+  return retainedProjections.cache;
+}
+
+/** Forgets the retained projections; for tests. */
+export function resetRetainedProjections(): void {
+  retainedProjections = null;
+}
+
 /** Projections for the sheet's views, cached by model and view intent. */
 function useViewProjections(
   sheet: DrawingSheet | null,
@@ -257,7 +281,14 @@ function useViewProjections(
   const client = useRef<DrawingProjectionClient | null>(null);
   /** Aborted on close: abandons tessellations still queued or running. */
   const closed = useRef<AbortController | null>(null);
-  const cache = useRef(new Map<string, ViewState>());
+  const cache = useRef(projectionCacheFor(document.projectId));
+  cache.current = projectionCacheFor(document.projectId);
+  /**
+   * The 'projecting' markers this workspace put in the cache, so closing it
+   * takes back only its own: the cache outlives it, and a marker left behind
+   * would keep the next workspace from ever asking for that view.
+   */
+  const markers = useRef(new Map<string, ViewState>());
   /**
    * The canonical tessellations of the model the sheet on screen is fenced
    * to, per body, so a pass that only toggles hidden lines does not mesh
@@ -288,8 +319,12 @@ function useViewProjections(
     const lifetime = new AbortController();
     client.current = owned;
     closed.current = lifetime;
+    const ownMarkers = markers.current;
     return () => {
       mounted.current = false;
+      for (const [key, marker] of ownMarkers)
+        if (cache.current.get(key) === marker) cache.current.delete(key);
+      ownMarkers.clear();
       lifetime.abort();
       owned.dispose();
       client.current = null;
@@ -327,6 +362,7 @@ function useViewProjections(
     // geometry once however many views draw it.
     const views: DrawingProjectionViewRequest[] = [];
     const bodyIds = new Set<BodyId>();
+    const passMarkers = new Map<string, ViewState>();
     for (const view of sheet.views) {
       const key = projectionKey(fingerprint, view);
       if (cache.current.has(key) || views.some((entry) => entry.key === key))
@@ -341,7 +377,10 @@ function useViewProjections(
         // whether its projection was cached or made after a reload.
         bodyIds: [...view.bodyIds].sort()
       });
-      cache.current.set(key, { state: 'projecting' });
+      const marker: ViewState = { state: 'projecting' };
+      cache.current.set(key, marker);
+      passMarkers.set(key, marker);
+      markers.current.set(key, marker);
     }
     if (views.length > 0) {
       outstanding.current = true;
@@ -376,7 +415,19 @@ function useViewProjections(
             if (!input) throw new Error(`Body ${id} has no geometry to draw.`);
             inputs[id] = input;
           }
-          return owned.project(inputs, views);
+          // Each view shows as soon as it is projected, not when the
+          // slowest view of the sheet is done.
+          return owned.project(inputs, views, (key, result) => {
+            failures.current.delete(key);
+            markers.current.delete(key);
+            cache.current.set(
+              key,
+              result.ok
+                ? { state: 'ready', projection: result.projection }
+                : { state: 'error', message: result.error }
+            );
+            if (mounted.current) setRevision((value) => value + 1);
+          });
         })
         .then(
           (results) => {
@@ -385,6 +436,7 @@ function useViewProjections(
               // An answer clears the transport-failure count: retries are
               // counted per run of failures, not over the key's lifetime.
               failures.current.delete(view.key);
+              markers.current.delete(view.key);
               cache.current.set(
                 view.key,
                 result?.ok
@@ -406,6 +458,11 @@ function useViewProjections(
             const aborted =
               error instanceof Error && error.name === 'AbortError';
             for (const view of views) {
+              // A view already answered keeps its answer, and one another
+              // workspace has asked for since is not this pass's to forget.
+              const marker = passMarkers.get(view.key);
+              markers.current.delete(view.key);
+              if (cache.current.get(view.key) !== marker) continue;
               const tries = (failures.current.get(view.key) ?? 0) + 1;
               if (!aborted) failures.current.set(view.key, tries);
               if (aborted || tries < 3) cache.current.delete(view.key);
