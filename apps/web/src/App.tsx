@@ -4112,6 +4112,19 @@ export function App() {
   const reusableRadiusPreview = useRef<{
     candidate: RadiusPreviewCandidate;
   } | null>(null);
+  const radiusRestRebuilds = useRef(
+    new PreviewRebuilds<ProjectDocument['derived']>()
+  ).current;
+  const reusableRadiusRestPreview = useRef<{
+    candidate: RadiusPreviewCandidate;
+    derived: ProjectDocument['derived'];
+  } | null>(null);
+  const [lastDirectEditFailure, setLastDirectEditFailure] = useState<{
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    message: string;
+  } | null>(null);
+  useEffect(() => setLastDirectEditFailure(null), [doc?.projectId, doc?.version]);
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
@@ -4220,15 +4233,32 @@ export function App() {
     })
   ).current;
   /**
-   * A hole drags as a viewport projection, so nothing exact runs per snap.
-   * Once the hand rests, this rebuilds the held size off screen: a size the
-   * kernel refuses shows its refusal while the hand is still on it, instead
-   * of only after release. It never publishes geometry over the projection.
+   * Once a hole drag rests, fully validate its held size off screen. The
+   * visible drag can use a viewport projection or an exact display frame;
+   * neither display-only snapshot is an authoritative commit. A refusal is
+   * reported while the hand still holds that size, before release.
    */
   const cylinderRadiusRestCheck = useRef(
-    new LivePreview<RadiusPreviewCandidate, GeometryReadyState>({
+    new LivePreview<RadiusPreviewCandidate, ProjectDocument['derived']>({
       ...cylinderRadiusExact,
+      // Rest validates the actual candidate completely. The same result can
+      // answer a release; a display-only snapshot cannot author a commit.
+      derive: async (candidate) => {
+        const derived = await radiusRestRebuilds.start(candidate, () =>
+          geometry.syncOnce(candidate.document)
+        );
+        const rejection = offsetPreviewRejection({
+          ...candidate,
+          derived,
+          documentMoved: !previewBaseIsCurrent(candidate)
+        });
+        if (rejection) throw new Error(rejection.message);
+        return derived;
+      },
       publish: (preview) => {
+        reusableRadiusRestPreview.current = preview
+          ? { candidate: preview.document, derived: preview.derived }
+          : null;
         if (!preview) return;
         if (preview.document.radius === cylinderRadiusHandValue.current) {
           recoverPreviewInteraction();
@@ -4245,6 +4275,15 @@ export function App() {
       cylinderRadiusRestTimer.current = null;
     }
     cylinderRadiusRestCheck.clear();
+  }
+  function queueCylinderRadiusRestCheck(radius: number) {
+    cylinderRadiusRestTimer.current = window.setTimeout(() => {
+      cylinderRadiusRestTimer.current = null;
+      if (cylinderRadiusHandValue.current !== radius) return;
+      // Complete the live display frame before validating it for release.
+      if (cylinderRadiusPreview.running) queueCylinderRadiusRestCheck(radius);
+      else cylinderRadiusRestCheck.request(radius);
+    }, CYLINDER_RADIUS_REST_MS);
   }
 
   /**
@@ -4597,6 +4636,18 @@ export function App() {
     onValidationFailed: (diagnostic, value) => {
       const pending = pendingDirectEditRef.current;
       pendingDirectEditRef.current = null;
+      const current = managerRef.current?.document;
+      if (
+        current &&
+        pending?.document.projectId === current.projectId &&
+        pending.document.version === current.version
+      ) {
+        setLastDirectEditFailure({
+          projectId: current.projectId,
+          version: current.version,
+          message: diagnostic.message
+        });
+      }
       recordDirectEditOutcome('refused', {
         ...(pending
           ? {
@@ -23306,15 +23357,8 @@ export function App() {
       // transform during drag. Drop any older worker result so it cannot flash
       // over that proxy; release still validates one exact kernel rebuild.
       cylinderRadiusPreview.clear();
-      if (current.target.concavity === 'hole') {
-        cylinderRadiusRestTimer.current = window.setTimeout(() => {
-          cylinderRadiusRestTimer.current = null;
-          if (cylinderRadiusHandValue.current === radius) {
-            cylinderRadiusRestCheck.request(radius);
-          }
-        }, CYLINDER_RADIUS_REST_MS);
-      }
     }
+    if (current.target.concavity === 'hole') queueCylinderRadiusRestCheck(radius);
   }
 
   function handleCylinderRadiusCancel() {
@@ -23363,12 +23407,21 @@ export function App() {
       setStatus('Radius is too small to form valid geometry at this scale.');
       return false;
     }
-    const candidate =
+    const restReuse =
       exact === undefined
+        ? radiusRestRebuilds.reusable(
+            reusableRadiusRestPreview.current,
+            cylinderRadiusRestCheck.running?.document,
+            (candidate) =>
+              candidate.radius === radius && previewSelectionIsCurrent(candidate)
+          )
+        : null;
+    const candidate =
+      restReuse?.candidate ?? (exact === undefined
         ? cylinderRadiusPreview.running?.document?.radius === radius
           ? cylinderRadiusPreview.running.document
           : reusableRadiusPreview.current?.candidate
-        : undefined;
+        : undefined);
     const reuse =
       candidate &&
       candidate.radius === radius &&
@@ -23451,6 +23504,13 @@ export function App() {
             managerRef.current!.document,
             plan.sourceFeatureId
           )
+        : undefined,
+      restReuse
+        ? {
+            baseProjectId: restReuse.candidate.baseProjectId,
+            baseVersion: restReuse.candidate.baseVersion,
+            derived: restReuse.derived
+          }
         : undefined
     );
     return true;
@@ -28890,6 +28950,13 @@ export function App() {
           editPending={
             isOperationState(interaction) && interaction.phase === 'validating'
           }
+          editRefusal={
+            lastDirectEditFailure?.projectId === doc.projectId &&
+            lastDirectEditFailure.version === doc.version
+              ? lastDirectEditFailure.message
+              : null
+          }
+          onReviewEditFailure={() => setActivityLogOpen(true)}
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
@@ -30636,6 +30703,11 @@ export function App() {
                 />
               ) : interaction.mode === 'region' && !modelingLocked ? (
                 <ExtrudeCommand
+                  resolvedChoice={
+                    previewDoc
+                      ? reusableRegionExtrudePreview.current?.resolved.inference
+                      : null
+                  }
                   key={`extrude-${interaction.target.sketchId}`}
                   initial={{
                     name: 'Extrude',
