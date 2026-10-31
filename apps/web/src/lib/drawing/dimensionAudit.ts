@@ -3,12 +3,14 @@ import {
   type BoundingBox,
   type DrawingAnnotationId,
   type DrawingSheet,
+  type DrawingView,
   type EdgeTopology,
   type FaceTopology,
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
 import {
+  annotationBody,
   annotationModelReading,
   defaultDimensionDecimals,
   formatDrawingNumber,
@@ -58,6 +60,10 @@ import {
  * face no feature explains — not the part's envelope, not a recognized
  * feature's face, not the floor or shoulder of a turned surface — is raw
  * geometry, and its position is marked so (decision 2).
+ *
+ * A section view (D03) measures its cut body's edges, so a position inside
+ * the part — a bore's floor, an internal step — that no outside view shows
+ * visible is stated there, not on hidden lines (slice F).
  *
  * Everything is read from the current model, as dimensions are; nothing is
  * stored. See docs/plans/drawing-auto-dimensioning-plan.md.
@@ -698,6 +704,20 @@ export class Links {
   }
 }
 
+/**
+ * The edges `view` draws of `bodyId`, as dimensions measure them: a
+ * section's cut body (D03), or the model body's. A section whose body was
+ * cut from its tessellation has no cut edges, and so nothing to measure.
+ */
+export function viewEdges(
+  bodies: AnnotationBodies,
+  view: Pick<DrawingView, 'viewId' | 'section'>,
+  bodyId: string
+): readonly EdgeTopology[] {
+  const body = annotationBody(bodies, view, bodyId);
+  return body && !body.consumed ? (body.topology?.edges ?? []) : [];
+}
+
 /** Whether a view on the sheet measures along `axis` true size. */
 export function viewsAlong(
   sheet: DrawingSheet,
@@ -705,58 +725,56 @@ export function viewsAlong(
   axis: AuditAxis
 ) {
   return sheet.views.filter((view) => {
-    // A section (D03) draws a cut body whose edges are not the model's:
-    // dimensions read from model edges are not placed there (D06 slice F).
-    if (
-      view.orientation === 'iso' ||
-      view.section ||
-      !view.bodyIds.includes(bodyId as never)
-    )
+    if (view.orientation === 'iso' || !view.bodyIds.includes(bodyId as never))
       return false;
     const frame = DRAWING_VIEW_FRAMES[view.orientation];
     return axisOf(frame.x) === axis || axisOf(frame.up) === axis;
   });
 }
 
+/** Whether `view` looks straight along `axis` (a circle about it is round). */
+function faceOn(view: DrawingView, axis: Vector3): boolean {
+  return (
+    Math.abs(
+      Math.abs(dot(axis, DRAWING_VIEW_FRAMES[view.orientation].direction)) - 1
+    ) <= 1e-6
+  );
+}
+
 /**
- * Whether a dimension can land on `value` along `axis`: an open edge ends
- * there, a circle centred there faces a view that measures `axis`, or a rim
- * about `axis` lies there, whose silhouette (v48) a view measuring `axis`
- * sees side-on.
+ * The views in which a dimension can land on `value` along `axis`: one that
+ * measures `axis` and draws an open edge ending there, a circle centred
+ * there face-on, or a rim about `axis` lying there, whose silhouette (v48)
+ * it sees side-on. A section measures its cut body's edges, so a bore's
+ * floor is a visible line there where every outside view sees only the
+ * hidden silhouette of its rim.
  */
-function anchorable(
+function anchoringViews(
   sheet: DrawingSheet,
   bodyId: string,
-  edges: readonly EdgeTopology[],
+  bodies: AnnotationBodies,
   axis: AuditAxis,
   value: number
-): boolean {
-  const views = viewsAlong(sheet, bodyId, axis);
-  if (views.length === 0) return false;
-  return edges.some((edge) => {
-    if (edge.displayRole === 'seam') return false;
-    const circle = edge.curve?.circle;
-    if (circle) {
-      if (!same(circle.center[axis], value)) return false;
-      if (Math.abs(Math.abs(circle.axis[axis]) - 1) <= 1e-9) return true;
-      return views.some(
-        (view) =>
-          Math.abs(
-            Math.abs(
-              dot(circle.axis, DRAWING_VIEW_FRAMES[view.orientation].direction)
-            ) - 1
-          ) <= 1e-6
+): DrawingView[] {
+  const at = AXES.indexOf(axis);
+  return viewsAlong(sheet, bodyId, axis).filter((view) =>
+    viewEdges(bodies, view, bodyId).some((edge) => {
+      if (edge.displayRole === 'seam') return false;
+      const circle = edge.curve?.circle;
+      if (circle) {
+        if (!same(circle.center[axis], value)) return false;
+        if (Math.abs(Math.abs(circle.axis[axis]) - 1) <= 1e-9) return true;
+        return faceOn(view, circle.axis);
+      }
+      const p = edge.points;
+      if (p.length < 6) return false;
+      const closed =
+        edge.vertexIds !== undefined && edge.vertexIds[0] === edge.vertexIds[1];
+      return (
+        !closed && (same(p[at]!, value) || same(p[p.length - 3 + at]!, value))
       );
-    }
-    const p = edge.points;
-    if (p.length < 6) return false;
-    const at = AXES.indexOf(axis);
-    const closed =
-      edge.vertexIds !== undefined && edge.vertexIds[0] === edge.vertexIds[1];
-    return (
-      !closed && (same(p[at]!, value) || same(p[p.length - 3 + at]!, value))
-    );
-  });
+    })
+  );
 }
 
 /**
@@ -1047,22 +1065,17 @@ export function readDimensionState(
     for (const group of body.sizes) {
       audit.required += 1;
       if (sizeStatedBy.has(group)) continue;
-      const faceOn = sheet.views.some(
+      const seen = sheet.views.some(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
-          !view.section &&
-          group.axes.some(
-            (axis) =>
-              Math.abs(
-                Math.abs(
-                  dot(
-                    axis.direction,
-                    DRAWING_VIEW_FRAMES[view.orientation].direction
-                  )
-                ) - 1
-              ) <= 1e-6
-          )
+          group.axes.some((axis) => faceOn(view, axis.direction)) &&
+          // A section states it only where its cut leaves one of the circles.
+          (!view.section ||
+            viewEdges(bodies, view, bodyId).some((edge) => {
+              const circle = edge.curve?.circle;
+              return circle !== undefined && circleInGroup(group, circle);
+            }))
       );
       // A turned diameter is also stated across its outline, side-on.
       const sideOn =
@@ -1082,7 +1095,7 @@ export function readDimensionState(
             )
         );
       const finding = { bodyId, message: `${sizeLabel(group, units)}.` };
-      if (faceOn || sideOn) audit.missing.push(finding);
+      if (seen || sideOn) audit.missing.push(finding);
       else
         audit.unmeasurable.push({
           bodyId,
@@ -1170,40 +1183,59 @@ export function readDimensionState(
         .sort((p, q) => p.position.value - q.position.value);
       const datum = graph.find(order[0]!.index);
       const seen = new Set([datum]);
-      // A virtual point (v48/v49) marks a position wherever a view sees
-      // its axis, which `viewsAlong` already requires.
-      const marks = (position: Position) =>
-        position.mark !== undefined
-          ? viewsAlong(sheet, bodyId, axis).length > 0
-          : anchorable(
-              sheet,
-              bodyId,
-              bodies[bodyId]!.topology!.edges,
-              axis,
-              position.value
-            );
-      const datumCanAnchor = order.some(
-        ({ position, index }) => graph.find(index) === datum && marks(position)
+      // Sections the kernel would not cut exactly have no edges to measure.
+      const approximate = sheet.views.flatMap((view) =>
+        view.section &&
+        view.bodyIds.includes(bodyId as never) &&
+        annotationBody(bodies, view, bodyId) !== undefined &&
+        viewEdges(bodies, view, bodyId).length === 0
+          ? [`${view.section.label}-${view.section.label}`]
+          : []
       );
+      /** The views that can mark some position of a linked group. */
+      const groupViews = (root: number) =>
+        new Set(
+          order.flatMap(({ position, index }) =>
+            graph.find(index) !== root
+              ? []
+              : // A virtual point (v48/v49) marks a position in every
+                // outside view that measures its axis; a section draws a
+                // cut body whose faces are not the ones it names.
+                position.mark !== undefined
+                ? viewsAlong(sheet, bodyId, axis).filter(
+                    (view) => !view.section
+                  )
+                : anchoringViews(sheet, bodyId, bodies, axis, position.value)
+          )
+        );
+      const datumViews = groupViews(datum);
       for (const { position, index } of order) {
         const root = graph.find(index);
         if (seen.has(root)) continue;
         seen.add(root);
         const message = `${axis.toUpperCase()}: nothing locates ${position.label} from ${order[0]!.position.label}.`;
-        const canAnchor =
-          datumCanAnchor &&
-          order.some(
-            (entry) => graph.find(entry.index) === root && marks(entry.position)
-          );
-        if (canAnchor) audit.missing.push({ bodyId, message });
-        else
-          audit.unmeasurable.push({
+        const targetViews = groupViews(root);
+        if (datumViews.size > 0 && targetViews.size > 0) {
+          // Only a section marks it: say where it can be stated.
+          const sections = [...targetViews].filter((view) => view.section);
+          audit.missing.push({
             bodyId,
             message:
-              viewsAlong(sheet, bodyId, axis).length === 0
-                ? `${message.slice(0, -1)}: add a view that shows ${axis.toUpperCase()}.`
-                : `${message.slice(0, -1)}: no edge or rim marks it in a view yet.`
+              sections.length === targetViews.size
+                ? `${message.slice(0, -1)}, which only section ${sections.map((view) => `${view.section!.label}-${view.section!.label}`).join(' or ')} shows.`
+                : message
           });
+          continue;
+        }
+        audit.unmeasurable.push({
+          bodyId,
+          message:
+            viewsAlong(sheet, bodyId, axis).length === 0
+              ? `${message.slice(0, -1)}: add a view that shows ${axis.toUpperCase()}.`
+              : approximate.length > 0
+                ? `${message.slice(0, -1)}: no edge or rim marks it in a view yet, and section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot be dimensioned.`
+                : `${message.slice(0, -1)}: no edge or rim marks it in a view yet.`
+        });
       }
     }
   }

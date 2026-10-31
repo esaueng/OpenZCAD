@@ -1967,6 +1967,69 @@ describe('DrawingWorkspace section views (D03)', () => {
     ).toBe(false);
   });
 
+  it('places Auto-dimension on the section where only it measures an axis (D06 slice F)', async () => {
+    resetRetainedProjections();
+    // Front and section A-A only: the front measures X and Z, so the
+    // section's cut edges are the only ones that can state Y.
+    const exact = { [bodyId]: cube(10, true) };
+    const fingerprint = drawingSourceFingerprint(exact, [bodyId])!;
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [withSection(fingerprint)] }
+        }}
+        bodies={exact}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation(exact)}
+        requestSection={() => Promise.resolve({ [bodyId]: halfCube() })}
+        editDisabledReason={null}
+        onCommand={onCommand}
+        onStatus={vi.fn()}
+      />
+    );
+    const missing = await screen.findByRole('list', {
+      name: 'Missing dimensions'
+    });
+    expect(
+      within(missing)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toContain(
+      'Y: nothing locates the face at y = 10 from the face at y = 0, which only section A-A shows.'
+    );
+    const auto = screen.getByRole('button', { name: 'Auto-dimension' });
+    await waitFor(() => expect(auto).toBeEnabled());
+    await userEvent.click(auto);
+    const preview = screen.getByRole('group', {
+      name: 'Auto-dimension preview'
+    });
+    expect(
+      within(preview).getByText('Adds 3 dimensions, shown on the sheet.')
+    ).toBeTruthy();
+    // Every one visible, so it neither measures hidden lines nor asks for
+    // another section.
+    expect(within(preview).queryByText(/hidden lines/)).toBeNull();
+    expect(within(preview).queryByText(/Add a section/)).toBeNull();
+    await userEvent.click(
+      within(preview).getByRole('button', { name: 'Apply' })
+    );
+    const added = onCommand.mock.calls[0]![0].commands!.map(
+      (entry) =>
+        (entry as { payload: { annotation: DrawingAnnotation } }).payload
+          .annotation
+    );
+    const onSection = added.filter((a) => a.viewId === 'dvw_section');
+    expect(onSection.length).toBeGreaterThan(0);
+    expect(
+      onSection.some((a) => a.kind === 'linear' && a.direction === 'horizontal')
+    ).toBe(true);
+  });
+
   it('shows a refused section on its view and refuses export, without retrying', async () => {
     resetRetainedProjections();
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [

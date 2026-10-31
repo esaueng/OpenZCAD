@@ -246,7 +246,29 @@ Each needs its own schema bump, claimed from open PRs at the time
   a dimension line runs along another line, or lines cross anywhere but at
   a foot (a shared baseline extension line) or a radial centre.
 - **Hidden lines.** With no visible anchor in any view, a dimension measures
-  hidden lines and the preview says so, until D03 sections.
+  hidden lines and the preview says so (and, since slice F, asks for a
+  section).
+
+## Slice F decisions (sections, 2026-10-31)
+
+- **Cut edges are anchors.** A D03 section view measures its cut body's
+  exact edges (`sectionBodyKey`), in the checker and the generator alike,
+  so a bore's floor or a pocket's depth is a visible line there where every
+  outside view sees only a hidden line or a rim's hidden silhouette (v48).
+  A requirement only a section can mark is reported as such ("which only
+  section A-A shows").
+- **Visible before hidden.** The generator's existing visible-first scoring
+  puts an internal position on the section's visible cut rather than on a
+  hidden line of an outside view; the view already holding the body's
+  dimensions breaks ties.
+- **Ask, never add.** Whatever Auto-dimension can place only on hidden
+  lines is named in one preview line, "Add a section through the part to
+  dimension … on visible lines." A section is not created automatically:
+  its plane is a drawing choice.
+- **Approximate sections.** A section the pinned kernel would not cut
+  exactly (every plane through the turned foot's tori and cones, on this
+  pin) has no edge identity, so nothing is placed on it and the advice says
+  why.
 
 ## Slice D decisions (history-less imports, schema v49, 2026-10-31)
 
@@ -300,8 +322,9 @@ Each needs its own schema bump, claimed from open PRs at the time
 | E     | Assistant operations and style requests                                                           | Proposal shown only when the checker passes; fake-provider e2e                                                |
 | F     | Section-aware placement once D03 lands                                                            | Bore depth and floor dimensioned on the section rather than on hidden lines                                   |
 
-Until D03, an internal feature with no visible view is dimensioned on hidden
-lines and the report says so.
+Since slice F, an internal feature is dimensioned on a section when the
+sheet has one that marks it; otherwise on hidden lines, and the report asks
+for a section.
 
 ## Evaluation corpus
 

@@ -1109,6 +1109,9 @@ function AutoDimensionPreview(props: {
           recognized feature of the import states {raw === 1 ? 'it' : 'them'}.
         </p>
       )}
+      {plan.sectionAdvice && (
+        <p className="drawing-hint">{plan.sectionAdvice}</p>
+      )}
       {waiting > 0 && (
         <p className="drawing-hint">
           Skips {waiting} it can&apos;t dimension yet, listed below.
