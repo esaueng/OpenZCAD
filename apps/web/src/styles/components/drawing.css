@@ -158,14 +158,8 @@
   flex: 1 1 auto;
 }
 
-.drawing-banner.is-stale,
-.drawing-banner.is-replaced,
 .drawing-banner.is-missing {
   border-color: var(--color-warning);
-}
-
-.drawing-banner.is-pending {
-  color: var(--color-text-muted);
 }
 
 /* The right panel is contextual: the sheet's settings, or the selected
@@ -601,10 +595,54 @@
 }
 
 .drawing-sync-dot {
+  flex: 0 0 auto;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--color-success);
+}
+
+.drawing-sync.is-pending .drawing-sync-dot {
+  background: var(--color-text-muted);
+}
+
+/* A sheet drawn from an earlier model: one quiet chip, not a banner, shaped
+   like the zoom group beside it. The drawing stays usable; Update is an
+   offer, never forced. */
+.drawing-sync.is-outdated {
+  gap: 8px;
+  padding: 3px 3px 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-text);
+}
+
+.drawing-sync.is-outdated .drawing-sync-dot {
+  background: var(--color-warning);
+}
+
+.drawing-sync-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.drawing-sync-update:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.drawing-sync-update:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .drawing-export {

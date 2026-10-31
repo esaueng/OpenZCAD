@@ -328,6 +328,29 @@
   --hud-accent-border: color-mix(in srgb, var(--color-select) 45%, transparent);
 }
 
+/* Other handle layouts keep their independent anchors. Edge operation and
+   value pills share one flex row so text growth never closes their gap. */
+.handle-chip-pair {
+  display: contents;
+}
+
+.handle-chip-pair[data-paired] {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  transform: translateY(-50%);
+}
+
+.handle-chip-pair[data-paired] > .handle-value-chip,
+.handle-chip-pair[data-paired] > .handle-label-chip {
+  position: static;
+  flex: none;
+  transform: none;
+}
+
 /* Value chip beside a drag handle; tap to type the exact value. A small,
    translucent tag rather than a tooltip: it reads at a glance and lets the
    geometry under it show through. */

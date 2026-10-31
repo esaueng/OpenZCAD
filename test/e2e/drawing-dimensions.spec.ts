@@ -136,29 +136,27 @@ test('dimensions a drawing view from the model and follows its Update', async ({
   expect(pdf).toContain('(30) Tj');
   expect(pdf).toContain('(BREAK SHARP EDGES) Tj');
 
-  // Widen the box: the sheet goes stale and its dimensions show no value
-  // until the explicit Update reads the new model.
+  // Widen the box: the sheet goes stale but keeps its drawing, dimensions
+  // read from the model it was drawn from, until the explicit Update reads
+  // the new one.
   await mode(page, 'Build').click();
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   await inspector.getByRole('textbox', { name: 'Width (X)' }).fill('45');
   await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edited Box');
   await mode(page, 'Draw').click();
-  const banner = drawings.locator('.drawing-banner');
-  await expect(banner).toContainText(
+  const outdated = drawings.locator('.drawing-sync.is-outdated');
+  await expect(outdated).toContainText(
     'The model changed since this sheet was drawn',
     { timeout: 20_000 }
   );
-  const list = panel.getByRole('listbox', {
-    name: 'Annotations on this sheet'
-  });
   await expect(
-    list.getByRole('option', { name: 'Horizontal dimension', exact: true })
+    canvas.getByRole('button', { name: 'Horizontal dimension 30' })
   ).toBeVisible();
   await expect(
-    canvas.getByRole('button', { name: /^Horizontal dimension/ })
-  ).toHaveCount(0);
-  await banner.getByRole('button', { name: 'Update' }).click();
+    drawings.getByRole('button', { name: 'Export PDF' })
+  ).toBeEnabled();
+  await outdated.getByRole('button', { name: 'Update' }).click();
   await expect(
     canvas.getByRole('button', { name: 'Horizontal dimension 45' })
   ).toBeVisible({ timeout: 20_000 });

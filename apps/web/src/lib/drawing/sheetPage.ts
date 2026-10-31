@@ -688,3 +688,102 @@ export function fitViewsToSheet(
     }))
   };
 }
+
+/** Paper kept between "Auto scale" grid cells and around them. */
+const AUTO_SCALE_GAP_MM = 15;
+/** View centres closer than this on paper share a row or column. */
+const AUTO_SCALE_ALIGN_MM = 0.5;
+
+/**
+ * "Auto scale": the sheet's views laid out again as a grid above the title
+ * block, at the largest preset scale at which the grid fits. Views whose
+ * centres line up keep sharing a row or column, so projected views stay
+ * aligned with their base and the arrangement survives — but, unlike "Fit
+ * views to sheet", the gaps between views are set afresh, so a layout that
+ * overlaps or sprawls after a scale change comes out evenly spaced at the
+ * scale that fills the paper. Null when the sheet has no view with an
+ * extent, or the grid fits at no preset.
+ */
+export function autoScaleSheet(
+  sheet: DrawingSheet,
+  extents: ReadonlyMap<string, ViewExtent>,
+  units: UnitSystem
+): {
+  scale: DrawingSheet['scale'];
+  centers: {
+    viewId: DrawingView['viewId'];
+    centerMm: { x: number; y: number };
+  }[];
+} | null {
+  const placed = sheet.views.flatMap((view) => {
+    const extent = extents.get(view.viewId);
+    return extent
+      ? [
+          {
+            view,
+            width: extent.maxU - extent.minU,
+            height: extent.maxV - extent.minV
+          }
+        ]
+      : [];
+  });
+  if (placed.length === 0) return null;
+  // Track index per view along one axis, and each track's model size.
+  const tracks = (axis: 'x' | 'y', size: 'width' | 'height') => {
+    const order = [...placed].sort(
+      (a, b) => a.view.centerMm[axis] - b.view.centerMm[axis]
+    );
+    const index = new Map<DrawingView['viewId'], number>();
+    const sizes: number[] = [];
+    let last = -Infinity;
+    for (const entry of order) {
+      if (entry.view.centerMm[axis] - last > AUTO_SCALE_ALIGN_MM) sizes.push(0);
+      last = entry.view.centerMm[axis];
+      index.set(entry.view.viewId, sizes.length - 1);
+      sizes[sizes.length - 1] = Math.max(sizes.at(-1)!, entry[size]);
+    }
+    return { index, sizes };
+  };
+  const columns = tracks('x', 'width');
+  const rows = tracks('y', 'height');
+  const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
+  const needU = sum(columns.sizes);
+  const needV = sum(rows.sizes);
+  const area = sheetViewArea(sheet);
+  // Presets run from the largest scale down; take the first that fits.
+  const scale = DRAWING_SCALE_PRESETS.find((candidate) => {
+    const k = drawingPaperPerModelUnit(candidate, units);
+    return (
+      needU * k + (columns.sizes.length + 1) * AUTO_SCALE_GAP_MM <=
+        area.width + PLACEMENT_TOLERANCE_MM &&
+      needV * k + (rows.sizes.length + 1) * AUTO_SCALE_GAP_MM <=
+        area.height + PLACEMENT_TOLERANCE_MM
+    );
+  });
+  if (!scale) return null;
+  const k = drawingPaperPerModelUnit(scale, units);
+  // Leftover paper is shared evenly between the gaps, as in the starter.
+  const trackCenters = (sizes: number[], start: number, span: number) => {
+    const gap = (span - sum(sizes) * k) / (sizes.length + 1);
+    let at = start;
+    return sizes.map((size) => {
+      at += gap;
+      const center = at + (size * k) / 2;
+      at += size * k;
+      return center;
+    });
+  };
+  const xs = trackCenters(columns.sizes, area.x, area.width);
+  const ys = trackCenters(rows.sizes, area.y, area.height);
+  const round = (value: number) => Math.round(value * 10) / 10;
+  return {
+    scale,
+    centers: placed.map(({ view }) => ({
+      viewId: view.viewId,
+      centerMm: {
+        x: round(xs[columns.index.get(view.viewId)!]!),
+        y: round(ys[rows.index.get(view.viewId)!]!)
+      }
+    }))
+  };
+}

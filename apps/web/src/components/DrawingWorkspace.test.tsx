@@ -14,6 +14,7 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import {
+  formatDrawingScale,
   toUserId,
   type BodyId,
   type BodyRepresentation,
@@ -630,7 +631,7 @@ describe('DrawingWorkspace', () => {
       canvas.querySelectorAll('.drawing-view.is-placeholder')
     ).toHaveLength(4);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Rebuilding the model: Gear (5 of 10). Showing the last drawing'
+      'Rebuilding Gear (5 of 10). Showing the last drawing'
     );
     expect(
       screen.getByRole('progressbar', { name: 'Model rebuild' })
@@ -691,7 +692,7 @@ describe('DrawingWorkspace', () => {
     expect(window.localStorage.getItem('openzcad.drawing.darkPaper')).toBe('0');
   });
 
-  it('shows a stale sheet as outlines, refuses export and rebinds on Update', async () => {
+  it('shows a stale sheet it never drew as outlines, refuses export and rebinds on Update', async () => {
     const before = drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
     const { onCommand } = setup({ sheet: starter(before), size: 12 });
     const banner = screen.getByRole('status');
@@ -1084,6 +1085,43 @@ describe('DrawingWorkspace', () => {
     expect(options).toEqual(
       expect.arrayContaining(['1:200', '1:500', '1:1000'])
     );
+    // The ISO enlargements and common intermediates, largest first.
+    expect(options).toEqual(
+      expect.arrayContaining(['50:1', '20:1', '4:1', '1:4', '1:25', '1:250'])
+    );
+    expect(options.slice(0, 3)).toEqual(['50:1', '20:1', '10:1']);
+  });
+
+  it('auto scales a hand-shrunk sheet back up in one undoable command', async () => {
+    const fitted = starter(
+      drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+    );
+    const sheet: DrawingSheet = {
+      ...fitted,
+      scale: { numerator: 1, denominator: 2 }
+    };
+    const { onCommand, onStatus } = setup({ sheet });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Auto scale' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.label).toBe('Auto scale');
+    const before: ProjectDocument = {
+      ...createProjectDocument('Bracket', toUserId('test')),
+      bodyOrder: [bodyId],
+      drawings: { sheets: [sheet] }
+    };
+    command.validate(before);
+    const after = command.apply(before);
+    expect(after.drawings!.sheets[0]!.scale).toEqual(fitted.scale);
+    expect(onStatus).toHaveBeenLastCalledWith(
+      `Scaled the views to ${formatDrawingScale(fitted.scale)}, the largest scale that fits the sheet.`
+    );
   });
 
   it('frees the projections of the last sheet when it is deleted', async () => {
@@ -1249,6 +1287,114 @@ describe('DrawingWorkspace', () => {
       };
       return { ...sheet, annotations: [annotation] };
     }
+
+    it('keeps the earlier drawing usable after a model change until Update', async () => {
+      const doc: ProjectDocument = {
+        ...createProjectDocument('Bracket', toUserId('test')),
+        bodyOrder: [bodyId],
+        drawings: { sheets: [dimensioned()] }
+      };
+      const onCommand = vi.fn((_command: AnyCommand) => true);
+      const workspace = (size: number, shown = doc) => {
+        const bodies = { [bodyId]: cube(size) };
+        return (
+          <DrawingWorkspace
+            document={shown}
+            bodies={bodies}
+            geometryPending={false}
+            defaultBodyIds={[bodyId]}
+            requestTessellation={displayTessellation(bodies)}
+            editDisabledReason={null}
+            onCommand={onCommand}
+            onStatus={vi.fn()}
+          />
+        );
+      };
+      const first = render(workspace(10));
+      const drawn = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+      await within(drawn).findByRole('button', {
+        name: 'Horizontal dimension 10'
+      });
+      await waitFor(() =>
+        expect(
+          drawn.querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(0)
+      );
+      // Leave Draw, change the model in Build, come back.
+      first.unmount();
+      const { rerender } = render(workspace(12));
+      const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+      // The sheet is drawn as it was, not faded or reduced to outlines…
+      expect(canvas.classList.contains('is-ghost')).toBe(false);
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0);
+      expect(
+        canvas.querySelectorAll('.drawing-strokes.is-visible polyline').length
+      ).toBeGreaterThan(0);
+      // …its dimensions still read the model it was drawn from (the new
+      // cube has no edge with that hash at all)…
+      expect(
+        within(canvas).getByRole('button', { name: 'Horizontal dimension 10' })
+      ).toBeTruthy();
+      // …and it exports and annotates as before.
+      expect(
+        screen.getByRole('button', { name: 'Export PDF' })
+      ).not.toBeDisabled();
+      expect(
+        screen.getByRole('button', { name: 'Horizontal' })
+      ).not.toBeDisabled();
+      // One quiet pill offers the Update; nothing forces it.
+      expect(screen.getByRole('status')).toHaveTextContent('Model changed');
+      expect(document.querySelector('.drawing-banner')).toBeNull();
+      expect(onCommand).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole('button', { name: /Update/ }));
+      const command = onCommand.mock.calls[0]![0];
+      expect(command.kind).toBe('drawing.sheet.update');
+      expect(command.payload).toMatchObject({
+        source: {
+          fingerprint: drawingSourceFingerprint({ [bodyId]: cube(12) }, [
+            bodyId
+          ])
+        }
+      });
+      // The Update lands and the sheet redraws from the new model…
+      const updated: ProjectDocument = {
+        ...doc,
+        drawings: {
+          sheets: [
+            {
+              ...doc.drawings!.sheets[0]!,
+              source: {
+                fingerprint: drawingSourceFingerprint({ [bodyId]: cube(12) }, [
+                  bodyId
+                ])!
+              }
+            }
+          ]
+        }
+      };
+      rerender(workspace(12, updated));
+      await waitFor(() =>
+        expect(document.querySelector('.drawing-sync.is-outdated')).toBeNull()
+      );
+      await waitFor(() =>
+        expect(
+          canvas.querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(0)
+      );
+      // …and undoing it brings the earlier drawing back, not outlines.
+      rerender(workspace(12));
+      expect(
+        document.querySelector('.drawing-sync.is-outdated')
+      ).toHaveTextContent('Model changed');
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0);
+      expect(
+        within(canvas).getByRole('button', { name: 'Horizontal dimension 10' })
+      ).toBeTruthy();
+    });
 
     it('draws a dimension with its value read from the model', async () => {
       setup({ sheet: dimensioned() });
