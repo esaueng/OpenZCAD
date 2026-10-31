@@ -396,10 +396,7 @@ describe('TopBar encryption indicator', () => {
     renderTopBar({ encryption: indicator({ state: 'verified' }) });
     const lock = screen.getByLabelText('End-to-end encrypted');
     expect(lock.tagName).toBe('SUMMARY');
-    expect(lock).toHaveAttribute(
-      'title',
-      'End-to-end encrypted. This project’s contents are encrypted on this device, and the version this page last opened or saved passed verification.'
-    );
+    expect(lock).toHaveAttribute('title', 'End-to-end encrypted');
     expect(lock.closest('details')).toHaveAttribute(
       'data-encryption-state',
       'verified'
@@ -407,6 +404,7 @@ describe('TopBar encryption indicator', () => {
     fireEvent.click(lock);
     expect(lock.closest('details')).toHaveAttribute('open');
     expect(screen.getByText('Verified')).toBeVisible();
+    expect(screen.getByText(/signed by one of your devices/)).toBeVisible();
     // No claim the account cannot fork or roll back (ADR-024).
     expect(
       document.querySelector('.encryption-menu-panel')
@@ -433,7 +431,7 @@ describe('TopBar encryption indicator', () => {
     expect(
       screen.getByText(/cannot tell whether a newer version was left out/)
     ).toBeVisible();
-    expect(screen.getByText(/^Signed .* · last activity .*\.$/)).toBeVisible();
+    expect(screen.getByText(/^Signed .* · last activity .*$/)).toBeVisible();
   });
 
   it('prompts to unlock in Settings › Encryption when keys are locked', () => {
@@ -444,13 +442,15 @@ describe('TopBar encryption indicator', () => {
     const lock = screen.getByLabelText(
       'End-to-end encrypted · encryption locked'
     );
-    expect(lock).toHaveAttribute(
-      'title',
-      'End-to-end encrypted. Unlock encryption on this device (Settings › Encryption) to open or save encrypted projects.'
-    );
     fireEvent.click(lock);
+    expect(screen.getByText('Locked on this device')).toBeVisible();
+    expect(
+      screen.getByText(
+        'Unlock encryption on this device (Settings › Encryption) to open or save encrypted projects.'
+      )
+    ).toBeVisible();
     fireEvent.click(
-      screen.getByRole('button', { name: 'Open Settings › Encryption' })
+      screen.getByRole('button', { name: 'Encryption settings' })
     );
     expect(onOpenEncryptionSettings).toHaveBeenCalledTimes(1);
     expect(lock.closest('details')).not.toHaveAttribute('open');
@@ -519,12 +519,32 @@ describe('TopBar encryption indicator', () => {
     expect(screen.getByText(code).tagName).toBe('CODE');
   });
 
+  it('copies the project state code', async () => {
+    const code = '0123 4567 89ab cdef 0123 4567 89ab cdef';
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    });
+    renderTopBar({
+      encryption: indicator({ state: 'verified' }, { projectStateCode: code })
+    });
+    fireEvent.click(screen.getByLabelText('End-to-end encrypted'));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Copy project state code' })
+    );
+    expect(writeText).toHaveBeenCalledWith(code);
+    expect(
+      await screen.findByRole('button', { name: 'Copied project state code' })
+    ).toBeVisible();
+  });
+
   it('closes on Escape and hands focus back to the lock', () => {
     renderTopBar({ encryption: indicator({ state: 'verified' }) });
     const lock = screen.getByLabelText('End-to-end encrypted');
     fireEvent.click(lock);
     const settings = screen.getByRole('button', {
-      name: 'Open Settings › Encryption'
+      name: 'Encryption settings'
     });
     settings.focus();
     fireEvent.keyDown(document, { key: 'Escape' });

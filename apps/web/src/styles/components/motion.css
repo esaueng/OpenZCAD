@@ -236,6 +236,7 @@ textarea {
    drops, a panel above its button rises, a panel beside the right-hand rail
    slides out leftward, and the drawer slides in from its edge. */
 .file-menu[open] > .topbar-menu-panel,
+.encryption-menu[open] > .topbar-menu-panel,
 .measurement-dock,
 .panel-overflow-menu,
 .start-tile-menu {
