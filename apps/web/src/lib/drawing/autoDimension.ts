@@ -27,6 +27,7 @@ import {
   markHiddenLeaders,
   resolveDrawingAnnotation,
   resolveSheetAnnotations,
+  sectionBodyKey,
   type AnnotationBodies,
   type AnnotationBox,
   type AnnotationLayout,
@@ -41,6 +42,7 @@ import {
   readDimensionState,
   same,
   sizeLabel,
+  viewEdges,
   type AuditAxis,
   type SizeGroup
 } from './dimensionAudit';
@@ -72,6 +74,12 @@ import {
  * dimension; nothing overlaps text, other views or the title block, and
  * all of it stays on the paper. Existing dimensions are kept and count.
  *
+ * A section view (D03) measures its cut body's edges, so a feature inside
+ * the part — a bore's floor, an internal step — is dimensioned there, on
+ * the visible cut, rather than on hidden lines (slice F). When no view
+ * shows such a feature visible, the plan asks for a section through it; it
+ * never adds one itself.
+ *
  * What the checker cannot state yet, and anything that finds no edge or no
  * room, is skipped and reported. See
  * docs/plans/drawing-auto-dimensioning-plan.md.
@@ -91,6 +99,12 @@ export interface AutoDimensionPlan {
   skipped: AutoDimensionSkip[];
   /** How many of `annotations` measure edges their view draws hidden. */
   onHiddenLines: number;
+  /**
+   * The features it could place only on hidden lines, which a section
+   * through the part would dimension on visible ones, worded for the
+   * report ("Add a section … to dimension …"), or null when there are none.
+   */
+  sectionAdvice: string | null;
 }
 
 /** A point a linear dimension may end on, in one view. */
@@ -125,6 +139,8 @@ interface Planned {
   visible: boolean;
   /** What it states, for a report when it finds no room. */
   what: string;
+  /** The feature it locates or sizes, for asking for a section. */
+  subject: string;
   /**
    * For a size: every circle that could state it, best first. Placement
    * takes the first whose leader clears the rest of the sheet.
@@ -210,13 +226,14 @@ export function planAutoDimensions(
       tolerance: drawnCoincidence(bodies, view.bodyIds, k)
     });
   }
-  // Views that measure true size: every principal view, never the
-  // isometric one. Not a section (D03) yet either: its cut body's edges are
-  // not the model's these dimensions are read from (D06 slice F).
+  // Views that measure true size: every principal view and section, never
+  // the isometric one.
   const measuring = contexts.filter(
-    (context) =>
-      context.view.orientation !== 'iso' && context.view.section === undefined
+    (context) => context.view.orientation !== 'iso'
   );
+  /** What a view measures of a body: a section's cut edges, else the model's. */
+  const edgesOf = (context: ViewContext, bodyId: string) =>
+    viewEdges(bodies, context.view, bodyId);
 
   // Dimensions per view and body, existing ones included: a feature's
   // dimension goes where most of its body's others already are.
@@ -233,10 +250,12 @@ export function planAutoDimensions(
   const holding = (context: ViewContext, bodyId: string) =>
     held.get(holdKey(context.view.viewId, bodyId)) ?? 0;
 
+  // By edge: a section's cut edges are their own objects, resolved against
+  // the cut body of the view that draws them.
   const refs = new Map<EdgeTopology, DrawingEdgeRef | null>();
-  const refOf = (bodyId: string, edge: EdgeTopology) => {
+  const refOf = (context: ViewContext, bodyId: string, edge: EdgeTopology) => {
     if (!refs.has(edge))
-      refs.set(edge, edgeRefFor(bodies, bodyId as BodyId, edge));
+      refs.set(edge, edgeRefFor(bodies, bodyId as BodyId, edge, context.view));
     return refs.get(edge)!;
   };
 
@@ -246,10 +265,9 @@ export function planAutoDimensions(
     const cached = anchorCache.get(key);
     if (cached) return cached;
     const out: Anchor[] = [];
-    const body = bodies[bodyId];
-    for (const edge of body?.topology?.edges ?? []) {
+    for (const edge of edgesOf(context, bodyId)) {
       if (edge.displayRole === 'seam' || edge.points.length < 6) continue;
-      const ref = refOf(bodyId, edge);
+      const ref = refOf(context, bodyId, edge);
       if (!ref) continue;
       const edgeShown = edgeVisible(context, edge);
       for (const anchor of ['first', 'second', 'center'] as const) {
@@ -326,7 +344,7 @@ export function planAutoDimensions(
       const circles = circleOptions(
         measuring,
         bodyId,
-        bodies[bodyId]?.topology?.edges ?? [],
+        edgesOf,
         group,
         refOf,
         holding
@@ -350,7 +368,7 @@ export function planAutoDimensions(
           placementMm: { x: 0, y: 0 }
         }
       }));
-      plan({ bodyId, what: label, ...options[0]!, options });
+      plan({ bodyId, what: label, subject: label, ...options[0]!, options });
     }
     // Positions: each group not linked to the datum gets one dimension to it.
     for (const axis of AXES) {
@@ -405,6 +423,7 @@ export function planAutoDimensions(
           context: best.context,
           visible: best.from.visible && best.to.visible,
           what,
+          subject: position.label,
           annotation: {
             annotationId: createId(),
             kind: 'linear',
@@ -437,11 +456,49 @@ export function planAutoDimensions(
       bodyId: entry.bodyId,
       message: `${entry.what}: the sheet already holds ${MAX_DRAWING_ANNOTATIONS} annotations.`
     });
+  const inside = kept
+    .filter((entry) => !entry.visible)
+    .map((entry) => entry.subject);
   return {
     annotations: kept.map((entry) => entry.annotation),
     skipped,
-    onHiddenLines: kept.filter((entry) => !entry.visible).length
+    onHiddenLines: kept.filter((entry) => !entry.visible).length,
+    sectionAdvice: sectionAdvice(
+      inside,
+      // Sections the kernel cut from the tessellation: no edges to measure.
+      sheet.views.flatMap((view) =>
+        view.section &&
+        view.bodyIds.some(
+          (id) =>
+            bodies[sectionBodyKey(view.viewId, id)] !== undefined &&
+            viewEdges(bodies, view, id).length === 0
+        )
+          ? [`${view.section.label}-${view.section.label}`]
+          : []
+      )
+    )
   };
+}
+
+/** "Add a section to dimension a, b and 2 more." */
+function sectionAdvice(
+  subjects: readonly string[],
+  approximate: readonly string[]
+): string | null {
+  const unique = [...new Set(subjects)];
+  if (unique.length === 0) return null;
+  const named = unique.slice(0, unique.length > 3 ? 2 : 3);
+  const rest = unique.length - named.length;
+  const list =
+    rest > 0
+      ? `${named.join(', ')} and ${rest} more`
+      : named.length > 1
+        ? `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
+        : named[0]!;
+  const advice = `Add a section through the part to dimension ${list} on visible lines.`;
+  return approximate.length > 0
+    ? `${advice} Section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot carry dimensions.`
+    : advice;
 }
 
 /**
@@ -452,9 +509,13 @@ export function planAutoDimensions(
 function circleOptions(
   measuring: readonly ViewContext[],
   bodyId: string,
-  edges: readonly EdgeTopology[],
+  edgesOf: (context: ViewContext, bodyId: string) => readonly EdgeTopology[],
   group: SizeGroup,
-  refOf: (bodyId: string, edge: EdgeTopology) => DrawingEdgeRef | null,
+  refOf: (
+    context: ViewContext,
+    bodyId: string,
+    edge: EdgeTopology
+  ) => DrawingEdgeRef | null,
   holding: (context: ViewContext, bodyId: string) => number
 ): { context: ViewContext; ref: DrawingEdgeRef; visible: boolean }[] {
   const out: {
@@ -466,7 +527,7 @@ function circleOptions(
   for (const context of measuring) {
     if (!context.view.bodyIds.includes(bodyId as BodyId)) continue;
     const direction = DRAWING_VIEW_FRAMES[context.view.orientation].direction;
-    for (const edge of edges) {
+    for (const edge of edgesOf(context, bodyId)) {
       const circle = edge.curve?.circle;
       if (!circle || edge.displayRole === 'seam') continue;
       if (
@@ -480,7 +541,7 @@ function circleOptions(
         !circleInGroup(group, circle)
       )
         continue;
-      const ref = refOf(bodyId, edge);
+      const ref = refOf(context, bodyId, edge);
       if (!ref) continue;
       const visible = edgeVisible(context, edge);
       out.push({
