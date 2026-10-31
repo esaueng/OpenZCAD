@@ -51,6 +51,21 @@ for (const viewport of [
     expect(requestedPreviews.size).toBeLessThan(96);
     expect(requestedPreviews.has('scroll-preview-96')).toBe(false);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    const toolbar = page.locator('.start-toolbar');
+    const settings = page.getByRole('button', { name: 'Open settings' });
+    const toolbarTop = await toolbar.evaluate(
+      (element) => element.getBoundingClientRect().top
+    );
+    const settingsTop = await settings.evaluate(
+      (element) => element.getBoundingClientRect().top
+    );
+    if (viewport.width > 900) {
+      // The entire head must sit outside the scrolling shelf. A sticky head
+      // inside it bounces on macOS while the page-anchored Settings stays put.
+      expect(
+        await toolbar.evaluate((element) => element.closest('.start-body'))
+      ).toBeNull();
+    }
     await page.screenshot({ path: testInfo.outputPath('library-top.png') });
 
     // Scroll the actual scroll container, including the page shell on mobile.
@@ -64,6 +79,22 @@ for (const viewport of [
     await expect(cards.last()).toBeInViewport();
     await expect(cards.last().locator('img')).toBeVisible();
     expect(requestedPreviews.has('scroll-preview-96')).toBe(true);
+    if (viewport.width > 900) {
+      await expect(toolbar).toBeInViewport();
+      await expect(settings).toBeInViewport();
+      expect(
+        await toolbar.evaluate((el) => el.getBoundingClientRect().top)
+      ).toBeCloseTo(toolbarTop, 0);
+      expect(
+        await settings.evaluate((el) => el.getBoundingClientRect().top)
+      ).toBeCloseTo(settingsTop, 0);
+      await settings.click();
+      await expect(
+        page.getByRole('dialog', { name: 'Settings' })
+      ).toBeVisible();
+      await page.getByRole('button', { name: 'Back to projects' }).click();
+      await expect(cards.last()).toBeInViewport();
+    }
     await page.screenshot({ path: testInfo.outputPath('library-bottom.png') });
     expect(
       await page.evaluate(

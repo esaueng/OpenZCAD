@@ -875,15 +875,25 @@
 
 /* ── Body: the shelf ─────────────────────────────────────── */
 
-/* The body is the only thing that scrolls in the wide layout, so the column
-   stays put while a long shelf goes by. Its margins are kept to the tiles'
-   own gap scale: every pixel of padding here is a pixel off every tile. */
-.start-body {
+/* Keep the head outside the shelf's scroll container. A sticky head inside
+   it moves with elastic overscroll on macOS while page-anchored Settings
+   stays put, separating the two halves of the same toolbar. */
+.start-stage {
   grid-area: body;
+  display: grid;
+  min-height: 0;
+  padding: 0 var(--island-gap);
+}
+
+.start-body {
   display: grid;
   align-content: start;
   gap: var(--sp-3);
-  padding: var(--island-gap) var(--island-gap) var(--sp-4);
+  min-height: 0;
+  padding-bottom: var(--sp-4);
+  /* Preview mounts must not re-anchor the whole grid and undo a wheel scroll
+     or the position restored by useScrollMemory. Card dimensions stay fixed. */
+  overflow-anchor: none;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -893,38 +903,27 @@
 .start-section {
   container: start-section / inline-size;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
   gap: var(--sp-3);
 }
 
-/* Title, filters, order, search and layout on one line: the parts you
-   own are the page, so the controls that narrow them stay beside their
-   heading rather than on a second row that pushes the grid down. In the
-   column layout the line stays put while the shelf scrolls under it, so a
-   card never passes beneath Settings on its end. */
+/* Title, filters, order, search and layout on one line, aligned with Settings
+   outside the scrolling shelf. Reserve the same classic-scrollbar inset as
+   the Settings slot so the tools and cards still share their right edge. */
 .start-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2) var(--sp-5);
   min-height: 40px;
-  /* Room on the line's end for Settings, placed over it (corner-slot.css).
-     No rule under it: the band's background already parts it from the
-     shelf, and a hairline only added noise beside Settings. */
-  padding-right: calc(var(--corner-slot-w) + var(--sp-3));
+  padding-right: calc(
+    var(--corner-slot-w) + var(--sp-3) + var(--corner-scrollbar-w, 0px)
+  );
 }
 
 @media (min-width: 901px) {
-  /* The body's top inset moves into the line itself, so the band the line
-     paints runs to the top edge and nothing shows above it. Above the
-     cards' own layers (a dragged card is 5); under the selection bar. */
-  .start-body {
-    padding-top: 0;
-  }
-
   .start-toolbar {
-    position: sticky;
-    top: 0;
-    z-index: 6;
     padding-top: var(--island-gap);
     background: var(--color-bg);
   }
@@ -2205,7 +2204,7 @@
   grid-template-rows: minmax(0, 1fr);
 }
 
-.start-screen.is-fresh .start-body > .start-section {
+.start-screen.is-fresh .start-stage > .start-section {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -2318,8 +2317,16 @@
     display: none;
   }
 
-  .start-body {
+  .start-stage {
     padding: var(--sp-3);
+  }
+
+  .start-section {
+    grid-template-rows: auto auto;
+  }
+
+  .start-body {
+    padding: 0;
     overflow: visible;
   }
 
