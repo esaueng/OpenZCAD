@@ -30,6 +30,7 @@ import { COLLABORATION_LABELS } from '../lib/collaborationLabels';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import { StableLabel } from './StableLabel';
+import { Tooltip } from './Tooltip';
 import {
   ACCOUNT_LABEL_RESERVE,
   CLOUD_SAVE_LABEL_RESERVE,
@@ -518,10 +519,6 @@ export function TopBar({
         data-active={workspaceMode}
         role="group"
         aria-label="Workspace mode"
-        title={labelWithKey(
-          'Switch between viewing, tweaking parameters, modeling and drawing',
-          keymap.label('workspace-mode-cycle')
-        )}
       >
         {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
           const disabledReason =
@@ -533,20 +530,27 @@ export function TopBar({
                   ? drawingModeDisabledReason
                   : null;
           return (
-            <button
+            <Tooltip
               key={mode}
-              type="button"
-              className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
-              aria-pressed={workspaceMode === mode}
-              disabled={disabledReason !== null}
-              title={disabledReason ?? `${label} — ${hint}`}
-              onClick={() => onWorkspaceMode(mode)}
+              multiline
+              label={label}
+              description={disabledReason ?? hint}
+              shortcut={keymap.label('workspace-mode-cycle')}
             >
-              <Icon size={13} aria-hidden="true" />
-              <span className="mode-switch-label">
-                <StableLabel reserve={[label]}>{label}</StableLabel>
-              </span>
-            </button>
+              <button
+                type="button"
+                className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
+                aria-pressed={workspaceMode === mode}
+                disabled={disabledReason !== null}
+                title={disabledReason ?? undefined}
+                onClick={() => onWorkspaceMode(mode)}
+              >
+                <Icon size={13} aria-hidden="true" />
+                <span className="mode-switch-label">
+                  <StableLabel reserve={[label]}>{label}</StableLabel>
+                </span>
+              </button>
+            </Tooltip>
           );
         })}
       </div>

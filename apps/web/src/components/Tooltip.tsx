@@ -34,6 +34,8 @@ interface TooltipProps {
   label: ReactNode;
   shortcut?: ReactNode;
   description?: ReactNode;
+  /** Put longer explanations on their own wrapping line. */
+  multiline?: boolean;
 }
 
 interface TooltipPosition {
@@ -171,7 +173,8 @@ export function Tooltip({
   children,
   label,
   shortcut,
-  description
+  description,
+  multiline = false
 }: TooltipProps) {
   const tooltipId = useId();
   const trigger = children as ReactElement<TooltipTriggerProps>;
@@ -470,6 +473,7 @@ export function Tooltip({
               id={tooltipId}
               role="tooltip"
               className="tooltip"
+              data-multiline={multiline || undefined}
               data-placement={position?.placement ?? 'below'}
               style={{
                 left: position?.left ?? 0,

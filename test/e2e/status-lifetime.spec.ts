@@ -5,6 +5,61 @@ import {
   test
 } from './openzcad-fixtures';
 import { STATUS_LIFETIME_MS } from '../../apps/web/src/lib/statusLifetime';
+import { WORKSPACE_MODE_OPTIONS } from '../../apps/web/src/lib/topBarPresentation';
+
+test(
+  'workspace modes explain themselves on demand without bottom banners',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Quiet workspace modes');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'cylinder');
+
+    const modes = page.getByRole('group', { name: 'Workspace mode' });
+    const status = page.locator('.workspace-toast-body');
+    // Match the recording's rapid switches, then return from Draw to Build.
+    for (const label of ['Tweak', 'View', 'Build', 'Draw', 'Build']) {
+      const button = modes.getByRole('button', { name: label, exact: true });
+      await button.click();
+      await expect(button).toHaveAttribute('aria-pressed', 'true');
+      await expect(status).toHaveClass(/quiet/);
+      await expect(page.locator('.toast')).toHaveCount(0);
+    }
+
+    // Pointer help stays by the controls; keyboard users get the same text
+    // without changing modes, and Escape dismisses it without moving focus.
+    for (const { label, hint } of WORKSPACE_MODE_OPTIONS) {
+      const button = modes.getByRole('button', { name: label, exact: true });
+      await button.hover();
+      await expect(page.getByRole('tooltip')).toContainText(hint);
+      const description = page
+        .getByRole('tooltip')
+        .locator('.tooltip-description');
+      expect(
+        await description.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth
+        )
+      ).toBe(true);
+      await page.mouse.move(10, 200);
+      await button.focus();
+      // Real keyboard navigation establishes :focus-visible; a programmatic
+      // focus after hovering deliberately does not open the shared tooltip.
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Tab');
+      await expect(page.getByRole('tooltip')).toContainText(hint);
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('tooltip')).toHaveCount(0);
+      await expect(button).toBeFocused();
+      await button.blur();
+    }
+    await expect(
+      modes.getByRole('button', { name: 'Build', exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(status).toHaveClass(/quiet/);
+  }
+);
 
 /**
  * The status line used to keep whatever it last said for the rest of the
