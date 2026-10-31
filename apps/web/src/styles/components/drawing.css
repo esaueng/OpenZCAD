@@ -431,6 +431,20 @@
   gap: 2px;
 }
 
+.drawing-auto-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+.drawing-auto-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .drawing-audit-reason {
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);

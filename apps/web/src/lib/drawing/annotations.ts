@@ -339,6 +339,21 @@ function pointOf(
   return { ok: true, point: anchor === 'first' ? ends[0] : ends[1] };
 }
 
+/**
+ * Where a point anchor of `edge` lies in `view`: its (u, v), its depth into
+ * the view and the model point, by the same rule a dimension resolves it;
+ * null when the edge has no such point there (a closed edge's end, a
+ * circle seen edge-on).
+ */
+export function drawingPointInView(
+  view: DrawingView,
+  edge: EdgeTopology,
+  anchor: DrawingPointAnchor
+): { uv: UV; depth: number; model: Vector3 } | null {
+  const found = pointOf(view, edge, anchor);
+  return found.ok ? found.point : null;
+}
+
 function projectedPolyline(view: DrawingView, edge: EdgeTopology): number[] {
   const out: number[] = [];
   for (let i = 0; i + 2 < edge.points.length; i += 3) {
