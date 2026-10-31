@@ -20,9 +20,11 @@ function subscribeOnline(changed: () => void) {
  * owns the first (opening from the shelf, or restoring after a reload), and
  * WorkspaceLoading owns the model build and the lazy panels behind it.
  */
-export type StartupStage = 'opening' | 'restoring' | 'model' | 'panels';
+export type StartupStage =
+  'creating' | 'opening' | 'restoring' | 'model' | 'panels';
 
 const STEP: Record<StartupStage, number> = {
+  creating: 0,
   opening: 0,
   restoring: 0,
   model: 1,
@@ -30,6 +32,7 @@ const STEP: Record<StartupStage, number> = {
 };
 
 const DETAIL: Record<StartupStage, string> = {
+  creating: 'Creating your project',
   opening: 'Checking saved copies',
   restoring: 'Loading your last project',
   model: 'Building the model',
@@ -125,7 +128,11 @@ export function StartupScreen({
           role="status"
           aria-live="polite"
           aria-label={
-            stage === 'opening' ? 'Opening project' : 'Restoring workspace'
+            stage === 'creating'
+              ? 'Creating project'
+              : stage === 'opening'
+                ? 'Opening project'
+                : 'Restoring workspace'
           }
         >
           <span className="startup-title" title={projectName}>

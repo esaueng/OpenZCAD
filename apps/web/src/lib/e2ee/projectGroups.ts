@@ -1609,12 +1609,17 @@ async function publishSessionAuthority(
     refOf(ctx, device, projectId)
   );
   const keyEpoch = keyEpochBase + material.epoch;
+  const [archive, deviceLists] = await Promise.all([
+    fetchArchive(ctx, projectId, keyEpoch),
+    projectDeviceLists(ctx, projectId)
+  ]);
   const body = await openArchive(
     ctx,
     projectId,
     keyEpoch,
     material.projectKey,
-    await fetchArchive(ctx, projectId, keyEpoch)
+    archive,
+    deviceLists
   );
   const accepted = manifest ?? body?.authorityManifest;
   if (!accepted)
@@ -1622,10 +1627,16 @@ async function publishSessionAuthority(
       'archive-invalid',
       'This epoch has no authenticated MLS roots.'
     );
-  const proof = await epochAuthority(ctx, projectId, keyEpoch, {
-    body,
-    key: material.projectKey
-  });
+  const proof = await epochAuthority(
+    ctx,
+    projectId,
+    keyEpoch,
+    {
+      body,
+      key: material.projectKey
+    },
+    deviceLists
+  );
   if (!sameBytes(proof.groupContext, groupInfoContextBytes(material.groupInfo)))
     throw new ProjectGroupError(
       'archive-invalid',
@@ -3844,9 +3855,16 @@ export async function epochAuthority(
     collect((await ctx.sessions.inspectGroupInfo(ref, anchor)).members);
     for (const record of [...records, body.epochRecord])
       collect((await ctx.sessions.decodeEpochRecord(record)).members);
-    const lists = await projectDeviceLists(ctx, projectId, [
+    const historicalUsers = [
       ...new Set([...claims.values()].map((claim) => claim.userId))
-    ]);
+    ];
+    // Reuse this operation's verified lists when they cover the replay.
+    // Removed historical members still require their own verified lookup.
+    const lists = historicalUsers.every((userId) =>
+      heads.some((list) => list.userId === userId)
+    )
+      ? heads
+      : await projectDeviceLists(ctx, projectId, historicalUsers);
     const manifestOwner = lists.find(
       (list) => list.userId === trustedManifest.ownerUserId
     );

@@ -126,8 +126,29 @@ test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-s
   await page.keyboard.press('Escape');
   await expect(settings).toHaveCount(0);
 
+  let profiling = true;
+  let accountRequests = 0;
+  const latencyMs = Number(process.env.OZ_CREATE_LATENCY_MS ?? 0);
+  if (latencyMs > 0) {
+    await page.route('**/api/**', async (route) => {
+      if (profiling) {
+        accountRequests++;
+        await new Promise((resolve) => setTimeout(resolve, latencyMs));
+      }
+      await route.fallback();
+    });
+  }
   await page.getByLabel('Project name').fill('Secret bracket');
+  const createStart = Date.now();
   await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.locator('.workspace-reveal')).toHaveClass(/is-ready/, {
+    timeout: SYNC_BUDGET_MS
+  });
+  profiling = false;
+  if (latencyMs > 0)
+    console.log('CREATE_PROFILE', JSON.stringify({
+      elapsedMs: Date.now() - createStart, accountRequests, latencyMs
+    }));
   await createPrimitiveInPlace(page, 'box');
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
