@@ -101,6 +101,11 @@ function segmentsFromPolyline(points: readonly number[]): number[] {
 function growPositions(line: LineSegments2, positions: readonly number[]) {
   const grown = new Float32Array(positions.length);
   grown.set(positions);
+  // Release the old GPU attributes before replacing them. Three caches the
+  // first rendered instance capacity on the geometry; setPositions alone
+  // leaves that limit behind and truncates a longer edge to the old count.
+  // Disposing invalidates that cache while keeping this geometry reusable.
+  line.geometry.dispose();
   line.geometry.setPositions(grown);
   line.computeLineDistances();
 }
@@ -550,8 +555,8 @@ export class BodyEdgeOverlay extends THREE.Group {
       // The x-ray twin is the translucent one; see drawFatLineOncePerPixel.
       drawFatLineOncePerPixel(overlay.material);
     }
-    // The buffer is allocated at full capacity so later updates never
-    // reallocate, but an overlay starts empty. Without this the batch reports
+    // The buffer starts with one segment and grows on demand, but an overlay
+    // starts empty. Without this the batch reports
     // its whole capacity as live instances, and `refreshVisibility` — which
     // reads `instanceCount` for the hover tiers — draws a body's entire edge
     // set as degenerate zero-length segments until the first hover.

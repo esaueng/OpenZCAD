@@ -602,6 +602,69 @@ describe('BodyEdgeOverlay allocation', () => {
     'body-face-boundary-selected-hidden'
   ];
 
+  it.each(['hover', 'selection', 'face boundary'] as const)(
+    'releases old %s buffers before growth and reuses capacity afterward',
+    (tier) => {
+      const overlay = makeOverlay();
+      const lines =
+        tier === 'hover'
+          ? [overlay.hoverEdges, overlay.hoverHiddenEdges]
+          : tier === 'selection'
+            ? [overlay.selectedEdges, overlay.selectedHiddenEdges]
+            : [
+                overlay.selectedFaceBoundaryEdges,
+                overlay.selectedFaceBoundaryHiddenEdges
+              ];
+      const geometries = lines.map((line) => line.geometry);
+      const released = geometries.map(() => [] as unknown[]);
+      geometries.forEach((geometry, index) => {
+        geometry.addEventListener('dispose', () => {
+          released[index]!.push(geometry.getAttribute('instanceStart'));
+        });
+      });
+      const initial = geometries.map((geometry) =>
+        geometry.getAttribute('instanceStart')
+      );
+      const show = (long: boolean) => {
+        if (tier === 'hover') {
+          overlay.setHovered({
+            bodyId: BODY_ID,
+            topologyId: long ? 'edge-a' : 'edge-b',
+            hash: long ? 11 : 13
+          });
+        } else if (tier === 'selection') {
+          overlay.setSelected([selection(long ? 'edge-a' : 'edge-b')]);
+        } else {
+          // A face with no boundary clears the tier without changing capacity.
+          overlay.setSelectedFaceBoundary(long ? 101 : null);
+        }
+        settle(overlay);
+      };
+
+      show(false);
+      show(true);
+      lines.forEach((line, index) => {
+        expect(line.geometry).toBe(geometries[index]);
+        // The renderer must see the outgoing attributes during disposal,
+        // otherwise their GPU buffers survive the replacement.
+        expect(released[index]).toEqual([initial[index]]);
+        expect(line.geometry.getAttribute('instanceStart')).not.toBe(
+          initial[index]
+        );
+        expect(line.geometry.instanceCount).toBe(2);
+      });
+      const grown = geometries.map((geometry) =>
+        geometry.getAttribute('instanceStart')
+      );
+      show(false);
+      show(true);
+      lines.forEach((line, index) => {
+        expect(released[index]).toHaveLength(1);
+        expect(line.geometry.getAttribute('instanceStart')).toBe(grown[index]);
+      });
+    }
+  );
+
   it('does not size the hover and selection batches to the whole body', () => {
     const overlay = largeOverlay(2_000, 20);
     const idle = instanceBufferFloats(overlay.idleEdges);

@@ -438,6 +438,25 @@ function raceCommitBatches(srv: Server, mode: 'fence' | 'constraint') {
 // --- Scenarios -------------------------------------------------------------
 
 describe('solo MLS groups', () => {
+  it('discovers member lists once per authority publication and refreshes on the next operation', async () => {
+    const srv = newServer();
+    const projectId = seedProject(srv);
+    const laptop = device(srv, owner, 'owner_laptop');
+    const lists = vi.fn(async () => []);
+    laptop.ctx = { ...laptop.ctx, members: { lists } };
+
+    await createProjectGroup(laptop.ctx, projectId);
+    expect(lists).toHaveBeenCalledTimes(1);
+    expect(lists).toHaveBeenCalledWith(projectId, undefined);
+
+    // No cross-operation cache: a subsequent join/catch-up must discover
+    // current membership again instead of inheriting the solo snapshot.
+    const desktop = device(srv, owner, 'owner_desktop');
+    desktop.ctx = { ...desktop.ctx, members: { lists } };
+    await joinProjectGroup(desktop.ctx, projectId);
+    expect(lists.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it('create, join by external Commit while the first device is offline, then catch up', async () => {
     const srv = newServer();
     const projectId = seedProject(srv);

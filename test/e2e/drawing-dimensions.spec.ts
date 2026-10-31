@@ -73,7 +73,7 @@ test('dimensions a drawing view from the model and follows its Update', async ({
   await expect(
     canvas.locator('[data-view="front"]:not(.is-placeholder)')
   ).toHaveCount(1, { timeout: 20_000 });
-  const tools = panel.getByRole('toolbar', { name: 'Annotation tools' });
+  const tools = drawings.getByRole('toolbar', { name: 'Annotation tools' });
 
   // Horizontal: the front view's top edge picked away from its ends is
   // dimensioned whole; the next click places the text above it.
@@ -124,14 +124,14 @@ test('dimensions a drawing view from the model and follows its Update', async ({
 
   // Export: the dimensions and note are in the SVG and the PDF.
   let downloadPromise = page.waitForEvent('download');
-  await panel.getByRole('button', { name: 'SVG', exact: true }).click();
+  await drawings.getByRole('button', { name: 'Export SVG' }).click();
   const svg = (await readDownload(await downloadPromise)).toString('utf8');
   expect(svg).toContain('<g class="dimension"');
   expect(svg).toMatch(/>30<\/text>/);
   expect(svg).toMatch(/>10<\/text>/);
   expect(svg).toContain('>BREAK SHARP EDGES</text>');
   downloadPromise = page.waitForEvent('download');
-  await panel.getByRole('button', { name: 'PDF', exact: true }).click();
+  await drawings.getByRole('button', { name: 'Export PDF' }).click();
   const pdf = (await readDownload(await downloadPromise)).toString('latin1');
   expect(pdf).toContain('(30) Tj');
   expect(pdf).toContain('(BREAK SHARP EDGES) Tj');

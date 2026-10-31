@@ -14,6 +14,7 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import {
+  formatDrawingScale,
   toUserId,
   type BodyId,
   type BodyRepresentation,
@@ -29,7 +30,10 @@ import {
   drawingSourceFingerprint,
   projectionBodyInput
 } from '../lib/drawing/sheetSources';
-import type { ProjectionBodyInput } from '../lib/drawing/projectView';
+import {
+  projectView,
+  type ProjectionBodyInput
+} from '../lib/drawing/projectView';
 import type * as SheetSources from '../lib/drawing/sheetSources';
 
 // Pass-through, counted: fingerprinting is the costly step a drag must skip.
@@ -236,7 +240,7 @@ describe('DrawingWorkspace', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Finishing features replaced a body'
     );
-    expect(screen.getByRole('button', { name: 'PDF' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
     expect(onCommand).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Update' }));
     expect(onCommand).toHaveBeenCalledTimes(1);
@@ -318,7 +322,8 @@ describe('DrawingWorkspace', () => {
     ).toBeGreaterThan(0);
     expect(screen.queryByRole('status')).toBeNull();
     expect(
-      screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+        .disabled
     ).toBe(false);
   });
 
@@ -345,6 +350,156 @@ describe('DrawingWorkspace', () => {
       );
       expect(project).toHaveBeenCalledTimes(2);
       expect(canvas.textContent).not.toMatch(/worker stopped/);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('draws each view as soon as it is projected, before the rest of the sheet', async () => {
+    const project = vi
+      .spyOn(DrawingProjectionClient.prototype, 'project')
+      .mockImplementationOnce((inputs, views, onView) => {
+        // The first view lands; the others are still being projected.
+        const first = views[0]!;
+        onView?.(first.key, {
+          ok: true,
+          projection: projectView({
+            orientation: first.orientation,
+            hiddenLines: first.hiddenLines,
+            bodies: first.bodyIds.map((id) => inputs[id]!)
+          })
+        });
+        return new Promise(() => {});
+      });
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      setup({ sheet: starter(fingerprint) });
+      const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+      await waitFor(() =>
+        expect(
+          canvas.querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(3)
+      );
+      expect(
+        canvas.querySelectorAll('.drawing-strokes.is-visible polyline').length
+      ).toBeGreaterThan(0);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('keeps the projections when Draw closes and reopens on the same project', async () => {
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const sheet = starter(fingerprint);
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document: ProjectDocument = {
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [sheet] }
+      };
+      const requestTessellation = vi.fn(
+        displayTessellation({ [bodyId]: cube() })
+      );
+      const workspace = (shown: ProjectDocument) => (
+        <DrawingWorkspace
+          document={shown}
+          bodies={{ [bodyId]: cube() }}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          requestTessellation={requestTessellation}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const settled = () =>
+        waitFor(() =>
+          expect(
+            screen
+              .getByRole('application', { name: 'Sheet Sheet 1' })
+              .querySelectorAll('.drawing-view.is-placeholder')
+          ).toHaveLength(0)
+        );
+      const first = render(workspace(document));
+      await settled();
+      expect(project).toHaveBeenCalledTimes(1);
+      // Off to Build and back: every view is drawn at once, with no
+      // tessellation or projection.
+      first.unmount();
+      const second = render(workspace(document));
+      expect(
+        screen
+          .getByRole('application', { name: 'Sheet Sheet 1' })
+          .querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0);
+      expect(project).toHaveBeenCalledTimes(1);
+      expect(requestTessellation).toHaveBeenCalledTimes(1);
+      second.unmount();
+      // Another project keeps nothing of this one's.
+      const other = createProjectDocument('Other', toUserId('test'));
+      render(
+        workspace({
+          ...other,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [sheet] }
+        })
+      );
+      await settled();
+      expect(project).toHaveBeenCalledTimes(2);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('asks again for views whose projection was cut off when Draw closed', async () => {
+    const original = DrawingProjectionClient.prototype.project;
+    const project = vi
+      .spyOn(DrawingProjectionClient.prototype, 'project')
+      // The first workspace closes while its views are still projecting.
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockImplementation(function (this: DrawingProjectionClient, ...args) {
+        return original.apply(this, args);
+      });
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document: ProjectDocument = {
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [starter(fingerprint)] }
+      };
+      const workspace = () => (
+        <DrawingWorkspace
+          document={document}
+          bodies={{ [bodyId]: cube() }}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation({ [bodyId]: cube() })}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const first = render(workspace());
+      await waitFor(() => expect(project).toHaveBeenCalledTimes(1));
+      first.unmount();
+      render(workspace());
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole('application', { name: 'Sheet Sheet 1' })
+            .querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(0)
+      );
+      expect(project).toHaveBeenCalledTimes(2);
     } finally {
       project.mockRestore();
     }
@@ -407,8 +562,110 @@ describe('DrawingWorkspace', () => {
       canvas.querySelectorAll('.drawing-view.is-placeholder')
     ).toHaveLength(4);
     expect(
-      screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+        .disabled
     ).toBe(true);
+  });
+
+  it('keeps the last drawing, faded and unexportable, while the model rebuilds', async () => {
+    const bodies = { [bodyId]: cube() };
+    const fingerprint = drawingSourceFingerprint(bodies, [bodyId])!;
+    const document: ProjectDocument = {
+      ...createProjectDocument('Bracket', toUserId('test')),
+      bodyOrder: [bodyId],
+      drawings: { sheets: [starter(fingerprint)] }
+    };
+    const workspace = (pending: boolean) => (
+      <DrawingWorkspace
+        document={document}
+        bodies={bodies}
+        geometryPending={pending}
+        rebuildProgress={pending ? { name: 'Gear', index: 5, total: 10 } : null}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation(bodies)}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    const { rerender } = render(workspace(false));
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    rerender(workspace(true));
+    // The last drawing stays on the paper instead of empty outlines…
+    expect(canvas.classList.contains('is-ghost')).toBe(true);
+    expect(
+      canvas.querySelectorAll('.drawing-strokes.is-visible polyline').length
+    ).toBeGreaterThan(0);
+    expect(canvas.querySelectorAll('.drawing-view-outline')).toHaveLength(0);
+    // …but it is not the model the document holds: nothing reads ready.
+    expect(
+      canvas.querySelectorAll('.drawing-view.is-placeholder')
+    ).toHaveLength(4);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Rebuilding the model: Gear (5 of 10). Showing the last drawing'
+    );
+    expect(
+      screen.getByRole('progressbar', { name: 'Model rebuild' })
+    ).toHaveAttribute('aria-valuenow', '5');
+    expect(screen.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Horizontal' })).toBeDisabled();
+  });
+
+  it('picks tools by key and backs out with Escape, but never from a field', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    setup({ sheet: starter(fingerprint) });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    const horizontal = screen.getByRole('button', { name: 'Horizontal' });
+    const reached = vi.fn();
+    window.addEventListener('keydown', reached);
+    try {
+      await userEvent.keyboard('h');
+      expect(horizontal).toHaveAttribute('aria-pressed', 'true');
+      // Taken before the workspace's modeling shortcuts see it.
+      expect(reached).not.toHaveBeenCalled();
+      await userEvent.keyboard('{Escape}');
+      expect(horizontal).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.getByRole('button', { name: 'Select' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Front view' }));
+      expect(screen.getByLabelText('Centre X (mm)')).toBeInTheDocument();
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByLabelText('Centre X (mm)')).toBeNull();
+      await userEvent.type(screen.getByLabelText('Name'), 'h');
+      expect(horizontal).toHaveAttribute('aria-pressed', 'false');
+    } finally {
+      window.removeEventListener('keydown', reached);
+    }
+  });
+
+  it('shows the paper dark on request and remembers it on this device', async () => {
+    window.localStorage.removeItem('openzcad.drawing.darkPaper');
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    setup({ sheet: starter(fingerprint) });
+    const workspace = screen.getByRole('region', { name: 'Drawings' });
+    expect(workspace.classList.contains('is-dark-paper')).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: 'Dark paper' }));
+    expect(workspace.classList.contains('is-dark-paper')).toBe(true);
+    expect(window.localStorage.getItem('openzcad.drawing.darkPaper')).toBe('1');
+    await userEvent.click(screen.getByRole('button', { name: 'Dark paper' }));
+    expect(workspace.classList.contains('is-dark-paper')).toBe(false);
+    expect(window.localStorage.getItem('openzcad.drawing.darkPaper')).toBe('0');
   });
 
   it('shows a stale sheet as outlines, refuses export and rebinds on Update', async () => {
@@ -426,7 +683,8 @@ describe('DrawingWorkspace', () => {
       canvas.querySelectorAll('.drawing-strokes.is-visible polyline')
     ).toHaveLength(0);
     expect(
-      screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+        .disabled
     ).toBe(true);
     await userEvent.click(screen.getByRole('button', { name: /Update/ }));
     const command = onCommand.mock.calls[0]![0];
@@ -778,15 +1036,11 @@ describe('DrawingWorkspace', () => {
               .querySelectorAll('.drawing-view.is-placeholder')
           ).toHaveLength(0)
         );
-      const list = screen.getByRole('listbox', { name: 'Drawing sheets' });
+      const tabs = screen.getByRole('tablist', { name: 'Drawing sheets' });
       await settled('Sheet 1');
-      await userEvent.click(
-        within(list).getByRole('option', { name: 'Sheet 2' })
-      );
+      await userEvent.click(within(tabs).getByRole('tab', { name: 'Sheet 2' }));
       await settled('Sheet 2');
-      await userEvent.click(
-        within(list).getByRole('option', { name: 'Sheet 1' })
-      );
+      await userEvent.click(within(tabs).getByRole('tab', { name: 'Sheet 1' }));
       await settled('Sheet 1');
       // One request per sheet: going back to the first reuses its views.
       expect(project).toHaveBeenCalledTimes(2);
@@ -806,6 +1060,43 @@ describe('DrawingWorkspace', () => {
     const options = Array.from(scale.options, (option) => option.value);
     expect(options).toEqual(
       expect.arrayContaining(['1:200', '1:500', '1:1000'])
+    );
+    // The ISO enlargements and common intermediates, largest first.
+    expect(options).toEqual(
+      expect.arrayContaining(['50:1', '20:1', '4:1', '1:4', '1:25', '1:250'])
+    );
+    expect(options.slice(0, 3)).toEqual(['50:1', '20:1', '10:1']);
+  });
+
+  it('auto scales a hand-shrunk sheet back up in one undoable command', async () => {
+    const fitted = starter(
+      drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+    );
+    const sheet: DrawingSheet = {
+      ...fitted,
+      scale: { numerator: 1, denominator: 2 }
+    };
+    const { onCommand, onStatus } = setup({ sheet });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Auto scale' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.label).toBe('Auto scale');
+    const before: ProjectDocument = {
+      ...createProjectDocument('Bracket', toUserId('test')),
+      bodyOrder: [bodyId],
+      drawings: { sheets: [sheet] }
+    };
+    command.validate(before);
+    const after = command.apply(before);
+    expect(after.drawings!.sheets[0]!.scale).toEqual(fitted.scale);
+    expect(onStatus).toHaveBeenLastCalledWith(
+      `Scaled the views to ${formatDrawingScale(fitted.scale)}, the largest scale that fits the sheet.`
     );
   });
 
@@ -994,7 +1285,8 @@ describe('DrawingWorkspace', () => {
         ).getByRole('option', { name: 'Horizontal dimension 10' })
       ).toBeTruthy();
       expect(
-        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+          .disabled
       ).toBe(false);
     });
 
@@ -1007,7 +1299,8 @@ describe('DrawingWorkspace', () => {
         expect(canvas.textContent).toContain('Broken dimension')
       );
       expect(
-        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+          .disabled
       ).toBe(true);
       expect(document.body.textContent).toMatch(
         /An annotation has lost what it measures/
@@ -1253,7 +1546,9 @@ describe('DrawingWorkspace QA fixes', () => {
         name: 'Isometric (partly off the page)'
       })
     ).toBeTruthy();
-    const pdf = screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' });
+    const pdf = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Export PDF'
+    });
     expect(pdf.disabled).toBe(true);
     expect(pdf.title).toBe(
       'The Isometric view runs off the paper. Fit views to sheet, or move it onto the page, to export.'
@@ -1275,7 +1570,8 @@ describe('DrawingWorkspace QA fixes', () => {
     rerender(<DrawingWorkspace document={after} {...shared} />);
     await waitFor(() =>
       expect(
-        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+          .disabled
       ).toBe(false)
     );
     expect(

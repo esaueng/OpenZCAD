@@ -55,6 +55,7 @@ import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
+import { gearHeightPreviewProfile } from './lib/interaction/gearHeightPreviewProfile';
 import { stepPreviewProfile } from './lib/interaction/stepPreviewProfile';
 import {
   parameterMinimums,
@@ -1004,7 +1005,7 @@ const InPlaceCommandBar = withSuspense(
   )
 );
 
-const LazyViewerShell = lazyWithStaleChunkNotice(() =>
+const LazyViewerShell = preloadableLazy(() =>
   import('./components/ViewerShell').then((module) => ({
     default: module.ViewerShell
   }))
@@ -1217,7 +1218,8 @@ const TweakPanel = createLazyPanel<ComponentProps<typeof TweakPanelComponent>>(
   () =>
     import('./components/TweakPanel').then((module) => ({
       default: module.TweakPanel
-    }))
+    })),
+  'tweak-rail'
 );
 // The text tool's card exists only while text is being composed.
 const LazySketchTextCard = lazyWithStaleChunkNotice(() =>
@@ -2290,6 +2292,7 @@ export function App() {
   const fragmentNavigationRef = useRef(0);
   const navigationBusyRef = useRef<object | null>(null);
   const [openingProject, setOpeningProject] = useState<string | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
@@ -2299,11 +2302,15 @@ export function App() {
     setOpeningProject(null);
     setBusy(false);
   }, []);
-  const startNavigationBusy = useCallback((projectName?: string) => {
+  const startNavigationBusy = useCallback((
+    projectName?: string,
+    creating = false
+  ) => {
     const owner = {};
     navigationBusyRef.current = owner;
     setBusy(true);
     setOpeningProject(projectName ?? null);
+    setCreatingProject(creating);
     return () => {
       if (navigationBusyRef.current !== owner) return;
       navigationBusyRef.current = null;
@@ -12241,7 +12248,10 @@ export function App() {
     const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
-    const finishBusy = startNavigationBusy();
+    const finishBusy = startNavigationBusy(name, true);
+    // Load the viewport while the account creates the project. No document
+    // or keys are speculated, and a failed warm-up leaves render recovery intact.
+    void loadWhenOnline(() => LazyViewerShell.preload()).catch(() => undefined);
     async function createLocal(userId: UserId, message?: string) {
       const localDocument = createProjectDocument(name, userId, units);
       await saveLocalProject(localDocument);
@@ -22931,16 +22941,23 @@ export function App() {
       (face) =>
         face.topologyId === target.topologyId && face.hash === target.hash
     );
+    const gearProfile =
+      !profile && !boxProfile && doc
+        ? gearHeightPreviewProfile(doc, body, pickedFace)
+        : null;
     const terminalProfile =
-      !profile && !boxProfile ? capPreviewProfile(body, pickedFace) : null;
+      !profile && !boxProfile && !gearProfile
+        ? capPreviewProfile(body, pickedFace)
+        : null;
     const linearProfile = boxProfile ?? terminalProfile;
     // Any other planar face: move it with its blends and stretch the walls
     // they meet, when that is what the exact move would do.
     const stepProfile =
-      !profile && !linearProfile && !E2E_EXACT_FACE_DRAG
+      !profile && !linearProfile && !gearProfile && !E2E_EXACT_FACE_DRAG
         ? stepPreviewProfile(body, pickedFace)
         : null;
     return {
+      ...(gearProfile ? { gearHeightProfilePreview: gearProfile } : {}),
       ...(linearProfile ? { linearProfilePreview: linearProfile } : {}),
       ...(stepProfile ? { stepProfilePreview: stepProfile } : {}),
       ...(profile ? { profilePreview: profile } : {}),
@@ -27321,7 +27338,8 @@ export function App() {
     return (
       <StartupScreen
         projectName={openingProject}
-        backLabel={doc ? 'Cancel opening' : 'Back to projects'}
+        stage={creatingProject ? 'creating' : 'opening'}
+        backLabel={doc ? (creatingProject ? 'Cancel creating' : 'Cancel opening') : 'Back to projects'}
         onBack={() => {
           beginProjectNavigation();
           setStatus('');
@@ -28869,6 +28887,9 @@ export function App() {
       }
       topBar={
         <TopBar
+          editPending={
+            isOperationState(interaction) && interaction.phase === 'validating'
+          }
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
@@ -30440,6 +30461,12 @@ export function App() {
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
+                rebuildProgress={
+                  geometry.state.phase === 'rebuilding' &&
+                  geometry.state.progress?.stage === 'feature'
+                    ? geometry.state.progress
+                    : null
+                }
                 defaultBodyIds={drawingDefaultBodyIds}
                 requestTessellation={(source, bodyIds, signal) =>
                   geometry.drawingTessellation(source, bodyIds, { signal })
