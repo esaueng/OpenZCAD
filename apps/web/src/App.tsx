@@ -470,6 +470,7 @@ import {
   decideProjectSync,
   shouldPollForFreshness
 } from './lib/projectSyncDecision';
+import { watchLibraryFreshness } from './lib/libraryRefresh';
 import {
   claimProjectOwnership,
   type ProjectOwnershipClaim
@@ -6147,6 +6148,45 @@ export function App() {
     shareSession,
     sharedAccountProject
   ]);
+
+  /**
+   * Re-lists the shelf while it is on screen so changes made on another
+   * device reach this one without a reload. A refresh never lands over a
+   * shelf this tab changed while it was listing (a pin, rename or move) or
+   * over a navigation; the next one picks the change up instead.
+   */
+  const libraryShown = doc === null && !shareSession;
+  useEffect(() => {
+    const accountId = session?.userId ?? null;
+    if (!libraryShown || !cloudFunctionsEnabled || accountId === null) return;
+    let cancelled = false;
+    const settled = () =>
+      !cancelled &&
+      navigationBusyRef.current === null &&
+      pendingOrganizations.current.size === 0 &&
+      sessionRef.current?.userId === accountId;
+    const stop = watchLibraryFreshness(async () => {
+      if (!settled()) return;
+      const before = latestProjects.current;
+      // Expiry purging stays with the explicit listings.
+      const listed = await loadProjectSummaries(accountId, false);
+      // An unreachable account keeps the shelf as it was rather than
+      // dropping it to device-only between polls.
+      if (!listed.remoteReached || !settled()) return;
+      if (latestProjects.current !== before) return;
+      // An unchanged listing leaves state alone so the shelf (and its
+      // thumbnail loads) does not re-render every poll.
+      if (JSON.stringify(listed.projects) === JSON.stringify(before)) return;
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(true);
+      setCloudAvailable(true);
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [cloudFunctionsEnabled, libraryShown, session?.userId]);
 
   useEffect(() => {
     syncCloudSettingsSession(

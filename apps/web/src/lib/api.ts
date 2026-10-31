@@ -5,6 +5,10 @@ import {
   durationBucket
 } from './analytics';
 import type {
+  LibraryFolderSnapshot,
+  SaveLibraryFolderRequest
+} from './libraryFolderCloudSync';
+import type {
   AccountStorageUsage,
   AccountDeletionPreview,
   AccountDeletionScope,
@@ -564,6 +568,13 @@ export const api = {
       body: '{}'
     }),
   getSettings: () => requestJson<AppSettingsResponse>('/api/settings'),
+  getLibraryFolders: () =>
+    requestJson<LibraryFolderSnapshot>('/api/library-folders'),
+  saveLibraryFolders: (payload: SaveLibraryFolderRequest) =>
+    requestJson<LibraryFolderSnapshot>('/api/library-folders', {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
   updateSettings: (payload: UpdateAppSettingsRequest) =>
     requestJson<AppSettingsResponse>('/api/settings', {
       method: 'PATCH',
