@@ -1152,6 +1152,7 @@ export function Inspector(props: InspectorProps) {
 
   let eyebrow = '';
   let title = '';
+  let step: { index: number; count: number } | null = null;
   let body: ReactNode = null;
   let objectReadout = false;
   /**
@@ -1194,6 +1195,13 @@ export function Inspector(props: InspectorProps) {
     objectReadout = heading.demoted;
     eyebrow = heading.eyebrow;
     title = heading.title;
+    // Where the step stands in History, so a card opened from a row still
+    // says which row it is once the user looks back at the model.
+    const featureOrder = props.document?.featureOrder ?? [];
+    const stepIndex = featureOrder.indexOf(selectedFeature.featureId);
+    if (!objectReadout && stepIndex >= 0) {
+      step = { index: stepIndex + 1, count: featureOrder.length };
+    }
     const editKey = `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`;
     const data = selectedFeature.data;
     let form: ReactNode = null;
@@ -1612,6 +1620,15 @@ export function Inspector(props: InspectorProps) {
                 Edit {TOOL_META[data.featureKind].label.toLowerCase()}
               </button>
             )}
+        {/* The command's values and Done are in the bar under the model;
+            without this the card read as measurements with no way to edit. */}
+        {editingInPlace && inPlaceTool && (
+          <p className="inspector-edit-hint">
+            Edit the {TOOL_META[inPlaceTool].label.toLowerCase()} on the model:
+            drag a handle or type a value in the bar below.{' '}
+            <kbd>Enter</kbd> applies, <kbd>Esc</kbd> cancels.
+          </p>
+        )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (
@@ -1826,7 +1843,7 @@ export function Inspector(props: InspectorProps) {
 
   return (
     <section
-      className={`inspector${objectReadout ? ' object-readout' : ''}`}
+      className={`inspector${objectReadout ? ' object-readout' : ''}${step ? ' edit-card' : ''}`}
       aria-label="Feature inspector"
       onSubmitCapture={(event) => {
         if (!tool && props.onValidateSelection?.() === false) {
@@ -1850,7 +1867,19 @@ export function Inspector(props: InspectorProps) {
     >
       <CardHeader
         title={title}
-        eyebrow={eyebrow}
+        eyebrow={
+          step ? (
+            <>
+              {eyebrow}
+              <span className="panel-eyebrow-step">
+                {' '}
+                · Step {step.index} of {step.count}
+              </span>
+            </>
+          ) : (
+            eyebrow
+          )
+        }
         actions={
           deleteAction ? (
             <PanelOverflow>

@@ -128,10 +128,34 @@ describe('PrimitiveForm dimension validation', () => {
       />
     );
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    // A dimmed Apply alone read as broken; the card says why it is off.
+    expect(screen.getByText(/No changes yet/)).toBeVisible();
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
       target: { value: 'Renamed' }
     });
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    expect(screen.queryByText(/No changes yet/)).toBeNull();
+  });
+
+  it('puts Cancel before Apply, as the in-place Cancel/Done bar does', () => {
+    render(
+      <PrimitiveForm
+        kind="box"
+        scope={{}}
+        documentUnits="mm"
+        initialName="QA Box"
+        initialDimensions={{ width: 30, height: 18, depth: 24 }}
+        submitLabel="Apply"
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    expect(cancel).toHaveAttribute('aria-keyshortcuts', 'Escape');
+    expect(
+      cancel.compareDocumentPosition(apply) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it('allows a pointed cone but rejects two zero radii', () => {

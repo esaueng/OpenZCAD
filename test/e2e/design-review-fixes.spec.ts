@@ -6,6 +6,7 @@ import {
   expect,
   expectBodyCount,
   finishInPlaceCommand,
+  modelPanel,
   revealModelPanel,
   stubApi,
   test
@@ -133,10 +134,16 @@ test('precise hole creation, honest properties, recoverable errors and compact e
   await revealModelPanel(page, 'History');
   const layout = await dockConfiguration(page);
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
-  await expect(page.locator('.model-panel')).toHaveCount(0);
+  // Editing a step keeps History open beside its card; hiding the panel the
+  // row was clicked in lost the user's place.
   await expect(inspector(page)).toBeVisible();
+  await expect(modelPanel(page, 'History')).toBeVisible();
   const bounds = (await inspector(page).boundingBox())!;
-  expect(bounds.x).toBeGreaterThan(1048 / 2);
+  const history = (await modelPanel(page, 'History').boundingBox())!;
+  expect(
+    bounds.x + bounds.width <= history.x ||
+      bounds.x >= history.x + history.width
+  ).toBe(true);
   await expect(inspector(page)).toContainText('Measurements (last applied)');
   await expect(inspector(page)).toContainText('24000');
   await inspector(page).getByLabel('Width (X)').fill('100');

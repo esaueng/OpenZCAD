@@ -533,15 +533,26 @@ export function DatumPlaneForm({
       <div className="form-footer">
         <div className="form-actions">
           <button
+            type="button"
+            className="secondary"
+            onClick={onCancel}
+            aria-keyshortcuts="Escape"
+          >
+            Cancel
+            <kbd className="kbd-inline kbd-quiet" aria-hidden="true">
+              Esc
+            </kbd>
+          </button>
+          <button
             type="submit"
             className="primary"
             disabled={!canCheck || preflight.status === 'pending'}
             aria-keyshortcuts="Enter"
           >
             {buttonLabel}
-          </button>
-          <button type="button" className="secondary" onClick={onCancel}>
-            Cancel
+            <kbd className="kbd-inline" aria-hidden="true">
+              ↵
+            </kbd>
           </button>
         </div>
         {blocked ? (

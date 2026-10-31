@@ -433,10 +433,42 @@ describe('Inspector feature provenance', () => {
     expect(
       screen.queryByRole('button', { name: 'Edit fillet' })
     ).not.toBeInTheDocument();
+    // The card says where its values went, rather than only measuring.
+    expect(screen.getByText(/Edit the fillet on the model/)).toBeVisible();
     fireEvent.click(screen.getByLabelText('More actions'));
     expect(
       screen.getByRole('button', { name: /Delete feature/ })
     ).toBeVisible();
+  });
+});
+
+describe('an edit card opened from History', () => {
+  it('names its step and keeps the full title on its own row', () => {
+    const document = {
+      featureOrder: ['feature-0', feature.featureId, 'feature-2'],
+      derived: { bodyRepresentations: {} }
+    } as unknown as ProjectDocument;
+    render(
+      <Inspector
+        {...makeProps({
+          commandSession: null,
+          featureSelectionSource: 'pinned',
+          document
+        })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(inspector).toHaveClass('edit-card');
+    expect(inspector.querySelector('.panel-eyebrow')).toHaveTextContent(
+      'Edit feature · Step 2 of 3'
+    );
+  });
+
+  it('names no step for an object readout', () => {
+    render(<Inspector {...makeProps()} />);
+    expect(
+      screen.getByRole('region', { name: 'Feature inspector' })
+    ).not.toHaveClass('edit-card');
   });
 });
 

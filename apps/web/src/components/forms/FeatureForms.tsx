@@ -79,6 +79,8 @@ interface FormShellProps {
   onName(value: string): void;
   submitLabel: string;
   canSubmit: boolean;
+  /** An edit whose every value still matches the document. */
+  pristine?: boolean;
   onSubmit(): void;
   onCancel?: () => void;
   children: ReactNode;
@@ -89,6 +91,7 @@ function FormShell({
   onName,
   submitLabel,
   canSubmit,
+  pristine = false,
   onSubmit,
   onCancel,
   children
@@ -127,7 +130,29 @@ function FormShell({
         <input value={name} onChange={(event) => onName(event.target.value)} />
       </label>
       {children}
+      {/* An edit that matches the document has nothing to apply; saying so
+          beats a dimmed button that reads as broken. */}
+      {pristine && (
+        <p className="form-pristine muted" role="status">
+          No changes yet. Edit a value to apply it.
+        </p>
+      )}
+      {/* Cancel, then the primary action: the order of the Cancel/Done bar
+          an in-place command shows under the model. */}
       <div className="form-actions">
+        {onCancel && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={onCancel}
+            aria-keyshortcuts="Escape"
+          >
+            Cancel
+            <kbd className="kbd-inline kbd-quiet" aria-hidden="true">
+              Esc
+            </kbd>
+          </button>
+        )}
         <button
           type="submit"
           className="primary"
@@ -145,11 +170,6 @@ function FormShell({
             ↵
           </kbd>
         </button>
-        {onCancel && (
-          <button type="button" className="secondary" onClick={onCancel}>
-            Cancel
-          </button>
-        )}
       </div>
     </form>
   );
@@ -333,6 +353,7 @@ export function PrimitiveForm({
       onName={setName}
       submitLabel={submitLabel}
       canSubmit={canSubmit}
+      pristine={unchanged}
       onSubmit={() =>
         onSubmit(
           name.trim(),

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  commandSuspendsPanels,
   DEFAULT_PANEL_STATE,
   defaultPanelState,
   effectivePanels,
@@ -283,6 +284,72 @@ describe('workspace panel state', () => {
     expect(Object.keys(normalized.sidebarSections).sort()).toEqual(
       [...SIDEBAR_SECTION_IDS].sort()
     );
+  });
+});
+
+describe('which commands take the stage from the panels', () => {
+  const none = {
+    inPlace: { active: false, editing: false },
+    extrude: { active: false, editing: false },
+    tool: { name: null, editing: false },
+    moving: false
+  };
+
+  it('suspends the panels while a feature is being created', () => {
+    expect(commandSuspendsPanels(none)).toBe(false);
+    expect(
+      commandSuspendsPanels({
+        ...none,
+        inPlace: { active: true, editing: false }
+      })
+    ).toBe(true);
+    expect(
+      commandSuspendsPanels({
+        ...none,
+        extrude: { active: true, editing: false }
+      })
+    ).toBe(true);
+    expect(
+      commandSuspendsPanels({ ...none, tool: { name: 'box', editing: false } })
+    ).toBe(true);
+  });
+
+  it('keeps History open while a step from it is edited', () => {
+    // Clicking a History row used to close History under the pointer.
+    expect(
+      commandSuspendsPanels({
+        ...none,
+        inPlace: { active: true, editing: true }
+      })
+    ).toBe(false);
+    expect(
+      commandSuspendsPanels({
+        ...none,
+        extrude: { active: true, editing: true }
+      })
+    ).toBe(false);
+    expect(
+      commandSuspendsPanels({
+        ...none,
+        tool: { name: 'datum-plane', editing: true }
+      })
+    ).toBe(false);
+  });
+
+  it('leaves the panels for Move and a drag', () => {
+    expect(
+      commandSuspendsPanels({
+        ...none,
+        tool: { name: 'transform', editing: false }
+      })
+    ).toBe(false);
+    expect(
+      commandSuspendsPanels({
+        ...none,
+        inPlace: { active: true, editing: false },
+        moving: true
+      })
+    ).toBe(false);
   });
 });
 
