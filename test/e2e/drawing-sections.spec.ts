@@ -125,10 +125,11 @@ test(
     await expect(
       canvas.locator('.drawing-strokes.is-chain polyline')
     ).toHaveCount(1);
-    await expect(canvas.locator('.drawing-texts')).toContainText('SECTION A-A');
     // Placed clear of the front view, the layout may run past the border:
     // fit the views, then check the section stayed in the front's column.
     await drawings.getByRole('button', { name: 'Fit views to sheet' }).click();
+    // Its caption, above it, is on the paper once the views fit.
+    await expect(canvas.locator('.drawing-texts')).toContainText('SECTION A-A');
     const placed = await viewBox(canvas, 'section-A');
     const aligned = await viewBox(canvas, 'front');
     expect(Math.abs(placed.centreX - aligned.centreX)).toBeLessThan(1);
