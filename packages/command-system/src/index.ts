@@ -1067,6 +1067,8 @@ const MAX_GEAR_HELIX_DEG = 45;
 const MIN_BEVEL_TEETH = 4;
 /** M14: the most thread starts the kernel's worm generator builds. */
 const MAX_WORM_STARTS = 10;
+/** M14: the fewest wheel teeth an enveloping worm is built for. */
+const MIN_ENVELOPED_TEETH = 10;
 
 /**
  * Structural checks for a gear feature. Whether the tooth form is buildable
@@ -1091,6 +1093,7 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
   const bevel = input.gearType === 'bevel';
   const worm = input.gearType === 'worm';
   const wormWheel = input.gearType === 'worm-wheel';
+  const enveloping = input.gearType === 'enveloping-worm';
   const toothCount = (
     label: string,
     param: ParamValue,
@@ -1109,7 +1112,7 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     }
     return count;
   };
-  if (worm) {
+  if (worm || enveloping) {
     toothCount('starts', input.teeth, 1, MAX_WORM_STARTS);
   } else {
     toothCount(
@@ -1162,8 +1165,43 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
         throw new Error(`A ${kind} takes no ${label}.`);
       }
     }
+  } else if (enveloping) {
+    if (input.mateTeeth === undefined) {
+      throw new Error('An enveloping worm needs its wheel’s tooth count.');
+    }
+    const wheel = toothCount(
+      'wheel teeth',
+      input.mateTeeth,
+      MIN_ENVELOPED_TEETH
+    );
+    if (wheel < 2 * value('starts', input.teeth)) {
+      throw new Error(
+        'An enveloping worm’s wheel needs at least two teeth per start.'
+      );
+    }
+    if (input.diameterFactor === undefined) {
+      throw new Error('An enveloping worm needs its diameter factor.');
+    }
+    positive('diameter factor', input.diameterFactor);
+    // The thread is cut by the wheel's straight teeth, so it has no shift,
+    // fillet or helix of its own, and it is a new body.
+    for (const [label, present] of [
+      ['profile shift', input.profileShift],
+      ['root fillet', input.rootFillet],
+      ['helix angle', input.helixAngleDeg],
+      ['herringbone', input.herringbone],
+      ['shaft angle', input.shaftAngleDeg],
+      ['rim diameter', input.rimDiameter],
+      ['back depth', input.backDepth],
+      ['target body', input.targetBodyId],
+      ['fit', input.fit]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(`An enveloping worm takes no ${label}.`);
+      }
+    }
   } else if (input.diameterFactor !== undefined) {
-    throw new Error('Only a worm or worm wheel takes a diameter factor.');
+    throw new Error('Only a worm gear takes a diameter factor.');
   }
   if (input.throated !== undefined) {
     if (typeof input.throated !== 'boolean') {
@@ -1212,6 +1250,7 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
   } else if (
     !worm &&
     !wormWheel &&
+    !enveloping &&
     (input.mateTeeth !== undefined || input.shaftAngleDeg !== undefined)
   ) {
     throw new Error('Only a bevel gear takes a mate and a shaft angle.');
@@ -1347,7 +1386,13 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     value('x direction Z', input.xDirection.z);
   }
   if (input.boreDiameter !== undefined) {
-    if (input.gearType !== 'external' && !bevel && !worm && !wormWheel) {
+    if (
+      input.gearType !== 'external' &&
+      !bevel &&
+      !worm &&
+      !wormWheel &&
+      !enveloping
+    ) {
       throw new Error('Only an external, bevel or worm gear takes a bore.');
     }
     positive('bore diameter', input.boreDiameter);

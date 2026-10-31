@@ -9,7 +9,9 @@ import {
   transformBody,
   setParameter,
   getParameterScope,
-  resolveParamValue
+  resolveParamValue,
+  gearBody,
+  directEditBody
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -31,6 +33,116 @@ import { faceOffsetBaseline, planFaceOffset } from './faceOffsetPlan';
  */
 
 const user = toUserId('user_face_offset_plan');
+
+describe('planFaceOffset on a standalone gear cap', () => {
+  function gear() {
+    const made = gearBody(createProjectDocument('Gear', user), {
+      name: 'Gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 20,
+      faceWidth: '20 + 20',
+      origin: { x: 0, y: 0, z: 7 },
+      axis: { x: 0, y: 0, z: 2 }
+    });
+    const face = capFace(
+      listFeaturesInOrder(made.document)[0]!.featureId,
+      1,
+      'gear.face.cap.end'
+    );
+    return { ...made, face };
+  }
+
+  it('preserves the width expression and an exact unit expression', () => {
+    const { document, bodyId, face } = gear();
+    const plan = planFaceOffset({
+      document,
+      bodyId,
+      face,
+      faceHash: CAP_HASH,
+      offset: -15,
+      exact: '-15 mm'
+    });
+    expect(plan?.kind).toBe('gear-width');
+    if (plan?.kind !== 'gear-width') return;
+    expect(plan.value).toBe(25);
+    const edited = plan.command.apply(document);
+    const data = listFeaturesInOrder(edited)[0]!.data;
+    expect(data.featureKind === 'gear' && data.faceWidth).toBe(
+      '(20 + 20) + (-15 mm)'
+    );
+  });
+
+  it.each([-40, -50])('refuses a nonpositive face width (%s)', (offset) => {
+    const { document, bodyId, face } = gear();
+    const plan = planFaceOffset({
+      document,
+      bodyId,
+      face,
+      faceHash: CAP_HASH,
+      offset
+    });
+    expect(plan?.kind === 'gear-width' && plan.preflightRejection).toMatch(
+      /no face width/
+    );
+  });
+
+  it('keeps stale, unreferenced and flank selections on the existing local route', () => {
+    const { document, bodyId, face } = gear();
+    for (const candidate of [
+      { ...face, reference: undefined },
+      { ...face, reference: { ...face.reference!, currentHash: CAP_HASH + 1 } },
+      {
+        ...face,
+        reference: { ...face.reference!, lineageName: 'gear.face.tooth.flank' }
+      }
+    ]) {
+      expect(
+        planFaceOffset({
+          document,
+          bodyId,
+          face: candidate,
+          faceHash: CAP_HASH,
+          offset: 1
+        })?.kind
+      ).toBe('direct-edit');
+      expect(
+        faceOffsetBaseline(document, bodyId, candidate, CAP_HASH)
+      ).toBeUndefined();
+    }
+    expect(
+      planFaceOffset({
+        document,
+        bodyId,
+        face,
+        faceHash: CAP_HASH,
+        offset: 1,
+        localOnly: true
+      })?.kind
+    ).toBe('direct-edit');
+  });
+
+  it('does not rewrite the gear below a later local edit', () => {
+    const { document, bodyId, face } = gear();
+    const edited = directEditBody(document, {
+      name: 'Local edit',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: CAP_HASH,
+        sourceSurfaceType: 'plane',
+        sourceArea: 60,
+        sourceCenter: { x: 0, y: 0, z: 40 },
+        sourceNormal: { x: 0, y: 0, z: 1 },
+        offset: 1
+      }
+    });
+    expect(
+      faceOffsetBaseline(edited.document, bodyId, face, CAP_HASH)
+    ).toBeUndefined();
+  });
+});
 
 function extrudedPlate(
   distance: number | string,

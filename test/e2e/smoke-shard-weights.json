@@ -28,9 +28,11 @@
   "settings.spec.ts": 8,
   "sketch-modify-tools.spec.ts": 9,
   "sketch-move.spec.ts": 11,
+  "sketch-transition-continuity.spec.ts": 60,
   "start-screen-responsive.spec.ts": 3,
   "start-screen-sync-failures.spec.ts": 4,
   "start-tile-reorder.spec.ts": 2,
+  "standalone-gear-height.spec.ts": 60,
   "text-authoring.spec.ts": 7,
   "tool-rail-pins.spec.ts": 6,
   "viewport.spec.ts": 12

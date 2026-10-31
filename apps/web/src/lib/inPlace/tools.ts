@@ -1720,9 +1720,8 @@ function gearTwists(state: InPlacePanelState): boolean {
 
 /** A worm or its wheel: the worm's thread sets the helix and the hand. */
 function gearIsWorm(state: InPlacePanelState): boolean {
-  return (
-    state.options.gearType === 'worm' || state.options.gearType === 'worm-wheel'
-  );
+  const type = state.options.gearType;
+  return type === 'worm' || type === 'worm-wheel' || type === 'enveloping-worm';
 }
 
 /** The value a gear's chosen sizing reads its pitch from. */
@@ -1809,7 +1808,8 @@ function gearSummary(
   const teeth = state.numbers.teeth ?? 20;
   if (type === 'rack') {
     parts.push(`Pitch ${gearLength(module * Math.PI, units)}`);
-  } else if (type === 'worm') {
+  } else if (type === 'worm' || type === 'enveloping-worm') {
+    // An enveloping worm's pitch diameter and lead are at its throat.
     const factor = state.numbers.diameterFactor ?? 10;
     const starts = state.numbers.starts ?? 1;
     parts.push(`Pitch Ø ${gearLength(module * factor, units)}`);
@@ -2250,6 +2250,11 @@ const gear: InPlaceToolSpec = {
           value: 'worm-wheel',
           label: 'Worm wheel',
           note: 'The helical wheel that meshes with a worm of these starts and diameter factor'
+        },
+        {
+          value: 'enveloping-worm',
+          label: 'Enveloping worm',
+          note: 'An hourglass worm wrapping a wheel of these teeth, its thread cut by the wheel’s straight teeth'
         }
       ],
       initial: 'external'
@@ -2283,7 +2288,8 @@ const gear: InPlaceToolSpec = {
       options.gearType === 'rack' ||
       options.gearType === 'bevel' ||
       options.gearType === 'worm' ||
-      options.gearType === 'worm-wheel'
+      options.gearType === 'worm-wheel' ||
+      options.gearType === 'enveloping-worm'
         ? options.gearType
         : 'external';
     // An edited gear's own placement goes back as stored, expressions and
@@ -2323,7 +2329,11 @@ const gear: InPlaceToolSpec = {
         }
       };
     }
-    if (gearType === 'worm' || gearType === 'worm-wheel') {
+    if (
+      gearType === 'worm' ||
+      gearType === 'worm-wheel' ||
+      gearType === 'enveloping-worm'
+    ) {
       // The thread's lead sets the helix and the worm's hand winds it, so a
       // worm gear has no shift, helix angle or herringbone of its own.
       const {
@@ -2344,9 +2354,13 @@ const gear: InPlaceToolSpec = {
         gear: {
           gearType,
           ...wormFields,
+          // A worm's teeth are its starts; an enveloping worm also carries
+          // the teeth of the wheel it wraps, a wheel the starts of its worm.
           ...(gearType === 'worm'
             ? { teeth: starts }
-            : { teeth, mateTeeth: starts }),
+            : gearType === 'enveloping-worm'
+              ? { teeth: starts, mateTeeth: teeth }
+              : { teeth, mateTeeth: starts }),
           diameterFactor: values.diameterFactor ?? 10,
           ...(throated
             ? {
@@ -2397,7 +2411,8 @@ const gear: InPlaceToolSpec = {
     const base = keyOf('gear', origin.x, origin.y, origin.z);
     // A worm's tip circle follows its diameter factor, and its count chip
     // is its starts.
-    const worm = options.gearType === 'worm';
+    const worm =
+      options.gearType === 'worm' || options.gearType === 'enveloping-worm';
     const pitch = gearPitchValueId(options);
     const reach =
       (gearModuleOf(options, values, ctx.units) *

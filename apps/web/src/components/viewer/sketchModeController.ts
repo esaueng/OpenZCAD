@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import {
-  createFatLine,
   createFatLineMaterial,
   VIEWPORT_RENDER_ORDER,
   type FatLineResolution
@@ -20,6 +19,7 @@ import {
   type SketchObjectPolyline
 } from '../../lib/objectPolyline';
 import { triangulateRegionGeometry } from './regionOverlay';
+import { createSketchCurve, SKETCH_CURVE_WIDTH } from './sketchCurve';
 
 /**
  * Scene-side rig for in-viewport sketching: a tinted plane quad with a
@@ -58,7 +58,7 @@ function textPreviewId(objects: readonly { id: string }[]): string {
   return id;
 }
 /** Screen-space width in CSS pixels for the sketch polylines. */
-const SKETCH_LINE_WIDTH = 1.6;
+const SKETCH_LINE_WIDTH = SKETCH_CURVE_WIDTH;
 /** Screen-space diameter in CSS pixels for the snap-point dots. */
 const SKETCH_POINT_SIZE = 5;
 
@@ -393,6 +393,7 @@ export function buildSketchModeRig(
     resolution: resolution()
   });
   const inProgress = new Line2(new LineGeometry(), inProgressMaterial);
+  inProgressMaterial.toneMapped = false;
   inProgress.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
   inProgress.visible = false;
   inProgress.frustumCulled = false;
@@ -545,7 +546,7 @@ export function buildSketchModeRig(
       pickProxy.userData.pickProxy = true;
       container.add(pickProxy);
 
-      const visual = createFatLine(vertices, {
+      const visual = createSketchCurve(vertices, {
         color,
         linewidth: SKETCH_LINE_WIDTH,
         opacity,
@@ -868,7 +869,7 @@ export function buildSketchModeRig(
         if (polyline.points.length < 2) {
           continue;
         }
-        const visual = createFatLine(
+        const visual = createSketchCurve(
           polyline.points.map((point) => liftPoint(basis, point)),
           {
             color: IN_PROGRESS_COLOR,

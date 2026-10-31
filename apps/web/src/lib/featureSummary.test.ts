@@ -298,6 +298,13 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('30 teeth, throated worm wheel for 2-start worm');
+    expect(
+      featureValueSummary(
+        gear({ gearType: 'enveloping-worm', teeth: 1, mateTeeth: 30 }),
+        {},
+        'mm'
+      )
+    ).toBe('Enveloping worm, 1 start, for 30-tooth wheel');
   });
 
   it('returns null for kinds without one driving value', () => {

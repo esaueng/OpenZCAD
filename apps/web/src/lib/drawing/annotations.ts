@@ -12,7 +12,8 @@ import {
   type DrawingView,
   type EdgeTopology,
   type GeometryBodyRepresentation,
-  type UnitSystem
+  type UnitSystem,
+  type Vector3
 } from '@openzcad/shared';
 import {
   inspectTopologyWitness,
@@ -250,6 +251,8 @@ interface ViewPoint {
   uv: UV;
   /** Distance into the view along its direction, in model units. */
   depth: number;
+  /** The same point in model space. */
+  model: Vector3;
 }
 
 /** {@link edgeEndsInPageOrder}, keeping each end's depth. */
@@ -270,8 +273,13 @@ function edgeEndsWithDepth(
       : !level(a.v, b.v)
         ? a.v < b.v
         : a.depth <= b.depth;
-  const ua: ViewPoint = { uv: [a.u, a.v], depth: a.depth };
-  const ub: ViewPoint = { uv: [b.u, b.v], depth: b.depth };
+  const at = (i: number): Vector3 => ({ x: p[i]!, y: p[i + 1]!, z: p[i + 2]! });
+  const ua: ViewPoint = { uv: [a.u, a.v], depth: a.depth, model: at(0) };
+  const ub: ViewPoint = {
+    uv: [b.u, b.v],
+    depth: b.depth,
+    model: at(p.length - 3)
+  };
   return aFirst ? [ua, ub] : [ub, ua];
 }
 
@@ -316,7 +324,14 @@ function pointOf(
   if (anchor === 'center') {
     const circle = faceOnCircle(view, edge);
     return circle.ok
-      ? { ok: true, point: { uv: circle.center, depth: circle.depth } }
+      ? {
+          ok: true,
+          point: {
+            uv: circle.center,
+            depth: circle.depth,
+            model: edge.curve!.circle!.center
+          }
+        }
       : circle;
   }
   const ends = edgeEndsWithDepth(view, edge);
@@ -509,6 +524,64 @@ export function resolveDrawingAnnotation(
       };
     }
   }
+}
+
+/**
+ * D06: what a dimension measures, in model space, for checking a sheet's
+ * dimension set against the part. The same lookups as
+ * {@link resolveDrawingAnnotation}, so it reads only what that would draw;
+ * `null` for a note or anything that does not resolve.
+ */
+export type AnnotationModelReading =
+  | {
+      kind: 'linear';
+      bodyIds: [string, string];
+      from: Vector3;
+      to: Vector3;
+      /** The measured model direction; absent for an aligned span. */
+      direction?: Vector3;
+    }
+  | {
+      kind: 'radius' | 'diameter';
+      bodyId: string;
+      circle: { center: Vector3; axis: Vector3; radius: number };
+    };
+
+export function annotationModelReading(
+  annotation: DrawingAnnotation,
+  view: DrawingView | undefined,
+  bodies: AnnotationBodies,
+  units: UnitSystem
+): AnnotationModelReading | null {
+  if (!view || annotation.kind === 'note' || annotation.kind === 'angle')
+    return null;
+  if (!resolveDrawingAnnotation(annotation, view, bodies, units).ok)
+    return null;
+  if (annotation.kind === 'linear') {
+    const fromEdge = lookupEdge(annotation.from.edge, view, bodies);
+    const toEdge = lookupEdge(annotation.to.edge, view, bodies);
+    if (!fromEdge.ok || !toEdge.ok) return null;
+    const from = pointOf(view, fromEdge.edge, annotation.from.anchor);
+    const to = pointOf(view, toEdge.edge, annotation.to.anchor);
+    if (!from.ok || !to.ok) return null;
+    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    return {
+      kind: 'linear',
+      bodyIds: [annotation.from.edge.bodyId, annotation.to.edge.bodyId],
+      from: from.point.model,
+      to: to.point.model,
+      ...(annotation.direction === 'horizontal'
+        ? { direction: frame.x }
+        : annotation.direction === 'vertical'
+          ? { direction: frame.up }
+          : {})
+    };
+  }
+  const found = lookupEdge(annotation.edge, view, bodies);
+  const circle = found.ok ? found.edge.curve?.circle : undefined;
+  return circle
+    ? { kind: annotation.kind, bodyId: annotation.edge.bodyId, circle }
+    : null;
 }
 
 // ---------------------------------------------------------------------------

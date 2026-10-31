@@ -117,6 +117,10 @@ import {
   type AnnotationResolution
 } from '../lib/drawing/annotations';
 import {
+  auditDrawingDimensions,
+  type DrawingAudit
+} from '../lib/drawing/dimensionAudit';
+import {
   ANNOTATION_TOOL_LABELS,
   annotationToolHint,
   applyAnnotationPick,
@@ -833,6 +837,122 @@ function AnnotationList(props: {
 }
 
 /**
+ * D06: whether the sheet's dimensions state every size and position the
+ * check can read, once. Read from the current model, so only a ready sheet
+ * reports; a repeated or unchecked dimension selects on click.
+ */
+function DimensionCheck(props: {
+  sheet: DrawingSheet;
+  ready: boolean;
+  audit: DrawingAudit | null;
+  resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
+  onSelect: (annotationId: DrawingAnnotationId) => void;
+}) {
+  const { sheet, audit } = props;
+  if (sheet.views.length === 0) return null;
+  const annotations = new Map(
+    (sheet.annotations ?? []).map((annotation) => [
+      annotation.annotationId,
+      annotation
+    ])
+  );
+  const entry = (annotationId: DrawingAnnotationId, message: string) => {
+    const annotation = annotations.get(annotationId);
+    return (
+      <button
+        key={annotationId}
+        type="button"
+        className="drawing-sheet-item drawing-audit-item"
+        onClick={() => props.onSelect(annotationId)}
+      >
+        {annotation
+          ? annotationName(
+              annotation,
+              props.resolutions.get(annotationId),
+              props.ready
+            )
+          : 'Dimension'}
+        <span className="drawing-audit-reason">{message}</span>
+      </button>
+    );
+  };
+  const complete =
+    audit !== null &&
+    audit.missing.length === 0 &&
+    audit.redundant.length === 0;
+  return (
+    <div className="drawing-panel-section">
+      <h3>Dimension check</h3>
+      {!props.ready || !audit ? (
+        <p className="drawing-hint">Checked once the sheet is drawn.</p>
+      ) : (
+        <>
+          <p className="drawing-annotation-value">
+            {complete
+              ? `Every size and position it reads is stated once (${audit.stated}).`
+              : `${audit.stated} of ${audit.required} stated`}
+          </p>
+          {audit.missing.length > 0 && (
+            <>
+              <p className="drawing-audit-heading">
+                Missing · {audit.missing.length}
+              </p>
+              <ul
+                className="drawing-audit-list"
+                aria-label="Missing dimensions"
+              >
+                {audit.missing.map((finding) => (
+                  <li key={finding.message}>{finding.message}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {audit.redundant.length > 0 && (
+            <>
+              <p className="drawing-audit-heading is-warning">
+                Repeated · {audit.redundant.length}
+              </p>
+              <div className="drawing-view-list">
+                {audit.redundant.map((finding) =>
+                  entry(finding.annotationId, finding.message)
+                )}
+              </div>
+            </>
+          )}
+          {audit.unmeasurable.length > 0 && (
+            <>
+              <p className="drawing-audit-heading">
+                Can&apos;t dimension yet · {audit.unmeasurable.length}
+              </p>
+              <ul
+                className="drawing-audit-list"
+                aria-label="Requirements no dimension can state yet"
+              >
+                {audit.unmeasurable.map((finding) => (
+                  <li key={finding.message}>{finding.message}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {audit.unchecked.length > 0 && (
+            <>
+              <p className="drawing-audit-heading">
+                Not checked · {audit.unchecked.length}
+              </p>
+              <div className="drawing-view-list">
+                {audit.unchecked.map((finding) =>
+                  entry(finding.annotationId, finding.message)
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * D02: the selected annotation's properties. Values are shown only while the
  * sheet is ready: a stale sheet has not been redrawn from the model they
  * would be read from.
@@ -1442,6 +1562,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     status?.kind === 'stale' ||
     status?.kind === 'replaced' ||
     status?.kind === 'missing';
+  // D06: checked against the model the sheet draws, as its dimensions are.
+  const dimensionAudit = useMemo(
+    () =>
+      shownSheet && sheetReady
+        ? auditDrawingDimensions(shownSheet, drawBodies, document.units)
+        : null,
+    [shownSheet, sheetReady, drawBodies, document.units]
+  );
   // A tool picks from one sheet's drawn model: a sheet that stops being
   // ready (a collaborator's model edit, a rebuild), or another sheet taking
   // its place (an undo, a delete, a collaborator's edit), ends it rather
@@ -3374,6 +3502,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           sheet={sheet}
           ready={sheetReady}
           selected={selectedAnnotation}
+          resolutions={resolutions}
+          onSelect={(annotationId) => {
+            setSelectedAnnotationId(annotationId);
+            setSelectedViewId(null);
+          }}
+        />
+        <DimensionCheck
+          sheet={sheet}
+          ready={sheetReady}
+          audit={dimensionAudit}
           resolutions={resolutions}
           onSelect={(annotationId) => {
             setSelectedAnnotationId(annotationId);

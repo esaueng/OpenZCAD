@@ -438,6 +438,9 @@ export function inPlaceEditSeed(
       seed.options.gearType = data.gearType;
       if (data.gearType === 'worm') {
         value('starts', data.teeth);
+      } else if (data.gearType === 'enveloping-worm') {
+        value('starts', data.teeth);
+        value('teeth', data.mateTeeth);
       } else if (data.gearType === 'worm-wheel') {
         value('starts', data.mateTeeth);
       } else {
