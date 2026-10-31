@@ -4,6 +4,7 @@ import {
   loadWhenOnline,
   lazyWithStaleChunkNotice,
   onStaleChunk,
+  refreshFailedChunk,
   watchPreloadErrors
 } from './staleChunk';
 
@@ -236,5 +237,40 @@ describe('loadWhenOnline', () => {
     window.dispatchEvent(new Event('online'));
     await expect(result).resolves.toBe('chunk');
     expect(load).toHaveBeenCalledOnce();
+  });
+
+  it('refetches the failed chunk past the cache so a reload can load it', () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('export {}'));
+    refreshFailedChunk(
+      new TypeError(
+        `error loading dynamically imported module: ${window.location.origin}/assets/ViewModeBar-CRN-hUHX.js`
+      ),
+      fetcher
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      `${window.location.origin}/assets/ViewModeBar-CRN-hUHX.js`,
+      { cache: 'reload' }
+    );
+  });
+
+  it('resolves a CSS preload path and leaves other origins alone', () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(''));
+    refreshFailedChunk(
+      new Error('Unable to preload CSS for /assets/EncryptionSettings-x.css'),
+      fetcher
+    );
+    refreshFailedChunk(
+      new Error(
+        'Failed to fetch dynamically imported module: https://elsewhere.example/assets/a.js'
+      ),
+      fetcher
+    );
+    refreshFailedChunk(new Error('Importing a module script failed.'), fetcher);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0]![0]).toBe(
+      `${window.location.origin}/assets/EncryptionSettings-x.css`
+    );
   });
 });

@@ -244,6 +244,13 @@ function validateCommon(config, { allowPlaceholders }) {
   ) {
     errors.push('assets.run_worker_first must protect /api/* and /healthz');
   }
+  // The asset layer's SPA fallback answers a missing chunk with the shell,
+  // which `_headers` then marks immutable. The Worker owns misses instead.
+  if (config.assets?.not_found_handling === 'single-page-application') {
+    errors.push(
+      'assets.not_found_handling must be "none" so the Worker answers missing chunks'
+    );
+  }
 
   const db = binding(config, 'd1_databases', 'DB');
   if (!db?.database_name || !db?.database_id || !db?.migrations_dir) {

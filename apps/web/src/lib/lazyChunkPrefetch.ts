@@ -122,11 +122,30 @@ function idle(callback: () => void): void {
   }
 }
 
+/**
+ * Reads one chunk into the HTTP cache. HTML under a chunk URL is the app
+ * shell an older asset fallback cached as immutable (see `staleChunk.ts`
+ * `refreshFailedChunk`); fetching past the cache replaces it with the chunk.
+ */
+export async function prefetchChunk(
+  href: string,
+  fetcher: typeof fetch = fetch
+): Promise<void> {
+  const response = await fetcher(href, { priority: 'low' });
+  if (/^text\/html\b/i.test(response.headers.get('content-type') ?? '')) {
+    await response.body?.cancel();
+    await (
+      await fetcher(href, { cache: 'reload', priority: 'low' })
+    ).arrayBuffer();
+    return;
+  }
+  await response.arrayBuffer();
+}
+
 export function prefetchLazyChunks(
   doc: Document = document,
   base: string = import.meta.env.BASE_URL,
-  load: (href: string) => Promise<unknown> = (href) =>
-    fetch(href, { priority: 'low' }).then((response) => response.arrayBuffer()),
+  load: (href: string) => Promise<unknown> = prefetchChunk,
   ready: Promise<void> = modelVisible()
 ): void {
   if (prefersSavingData()) return;
