@@ -39,6 +39,12 @@ for (const completed of [true, false]) {
       const errors: string[] = [];
       page.on('pageerror', (error) => errors.push(error.message));
       await stubApi(page, { panelLayout: MODEL_ONLY });
+      await page.route('**/api/session', (route) =>
+        route.fulfill({
+          status: 401,
+          json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+        })
+      );
       await page.setViewportSize({ width: 1440, height: 1000 });
       await page.addInitScript(() => {
         const scope = window as BoreScope;
@@ -158,15 +164,21 @@ for (const completed of [true, false]) {
         operation: 'cut',
         targetBodyId: gear.bodyId
       });
-      await page.route('**/api/projects', async (route) => {
-        if (route.request().method() === 'POST') {
-          await route.fulfill({ json: { document } });
-        } else await route.fallback();
-      });
       await page.goto('/');
       await expect(page).toHaveTitle(/OpenZCAD/);
-      await page.getByLabel('Project name').fill('Bore validation');
-      await page.getByRole('button', { name: 'New project' }).click();
+      await page.getByRole('button', { name: 'Import project' }).click();
+      await page.getByLabel('Import project backup').setInputFiles({
+        name: 'bore.openzcad',
+        mimeType: 'application/json',
+        buffer: Buffer.from(
+          JSON.stringify({
+            format: 'openzcad-project',
+            version: 1,
+            document,
+            files: []
+          })
+        )
+      });
       const canvas = page.locator('.viewer-host canvas');
       await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
         timeout: 30_000

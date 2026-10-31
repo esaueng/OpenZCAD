@@ -3,7 +3,7 @@ row: U01
 ---
 
 Released proxy previews say “Checking exact result” during validation. The
-workspace header says “Checking edit” until the proposal is accepted; a
+workspace header retains “Checking” until the proposal is accepted; a
 refused direct edit leaves an “Edit not applied” link to its Activity log,
 including after deselection, until the document changes. Save failures keep
 priority over that proposal notice. Long selection refusals offer Read more;
