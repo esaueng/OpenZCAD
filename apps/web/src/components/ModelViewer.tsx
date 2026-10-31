@@ -6175,7 +6175,28 @@ export function ModelViewer({
           : null
       );
     };
+    const handleE2EEdgeOverlayGrowth = E2E_CANVAS_HOOKS_ENABLED
+      ? (event: Event) => {
+          if (!e2eCanvasHooksEnabled) return;
+          const detail = (
+            event as CustomEvent<{
+              resolve: (value: unknown) => void;
+              reject: (reason: string) => void;
+            }>
+          ).detail;
+          void import('./viewer/edgeOverlayGrowthProbe')
+            .then(({ probeEdgeOverlayGrowth }) => {
+              detail.resolve(probeEdgeOverlayGrowth(renderer));
+              context.requestRender();
+            })
+            .catch((error: unknown) => detail.reject(String(error)));
+        }
+      : () => undefined;
     if (E2E_CANVAS_HOOKS_ENABLED) {
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-edge-overlay-growth',
+        handleE2EEdgeOverlayGrowth
+      );
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
@@ -11319,6 +11340,10 @@ export function ModelViewer({
       renderer.domElement.removeEventListener(
         'pointerleave',
         handlePointerLeave
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-edge-overlay-growth',
+        handleE2EEdgeOverlayGrowth
       );
       renderer.domElement.removeEventListener(
         'openzcad:e2e-select-cylinder',
