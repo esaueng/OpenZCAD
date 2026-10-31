@@ -17,6 +17,7 @@
   "face-drag-continuity.spec.ts": 12,
   "face-offset-continuity.spec.ts": 30,
   "feature-history.spec.ts": 21,
+  "gear-face-width.spec.ts": 30,
   "gear-height-preview.spec.ts": 47.5,
   "gear.spec.ts": 15,
   "in-place-primitives.spec.ts": 15,
