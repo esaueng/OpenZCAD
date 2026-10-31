@@ -572,13 +572,14 @@
   background: var(--color-text-muted);
 }
 
-/* A sheet drawn from an earlier model: one quiet pill, not a banner. The
-   drawing stays usable; Update is an offer, never forced. */
+/* A sheet drawn from an earlier model: one quiet chip, not a banner, shaped
+   like the zoom group beside it. The drawing stays usable; Update is an
+   offer, never forced. */
 .drawing-sync.is-outdated {
-  gap: 6px;
-  padding: 2px 2px 2px 10px;
+  gap: 8px;
+  padding: 3px 3px 3px 10px;
   border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--color-warning) 10%, transparent);
   color: var(--color-text);
 }
@@ -591,9 +592,9 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   background: var(--color-accent);
   color: var(--color-on-accent);
   font: inherit;
