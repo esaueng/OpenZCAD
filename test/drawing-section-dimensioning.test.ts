@@ -438,14 +438,16 @@ describe('D06 slice F: the turned foot', () => {
     const sheet = sheetFor(bodyId);
     const { bodies, views } = await drawSheet(document, sheet);
     const { plan, after, audit } = autoDimension(sheet, views, bodies);
-    // 9 floor thickness (on the bore rim's hidden silhouette) and 50
-    // overall, from the contact face.
+    // 9 floor thickness (on the bore rim's hidden silhouette), 29 to the
+    // shoulder chamfer's corner (slice D) and 50 overall, from the contact
+    // face.
     expect(
       plan.annotations
         .filter((a) => a.kind === 'linear')
         .map((a) => zSpan(a, after, bodies))
     ).toEqual([
       [0, 9],
+      [0, 29],
       [0, 50]
     ]);
     expect(plan.onHiddenLines).toBe(1);

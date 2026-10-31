@@ -5,7 +5,16 @@ import {
   commandsForCadPatch,
   composeCommands
 } from '@openzcad/command-system';
-import { createProjectDocument, findSketch } from '@openzcad/document-core';
+import {
+  addPrimitiveFeature,
+  addSketchFeature,
+  createProjectDocument,
+  extrudeSketch,
+  findSketch,
+  getLatestBodyId,
+  getLatestSketchId,
+  importStepBody
+} from '@openzcad/document-core';
 import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
@@ -339,3 +348,77 @@ export const roundedOperations = () => [
     samplePoint: { x: 5, y: 5 }
   }
 ];
+
+/**
+ * D06 slice D: a part as a history-less import. Exports `bodyId` of the
+ * built `document` as STEP through the kernel and imports it back, so the
+ * body carries only what the file does: faces and edges, no features.
+ */
+export async function importAsStep(
+  adapter: ExactKernelAdapter,
+  document: ProjectDocument,
+  bodyId: BodyId
+) {
+  const source = { ...document, derived: await adapter.syncDocument(document) };
+  const stepText = await adapter.exportStep(source, [bodyId]);
+  let imported = importStepBody(
+    createProjectDocument('Imported', toUserId('user_import')),
+    {
+      name: 'Imported part',
+      artifactId: 'artifact_d06_import',
+      sourceName: 'part.step',
+      stepText
+    }
+  ).document;
+  const synced = await adapter.syncDocument(imported);
+  expect(synced.warnings).toEqual([]);
+  imported = { ...imported, derived: synced };
+  const importedId = imported.bodyOrder[0]!;
+  const bodies = synced.bodyRepresentations;
+  return {
+    document: imported,
+    bodies,
+    bodyId: importedId,
+    body: bodies[importedId]!
+  };
+}
+
+/**
+ * A 40 × 30 × 8 plate with two counterbored holes on its top face: Ø6
+ * through, Ø11 × 3 deep, at x = 10 and 30 on y = 15.
+ */
+export function counterboredPlateDocument(): {
+  document: ProjectDocument;
+  bodyId: BodyId;
+} {
+  let document = addPrimitiveFeature(
+    createProjectDocument('Counterbored plate', toUserId('user_audit')),
+    {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 8 }
+    }
+  );
+  let bodyId = document.bodyOrder[0]!;
+  for (const [radius, depth] of [
+    [5.5, 3],
+    [3, 8]
+  ] as const)
+    for (const centerX of [10, 30]) {
+      const sketched = addSketchFeature(document, {
+        name: 'Hole',
+        plane: 'XY',
+        offset: 8,
+        object: { objectKind: 'circle', radius, centerX, centerY: 15 }
+      }).document;
+      document = extrudeSketch(sketched, {
+        name: 'Cut',
+        sketchId: getLatestSketchId(sketched)!,
+        distance: -depth,
+        operation: 'cut',
+        targetBodyId: bodyId
+      }).document;
+      bodyId = getLatestBodyId(document)!;
+    }
+  return { document, bodyId };
+}

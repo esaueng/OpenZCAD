@@ -113,33 +113,34 @@ function radial(
 const messages = (list: { message: string }[]) => list.map((f) => f.message);
 
 describe('D06 dimension audit: the turned foot', () => {
-  it('asks for each diameter, chamfer and axial position once', async () => {
+  it('asks for each diameter, chamfer, blend and axial position once', async () => {
     const { bodies, bodyId } = await build(footOperations());
     const audit = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
     // Coaxial: nothing to locate across the axis. Along it, three faces
-    // need two dimensions; since slice B (v48) their rims' silhouettes mark
-    // them, and each chamfer is stated as size × angle.
+    // and the shoulder's corner need three dimensions; since slice B (v48)
+    // rims' silhouettes mark them, and since slice D (v49) the shoulder is
+    // the same 4 × 45° chamfer as the bottom, cut at z = 29, and the three
+    // R4 tori are one counted radius.
     expect(messages(audit.missing)).toEqual([
       'Ø40 diameter.',
       'Ø33 diameter.',
       'Ø25 diameter.',
-      '4 × 45° chamfer.',
-      '3.5 × 45° chamfer.',
+      '2× 4 × 45° chamfer.',
+      '3× R4 blend radius.',
       'Z: nothing locates the face at z = 9 from the face at z = 0.',
+      "Z: nothing locates the 4 × 45° chamfer's corner at z = 29 from the face at z = 0.",
       'Z: nothing locates the face at z = 50 from the face at z = 0.'
-    ]);
-    expect(messages(audit.unmeasurable)).toEqual([
-      '3× R4 revolved blend: its radius needs a dimension D02 cannot place yet.'
     ]);
     expect(audit).toMatchObject({
       redundant: [],
+      unmeasurable: [],
       unchecked: [],
       stated: 0,
-      required: 7
+      required: 8
     });
   });
 
-  it('passes a sheet that states every requirement once with the v48 anchors', async () => {
+  it('passes a sheet that states every requirement once with the v48 and v49 anchors', async () => {
     const { bodies, bodyId, body } = await build(footOperations());
     const ref = (edge: EdgeTopology) => refOf(bodyId, edge);
     const silhouette = (edge: EdgeTopology, side: 'low' | 'high') => ({
@@ -153,18 +154,32 @@ describe('D06 dimension audit: the turned foot', () => {
           face.geometry?.surfaceType.toLowerCase().includes('cone') &&
           face.geometry.center.z > 20 === above
       )!;
-    const chamfer = (name: string, above: boolean): DrawingAnnotation => ({
+    const chamfer = (
+      name: string,
+      above: boolean,
+      count?: number
+    ): DrawingAnnotation => ({
       annotationId: id(name),
       kind: 'chamfer',
       viewId: frontId,
       face: { bodyId, hash: cone(above).hash },
+      ...(count ? { count } : {}),
       placementMm: { x: 40, y: above ? 10 : -30 }
     });
+    const torus = body.topology!.faces.find((face) =>
+      face.geometry?.surfaceType.toLowerCase().includes('tor')
+    )!;
+    const corner = {
+      anchor: 'chamfer-corner' as const,
+      face: { bodyId, hash: cone(true).hash },
+      like: { bodyId, hash: cone(false).hash },
+      side: 'high' as const
+    };
     const span = (
       name: string,
       direction: 'horizontal' | 'vertical',
-      from: ReturnType<typeof silhouette>,
-      to: ReturnType<typeof silhouette>,
+      from: DrawingLinearDimension['from'],
+      to: DrawingLinearDimension['to'],
       extra: Partial<DrawingLinearDimension> = {}
     ): DrawingAnnotation => ({
       annotationId: id(name),
@@ -180,7 +195,7 @@ describe('D06 dimension audit: the turned foot', () => {
     const top = circleEdge(body, 16.5, { z: 50 });
     const floor = circleEdge(body, 12.5, { z: 9 });
     const bodyRim = circleEdge(body, 20, { z: 4 * S });
-    const annotations = [
+    const annotations: DrawingAnnotation[] = [
       span(
         'height',
         'vertical',
@@ -208,8 +223,19 @@ describe('D06 dimension audit: the turned foot', () => {
         'diameter',
         ref(circleEdge(body, 12.5, { z: 50 }))
       ),
-      chamfer('low', false),
-      chamfer('shoulder', true)
+      // One chamfer dimension states both: the shoulder is the same
+      // 4 × 45°, and the 29 to the corner it cut locates it.
+      chamfer('low', false, 2),
+      span('body', 'vertical', silhouette(bottom, 'high'), corner),
+      {
+        annotationId: id('r4'),
+        kind: 'radius',
+        viewId: frontId,
+        face: { bodyId, hash: torus.hash },
+        side: 'high',
+        count: 3,
+        placementMm: { x: 40, y: 0 }
+      }
     ];
     const audit = auditDrawingDimensions(
       sheetOf(bodyId, annotations),
@@ -219,11 +245,20 @@ describe('D06 dimension audit: the turned foot', () => {
     expect(audit).toMatchObject({
       missing: [],
       redundant: [],
+      unmeasurable: [],
       unchecked: [],
-      stated: 7,
-      required: 7
+      stated: 8,
+      required: 8
     });
-    // The same Ø40 again face-on, and the floor thickness closing the chain.
+    // The same Ø40 again face-on, the floor thickness closing the chain,
+    // the shoulder's own 3.5 to the neck, a span to its virtual sharp with
+    // the body (z = 25, which the 4 × 45° and the 29 fix), and a second R4.
+    const bodyFace = body.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType.toLowerCase().includes('cylind') &&
+        face.geometry.radius !== undefined &&
+        near(face.geometry.radius, 20)
+    )!;
     const again = auditDrawingDimensions(
       sheetOf(bodyId, [
         ...annotations,
@@ -233,7 +268,29 @@ describe('D06 dimension audit: the turned foot', () => {
           'vertical',
           silhouette(bottom, 'low'),
           silhouette(floor, 'low')
-        )
+        ),
+        chamfer('shoulder', true),
+        span('sharp', 'vertical', silhouette(bottom, 'low'), {
+          anchor: 'virtual-sharp',
+          faces: [
+            { bodyId, hash: bodyFace.hash },
+            { bodyId, hash: cone(true).hash }
+          ],
+          side: 'low'
+        }),
+        {
+          annotationId: id('r4again'),
+          kind: 'radius',
+          viewId: frontId,
+          face: {
+            bodyId,
+            hash: body.topology!.faces.filter((face) =>
+              face.geometry?.surfaceType.toLowerCase().includes('tor')
+            )[1]!.hash
+          },
+          side: 'low',
+          placementMm: { x: -40, y: 0 }
+        }
       ]),
       bodies,
       'mm'
@@ -242,11 +299,15 @@ describe('D06 dimension audit: the turned foot', () => {
       again.redundant.map(({ annotationId, reason }) => [annotationId, reason])
     ).toEqual([
       [id('d40again'), 'duplicate-size'],
-      [id('floor'), 'closed-chain']
+      [id('floor'), 'closed-chain'],
+      [id('shoulder'), 'derived'],
+      [id('sharp'), 'derived'],
+      [id('r4again'), 'duplicate-size']
     ]);
+    expect(again.unchecked).toEqual([]);
   });
 
-  it('flags a repeated diameter and leaves a derived circle unchecked', async () => {
+  it('flags a repeated diameter and calls a circle a chamfer fixes derived', async () => {
     const { bodies, bodyId, body } = await build(footOperations());
     const ref = (edge: EdgeTopology) => refOf(bodyId, edge);
     const annotations = [
@@ -292,11 +353,17 @@ describe('D06 dimension audit: the turned foot', () => {
         reason: 'duplicate-size',
         message: 'Another dimension already states this Ø25 diameter.',
         statedBy: [id('d25')]
+      },
+      // Ø32 follows from Ø40 and the 4 × 45° chamfer (slice D).
+      {
+        annotationId: id('d32'),
+        reason: 'derived',
+        message:
+          'It measures where a chamfer or blend meets the next face, which that feature and the diameter it shapes already fix.',
+        statedBy: []
       }
     ]);
-    expect(audit.unchecked.map((entry) => entry.annotationId)).toEqual([
-      id('d32')
-    ]);
+    expect(audit.unchecked).toEqual([]);
     expect(audit.stated).toBe(3);
   });
 });

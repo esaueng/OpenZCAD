@@ -27,6 +27,12 @@ import type { DrawingViewId } from './drawings';
  * span, reference dimensions shown in brackets, and provenance for an
  * annotation the auto-dimensioner placed. All are additive and absent on
  * every older annotation; faces are held like edges, by lineage then hash.
+ *
+ * D06 slice D (schema v49) adds what a history-less turned import needs:
+ * the corner a step chamfer cuts, sized like a sibling chamfer, as a
+ * dimension point; a radius on a revolved blend's face seen side-on; and
+ * provenance marking a dimension placed from raw geometry rather than a
+ * recognized feature.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -101,8 +107,27 @@ export interface DrawingVirtualSharpRef {
   side: DrawingExtremeSide;
 }
 
+/**
+ * v49: the sharp corner a chamfer between two diameters cuts away, when it
+ * is the same chamfer as `like` (one of equal angle on the same diameter,
+ * cut at an end face): from its virtual sharp with the larger diameter,
+ * `like`'s size along the axis, away from that diameter. A shoulder
+ * chamfer running into a neck has no end face of its own, so this is where
+ * the body it was cut from ended — the foot's 29 to the shoulder. Measured
+ * at the larger diameter's extreme on `side`, like a rim.
+ */
+export interface DrawingChamferCornerRef {
+  face: DrawingFaceRef;
+  like: DrawingFaceRef;
+  anchor: 'chamfer-corner';
+  side: DrawingExtremeSide;
+}
+
 export type DrawingPointRef =
-  DrawingEdgePointRef | DrawingSilhouettePointRef | DrawingVirtualSharpRef;
+  | DrawingEdgePointRef
+  | DrawingSilhouettePointRef
+  | DrawingVirtualSharpRef
+  | DrawingChamferCornerRef;
 
 /**
  * Which way a two-point dimension measures in its view: along the page
@@ -120,6 +145,11 @@ export interface DrawingAnnotationProvenance {
   generated: true;
   /** The checker's key for the requirement this states. */
   requirement: string;
+  /**
+   * v49: read from raw geometry, not a recognized feature — on an import
+   * with no history, a face no feature explains. Absent means a feature.
+   */
+  basis?: 'geometry';
 }
 
 interface DrawingAnnotationBase {
@@ -162,6 +192,19 @@ export interface DrawingRadialDimension extends DrawingDimensionBase {
 }
 
 /**
+ * v49: a revolved blend's radius, read from its torus face seen side-on,
+ * where it draws as two arcs of its tube; `side` picks the one at the
+ * axis's extreme on that side across the page. No edge states it: the
+ * blend's boundary circles are its tangent lines, not its radius.
+ */
+export interface DrawingBlendRadiusDimension extends DrawingDimensionBase {
+  kind: 'radius';
+  face: DrawingFaceRef;
+  side: DrawingExtremeSide;
+  count?: number;
+}
+
+/**
  * v48: a chamfer stated as `size × angle`. The face is a cone about the
  * part's axis or a plane, seen side-on or edge-on in the view. Its two ends
  * are its virtual sharps with the faces either side (through any blend), so
@@ -194,6 +237,7 @@ export interface DrawingNote extends DrawingAnnotationBase {
 export type DrawingDimension =
   | DrawingLinearDimension
   | DrawingRadialDimension
+  | DrawingBlendRadiusDimension
   | DrawingAngleDimension
   | DrawingChamferDimension;
 
@@ -412,6 +456,20 @@ function pointRefError(value: unknown): string | null {
         return 'needs two different faces for a virtual sharp';
       return null;
     }
+    case 'chamfer-corner': {
+      if (value.side !== 'low' && value.side !== 'high')
+        return 'has an unknown extreme side';
+      const error =
+        topologyRefError(value.face, 'face') ??
+        topologyRefError(value.like, 'face');
+      if (error) return error;
+      const face = value.face as DrawingFaceRef;
+      const like = value.like as DrawingFaceRef;
+      if (face.bodyId !== like.bodyId)
+        return 'sizes a chamfer corner like a chamfer on another body';
+      if (face.hash === like.hash) return 'sizes a chamfer corner like itself';
+      return null;
+    }
     default:
       return 'has an unknown point anchor';
   }
@@ -472,7 +530,9 @@ export function drawingAnnotationError(
       !isRecord(provenance) ||
       provenance.generated !== true ||
       !isShortText(provenance.requirement, MAX_REQUIREMENT_LENGTH) ||
-      Object.keys(provenance).length !== 2
+      (provenance.basis !== undefined && provenance.basis !== 'geometry') ||
+      Object.keys(provenance).length !==
+        (provenance.basis === undefined ? 2 : 3)
     )
       return `${where} has malformed provenance.`;
   }
@@ -530,13 +590,23 @@ export function drawingAnnotationError(
         [value.from, value.to].some(
           (point) =>
             (point as DrawingPointRef).anchor === 'silhouette' ||
-            (point as DrawingPointRef).anchor === 'virtual-sharp'
+            (point as DrawingPointRef).anchor === 'virtual-sharp' ||
+            (point as DrawingPointRef).anchor === 'chamfer-corner'
         )
       )
         return `${where} measures to an extreme, which only a horizontal or vertical dimension can.`;
       return null;
     case 'radius':
     case 'diameter':
+      if (value.face !== undefined || value.side !== undefined) {
+        if (value.kind !== 'radius')
+          return `${where} is a diameter of a blend face, which only a radius states.`;
+        if (value.edge !== undefined)
+          return `${where} names both an edge and a blend face.`;
+        if (value.side !== 'low' && value.side !== 'high')
+          return `${where} has an unknown extreme side.`;
+        return fail(topologyRefError(value.face, 'face'));
+      }
       return fail(edgeRefError(value.edge));
     case 'angle':
       if (!Array.isArray(value.edges) || value.edges.length !== 2)
@@ -552,10 +622,12 @@ export function drawingAnnotationError(
 function pointReferences(
   point: DrawingPointRef
 ): (DrawingEdgeRef | DrawingFaceRef)[] {
-  return 'faces' in point ? [...point.faces] : [point.edge];
+  if ('faces' in point) return [...point.faces];
+  if ('like' in point) return [point.face, point.like];
+  return [point.edge];
 }
 
-/** Every edge an annotation refers to; a virtual sharp's faces are not. */
+/** Every edge an annotation refers to; faces (a virtual sharp's, a chamfer's, a blend's) are not. */
 export function drawingAnnotationEdges(
   annotation: DrawingAnnotation
 ): DrawingEdgeRef[] {
@@ -566,6 +638,9 @@ export function drawingAnnotationEdges(
       );
     case 'chamfer':
       return [];
+    case 'radius':
+    case 'diameter':
+      return 'face' in annotation ? [] : [annotation.edge];
     default:
       return drawingAnnotationReferences(annotation) as DrawingEdgeRef[];
   }
@@ -590,7 +665,7 @@ export function drawingAnnotationReferences(
       ];
     case 'radius':
     case 'diameter':
-      return [annotation.edge];
+      return 'face' in annotation ? [annotation.face] : [annotation.edge];
     case 'angle':
       return [...annotation.edges];
     case 'chamfer':
