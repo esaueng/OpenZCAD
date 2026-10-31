@@ -27,7 +27,9 @@ import {
   type SketchId,
   type SketchProfileReference,
   type SketchSectionReference,
+  type UnitSystem,
   type VariableFilletLaw,
+  UNIT_TO_MM,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -255,6 +257,16 @@ export interface OptionSpec {
    * operation): choosing one switches the command to that tool.
    */
   switchesTool?: boolean;
+  /** Whether the row means anything with the other choices as they stand. */
+  when?(state: InPlacePanelState): boolean;
+}
+
+/** What a panel row's `when` reads: every option chosen, every value. */
+export interface InPlacePanelState {
+  /** Each option's value, its initial one where none is chosen. */
+  options: Readonly<Record<string, string>>;
+  /** Each value as a number, its initial one where none is set. */
+  numbers: Readonly<Record<string, number>>;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -276,6 +288,17 @@ export interface ValueSpec {
    * only `min` (a revolve: more than 0°, up to 360°).
    */
   exclusive?: boolean | 'min';
+  /**
+   * What the panel shows after the number in place of the unit's own (a
+   * diametral pitch's "/in", a profile shift's "× m").
+   */
+  suffix?: string;
+  /** What the value means, as the panel row's tooltip. */
+  note?: string;
+  /** One arrow-key or scrub step; else 1, or 0.1 for a length under 10. */
+  step?: number;
+  /** Whether the row means anything with the other choices as they stand. */
+  when?(state: InPlacePanelState): boolean;
 }
 
 /** A sketch as the commands read it: its plane and its region outlines. */
@@ -317,6 +340,16 @@ export interface InPlaceContext {
   touched?: readonly string[];
   /** Where a reference image's plane lies now; null while it is unresolved. */
   imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
+  /** The document's length unit, which a diametral pitch converts from. */
+  units?: UnitSystem;
+}
+
+/** A titled group of an Options panel's rows; `collapsed` folds it shut. */
+export interface InPlacePanelSection {
+  label?: string;
+  collapsed?: boolean;
+  /** Option and value ids, in order. */
+  items: readonly string[];
 }
 
 /**
@@ -641,6 +674,29 @@ export interface InPlaceToolSpec {
    */
   clickPlacesPoint?: { optionId: string; value: string };
   options?: readonly OptionSpec[];
+  /**
+   * How the Options panel orders and groups its rows, by option and value
+   * id; a row whose spec has a `when` shows only while that holds, and a
+   * handle's value only while its handle stands. Without one, the options
+   * come first, then the values.
+   */
+  layout?: readonly InPlacePanelSection[];
+  /**
+   * What the choices come to, read-only over the panel's rows (a gear's
+   * module and pitch diameter when it is sized by pitch), else null.
+   */
+  summary?(state: InPlacePanelState, units: UnitSystem): string | null;
+  /**
+   * Values an option's change carries with it, from the values as they
+   * were (a gear sized by another pitch keeps its tooth size), each with the
+   * value it came `from`: it counts as set when that one was. Else null.
+   */
+  optionCarries?(
+    optionId: string,
+    value: string,
+    state: InPlacePanelState,
+    ctx: InPlaceContext
+  ): Record<string, { value: number; from: string }> | null;
   wantsAxis: boolean;
   wantsPath: boolean;
   values: readonly ValueSpec[];
@@ -1651,9 +1707,125 @@ function normalHandle(
   ];
 }
 
+/** A gear type whose teeth may twist: the others have no helix of their own. */
+function gearTwists(state: InPlacePanelState): boolean {
+  const type = state.options.gearType;
+  return (
+    type === undefined ||
+    type === 'external' ||
+    type === 'internal' ||
+    type === 'rack'
+  );
+}
+
+/** A worm or its wheel: the worm's thread sets the helix and the hand. */
+function gearIsWorm(state: InPlacePanelState): boolean {
+  return (
+    state.options.gearType === 'worm' || state.options.gearType === 'worm-wheel'
+  );
+}
+
+/** The value a gear's chosen sizing reads its pitch from. */
+export function gearPitchValueId(
+  options: Readonly<Record<string, string>>
+): 'module' | 'circularPitch' | 'diametralPitch' {
+  return options.sizing === 'circular-pitch'
+    ? 'circularPitch'
+    : options.sizing === 'diametral-pitch'
+      ? 'diametralPitch'
+      : 'module';
+}
+
+/**
+ * A gear's module in document units, from its sizing's pitch: a diametral
+ * pitch counts teeth per inch in every unit system (the kernel adapter's
+ * `gearModule`, which the main thread may not import).
+ */
+export function gearModuleOf(
+  options: Readonly<Record<string, string>>,
+  numbers: Readonly<Record<string, number>>,
+  units: UnitSystem = 'mm'
+): number {
+  const id = gearPitchValueId(options);
+  const pitch = numbers[id] ?? GEAR_PITCH_INITIALS[id];
+  if (id === 'circularPitch') return pitch / Math.PI;
+  if (id === 'diametralPitch') {
+    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / pitch;
+  }
+  return pitch;
+}
+
+/** A pitch in `id`'s terms for a module in document units. */
+function gearPitchFor(
+  id: 'module' | 'circularPitch' | 'diametralPitch',
+  module: number,
+  units: UnitSystem
+): number {
+  if (id === 'circularPitch') return module * Math.PI;
+  if (id === 'diametralPitch') {
+    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / module;
+  }
+  return module;
+}
+
+const GEAR_PITCH_INITIALS = {
+  module: 2,
+  circularPitch: 2 * Math.PI,
+  diametralPitch: 12.7
+} as const;
+
+/** A length to a few places, as the panel's summary reads it. */
+function gearLength(value: number, units: UnitSystem): string {
+  return `${Math.round(value * 1000) / 1000} ${units}`;
+}
+
+/** Another sizing keeps the tooth the same size, in its own terms. */
+function gearSizingCarries(
+  optionId: string,
+  value: string,
+  state: InPlacePanelState,
+  ctx: InPlaceContext
+): Record<string, { value: number; from: string }> | null {
+  if (optionId !== 'sizing' || value === state.options.sizing) return null;
+  const from = gearPitchValueId(state.options);
+  const to = gearPitchValueId({ sizing: value });
+  const units = ctx.units ?? 'mm';
+  const module = gearModuleOf(state.options, state.numbers, units);
+  if (!(module > 0)) return null;
+  return { [to]: { value: gearPitchFor(to, module, units), from } };
+}
+
+/** The module a gear comes to, and its pitch diameter where it is plain. */
+function gearSummary(
+  state: InPlacePanelState,
+  units: UnitSystem
+): string | null {
+  // Kept to the face, the Fit row's note already says what sizes it.
+  if (state.options.fit === 'keep-diameter') return null;
+  const module = gearModuleOf(state.options, state.numbers, units);
+  if (!(module > 0)) return null;
+  const parts = [`Module ${gearLength(module, units)}`];
+  const type = state.options.gearType;
+  const teeth = state.numbers.teeth ?? 20;
+  if (type === 'rack') {
+    parts.push(`Pitch ${gearLength(module * Math.PI, units)}`);
+  } else if (type === 'worm') {
+    const factor = state.numbers.diameterFactor ?? 10;
+    const starts = state.numbers.starts ?? 1;
+    parts.push(`Pitch Ø ${gearLength(module * factor, units)}`);
+    parts.push(`Lead ${gearLength(Math.PI * module * starts, units)}`);
+  } else if (!gearTwists(state) || (state.numbers.helixAngleDeg ?? 0) === 0) {
+    // A helical gear's diameters depend on how the kernel reads its module.
+    parts.push(`Pitch Ø ${gearLength(module * teeth, units)}`);
+  }
+  return parts.join(' · ');
+}
+
 const GEAR_SIZING_OPTION: OptionSpec = {
   id: 'sizing',
   label: 'Size by',
+  // Kept to the face's diameter, the tooth size is not chosen.
+  when: (state) => state.options.fit !== 'keep-diameter',
   choices: [
     { value: 'module', label: 'Module' },
     { value: 'circular-pitch', label: 'Circular pitch' },
@@ -1677,31 +1849,35 @@ const GEAR_TOOTH_VALUES: ValueSpec[] = [
     min: 1,
     max: 1000
   },
+  // The pitch the sizing reads is a chip of its own, so each shows in the
+  // panel only while it is the one sized by.
   {
     id: 'module',
     label: 'Module',
     unit: 'length',
-    initial: 2,
+    initial: GEAR_PITCH_INITIALS.module,
     min: 0,
-    exclusive: 'min'
+    exclusive: 'min',
+    note: 'Pitch diameter over teeth: the tooth size'
   },
   {
     id: 'circularPitch',
     label: 'Circular pitch',
     unit: 'length',
-    initial: 2 * Math.PI,
+    initial: GEAR_PITCH_INITIALS.circularPitch,
     min: 0,
     exclusive: 'min',
-    inOptions: true
+    note: 'Tooth to tooth along the pitch circle'
   },
   {
     id: 'diametralPitch',
     label: 'Diametral pitch',
     unit: 'count',
-    initial: 10,
+    initial: GEAR_PITCH_INITIALS.diametralPitch,
     min: 0,
     exclusive: 'min',
-    inOptions: true
+    suffix: '/in',
+    note: 'Teeth per inch of pitch diameter, in every unit system'
   },
   {
     id: 'pressureAngleDeg',
@@ -1711,7 +1887,8 @@ const GEAR_TOOTH_VALUES: ValueSpec[] = [
     min: 0,
     max: 45,
     exclusive: 'min',
-    inOptions: true
+    inOptions: true,
+    note: 'The flank angle at the pitch circle; mating gears share it'
   },
   {
     id: 'profileShift',
@@ -1720,7 +1897,11 @@ const GEAR_TOOTH_VALUES: ValueSpec[] = [
     initial: 0,
     min: -2,
     max: 2,
-    inOptions: true
+    inOptions: true,
+    suffix: '× m',
+    step: 0.05,
+    note: 'Moves the teeth out (+) or in (−), in modules',
+    when: (state) => gearTwists(state)
   },
   {
     id: 'backlash',
@@ -1728,14 +1909,16 @@ const GEAR_TOOTH_VALUES: ValueSpec[] = [
     unit: 'length',
     initial: 0,
     min: 0,
-    inOptions: true
+    inOptions: true,
+    note: 'Thins each tooth so a meshing pair has play'
   },
   {
     id: 'phaseDeg',
     label: 'Phase',
     unit: 'angle',
     initial: 0,
-    inOptions: true
+    inOptions: true,
+    note: 'Turns the teeth about the axis, to line up with a mate'
   },
   {
     id: 'helixAngleDeg',
@@ -1744,7 +1927,19 @@ const GEAR_TOOTH_VALUES: ValueSpec[] = [
     initial: 0,
     min: 0,
     max: 45,
-    inOptions: true
+    inOptions: true,
+    note: '0° is a spur gear; above it the teeth twist',
+    when: (state) => gearTwists(state)
+  }
+];
+
+/** Both gear commands' tooth form, folded shut: set once, seldom changed. */
+const GEAR_FORM_SECTIONS: readonly InPlacePanelSection[] = [
+  { label: 'Helix', items: ['helixAngleDeg', 'hand', 'helix'] },
+  {
+    label: 'Tooth form',
+    collapsed: true,
+    items: ['pressureAngleDeg', 'profileShift', 'backlash', 'phaseDeg']
   }
 ];
 
@@ -1764,7 +1959,11 @@ const GEAR_HAND_OPTION: OptionSpec = {
       note: 'Teeth twist like a left-hand screw thread'
     }
   ],
-  initial: 'right'
+  initial: 'right',
+  // A worm's hand winds its thread, with or without a helix angle.
+  when: (state) =>
+    gearIsWorm(state) ||
+    (gearTwists(state) && (state.numbers.helixAngleDeg ?? 0) > 0)
 };
 
 /** A helical gear's helix: one hand, or both meeting at mid-width. */
@@ -1779,7 +1978,8 @@ const GEAR_HELIX_OPTION: OptionSpec = {
       note: 'The hand reverses at mid-width, so the teeth meet in a V'
     }
   ],
-  initial: 'single'
+  initial: 'single',
+  when: (state) => gearTwists(state) && (state.numbers.helixAngleDeg ?? 0) > 0
 };
 
 /** A worm wheel's blank; read only on a worm wheel. */
@@ -1794,7 +1994,8 @@ const GEAR_THROAT_OPTION: OptionSpec = {
       note: 'The tips wrap the worm across the middle of the face'
     }
   ],
-  initial: 'plain'
+  initial: 'plain',
+  when: (state) => state.options.gearType === 'worm-wheel'
 };
 
 /** Optional tooth-form fields: stored once set, else the kernel default. */
@@ -1856,10 +2057,10 @@ function gearToothFields(
       ? {
           pitch:
             sizing === 'module'
-              ? (values.module ?? 2)
+              ? (values.module ?? GEAR_PITCH_INITIALS.module)
               : sizing === 'circular-pitch'
-                ? (values.circularPitch ?? 2 * Math.PI)
-                : (values.diametralPitch ?? 10)
+                ? (values.circularPitch ?? GEAR_PITCH_INITIALS.circularPitch)
+                : (values.diametralPitch ?? GEAR_PITCH_INITIALS.diametralPitch)
         }
       : {}),
     teeth: values.teeth ?? 20,
@@ -1913,7 +2114,12 @@ const gear: InPlaceToolSpec = {
       unit: 'length',
       initial: 0,
       min: 0,
-      inOptions: true
+      inOptions: true,
+      note: 'A shaft hole through the gear; 0 leaves it solid',
+      // A ring and a rack have no hub to bore.
+      when: (state) =>
+        state.options.gearType !== 'internal' &&
+        state.options.gearType !== 'rack'
     },
     {
       id: 'rimDiameter',
@@ -1922,7 +2128,9 @@ const gear: InPlaceToolSpec = {
       initial: 52,
       min: 0,
       exclusive: 'min',
-      inOptions: true
+      inOptions: true,
+      note: 'The outside of the ring the inner teeth are cut in',
+      when: (state) => state.options.gearType === 'internal'
     },
     {
       id: 'mateTeeth',
@@ -1932,7 +2140,9 @@ const gear: InPlaceToolSpec = {
       integer: true,
       min: 4,
       max: 1000,
-      inOptions: true
+      inOptions: true,
+      note: 'The teeth on the bevel gear this one meshes with',
+      when: (state) => state.options.gearType === 'bevel'
     },
     {
       id: 'shaftAngleDeg',
@@ -1942,7 +2152,9 @@ const gear: InPlaceToolSpec = {
       min: 0,
       max: 180,
       exclusive: true,
-      inOptions: true
+      inOptions: true,
+      note: 'The angle between the two gears’ shafts',
+      when: (state) => state.options.gearType === 'bevel'
     },
     {
       id: 'starts',
@@ -1952,7 +2164,9 @@ const gear: InPlaceToolSpec = {
       integer: true,
       min: 1,
       max: 10,
-      inOptions: true
+      inOptions: true,
+      note: 'Threads wound side by side on the worm',
+      when: (state) => gearIsWorm(state)
     },
     {
       id: 'diameterFactor',
@@ -1961,7 +2175,10 @@ const gear: InPlaceToolSpec = {
       initial: 10,
       min: 0,
       exclusive: 'min',
-      inOptions: true
+      inOptions: true,
+      suffix: 'q',
+      note: 'The worm’s pitch diameter over its module',
+      when: (state) => gearIsWorm(state)
     },
     {
       // 0 leaves a throated wheel's outside diameter to the kernel default.
@@ -1970,9 +2187,35 @@ const gear: InPlaceToolSpec = {
       unit: 'length',
       initial: 0,
       min: 0,
-      inOptions: true
+      inOptions: true,
+      note: 'Across the tips either side of the throat; 0 is the kernel’s default',
+      when: (state) =>
+        state.options.gearType === 'worm-wheel' &&
+        state.options.throat === 'throated'
     }
   ],
+  layout: [
+    {
+      items: [
+        'gearType',
+        'teeth',
+        'starts',
+        'sizing',
+        'module',
+        'circularPitch',
+        'diametralPitch',
+        'faceWidth',
+        'diameterFactor',
+        'throat',
+        'outsideDiameter'
+      ]
+    },
+    { label: 'Mate', items: ['mateTeeth', 'shaftAngleDeg'] },
+    { label: 'Hub', items: ['boreDiameter', 'rimDiameter'] },
+    ...GEAR_FORM_SECTIONS
+  ],
+  summary: gearSummary,
+  optionCarries: gearSizingCarries,
   options: [
     {
       id: 'gearType',
@@ -2029,7 +2272,7 @@ const gear: InPlaceToolSpec = {
     if (slots.plane.kind === 'datum') {
       return 'A gear stands on a ghost plane or a flat face';
     }
-    return `Drag the face width; tap teeth and module to type · ${FINISH}`;
+    return 'Drag the face width; tap the teeth or the pitch to type';
   },
   ready: (slots) => gearFrame(slots.plane) !== null,
   request(slots, values, options, ctx, numbers) {
@@ -2147,7 +2390,7 @@ const gear: InPlaceToolSpec = {
       }
     };
   },
-  handles(slots, values, _ctx, options) {
+  handles(slots, values, ctx, options) {
     const frame = gearFrame(slots.plane);
     if (!frame) return [];
     const { origin, normal, radial } = frame;
@@ -2155,8 +2398,9 @@ const gear: InPlaceToolSpec = {
     // A worm's tip circle follows its diameter factor, and its count chip
     // is its starts.
     const worm = options.gearType === 'worm';
+    const pitch = gearPitchValueId(options);
     const reach =
-      ((values.module ?? 2) *
+      (gearModuleOf(options, values, ctx.units) *
         ((worm ? (values.diameterFactor ?? 10) : (values.teeth ?? 20)) + 2)) /
       2;
     const count = worm ? 'starts' : 'teeth';
@@ -2179,9 +2423,11 @@ const gear: InPlaceToolSpec = {
         params: { anchor: at(reach * 1.15) }
       },
       {
-        valueId: 'module',
+        // The pitch the sizing reads, so the chip edits what is built.
+        valueId: pitch,
         kind: 'chip',
-        key: `${base}:module`,
+        key: `${base}:${pitch}`,
+        ...(pitch === 'diametralPitch' ? { label: 'Diametral pitch' } : {}),
         params: { anchor: at(-reach * 1.15) }
       }
     ];
@@ -2232,13 +2478,29 @@ const gearTeeth: InPlaceToolSpec = {
     GEAR_HAND_OPTION,
     GEAR_HELIX_OPTION
   ],
+  layout: [
+    {
+      items: [
+        'side',
+        'fit',
+        'teeth',
+        'sizing',
+        'module',
+        'circularPitch',
+        'diametralPitch'
+      ]
+    },
+    ...GEAR_FORM_SECTIONS
+  ],
+  summary: gearSummary,
+  optionCarries: gearSizingCarries,
   hint(slots, options) {
     if (slots.faces.length === 0) {
       return 'Pick a cylindrical face: a boss for outside teeth, a bore for inside';
     }
     return options?.fit === 'module'
-      ? `Tap teeth and module to type; the teeth run the whole face · ${FINISH}`
-      : `Tap teeth to type; the teeth run the whole face · ${FINISH}`;
+      ? 'Tap the teeth or the pitch to type; the teeth run the whole face'
+      : 'Tap the teeth to type; the teeth run the whole face';
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values, options, ctx) {
@@ -2272,9 +2534,12 @@ const gearTeeth: InPlaceToolSpec = {
       ...(options.fit === 'module'
         ? [
             {
-              valueId: 'module',
+              valueId: gearPitchValueId(options),
               kind: 'chip' as const,
-              key: `${base}:module`,
+              key: `${base}:${gearPitchValueId(options)}`,
+              ...(gearPitchValueId(options) === 'diametralPitch'
+                ? { label: 'Diametral pitch' }
+                : {}),
               params: {
                 anchor: { x: anchor.x, y: anchor.y, z: anchor.z + 1 }
               }
