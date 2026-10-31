@@ -601,6 +601,41 @@ export function StartScreen({
     observer.observe(body);
     return () => observer.disconnect();
   }, []);
+  // Once the shelf scrolls, its line fades the cards out beneath it; a group
+  // label stuck under the line draws that fade itself. Flags, not React
+  // state: a scroll must not re-render the whole library.
+  useEffect(() => {
+    const screen = screenRef.current;
+    if (!screen) return;
+    const flag = (element: Element, name: string, on: boolean) => {
+      if (on) element.setAttribute(name, '');
+      else element.removeAttribute(name);
+    };
+    // The shelf body is replaced as the library loads, so listen on the
+    // screen (scroll does not bubble; capture reaches it) and read the body
+    // each time rather than holding the first one.
+    const update = () => {
+      const body = screen.querySelector<HTMLElement>('.start-body');
+      const section = body?.closest('.start-section');
+      if (!body || !section) return;
+      const scrolled = body.scrollTop > 0;
+      const top = body.getBoundingClientRect().top;
+      let stuck = false;
+      for (const label of body.querySelectorAll<HTMLElement>(
+        ':scope > .start-shelf-group'
+      )) {
+        const on = scrolled && label.getBoundingClientRect().top <= top + 0.5;
+        flag(label, 'data-stuck', on);
+        stuck ||= on;
+      }
+      flag(section, 'data-scrolled', scrolled);
+      flag(section, 'data-label-stuck', stuck);
+    };
+    update();
+    screen.addEventListener('scroll', update, { capture: true, passive: true });
+    return () =>
+      screen.removeEventListener('scroll', update, { capture: true });
+  }, []);
 
   // The server measures the trimmed name, so the form has to agree exactly or
   // it would block names the API accepts (or vice versa).
@@ -2493,8 +2528,7 @@ export function StartScreen({
           title={labelWithKey('Settings', settingsKey)}
           onClick={onOpenSettings}
         >
-          <Settings size={14} aria-hidden="true" />
-          Settings
+          <Settings size={15} aria-hidden="true" />
         </button>
       </div>
 
@@ -2539,6 +2573,7 @@ export function StartScreen({
                 onImport={onImportProject}
                 disabled={busy}
                 className="start-launch-import"
+                shortLabel="Import"
                 title="Import an .openzcad project backup"
               />
             )}
@@ -2647,7 +2682,13 @@ export function StartScreen({
             >
               <entry.Icon size={15} aria-hidden="true" />
               {entry.label}
-              <span className="start-shelf-count">
+              <span
+                className={
+                  !loading && shelfCount(entry.status) === 0
+                    ? 'start-shelf-count is-zero'
+                    : 'start-shelf-count'
+                }
+              >
                 {loading ? '…' : shelfCount(entry.status)}
               </span>
             </button>
@@ -3022,11 +3063,17 @@ export function StartScreen({
                         </h3>
                       )}
                       <div
-                        className={
-                          layout === 'list'
-                            ? 'start-tile-grid is-list'
-                            : `start-tile-grid is-${cardSize}`
-                        }
+                        className={[
+                          'start-tile-grid',
+                          layout === 'list' ? 'is-list' : `is-${cardSize}`,
+                          // The label says these are pinned, so their pins
+                          // wait for the pointer.
+                          group.label && group.group === 'pinned'
+                            ? 'is-pinned-group'
+                            : ''
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         data-tile-group={canReorder ? group.group : undefined}
                       >
                         {group.items.map((item) =>
