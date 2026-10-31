@@ -18,6 +18,23 @@ function Screen({ view, ready }: { view: string; ready: boolean }) {
 afterEach(() => sessionStorage.clear());
 
 describe('useScrollMemory', () => {
+  it('keeps the original offset through skeleton and partial-library renders', () => {
+    sessionStorage.setItem(
+      KEY,
+      JSON.stringify({ view: 'parts', tops: { '.body': 640 } })
+    );
+    const { getByTestId, rerender } = render(
+      <Screen view="parts" ready={false} />
+    );
+    const body = getByTestId('body');
+    expect(body.scrollTop).toBe(640);
+    body.scrollTop = 0; // Browser clamp when the shorter local listing arrives.
+    rerender(<Screen view="parts" ready={false} />);
+    expect(body.scrollTop).toBe(640);
+    body.scrollTop = 0;
+    rerender(<Screen view="parts" ready />);
+    expect(body.scrollTop).toBe(640);
+  });
   it('puts back the stored position for the same view', () => {
     sessionStorage.setItem(
       KEY,

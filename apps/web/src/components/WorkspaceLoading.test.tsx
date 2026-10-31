@@ -1,11 +1,39 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { lazy, Suspense, useEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WorkspaceLoading, WorkspacePending } from './WorkspaceLoading';
+import {
+  WorkspaceLoading,
+  WorkspacePending,
+  useWorkspaceFrameReady
+} from './WorkspaceLoading';
 import { createLazyPanel } from './LazyPanel';
 import { StartupScreen } from './StartupScreen';
 
 describe('coordinated workspace reveal', () => {
+  it('waits for a drawn frame after geometry is ready, not just loaded bodies', () => {
+    const tick = frames();
+    let draw = () => {};
+    function Viewer() {
+      draw = useWorkspaceFrameReady();
+      return <p>Viewport</p>;
+    }
+    const view = (ready: boolean) => (
+      <WorkspaceLoading ready={ready} onBack={vi.fn()}>
+        <Viewer />
+      </WorkspaceLoading>
+    );
+    const { rerender } = render(view(false));
+    act(() => draw());
+    rerender(view(true));
+    tick();
+    tick();
+    expect(screen.getByRole('status')).toBeVisible();
+    act(() => draw());
+    tick();
+    tick();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   afterEach(() => vi.restoreAllMocks());
 
   function frames() {

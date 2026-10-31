@@ -10,7 +10,7 @@ export const COLLABORATION_LABELS: Record<CollaborationStatus, string> = {
   offline: 'Offline',
   conflict: 'Conflict',
   oversize: 'Local only',
-  rejected: 'Not shared',
+  rejected: 'Unavailable',
   'read-only': 'Read-only',
   'lease-denied': 'Edit locked',
   'update-required': 'Update required'

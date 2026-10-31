@@ -2,6 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readLibraryLayout, saveLibraryLayout } from './libraryLayout';
 
 describe('library layout reservation', () => {
+  it('retains recovery footer positions beyond the project count when empty folders precede them', () => {
+    const layout = {
+      all: 1,
+      pinned: 0,
+      attention: 0,
+      local: 0,
+      footers: [2],
+      groups: [{ label: null, count: 3 }]
+    } as const;
+    saveLibraryLayout({
+      ...layout,
+      footers: [...layout.footers],
+      groups: [...layout.groups]
+    });
+    expect(readLibraryLayout()).toEqual(layout);
+  });
   afterEach(() => {
     sessionStorage.clear();
     vi.restoreAllMocks();

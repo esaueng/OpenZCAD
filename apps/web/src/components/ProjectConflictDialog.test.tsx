@@ -99,6 +99,7 @@ describe('ProjectConflictDialog', () => {
         year: 'numeric',
         hour: 'numeric',
         minute: '2-digit',
+        second: '2-digit',
         timeZoneName: 'short'
       });
       expect(remote).toHaveTextContent(formatted);
@@ -226,7 +227,9 @@ describe('ProjectConflictDialog', () => {
       screen.getByText('Using one version replaces the other.')
     ).toBeInTheDocument();
     expect(
-      screen.getByText('Cloud stays original; yours becomes a copy.')
+      screen.getByText(
+        'Cloud stays original; yours is saved as a copy on this device.'
+      )
     ).toBeInTheDocument();
 
     await user.click(
@@ -259,7 +262,9 @@ describe('ProjectConflictDialog', () => {
     );
 
     expect(
-      screen.getByText('Live session stays original; yours becomes a copy.')
+      screen.getByText(
+        'Live session stays original; yours is saved as a copy on this device.'
+      )
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Live session/ })).toBeEnabled();
     expect(

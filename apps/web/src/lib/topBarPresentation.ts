@@ -63,7 +63,13 @@ export const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
 // "Joining…" rather than "Connecting…": the room is joined for the opening
 // frames of every cloud project, and the longer word would either resize the
 // chip on the way in or cost the bar four characters for good.
-export const COLLABORATION_LABEL_RESERVE = ['9 live', 'Offline', 'Joining…'];
+export const COLLABORATION_LABEL_RESERVE = [
+  '9 live',
+  'Offline',
+  'Joining…',
+  'Not shared',
+  'Unavailable'
+];
 export const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out'];
 
 export type SaveGlyph = 'busy' | 'warning' | 'saved' | 'idle';
