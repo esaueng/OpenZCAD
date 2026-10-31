@@ -2007,6 +2007,11 @@ const gear: InPlaceToolSpec = {
           value: 'worm-wheel',
           label: 'Worm wheel',
           note: 'The helical wheel that meshes with a worm of these starts and diameter factor'
+        },
+        {
+          value: 'enveloping-worm',
+          label: 'Enveloping worm',
+          note: 'An hourglass worm wrapping a wheel of these teeth, its thread cut by the wheel’s straight teeth'
         }
       ],
       initial: 'external'
@@ -2040,7 +2045,8 @@ const gear: InPlaceToolSpec = {
       options.gearType === 'rack' ||
       options.gearType === 'bevel' ||
       options.gearType === 'worm' ||
-      options.gearType === 'worm-wheel'
+      options.gearType === 'worm-wheel' ||
+      options.gearType === 'enveloping-worm'
         ? options.gearType
         : 'external';
     // An edited gear's own placement goes back as stored, expressions and
@@ -2080,7 +2086,11 @@ const gear: InPlaceToolSpec = {
         }
       };
     }
-    if (gearType === 'worm' || gearType === 'worm-wheel') {
+    if (
+      gearType === 'worm' ||
+      gearType === 'worm-wheel' ||
+      gearType === 'enveloping-worm'
+    ) {
       // The thread's lead sets the helix and the worm's hand winds it, so a
       // worm gear has no shift, helix angle or herringbone of its own.
       const {
@@ -2101,9 +2111,13 @@ const gear: InPlaceToolSpec = {
         gear: {
           gearType,
           ...wormFields,
+          // A worm's teeth are its starts; an enveloping worm also carries
+          // the teeth of the wheel it wraps, a wheel the starts of its worm.
           ...(gearType === 'worm'
             ? { teeth: starts }
-            : { teeth, mateTeeth: starts }),
+            : gearType === 'enveloping-worm'
+              ? { teeth: starts, mateTeeth: teeth }
+              : { teeth, mateTeeth: starts }),
           diameterFactor: values.diameterFactor ?? 10,
           ...(throated
             ? {
@@ -2154,7 +2168,8 @@ const gear: InPlaceToolSpec = {
     const base = keyOf('gear', origin.x, origin.y, origin.z);
     // A worm's tip circle follows its diameter factor, and its count chip
     // is its starts.
-    const worm = options.gearType === 'worm';
+    const worm =
+      options.gearType === 'worm' || options.gearType === 'enveloping-worm';
     const reach =
       ((values.module ?? 2) *
         ((worm ? (values.diameterFactor ?? 10) : (values.teeth ?? 20)) + 2)) /
