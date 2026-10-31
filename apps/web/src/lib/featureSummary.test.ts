@@ -286,6 +286,18 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('30 teeth, worm wheel for 2-start worm');
+    expect(
+      featureValueSummary(
+        gear({
+          gearType: 'worm-wheel',
+          teeth: 30,
+          mateTeeth: 2,
+          throated: true
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('30 teeth, throated worm wheel for 2-start worm');
   });
 
   it('returns null for kinds without one driving value', () => {

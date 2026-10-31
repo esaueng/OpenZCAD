@@ -445,6 +445,8 @@ export function inPlaceEditSeed(
       }
       value('shaftAngleDeg', data.shaftAngleDeg);
       value('diameterFactor', data.diameterFactor);
+      if (data.throated) seed.options.throat = 'throated';
+      value('outsideDiameter', data.outsideDiameter);
       value('faceWidth', data.faceWidth);
       value('boreDiameter', data.boreDiameter);
       value('rimDiameter', data.rimDiameter);
@@ -951,6 +953,8 @@ export function inPlaceFeatureUpdate(
         'mateTeeth',
         'shaftAngleDeg',
         'diameterFactor',
+        'throated',
+        'outsideDiameter',
         'xDirection',
         'boreDiameter',
         'rimDiameter',
