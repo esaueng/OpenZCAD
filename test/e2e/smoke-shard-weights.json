@@ -19,6 +19,7 @@
   "feature-history.spec.ts": 21,
   "gear-face-width.spec.ts": 30,
   "gear-height-preview.spec.ts": 47.5,
+  "gear-stale-reference.spec.ts": 60,
   "gear.spec.ts": 15,
   "in-place-primitives.spec.ts": 15,
   "keyboard-focus-recovery.spec.ts": 8,

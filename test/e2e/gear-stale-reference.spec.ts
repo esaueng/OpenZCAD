@@ -122,7 +122,9 @@ test(
       '56'
     );
     await testInfo.attach('gear-reference-height-56', {
-      body: await page.screenshot(),
+      body: await page.screenshot({
+        path: testInfo.outputPath('gear-reference-height-56.png')
+      }),
       contentType: 'image/png'
     });
     expect(errors).toEqual([]);
