@@ -115,10 +115,14 @@ function topAndRight(drawing: CadDigestDrawing) {
   const edges = drawing.views[0]!.edges;
   const top = edges
     .filter(level)
-    .reduce((best, edge) => (edge.ends![0][1] > best.ends![0][1] ? edge : best));
+    .reduce((best, edge) =>
+      edge.ends![0][1] > best.ends![0][1] ? edge : best
+    );
   const right = edges
     .filter(plumb)
-    .reduce((best, edge) => (edge.ends![0][0] > best.ends![0][0] ? edge : best));
+    .reduce((best, edge) =>
+      edge.ends![0][0] > best.ends![0][0] ? edge : best
+    );
   return { top, right };
 }
 
@@ -299,7 +303,7 @@ describe('assistant drawing operations (D06 slice E)', () => {
     );
     expect(() =>
       preflightDrawingPatch(document, proposal, sheetSource)
-    ).toThrow(/do not all measure the drawn model/);
+    ).toThrow(/does not pass the drawing check/);
     expect(() =>
       preflightDrawingPatch(document, proposal, {
         ...sheetSource,
@@ -309,6 +313,49 @@ describe('assistant drawing operations (D06 slice E)', () => {
     expect(() => preflightDrawingPatch(document, proposal, null)).toThrow(
       /Open the sheet in Draw/
     );
+  });
+
+  it('refuses a proposal that repeats a dimension, and reports what is missing', async () => {
+    const { document, source } = await drawnPlate();
+    const sheetSource = source(document);
+    const drawing = sheetSource.digest();
+    // The check reads the plate's sizes; nothing states them yet.
+    expect(drawing.audit).toMatchObject({ stated: 0, redundant: [] });
+    expect(drawing.audit!.missing.length).toBeGreaterThan(0);
+    const edges = drawing.views[0]!.edges.filter(level);
+    const { right } = topAndRight(drawing);
+    const digest = {
+      ...createCadDocumentDigest(document, {
+        featureIds: [],
+        bodyIds: [],
+        topologies: []
+      }),
+      drawing
+    };
+    // The top and bottom edges are both 20 long: the width, stated twice.
+    const twice = parseCadPatchProposal(
+      proposalOf(
+        linear(edges[0]!.ref, 'horizontal', { x: 0, y: 14 }),
+        linear(edges[1]!.ref, 'horizontal', { x: 0, y: -14 }),
+        linear(right.ref, 'vertical', { x: 28, y: 0 })
+      ),
+      digest
+    );
+    expect(() => preflightDrawingPatch(document, twice, sheetSource)).toThrow(
+      /repeats a value/
+    );
+    // Width and height alone pass, though the depth is still missing: a
+    // front-view request leaves the top view's size out on purpose.
+    const once = parseCadPatchProposal(
+      proposalOf(
+        linear(edges[0]!.ref, 'horizontal', { x: 0, y: 14 }),
+        linear(right.ref, 'vertical', { x: 28, y: 0 })
+      ),
+      digest
+    );
+    expect(() =>
+      preflightDrawingPatch(document, once, sheetSource)
+    ).not.toThrow();
   });
 
   it('refuses an ungrounded edge rather than look it up', async () => {

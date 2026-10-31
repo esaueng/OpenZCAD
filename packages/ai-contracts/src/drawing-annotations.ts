@@ -458,8 +458,7 @@ export function validateDrawingOperation(
       drawing.annotations.map((entry) => entry.annotationId)
     );
     const unknown = operation.annotationIds.find((id) => !known.has(id));
-    if (unknown)
-      throw new Error(`Annotation ${unknown} is not on the sheet.`);
+    if (unknown) throw new Error(`Annotation ${unknown} is not on the sheet.`);
     return operation;
   }
   if (!drawing.ready)
@@ -474,7 +473,11 @@ export function validateDrawingOperation(
     const view = views.get(spec.viewId);
     if (!view)
       throw new Error(`${where} names view ${spec.viewId}, not on the sheet.`);
-    const check = (ref: string, ok: (edge: CadDigestDrawingEdge) => boolean, need: string) => {
+    const check = (
+      ref: string,
+      ok: (edge: CadDigestDrawingEdge) => boolean,
+      need: string
+    ) => {
       const edge = digestEdge(view, ref, where);
       if (!ok(edge)) throw new Error(`${where}: edge ${ref} ${need}.`);
       edges[ref] = { bodyId: edge.bodyId, hash: edge.hash } as DrawingEdgeRef;
@@ -535,7 +538,9 @@ export function describeDrawingOperation(operation: CadDrawingOperation) {
   ).length;
   const notes = operation.annotations.length - dimensions;
   const parts = [
-    dimensions > 0 ? `${dimensions} dimension${dimensions === 1 ? '' : 's'}` : null,
+    dimensions > 0
+      ? `${dimensions} dimension${dimensions === 1 ? '' : 's'}`
+      : null,
     notes > 0 ? `${notes} note${notes === 1 ? '' : 's'}` : null
   ].filter(Boolean);
   return `Add ${parts.join(' and ')} to the sheet`;

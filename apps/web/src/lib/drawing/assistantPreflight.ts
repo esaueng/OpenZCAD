@@ -57,11 +57,11 @@ export function preflightDrawingPatch(
     bodies: source.bodies,
     units: base.units
   });
-  // Seam for D06 slices A and C: the dimension check (and later the
-  // generator's repair) runs here, on the sheet as proposed.
+  // Seam for D06 slice C: once the generator lands, a refused set is
+  // repaired from its candidates here before it is refused.
   if (problems.length > 0)
     throw new Error(
-      `The proposed annotations do not all measure the drawn model.\n\n${problems.join('\n')}`
+      `The proposed sheet does not pass the drawing check.\n\n${problems.join('\n')}`
     );
   return { commands, sheet };
 }

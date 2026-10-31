@@ -165,10 +165,11 @@ describe('the assistant on a Draw sheet', () => {
     await screen.findByText('Dimension the plate: width and height.');
 
     // The sheet went out with the ask: its views, edges and refs.
-    const request = fetch.mock.calls.find(([input]) =>
-      String(input).includes('/api/assistant/proposals')
+    const request = fetch.mock.calls.find(
+      ([input]) =>
+        typeof input === 'string' && input.includes('/api/assistant/proposals')
     );
-    const sent = JSON.parse(String(request?.[1]?.body)) as {
+    const sent = JSON.parse(request?.[1]?.body as string) as {
       digest: { drawing?: CadDigestDrawing };
     };
     expect(sent.digest.drawing).toEqual(drawing);

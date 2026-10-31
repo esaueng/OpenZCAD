@@ -162,7 +162,14 @@ Each needs its own schema bump, claimed from open PRs at the time
   checker must pass for the requested scope. A scoped request ("only the
   front view") reports what it leaves out rather than passing silently.
 - The assistant must be reachable from Draw; confirm the panel's mount
-  conditions there before this slice.
+  conditions there before this slice. (Done: the panel mounts in Draw and
+  there refuses model proposals; Draw-only proposals preview on the sheet
+  and apply as one undo step.)
+- Delivered first: the two operations, a sheet digest whose per-view edge
+  refs are the only edges a proposal may name, and a gate in
+  `apps/web/src/lib/drawing/assistantPreflight.ts` that refuses a proposal
+  whose annotations do not resolve or that leaves a repeated dimension. The
+  generator's candidates and repair plug in at that same function.
 
 ## Slice A decisions (dimension check, 2026-10-31)
 

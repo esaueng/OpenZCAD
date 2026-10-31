@@ -29,6 +29,7 @@ import {
   type AnnotationBodies,
   type AnnotationResolution
 } from './annotations';
+import { auditDrawingDimensions } from './dimensionAudit';
 import type { ComposedView } from './sheetPage';
 
 /**
@@ -68,7 +69,8 @@ const roundModel = (value: number) => Number(value.toFixed(4));
 function curveOf(edge: EdgeTopology, closed: boolean) {
   const type = edge.curve?.type;
   if (type === 'LINE') return 'line' as const;
-  if (edge.curve?.circle) return closed ? ('circle' as const) : ('arc' as const);
+  if (edge.curve?.circle)
+    return closed ? ('circle' as const) : ('arc' as const);
   return 'other' as const;
 }
 
@@ -78,8 +80,9 @@ function faceOn(view: DrawingView, edge: EdgeTopology): boolean {
   const d = DRAWING_VIEW_FRAMES[view.orientation].direction;
   return (
     Math.abs(
-      Math.abs(circle.axis.x * d.x + circle.axis.y * d.y + circle.axis.z * d.z) -
-        1
+      Math.abs(
+        circle.axis.x * d.x + circle.axis.y * d.y + circle.axis.z * d.z
+      ) - 1
     ) <= 1e-6
   );
 }
@@ -204,6 +207,7 @@ export function drawingAssistantDigest(input: {
     (ready
       ? resolveSheetAnnotations(sheet, bodies, units)
       : new Map<DrawingAnnotationId, AnnotationResolution>());
+  const audit = ready ? auditDrawingDimensions(sheet, bodies, units) : null;
   return {
     sheetId: sheet.sheetId,
     name: sheet.name,
@@ -236,7 +240,23 @@ export function drawingAssistantDigest(input: {
             ? null
             : 'The sheet is not drawn from the current model.'
       };
-    })
+    }),
+    ...(audit
+      ? {
+          audit: {
+            missing: audit.missing.map(({ message }) => ({ message })),
+            redundant: audit.redundant.map(({ annotationId, message }) => ({
+              annotationId,
+              message
+            })),
+            unmeasurable: audit.unmeasurable.map(({ message }) => ({
+              message
+            })),
+            stated: audit.stated,
+            required: audit.required
+          }
+        }
+      : {})
   };
 }
 
@@ -284,7 +304,12 @@ export function isDrawingProposal(proposal: CadPatchProposal): boolean {
 
 /**
  * Why the proposed sheet cannot be shown, or an empty list: every
- * annotation the proposal adds must resolve against the drawn model.
+ * annotation the proposal adds must resolve against the drawn model, and
+ * the dimension check (D06 slice A) must find no dimension repeated — one
+ * the sheet already had included, since the proposal leaves it standing.
+ * A dimension the check reports missing is not a refusal: a request for
+ * one view or one feature leaves the rest out on purpose, and the check
+ * panel says what is left.
  */
 export function drawingProposalProblems(input: {
   before: DrawingSheet;
@@ -310,5 +335,14 @@ export function drawingProposalProblems(input: {
           `Proposed annotation ${index + 1} (${annotation.kind}): ${resolution.message}`
         );
     });
+  if (problems.length > 0) return problems;
+  for (const finding of auditDrawingDimensions(
+    input.after,
+    input.bodies,
+    input.units
+  ).redundant)
+    problems.push(
+      `${existing.has(finding.annotationId) ? `Existing dimension ${finding.annotationId}` : 'A proposed dimension'} repeats a value: ${finding.message}`
+    );
   return problems;
 }

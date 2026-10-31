@@ -1553,10 +1553,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     document.units,
     assistantReady
   ]);
-  useEffect(
-    () => () => onAssistantSource?.(null),
-    [onAssistantSource]
-  );
+  useEffect(() => () => onAssistantSource?.(null), [onAssistantSource]);
   /** Drawn from an earlier model than the document's: Update redraws it. */
   const outdated =
     status?.kind === 'stale' ||

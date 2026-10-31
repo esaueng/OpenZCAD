@@ -93,9 +93,10 @@ function digest(withDrawing: CadDigestDrawing | null = drawing) {
     createProjectDocument('Plate', toUserId('test')),
     { featureIds: [], bodyIds: [], topologies: [] }
   );
-  return (
-    withDrawing ? { ...base, drawing: withDrawing } : base
-  ) as CadDocumentDigest;
+  const out: CadDocumentDigest = withDrawing
+    ? { ...base, drawing: withDrawing }
+    : base;
+  return out;
 }
 
 const width = {
@@ -243,9 +244,7 @@ describe('drawing annotation operations (D06 slice E)', () => {
 
   it('refuses malformed specs before any digest is read', () => {
     const refuse = (spec: unknown, pattern: RegExp) =>
-      expect(() => parseCadPatchProposal(proposal(add(spec)))).toThrow(
-        pattern
-      );
+      expect(() => parseCadPatchProposal(proposal(add(spec)))).toThrow(pattern);
     refuse({ ...width, viewId: null }, /names no view/);
     refuse({ ...width, direction: null }, /direction/);
     refuse({ ...width, edgeRefs: ['v1:e1'] }, /from and to/);
@@ -309,8 +308,8 @@ describe('drawing annotation operations (D06 slice E)', () => {
     expect(() =>
       parseCadPatchProposal(remove(['dann_gone']), digest())
     ).toThrow(/not on the sheet/);
-    expect(() => parseCadPatchProposal(remove(['dann_old', 'dann_old']))).toThrow(
-      /Invalid remove_drawing_annotations/
-    );
+    expect(() =>
+      parseCadPatchProposal(remove(['dann_old', 'dann_old']))
+    ).toThrow(/Invalid remove_drawing_annotations/);
   });
 });

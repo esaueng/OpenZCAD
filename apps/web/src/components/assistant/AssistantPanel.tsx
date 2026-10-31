@@ -950,7 +950,9 @@ export function AssistantPanel({
             ),
             history: historyForRequest(conversation),
             // Verified just above: this project's consent lets it through.
-            ...(consentRef.current ? { consentedProjectId: doc.projectId } : {}),
+            ...(consentRef.current
+              ? { consentedProjectId: doc.projectId }
+              : {}),
             attachments: attachments.map((attachment) => ({
               id: attachment.id,
               mediaType: attachment.mediaType,
