@@ -520,8 +520,14 @@ describe('a section down a blind bore', () => {
     // the old floor's hash on the body this section draws.
     const moved = { ...section, bodyIds: [deeperId] };
     const after = sectionEdges(await sectionInputs(deeper, moved), deeperId);
-    dimension.from.edge = { bodyId: deeperId, hash: floor.hash };
-    dimension.to.edge = { bodyId: deeperId, hash: floor.hash };
+    dimension.from = {
+      edge: { bodyId: deeperId, hash: floor.hash },
+      anchor: 'first'
+    };
+    dimension.to = {
+      edge: { bodyId: deeperId, hash: floor.hash },
+      anchor: 'second'
+    };
     expect(lineAt(after, 8)).toHaveLength(1);
     const bodies = {
       [deeperId]: { id: deeperId } as never,

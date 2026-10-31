@@ -216,6 +216,7 @@ describe('assistant drawing operations (D06 slice E)', () => {
       sheet.annotations!.every(
         (annotation) =>
           annotation.kind === 'linear' &&
+          'edge' in annotation.from &&
           annotation.from.edge.reference?.currentHash ===
             annotation.from.edge.hash
       )

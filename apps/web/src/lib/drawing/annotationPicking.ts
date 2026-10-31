@@ -1,23 +1,29 @@
 import {
   DRAWING_VIEW_FRAMES,
   drawingEdgeRefError,
+  drawingFaceRefError,
   drawingPaperPerModelUnit,
   projectToView,
   type BodyId,
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingEdgeRef,
+  type DrawingExtremeSide,
+  type DrawingFaceRef,
   type DrawingPointAnchor,
   type DrawingPointRef,
   type DrawingSheet,
   type DrawingView,
   type DrawingViewId,
   type EdgeTopology,
-  type UnitSystem
+  type FaceTopology,
+  type UnitSystem,
+  type Vector3
 } from '@openzcad/shared';
-import { resolveEdge } from '../topologyResolution';
+import { resolveEdge, resolveFace } from '../topologyResolution';
 import {
   annotationBody,
+  dimensionPointInView,
   drawnCoincidence,
   drawnLines,
   edgeEndsInPageOrder,
@@ -26,6 +32,7 @@ import {
   type AnnotationBodies
 } from './annotations';
 import { viewPageTransform, type ComposedView } from './sheetPage';
+import { add, cross, dot, norm, scale, sub } from './surfaceSharps';
 
 export { drawnLines };
 
@@ -49,6 +56,22 @@ export interface PickableEdge {
   depths: number[];
   /** How far a drawn line of this view may lie from it, in paper mm. */
   coincidenceMm: number;
+  /** The view's (u, v) to paper millimetres. */
+  toPage?: (u: number, v: number) => XY;
+}
+
+/**
+ * D06: a face whose outline the view draws as straight lines — a plane seen
+ * edge-on, or a cylinder or cone seen side-on, whose sides are silhouettes
+ * and no model edge. A virtual sharp and a chamfer are picked by these.
+ */
+export interface PickableFace {
+  view: DrawingView;
+  bodyId: BodyId;
+  face: FaceTopology;
+  /** The outline's straight runs on the paper, in millimetres. */
+  lines: [XY, XY][];
+  toPage: (u: number, v: number) => XY;
 }
 
 /** Every physical edge of every drawn view, placed on the paper. */
@@ -81,9 +104,185 @@ export function pickableEdges(
           page.push(toPage(projected.u, projected.v));
           depths.push(projected.depth);
         }
-        out.push({ view, bodyId, edge, page, depths, coincidenceMm });
+        out.push({ view, bodyId, edge, page, depths, coincidenceMm, toPage });
       }
     }
+  }
+  return out;
+}
+
+/** Faces seen as straight outlines in each drawn view, on the paper. */
+export function pickableFaces(
+  sheet: Pick<DrawingSheet, 'scale'>,
+  views: readonly ComposedView[],
+  bodies: AnnotationBodies,
+  units: UnitSystem
+): PickableFace[] {
+  const out: PickableFace[] = [];
+  for (const { view, projection } of views) {
+    if (!projection.bounds || view.orientation === 'iso') continue;
+    const toPage = viewPageTransform(view, projection.bounds, sheet, units);
+    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    const page = (point: Vector3): XY => {
+      const p = projectToView(frame, point);
+      return toPage(p.u, p.v);
+    };
+    for (const bodyId of view.bodyIds) {
+      const body = bodies[bodyId];
+      if (!body?.topology || body.consumed) continue;
+      const { faces, edges } = body.topology;
+      for (const face of faces) {
+        const lines = faceOutline(face, edges, frame.direction, page);
+        if (lines.length > 0) out.push({ view, bodyId, face, lines, toPage });
+      }
+    }
+  }
+  return out;
+}
+
+/** Every point of the edges bounding `face`. */
+function boundaryPoints(
+  face: FaceTopology,
+  edges: readonly EdgeTopology[]
+): Vector3[] {
+  const points: Vector3[] = [];
+  for (const edge of edges) {
+    if (!edge.adjacentFaceHashes?.includes(face.hash)) continue;
+    const p = edge.points;
+    for (let i = 0; i + 2 < p.length; i += 3)
+      points.push({ x: p[i]!, y: p[i + 1]!, z: p[i + 2]! });
+  }
+  return points;
+}
+
+/** The straight runs a face's outline draws in a view looking along `look`. */
+function faceOutline(
+  face: FaceTopology,
+  edges: readonly EdgeTopology[],
+  look: Vector3,
+  page: (point: Vector3) => XY
+): [XY, XY][] {
+  const g = face.geometry;
+  if (!g) return [];
+  const type = g.surfaceType.toLowerCase();
+  const square = (direction: Vector3) =>
+    Math.abs(dot(direction, look)) <= 1e-6 * Math.max(1, norm(direction));
+  if (type.includes('plane')) {
+    if (!g.normal || !square(g.normal)) return [];
+    // Edge-on: its boundary lies on one line across the page.
+    const along = cross(look, g.normal);
+    const points = boundaryPoints(face, edges);
+    if (points.length < 2) return [];
+    const ts = points.map((point) => dot(point, along));
+    const low = points[ts.indexOf(Math.min(...ts))]!;
+    const high = points[ts.indexOf(Math.max(...ts))]!;
+    return [[page(low), page(high)]];
+  }
+  let axis: Vector3 | null = null;
+  let origin: Vector3 | null = null;
+  let radiusAt: ((t: number) => number) | null = null;
+  if (
+    type.includes('cylind') &&
+    g.radius !== undefined &&
+    g.axisStart &&
+    g.axisEnd
+  ) {
+    const span = sub(g.axisEnd, g.axisStart);
+    const length = norm(span);
+    if (length < 1e-12) return [];
+    axis = scale(span, 1 / length);
+    origin = g.axisStart;
+    const radius = g.radius;
+    radiusAt = () => radius;
+  } else if (
+    type.includes('cone') &&
+    g.apex &&
+    g.axis &&
+    g.halfAngle !== undefined
+  ) {
+    axis = scale(g.axis, 1 / norm(g.axis));
+    origin = g.apex;
+    const slope = Math.tan(g.halfAngle);
+    radiusAt = (t) => Math.abs(t) * slope;
+  }
+  if (!axis || !origin || !radiusAt || !square(axis)) return [];
+  const points = boundaryPoints(face, edges);
+  if (points.length < 2) return [];
+  const ts = points.map((point) => dot(sub(point, origin), axis));
+  const t0 = Math.min(...ts);
+  const t1 = Math.max(...ts);
+  if (t1 - t0 <= 1e-9) return [];
+  const outward = cross(look, axis);
+  return [1, -1].map(
+    (sign) =>
+      [t0, t1].map((t) =>
+        page(
+          add(
+            add(origin, scale(axis, t)),
+            scale(outward, (sign * radiusAt(t)) / norm(outward))
+          )
+        )
+      ) as [XY, XY]
+  );
+}
+
+/**
+ * The face whose outline is nearest `point` within `tolerance` paper
+ * millimetres, where the view draws a line, or null.
+ */
+export function hitFace(
+  faces: readonly PickableFace[],
+  point: XY,
+  tolerance: number,
+  /** Every line each view draws, silhouettes included. */
+  outlines?: ReadonlyMap<DrawingViewId, XY[][]>
+): PickableFace | null {
+  let best: PickableFace | null = null;
+  let bestDistance = Infinity;
+  for (const entry of faces) {
+    const distance = Math.min(
+      ...entry.lines.map(([a, b]) => distanceToSegment(point, a, b))
+    );
+    if (distance > tolerance || distance >= bestDistance - 1e-6) continue;
+    if (outlines) {
+      const drawn = (outlines.get(entry.view.viewId) ?? []).some((line) =>
+        line.some(
+          (a, i) =>
+            i + 1 < line.length &&
+            distanceToSegment(point, a, line[i + 1]!) <= tolerance
+        )
+      );
+      if (!drawn) continue;
+    }
+    best = entry;
+    bestDistance = distance;
+  }
+  return best;
+}
+
+/**
+ * Every line each drawn view shows, on the paper, its curved faces'
+ * silhouettes included: a face is picked by its drawn outline.
+ */
+export function drawnOutlines(
+  sheet: Pick<DrawingSheet, 'scale'>,
+  views: readonly ComposedView[],
+  units: UnitSystem
+): Map<DrawingViewId, XY[][]> {
+  const out = new Map<DrawingViewId, XY[][]>();
+  for (const { view, projection } of views) {
+    if (!projection.bounds) continue;
+    const toPage = viewPageTransform(view, projection.bounds, sheet, units);
+    const lines: XY[][] = [];
+    for (const run of view.hiddenLines
+      ? [...projection.visible, ...projection.hidden]
+      : projection.visible) {
+      const line: XY[] = [];
+      for (let i = 0; i + 1 < run.length; i += 2)
+        line.push(toPage(run[i]!, run[i + 1]!));
+      lines.push(line);
+    }
+    out.set(view.viewId, lines);
   }
   return out;
 }
@@ -311,6 +510,7 @@ export type AnnotationToolKind =
   | 'radius'
   | 'diameter'
   | 'angle'
+  | 'chamfer'
   | 'note';
 
 export const ANNOTATION_TOOL_LABELS: Readonly<
@@ -322,6 +522,7 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   radius: 'Radius',
   diameter: 'Diameter',
   angle: 'Angle',
+  chamfer: 'Chamfer',
   note: 'Note'
 };
 
@@ -336,9 +537,11 @@ export function annotationToolHint(tool: AnnotationTool): string {
     case 'horizontal':
     case 'vertical':
     case 'aligned':
+      if (tool.faces.length === 1)
+        return `${label} dimension: pick the second face; the point is where the two would meet (their virtual sharp).`;
       return tool.points.length === 0
-        ? `${label} dimension: pick a straight edge, or an edge end or circle for its first point.`
-        : `${label} dimension: pick the second point (an edge end or a circle).`;
+        ? `${label} dimension: pick a straight edge, or an edge end, circle or rim for its first point; or a face outline for a virtual sharp.`
+        : `${label} dimension: pick the second point (an edge end, circle or rim, or a face outline).`;
     case 'radius':
     case 'diameter':
       return `${label}: pick a circle or arc seen face-on.`;
@@ -346,6 +549,8 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return tool.edges.length === 0
         ? 'Angle: pick the first straight edge.'
         : 'Angle: pick the second straight edge.';
+    case 'chamfer':
+      return 'Chamfer: pick the chamfer’s outline, seen side-on or edge-on.';
     case 'note':
       return 'Note: pick an edge for its leader, or click empty paper to place it.';
   }
@@ -357,6 +562,11 @@ export interface AnnotationTool {
   viewId?: DrawingViewId;
   points: DrawingPointRef[];
   edges: DrawingEdgeRef[];
+  /**
+   * D06: faces picked so far — a chamfer's face, or the first of two whose
+   * virtual sharp is a linear dimension's next point.
+   */
+  faces: DrawingFaceRef[];
   /** A note's free placement, once clicked on empty paper. */
   placed?: { x: number; y: number };
   /** Re-picking the references of this broken annotation. */
@@ -391,6 +601,7 @@ export function startAnnotationTool(
     kind,
     points: [],
     edges: [],
+    faces: [],
     ...(repairId ? { repairId } : {}),
     ...(viewId ? { viewId } : {})
   };
@@ -408,6 +619,8 @@ export function pickedEnough(tool: AnnotationTool): boolean {
       return tool.edges.length === 1;
     case 'angle':
       return tool.edges.length === 2;
+    case 'chamfer':
+      return tool.faces.length === 1;
     case 'note':
       return tool.edges.length === 1 || tool.placed !== undefined;
   }
@@ -444,6 +657,56 @@ export function edgeRefFor(
   return found.ok && found.entry === edge ? ref : null;
 }
 
+/** {@link edgeRefFor} for a picked face. */
+export function faceRefFor(
+  bodies: AnnotationBodies,
+  bodyId: BodyId,
+  face: FaceTopology
+): DrawingFaceRef | null {
+  const full: DrawingFaceRef = {
+    bodyId,
+    hash: face.hash,
+    ...(face.reference ? { reference: face.reference } : {})
+  };
+  const ref: DrawingFaceRef =
+    face.reference &&
+    face.reference.currentHash === face.hash &&
+    referenceTrust({ reference: face.reference }) === 'trusted' &&
+    drawingFaceRefError(full) === null
+      ? full
+      : { bodyId, hash: face.hash };
+  const found = resolveFace(bodies[bodyId], ref);
+  return found.ok && found.entry === face ? ref : null;
+}
+
+/**
+ * The side of an extreme point nearer the click: both sides resolved, the
+ * one whose point lands nearer `click` on the paper. Null when neither does.
+ */
+function nearerSide(
+  view: DrawingView,
+  make: (side: DrawingExtremeSide) => DrawingPointRef,
+  direction: 'horizontal' | 'vertical',
+  toPage: (u: number, v: number) => XY,
+  bodies: AnnotationBodies,
+  click: XY
+): DrawingPointRef | null {
+  let best: DrawingPointRef | null = null;
+  let bestDistance = Infinity;
+  for (const side of ['low', 'high'] as const) {
+    const point = make(side);
+    const at = dimensionPointInView(view, point, bodies, direction);
+    if (!at) continue;
+    const [x, y] = toPage(at.uv[0], at.uv[1]);
+    const distance = Math.hypot(x - click[0], y - click[1]);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = point;
+    }
+  }
+  return best;
+}
+
 function isFaceOnCircle(view: DrawingView, edge: EdgeTopology): boolean {
   const circle = edge.curve?.circle;
   if (!circle) return false;
@@ -470,9 +733,33 @@ export function applyAnnotationPick(
   hit: PickableEdge | null,
   point: XY,
   viewAt: DrawingView | null,
-  bodies: AnnotationBodies
+  bodies: AnnotationBodies,
+  /** The face outline under the pointer, for virtual sharps and chamfers. */
+  faceHit: PickableFace | null = null
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
+  const linear =
+    tool.kind === 'horizontal' ||
+    tool.kind === 'vertical' ||
+    tool.kind === 'aligned';
+  // A face completes a virtual sharp, and is a chamfer's only pick; an edge
+  // otherwise wins over the face outline it may lie on.
+  if (
+    faceHit &&
+    (tool.kind === 'chamfer' || (linear && (tool.faces.length === 1 || !hit)))
+  )
+    return applyFacePick(tool, faceHit, point, bodies);
+  if (tool.kind === 'chamfer')
+    return {
+      ok: false,
+      message:
+        'Pick a chamfer’s outline: a cone seen side-on or a plane edge-on.'
+    };
+  if (linear && tool.faces.length === 1)
+    return {
+      ok: false,
+      message: 'Pick a second face’s outline for the virtual sharp.'
+    };
   if (!hit) {
     if (tool.kind === 'note' && !tool.repairId)
       return {
@@ -518,12 +805,36 @@ export function applyAnnotationPick(
     case 'aligned': {
       const ends = edgeEndsInPageOrder(view, hit.edge);
       if (!ends) {
-        if (!isFaceOnCircle(view, hit.edge))
+        if (!isFaceOnCircle(view, hit.edge)) {
+          // A rim seen side-on: its silhouette end nearer the click.
+          if (!hit.edge.curve?.circle)
+            return {
+              ok: false,
+              message: 'Pick an edge end, a straight edge, a circle or a rim.'
+            };
+          if (tool.kind === 'aligned')
+            return {
+              ok: false,
+              message:
+                'A rim’s silhouette is measured horizontally or vertically. Use the Horizontal or Vertical tool.'
+            };
+          const silhouette =
+            hit.toPage &&
+            nearerSide(
+              view,
+              (side) => ({ edge: ref, anchor: 'silhouette', side }),
+              tool.kind,
+              hit.toPage,
+              bodies,
+              point
+            );
+          if (!silhouette)
+            return { ok: false, message: 'That rim does not measure here.' };
           return {
-            ok: false,
-            message:
-              'Pick an edge end, a straight edge or a circle seen face-on.'
+            ok: true,
+            tool: { ...next, points: [...tool.points, silhouette] }
           };
+        }
         return {
           ok: true,
           tool: {
@@ -600,6 +911,60 @@ export function applyAnnotationPick(
   }
 }
 
+/** A face pick: a chamfer, or one of a virtual sharp's two faces. */
+function applyFacePick(
+  tool: AnnotationTool,
+  hit: PickableFace,
+  point: XY,
+  bodies: AnnotationBodies
+): PickResult {
+  if (tool.viewId && hit.view.viewId !== tool.viewId)
+    return {
+      ok: false,
+      message: tool.repairId
+        ? 'Re-pick in the view this annotation belongs to.'
+        : 'Pick in the same view as the first pick.'
+    };
+  const ref = faceRefFor(bodies, hit.bodyId, hit.face);
+  if (!ref)
+    return {
+      ok: false,
+      message:
+        'That face cannot be told apart from another one in the model. Pick a different face.'
+    };
+  const next = { ...tool, viewId: hit.view.viewId };
+  if (tool.kind === 'chamfer')
+    return { ok: true, tool: { ...next, faces: [ref] } };
+  if (tool.kind !== 'horizontal' && tool.kind !== 'vertical')
+    return {
+      ok: false,
+      message:
+        'A virtual sharp is measured horizontally or vertically. Use the Horizontal or Vertical tool.'
+    };
+  const first = tool.faces[0];
+  if (!first) return { ok: true, tool: { ...next, faces: [ref] } };
+  if (first.bodyId === ref.bodyId && first.hash === ref.hash)
+    return { ok: false, message: 'Pick a different face for the second one.' };
+  const sharp = nearerSide(
+    hit.view,
+    (side) => ({ faces: [first, ref], anchor: 'virtual-sharp', side }),
+    tool.kind,
+    hit.toPage,
+    bodies,
+    point
+  );
+  if (!sharp)
+    return {
+      ok: false,
+      message:
+        'These two faces have no virtual sharp this view can show. Pick coaxial turned faces, or one and a face square to their axis.'
+    };
+  return {
+    ok: true,
+    tool: { ...next, faces: [], points: [...tool.points, sharp] }
+  };
+}
+
 /**
  * The annotation a finished tool makes, with its text at `placementMm`
  * (relative to the view's centre, or on the paper for a free note). Null
@@ -640,6 +1005,13 @@ export function draftAnnotation(
         viewId: tool.viewId!,
         edges: [tool.edges[0]!, tool.edges[1]!]
       };
+    case 'chamfer':
+      return {
+        ...base,
+        kind: 'chamfer',
+        viewId: tool.viewId!,
+        face: tool.faces[0]!
+      };
     case 'note':
       return {
         ...base,
@@ -668,13 +1040,13 @@ export function repairedAnnotation(
   if (!draft || draft.kind !== previous.kind) return null;
   if (previous.kind === 'note' && draft.kind === 'note')
     return { ...previous, ...(draft.leader ? { leader: draft.leader } : {}) };
-  if (
-    'decimals' in previous &&
-    previous.decimals !== undefined &&
-    draft.kind !== 'note'
-  )
-    return { ...draft, decimals: previous.decimals };
-  return draft;
+  // A re-pick keeps the format (decimals, count, Ø, reference) but makes the
+  // dimension the person's own: it no longer carries generated provenance.
+  const format = previous as unknown as Record<string, unknown>;
+  const kept: Record<string, unknown> = {};
+  for (const key of ['decimals', 'count', 'diameter', 'reference'])
+    if (format[key] !== undefined) kept[key] = format[key];
+  return { ...draft, ...kept };
 }
 
 /** Which annotation tool re-picks `annotation`'s references. */

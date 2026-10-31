@@ -25,6 +25,8 @@ export function gearCapAncestor(
   scale: number;
   side: 'start' | 'end';
   axis: Vector3;
+  /** Helical or herringbone: its teeth turn along the axis. */
+  twisted: boolean;
 } | null {
   if (!reference || reference.currentHash !== hash) return null;
   const role = /^gear\.face\.cap\.(start|end)$/.exec(reference.lineageName);
@@ -76,6 +78,7 @@ export function gearCapAncestor(
       z: value(data.axis.z, 'axis z')
     };
     const length = Math.hypot(raw.x, raw.y, raw.z);
+    const helix = value(data.helixAngleDeg ?? 0, 'helix angle');
     if (
       ![width, scale, length].every(
         (number) => Number.isFinite(number) && number > 0
@@ -87,7 +90,8 @@ export function gearCapAncestor(
       width,
       scale,
       side: role[1] as 'start' | 'end',
-      axis: { x: raw.x / length, y: raw.y / length, z: raw.z / length }
+      axis: { x: raw.x / length, y: raw.y / length, z: raw.z / length },
+      twisted: Math.abs(helix) > 1e-9 || data.herringbone === true
     };
   } catch {
     return null;

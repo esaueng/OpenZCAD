@@ -10,12 +10,14 @@ import type {
 } from '@openzcad/shared';
 import type { LinearPreviewProfile } from '@openzcad/viewport';
 import { primitiveCylinderCapAncestor } from './cylinderPrimitiveAncestry';
+import { gearCapAncestor } from './gearCapAncestry';
 
 /**
- * A spur gear cut along a cylinder regenerates the same cross-section at any
- * height. Stretch every axial vertex, including the ones inside a curved tooth
- * wall: moving only vertices touching the cap pins the middle of those walls
- * and the generic face preview stops at its first folding triangle.
+ * A spur gear, cut along a cylinder or built as its own body, regenerates the
+ * same cross-section at any height. Stretch every axial vertex, including the
+ * ones inside a curved tooth wall: moving only vertices touching the cap pins
+ * the middle of those walls and the generic face preview stops at its first
+ * folding triangle.
  *
  * History proves the straight extrusion, not the triangles' normals: even a
  * straight curved surface can tessellate into triangles oblique to its axis.
@@ -33,24 +35,24 @@ export function gearHeightPreviewProfile(
     !cap ||
     !faces.includes(cap) ||
     cap.geometry?.surfaceType !== 'plane' ||
-    !cap.geometry.normal ||
-    !primitiveCylinderCapAncestor(
-      document,
-      body.bodyId,
-      cap.reference,
-      cap.hash
-    )
+    !cap.geometry.normal
   )
     return null;
   const producer = listFeaturesInOrder(document).find(
     (feature) => feature.bodyId === body.bodyId
   );
-  if (
-    producer?.data.featureKind !== 'gear' ||
-    producer.data.gearType !== 'external' ||
-    !producer.data.targetBodyId
-  )
-    return null;
+  if (producer?.data.featureKind !== 'gear') return null;
+  const proven = producer.data.targetBodyId
+    ? producer.data.gearType === 'external' &&
+      primitiveCylinderCapAncestor(
+        document,
+        body.bodyId,
+        cap.reference,
+        cap.hash
+      ) !== null
+    : gearCapAncestor(document, body.bodyId, cap.reference, cap.hash)
+        ?.feature === producer;
+  if (!proven) return null;
   try {
     const { scope } = getParameterScope(document);
     if (

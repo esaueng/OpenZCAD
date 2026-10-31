@@ -282,12 +282,8 @@ function autoDimension(
     'mm'
   ))
     expect(resolution, annotationId).toMatchObject({ ok: true });
-  return {
-    before,
-    plan,
-    after,
-    audit: auditDrawingDimensions(after, bodies, 'mm')
-  };
+  const audit = auditDrawingDimensions(after, bodies, 'mm');
+  return { before, plan, after, audit };
 }
 
 /** The z values a linear dimension spans, read from the model. */
@@ -312,21 +308,22 @@ function zSpan(
 const messages = (list: { message: string }[]) => list.map((f) => f.message);
 
 describe('D06 slice F: a blind bore dimensioned on its section', () => {
-  it('asks for a section when only circles mark the floor', async () => {
+  it('puts the floor on a hidden rim without a section, and asks for one', async () => {
     const document = boredCylinder();
     const bodyId = document.bodyOrder.at(-1)!;
     const sheet = sheetFor(bodyId);
     const { bodies, views } = await drawSheet(document, sheet);
-    const audit = auditDrawingDimensions(sheet, bodies, 'mm');
-    // Outside, the floor and both ends are circles seen edge-on.
-    expect(messages(audit.unmeasurable)).toEqual([
-      'Z: nothing locates the face at z = 12 from the face at z = 0: only circles seen edge-on mark it; add a section through their axis.',
-      'Z: nothing locates the face at z = 30 from the face at z = 0: only circles seen edge-on mark it; add a section through their axis.'
-    ]);
-    const plan = planAutoDimensions(sheet, views, bodies, 'mm', counter());
-    expect(plan.sectionAdvice).toBe(
-      'Add a section through the part to dimension the face at z = 12 and the face at z = 30 on visible lines.'
+    const { plan, after, audit } = autoDimension(sheet, views, bodies);
+    // Outside, the floor is only the silhouette of a rim inside the part.
+    const floor = plan.annotations.find(
+      (a) => a.kind === 'linear' && zSpan(a, after, bodies).join() === '0,12'
     );
+    expect(floor?.viewId).toBe(frontId);
+    expect(plan.onHiddenLines).toBe(1);
+    expect(plan.sectionAdvice).toBe(
+      'Add a section through the part to dimension the face at z = 12 on visible lines.'
+    );
+    expect(audit).toMatchObject({ missing: [], redundant: [] });
   });
 
   it('states the floor and the height on the section, and places them there', async () => {
@@ -335,26 +332,26 @@ describe('D06 slice F: a blind bore dimensioned on its section', () => {
     const sheet = sheetFor(bodyId, { cutAt: { x: 0, y: 0, z: 0 } });
     const { bodies, views } = await drawSheet(document, sheet);
     const { before, plan, after, audit } = autoDimension(sheet, views, bodies);
-    // Satisfiable now, and only on the section.
     expect(messages(before.missing)).toEqual([
       'Ø20 diameter.',
       'Ø8 diameter.',
-      'Z: nothing locates the face at z = 12 from the face at z = 0, which only section A-A shows.',
-      'Z: nothing locates the face at z = 30 from the face at z = 0, which only section A-A shows.'
+      'Z: nothing locates the face at z = 12 from the face at z = 0.',
+      'Z: nothing locates the face at z = 30 from the face at z = 0.'
     ]);
     expect(before.unmeasurable).toEqual([]);
 
-    // The diameters face-on from above; the floor and the height on the cut.
+    // The diameters face-on from above; the floor and the height on the
+    // cut, where both are visible lines.
     const linear = plan.annotations.filter(
       (a): a is DrawingLinearDimension => a.kind === 'linear'
     );
-    expect(linear).toHaveLength(2);
-    expect(linear.every((a) => a.viewId === sectionId)).toBe(true);
-    expect(linear.every((a) => a.direction === 'vertical')).toBe(true);
-    expect(linear.map((a) => zSpan(a, after, bodies))).toEqual([
-      [0, 12],
-      [0, 30]
+    expect(
+      linear.map((a) => ({ viewId: a.viewId, span: zSpan(a, after, bodies) }))
+    ).toEqual([
+      { viewId: sectionId, span: [0, 12] },
+      { viewId: sectionId, span: [0, 30] }
     ]);
+    expect(linear.every((a) => a.direction === 'vertical')).toBe(true);
     expect(
       plan.annotations.filter((a) => a.kind === 'diameter').map((a) => a.viewId)
     ).toEqual([topId, topId]);
@@ -436,35 +433,42 @@ describe('D06 slice F: an internal pocket prefers the section to hidden lines', 
 });
 
 describe('D06 slice F: the turned foot', () => {
-  it('says why a section the kernel cuts from the tessellation cannot carry its height', async () => {
+  it('asks for a section for its bore floor when it has none', async () => {
+    const { document, bodyId } = await buildPart(adapter, footOperations());
+    const sheet = sheetFor(bodyId);
+    const { bodies, views } = await drawSheet(document, sheet);
+    const { plan, after, audit } = autoDimension(sheet, views, bodies);
+    // 9 floor thickness (on the bore rim's hidden silhouette) and 50
+    // overall, from the contact face.
+    expect(
+      plan.annotations
+        .filter((a) => a.kind === 'linear')
+        .map((a) => zSpan(a, after, bodies))
+    ).toEqual([
+      [0, 9],
+      [0, 50]
+    ]);
+    expect(plan.onHiddenLines).toBe(1);
+    expect(plan.sectionAdvice).toBe(
+      'Add a section through the part to dimension the face at z = 9 on visible lines.'
+    );
+    expect(audit.redundant).toEqual([]);
+  });
+
+  it('places nothing on a section the kernel cut from the tessellation, and says so', async () => {
     // The pinned kernel's exact-only boolean refuses every plane through
-    // the foot's revolved blends and chamfers (a Remus ask, D03's open
+    // the foot's revolved blends and chamfers (a Remus ask on D03's open
     // list), so section A-A is drawn from the mesh with no edge identity.
-    // When it cuts exactly, this case moves to the bored cylinder's.
+    // When it cuts exactly, this case becomes the bored cylinder's.
     const { document, bodyId } = await buildPart(adapter, footOperations());
     const sheet = sheetFor(bodyId, { cutAt: { x: 0, y: 0, z: 0 } });
     const { bodies, views, approximate } = await drawSheet(document, sheet);
     expect(approximate).toBe(true);
     const { plan, audit } = autoDimension(sheet, views, bodies);
-    expect(
-      messages(audit.unmeasurable).filter((m) => m.startsWith('Z:'))
-    ).toEqual([
-      'Z: nothing locates the face at z = 9 from the face at z = 0: only circles seen edge-on mark it, and section A-A was cut from the tessellation, so its edges cannot be dimensioned.',
-      'Z: nothing locates the face at z = 50 from the face at z = 0: only circles seen edge-on mark it, and section A-A was cut from the tessellation, so its edges cannot be dimensioned.'
-    ]);
-    // Nothing is placed on it, and it does not ask for another section.
     expect(plan.annotations.some((a) => a.viewId === sectionId)).toBe(false);
-    expect(plan.sectionAdvice).toBeNull();
-    expect(audit).toMatchObject({ missing: [], redundant: [] });
-  });
-
-  it('asks for a section for its height and bore floor when it has none', async () => {
-    const { document, bodyId } = await buildPart(adapter, footOperations());
-    const sheet = sheetFor(bodyId);
-    const { bodies, views } = await drawSheet(document, sheet);
-    const plan = planAutoDimensions(sheet, views, bodies, 'mm', counter());
     expect(plan.sectionAdvice).toBe(
-      'Add a section through the part to dimension the face at z = 9 and the face at z = 50 on visible lines.'
+      'Add a section through the part to dimension the face at z = 9 on visible lines. Section A-A was cut from the tessellation, so its edges cannot carry dimensions.'
     );
+    expect(audit.redundant).toEqual([]);
   });
 });

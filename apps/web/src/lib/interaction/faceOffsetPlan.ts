@@ -302,8 +302,17 @@ export function planFaceOffset(
       typeof current === 'number' && typeof change === 'number'
         ? current + change
         : `(${current}) + (${change})`;
+    // Moving the start cap of a twisted gear would turn the teeth at the far
+    // cap, which stays put; only its end cap is a pure width edit.
+    const rejection =
+      value <= 0
+        ? 'That distance would leave the gear with no face width.'
+        : gear.side === 'start' && gear.twisted
+          ? 'Drag the other cap: moving this end of a helical gear would turn its teeth at the far end.'
+          : undefined;
+    const moveOrigin = gear.side === 'start' && rejection === undefined;
     const origin = { ...data.origin! };
-    if (gear.side === 'start' && value > 0) {
+    if (moveOrigin) {
       for (const axis of ['x', 'y', 'z'] as const) {
         if (gear.axis[axis] === 0) continue;
         origin[axis] = add(
@@ -323,17 +332,12 @@ export function planFaceOffset(
           featureId: gear.feature.featureId,
           data: {
             faceWidth: add(data.faceWidth!, delta),
-            ...(gear.side === 'start' && value > 0 ? { origin } : {})
+            ...(moveOrigin ? { origin } : {})
           }
         },
         `Resize ${gear.feature.name} face width`
       ),
-      ...(value <= 0
-        ? {
-            preflightRejection:
-              'That distance would leave the gear with no face width.'
-          }
-        : {})
+      ...(rejection ? { preflightRejection: rejection } : {})
     };
   }
 

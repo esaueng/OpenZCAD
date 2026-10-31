@@ -15,6 +15,7 @@ import {
   formatDrawingNumber,
   type AnnotationBodies
 } from './annotations';
+import { readChamfer } from './surfaceSharps';
 
 /**
  * D06 slice A: does a sheet's dimension set state every size and location
@@ -32,14 +33,19 @@ import {
  *
  * A blend's position is fixed by its radius and the faces it is tangent to,
  * so a dimension to where it meets a face states a value the part already
- * derives. Geometry D02 has no way to dimension yet (a revolved fillet's
- * radius, a chamfer or taper, a sloped face, and positions only closed
- * circles mark) is reported as such, never counted as satisfied.
+ * derives. Geometry no dimension can state yet (a revolved fillet's
+ * radius, a taper, a sloped face) is reported as such, never counted as
+ * satisfied.
+ *
+ * Slice B (schema v48) makes more of a turned part satisfiable: a rim's
+ * silhouette marks a position along its axis, a linear Ø span across a
+ * turned surface or a bolt circle states its diameter, and a chamfer
+ * dimension states a chamfer — grouped by size and angle, so "2× 4 × 45°"
+ * is one requirement.
  *
  * A section view (D03) measures its cut body's edges, so a position inside
- * the part — a bore's floor, an internal step — that no outside view marks
- * with an edge is stated there (slice F). A position marked only by circles
- * seen edge-on asks for a section through their axis.
+ * the part — a bore's floor, an internal step — that no outside view shows
+ * visible is stated there, not on hidden lines (slice F).
  *
  * Everything is read from the current model, as dimensions are; nothing is
  * stored. See docs/plans/drawing-auto-dimensioning-plan.md.
@@ -50,12 +56,6 @@ export type AuditAxis = 'x' | 'y' | 'z';
 export interface AuditRequirement {
   bodyId: string;
   message: string;
-  /**
-   * For a position no view marks yet that a section through the part
-   * would: what it locates (a position's label), for Auto-dimension to
-   * name when it asks for a section.
-   */
-  needsSection?: string;
 }
 
 export type AuditRedundancyReason =
@@ -125,8 +125,28 @@ export interface BodyRequirements {
   /** Positions a blend's radius already fixes, per axis. */
   derived: Record<AuditAxis, Position[]>;
   sizes: SizeGroup[];
-  /** Requirements no D02 dimension can state, already worded. */
+  chamfers: ChamferGroup[];
+  boltCircles: BoltCircle[];
+  /** Requirements no dimension can state yet, already worded. */
   unmeasurable: string[];
+}
+
+/** Like chamfers: one size and angle, stated once with a count. */
+export interface ChamferGroup {
+  size: number;
+  angleDeg: number;
+  faces: FaceTopology[];
+  /** The cones' axes, to tell whether a view sees them side-on. */
+  axes: Vector3[];
+}
+
+/** Holes of one size spaced equally round a turned axis. */
+export interface BoltCircle {
+  pitchRadius: number;
+  holeRadius: number;
+  count: number;
+  center: Vector3;
+  direction: Vector3;
 }
 
 export interface SizeGroup {
@@ -188,6 +208,8 @@ function bodyRequirements(
   const positions: BodyRequirements['positions'] = { x: [], y: [], z: [] };
   const derived: BodyRequirements['derived'] = { x: [], y: [], z: [] };
   const sizes: SizeGroup[] = [];
+  const chamfers: ChamferGroup[] = [];
+  const boltCircles: BoltCircle[] = [];
   const unmeasurable = new Map<string, number>();
   const note = (message: string) =>
     unmeasurable.set(message, (unmeasurable.get(message) ?? 0) + 1);
@@ -355,9 +377,31 @@ function bodyRequirements(
       );
     } else if (type.includes('cone') && geometry.apex && geometry.axis) {
       addAxisPositions(geometry.apex, geometry.axis, 'turned', positions);
-      note(
-        `${format(((geometry.halfAngle ?? 0) * 180) / Math.PI, units)}° chamfer or taper: its size and position need a chamfer dimension D02 cannot place yet`
-      );
+      // A chamfer runs between virtual sharps with the faces either side;
+      // a cone that does not is a taper, which nothing states yet.
+      const chamfer = readChamfer(face, faces, edges);
+      if (chamfer.ok && chamfer.kind === 'cone') {
+        let group = chamfers.find(
+          (known) =>
+            same(known.size, chamfer.size) &&
+            same(known.angleDeg, chamfer.angleDeg)
+        );
+        if (!group) {
+          group = {
+            size: chamfer.size,
+            angleDeg: chamfer.angleDeg,
+            faces: [],
+            axes: []
+          };
+          chamfers.push(group);
+        }
+        group.faces.push(face);
+        group.axes.push(chamfer.axis);
+      } else {
+        note(
+          `${format(((geometry.halfAngle ?? 0) * 180) / Math.PI, units)}° taper: its size and position need a dimension this check does not read yet`
+        );
+      }
     } else {
       note(
         `a ${geometry.surfaceType} face, which this check does not read yet`
@@ -383,9 +427,13 @@ function bodyRequirements(
       if (pitch[0]! <= 1e-6 || !pitch.every((r) => same(r, pitch[0]!)))
         continue;
       for (const axis of group.axes) onBoltCircle.add(axis);
-      note(
-        `${group.axes.length}× Ø${format(2 * group.radius, units)} on a Ø${format(2 * pitch[0]!, units)} bolt circle: its pitch diameter needs a dimension D02 cannot place yet`
-      );
+      boltCircles.push({
+        pitchRadius: pitch[0]!,
+        holeRadius: group.radius,
+        count: group.axes.length,
+        center: parent.point,
+        direction
+      });
       break;
     }
   }
@@ -429,6 +477,8 @@ function bodyRequirements(
     positions,
     derived,
     sizes,
+    chamfers,
+    boltCircles,
     unmeasurable: [...unmeasurable].map(([message, count]) =>
       count > 1 ? `${count}× ${message}` : message
     )
@@ -518,11 +568,12 @@ function faceOn(view: DrawingView, axis: Vector3): boolean {
 }
 
 /**
- * The views in which a D02 dimension can land on `value` along `axis`: one
- * that measures `axis` and draws an open edge ending there, or a circle
- * centred there face-on. A section measures its cut body's edges, so a
- * bore's floor is a line there although every outside view sees it as a
- * circle edge-on.
+ * The views in which a dimension can land on `value` along `axis`: one that
+ * measures `axis` and draws an open edge ending there, a circle centred
+ * there face-on, or a rim about `axis` lying there, whose silhouette (v48)
+ * it sees side-on. A section measures its cut body's edges, so a bore's
+ * floor is a visible line there where every outside view sees only the
+ * hidden silhouette of its rim.
  */
 function anchoringViews(
   sheet: DrawingSheet,
@@ -536,8 +587,11 @@ function anchoringViews(
     viewEdges(bodies, view, bodyId).some((edge) => {
       if (edge.displayRole === 'seam') return false;
       const circle = edge.curve?.circle;
-      if (circle)
-        return same(circle.center[axis], value) && faceOn(view, circle.axis);
+      if (circle) {
+        if (!same(circle.center[axis], value)) return false;
+        if (Math.abs(Math.abs(circle.axis[axis]) - 1) <= 1e-9) return true;
+        return faceOn(view, circle.axis);
+      }
       const p = edge.points;
       if (p.length < 6) return false;
       const closed =
@@ -547,28 +601,6 @@ function anchoringViews(
       );
     })
   );
-}
-
-/**
- * Whether `value` along `axis` is marked by a circle in its plane (a bore's
- * floor, a turned part's end): every outside view sees that circle edge-on,
- * where a linear dimension cannot end, and a section through its axis
- * draws it as a line.
- */
-function edgeOnCircleAt(
-  edges: readonly EdgeTopology[],
-  axis: AuditAxis,
-  value: number
-): boolean {
-  return edges.some((edge) => {
-    const circle = edge.curve?.circle;
-    return (
-      circle !== undefined &&
-      edge.displayRole !== 'seam' &&
-      axisOf(circle.axis) === axis &&
-      same(circle.center[axis], value)
-    );
-  });
 }
 
 /**
@@ -585,6 +617,8 @@ export interface DimensionState {
       requirements: BodyRequirements;
       links: Record<AuditAxis, Links>;
       statedSizes: ReadonlySet<SizeGroup>;
+      statedChamfers: ReadonlySet<ChamferGroup>;
+      statedBoltCircles: ReadonlySet<BoltCircle>;
     }
   >;
 }
@@ -631,6 +665,8 @@ export function readDimensionState(
     return links.get(key)!;
   };
   const sizeStatedBy = new Map<SizeGroup, DrawingAnnotationId>();
+  const chamferStatedBy = new Map<ChamferGroup, DrawingAnnotationId>();
+  const boltStatedBy = new Map<BoltCircle, DrawingAnnotationId>();
 
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
   for (const annotation of sheet.annotations ?? []) {
@@ -652,10 +688,59 @@ export function readDimensionState(
       });
       continue;
     }
+    if (reading.kind === 'chamfer') {
+      const group = requirements
+        .get(reading.bodyId)
+        ?.chamfers.find((candidate) => candidate.faces.includes(reading.face));
+      if (!group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message: 'It measures a chamfer this check does not read.'
+        });
+        continue;
+      }
+      const earlier = chamferStatedBy.get(group);
+      if (earlier) {
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message: `Another dimension already states this ${chamferLabel(group, units)}.`,
+          statedBy: [earlier]
+        });
+        continue;
+      }
+      chamferStatedBy.set(group, id);
+      audit.stated += 1;
+      continue;
+    }
     if (reading.kind === 'linear') {
       const [fromBody, toBody] = reading.bodyIds;
       const body = requirements.get(fromBody);
       const axis = axisOf(reading.direction ?? sub(reading.to, reading.from));
+      // A span across a turned surface or a bolt circle, symmetric about its
+      // axis, states that diameter (shown Ø), not two positions.
+      const across =
+        body && fromBody === toBody && axis
+          ? diameterAcross(body, reading.from, reading.to, axis)
+          : null;
+      if (across) {
+        const stated = (
+          across.kind === 'size' ? sizeStatedBy : boltStatedBy
+        ) as Map<SizeGroup | BoltCircle, DrawingAnnotationId>;
+        const earlier = stated.get(across.requirement);
+        if (earlier) {
+          audit.redundant.push({
+            annotationId: id,
+            reason: 'duplicate-size',
+            message: `Another dimension already states this ${across.label(units)}.`,
+            statedBy: [earlier]
+          });
+        } else {
+          stated.set(across.requirement, id);
+          audit.stated += 1;
+        }
+        continue;
+      }
       if (!body || fromBody !== toBody || !axis) {
         audit.unchecked.push({
           annotationId: id,
@@ -752,12 +837,75 @@ export function readDimensionState(
               return circle !== undefined && circleInGroup(group, circle);
             }))
       );
+      // A turned diameter is also stated across its outline, side-on.
+      const sideOn =
+        !group.blend &&
+        sheet.views.some(
+          (view) =>
+            view.bodyIds.includes(bodyId as never) &&
+            view.orientation !== 'iso' &&
+            group.axes.some(
+              (axis) =>
+                Math.abs(
+                  dot(
+                    axis.direction,
+                    DRAWING_VIEW_FRAMES[view.orientation].direction
+                  )
+                ) <= 1e-6
+            )
+        );
       const finding = { bodyId, message: `${sizeLabel(group, units)}.` };
-      if (seen) audit.missing.push(finding);
+      if (seen || sideOn) audit.missing.push(finding);
       else
         audit.unmeasurable.push({
           bodyId,
           message: `${sizeLabel(group, units)}: add a view that looks along its axis.`
+        });
+    }
+    for (const group of body.chamfers) {
+      audit.required += 1;
+      if (chamferStatedBy.has(group)) continue;
+      const sideOn = sheet.views.some(
+        (view) =>
+          view.bodyIds.includes(bodyId as never) &&
+          view.orientation !== 'iso' &&
+          group.axes.some(
+            (axis) =>
+              Math.abs(
+                dot(axis, DRAWING_VIEW_FRAMES[view.orientation].direction)
+              ) <= 1e-6
+          )
+      );
+      const label = chamferLabel(group, units);
+      if (sideOn) audit.missing.push({ bodyId, message: `${label}.` });
+      else
+        audit.unmeasurable.push({
+          bodyId,
+          message: `${label}: add a view that sees it side-on.`
+        });
+    }
+    for (const circle of body.boltCircles) {
+      audit.required += 1;
+      if (boltStatedBy.has(circle)) continue;
+      const faceOn = sheet.views.some(
+        (view) =>
+          view.bodyIds.includes(bodyId as never) &&
+          view.orientation !== 'iso' &&
+          Math.abs(
+            Math.abs(
+              dot(
+                circle.direction,
+                DRAWING_VIEW_FRAMES[view.orientation].direction
+              )
+            ) - 1
+          ) <= 1e-6
+      );
+      const label = boltLabel(circle, units);
+      if (faceOn) audit.missing.push({ bodyId, message: `${label}.` });
+      else
+        audit.unmeasurable.push({
+          bodyId,
+          message: `${label}: add a view that looks along its axis.`
         });
     }
     for (const axis of AXES) {
@@ -772,7 +920,6 @@ export function readDimensionState(
         .sort((p, q) => p.position.value - q.position.value);
       const datum = graph.find(order[0]!.index);
       const seen = new Set([datum]);
-      const modelEdges = bodies[bodyId]!.topology!.edges;
       // Sections the kernel would not cut exactly have no edges to measure.
       const approximate = sheet.views.flatMap((view) =>
         view.section &&
@@ -810,37 +957,15 @@ export function readDimensionState(
           });
           continue;
         }
-        // Whichever end no view marks: is it a circle seen edge-on?
-        const circledGroup = (group: number) =>
-          order.some(
-            (entry) =>
-              graph.find(entry.index) === group &&
-              edgeOnCircleAt(modelEdges, axis, entry.position.value)
-          );
-        const circled =
-          (targetViews.size === 0 && circledGroup(root)) ||
-          (datumViews.size === 0 && circledGroup(datum));
-        if (viewsAlong(sheet, bodyId, axis).length === 0)
-          audit.unmeasurable.push({
-            bodyId,
-            message: `${message.slice(0, -1)}: add a view that shows ${axis.toUpperCase()}.`
-          });
-        else if (circled && approximate.length > 0)
-          audit.unmeasurable.push({
-            bodyId,
-            message: `${message.slice(0, -1)}: only circles seen edge-on mark it, and section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot be dimensioned.`
-          });
-        else if (circled)
-          audit.unmeasurable.push({
-            bodyId,
-            message: `${message.slice(0, -1)}: only circles seen edge-on mark it; add a section through their axis.`,
-            needsSection: position.label
-          });
-        else
-          audit.unmeasurable.push({
-            bodyId,
-            message: `${message.slice(0, -1)}: no edge marks it in a view yet (a turned part's outline needs a silhouette anchor).`
-          });
+        audit.unmeasurable.push({
+          bodyId,
+          message:
+            viewsAlong(sheet, bodyId, axis).length === 0
+              ? `${message.slice(0, -1)}: add a view that shows ${axis.toUpperCase()}.`
+              : approximate.length > 0
+                ? `${message.slice(0, -1)}: no edge or rim marks it in a view yet, and section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot be dimensioned.`
+                : `${message.slice(0, -1)}: no edge or rim marks it in a view yet.`
+        });
       }
     }
   }
@@ -853,9 +978,63 @@ export function readDimensionState(
         y: linksFor(bodyId, 'y'),
         z: linksFor(bodyId, 'z')
       },
-      statedSizes: new Set(sizeStatedBy.keys())
+      statedSizes: new Set(sizeStatedBy.keys()),
+      statedChamfers: new Set(chamferStatedBy.keys()),
+      statedBoltCircles: new Set(boltStatedBy.keys())
     });
   return { audit, bodies: state };
+}
+
+/**
+ * The turned diameter or bolt circle a span across `axis` states: its two
+ * ends either side of the circle's axis, each a radius from it.
+ */
+function diameterAcross(
+  body: BodyRequirements,
+  from: Vector3,
+  to: Vector3,
+  axis: AuditAxis
+): {
+  kind: 'size' | 'bolt';
+  requirement: SizeGroup | BoltCircle;
+  label: (units: UnitSystem) => string;
+} | null {
+  const symmetric = (center: Vector3, direction: Vector3, radius: number) => {
+    if (Math.abs(direction[axis]) > 1e-9) return false;
+    const a = from[axis] - center[axis];
+    const b = to[axis] - center[axis];
+    return a * b < 0 && same(Math.abs(a), radius) && same(Math.abs(b), radius);
+  };
+  for (const group of body.sizes) {
+    if (group.blend) continue;
+    if (
+      group.axes.some((entry) =>
+        symmetric(entry.point, entry.direction, group.radius)
+      )
+    )
+      return {
+        kind: 'size',
+        requirement: group,
+        label: (units) => sizeLabel(group, units)
+      };
+  }
+  for (const circle of body.boltCircles)
+    if (symmetric(circle.center, circle.direction, circle.pitchRadius))
+      return {
+        kind: 'bolt',
+        requirement: circle,
+        label: (units) => boltLabel(circle, units)
+      };
+  return null;
+}
+
+export function chamferLabel(group: ChamferGroup, units: UnitSystem): string {
+  const count = group.faces.length > 1 ? `${group.faces.length}× ` : '';
+  return `${count}${format(group.size, units)} × ${formatDrawingNumber(group.angleDeg, defaultDimensionDecimals('angle', units))}° chamfer`;
+}
+
+export function boltLabel(circle: BoltCircle, units: UnitSystem): string {
+  return `Ø${format(2 * circle.pitchRadius, units)} pitch diameter of the ${circle.count}× Ø${format(2 * circle.holeRadius, units)} bolt circle`;
 }
 
 export function sizeLabel(group: SizeGroup, units: UnitSystem): string {
