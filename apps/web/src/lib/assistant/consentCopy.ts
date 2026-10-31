@@ -31,6 +31,7 @@ export const ASSISTANT_CONSENT_REQUEST_FIELDS = [
 /** The model digest's fields (`CadDocumentDigest`), sorted. */
 export const ASSISTANT_CONSENT_DIGEST_FIELDS = [
   'bodies',
+  'drawing',
   'editCatalog',
   'features',
   'name',
@@ -52,6 +53,23 @@ export const ASSISTANT_CONSENT_FIELDS_BY_COPY_VERSION: Readonly<
   Record<number, { request: readonly string[]; digest: readonly string[] }>
 > = {
   1: {
+    request: ASSISTANT_CONSENT_REQUEST_FIELDS,
+    digest: [
+      'bodies',
+      'editCatalog',
+      'features',
+      'name',
+      'parameters',
+      'projectId',
+      'schemaVersion',
+      'selection',
+      'units',
+      'version',
+      'warnings'
+    ]
+  },
+  // D06 slice E: an ask from Draw also sends the sheet the user is on.
+  2: {
     request: ASSISTANT_CONSENT_REQUEST_FIELDS,
     digest: ASSISTANT_CONSENT_DIGEST_FIELDS
   }
@@ -103,6 +121,12 @@ export const ASSISTANT_CONSENT_ITEMS: readonly AssistantConsentItem[] = [
     fields: ['digest.selection'],
     label: 'Your selection',
     detail: 'The features, bodies, faces and edges selected when you send.'
+  },
+  {
+    fields: ['digest.drawing'],
+    label: 'The drawing sheet you are on',
+    detail:
+      'Only when you ask from Draw: the sheet’s name, scale and views, the model edges each view draws with their positions on the paper, and its dimensions and notes with their values and text.'
   },
   {
     fields: ['attachments'],

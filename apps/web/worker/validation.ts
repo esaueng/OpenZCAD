@@ -798,6 +798,26 @@ export function parseAssistantProposalRequest(
   ) {
     throw badRequest('"digest" is missing required fields.');
   }
+  if (digest.drawing !== undefined) {
+    // D06 slice E: the Draw sheet the ask came from. Only its shape is
+    // checked here; a reply's annotations are checked against it.
+    const drawing = asRecord(digest.drawing, '"digest.drawing"');
+    if (
+      typeof drawing.sheetId !== 'string' ||
+      typeof drawing.ready !== 'boolean' ||
+      !Array.isArray(drawing.views) ||
+      !Array.isArray(drawing.annotations) ||
+      !drawing.views.every(
+        (view) =>
+          typeof view === 'object' &&
+          view !== null &&
+          typeof (view as Record<string, unknown>).viewId === 'string' &&
+          Array.isArray((view as Record<string, unknown>).edges)
+      )
+    ) {
+      throw badRequest('"digest.drawing" is missing required fields.');
+    }
+  }
   for (const key of ['parameters', 'features', 'bodies', 'warnings'] as const) {
     const value = digest[key];
     if (Array.isArray(value) && value.length > MAX_AI_DIGEST_ITEMS) {

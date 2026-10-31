@@ -69,6 +69,34 @@ export {
   type GrowingHolderProposalTarget
 } from './growing-holder-proposal';
 
+import {
+  DRAWING_OPERATION_SCHEMAS,
+  describeDrawingOperation,
+  isDrawingOperation,
+  parseDrawingOperation,
+  validateDrawingOperation,
+  type CadDigestDrawing,
+  type CadDrawingOperation
+} from './drawing-annotations';
+export {
+  DRAWING_OPERATION_KINDS,
+  MAX_PROPOSED_DRAWING_ANNOTATIONS,
+  drawingSpecEdgeRefs,
+  isDrawingOperation,
+  type CadAddDrawingAnnotationsOperation,
+  type CadDigestDrawing,
+  type CadDigestDrawingAnnotation,
+  type CadDigestDrawingAudit,
+  type CadDigestDrawingEdge,
+  type CadDigestDrawingFinding,
+  type CadDigestDrawingView,
+  type CadDrawingAnnotationKind,
+  type CadDrawingAnnotationSpec,
+  type CadDrawingOperation,
+  type CadDrawingPointSpec,
+  type CadRemoveDrawingAnnotationsOperation
+} from './drawing-annotations';
+
 export {
   isSketchDimensionField,
   sketchObjectExposesDimension,
@@ -565,7 +593,8 @@ export type CadPatchOperation =
       axis: AxisId;
       spacing: ParamValue;
       angleDeg: ParamValue;
-    };
+    }
+  | CadDrawingOperation;
 
 export interface CadPatchProposal {
   proposalId: string;
@@ -744,6 +773,11 @@ export interface CadDocumentDigest {
     topology?: CadDigestBodyTopology;
   }>;
   selection?: CadDigestSelection;
+  /**
+   * The Draw sheet the user is on (D06 slice E), supplied by the app: the
+   * only source of the edges a drawing operation may name.
+   */
+  drawing?: CadDigestDrawing;
   warnings: string[];
 }
 
@@ -3258,7 +3292,8 @@ export const CAD_PATCH_JSON_SCHEMA = {
               'spacing',
               'angleDeg'
             ]
-          }
+          },
+          ...DRAWING_OPERATION_SCHEMAS
         ]
       }
     }
@@ -4579,6 +4614,10 @@ export function parseCadPatchProposal(
           throw new Error('Invalid delete_feature operation.');
         }
         break;
+      case 'add_drawing_annotations':
+      case 'remove_drawing_annotations':
+        parseDrawingOperation(operation);
+        break;
       case 'rename_feature':
         if (
           typeof operation.featureId !== 'string' ||
@@ -5361,6 +5400,18 @@ export function parseCadPatchProposal(
   }
 
   const proposal = candidate as unknown as CadPatchProposal;
+  // A sheet edit is a Draw-workspace change on the model as drawn; a model
+  // edit in the same proposal would move the edges it names.
+  const drawingOperations = proposal.operations.filter(isDrawingOperation);
+  if (
+    drawingOperations.length > 0 &&
+    drawingOperations.length !== proposal.operations.length
+  )
+    throw new Error(
+      'A proposal changes either the model or a drawing sheet, not both.'
+    );
+  if (new Set(drawingOperations.map((op) => op.sheetId)).size > 1)
+    throw new Error('A drawing proposal edits one sheet.');
   return digest
     ? validateCadPatchProposalAgainstDigest(proposal, digest)
     : proposal;
@@ -5810,6 +5861,15 @@ export function validateCadPatchProposalAgainstDigest(
   const parameterNames = new Set(
     digest.parameters.map((parameter) => parameter.name)
   );
+  if (proposal.operations.some(isDrawingOperation))
+    proposal = {
+      ...proposal,
+      operations: proposal.operations.map((operation) =>
+        isDrawingOperation(operation)
+          ? validateDrawingOperation(operation, digest.drawing)
+          : operation
+      )
+    };
   const updatedPlanes = new Set<string>();
   const updatedAxes = new Set<string>();
   const datumDefinitions = new Map<string, unknown>();
@@ -6474,5 +6534,8 @@ export function describeCadPatchOperation(
       } on ${operation.targetBodyId}`;
     case 'add_pattern':
       return `Create ${operation.patternKind} pattern of ${operation.targetBodyId}`;
+    case 'add_drawing_annotations':
+    case 'remove_drawing_annotations':
+      return describeDrawingOperation(operation);
   }
 }

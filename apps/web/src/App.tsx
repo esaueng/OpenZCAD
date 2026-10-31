@@ -23,6 +23,8 @@ import {
 } from './lib/analytics';
 import {
   PROJECT_MIGRATING_CODE,
+  type DrawingAnnotation,
+  type DrawingSheetId,
   type GeometryBodyRepresentation,
   type GeometryReadyState,
   type ParameterKind,
@@ -180,6 +182,7 @@ import type {
   CadPatchProposal,
   CadSelectionContext
 } from '@openzcad/ai-contracts';
+import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
 import {
   appendRevision,
   createCheckpoint,
@@ -851,10 +854,7 @@ import {
   type ExtrudeCommandState,
   type ExtrudeValueId
 } from './components/ExtrudeCommand';
-import {
-  DRAFT_DRAG_LIMIT_DEG,
-  extrudeHandles
-} from './lib/inPlace/extrude';
+import { DRAFT_DRAG_LIMIT_DEG, extrudeHandles } from './lib/inPlace/extrude';
 import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
@@ -2105,7 +2105,12 @@ async function loadProjectSummaries(
     ? remote?.pendingEncryptedProjectIds
     : undefined;
   if (accountId && isCurrentKeySession(keySessionRevision)) {
-    if (remote) forgetShelfProjectNames(accountId, [...shelfNames.keys()].filter((id) => !remoteIds.has(id)), scope.ownsDiscovery);
+    if (remote)
+      forgetShelfProjectNames(
+        accountId,
+        [...shelfNames.keys()].filter((id) => !remoteIds.has(id)),
+        scope.ownsDiscovery
+      );
     for (const project of remoteProjects) {
       if (
         project.storageFormat === 2 &&
@@ -2302,22 +2307,22 @@ export function App() {
     setOpeningProject(null);
     setBusy(false);
   }, []);
-  const startNavigationBusy = useCallback((
-    projectName?: string,
-    creating = false
-  ) => {
-    const owner = {};
-    navigationBusyRef.current = owner;
-    setBusy(true);
-    setOpeningProject(projectName ?? null);
-    setCreatingProject(creating);
-    return () => {
-      if (navigationBusyRef.current !== owner) return;
-      navigationBusyRef.current = null;
-      setOpeningProject(null);
-      setBusy(false);
-    };
-  }, []);
+  const startNavigationBusy = useCallback(
+    (projectName?: string, creating = false) => {
+      const owner = {};
+      navigationBusyRef.current = owner;
+      setBusy(true);
+      setOpeningProject(projectName ?? null);
+      setCreatingProject(creating);
+      return () => {
+        if (navigationBusyRef.current !== owner) return;
+        navigationBusyRef.current = null;
+        setOpeningProject(null);
+        setBusy(false);
+      };
+    },
+    []
+  );
   const beginProjectNavigation = useCallback(
     (clearShareFragment = true) => {
       cancelNavigationBusy();
@@ -2650,9 +2655,7 @@ export function App() {
   const shelfWrites = useRef<Promise<unknown>>(Promise.resolve());
   const latestProjects = useRef(projects);
   latestProjects.current = projects;
-  const pendingOrganizations = useRef(
-    new Map<string, ProjectOrganization>()
-  );
+  const pendingOrganizations = useRef(new Map<string, ProjectOrganization>());
   useEffect(() => {
     for (const project of projects) {
       if (
@@ -2905,7 +2908,10 @@ export function App() {
     ? 'edge'
     : tool === 'sketch'
       ? 'face'
-      : effectiveSelectionFilter(manualSelectionFilter, tool ?? inPlaceEdgeTool);
+      : effectiveSelectionFilter(
+          manualSelectionFilter,
+          tool ?? inPlaceEdgeTool
+        );
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -3197,6 +3203,19 @@ export function App() {
     (BodyIsolation & { projectId: string }) | null
   >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
+  // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
+  const [drawingPreview, setDrawingPreview] = useState<{
+    sheetId: DrawingSheetId;
+    annotations: DrawingAnnotation[];
+  } | null>(null);
+  // The sheet on screen in Draw, as the assistant reads and checks it.
+  const drawingAssistantRef = useRef<DrawingAssistantSource | null>(null);
+  const handleDrawingAssistantSource = useCallback(
+    (source: DrawingAssistantSource | null) => {
+      drawingAssistantRef.current = source;
+    },
+    []
+  );
   const [faceGeometryPreview, setFaceGeometryPreview] = useState<{
     document: ProjectDocument;
     baseProjectId: ProjectDocument['projectId'];
@@ -5303,6 +5322,8 @@ export function App() {
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
+  const drawingModeRef = useRef(drawingMode);
+  drawingModeRef.current = drawingMode;
   // Ctrl+Shift+M steps View → Tweak → Build → Draw past whatever the project
   // locks. The shortcut and the palette row that advertises it both read
   // this, so the row always names where the key goes.
@@ -5509,10 +5530,7 @@ export function App() {
   function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
     // A batch of drawing-sheet commands never touches the model, so it
     // passes in the Draw workspace on the project's own locks alone.
-    if (
-      commands.length > 0 &&
-      commands.every(isDrawingCommand)
-    ) {
+    if (commands.length > 0 && commands.every(isDrawingCommand)) {
       return ensureCanEditDrawings(action);
     }
     const parametersOnly =
@@ -6390,7 +6408,10 @@ export function App() {
                 setProjects((current) => {
                   if (!isCurrent()) return current;
                   const next = current.map((entry) =>
-                    withVerifiedShelfMetadata(entry, verifiedMetadata.get(entry.projectId))
+                    withVerifiedShelfMetadata(
+                      entry,
+                      verifiedMetadata.get(entry.projectId)
+                    )
                   );
                   return next.some((entry, index) => entry !== current[index])
                     ? next
@@ -7245,8 +7266,7 @@ export function App() {
     // ghost of the part as it was, a bore's handle and dimension line say
     // what is changing, and a whole flange flashing mint the moment a hole
     // starts to grow read as a different part.
-    const faceDragPreview =
-      currentFaceGeometryPreview && faceDragInteraction;
+    const faceDragPreview = currentFaceGeometryPreview && faceDragInteraction;
     return !faceDragPreview &&
       (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
       ? tintPreviewResultBodies(bodies, representations)
@@ -7430,9 +7450,9 @@ export function App() {
       modelingEditFeatureId: modelingEditFeature?.id ?? null
     }
   );
-  function validateSelectionEdit(
-    { acceptCompleteCommit = false }: { acceptCompleteCommit?: boolean } = {}
-  ): boolean {
+  function validateSelectionEdit({
+    acceptCompleteCommit = false
+  }: { acceptCompleteCommit?: boolean } = {}): boolean {
     if (
       managerRef.current?.document.version !== doc?.version ||
       !(acceptCompleteCommit
@@ -7449,7 +7469,8 @@ export function App() {
 
   /** The extrude being edited in place, as the document has it now. */
   const extrudeEditFeature = useMemo(() => {
-    const feature = doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
+    const feature =
+      doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
     return feature?.data.featureKind === 'extrude' ? feature : null;
   }, [doc, extrudeEdit]);
   /** What it opens on: memoized, so its to-face target keeps its identity. */
@@ -7542,8 +7563,7 @@ export function App() {
   // A project opened directly while the listing is unavailable has no
   // summary; this page's own marker still says it is encrypted (#869).
   const assistantProject:
-    | Pick<ProjectSummary, 'projectId' | 'storageFormat'>
-    | undefined = doc
+    Pick<ProjectSummary, 'projectId' | 'storageFormat'> | undefined = doc
     ? (projects.find((project) => project.projectId === doc.projectId) ??
       (isEncryptedProject(doc.projectId)
         ? {
@@ -8268,10 +8288,10 @@ export function App() {
   // The picked face's kind, for the verbs when the machine does not hold it.
   const calloutFaceSurface = ((): SelectionCalloutVerbInput['faceSurface'] => {
     if (calloutKind !== 'face' || !renderedSelectedTopology) return undefined;
-    const surface = representations[renderedSelectedTopology.bodyId]?.topology
-      ?.faces.find(
-        (candidate) => candidate.hash === renderedSelectedTopology.hash
-      )
+    const surface = representations[
+      renderedSelectedTopology.bodyId
+    ]?.topology?.faces
+      .find((candidate) => candidate.hash === renderedSelectedTopology.hash)
       ?.geometry?.surfaceType.toLowerCase();
     if (!surface) return undefined;
     if (surface === 'plane') return 'planar';
@@ -8541,10 +8561,7 @@ export function App() {
     if (sharedAccountProject) return;
     // Only an editor's copy of an encrypted project goes to the account; a
     // viewer's never would be accepted (slice 5-4).
-    if (
-      encryptedMemberProject &&
-      encryptedMemberRoleRef.current !== 'editor'
-    ) {
+    if (encryptedMemberProject && encryptedMemberRoleRef.current !== 'editor') {
       return;
     }
     // Nothing reaches the account until its device transaction has committed.
@@ -8753,6 +8770,8 @@ export function App() {
       setPreviewDoc(null);
       const before = managerRef.current.document.derived.bodyRepresentations;
       let next = managerRef.current.runTransaction(label, commands);
+      // A batch of sheet edits leaves the model alone, as one does alone.
+      if (commands.every(isDrawingCommand)) geometry.retainReadyGeometry(next);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
         recordCompleteCommit(next, derived);
@@ -8966,8 +8985,7 @@ export function App() {
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
       cancelled: () =>
-        !editSessionIsCurrent(feature, editSession) ||
-        Boolean(withdrawn?.())
+        !editSessionIsCurrent(feature, editSession) || Boolean(withdrawn?.())
     }).then(
       (outcome) => settled?.(outcome === 'committed'),
       () => settled?.(false)
@@ -9212,11 +9230,7 @@ export function App() {
     inPlaceRef.current.start(
       tool,
       initial,
-      selectedFace
-        ? [selectedFace]
-        : bodyFace
-          ? [bodyFace]
-          : sweptFaces,
+      selectedFace ? [selectedFace] : bodyFace ? [bodyFace] : sweptFaces,
       initialBodies,
       { edges: initialEdges }
     );
@@ -9464,7 +9478,11 @@ export function App() {
         ? { x: points[at]!, y: points[at + 1]!, z: points[at + 2]! }
         : null;
     const away = middle
-      ? { x: middle.x - centre.x, y: middle.y - centre.y, z: middle.z - centre.z }
+      ? {
+          x: middle.x - centre.x,
+          y: middle.y - centre.y,
+          z: middle.z - centre.z
+        }
       : null;
     const reach = away ? Math.hypot(away.x, away.y, away.z) : 0;
     const last = points.length >= 3 ? points.length - 3 : -1;
@@ -9484,7 +9502,11 @@ export function App() {
         : {}),
       ...(last >= 0
         ? {
-            end: { x: points[last]!, y: points[last + 1]!, z: points[last + 2]! }
+            end: {
+              x: points[last]!,
+              y: points[last + 1]!,
+              z: points[last + 2]!
+            }
           }
         : {})
     };
@@ -9558,8 +9580,9 @@ export function App() {
         // still names itself by any face it has.
         const faces = representations[bodyId]?.topology?.faces ?? [];
         const face =
-          faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
-          faces[0];
+          faces.find(
+            (candidate) => candidate.geometry?.surfaceType === 'plane'
+          ) ?? faces[0];
         return face
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
           : null;
@@ -9574,8 +9597,7 @@ export function App() {
           (datum) => datum.featureId === featureId
         ),
       datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
-      bodyVertices: (bodyId) =>
-        representations[bodyId]?.mesh.vertices ?? null
+      bodyVertices: (bodyId) => representations[bodyId]?.mesh.vertices ?? null
     });
   }
 
@@ -9920,8 +9942,7 @@ export function App() {
     // So does a draft's clicked-point hinge, which can be chosen after the
     // click.
     const usesPoint =
-      inPlaceRef.current.tool === 'hole' ||
-      inPlaceRef.current.tool === 'draft';
+      inPlaceRef.current.tool === 'hole' || inPlaceRef.current.tool === 'draft';
     if (
       later &&
       editing &&
@@ -9965,9 +9986,10 @@ export function App() {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
-      const shown = previewDoc?.derived.bodyRepresentations[
-        resolvedBodyId
-      ]?.topology?.faces.find(matches)?.geometry;
+      const shown =
+        previewDoc?.derived.bodyRepresentations[
+          resolvedBodyId
+        ]?.topology?.faces.find(matches)?.geometry;
       const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
       if (target) {
         face = coplanarFace(
@@ -11144,9 +11166,7 @@ export function App() {
   /** Image byte releases, run one after another. */
   const referenceImageReleasesRef = useRef<Promise<void>>(Promise.resolve());
   /** The picture an in-place Image is placing, until Done or Cancel. */
-  const pendingReferenceImageRef = useRef<PreparedReferenceImage | null>(
-    null
-  );
+  const pendingReferenceImageRef = useRef<PreparedReferenceImage | null>(null);
 
   /**
    * The plane of the selected face, when an image can lie on it: associative
@@ -11200,9 +11220,8 @@ export function App() {
     referenceImagePlaneRef.current = null;
     setStatus(`Placing ${file.name}…`);
     try {
-      const { prepareReferenceImage } = await import(
-        './lib/referenceImageInsert'
-      );
+      const { prepareReferenceImage } =
+        await import('./lib/referenceImageInsert');
       // A release still running (an earlier picture let go) finishes first,
       // so reading the same file again stores its bytes afresh rather than
       // finding bytes about to be deleted.
@@ -11264,7 +11283,8 @@ export function App() {
       setStatus(errorMessage(error, 'The image could not be placed.'));
     } finally {
       referenceImagesInFlightRef.current -= 1;
-      if (referenceImagesInFlightRef.current === 0) releaseStaleReferenceImages();
+      if (referenceImagesInFlightRef.current === 0)
+        releaseStaleReferenceImages();
     }
   }
 
@@ -11299,9 +11319,8 @@ export function App() {
           }
           return;
         }
-        const { discardReferenceImageBytes } = await import(
-          './lib/referenceImageInsert'
-        );
+        const { discardReferenceImageBytes } =
+          await import('./lib/referenceImageInsert');
         await discardReferenceImageBytes(prepared, [
           managerRef.current?.document
         ]);
@@ -12203,7 +12222,10 @@ export function App() {
               }
             });
       if (scope === 'projects' && departingSession)
-        forgetShelfProjectNames(departingSession.userId, deleted.deletedProjectIds);
+        forgetShelfProjectNames(
+          departingSession.userId,
+          deleted.deletedProjectIds
+        );
       if (deleted.signedOut) {
         if (sessionRef.current !== null) return;
         organizationBackground.confirmSignedOut();
@@ -12857,7 +12879,10 @@ export function App() {
         setCloudAvailable(Boolean(remoteDocument));
         setArtifacts([]);
         if (remoteDocument) {
-          remoteVersionsRef.current.set(remoteDocument.projectId, remoteDocument.version);
+          remoteVersionsRef.current.set(
+            remoteDocument.projectId,
+            remoteDocument.version
+          );
         }
       };
       if (outcome.choice === 'diverged') {
@@ -13549,9 +13574,7 @@ export function App() {
     // in the background, so a slow network never holds the shelf's drag
     // preview (and its Pin/Unpin state) past the local save.
     if (session) {
-      const organizationScope = organizationBackground.scopeFor(
-        session.userId
-      );
+      const organizationScope = organizationBackground.scopeFor(session.userId);
       void mirrorPendingReorder(
         projectIds,
         organizationMirrorHost,
@@ -14772,12 +14795,22 @@ export function App() {
 
   const aiPreviewEpochRef = useRef(0);
 
+  /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
+  function isDrawingProposal(proposal: CadPatchProposal): boolean {
+    return proposal.operations.some(
+      (operation) =>
+        operation.kind === 'add_drawing_annotations' ||
+        operation.kind === 'remove_drawing_annotations'
+    );
+  }
+
   async function handlePreviewPatch(
     proposal: CadPatchProposal | null
   ): Promise<AssistantPreviewOutcome> {
     const epoch = ++aiPreviewEpochRef.current;
     if (!proposal) {
       setPreviewDoc(null);
+      setDrawingPreview(null);
       setStatus('Preview cleared.');
       return { ok: true };
     }
@@ -14785,6 +14818,38 @@ export function App() {
     if (!current) {
       return { ok: false, reason: 'No project is open to preview.' };
     }
+    if (isDrawingProposal(proposal)) {
+      setPreviewDoc(null);
+      try {
+        const { preflightDrawingPatch } =
+          await import('./lib/drawing/assistantPreflight');
+        if (epoch !== aiPreviewEpochRef.current)
+          return { ok: false, reason: 'A newer preview replaced this one.' };
+        const { sheet } = preflightDrawingPatch(
+          current,
+          proposal,
+          drawingModeRef.current ? drawingAssistantRef.current : null
+        );
+        setDrawingPreview({
+          sheetId: sheet.sheetId,
+          annotations: sheet.annotations ?? []
+        });
+        setStatus('Previewing the proposed annotations.');
+        return { ok: true };
+      } catch (error) {
+        if (epoch === aiPreviewEpochRef.current) setDrawingPreview(null);
+        const reason = errorMessage(error, 'Drawing preview failed.');
+        setStatus(reason);
+        return { ok: false, reason };
+      }
+    }
+    setDrawingPreview(null);
+    if (drawingModeRef.current)
+      return {
+        ok: false,
+        reason:
+          'In Draw the assistant edits the sheet only. Switch to Build to change the model.'
+      };
     try {
       setStatus('Checking the AI preview against exact geometry…');
       const preflight = await preflightCadPatch(
@@ -14831,7 +14896,37 @@ export function App() {
     return run;
   }
 
+  async function applyDrawingPatch(
+    proposal: CadPatchProposal
+  ): Promise<boolean> {
+    const current = managerRef.current?.document;
+    if (!current || !ensureCanEditDrawings('apply this AI proposal')) {
+      return false;
+    }
+    try {
+      const { preflightDrawingPatch } =
+        await import('./lib/drawing/assistantPreflight');
+      const live = managerRef.current?.document;
+      if (!live || live !== current)
+        throw new Error(
+          'The document changed while the proposal was checked. Review it again.'
+        );
+      const { commands } = preflightDrawingPatch(
+        current,
+        proposal,
+        drawingModeRef.current ? drawingAssistantRef.current : null
+      );
+      const applied = executeTransaction('Apply AI annotations', commands);
+      if (applied) setDrawingPreview(null);
+      return applied;
+    } catch (error) {
+      setStatus(errorMessage(error, 'Annotations could not be added.'));
+      return false;
+    }
+  }
+
   async function applyPatch(proposal: CadPatchProposal): Promise<boolean> {
+    if (isDrawingProposal(proposal)) return applyDrawingPatch(proposal);
     if (!ensureCanEdit('apply this AI proposal')) {
       return false;
     }
@@ -16711,12 +16806,7 @@ export function App() {
     // An edit keeps the body it blends: its stored edges are named on that
     // body alone, so an edge of another earlier body is refused rather than
     // stored where it names nothing (or the wrong edge).
-    if (
-      editing &&
-      target !== null &&
-      selection.bodyId !== target &&
-      !remap
-    ) {
+    if (editing && target !== null && selection.bodyId !== target && !remap) {
       setStatus(
         `${editing.name} rounds edges of one body: pick an edge of the body it was made on.`
       );
@@ -20621,7 +20711,9 @@ export function App() {
   // and no others, so arming an edit does not outline every sketch.
   const inPlaceEditInputSketchIds = useMemo(() => {
     const feature =
-      doc && inPlaceEditFeatureId ? findFeature(doc, inPlaceEditFeatureId) : null;
+      doc && inPlaceEditFeatureId
+        ? findFeature(doc, inPlaceEditFeatureId)
+        : null;
     return new Set<string>(
       feature ? inPlaceEditSourceSketchIds(feature.data) : []
     );
@@ -20775,7 +20867,10 @@ export function App() {
    * datum axis first, in the same undoable step: the stored features only
    * turn about datum axes.
    */
-  function inPlaceCommandFor(request: InPlaceRequest, name: string): AnyCommand {
+  function inPlaceCommandFor(
+    request: InPlaceRequest,
+    name: string
+  ): AnyCommand {
     const definition = requestNewAxis(request);
     if (!definition) {
       return inPlaceResolvedCommand(resolveNewAxis(request, null)!, name);
@@ -20912,7 +21007,9 @@ export function App() {
           patternKind: request.patternKind,
           count: request.count,
           axis: request.axis,
-          ...(request.spacing !== undefined ? { spacing: request.spacing } : {}),
+          ...(request.spacing !== undefined
+            ? { spacing: request.spacing }
+            : {}),
           ...(request.angleDeg !== undefined
             ? { angleDeg: request.angleDeg }
             : {}),
@@ -21265,9 +21362,7 @@ export function App() {
         name,
         resultBodyId,
         withdrawn
-      )?.then(
-        (outcome) => outcome === 'committed'
-      );
+      )?.then((outcome) => outcome === 'committed');
     },
     publishPreview: setPreviewDoc,
     onStatus: setStatus
@@ -21331,17 +21426,16 @@ export function App() {
           (panelFeature.data.featureKind === 'primitive' ||
             panelFeature.featureId === inPlaceEditing?.featureId ||
             panelFeature.featureId === extrudeEditFeatureId))),
-    sessionId:
-      sketchPanelSession
-        // Acquiring a canonical sketch ID is still the same editing session.
-        ? 'active'
-        : inPlace.sessionId !== null
-          // Picks, options and preview updates keep the same release; even
+    sessionId: sketchPanelSession
+      ? // Acquiring a canonical sketch ID is still the same editing session.
+        'active'
+      : inPlace.sessionId !== null
+        ? // Picks, options and preview updates keep the same release; even
           // restarting the same command gets a fresh suspension.
-          ? `command:${inPlace.sessionId}`
-          : extrudeSessionKey !== null
-            ? `extrude:${extrudeSessionKey}:${extrudeCreateGeneration}`
-            : `${tool ?? 'edit'}:${featureSelectionSource === 'pinned' ? selectedFeatureNode?.id ?? '' : ''}`
+          `command:${inPlace.sessionId}`
+        : extrudeSessionKey !== null
+          ? `extrude:${extrudeSessionKey}:${extrudeCreateGeneration}`
+          : `${tool ?? 'edit'}:${featureSelectionSource === 'pinned' ? (selectedFeatureNode?.id ?? '') : ''}`
   });
   useEffect(() => {
     setInPlaceEditFeatureId(
@@ -21564,7 +21658,11 @@ export function App() {
     const shown = new Set(
       sections.flatMap((section) =>
         section.rows.flatMap((row) =>
-          row.kind === 'option' ? [] : row.kind === 'vector' ? row.ids : [row.id]
+          row.kind === 'option'
+            ? []
+            : row.kind === 'vector'
+              ? row.ids
+              : [row.id]
         )
       )
     );
@@ -21687,11 +21785,11 @@ export function App() {
             : valueSpec?.label === '×'
               ? (value: number) => `× ${round(value)}`
               : valueSpec?.unit === 'count'
-              ? handle.label
-                ? (value: number) => `${label} ${round(value)}`
-                : (value: number) => `${round(value)} ${label.toLowerCase()}`
-              : (value: number) =>
-                  `${label} ${round(value)} ${inPlaceUnits}`.trim();
+                ? handle.label
+                  ? (value: number) => `${label} ${round(value)}`
+                  : (value: number) => `${round(value)} ${label.toLowerCase()}`
+                : (value: number) =>
+                    `${label} ${round(value)} ${inPlaceUnits}`.trim();
         return {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
@@ -21718,16 +21816,18 @@ export function App() {
     if (inPlace.active) return [];
     // An edit's region is its stored profile (the sketch's first region for
     // one stored before profiles); a new extrude's, the one its arrow is on.
-    const edited = extrudeEditFeature?.data.featureKind === 'extrude'
-      ? extrudeEditFeature.data
-      : null;
+    const edited =
+      extrudeEditFeature?.data.featureKind === 'extrude'
+        ? extrudeEditFeature.data
+        : null;
     const stored = edited ? (edited.profiles?.[0] ?? edited.profile) : null;
     const pick: ProfilePick | null = edited
       ? stored
         ? {
             sketchId: edited.sketchId,
             reference: stored,
-            regionFingerprint: stored.all === true ? 0 : stored.regionFingerprint
+            regionFingerprint:
+              stored.all === true ? 0 : stored.regionFingerprint
           }
         : {
             sketchId: edited.sketchId,
@@ -21856,9 +21956,7 @@ export function App() {
   const inPlaceTool = inPlace.tool;
   useEffect(() => {
     setInPlaceEdgeTool(
-      inPlaceTool === 'fillet' || inPlaceTool === 'chamfer'
-        ? inPlaceTool
-        : null
+      inPlaceTool === 'fillet' || inPlaceTool === 'chamfer' ? inPlaceTool : null
     );
   }, [inPlaceTool]);
   // A body tool's picked bodies are the selection: each wears its pick
@@ -26838,8 +26936,9 @@ export function App() {
         !typing &&
         !(
           target instanceof Element &&
-          target.closest('[aria-haspopup], [role="menu"], .in-place-command') !==
-            null
+          target.closest(
+            '[aria-haspopup], [role="menu"], .in-place-command'
+          ) !== null
         ) &&
         regionExtrudeCommandRef.current?.submit() === true
       ) {
@@ -26867,8 +26966,7 @@ export function App() {
         // As for an in-place command: Enter on the Move bar's own controls
         // (Options, Cancel, Done) acts for that control, not the Move.
         const moveControl =
-          target instanceof Element &&
-          target.closest('.move-command') !== null;
+          target instanceof Element && target.closest('.move-command') !== null;
         if (event.key === 'Enter' && !typing && !moveControl) {
           event.preventDefault();
           confirmMove();
@@ -27399,7 +27497,13 @@ export function App() {
       <StartupScreen
         projectName={openingProject}
         stage={creatingProject ? 'creating' : 'opening'}
-        backLabel={doc ? (creatingProject ? 'Cancel creating' : 'Cancel opening') : 'Back to projects'}
+        backLabel={
+          doc
+            ? creatingProject
+              ? 'Cancel creating'
+              : 'Cancel opening'
+            : 'Back to projects'
+        }
         onBack={() => {
           beginProjectNavigation();
           setStatus('');
@@ -27481,7 +27585,9 @@ export function App() {
           onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
           onChange={handleAppSettingsChange}
           onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
-          onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
+          onSaveCredential={(token) =>
+            void handleSaveAssistantCredential(token)
+          }
           onDeleteCredential={() => void handleDeleteAssistantCredential()}
           onTestAssistant={() => void handleTestAssistantConnection()}
           onRequestLoginCode={handleRequestLoginCode}
@@ -28258,8 +28364,12 @@ export function App() {
   // sketch would throw both away.
   // Locked in Tweak as well: the assistant authors feature edits, which is
   // exactly what Tweak promises cannot happen.
+  // Draw is the exception (D06 slice E): there it edits the sheet only,
+  // never the model, and refuses a model proposal before showing it.
   const assistantAvailable =
-    cloudFunctionsEnabled && appSettings.assistant.enabled && !modelingLocked;
+    cloudFunctionsEnabled &&
+    appSettings.assistant.enabled &&
+    (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
   const baseToolCard = toolCardFor(interaction);
@@ -28759,7 +28869,9 @@ export function App() {
       onRenameBody={editDisabledReason ? undefined : handleRenameBody}
       bodyAppearancePreview={bodyAppearancePreview}
       onPreviewBodyAppearance={previewBodyAppearance}
-      onCommitBodyAppearance={editDisabledReason ? undefined : commitBodyAppearance}
+      onCommitBodyAppearance={
+        editDisabledReason ? undefined : commitBodyAppearance
+      }
       objectFolderActions={objectFolderActions}
       onToggleSketchVisibility={toggleSketchVisibility}
       onFeatureContextMenu={handleFeatureContextMenu}
@@ -29109,11 +29221,7 @@ export function App() {
             onViewActivityLog={() => setActivityLogOpen(true)}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
-            share={
-              shareSession
-                ? { onMakeCopy: requestShareCopy }
-                : null
-            }
+            share={shareSession ? { onMakeCopy: requestShareCopy } : null}
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -29477,11 +29585,11 @@ export function App() {
                 // of an edge would take the click meant for its end.
                 Boolean(
                   inPlaceSpec?.refKinds?.includes('plane') &&
-                    selectionFilter !== 'edge'
+                  selectionFilter !== 'edge'
                 ) ||
                 Boolean(
                   inPlace.slots.image &&
-                    imageNeedsPlane(inPlace.slots.image, inPlace.options)
+                  imageNeedsPlane(inPlace.slots.image, inPlace.options)
                 ))
             }
             // A Plane or Axis in progress shows the datum it would add.
@@ -29619,20 +29727,20 @@ export function App() {
                         ...(point ? { point } : {})
                       })
                   : inPlace.active && inPlaceSpec?.wantsPlane
-                ? (featureId) =>
-                    pickInPlaceDatumPlane(featureId as FeatureId)
-                : faceRepair ||
-              datumRepair ||
-              toFacePick ||
-              measuring ||
-              tool !== null ||
-              interaction.mode === 'sketch'
-                ? undefined
-                : (featureId) => {
-                    const node =
-                      doc && findFeature(doc, featureId as FeatureId);
-                    if (node) handleSelectFeatureFromTree(node.id, false);
-                  }
+                    ? (featureId) =>
+                        pickInPlaceDatumPlane(featureId as FeatureId)
+                    : faceRepair ||
+                        datumRepair ||
+                        toFacePick ||
+                        measuring ||
+                        tool !== null ||
+                        interaction.mode === 'sketch'
+                      ? undefined
+                      : (featureId) => {
+                          const node =
+                            doc && findFeature(doc, featureId as FeatureId);
+                          if (node) handleSelectFeatureFromTree(node.id, false);
+                        }
             }
             // A selected datum opens its Plane card; the handle feeds the
             // card's Offset field, and the card's own Apply commits it. Only
@@ -30013,7 +30121,9 @@ export function App() {
             onSectionCommit={(offset) => {
               const section = viewerSettingsRef.current.sectionView;
               const next =
-                section && offset !== undefined ? { ...section, offset } : section;
+                section && offset !== undefined
+                  ? { ...section, offset }
+                  : section;
               persistSectionView(next);
               void requestExactSection(next);
             }}
@@ -30496,6 +30606,11 @@ export function App() {
               signedIn={Boolean(session)}
               document={doc}
               selection={assistantSelection}
+              drawingDigest={() =>
+                drawingMode
+                  ? (drawingAssistantRef.current?.digest() ?? null)
+                  : null
+              }
               onApply={handleApplyPatch}
               onPreview={handlePreviewPatch}
               onAnalyze={async (document, analysis) =>
@@ -30544,6 +30659,8 @@ export function App() {
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message) => setStatus(message)}
+                onAssistantSource={handleDrawingAssistantSource}
+                previewAnnotations={drawingPreview}
               />
             </Suspense>
           </ErrorBoundary>
@@ -30805,8 +30922,8 @@ export function App() {
                     movePreview.target === 'sketch'
                       ? (findSketch(doc, movePreview.bodyId as SketchId)
                           ?.name ?? 'Selected sketch')
-                      : (representations[movePreview.bodyId as BodyId]
-                          ?.name ?? 'Selected body')
+                      : (representations[movePreview.bodyId as BodyId]?.name ??
+                        'Selected body')
                   }
                   hideRotation={movePreview.target === 'sketch'}
                   // A sketch move commits as a sketch translation, not a named
@@ -30951,7 +31068,8 @@ export function App() {
                 if (
                   destination === 'account' &&
                   shareCopyChoice.accountEncrypts === null
-                ) return;
+                )
+                  return;
                 setShareCopyChoice(null);
                 if (destination) void handleMakeShareCopy(destination);
               }}
