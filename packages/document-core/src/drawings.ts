@@ -57,6 +57,8 @@ export interface DrawingViewUpdateInput {
   centerMm?: { x: number; y: number };
   hiddenLines?: boolean;
   bodyIds?: BodyId[];
+  /** D03: moves a section view's cutting plane, in model units. */
+  sectionDepth?: number;
 }
 
 export interface DrawingViewDeleteInput {
@@ -123,6 +125,25 @@ function onPaper(
     x: Math.min(width, Math.max(0, center.x)),
     y: Math.min(height, Math.max(0, center.y))
   };
+}
+
+/**
+ * The view `view` stays aligned with: the base a projected view folds from,
+ * or the source a section view is cut from (D03).
+ */
+function alignmentBase(
+  sheet: DrawingSheet,
+  view: DrawingView
+): DrawingView | undefined {
+  const id = view.parentViewId ?? view.section?.sourceViewId;
+  return id ? sheet.views.find((entry) => entry.viewId === id) : undefined;
+}
+
+function alignedWith(view: DrawingView, base: DrawingView): boolean {
+  return (
+    view.parentViewId === base.viewId ||
+    view.section?.sourceViewId === base.viewId
+  );
 }
 
 function sheetIndex(sheets: DrawingSheet[], sheetId: DrawingSheetId): number {
@@ -224,20 +245,27 @@ export function updateDrawingSheet(
  */
 function mirrorProjectedViews(sheet: DrawingSheet): void {
   const byId = new Map(sheet.views.map((view) => [view.viewId, view]));
-  for (const view of sheet.views) {
-    const base = view.parentViewId ? byId.get(view.parentViewId) : undefined;
-    if (!base) continue;
+  const before = new Map(
+    sheet.views.map((view) => [view.viewId, { ...view.centerMm }])
+  );
+  const mirror = (view: DrawingView, base: DrawingView) => {
     const alignment = drawingViewAlignment(base.orientation, view.orientation);
+    // Across where the base was: a section's source may itself have just
+    // been mirrored, and the section keeps its offset from it, flipped.
+    const origin = before.get(base.viewId)!;
+    const offset = {
+      x: view.centerMm.x - origin.x,
+      y: view.centerMm.y - origin.y
+    };
     const mirrored =
       alignment === 'row'
-        ? { x: 2 * base.centerMm.x - view.centerMm.x, y: base.centerMm.y }
+        ? { x: base.centerMm.x - offset.x, y: base.centerMm.y }
         : alignment === 'column'
-          ? { x: base.centerMm.x, y: 2 * base.centerMm.y - view.centerMm.y }
+          ? { x: base.centerMm.x, y: base.centerMm.y - offset.y }
           : null;
-    if (!mirrored) continue;
+    if (!mirrored) return;
     // Kept on the paper like any other placement, then held on its side of
-    // the base (bases never move here, and have no projected views of their
-    // own, so nothing else needs to follow).
+    // the base.
     view.centerMm = alignedCenter(
       base,
       view,
@@ -245,6 +273,18 @@ function mirrorProjectedViews(sheet: DrawingSheet): void {
       sheet.projectionAngle,
       'clamp'
     );
+  };
+  // Projected views first (bases never move here), then sections, which
+  // may be cut from a projected view that just moved.
+  for (const view of sheet.views) {
+    const base = view.parentViewId ? byId.get(view.parentViewId) : undefined;
+    if (base) mirror(view, base);
+  }
+  for (const view of sheet.views) {
+    const source = view.section
+      ? byId.get(view.section.sourceViewId)
+      : undefined;
+    if (source) mirror(view, source);
   }
 }
 
@@ -268,9 +308,7 @@ export function addDrawingView(
     if (sheet.views.some((view) => view.viewId === input.view.viewId))
       throw new Error(`Drawing view ${input.view.viewId} already exists.`);
     const view = deepClone(input.view);
-    const parent = view.parentViewId
-      ? sheet.views.find((entry) => entry.viewId === view.parentViewId)
-      : undefined;
+    const parent = alignmentBase(sheet, view);
     view.centerMm = onPaper(sheet, view.centerMm);
     if (parent)
       view.centerMm = onPaper(
@@ -334,11 +372,14 @@ export function updateDrawingView(
         input.bodyIds.filter((id) => !view.bodyIds.includes(id))
       );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
+    if (input.sectionDepth !== undefined) {
+      if (!view.section)
+        throw new Error(`Drawing view ${input.viewId} is not a section.`);
+      view.section = { ...view.section, depth: input.sectionDepth };
+    }
     if (input.bodyIds) view.bodyIds = [...input.bodyIds];
     if (input.centerMm) {
-      const parent = view.parentViewId
-        ? sheet.views.find((entry) => entry.viewId === view.parentViewId)
-        : undefined;
+      const parent = alignmentBase(sheet, view);
       // On the paper first, then on the base's axis and side; the base is on
       // the paper too, so the aligned centre stays on it.
       const requested = onPaper(sheet, input.centerMm);
@@ -357,21 +398,31 @@ export function updateDrawingView(
       const dx = next.x - view.centerMm.x;
       const dy = next.y - view.centerMm.y;
       view.centerMm = next;
-      // A base carries its projected views along, snapped onto its shared
-      // axis, so the views it folds into stay aligned with it.
-      for (const child of sheet.views) {
-        if (child.parentViewId !== view.viewId) continue;
-        child.centerMm = onPaper(
-          sheet,
-          alignedCenter(
-            view,
+      // A base carries its projected and section views along, snapped onto
+      // its shared axis, so the views it folds into stay aligned with it;
+      // a projected view carries its own sections on in turn.
+      const carry = (base: DrawingView, dx: number, dy: number) => {
+        for (const child of sheet.views) {
+          if (child === view || !alignedWith(child, base)) continue;
+          const before = child.centerMm;
+          child.centerMm = onPaper(
+            sheet,
+            alignedCenter(
+              base,
+              child,
+              { x: before.x + dx, y: before.y + dy },
+              sheet.projectionAngle,
+              'clamp'
+            )
+          );
+          carry(
             child,
-            { x: child.centerMm.x + dx, y: child.centerMm.y + dy },
-            sheet.projectionAngle,
-            'clamp'
-          )
-        );
-      }
+            child.centerMm.x - before.x,
+            child.centerMm.y - before.y
+          );
+        }
+      };
+      carry(view, dx, dy);
     }
     return sheets;
   });
@@ -385,17 +436,23 @@ export function deleteDrawingView(
     const sheet = sheets[sheetIndex(sheets, input.sheetId)]!;
     if (!sheet.views.some((view) => view.viewId === input.viewId))
       throw new Error(`Drawing view ${input.viewId} not found.`);
-    // Its dimensions and notes go with it: they measure and sit in it.
+    // Its section views go with it: a section line cannot outlive the view
+    // it is drawn on. Its dimensions and notes, and theirs, go too: they
+    // measure and sit in them.
+    const removed = new Set<DrawingViewId>([input.viewId]);
+    for (const view of sheet.views)
+      if (view.section?.sourceViewId === input.viewId) removed.add(view.viewId);
     if (sheet.annotations) {
       const kept = sheet.annotations.filter(
-        (annotation) => annotation.viewId !== input.viewId
+        (annotation) =>
+          annotation.viewId === undefined || !removed.has(annotation.viewId)
       );
       if (kept.length > 0) sheet.annotations = kept;
       else delete sheet.annotations;
     }
     // Projected views of a deleted base stay where they are, now free.
     sheet.views = sheet.views
-      .filter((view) => view.viewId !== input.viewId)
+      .filter((view) => !removed.has(view.viewId))
       .map((view) => {
         if (view.parentViewId !== input.viewId) return view;
         const { parentViewId: _base, ...free } = view;

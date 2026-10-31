@@ -181,7 +181,7 @@ test('dimensions a drawing view from the model and follows its Update', async ({
 });
 
 /**
- * D06 slice B (schema v46): a turned part's rims are closed circles that a
+ * D06 slice B (schema v48): a turned part's rims are closed circles that a
  * side view draws as lines. Picked there, they measure to their silhouette
  * ends, so a cylinder's height and its side-view diameter are dimensioned.
  */

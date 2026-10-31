@@ -1,10 +1,10 @@
 import {
-  SHEET_HIDDEN_DASH_MM,
+  SHEET_STROKE_DASH_MM,
+  SHEET_STROKE_ORDER,
   SHEET_STROKE_WIDTH_MM,
   sheetSafeText,
   textWidthMm,
   type SheetPage,
-  type SheetStrokeKind,
   type SheetText
 } from './sheetPage';
 import { exportFileStem } from '../model';
@@ -58,14 +58,6 @@ function escapeXml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
-const STROKE_ORDER: readonly SheetStrokeKind[] = [
-  'border',
-  'thin',
-  'hidden',
-  'visible',
-  'dimension'
-];
-
 /**
  * Where a text's start lies: `align` measures back along its baseline by
  * the same Helvetica metrics layout used, so SVG and PDF agree.
@@ -92,13 +84,13 @@ export function sheetPageToSvg(page: SheetPage, title: string): string {
     `<title>${escapeXml(sheetSafeText(title))}</title>`,
     `<rect width="${num(page.widthMm)}" height="${num(h)}" fill="#ffffff"/>`
   ];
-  for (const kind of STROKE_ORDER) {
+  for (const kind of SHEET_STROKE_ORDER) {
     const strokes = page.strokes.filter((stroke) => stroke.kind === kind);
     if (strokes.length === 0) continue;
-    const dash =
-      kind === 'hidden'
-        ? ` stroke-dasharray="${SHEET_HIDDEN_DASH_MM.map((value) => num(value)).join(' ')}"`
-        : '';
+    const pattern = SHEET_STROKE_DASH_MM[kind];
+    const dash = pattern
+      ? ` stroke-dasharray="${pattern.map((value) => num(value)).join(' ')}"`
+      : '';
     lines.push(
       `<g class="${kind}" fill="none" stroke="#000000" stroke-width="${num(SHEET_STROKE_WIDTH_MM[kind])}" stroke-linecap="round" stroke-linejoin="round"${dash}>`
     );
@@ -166,15 +158,12 @@ export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
     `0 0 ${pt(page.widthMm)} ${pt(page.heightMm)} re W n`,
     '1 J 1 j 0 0 0 RG 0 0 0 rg'
   ];
-  for (const kind of STROKE_ORDER) {
+  for (const kind of SHEET_STROKE_ORDER) {
     const strokes = page.strokes.filter((stroke) => stroke.kind === kind);
     if (strokes.length === 0) continue;
     content.push(`${pt(SHEET_STROKE_WIDTH_MM[kind])} w`);
-    content.push(
-      kind === 'hidden'
-        ? `[${SHEET_HIDDEN_DASH_MM.map(pt).join(' ')}] 0 d`
-        : '[] 0 d'
-    );
+    const pattern = SHEET_STROKE_DASH_MM[kind];
+    content.push(pattern ? `[${pattern.map(pt).join(' ')}] 0 d` : '[] 0 d');
     for (const stroke of strokes) {
       const path: string[] = [];
       for (let i = 0; i + 1 < stroke.points.length; i += 2)

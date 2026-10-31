@@ -322,6 +322,113 @@ export interface DrawingView {
    * axis. Absent on a base view and on the isometric.
    */
   parentViewId?: DrawingViewId;
+  /**
+   * D03 (schema v47): this view is a section, cut from the model by a plane
+   * drawn as a section line on its source view. Absent on every other view.
+   */
+  section?: DrawingSectionCut;
+}
+
+/**
+ * A section view's cut (D03, schema v47). The cutting plane is normal to
+ * the section view's own direction of sight and stores only its depth along
+ * it, in model units, so moving either view never moves the cut. Material
+ * nearer the camera than the plane (`dot(direction, p) < depth`) is removed;
+ * the rest is drawn, its cut faces hatched. The view stays aligned with its
+ * source like a projected view folded from it (`drawingViewAlignment`), on
+ * the side the sheet's projection angle gives its direction of sight, so the
+ * section line on the source is horizontal or vertical there.
+ */
+export interface DrawingSectionCut {
+  /** The view the section line is drawn on: a principal view, not a section. */
+  sourceViewId: DrawingViewId;
+  /** One or two capital letters naming the section ("A" for A–A). */
+  label: string;
+  /** The plane's depth along this view's direction, in model units. */
+  depth: number;
+}
+
+export const MAX_DRAWING_SECTION_DEPTH = 1e7;
+const SECTION_LABEL = /^[A-Z]{1,2}$/;
+
+/** The cutting plane of a section view: `dot(normal, p) = depth`. */
+export function drawingSectionPlane(
+  view: Pick<DrawingView, 'orientation'> & {
+    section: Pick<DrawingSectionCut, 'depth'>;
+  }
+): { normal: Vector3; depth: number } {
+  return {
+    normal: { ...DRAWING_VIEW_FRAMES[view.orientation].direction },
+    depth: view.section.depth
+  };
+}
+
+/**
+ * Where a section view's cutting plane crosses its source view: a line
+ * across the source at page coordinate `at` (model units, in the source's
+ * own u or v), horizontal when the two share a column and vertical when they
+ * share a row. `sight` is the direction of sight in the source's page
+ * (u, v), the way the section line's arrows point. Null when the two do not
+ * fold.
+ */
+export function drawingSectionLine(
+  source: DrawingViewOrientation,
+  section: DrawingViewOrientation,
+  depth: number
+): {
+  axis: 'horizontal' | 'vertical';
+  at: number;
+  sight: [number, number];
+} | null {
+  const alignment = drawingViewAlignment(source, section);
+  if (alignment === null) return null;
+  const from = DRAWING_VIEW_FRAMES[source];
+  const d = DRAWING_VIEW_FRAMES[section].direction;
+  const along = alignment === 'column' ? from.up : from.x;
+  const sign = along.x * d.x + along.y * d.y + along.z * d.z;
+  // `along` is ±d for a folded pair, so the plane sits at ±depth on it.
+  return alignment === 'column'
+    ? { axis: 'horizontal', at: sign * depth, sight: [0, sign] }
+    : { axis: 'vertical', at: sign * depth, sight: [sign, 0] };
+}
+
+/**
+ * The section orientations a line drawn across `source` can make, looking
+ * either way across it: each must fold from the source so the section view
+ * can stay aligned with it. A horizontal line cuts along the source's up
+ * axis, a vertical one along its x axis.
+ */
+export function drawingSectionOrientations(
+  source: DrawingViewOrientation,
+  axis: 'horizontal' | 'vertical'
+): DrawingViewOrientation[] {
+  if (source === 'iso') return [];
+  const frame = DRAWING_VIEW_FRAMES[source];
+  const along = axis === 'horizontal' ? frame.up : frame.x;
+  return DRAWING_VIEW_ORIENTATIONS.filter((orientation) => {
+    if (orientation === 'iso' || orientation === source) return false;
+    const d = DRAWING_VIEW_FRAMES[orientation].direction;
+    const dot = along.x * d.x + along.y * d.y + along.z * d.z;
+    return (
+      Math.abs(Math.abs(dot) - 1) < 1e-9 &&
+      drawingViewAlignment(source, orientation) ===
+        (axis === 'horizontal' ? 'column' : 'row')
+    );
+  });
+}
+
+/** The first section label the sheet does not use yet: A, B, … Z, AA, AB … */
+export function nextDrawingSectionLabel(
+  sheet: Pick<DrawingSheet, 'views'>
+): string {
+  const used = new Set(
+    sheet.views.flatMap((view) => (view.section ? [view.section.label] : []))
+  );
+  // I, O and Q read as digits on a print; drafting practice skips them.
+  const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ';
+  for (const a of ['', ...letters])
+    for (const b of letters) if (!used.has(a + b)) return a + b;
+  throw new Error('No section labels left on this sheet.');
 }
 
 export interface DrawingSheet {
@@ -413,6 +520,24 @@ function drawingViewError(view: unknown, where: string): string | null {
     return `${where} has an invalid hidden-line setting.`;
   if (view.parentViewId !== undefined && typeof view.parentViewId !== 'string')
     return `${where} has an invalid base view.`;
+  if (view.section !== undefined) {
+    const section = view.section;
+    if (
+      !isRecord(section) ||
+      typeof section.sourceViewId !== 'string' ||
+      typeof section.label !== 'string' ||
+      !SECTION_LABEL.test(section.label) ||
+      typeof section.depth !== 'number' ||
+      !Number.isFinite(section.depth) ||
+      Math.abs(section.depth) > MAX_DRAWING_SECTION_DEPTH ||
+      Object.keys(section).some(
+        (key) => !['sourceViewId', 'label', 'depth'].includes(key)
+      )
+    )
+      return `${where} has an invalid section.`;
+    if (view.parentViewId !== undefined)
+      return `${where} cannot be both a section and a projected view.`;
+  }
   return null;
 }
 
@@ -504,6 +629,45 @@ export function drawingSheetError(value: unknown): string | null {
       side * free < -ALIGNMENT_TOLERANCE_MM
     )
       return `${where} has a projected view out of line with its base or on the wrong side for its projection angle.`;
+  }
+  const labels = new Set<string>();
+  for (const view of views.values()) {
+    const section = view.section as DrawingSectionCut | undefined;
+    if (!section) continue;
+    if (labels.has(section.label))
+      return `${where} names section ${section.label} twice.`;
+    labels.add(section.label);
+    const source = views.get(section.sourceViewId);
+    if (
+      !source ||
+      source.section !== undefined ||
+      source.orientation === 'iso' ||
+      drawingViewAlignment(
+        source.orientation as DrawingViewOrientation,
+        view.orientation as DrawingViewOrientation
+      ) === null
+    )
+      return `${where} has a section that cannot be cut from its source view.`;
+    const child = view.centerMm as { x: number; y: number };
+    const base = source.centerMm as { x: number; y: number };
+    const alignment = drawingViewAlignment(
+      source.orientation as DrawingViewOrientation,
+      view.orientation as DrawingViewOrientation
+    );
+    const side = projectedViewSide(
+      source.orientation as DrawingViewOrientation,
+      view.orientation as DrawingViewOrientation,
+      value.projectionAngle
+    );
+    const [shared, free] =
+      alignment === 'row'
+        ? [child.y - base.y, child.x - base.x]
+        : [child.x - base.x, child.y - base.y];
+    if (
+      Math.abs(shared) > ALIGNMENT_TOLERANCE_MM ||
+      side * free < -ALIGNMENT_TOLERANCE_MM
+    )
+      return `${where} has a section view out of line with its source or on the wrong side for its projection angle.`;
   }
   if (value.annotations !== undefined) {
     if (

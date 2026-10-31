@@ -22,6 +22,7 @@ import {
 } from '@openzcad/shared';
 import { resolveEdge, resolveFace } from '../topologyResolution';
 import {
+  annotationBody,
   dimensionPointInView,
   drawnCoincidence,
   drawnLines,
@@ -88,7 +89,7 @@ export function pickableEdges(
     const k = drawingPaperPerModelUnit(sheet.scale, units);
     const coincidenceMm = drawnCoincidence(bodies, view.bodyIds, k) * k;
     for (const bodyId of view.bodyIds) {
-      const body = bodies[bodyId];
+      const body = annotationBody(bodies, view, bodyId);
       if (!body?.topology || body.consumed) continue;
       for (const edge of body.topology.edges) {
         if (edge.displayRole === 'seam' || edge.points.length < 6) continue;
@@ -583,9 +584,11 @@ export interface AnnotationTool {
  * not a pick of what the view draws under another.
  */
 export function drawingViewSignature(
-  view: Pick<DrawingView, 'orientation' | 'hiddenLines' | 'bodyIds'>
+  view: Pick<DrawingView, 'orientation' | 'hiddenLines' | 'bodyIds' | 'section'>
 ): string {
-  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}`;
+  // A section's cut is what it draws too: moving the plane ends a tool.
+  const cut = view.section ? `|section:${view.section.depth}` : '';
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}`;
 }
 
 export function startAnnotationTool(
@@ -630,7 +633,9 @@ export function pickedEnough(tool: AnnotationTool): boolean {
 export function edgeRefFor(
   bodies: AnnotationBodies,
   bodyId: BodyId,
-  edge: EdgeTopology
+  edge: EdgeTopology,
+  /** The view picked in; a section view resolves against its cut body. */
+  view?: Pick<DrawingView, 'viewId' | 'section'>
 ): DrawingEdgeRef | null {
   // Only a reference the document can hold, for this very hash and with a
   // witness that fingerprints to it, is stored; otherwise the pick is kept
@@ -648,7 +653,7 @@ export function edgeRefFor(
     drawingEdgeRefError(full) === null
       ? full
       : { bodyId, hash: edge.hash };
-  const found = resolveEdge(bodies[bodyId], ref);
+  const found = resolveEdge(annotationBody(bodies, view, bodyId), ref);
   return found.ok && found.entry === edge ? ref : null;
 }
 
@@ -774,7 +779,7 @@ export function applyAnnotationPick(
         ? 'Re-pick in the view this annotation belongs to.'
         : 'Pick in the same view as the first pick.'
     };
-  const ref = edgeRefFor(bodies, hit.bodyId, hit.edge);
+  const ref = edgeRefFor(bodies, hit.bodyId, hit.edge, hit.view);
   if (!ref)
     return {
       ok: false,

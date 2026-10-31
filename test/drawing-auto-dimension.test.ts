@@ -236,7 +236,7 @@ describe('D06 Auto-dimension: the corpus', () => {
       sheetOf(bodyId),
       bodies
     );
-    // Since v46 a Ø span between opposite holes states the pitch; the
+    // Since v48 a Ø span between opposite holes states the pitch; the
     // generator leaves that one to the person and says so.
     expect(audit).toMatchObject({ redundant: [] });
     expect(audit.missing.map((entry) => entry.message)).toEqual([
@@ -266,7 +266,7 @@ describe('D06 Auto-dimension: the corpus', () => {
       sheetOf(bodyId),
       bodies
     );
-    // Three diameters face-on from above, and (v46) the two heights off
+    // Three diameters face-on from above, and (v48) the two heights off
     // the rims' silhouettes in the front view.
     expect(kinds(plan.annotations)).toEqual([
       'diameter',

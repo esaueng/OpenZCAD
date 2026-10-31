@@ -25,6 +25,8 @@ import { mark, measure, timed } from '../lib/perf';
 import { faceDragTraceEnabled, traceFaceDrag } from '../lib/faceDragTrace';
 import type {
   DrawingBodyTessellation,
+  DrawingSectionBody,
+  DrawingSectionPlane,
   ExactSectionPlane,
   MeshQualityReport,
   MassPropertiesRead,
@@ -237,6 +239,16 @@ export interface GeometryWorkerApi {
     bodyIds: BodyId[],
     options?: { signal?: AbortSignal }
   ): Promise<Record<BodyId, DrawingBodyTessellation>>;
+  /**
+   * D03: each body cut by a drawing section plane, keeping what lies behind
+   * it, meshed like `drawingTessellation`, with its cut faces and edges.
+   */
+  drawingSection(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    plane: DrawingSectionPlane,
+    options?: { signal?: AbortSignal }
+  ): Promise<Record<BodyId, DrawingSectionBody>>;
   /** Queries live geometry; a stale derived-cache hit restores exact history first. */
   massProperties(
     document: ProjectDocument,
@@ -309,7 +321,12 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     new Map<string, PendingRequest<MeshQualityReport>>()
   );
   const drawingTessellationRequests = useRef(
-    new Map<string, PendingRequest<Record<BodyId, DrawingBodyTessellation>>>()
+    new Map<
+      string,
+      PendingRequest<
+        Record<BodyId, DrawingBodyTessellation | DrawingSectionBody>
+      >
+    >()
   );
   const massPropertiesRequests = useRef(
     new Map<string, PendingRequest<MassPropertiesRead>>()
@@ -958,6 +975,44 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     return { ok: true, requestId, promise };
   };
 
+  /** One drawing-tessellation request, cut by `section` when given (D03). */
+  const drawingRequest = (
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    section: DrawingSectionPlane | undefined,
+    signal: AbortSignal | undefined
+  ): Promise<Record<BodyId, DrawingBodyTessellation | DrawingSectionBody>> => {
+    if (signal?.aborted)
+      return Promise.reject(abortError('Drawing tessellation cancelled.'));
+    const posted = postRequest(drawingTessellationRequests.current, {
+      type: 'drawing-tessellation',
+      document: documentForWorker(document),
+      bodyIds,
+      ...(section ? { section } : {})
+    });
+    if (!posted.ok)
+      return Promise.reject(new Error('Geometry worker is unavailable.'));
+    if (!signal) return posted.promise;
+    // Its only consumer left Draw: a queued job is skipped, a running one
+    // finishes and its answer is dropped, so the viewport's own rebuilds
+    // stop waiting behind it.
+    const onAbort = () => {
+      const pending = drawingTessellationRequests.current.get(posted.requestId);
+      if (!pending) return;
+      drawingTessellationRequests.current.delete(posted.requestId);
+      armedRef.current = true;
+      workerRef.current?.postMessage({
+        type: 'cancel',
+        requestId: posted.requestId
+      });
+      pending.reject(abortError('Drawing tessellation cancelled.'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    return posted.promise.finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    });
+  };
+
   return {
     state,
     isReadyFor(document) {
@@ -1144,37 +1199,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return posted.promise;
     },
     drawingTessellation(document, bodyIds, options) {
-      const signal = options?.signal;
-      if (signal?.aborted)
-        return Promise.reject(abortError('Drawing tessellation cancelled.'));
-      const posted = postRequest(drawingTessellationRequests.current, {
-        type: 'drawing-tessellation',
-        document: documentForWorker(document),
-        bodyIds
-      });
-      if (!posted.ok)
-        return Promise.reject(new Error('Geometry worker is unavailable.'));
-      if (!signal) return posted.promise;
-      // Its only consumer left Draw: a queued job is skipped, a running one
-      // finishes and its answer is dropped, so the viewport's own rebuilds
-      // stop waiting behind it.
-      const onAbort = () => {
-        const pending = drawingTessellationRequests.current.get(
-          posted.requestId
-        );
-        if (!pending) return;
-        drawingTessellationRequests.current.delete(posted.requestId);
-        armedRef.current = true;
-        workerRef.current?.postMessage({
-          type: 'cancel',
-          requestId: posted.requestId
-        });
-        pending.reject(abortError('Drawing tessellation cancelled.'));
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-      return posted.promise.finally(() => {
-        signal.removeEventListener('abort', onAbort);
-      });
+      return drawingRequest(document, bodyIds, undefined, options?.signal);
+    },
+    drawingSection(document, bodyIds, plane, options) {
+      return drawingRequest(
+        document,
+        bodyIds,
+        plane,
+        options?.signal
+      ) as Promise<Record<BodyId, DrawingSectionBody>>;
     },
     massProperties(document, bodyId, options) {
       if (options?.signal?.aborted) {

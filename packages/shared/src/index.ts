@@ -192,12 +192,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // refused by older clients as an unknown gear kind.
 // v45 adds M14 double-enveloping wheels (`gearType: 'enveloping-wheel'`,
 // `wormLength`), refused by older clients as an unknown gear kind.
-// v46 adds D06 slice B drawing annotations: silhouette and virtual-sharp
+// v46 was claimed by D06 slice B, which landed after v47 and took v48.
+// v47 adds D03 drawing section views (`DrawingView.section`). An older client
+// would draw the view uncut and without its section line, so it must refuse.
+// v48 adds D06 slice B drawing annotations: silhouette and virtual-sharp
 // points, chamfer dimensions, counts, Ø on a linear span, reference
 // dimensions and provenance. An older client would refuse each as malformed
 // on load, or, past that, drop the meaning on its next save, so it must
 // refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 46 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 48 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

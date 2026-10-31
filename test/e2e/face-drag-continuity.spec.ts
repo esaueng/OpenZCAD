@@ -266,6 +266,82 @@ test('a press on the handle while its release validates changes nothing', async 
   ).toHaveCount(1);
 });
 
+test(
+  'clicking the face and at once dragging its arrow never takes the body',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(process.env.CI ? 240_000 : 120_000);
+    await holdValidation(page);
+    const { canvas, handle } = await armedBox(page);
+    await canvas.evaluate((element) => {
+      const log: { t: number; name: string; value: string | null }[] = [];
+      window.__faceDragLog = log;
+      new MutationObserver((records) => {
+        for (const record of records) {
+          const name = record.attributeName!;
+          log.push({
+            t: performance.now(),
+            name,
+            value: (record.target as Element).getAttribute(name)
+          });
+        }
+      }).observe(element, {
+        attributes: true,
+        attributeFilter: ['data-e2e-selected-face', 'data-e2e-offset-ghost']
+      });
+    });
+    await page.evaluate(() => {
+      window.__holdFinal!.hold = true;
+    });
+    // The arrow stands where the face was clicked, so the grab that follows
+    // a click lands on the same spot inside the double-click interval and the
+    // operating system counts it as the second click. Playwright sends the
+    // count it is given rather than working it out, so say what the OS says.
+    await page.mouse.click(handle.x, handle.y);
+    const pressed = await now(page);
+    await page.mouse.down({ clickCount: 2 });
+    await page.mouse.move(
+      handle.x + handle.dx * handle.pixels * 3,
+      handle.y + handle.dy * handle.pixels * 3,
+      { steps: 12 }
+    );
+    await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+    await page.mouse.up({ clickCount: 2 });
+    // A click re-arms a box side as Resize Body, whichever card the drag
+    // started from.
+    const card = page.getByRole('region', { name: / operation$/ });
+    await expect
+      .poll(() => page.evaluate(() => window.__holdFinal!.held))
+      .toBe(1);
+    // That release ended a drag, not a double-click: it used to select the
+    // whole body for the frames until the commit, dropping the handle, ghost
+    // and preview so the unedited part flashed lavender.
+    await page.waitForTimeout(300);
+    await expect(card).toContainText('Validating');
+    await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+    await expect(
+      page.getByRole('button', { name: 'Selection: Move', exact: true })
+    ).toHaveCount(0);
+    expect(await removals(page, 'data-e2e-selected-face', pressed)).toBe(0);
+    expect(await removals(page, 'data-e2e-offset-ghost', pressed)).toBe(0);
+    await page.evaluate(() => window.__holdFinal!.release());
+    await expect(page.getByText('depth set to', { exact: false })).toBeVisible(
+      { timeout: 30_000 }
+    );
+    await expect(
+      page.getByRole('button', { name: 'Selection: Move', exact: true })
+    ).toHaveCount(0);
+
+    // Two clicks that stay put are still a double-click, and take the body.
+    const besideX = handle.x - handle.dy * 40;
+    const besideY = handle.y + handle.dx * 40;
+    await page.mouse.dblclick(besideX, besideY);
+    await expect(
+      page.locator('.selection-readout .selection-callout-name')
+    ).toHaveText('Box 1');
+  }
+);
+
 test('dragging the selected face itself pushes it, as the arrow does', async ({
   page
 }) => {

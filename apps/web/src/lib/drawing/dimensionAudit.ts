@@ -35,7 +35,7 @@ import { readChamfer } from './surfaceSharps';
  * radius, a taper, a sloped face) is reported as such, never counted as
  * satisfied.
  *
- * Slice B (schema v46) makes more of a turned part satisfiable: a rim's
+ * Slice B (schema v48) makes more of a turned part satisfiable: a rim's
  * silhouette marks a position along its axis, a linear Ø span across a
  * turned surface or a bolt circle states its diameter, and a chamfer
  * dimension states a chamfer — grouped by size and angle, so "2× 4 × 45°"
@@ -531,7 +531,13 @@ export function viewsAlong(
   axis: AuditAxis
 ) {
   return sheet.views.filter((view) => {
-    if (view.orientation === 'iso' || !view.bodyIds.includes(bodyId as never))
+    // A section (D03) draws a cut body whose edges are not the model's:
+    // dimensions read from model edges are not placed there (D06 slice F).
+    if (
+      view.orientation === 'iso' ||
+      view.section ||
+      !view.bodyIds.includes(bodyId as never)
+    )
       return false;
     const frame = DRAWING_VIEW_FRAMES[view.orientation];
     return axisOf(frame.x) === axis || axisOf(frame.up) === axis;
@@ -541,7 +547,7 @@ export function viewsAlong(
 /**
  * Whether a dimension can land on `value` along `axis`: an open edge ends
  * there, a circle centred there faces a view that measures `axis`, or a rim
- * about `axis` lies there, whose silhouette (v46) a view measuring `axis`
+ * about `axis` lies there, whose silhouette (v48) a view measuring `axis`
  * sees side-on.
  */
 function anchorable(
@@ -805,6 +811,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
+          !view.section &&
           group.axes.some(
             (axis) =>
               Math.abs(

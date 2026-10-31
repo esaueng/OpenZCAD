@@ -296,7 +296,11 @@
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
 .start-screen {
-  --start-column-w: 304px;
+  --start-column-w: 248px;
+  /* The library's Settings is the gear alone, so the line holds less clear. */
+  --corner-slot-w: 28px;
+  /* How far the shelf's cards fade out under its line once it scrolls. */
+  --start-edge-fade: 20px;
   position: absolute;
   inset: 0;
   z-index: var(--z-start-screen);
@@ -304,9 +308,7 @@
   /* minmax(0, …) so the body can shrink below its content's natural width:
      a grid track defaults to min-content, which on a phone let the toolbar
      hold the whole page wider than the screen. */
-  grid-template-columns:
-    calc(var(--island-gap) + var(--start-column-w))
-    minmax(0, 1fr);
+  grid-template-columns: var(--start-column-w) minmax(0, 1fr);
   /* Column first: the column runs the window's full height, the product at
      its head and the account at its foot, and the shelf takes everything
      beside it. The demos give way first and scroll when the window is too
@@ -327,18 +329,16 @@
   z-index: calc(var(--z-start-screen) + 1);
 }
 
-/* The column's island, drawn once behind its blocks so each block can be a
-   separate grid item: a grid item itself, spanning their rows, so it ends
-   where they do. On the workspace tool rail's edge, 10px under the top bar. */
+/* The column's panel, drawn once behind its blocks so each block can be a
+   separate grid item: a grid item itself, spanning their rows. It runs the
+   window's full height from its left edge, with one hairline against the
+   shelf — no floating island, so no gap beside it. */
 .start-screen::before {
   content: '';
   grid-column: 1;
   grid-row: 1 / -1;
-  margin: var(--island-gap) 0 var(--island-gap) var(--island-gap);
   background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
+  border-right: var(--border-thin);
   pointer-events: none;
 }
 
@@ -356,7 +356,7 @@
   align-items: center;
   /* Centred 30px down: the workspace logo's line, and the shelf line's. */
   min-height: calc(12px + var(--topbar-island-h));
-  padding: 12px 10px 0 calc(var(--island-gap) + 14px);
+  padding: 12px 10px 0 16px;
 }
 
 .start-brand .brand {
@@ -372,14 +372,13 @@
   display: inline-flex;
 }
 
-/* The column's foot: where the parts are kept. */
+/* The column's foot: where the parts are kept, said as a line of text at
+   the column's end — no divider and no box around it. */
 .start-column-foot {
   grid-area: account;
   display: grid;
-  gap: var(--sp-2);
-  margin: 0 0 var(--island-gap) var(--island-gap);
-  padding: 10px;
-  border-top: var(--border-thin);
+  gap: var(--sp-1);
+  padding: var(--sp-1) 10px var(--sp-2);
 }
 
 /* What the one-line readout cannot hold (a run's failures, any news) hangs
@@ -396,6 +395,17 @@
   align-items: center;
   gap: var(--sp-2);
   font-size: var(--fs-sm);
+}
+
+/* The library's Settings is the gear alone, quieter than the workspace's
+   labelled button: the page's own tools sit right beside it. */
+.corner-action.start-settings-button {
+  justify-content: center;
+  width: 28px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border-color: var(--color-border);
 }
 
 /* The shelf's search sits with its other tools now there is no bar. */
@@ -423,19 +433,19 @@
   grid-area: launch;
   display: grid;
   gap: var(--sp-2);
-  padding: 12px 10px 12px calc(var(--island-gap) + 10px);
+  padding: 4px 10px 12px;
 }
 
 .start-launch-form {
   display: grid;
   /* The units track sizes to its longest option, so it never clips. */
   grid-template-columns: minmax(0, 1fr) max-content;
-  gap: var(--sp-2) 6px;
+  gap: 6px;
   align-items: center;
-  padding: 10px;
+  padding: 8px;
   /* A faint accent tint, not an outline, sets the card apart from the
      column: it reads as one panel without a ring drawn around it. */
-  background: color-mix(in srgb, var(--color-accent) 18%, var(--color-bg));
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg));
   border: 0;
   border-radius: var(--radius-lg);
 }
@@ -505,7 +515,8 @@
 .start-field input,
 .start-field select {
   width: 100%;
-  min-height: 32px;
+  min-height: 30px;
+  height: 30px;
   /* Sunk below the tinted card, edged in the same tint. */
   background: var(--color-bg);
   border-color: color-mix(
@@ -516,7 +527,7 @@
 }
 
 .start-field-name input {
-  font-size: var(--fs-md);
+  font-size: var(--fs-base);
 }
 
 /* Drawn rather than native: each engine put its own arrow flush against the
@@ -533,13 +544,13 @@
   cursor: pointer;
 }
 
-/* Centred on the 32px select from the label's foot, so the visible label
+/* Centred on the 30px select from the label's foot, so the visible label
    above it on narrow screens does not move it. */
 .start-field-units::after {
   content: '';
   position: absolute;
   right: 10px;
-  bottom: 13px;
+  bottom: 12px;
   width: 10px;
   height: 6px;
   background: var(--color-text-muted);
@@ -569,7 +580,7 @@
 
 .start-library {
   grid-area: library;
-  padding: 0 10px 12px calc(var(--island-gap) + 10px);
+  padding: 0 10px 12px;
 }
 
 /* The shelves are the column's navigation: icon, name, count. */
@@ -583,7 +594,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 8px;
   color: var(--color-text-muted);
   border-radius: var(--radius-md);
@@ -625,24 +636,31 @@
   outline-color: var(--color-error);
 }
 
+/* A bare figure at the row's end, not a pill: the shelf line above the
+   cards already says the same number. */
 .start-shelf-count {
   margin-left: auto;
-  min-width: 18px;
-  padding: 0 5px;
   color: var(--color-text-subtle);
-  background: var(--color-surface-2);
-  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
-  text-align: center;
+  text-align: right;
 }
 
-/* The badge's wash sits on the open tab's own, so its digits take the
-   brighter accent to keep their contrast on the doubled tint. */
+/* An empty shelf shows no "0", but the tab's name still says it is empty:
+   hidden from sight only, like .visually-hidden. */
+.start-shelf-count.is-zero {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .start-shelf-tabs button.is-active .start-shelf-count {
   color: var(--color-accent-hi);
-  background: var(--color-accent-dim);
 }
 
 /* ── Column: demos ───────────────────────────────────────── */
@@ -655,7 +673,7 @@
   align-content: start;
   gap: 2px;
   min-height: 0;
-  padding: 0 10px 10px calc(var(--island-gap) + 10px);
+  padding: 0 10px 10px;
   overflow-y: auto;
 }
 
@@ -710,12 +728,9 @@
 
 .start-account {
   display: grid;
-  gap: 7px;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 6px 0 6px 8px;
   color: var(--color-text-subtle);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
   font-size: var(--fs-sm);
 }
 
@@ -750,9 +765,13 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  color: var(--color-text);
+  color: var(--color-text-muted);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.start-account:is(.is-warning, .is-failed, .is-busy) .start-account-text {
+  color: var(--color-text);
 }
 
 .start-account.is-idle .start-account-text {
@@ -882,7 +901,9 @@
   grid-area: body;
   display: grid;
   min-height: 0;
-  padding: 0 var(--island-gap);
+  /* The sidebar has no gap beside it, so the shelf keeps its own gutter
+     from the hairline; the right edge stays on Settings' line. */
+  padding: 0 var(--island-gap) 0 var(--sp-5);
 }
 
 .start-body {
@@ -924,8 +945,31 @@
 
 @media (min-width: 901px) {
   .start-toolbar {
+    position: relative;
+    z-index: 4;
     padding-top: var(--island-gap);
     background: var(--color-bg);
+  }
+
+  /* Once the shelf scrolls, cards fade out under the line instead of being
+     sliced off on a hard edge. A stuck group label draws its own fade (it
+     sits under the line), so this one only shows on a shelf with no
+     labels. Both flags are set from the shelf's scroll position. */
+  .start-toolbar::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    height: var(--start-edge-fade);
+    background: linear-gradient(var(--color-bg), transparent);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+    pointer-events: none;
+  }
+
+  .start-section[data-scrolled]:not([data-label-stuck]) .start-toolbar::after {
+    opacity: 1;
   }
 }
 
@@ -1018,7 +1062,9 @@
   background: var(--color-surface-2);
 }
 
-/* Pinned parts head the shelf as their own labelled group. */
+/* Pinned parts head the shelf as their own labelled group. On a wide
+   window each label sticks under the shelf line while its group scrolls
+   past, so the edge always says which group the cards belong to. */
 .start-shelf-group {
   display: flex;
   align-items: baseline;
@@ -1027,6 +1073,41 @@
   color: var(--color-text-subtle);
   font-size: var(--fs-sm);
   font-weight: var(--fw-regular);
+}
+
+@media (min-width: 901px) {
+  .start-shelf-group {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    /* Fills the body's row gap above it, so a card scrolling under the
+       label never shows between it and the line. */
+    margin-top: calc(-1 * var(--sp-3));
+    padding-top: var(--sp-3);
+    background: var(--color-bg);
+  }
+
+  .start-body > .start-shelf-group:first-child {
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .start-shelf-group::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    height: var(--start-edge-fade);
+    background: linear-gradient(var(--color-bg), transparent);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+    pointer-events: none;
+  }
+
+  .start-shelf-group[data-stuck]::after {
+    opacity: 1;
+  }
 }
 
 .start-shelf-group span {
@@ -2022,8 +2103,15 @@
 }
 
 .start-tile-project:hover .start-tile-action,
-.start-tile-project:focus-within .start-tile-action,
-.start-tile-project.is-pinned .start-tile-pin {
+.start-tile-project:focus-within .start-tile-action {
+  opacity: 1;
+}
+
+/* Inside the labelled Pinned group the label already says it, so the pin
+   waits for the pointer like the other actions. */
+.start-tile-grid:not(.is-pinned-group)
+  .start-tile-project.is-pinned
+  .start-tile-pin {
   opacity: 1;
 }
 

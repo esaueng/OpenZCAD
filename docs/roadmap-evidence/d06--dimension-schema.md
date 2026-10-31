@@ -2,7 +2,7 @@
 row: D06
 ---
 
-Slice B, schema v46 (builds on v44; v45 is D03's claim): Draw annotations can
+Slice B, schema v48 (builds on v47, D03 section views): Draw annotations can
 now dimension a turned or chamfered part. A rim seen side-on is picked as its
 silhouette end (`silhouette` point), two face outlines as their virtual sharp
 (`virtual-sharp` point, from the kernel's exact planes, cylinders and cones),

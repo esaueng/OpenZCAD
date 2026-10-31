@@ -64,7 +64,7 @@ import {
 import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 
 /**
- * D06 slice B (schema v46): the annotation additions that let a turned or
+ * D06 slice B (schema v48): the annotation additions that let a turned or
  * chamfered part be dimensioned at all — silhouette and virtual-sharp
  * points, chamfer dimensions, counts, Ø on a linear span, reference
  * dimensions and provenance — read from real kernel bodies.
@@ -398,9 +398,9 @@ async function footModel() {
   };
 }
 
-describe('D06 slice B schema (v46)', () => {
-  it('claims v46 and fences documents from newer clients', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(46);
+describe('D06 slice B schema (v48)', () => {
+  it('claims v48 and fences documents from newer clients', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(48);
     const document = createProjectDocument('Fence', toUserId('test'));
     const newer = {
       ...document,

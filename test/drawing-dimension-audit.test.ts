@@ -117,7 +117,7 @@ describe('D06 dimension audit: the turned foot', () => {
     const { bodies, bodyId } = await build(footOperations());
     const audit = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
     // Coaxial: nothing to locate across the axis. Along it, three faces
-    // need two dimensions; since slice B (v46) their rims' silhouettes mark
+    // need two dimensions; since slice B (v48) their rims' silhouettes mark
     // them, and each chamfer is stated as size × angle.
     expect(messages(audit.missing)).toEqual([
       'Ø40 diameter.',
@@ -139,7 +139,7 @@ describe('D06 dimension audit: the turned foot', () => {
     });
   });
 
-  it('passes a sheet that states every requirement once with the v46 anchors', async () => {
+  it('passes a sheet that states every requirement once with the v48 anchors', async () => {
     const { bodies, bodyId, body } = await build(footOperations());
     const ref = (edge: EdgeTopology) => refOf(bodyId, edge);
     const silhouette = (edge: EdgeTopology, side: 'low' | 'high') => ({

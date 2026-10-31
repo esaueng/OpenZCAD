@@ -98,7 +98,7 @@ interface Anchor {
   edge: EdgeTopology;
   ref: DrawingEdgeRef;
   point: DrawingPointRef;
-  /** A rim's silhouette (v46) is a point of one page direction only. */
+  /** A rim's silhouette (v48) is a point of one page direction only. */
   direction?: 'horizontal' | 'vertical';
   model: Vector3;
   uv: XY;
@@ -168,7 +168,7 @@ export function planAutoDimensions(
   const skipped: AutoDimensionSkip[] = state.audit.unmeasurable.map(
     (finding) => ({ ...finding })
   );
-  // v46 chamfer dimensions and Ø pitch spans are the check's, and a
+  // v48 chamfer dimensions and Ø pitch spans are the check's, and a
   // person's, but not placed here yet.
   for (const [bodyId, body] of state.bodies) {
     for (const group of body.requirements.chamfers)
@@ -211,9 +211,11 @@ export function planAutoDimensions(
     });
   }
   // Views that measure true size: every principal view, never the
-  // isometric one.
+  // isometric one. Not a section (D03) yet either: its cut body's edges are
+  // not the model's these dimensions are read from (D06 slice F).
   const measuring = contexts.filter(
-    (context) => context.view.orientation !== 'iso'
+    (context) =>
+      context.view.orientation !== 'iso' && context.view.section === undefined
   );
 
   // Dimensions per view and body, existing ones included: a feature's

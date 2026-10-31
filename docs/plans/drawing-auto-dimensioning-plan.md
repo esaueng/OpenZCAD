@@ -187,10 +187,10 @@ Each needs its own schema bump, claimed from open PRs at the time
   blend (a chamfer's edge) are listed as "can't dimension yet" or "not
   checked", never as satisfied.
 
-## Slice B decisions (schema v46, 2026-10-31)
+## Slice B decisions (schema v48, 2026-10-31)
 
-- **Version.** v44 and v45 are M14's double-enveloping worms and wheels,
-  so slice B takes v46 (D03 section views follow at v47). An older client refuses the
+- **Version.** v44 and v45 are M14's double-enveloping worms and wheels
+  and v47 is D03 section views, which landed first, so slice B takes v48. An older client refuses the
   document; every addition is optional and absent on older annotations.
 - **Silhouette point** (`anchor: 'silhouette'`, `side: 'low' | 'high'`): a
   circular edge's extreme along a horizontal or vertical dimension's
