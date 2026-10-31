@@ -54,6 +54,15 @@ describe('glyph coverage extraction', () => {
     expect(keys.has(0x26a0)).toBe(true); // ⚠
     expect(keys.has(0x2300)).toBe(false); // ⌀ lives in the math face
   });
+
+  it('bundles the drawing text diameter alias and hyphens', () => {
+    const math = woff2CodePoints(font('openzcad-symbols-math.woff2'));
+    const text = woff2CodePoints(font('openzcad-symbols-text.woff2'));
+    expect(math.has(0x2205)).toBe(true); // empty set used as a diameter
+    expect(math.has(0x2010)).toBe(true); // hyphen
+    expect(text.has(0x2011)).toBe(true); // non-breaking hyphen
+    expect(text.has(0x2012)).toBe(true); // figure dash
+  });
 });
 
 describe('glyph coverage', () => {

@@ -3,7 +3,7 @@
    Import once in main.tsx before app.css.
    ───────────────────────────────────────────────────────────── */
 
-/* The symbols Geist does not draw (⌀ ∠ Δ ∥ ⊥ ⊕ □ ◇ ◎ ▾, ⌘ ⌥ ⌫ ⚠), as two
+/* The symbols Geist does not draw (⌀ ∠ Δ ∥ ⊥ ⊕ □ ◇ ◎ ▾ ∅ ‐ ‑ ‒, ⌘ ⌥ ⌫ ⚠), as
    kilobyte-sized Noto subsets. Without them those glyphs fall to whatever
    system font has them, and a browser that restricts local fonts paints the
    hex missing-glyph box instead. The unicode-range lists exactly what each
@@ -16,7 +16,8 @@
   font-weight: 100 900;
   font-display: swap;
   src: url('./fonts/openzcad-symbols-math.woff2') format('woff2');
-  unicode-range: U+0394, U+2220, U+2225, U+22A5, U+2295, U+2300, U+25A1,
+  unicode-range:
+    U+0394, U+2010, U+2205, U+2220, U+2225, U+22A5, U+2295, U+2300, U+25A1,
     U+25BE, U+25C7, U+25CE;
 }
 
@@ -27,6 +28,15 @@
   font-display: swap;
   src: url('./fonts/openzcad-symbols-keys.woff2') format('woff2');
   unicode-range: U+2318, U+2325, U+232B, U+26A0;
+}
+
+@font-face {
+  font-family: 'OpenZCAD Symbols';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./fonts/openzcad-symbols-text.woff2') format('woff2');
+  unicode-range: U+2011-2012;
 }
 
 :root {

@@ -4,6 +4,9 @@ Copyright 2022 Google LLC. All Rights Reserved.
 openzcad-symbols-keys.woff2 is a subset of Noto Sans Symbols 2 2.008:
 Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)
 
+openzcad-symbols-text.woff2 is a subset of Noto Sans:
+Copyright 2015-2021 Google LLC. All Rights Reserved.
+
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
 http://scripts.sil.org/OFL
