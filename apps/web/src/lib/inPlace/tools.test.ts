@@ -314,6 +314,25 @@ describe('face tools build the card state', () => {
     expect(chips).toEqual(['starts', 'module']);
   });
 
+  it('gear: an enveloping worm shows its worm fields and hand', () => {
+    const spec = IN_PLACE_TOOL_SPECS.gear;
+    const state = {
+      options: { gearType: 'enveloping-worm', throat: 'plain' },
+      numbers: {}
+    };
+    const shown = (id: string) =>
+      spec.values.find((value) => value.id === id)?.when?.(state) !== false;
+    expect(shown('starts')).toBe(true);
+    expect(shown('diameterFactor')).toBe(true);
+    expect(shown('mateTeeth')).toBe(false);
+    expect(shown('outsideDiameter')).toBe(false);
+    const option = (id: string) =>
+      spec.options.find((entry) => entry.id === id)?.when?.(state) !== false;
+    expect(option('hand')).toBe(true);
+    expect(option('throat')).toBe(false);
+    expect(option('helix')).toBe(false);
+  });
+
   it('gear: an enveloping worm sends its starts and its wheel’s teeth', () => {
     const spec = IN_PLACE_TOOL_SPECS.gear;
     const slots: InPlaceSlots = {

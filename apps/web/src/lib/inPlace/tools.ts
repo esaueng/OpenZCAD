@@ -1720,9 +1720,8 @@ function gearTwists(state: InPlacePanelState): boolean {
 
 /** A worm or its wheel: the worm's thread sets the helix and the hand. */
 function gearIsWorm(state: InPlacePanelState): boolean {
-  return (
-    state.options.gearType === 'worm' || state.options.gearType === 'worm-wheel'
-  );
+  const type = state.options.gearType;
+  return type === 'worm' || type === 'worm-wheel' || type === 'enveloping-worm';
 }
 
 /** The value a gear's chosen sizing reads its pitch from. */
