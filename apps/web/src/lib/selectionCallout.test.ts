@@ -519,6 +519,37 @@ describe('renderSelectionCallout', () => {
       }
     );
 
+    it('lets a long refusal expand in place', () => {
+      const element = document.createElement('div');
+      const message =
+        'The exact result could not be built. ' +
+        'Reduce the distance or choose a different face. '.repeat(6);
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({
+          verbs: edgeVerbs,
+          operation: operation({ phase: 'failed', error: { message } })
+        })
+      );
+      const readMore = [...element.querySelectorAll('button')].find(
+        (item) => item.textContent === 'Read more'
+      )!;
+      expect(readMore.getAttribute('aria-expanded')).toBe('false');
+      readMore.click();
+      expect(readMore.getAttribute('aria-expanded')).toBe('true');
+      expect(element.querySelector('[role="alert"]')).toHaveClass(
+        'is-expanded'
+      );
+      expect(
+        element.querySelector('.selection-callout-error')?.textContent
+      ).toBe(message);
+      readMore.click();
+      expect(element.querySelector('[role="alert"]')).not.toHaveClass(
+        'is-expanded'
+      );
+    });
+
     it('says why it refused, with each way out as a button', () => {
       const element = document.createElement('div');
       const filled = operation({

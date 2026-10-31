@@ -3571,6 +3571,8 @@ export function ModelViewer({
     const dragHud = hud.create('direct-edit-hud');
     const profilePreviewBadge = hud.create('direct-edit-hud');
     profilePreviewBadge.textContent = 'Preview · exact on release';
+    profilePreviewBadge.setAttribute('role', 'status');
+    profilePreviewBadge.setAttribute('aria-live', 'polite');
     profilePreviewBadge.style.left = '50%';
     profilePreviewBadge.style.top = '100px';
     profilePreviewBadge.style.transform = 'translateX(-50%)';
@@ -4238,6 +4240,9 @@ export function ModelViewer({
       // under the bar and could not be tapped.
       const footTop = rigs.size > 0 ? bottomLaneTop() : null;
       const stageRect = renderer.domElement.getBoundingClientRect();
+      const offsetRect = offsetChip.hidden
+        ? null
+        : offsetChip.getBoundingClientRect();
       const chipStage = {
         left: stageRect.left,
         right: stageRect.right,
@@ -4408,13 +4413,26 @@ export function ModelViewer({
       // centre is 0.8 of its height above it.
       shown.sort((a, b) => a.order - b.order);
       const separated = separateChips(
-        shown.map(({ valueId, x, y }) => ({
-          id: valueId,
-          x,
-          y: y - (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT,
-          width: chipWidths.get(valueId) ?? 0,
-          height: chipHeights.get(valueId) ?? 0
-        })),
+        [
+          ...(offsetRect
+            ? [
+                {
+                  id: '__offset__',
+                  x: (offsetRect.left + offsetRect.right) / 2 - stageRect.left,
+                  y: (offsetRect.top + offsetRect.bottom) / 2 - stageRect.top,
+                  width: offsetRect.width,
+                  height: offsetRect.height
+                }
+              ]
+            : []),
+          ...shown.map(({ valueId, x, y }) => ({
+            id: valueId,
+            x,
+            y: y - (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT,
+            width: chipWidths.get(valueId) ?? 0,
+            height: chipHeights.get(valueId) ?? 0
+          }))
+        ],
         {
           left: COMMAND_CHIP_MARGIN_PX,
           top: 0,
@@ -4735,6 +4753,7 @@ export function ModelViewer({
         event as CustomEvent<{
           bodyId?: string;
           surface?: 'wall' | 'cap' | 'top-cap' | 'bottom-cap';
+          radius?: number;
           select?: boolean;
           resolve?: (
             geometry: Pick<
@@ -4754,7 +4773,11 @@ export function ModelViewer({
           !candidate.consumed &&
           (!detail?.bodyId || candidate.bodyId === detail.bodyId)
       );
-      const faces = body?.topology?.faces ?? [];
+      const faces = (body?.topology?.faces ?? []).filter(
+        (face) =>
+          detail?.radius === undefined ||
+          Math.abs((face.geometry?.radius ?? Infinity) - detail.radius) < 1e-8
+      );
       const face =
         detail?.surface === 'top-cap' || detail?.surface === 'bottom-cap'
           ? faces.find((candidate) =>
@@ -7083,14 +7106,14 @@ export function ModelViewer({
       if (rig?.kind === 'cylinder-radius') {
         rig.setSpanMode?.(cylinderDimensionModeRef.current);
       }
-      // Face-offset controls keep one horizontal layout throughout the
+      // Face and region-extrude controls keep one horizontal layout throughout
       // gesture. Switching onto a long projected line rotated the value
       // vertically and changed both its colour and position under the hand.
       let lineAngle: number | null = null;
       const line =
         rig &&
         !dimensionChipBesidePin &&
-        !(rig.kind === 'offset-face' && offsetHandleRef.current) &&
+        rig.kind !== 'offset-face' &&
         rig.kind !== 'edge-radius'
           ? (rig.chipLine?.() ?? null)
           : null;
@@ -12849,6 +12872,9 @@ export function ModelViewer({
     }
     const previous = offsetRigRef.current;
     const built = offsetRigBuiltRef.current;
+    // The region effect owns this shared slot while extruding. Exact draft
+    // frames replace bodies, but must not retire the region's distance rig.
+    if (!offsetHandle && previous && previous === regionRigRef.current) return;
     // Validating a released drag re-derives the same handle, locked. Keep the
     // rig where it was let go — value, ghost and proxy included — instead of
     // fading it out and back in around the commit. Meshes that land meanwhile

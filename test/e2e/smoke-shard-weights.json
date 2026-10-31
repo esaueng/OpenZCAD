@@ -1,5 +1,6 @@
 {
   "boolean-selection.spec.ts": 9,
+  "bore-rest-validation.spec.ts": 60,
   "cloud-sync.spec.ts": 18,
   "collaboration.spec.ts": 13,
   "drawings.spec.ts": 12,
@@ -10,7 +11,7 @@
   "encryption-passkeys.spec.ts": 3,
   "encryption-pins.spec.ts": 2,
   "extrude-edit-in-place.spec.ts": 15,
-  "extrude-in-place.spec.ts": 15,
+  "extrude-in-place.spec.ts": 60,
   "extrude-through-all.spec.ts": 8,
   "face-offset-continuity.spec.ts": 30,
   "feature-history.spec.ts": 21,
