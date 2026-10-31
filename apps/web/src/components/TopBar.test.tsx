@@ -15,6 +15,7 @@ function renderTopBar(
     collaborationFailure?: string;
     geometryPending?: boolean;
     geometryFailed?: boolean;
+    editPending?: boolean;
     canExport?: boolean;
     exportWithheld?: string | null;
     exportUnavailableReason?: string | null;
@@ -42,6 +43,7 @@ function renderTopBar(
       saveState={options.saveState ?? 'local'}
       geometryPending={options.geometryPending}
       geometryFailed={options.geometryFailed}
+      editPending={options.editPending}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
@@ -75,6 +77,24 @@ function renderTopBar(
 }
 
 describe('TopBar save chip', () => {
+  it.each(['synced', 'local'] as const)(
+    'shows an uncommitted edit being checked instead of %s',
+    (saveState) => {
+      renderTopBar({ saveState, editPending: true });
+      const chip = screen.getByRole('status', { name: 'Checking' });
+      expect(chip).toHaveTextContent('Checking');
+      expect(chip.querySelector('.spin')).not.toBeNull();
+      expect(chip).toHaveAttribute(
+        'title',
+        expect.stringContaining('proposed edit')
+      );
+    }
+  );
+
+  it('keeps a save failure actionable while an edit is being checked', () => {
+    renderTopBar({ saveState: 'repair', editPending: true });
+    expect(screen.getByRole('button', { name: 'Repair needed' })).toBeVisible();
+  });
   it('distinguishes stored work from exact geometry readiness', () => {
     renderTopBar({
       saveState: 'synced',

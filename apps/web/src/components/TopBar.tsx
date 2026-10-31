@@ -69,6 +69,8 @@ interface TopBarProps {
   saveState: WorkspaceSaveState;
   geometryPending?: boolean;
   geometryFailed?: boolean;
+  /** A proposed direct edit has not passed validation or been saved yet. */
+  editPending?: boolean;
   /**
    * Import sources that exist only in this browser because their cloud
    * archival failed. Nonzero shows the File-menu action that retries the
@@ -149,6 +151,7 @@ export function TopBar({
   saveState,
   geometryPending = false,
   geometryFailed = false,
+  editPending = false,
   localOnlySourceCount,
   artifacts: storedArtifacts,
   meshCleanup,
@@ -211,11 +214,19 @@ export function TopBar({
   // "Saved" floating in a chip three times its size.
   const modelPending =
     !saveToAccount && saveState === 'synced' && geometryPending;
-  const saveGlyph: SaveGlyph = modelPending
-    ? geometryFailed
-      ? 'warning'
-      : 'busy'
-    : saveGlyphFor(saveState);
+  // The saved revision is still safe, but the proposed edit is not in it.
+  // Keep actionable storage failures visible rather than masking them.
+  const checkingEdit =
+    !saveToAccount &&
+    editPending &&
+    (saveState === 'synced' || saveState === 'local');
+  const saveGlyph: SaveGlyph = checkingEdit
+    ? 'busy'
+    : modelPending
+      ? geometryFailed
+        ? 'warning'
+        : 'busy'
+      : saveGlyphFor(saveState);
 
   useEffect(() => {
     if (editingProjectName) {
@@ -321,18 +332,23 @@ export function TopBar({
   const presentation = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
   const saveText = saveToAccount
     ? 'Save to my account'
-    : presentation.topBarLabel;
-  const modelReadiness = modelPending
-    ? geometryFailed
-      ? 'model unavailable'
-      : 'preparing model'
-    : null;
+    : checkingEdit
+      ? 'Checking'
+      : presentation.topBarLabel;
+  const modelReadiness =
+    !checkingEdit && modelPending
+      ? geometryFailed
+        ? 'model unavailable'
+        : 'preparing model'
+      : null;
   // The accessible name keeps the readiness the glyph shows, and still
   // begins with the visible label (WCAG 2.5.3).
   const saveLabel = modelReadiness
     ? `${saveText} · ${modelReadiness}`
     : saveText;
-  const saveTitle = `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
+  const saveTitle = checkingEdit
+    ? `The proposed edit is being checked before it is applied and saved. ${presentation.title}`
+    : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
       {/* Keyed by the glyph, not the state: saving → syncing keeps the
