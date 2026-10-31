@@ -1372,7 +1372,13 @@ changes.
 - **What the server sees.** Ciphertext length, write times, revision count
   and the commitment, which the device list already shows. Project ids in
   membership are inside the ciphertext. A plaintext folder record left from
-  before the account encrypted is read once and rewritten sealed.
+  before the account encrypted is read once and rewritten sealed. Once a
+  browser has pinned a sealed-record sequence, plaintext is a downgrade: it
+  is not merged, and the browser reseals its own set above the pin, as for a
+  rollback. A server response cannot re-enable the legacy migration. An
+  account-scoped memory floor preserves that pin for the visit even when
+  browser storage is blocked, full or absent; durable protection across
+  reloads still requires browser storage.
 - **Worker enforcement.** The Worker cannot read a sealed record. It refuses
   a plaintext record from an account whose projects must be encrypted, as it
   refuses a plaintext project (decision D2).
