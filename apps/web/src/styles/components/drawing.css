@@ -112,7 +112,6 @@
 .drawing-view-label {
   fill: #6b7380;
   font-family: var(--font-ui);
-  font-size: 3.2px;
   pointer-events: none;
   user-select: none;
 }
@@ -169,9 +168,8 @@
   color: var(--color-text-muted);
 }
 
-/* The left column lists the project's sheets; the right panel edits the
-   selected sheet or view. Both are islands like the rest of the stage. */
-.drawing-sheets,
+/* The right panel is contextual: the sheet's settings, or the selected
+   view's or annotation's. An island like the rest of the stage. */
 .drawing-panel {
   min-height: 0;
   overflow-y: auto;
@@ -184,12 +182,8 @@
   border: 1px solid var(--color-border);
 }
 
-.drawing-sheets {
-  flex: 0 0 200px;
-}
-
 .drawing-panel {
-  flex: 0 0 280px;
+  flex: 0 0 300px;
 }
 
 .drawing-panel-section {
@@ -397,52 +391,6 @@
   cursor: crosshair;
 }
 
-.drawing-tool-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
-}
-
-.drawing-tool {
-  min-height: 28px;
-  padding: 0 6px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-2);
-  color: var(--color-text);
-  font: inherit;
-  font-size: var(--fs-xs);
-  cursor: pointer;
-}
-
-.drawing-tool:hover:not(:disabled) {
-  background: var(--color-surface-hover);
-}
-
-.drawing-tool.active {
-  border-color: var(--color-accent-border);
-  background: var(--color-accent-dim);
-  color: var(--color-accent);
-}
-
-.drawing-tool:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.drawing-tool-hint {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--color-text);
-  font-size: var(--fs-xs);
-  line-height: 1.45;
-}
-
-.drawing-tool-hint span {
-  flex: 1 1 auto;
-}
-
 .drawing-annotation-status {
   margin: 0;
   color: var(--color-error-text);
@@ -466,14 +414,9 @@
     flex-direction: column;
   }
 
-  .drawing-sheets,
   .drawing-panel {
     flex: 0 0 auto;
     max-height: 45%;
-  }
-
-  .drawing-sheets {
-    max-height: 20%;
   }
 }
 
@@ -487,10 +430,6 @@
 }
 
 .drawing-zoom {
-  position: absolute;
-  right: 12px;
-  /* Above the command bar and status lane the stage keeps clear. */
-  bottom: calc(var(--command-bar-h) + var(--island-gap) * 3 + 12px);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -537,4 +476,293 @@
   color: var(--color-warning);
   font-size: var(--fs-xs);
   line-height: 1.45;
+}
+
+/* ── Stage bar: sheet tabs, then sync state, zoom and export ── */
+.drawing-stage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.drawing-sheet-tabs {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.drawing-sheet-tab {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.drawing-sheet-tab:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.drawing-sheet-tab.active {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.drawing-sheet-tab-paper {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.drawing-sheet-new {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.drawing-sheet-new:hover:not(:disabled) {
+  color: var(--color-text);
+  border-style: solid;
+}
+
+.drawing-sheet-new:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.drawing-stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawing-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.drawing-sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+
+.drawing-export {
+  display: flex;
+  gap: 4px;
+}
+
+.drawing-banner.is-blocked {
+  border-color: var(--color-error);
+  color: var(--color-error-text);
+}
+
+.drawing-progress {
+  flex: 0 0 72px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+.drawing-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 200ms ease-out;
+}
+
+/* ── Canvas area: the sheet, with the tool rail floating at its left ── */
+.drawing-canvas-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  /* The rail's column: the fitted paper never sits under it. */
+  padding-left: 52px;
+}
+
+.drawing-tool-rail {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.drawing-rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
+  margin-top: 2px;
+  border-top: 1px solid var(--color-border);
+}
+
+.drawing-rail-button {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.drawing-rail-button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.drawing-rail-button.active {
+  background: var(--color-accent-dim);
+  color: var(--color-selected-text);
+}
+
+.drawing-rail-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* The active tool's next step, over the top of the sheet. */
+.drawing-tool-hint {
+  position: absolute;
+  top: 8px;
+  left: calc(50% + 26px);
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 80px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent-border);
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  /* Clicks fall through to the sheet: a pick or placement near the paper's
+     top edge must land on the paper, not on the hint over it. */
+  pointer-events: none;
+}
+
+.drawing-tool-hint-cancel {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.drawing-tool-hint-cancel kbd {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* ── Contextual panel: the selection's heading and the way back ── */
+.drawing-panel-section.is-selection {
+  padding-top: 12px;
+}
+
+.drawing-panel-section h3.drawing-selection-title {
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.drawing-deselect {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.drawing-deselect:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* While the model rebuilds: the last drawing, faded. Never exported. */
+.drawing-canvas.is-ghost .drawing-strokes.is-visible,
+.drawing-canvas.is-ghost .drawing-strokes.is-hidden {
+  opacity: 0.3;
+}
+
+/* ── Dark paper (editor only) ─────────────────────────────────
+   A per-device preference for the canvas. The PDF and SVG writers
+   serialize the page model, never this stylesheet, so exports stay
+   black on white. */
+.drawing-workspace.is-dark-paper .drawing-paper {
+  fill: #1b1e23;
+  filter: drop-shadow(0 2px 10px rgb(0 0 0 / 55%));
+}
+
+.drawing-workspace.is-dark-paper .drawing-strokes {
+  stroke: #e3e6ea;
+}
+
+.drawing-workspace.is-dark-paper .drawing-strokes polygon.is-filled {
+  fill: #e3e6ea;
+}
+
+.drawing-workspace.is-dark-paper .drawing-texts {
+  fill: #e3e6ea;
+}
+
+.drawing-workspace.is-dark-paper .drawing-view-label {
+  fill: #8f97a2;
 }

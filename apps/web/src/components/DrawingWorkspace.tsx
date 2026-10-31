@@ -8,15 +8,26 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react';
 import {
+  Angle,
   Crosshair,
+  Diameter,
   FileDown,
   Maximize,
+  Moon,
+  MousePointer2,
+  MoveDiagonal2,
+  MoveHorizontal,
+  MoveVertical,
   Plus,
+  Radius,
   RefreshCw,
+  StickyNote,
+  Sun,
   Trash2,
   X,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  type LucideIcon
 } from 'lucide-react';
 import {
   commandFactories,
@@ -100,6 +111,7 @@ import {
   markHiddenLeaders,
   previewAnnotationLayer,
   resolveSheetAnnotations,
+  type AnnotationBox,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
 import {
@@ -153,6 +165,11 @@ export interface DrawingWorkspaceProps {
    * Sheet edits keep the ready geometry, so they never set this.
    */
   geometryPending: boolean;
+  /**
+   * The rebuild's progress while `geometryPending`, when the geometry worker
+   * reports one: the feature it is on, counted from 1.
+   */
+  rebuildProgress?: { name: string; index: number; total: number } | null;
   /**
    * Bodies a new sheet draws: the live bodies on screen, independent of the
    * selection and the export scope. Empty refuses the new sheet.
@@ -228,8 +245,13 @@ function sheetStatus(
     : { kind: 'stale', fingerprint };
 }
 
+/** What a view draws, independent of the model state it draws it from. */
+function viewIntentKey(view: DrawingView): string {
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}`;
+}
+
 function projectionKey(fingerprint: string, view: DrawingView): string {
-  return `${fingerprint}|${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}`;
+  return `${fingerprint}|${viewIntentKey(view)}`;
 }
 
 const PAPER_SIZES = Object.keys(DRAWING_PAPER_SIZES_MM) as DrawingPaperSize[];
@@ -499,7 +521,7 @@ function statusMessage(status: SheetStatus): string | null {
     case 'ready':
       return null;
     case 'pending':
-      return 'Waiting for the model to finish updating.';
+      return 'Waiting for the model to finish updating. The views redraw when it does.';
     case 'stale':
       return 'The model changed since this sheet was drawn. Update it to redraw the views.';
     case 'replaced':
@@ -622,6 +644,64 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'note'
 ];
 
+const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
+  {
+    horizontal: MoveHorizontal,
+    vertical: MoveVertical,
+    aligned: MoveDiagonal2,
+    radius: Radius,
+    diameter: Diameter,
+    angle: Angle,
+    note: StickyNote
+  };
+
+/** One key per tool, live while Draw is open and focus is not in a field. */
+const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
+  horizontal: 'H',
+  vertical: 'V',
+  aligned: 'A',
+  radius: 'R',
+  diameter: 'D',
+  angle: 'G',
+  note: 'N'
+};
+
+const DARK_PAPER_STORAGE_KEY = 'openzcad.drawing.darkPaper';
+
+/**
+ * Dark paper is a per-device editor preference: the canvas only. The PDF
+ * and SVG writers never read it, so exports stay black on white.
+ */
+function readDarkPaper(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(DARK_PAPER_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeDarkPaper(dark: boolean) {
+  try {
+    globalThis.localStorage?.setItem(DARK_PAPER_STORAGE_KEY, dark ? '1' : '0');
+  } catch {
+    // Private windows and blocked storage keep the choice for this visit.
+  }
+}
+
+/** A keydown the drawing shortcuts may take: no field, menu or dialog. */
+function drawingShortcutTarget(
+  event: KeyboardEvent,
+  workspace: HTMLElement | null
+): boolean {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.repeat)
+    return false;
+  const target = event.target as HTMLElement | null;
+  if (!target || !workspace) return false;
+  if (target.closest('input, select, textarea, [contenteditable="true"]'))
+    return false;
+  return target === globalThis.document.body || workspace.contains(target);
+}
+
 const ANNOTATION_KIND_LABELS: Readonly<
   Record<DrawingAnnotation['kind'], string>
 > = {
@@ -654,208 +734,253 @@ function annotationName(
     : `${title} (broken)`;
 }
 
-/**
- * D02 annotation tools and the selected annotation's properties. Values are
- * shown only while the sheet is ready: a stale sheet has not been redrawn
- * from the model they would be read from.
- */
-function AnnotationPanel(props: {
+/** The annotations on the sheet, to select one; values only while ready. */
+function AnnotationList(props: {
   sheet: DrawingSheet;
   ready: boolean;
-  editable: boolean;
-  units: ProjectDocument['units'];
-  tool: AnnotationTool | null;
   selected: DrawingAnnotation | null;
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
-  onTool: (tool: AnnotationTool | null) => void;
   onSelect: (annotationId: DrawingAnnotationId | null) => void;
+}) {
+  const { ready, selected } = props;
+  const annotations = props.sheet.annotations ?? [];
+  return (
+    <div className="drawing-panel-section">
+      <h3>Annotations · {annotations.length}</h3>
+      {annotations.length > 0 ? (
+        <div
+          className="drawing-view-list"
+          role="listbox"
+          aria-label="Annotations on this sheet"
+        >
+          {annotations.map((annotation) => {
+            const entry = props.resolutions.get(annotation.annotationId);
+            const broken = ready && entry !== undefined && !entry.ok;
+            return (
+              <button
+                key={annotation.annotationId}
+                type="button"
+                role="option"
+                aria-selected={
+                  annotation.annotationId === selected?.annotationId
+                }
+                className={`drawing-sheet-item${annotation.annotationId === selected?.annotationId ? ' active' : ''}${broken ? ' is-broken' : ''}`}
+                onClick={() => props.onSelect(annotation.annotationId)}
+              >
+                {annotationName(annotation, entry, ready)}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="drawing-hint">
+          Pick a dimension tool on the sheet&apos;s left. Dimensions read their
+          values from the model and follow the sheet&apos;s Update.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * D02: the selected annotation's properties. Values are shown only while the
+ * sheet is ready: a stale sheet has not been redrawn from the model they
+ * would be read from.
+ */
+function AnnotationProperties(props: {
+  selected: DrawingAnnotation;
+  ready: boolean;
+  /** Re-picking needs a ready, editable sheet with views. */
+  canRepick: boolean;
+  editable: boolean;
+  units: ProjectDocument['units'];
+  resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
+  onTool: (tool: AnnotationTool | null) => void;
+  onDeselect: () => void;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
   onDelete: (annotation: DrawingAnnotation) => void;
 }) {
-  const { sheet, ready, editable, tool, selected } = props;
-  const annotations = sheet.annotations ?? [];
-  // Dimensions measure a view's geometry; a note on the paper needs none,
-  // so a ready sheet with no views still takes one.
-  const canAnnotate = ready && editable && sheet.views.length > 0;
-  const canUseTool = (kind: AnnotationToolKind) =>
-    kind === 'note' ? ready && editable : canAnnotate;
-  const resolution = selected
-    ? props.resolutions.get(selected.annotationId)
-    : undefined;
+  const { selected, ready, editable } = props;
+  const resolution = props.resolutions.get(selected.annotationId);
   return (
-    <>
-      <div className="drawing-panel-section">
-        <h3>Annotate</h3>
-        <div
-          className="drawing-tool-grid"
-          role="toolbar"
-          aria-label="Annotation tools"
-        >
-          {ANNOTATION_TOOLS.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className={`drawing-tool${tool?.kind === kind && !tool.repairId ? ' active' : ''}`}
-              aria-pressed={tool?.kind === kind && !tool.repairId}
-              disabled={!canUseTool(kind)}
-              title={
-                canUseTool(kind)
-                  ? `${ANNOTATION_TOOL_LABELS[kind]} ${kind === 'note' ? '' : 'dimension'}`.trim()
-                  : !editable
-                    ? 'Drawing edits are unavailable.'
-                    : !ready
-                      ? 'Update the sheet to annotate it.'
-                      : 'Add a view to dimension it.'
-              }
-              onClick={() =>
-                props.onTool(
-                  tool?.kind === kind && !tool.repairId
-                    ? null
-                    : startAnnotationTool(kind)
-                )
-              }
-            >
-              {ANNOTATION_TOOL_LABELS[kind]}
-            </button>
-          ))}
-        </div>
-        {tool ? (
-          <div className="drawing-tool-hint" role="status">
-            <span>{annotationToolHint(tool)}</span>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => props.onTool(null)}
-            >
-              <X size={13} aria-hidden="true" /> Cancel
-            </button>
-          </div>
-        ) : (
-          <p className="drawing-hint">
-            Dimensions read their values from the model and follow the
-            sheet&apos;s Update.
-          </p>
-        )}
-        {annotations.length > 0 && (
-          <div
-            className="drawing-view-list"
-            role="listbox"
-            aria-label="Annotations on this sheet"
-          >
-            {annotations.map((annotation) => {
-              const entry = props.resolutions.get(annotation.annotationId);
-              const broken = ready && entry !== undefined && !entry.ok;
-              return (
-                <button
-                  key={annotation.annotationId}
-                  type="button"
-                  role="option"
-                  aria-selected={
-                    annotation.annotationId === selected?.annotationId
-                  }
-                  className={`drawing-sheet-item${annotation.annotationId === selected?.annotationId ? ' active' : ''}${broken ? ' is-broken' : ''}`}
-                  onClick={() => props.onSelect(annotation.annotationId)}
-                >
-                  {annotationName(annotation, entry, ready)}
-                </button>
+    <div className="drawing-panel-section is-selection">
+      <SelectionHeading
+        title={annotationTitle(selected)}
+        onDeselect={props.onDeselect}
+      />
+      {!ready ? (
+        <p className="drawing-hint">
+          Update the sheet to read this from the model again.
+        </p>
+      ) : resolution && !resolution.ok ? (
+        <p className="drawing-annotation-status" role="alert">
+          Broken: {resolution.message} Re-pick what it measures, or delete it.
+        </p>
+      ) : resolution?.ok && selected.kind !== 'note' ? (
+        <p className="drawing-annotation-value">
+          {resolution.resolved.label}
+          {selected.kind === 'angle' ? '' : ` ${props.units}`}
+        </p>
+      ) : null}
+      {selected.kind === 'note' ? (
+        <TextField
+          label="Text"
+          value={selected.text}
+          maxLength={MAX_DRAWING_NOTE_LENGTH}
+          printed
+          disabled={!editable}
+          onCommit={(text) =>
+            text.trim() &&
+            props.onUpdate({ ...selected, text: text.trim() }, 'Edit note')
+          }
+        />
+      ) : (
+        <label className="drawing-field">
+          <span>Decimals</span>
+          <select
+            value={selected.decimals ?? ''}
+            disabled={!editable}
+            onChange={(event) => {
+              const { decimals: _previous, ...rest } = selected;
+              props.onUpdate(
+                event.target.value === ''
+                  ? rest
+                  : { ...rest, decimals: Number(event.target.value) },
+                'Format dimension'
               );
-            })}
-          </div>
-        )}
-      </div>
-      {selected && (
-        <div className="drawing-panel-section">
-          <h3>{annotationTitle(selected)}</h3>
-          {!ready ? (
-            <p className="drawing-hint">
-              Update the sheet to read this from the model again.
-            </p>
-          ) : resolution && !resolution.ok ? (
-            <p className="drawing-annotation-status" role="alert">
-              Broken: {resolution.message} Re-pick what it measures, or delete
-              it.
-            </p>
-          ) : resolution?.ok && selected.kind !== 'note' ? (
-            <p className="drawing-annotation-value">
-              {resolution.resolved.label}
-              {selected.kind === 'angle' ? '' : ` ${props.units}`}
-            </p>
-          ) : null}
-          {selected.kind === 'note' ? (
-            <TextField
-              label="Text"
-              value={selected.text}
-              maxLength={MAX_DRAWING_NOTE_LENGTH}
-              printed
-              disabled={!editable}
-              onCommit={(text) =>
-                text.trim() &&
-                props.onUpdate({ ...selected, text: text.trim() }, 'Edit note')
-              }
-            />
-          ) : (
-            <label className="drawing-field">
-              <span>Decimals</span>
-              <select
-                value={selected.decimals ?? ''}
-                disabled={!editable}
-                onChange={(event) => {
-                  const { decimals: _previous, ...rest } = selected;
-                  props.onUpdate(
-                    event.target.value === ''
-                      ? rest
-                      : { ...rest, decimals: Number(event.target.value) },
-                    'Format dimension'
-                  );
-                }}
-              >
-                <option value="">
-                  Default (
-                  {defaultDimensionDecimals(selected.kind, props.units)})
+            }}
+          >
+            <option value="">
+              Default ({defaultDimensionDecimals(selected.kind, props.units)})
+            </option>
+            {Array.from(
+              { length: MAX_DRAWING_DIMENSION_DECIMALS + 1 },
+              (_, decimals) => (
+                <option key={decimals} value={decimals}>
+                  {decimals}
                 </option>
-                {Array.from(
-                  { length: MAX_DRAWING_DIMENSION_DECIMALS + 1 },
-                  (_, decimals) => (
-                    <option key={decimals} value={decimals}>
-                      {decimals}
-                    </option>
-                  )
-                )}
-              </select>
-            </label>
-          )}
-          <div className="drawing-field-row">
-            {(selected.kind !== 'note' || selected.leader) && (
-              <button
-                type="button"
-                className="secondary"
-                disabled={!canAnnotate}
-                title="Pick the edges this measures again"
-                onClick={() =>
-                  props.onTool(
-                    startAnnotationTool(
-                      repairToolKind(selected),
-                      selected.annotationId,
-                      selected.viewId
-                    )
-                  )
-                }
-              >
-                <Crosshair size={13} aria-hidden="true" /> Re-pick
-              </button>
+              )
             )}
-            <button
-              type="button"
-              className="secondary"
-              disabled={!editable}
-              onClick={() => props.onDelete(selected)}
-            >
-              <Trash2 size={13} aria-hidden="true" /> Delete
-            </button>
-          </div>
-        </div>
+          </select>
+        </label>
       )}
-    </>
+      <div className="drawing-field-row">
+        {(selected.kind !== 'note' || selected.leader) && (
+          <button
+            type="button"
+            className="secondary"
+            disabled={!props.canRepick}
+            title="Pick the edges this measures again"
+            onClick={() =>
+              props.onTool(
+                startAnnotationTool(
+                  repairToolKind(selected),
+                  selected.annotationId,
+                  selected.viewId
+                )
+              )
+            }
+          >
+            <Crosshair size={13} aria-hidden="true" /> Re-pick
+          </button>
+        )}
+        <button
+          type="button"
+          className="secondary"
+          disabled={!editable}
+          onClick={() => props.onDelete(selected)}
+        >
+          <Trash2 size={13} aria-hidden="true" /> Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The selection's name, and the way back to the sheet's own settings. */
+function SelectionHeading(props: { title: string; onDeselect: () => void }) {
+  return (
+    <div className="drawing-panel-heading">
+      <h3 className="drawing-selection-title">{props.title}</h3>
+      <button
+        type="button"
+        className="drawing-deselect"
+        aria-label="Back to the sheet"
+        title="Back to the sheet (Esc)"
+        onClick={props.onDeselect}
+      >
+        <X size={14} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The tool rail: a select arrow and the D02 annotation tools, each with a
+ * one-key shortcut the workspace listens for while Draw is open.
+ */
+function DrawingToolRail(props: {
+  tool: AnnotationTool | null;
+  canUseTool: (kind: AnnotationToolKind) => boolean;
+  disabledReason: (kind: AnnotationToolKind) => string;
+  onTool: (kind: AnnotationToolKind | null) => void;
+}) {
+  const { tool } = props;
+  const groups: AnnotationToolKind[][] = [
+    ['horizontal', 'vertical', 'aligned'],
+    ['radius', 'diameter', 'angle'],
+    ['note']
+  ];
+  return (
+    <div
+      className="drawing-tool-rail"
+      role="toolbar"
+      aria-label="Annotation tools"
+      aria-orientation="vertical"
+    >
+      <button
+        type="button"
+        className={`drawing-rail-button${tool ? '' : ' active'}`}
+        aria-label="Select"
+        aria-pressed={!tool}
+        title="Select and move views and annotations (Esc)"
+        onClick={() => props.onTool(null)}
+      >
+        <MousePointer2 size={16} aria-hidden="true" />
+      </button>
+      {groups.map((group) => (
+        <div key={group[0]} className="drawing-rail-group">
+          {group.map((kind) => {
+            const Icon = ANNOTATION_TOOL_ICONS[kind];
+            const active = tool?.kind === kind && !tool.repairId;
+            const usable = props.canUseTool(kind);
+            const name =
+              kind === 'note'
+                ? 'Note'
+                : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
+            return (
+              <button
+                key={kind}
+                type="button"
+                className={`drawing-rail-button${active ? ' active' : ''}`}
+                aria-label={ANNOTATION_TOOL_LABELS[kind]}
+                aria-pressed={active}
+                aria-keyshortcuts={ANNOTATION_TOOL_KEYS[kind]}
+                disabled={!usable}
+                title={
+                  usable
+                    ? `${name} (${ANNOTATION_TOOL_KEYS[kind]})`
+                    : props.disabledReason(kind)
+                }
+                onClick={() => props.onTool(active ? null : kind)}
+              >
+                <Icon size={16} aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1005,6 +1130,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const y = event.shiftKey && delta.x === 0 ? 0 : delta.y;
     setSheetZoom(panSheet(current, zoomPaper, rect, -x, -y));
   };
+  // The canvas's size on screen, so editor overlays (view names) keep a
+  // readable size whatever the paper and zoom.
+  const [canvasPx, setCanvasPx] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!canvasElement) return;
+    const measure = () => {
+      const rect = canvasElement.getBoundingClientRect();
+      setCanvasPx(
+        rect.width > 0 && rect.height > 0
+          ? { width: rect.width, height: rect.height }
+          : null
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(canvasElement);
+    return () => observer.disconnect();
+  }, [canvasElement]);
+  const [darkPaper, setDarkPaper] = useState(readDarkPaper);
   useEffect(() => {
     if (!canvasElement) return;
     const listener = (event: WheelEvent) => wheelRef.current(event);
@@ -1116,6 +1264,35 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         : [],
     [shownSheet, projections]
   );
+  // The last complete drawing of each sheet seen this session, by view
+  // intent. While the model rebuilds the sheet shows it faded instead of
+  // empty outlines; it is only ever seen, never picked from, annotated or
+  // exported, since it is not the model the document now holds.
+  const lastDrawn = useRef(
+    new Map<DrawingSheetId, Map<string, ViewProjection>>()
+  );
+  useEffect(() => {
+    if (!shownSheet || status?.kind !== 'ready') return;
+    if (drawnViews.length !== shownSheet.views.length) return;
+    lastDrawn.current.set(
+      shownSheet.sheetId,
+      new Map(
+        drawnViews.map(({ view, projection }) => [
+          viewIntentKey(view),
+          projection
+        ])
+      )
+    );
+  }, [shownSheet, status, drawnViews]);
+  const ghostViews: ComposedView[] = useMemo(() => {
+    if (!shownSheet || status?.kind !== 'pending') return [];
+    const last = lastDrawn.current.get(shownSheet.sheetId);
+    if (!last) return [];
+    return shownSheet.views.flatMap((view) => {
+      const projection = last.get(viewIntentKey(view));
+      return projection ? [{ view, projection }] : [];
+    });
+  }, [shownSheet, status]);
   // Every annotation against the current model. Only a ready sheet draws
   // or reports them: a stale one has not been redrawn from this model. A
   // leader whose edge its view no longer draws at all is broken too.
@@ -1175,6 +1352,65 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const brokenCount = sheetReady
     ? [...resolutions.values()].filter((entry) => !entry.ok).length
     : 0;
+  // Dimensions measure a view's geometry; a note on the paper needs none,
+  // so a ready sheet with no views still takes one.
+  const canAnnotate = sheetReady && editable && (sheet?.views.length ?? 0) > 0;
+  const canUseTool = (kind: AnnotationToolKind) =>
+    kind === 'note' ? sheetReady && editable : canAnnotate;
+  const toolDisabledReason = (kind: AnnotationToolKind) =>
+    !editable
+      ? (editDisabledReason ?? 'Drawing edits are unavailable.')
+      : !sheetReady
+        ? 'Update the sheet to annotate it.'
+        : kind === 'note'
+          ? 'Notes are unavailable.'
+          : 'Add a view to dimension it.';
+  const chooseTool = (next: AnnotationTool | null) => {
+    setTool(next && pinnedTool(next));
+    setHover(null);
+    if (next) canvasRef.current?.focus();
+  };
+  // Tool keys, and Escape back to the sheet. Window capture, ahead of the
+  // workspace's own shortcuts: in Draw a tool key would otherwise only be
+  // refused as a modeling tool.
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  const shortcutRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  shortcutRef.current = (event: KeyboardEvent) => {
+    if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
+    if (event.key === 'Escape') {
+      if (tool) {
+        setTool(null);
+        setHover(null);
+      } else if (selectedViewId || selectedAnnotationId) {
+        setSelectedViewId(null);
+        setSelectedAnnotationId(null);
+      } else return;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.shiftKey) return;
+    const kind = ANNOTATION_TOOLS.find(
+      (entry) =>
+        ANNOTATION_TOOL_KEYS[entry].toLowerCase() === event.key.toLowerCase()
+    );
+    if (!kind) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canUseTool(kind)) {
+      props.onStatus(toolDisabledReason(kind));
+      return;
+    }
+    chooseTool(
+      tool?.kind === kind && !tool.repairId ? null : startAnnotationTool(kind)
+    );
+  };
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => shortcutRef.current(event);
+    window.addEventListener('keydown', listener, { capture: true });
+    return () =>
+      window.removeEventListener('keydown', listener, { capture: true });
+  }, []);
 
   const run = (command: AnyCommand) => {
     if (!editable) {
@@ -1509,6 +1745,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   const composed = useMemo(() => {
     if (!shownSheet) return null;
+    if (drawnViews.length === 0 && ghostViews.length > 0)
+      return {
+        page: composeSheetPage(shownSheet, ghostViews, {
+          projectName: document.name,
+          units: document.units
+        }),
+        boxes: new Map<DrawingAnnotationId, AnnotationBox>(),
+        ghost: true
+      };
     const annotations = composeSheetAnnotations(
       shownSheet,
       drawnViews,
@@ -1522,9 +1767,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         { projectName: document.name, units: document.units },
         annotations
       ),
-      boxes: annotations.boxes
+      boxes: annotations.boxes,
+      ghost: false
     };
-  }, [shownSheet, drawnViews, resolutions, document.name, document.units]);
+  }, [
+    shownSheet,
+    drawnViews,
+    ghostViews,
+    resolutions,
+    document.name,
+    document.units
+  ]);
   const page: SheetPage | null = composed?.page ?? null;
   // Each view's projected extent: the drawn one once it is ready, the
   // model's estimate before. The canvas outlines, the placement flags and
@@ -1904,7 +2157,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   if (!sheet || !shownSheet || !page || !status) {
     return (
-      <section className="drawing-workspace" aria-label="Drawings">
+      <section
+        ref={workspaceRef}
+        className="drawing-workspace"
+        aria-label="Drawings"
+      >
         <div className="drawing-empty">
           <h2>Drawings</h2>
           <p>
@@ -2086,15 +2343,78 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     );
   })();
 
+  const selectSheet = (sheetId: DrawingSheetId) => {
+    setSelectedSheetId(sheetId);
+    setSelectedViewId(null);
+    setSelectedAnnotationId(null);
+    setTool(null);
+  };
+  const deselect = () => {
+    setSelectedViewId(null);
+    setSelectedAnnotationId(null);
+  };
+  const toggleDarkPaper = () => {
+    const next = !darkPaper;
+    setDarkPaper(next);
+    writeDarkPaper(next);
+  };
+  // Editor-only view names keep about 11 px on screen at any paper or zoom.
+  const pxPerMm = canvasPx ? sheetPxPerMm(zoom, paper, canvasPx) : 0;
+  const labelSizeMm = pxPerMm > 0 ? 11 / pxPerMm : 3.2;
+  const ghost = composed?.ghost === true;
+  const progress =
+    status.kind === 'pending' && props.rebuildProgress
+      ? props.rebuildProgress
+      : null;
+  // Not blocking export by itself, so never a live status: the sheet's
+  // banner and the export refusal stay the only ones.
+  const syncLabel =
+    status.kind !== 'ready'
+      ? null
+      : exportReason === 'Drawing the views…'
+        ? 'Drawing the views…'
+        : 'Matches the model';
+  const exportBlocked =
+    !message &&
+    (brokenCount > 0 || (exportReason !== null && exportReason === offPaper));
+  const selection: 'annotation' | 'view' | null = selectedAnnotation
+    ? 'annotation'
+    : selectedView
+      ? 'view'
+      : null;
+
   return (
-    <section className="drawing-workspace" aria-label="Drawings">
-      <aside className="drawing-sheets" aria-label="Sheets">
-        <div className="drawing-panel-section">
-          <div className="drawing-panel-heading">
-            <h3>Sheets</h3>
+    <section
+      ref={workspaceRef}
+      className={`drawing-workspace${darkPaper ? ' is-dark-paper' : ''}`}
+      aria-label="Drawings"
+    >
+      <div className="drawing-stage">
+        <div className="drawing-stage-bar">
+          <div
+            className="drawing-sheet-tabs"
+            role="tablist"
+            aria-label="Drawing sheets"
+          >
+            {sheets.map((entry) => (
+              <button
+                key={entry.sheetId}
+                type="button"
+                role="tab"
+                aria-selected={entry.sheetId === sheet.sheetId}
+                className={`drawing-sheet-tab${entry.sheetId === sheet.sheetId ? ' active' : ''}`}
+                onClick={() => selectSheet(entry.sheetId)}
+              >
+                <span>{entry.name}</span>
+                <span className="drawing-sheet-tab-paper" aria-hidden="true">
+                  {DRAWING_PAPER_LABELS[entry.paper.size].split(' (')[0]}
+                </span>
+              </button>
+            ))}
             <button
               type="button"
-              className="secondary"
+              className="drawing-sheet-new"
+              aria-label="New sheet"
               onClick={createSheet}
               disabled={!editable || props.geometryPending}
               title={
@@ -2104,38 +2424,122 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   : 'New sheet with the four standard views')
               }
             >
-              <Plus size={13} aria-hidden="true" /> New
+              <Plus size={14} aria-hidden="true" />
             </button>
           </div>
-          <div
-            className="drawing-sheet-list"
-            role="listbox"
-            aria-label="Drawing sheets"
-          >
-            {sheets.map((entry) => (
+          <div className="drawing-stage-actions">
+            {syncLabel && (
+              <span className="drawing-sync">
+                <span className="drawing-sync-dot" aria-hidden="true" />
+                {syncLabel}
+              </span>
+            )}
+            <div
+              className="drawing-zoom"
+              role="toolbar"
+              aria-label="Sheet zoom"
+            >
               <button
-                key={entry.sheetId}
                 type="button"
-                role="option"
-                aria-selected={entry.sheetId === sheet.sheetId}
-                className={`drawing-sheet-item${entry.sheetId === sheet.sheetId ? ' active' : ''}`}
-                onClick={() => {
-                  setSelectedSheetId(entry.sheetId);
-                  setSelectedViewId(null);
-                  setSelectedAnnotationId(null);
-                  setTool(null);
-                }}
+                className="drawing-zoom-button"
+                aria-label="Zoom out"
+                title="Zoom out (Ctrl+wheel or pinch on the sheet)"
+                disabled={zoom.zoom <= 1}
+                onClick={() => zoomBy(1 / SHEET_ZOOM_STEP)}
               >
-                {entry.name}
+                <ZoomOut size={14} aria-hidden="true" />
               </button>
-            ))}
+              {/* Plain text, not an <output>: that is a live "status", and the
+                  sheet's status lines must stay the only ones. */}
+              <span className="drawing-zoom-level" title="Zoom level">
+                {Math.round(zoom.zoom * 100)}%
+              </span>
+              <button
+                type="button"
+                className="drawing-zoom-button"
+                aria-label="Zoom in"
+                title="Zoom in (Ctrl+wheel or pinch on the sheet)"
+                disabled={zoom.zoom >= MAX_SHEET_ZOOM}
+                onClick={() => zoomBy(SHEET_ZOOM_STEP)}
+              >
+                <ZoomIn size={14} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="drawing-zoom-button"
+                aria-label="Fit sheet"
+                title="Show the whole sheet"
+                disabled={zoom.zoom <= 1}
+                onClick={() => setSheetZoom(fitSheetZoom(paper))}
+              >
+                <Maximize size={14} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="drawing-zoom-button"
+                aria-label="Dark paper"
+                aria-pressed={darkPaper}
+                title={
+                  darkPaper
+                    ? 'Show the paper white. Exports are always white.'
+                    : 'Show the paper dark. Exports stay white.'
+                }
+                onClick={toggleDarkPaper}
+              >
+                {darkPaper ? (
+                  <Sun size={14} aria-hidden="true" />
+                ) : (
+                  <Moon size={14} aria-hidden="true" />
+                )}
+              </button>
+            </div>
+            <div className="drawing-export">
+              <button
+                type="button"
+                className="primary"
+                disabled={exportReason !== null}
+                title={exportReason ?? 'Export this sheet as a vector PDF'}
+                onClick={() => void exportSheet('pdf')}
+              >
+                <FileDown size={13} aria-hidden="true" /> Export PDF
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                aria-label="Export SVG"
+                disabled={exportReason !== null}
+                title={exportReason ?? 'Export this sheet as SVG'}
+                onClick={() => void exportSheet('svg')}
+              >
+                SVG
+              </button>
+            </div>
           </div>
         </div>
-      </aside>
-      <div className="drawing-stage">
-        {message && (
+        {message ? (
           <div className={`drawing-banner is-${status.kind}`} role="status">
-            <span>{message}</span>
+            <span>
+              {progress
+                ? `Rebuilding the model: ${progress.name} (${progress.index} of ${progress.total}). ${ghost ? 'Showing the last drawing until the views redraw.' : 'The views redraw when it finishes.'}`
+                : message}
+            </span>
+            {progress && progress.total > 0 && (
+              <span
+                className="drawing-progress"
+                role="progressbar"
+                aria-label="Model rebuild"
+                aria-valuemin={0}
+                aria-valuemax={progress.total}
+                aria-valuenow={progress.index}
+              >
+                <span
+                  className="drawing-progress-fill"
+                  style={{
+                    width: `${Math.min(100, (100 * progress.index) / progress.total)}%`
+                  }}
+                />
+              </span>
+            )}
             {(status.kind === 'stale' || status.kind === 'replaced') && (
               <button
                 type="button"
@@ -2154,44 +2558,47 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               </button>
             )}
           </div>
-        )}
-        <svg
-          ref={attachCanvas}
-          className={`drawing-canvas${zoom.zoom > 1 ? ' is-zoomed' : ''}`}
-          role="application"
-          aria-label={`Sheet ${sheet.name}`}
-          tabIndex={0}
-          viewBox={sheetViewBox(zoom, paper)}
-          preserveAspectRatio="xMidYMid meet"
-          onKeyDown={onCanvasKeyDown}
-          onPointerDownCapture={onCanvasPointerDownCapture}
-          onPointerMoveCapture={onCanvasPointerMoveCapture}
-          onPointerUpCapture={onCanvasPointerEnd}
-          onPointerCancelCapture={onCanvasPointerEnd}
-          onPointerDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSelectedViewId(null);
-              setSelectedAnnotationId(null);
-            }
-            // A zoomed sheet pans by dragging empty paper.
-            const target = event.target as Element;
-            if (
-              event.button === 0 &&
-              zoom.zoom > 1 &&
-              !target.closest?.(
-                '.drawing-view-hit, .drawing-annotation-hit, .drawing-pick-surface'
+        ) : exportBlocked ? (
+          <div className="drawing-banner is-blocked" role="status">
+            <span>{exportReason}</span>
+          </div>
+        ) : null}
+        <div className="drawing-canvas-area">
+          <svg
+            ref={attachCanvas}
+            className={`drawing-canvas${zoom.zoom > 1 ? ' is-zoomed' : ''}${ghost ? ' is-ghost' : ''}`}
+            role="application"
+            aria-label={`Sheet ${sheet.name}`}
+            tabIndex={0}
+            viewBox={sheetViewBox(zoom, paper)}
+            preserveAspectRatio="xMidYMid meet"
+            onKeyDown={onCanvasKeyDown}
+            onPointerDownCapture={onCanvasPointerDownCapture}
+            onPointerMoveCapture={onCanvasPointerMoveCapture}
+            onPointerUpCapture={onCanvasPointerEnd}
+            onPointerCancelCapture={onCanvasPointerEnd}
+            onPointerDown={(event) => {
+              if (event.target === event.currentTarget) deselect();
+              // A zoomed sheet pans by dragging empty paper.
+              const target = event.target as Element;
+              if (
+                event.button === 0 &&
+                zoom.zoom > 1 &&
+                !target.closest?.(
+                  '.drawing-view-hit, .drawing-annotation-hit, .drawing-pick-surface'
+                )
               )
-            )
-              startPan(event);
-          }}
-        >
-          <rect
-            className="drawing-paper"
-            width={paper.width}
-            height={paper.height}
-          />
-          {(['border', 'thin', 'hidden', 'visible', 'dimension'] as const).map(
-            (kind) => (
+                startPan(event);
+            }}
+          >
+            <rect
+              className="drawing-paper"
+              width={paper.width}
+              height={paper.height}
+            />
+            {(
+              ['border', 'thin', 'hidden', 'visible', 'dimension'] as const
+            ).map((kind) => (
               <g key={kind} className={`drawing-strokes is-${kind}`}>
                 {page.strokes
                   .filter((stroke) => stroke.kind === kind)
@@ -2215,177 +2622,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     )
                   )}
               </g>
-            )
-          )}
-          <g className="drawing-texts">
-            {page.texts.map((text, index) => {
-              const start = sheetTextStart(text);
-              return (
-                <text
-                  key={index}
-                  x={start.x}
-                  y={paper.height - start.y}
-                  fontSize={text.sizeMm / 0.718}
-                  fontWeight={text.bold ? 'bold' : undefined}
-                  transform={
-                    text.angleDeg
-                      ? `rotate(${-text.angleDeg} ${start.x} ${paper.height - start.y})`
-                      : undefined
-                  }
-                >
-                  {text.text}
-                </text>
-              );
-            })}
-          </g>
-          {shownSheet.views.map((view) => {
-            const state = projections.get(view.viewId);
-            const extent =
-              state?.state === 'ready' && state.projection.bounds
-                ? state.projection.bounds
-                : estimateViewExtent(bodies, view.bodyIds, view.orientation);
-            if (!extent) return null;
-            const box = viewPageBox(view, extent, shownSheet, document.units);
-            const pad = 3;
-            const ready = state?.state === 'ready';
-            const label = DRAWING_VIEW_LABELS[view.orientation];
-            return (
-              <g
-                key={view.viewId}
-                className={`drawing-view${view.viewId === selectedViewId ? ' is-selected' : ''}${ready ? '' : ' is-placeholder'}`}
-                data-view={view.orientation}
-              >
-                {!ready && (
-                  <rect
-                    className="drawing-view-outline"
-                    x={box.x}
-                    y={paper.height - box.y - box.height}
-                    width={box.width}
-                    height={box.height}
-                  />
-                )}
-                {/* Editor-only: view names (and drawing/error status) are an
-                    overlay for picking views. composeSheetPage never draws
-                    them, so PDF and SVG exports carry no view labels. */}
-                <text
-                  className="drawing-view-label"
-                  x={box.x}
-                  y={paper.height - box.y + 5}
-                >
-                  {state?.state === 'error'
-                    ? `${label} — ${state.message}`
-                    : ready || status.kind !== 'ready'
-                      ? label
-                      : `${label} — drawing…`}
-                </text>
-                <rect
-                  className="drawing-view-hit"
-                  role="button"
-                  aria-label={`${label} view`}
-                  aria-pressed={view.viewId === selectedViewId}
-                  x={box.x - pad}
-                  y={paper.height - box.y - box.height - pad}
-                  width={box.width + 2 * pad}
-                  height={box.height + 2 * pad}
-                  onPointerDown={(event) => onViewPointerDown(event, view)}
-                  onPointerMove={onViewPointerMove}
-                  onPointerUp={onViewPointerUp}
-                  onPointerCancel={() => setDrag(null)}
-                />
-              </g>
-            );
-          })}
-          <rect
-            className="drawing-title-hit"
-            x={block.x}
-            y={paper.height - block.y - block.height}
-            width={block.width}
-            height={block.height}
-            onPointerDown={() => {
-              setSelectedViewId(null);
-              setSelectedAnnotationId(null);
-            }}
-          />
-          {(shownSheet.annotations ?? []).map((annotation) => {
-            const id = annotation.annotationId;
-            const box = composed?.boxes.get(id);
-            const resolution = resolutions.get(id);
-            const selectedClass =
-              id === selectedAnnotationId ? ' is-selected' : '';
-            const name = annotationName(annotation, resolution, sheetReady);
-            const handlers = {
-              onPointerDown: (event: ReactPointerEvent<SVGElement>) =>
-                onAnnotationPointerDown(event, annotation),
-              onPointerMove: onAnnotationPointerMove,
-              onPointerUp: onAnnotationPointerUp,
-              onPointerCancel: () => setAnnotationDrag(null)
-            };
-            if (box)
-              return (
-                <rect
-                  key={id}
-                  className={`drawing-annotation-hit${selectedClass}`}
-                  role="button"
-                  aria-label={name}
-                  aria-pressed={id === selectedAnnotationId}
-                  data-annotation={annotation.kind}
-                  x={box.x}
-                  y={paper.height - box.y - box.height}
-                  width={box.width}
-                  height={box.height}
-                  {...handlers}
-                />
-              );
-            // Broken: kept where it was placed, marked, and still
-            // selectable so it can be re-picked or deleted.
-            const view = annotation.viewId
-              ? shownSheet.views.find(
-                  (entry) => entry.viewId === annotation.viewId
-                )
-              : undefined;
-            if (
-              !sheetReady ||
-              !resolution ||
-              resolution.ok ||
-              (view && projections.get(view.viewId)?.state !== 'ready')
-            )
-              return null;
-            const [x, y] = annotationAnchor(annotation, view);
-            return (
-              <g
-                key={id}
-                className={`drawing-annotation-broken${selectedClass}`}
-              >
-                <text x={x} y={paper.height - y}>
-                  {annotation.kind === 'note'
-                    ? 'Broken leader'
-                    : 'Broken dimension'}
-                </text>
-                <rect
-                  className="drawing-annotation-hit"
-                  role="button"
-                  aria-label={name}
-                  aria-pressed={id === selectedAnnotationId}
-                  data-annotation={annotation.kind}
-                  x={x - 1}
-                  y={paper.height - y - 4}
-                  width={30}
-                  height={5.5}
-                  {...handlers}
-                />
-              </g>
-            );
-          })}
-          {tool && preview && (
-            <g className="drawing-annotation-preview">
-              {preview.strokes.map((stroke, index) => (
-                <polyline
-                  key={index}
-                  className={stroke.filled ? 'is-filled' : undefined}
-                  points={`${svgPoints(stroke.points, paper.height)}${stroke.filled ? ` ${svgPoints(stroke.points.slice(0, 2), paper.height)}` : ''}`}
-                />
-              ))}
-              {preview.texts.map((text, index) => {
+            ))}
+            <g className="drawing-texts">
+              {page.texts.map((text, index) => {
                 const start = sheetTextStart(text);
                 return (
                   <text
@@ -2393,6 +2632,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     x={start.x}
                     y={paper.height - start.y}
                     fontSize={text.sizeMm / 0.718}
+                    fontWeight={text.bold ? 'bold' : undefined}
                     transform={
                       text.angleDeg
                         ? `rotate(${-text.angleDeg} ${start.x} ${paper.height - start.y})`
@@ -2404,201 +2644,448 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 );
               })}
             </g>
-          )}
-          {tool && hover?.edge && (
-            <polyline
-              className="drawing-pick-highlight"
-              points={svgPoints(hover.edge.page.flat(), paper.height)}
-            />
-          )}
-          {tool && (
+            {shownSheet.views.map((view) => {
+              const state = projections.get(view.viewId);
+              const ghostView = ghost
+                ? ghostViews.find((entry) => entry.view === view)
+                : undefined;
+              const extent =
+                state?.state === 'ready' && state.projection.bounds
+                  ? state.projection.bounds
+                  : (ghostView?.projection.bounds ??
+                    estimateViewExtent(bodies, view.bodyIds, view.orientation));
+              if (!extent) return null;
+              const box = viewPageBox(view, extent, shownSheet, document.units);
+              const pad = 3;
+              const ready = state?.state === 'ready';
+              const label = DRAWING_VIEW_LABELS[view.orientation];
+              return (
+                <g
+                  key={view.viewId}
+                  className={`drawing-view${view.viewId === selectedViewId ? ' is-selected' : ''}${ready ? '' : ' is-placeholder'}`}
+                  data-view={view.orientation}
+                >
+                  {!ready && !ghostView && (
+                    <rect
+                      className="drawing-view-outline"
+                      x={box.x}
+                      y={paper.height - box.y - box.height}
+                      width={box.width}
+                      height={box.height}
+                    />
+                  )}
+                  {/* Editor-only: view names (and drawing/error status) are an
+                      overlay for picking views. composeSheetPage never draws
+                      them, so PDF and SVG exports carry no view labels. */}
+                  <text
+                    className="drawing-view-label"
+                    x={box.x}
+                    y={paper.height - box.y + pad + labelSizeMm}
+                    fontSize={labelSizeMm}
+                  >
+                    {state?.state === 'error'
+                      ? `${label} — ${state.message}`
+                      : ready || status.kind !== 'ready'
+                        ? label
+                        : `${label} — drawing…`}
+                  </text>
+                  <rect
+                    className="drawing-view-hit"
+                    role="button"
+                    aria-label={`${label} view`}
+                    aria-pressed={view.viewId === selectedViewId}
+                    x={box.x - pad}
+                    y={paper.height - box.y - box.height - pad}
+                    width={box.width + 2 * pad}
+                    height={box.height + 2 * pad}
+                    onPointerDown={(event) => onViewPointerDown(event, view)}
+                    onPointerMove={onViewPointerMove}
+                    onPointerUp={onViewPointerUp}
+                    onPointerCancel={() => setDrag(null)}
+                  />
+                </g>
+              );
+            })}
             <rect
-              className="drawing-pick-surface"
-              data-tool={tool.kind}
-              width={paper.width}
-              height={paper.height}
-              onPointerDown={onPickPointerDown}
-              onPointerMove={onPickPointerMove}
-              onPointerLeave={() => setHover(null)}
+              className="drawing-title-hit"
+              x={block.x}
+              y={paper.height - block.y - block.height}
+              width={block.width}
+              height={block.height}
+              onPointerDown={deselect}
             />
+            {(shownSheet.annotations ?? []).map((annotation) => {
+              const id = annotation.annotationId;
+              const box = composed?.boxes.get(id);
+              const resolution = resolutions.get(id);
+              const selectedClass =
+                id === selectedAnnotationId ? ' is-selected' : '';
+              const name = annotationName(annotation, resolution, sheetReady);
+              const handlers = {
+                onPointerDown: (event: ReactPointerEvent<SVGElement>) =>
+                  onAnnotationPointerDown(event, annotation),
+                onPointerMove: onAnnotationPointerMove,
+                onPointerUp: onAnnotationPointerUp,
+                onPointerCancel: () => setAnnotationDrag(null)
+              };
+              if (box)
+                return (
+                  <rect
+                    key={id}
+                    className={`drawing-annotation-hit${selectedClass}`}
+                    role="button"
+                    aria-label={name}
+                    aria-pressed={id === selectedAnnotationId}
+                    data-annotation={annotation.kind}
+                    x={box.x}
+                    y={paper.height - box.y - box.height}
+                    width={box.width}
+                    height={box.height}
+                    {...handlers}
+                  />
+                );
+              // Broken: kept where it was placed, marked, and still
+              // selectable so it can be re-picked or deleted.
+              const view = annotation.viewId
+                ? shownSheet.views.find(
+                    (entry) => entry.viewId === annotation.viewId
+                  )
+                : undefined;
+              if (
+                !sheetReady ||
+                !resolution ||
+                resolution.ok ||
+                (view && projections.get(view.viewId)?.state !== 'ready')
+              )
+                return null;
+              const [x, y] = annotationAnchor(annotation, view);
+              return (
+                <g
+                  key={id}
+                  className={`drawing-annotation-broken${selectedClass}`}
+                >
+                  <text x={x} y={paper.height - y}>
+                    {annotation.kind === 'note'
+                      ? 'Broken leader'
+                      : 'Broken dimension'}
+                  </text>
+                  <rect
+                    className="drawing-annotation-hit"
+                    role="button"
+                    aria-label={name}
+                    aria-pressed={id === selectedAnnotationId}
+                    data-annotation={annotation.kind}
+                    x={x - 1}
+                    y={paper.height - y - 4}
+                    width={30}
+                    height={5.5}
+                    {...handlers}
+                  />
+                </g>
+              );
+            })}
+            {tool && preview && (
+              <g className="drawing-annotation-preview">
+                {preview.strokes.map((stroke, index) => (
+                  <polyline
+                    key={index}
+                    className={stroke.filled ? 'is-filled' : undefined}
+                    points={`${svgPoints(stroke.points, paper.height)}${stroke.filled ? ` ${svgPoints(stroke.points.slice(0, 2), paper.height)}` : ''}`}
+                  />
+                ))}
+                {preview.texts.map((text, index) => {
+                  const start = sheetTextStart(text);
+                  return (
+                    <text
+                      key={index}
+                      x={start.x}
+                      y={paper.height - start.y}
+                      fontSize={text.sizeMm / 0.718}
+                      transform={
+                        text.angleDeg
+                          ? `rotate(${-text.angleDeg} ${start.x} ${paper.height - start.y})`
+                          : undefined
+                      }
+                    >
+                      {text.text}
+                    </text>
+                  );
+                })}
+              </g>
+            )}
+            {tool && hover?.edge && (
+              <polyline
+                className="drawing-pick-highlight"
+                points={svgPoints(hover.edge.page.flat(), paper.height)}
+              />
+            )}
+            {tool && (
+              <rect
+                className="drawing-pick-surface"
+                data-tool={tool.kind}
+                width={paper.width}
+                height={paper.height}
+                onPointerDown={onPickPointerDown}
+                onPointerMove={onPickPointerMove}
+                onPointerLeave={() => setHover(null)}
+              />
+            )}
+          </svg>
+          <DrawingToolRail
+            tool={tool}
+            canUseTool={canUseTool}
+            disabledReason={toolDisabledReason}
+            onTool={(kind) =>
+              chooseTool(kind ? startAnnotationTool(kind) : null)
+            }
+          />
+          {tool && (
+            <div className="drawing-tool-hint" role="status">
+              <span>{annotationToolHint(tool)}</span>
+              <button
+                type="button"
+                className="drawing-tool-hint-cancel"
+                onClick={() => chooseTool(null)}
+              >
+                Cancel <kbd>Esc</kbd>
+              </button>
+            </div>
           )}
-        </svg>
-        <div className="drawing-zoom" role="toolbar" aria-label="Sheet zoom">
-          <button
-            type="button"
-            className="drawing-zoom-button"
-            aria-label="Zoom out"
-            title="Zoom out (Ctrl+wheel or pinch on the sheet)"
-            disabled={zoom.zoom <= 1}
-            onClick={() => zoomBy(1 / SHEET_ZOOM_STEP)}
-          >
-            <ZoomOut size={14} aria-hidden="true" />
-          </button>
-          {/* Plain text, not an <output>: that is a live "status", and the
-              sheet's status lines must stay the only ones. */}
-          <span className="drawing-zoom-level" title="Zoom level">
-            {Math.round(zoom.zoom * 100)}%
-          </span>
-          <button
-            type="button"
-            className="drawing-zoom-button"
-            aria-label="Zoom in"
-            title="Zoom in (Ctrl+wheel or pinch on the sheet)"
-            disabled={zoom.zoom >= MAX_SHEET_ZOOM}
-            onClick={() => zoomBy(SHEET_ZOOM_STEP)}
-          >
-            <ZoomIn size={14} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="drawing-zoom-button"
-            aria-label="Fit sheet"
-            title="Show the whole sheet"
-            disabled={zoom.zoom <= 1}
-            onClick={() => setSheetZoom(fitSheetZoom(paper))}
-          >
-            <Maximize size={14} aria-hidden="true" />
-          </button>
         </div>
       </div>
       <aside className="drawing-panel" aria-label="Drawing properties">
-        <div className="drawing-panel-section">
-          <h3>Sheet</h3>
-          <TextField
-            label="Name"
-            value={sheet.name}
-            disabled={!editable}
-            onCommit={(name) =>
-              name.trim() &&
-              updateSheet({ name }, `Rename drawing to ${name.trim()}`)
-            }
+        {selection === 'annotation' && selectedAnnotation ? (
+          <AnnotationProperties
+            selected={selectedAnnotation}
+            ready={sheetReady}
+            canRepick={canAnnotate}
+            editable={editable}
+            units={document.units}
+            resolutions={resolutions}
+            onTool={chooseTool}
+            onDeselect={deselect}
+            onUpdate={updateAnnotation}
+            onDelete={deleteAnnotation}
           />
-          <div className="drawing-field-row">
-            <label className="drawing-field">
-              <span>Paper</span>
-              <select
-                value={sheet.paper.size}
+        ) : selection === 'view' && selectedView ? (
+          <div className="drawing-panel-section is-selection">
+            <SelectionHeading
+              title={`${DRAWING_VIEW_LABELS[selectedView.orientation]} view`}
+              onDeselect={deselect}
+            />
+            <div className="drawing-field-row">
+              <NumberField
+                label="Centre X (mm)"
+                value={selectedView.centerMm.x}
+                disabled={!editable}
+                onCommit={(x) =>
+                  moveView(selectedView.viewId, {
+                    ...selectedView.centerMm,
+                    x
+                  })
+                }
+              />
+              <NumberField
+                label="Centre Y (mm)"
+                value={selectedView.centerMm.y}
+                disabled={!editable}
+                onCommit={(y) =>
+                  moveView(selectedView.viewId, {
+                    ...selectedView.centerMm,
+                    y
+                  })
+                }
+              />
+            </div>
+            {selectedView.parentViewId && (
+              <p className="drawing-hint">
+                Projected from the{' '}
+                {DRAWING_VIEW_LABELS[
+                  sheet.views.find(
+                    (view) => view.viewId === selectedView.parentViewId
+                  )!.orientation
+                ].toLowerCase()}{' '}
+                view: it stays aligned with it.
+              </p>
+            )}
+            <label className="drawing-check">
+              <input
+                type="checkbox"
+                checked={selectedView.hiddenLines}
                 disabled={!editable}
                 onChange={(event) =>
-                  updateSheet({
-                    paper: {
-                      ...sheet.paper,
-                      size: event.target.value as DrawingPaperSize
+                  run(
+                    commandFactories.updateDrawingView({
+                      sheetId: sheet.sheetId,
+                      viewId: selectedView.viewId,
+                      hiddenLines: event.target.checked
+                    })
+                  )
+                }
+              />
+              Hidden lines
+            </label>
+            <fieldset className="drawing-bodies">
+              <legend>Bodies</legend>
+              {[
+                ...liveBodies,
+                // Bodies the view still names but the model no longer
+                // has: listed so they can be unticked, which is how a
+                // sheet blocked on a deleted body is repaired.
+                ...selectedView.bodyIds.filter((id) => !liveBodies.includes(id))
+              ].map((id) => (
+                <label key={id} className="drawing-check">
+                  <input
+                    type="checkbox"
+                    checked={selectedView.bodyIds.includes(id)}
+                    disabled={
+                      !editable ||
+                      // Not offered for removal until the rebuild says
+                      // whether it is really gone.
+                      (props.geometryPending && !liveBodies.includes(id)) ||
+                      (selectedView.bodyIds.length === 1 &&
+                        selectedView.bodyIds[0] === id)
                     }
-                  })
-                }
-              >
-                {PAPER_SIZES.map((size) => (
-                  <option key={size} value={size}>
-                    {DRAWING_PAPER_LABELS[size]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="drawing-field">
-              <span>Orientation</span>
-              <select
-                value={sheet.paper.orientation}
-                disabled={!editable}
-                onChange={(event) =>
-                  updateSheet({
-                    paper: {
-                      ...sheet.paper,
-                      orientation: event.target
-                        .value as DrawingSheet['paper']['orientation']
+                    onChange={(event) =>
+                      run(
+                        commandFactories.updateDrawingView({
+                          sheetId: sheet.sheetId,
+                          viewId: selectedView.viewId,
+                          bodyIds: event.target.checked
+                            ? [...selectedView.bodyIds, id]
+                            : selectedView.bodyIds.filter(
+                                (entry) => entry !== id
+                              )
+                        })
+                      )
                     }
-                  })
-                }
-              >
-                <option value="landscape">Landscape</option>
-                <option value="portrait">Portrait</option>
-              </select>
-            </label>
-          </div>
-          <div className="drawing-field-row">
-            <label className="drawing-field">
-              <span>Scale</span>
-              <select
-                value={formatDrawingScale(sheet.scale)}
-                disabled={!editable}
-                onChange={(event) => {
-                  const scale = scaleOptions.find(
-                    (option) =>
-                      formatDrawingScale(option) === event.target.value
-                  );
-                  if (scale) updateSheet({ scale });
-                }}
-              >
-                {scaleOptions.map((scale) => (
-                  <option
-                    key={formatDrawingScale(scale)}
-                    value={formatDrawingScale(scale)}
-                  >
-                    {formatDrawingScale(scale)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="drawing-field">
-              <span>Projection</span>
-              <select
-                value={sheet.projectionAngle}
-                disabled={!editable}
-                onChange={(event) =>
-                  updateSheet({
-                    projectionAngle: event.target
-                      .value as DrawingSheet['projectionAngle']
-                  })
-                }
-              >
-                <option value="first">First angle</option>
-                <option value="third">Third angle</option>
-              </select>
-            </label>
-          </div>
-        </div>
-        <AnnotationPanel
-          sheet={sheet}
-          ready={sheetReady}
-          editable={editable}
-          units={document.units}
-          tool={tool}
-          selected={selectedAnnotation}
-          resolutions={resolutions}
-          onTool={(next) => {
-            setTool(next && pinnedTool(next));
-            setHover(null);
-            if (next) canvasRef.current?.focus();
-          }}
-          onSelect={(annotationId) => {
-            setSelectedAnnotationId(annotationId);
-            setSelectedViewId(null);
-          }}
-          onUpdate={updateAnnotation}
-          onDelete={deleteAnnotation}
-        />
-        <div className="drawing-panel-section">
-          <h3>Title block</h3>
-          {TITLE_FIELDS.map(({ key, label }) => (
-            <TextField
-              key={key}
-              label={label}
-              value={sheet.titleBlock[key] ?? ''}
-              placeholder={key === 'title' ? document.name : undefined}
-              printed
+                  />
+                  {liveBodies.includes(id)
+                    ? (bodies[id]?.name ?? id)
+                    : props.geometryPending
+                      ? `${bodies[id]?.name ?? 'Body'} (updating…)`
+                      : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
+                </label>
+              ))}
+            </fieldset>
+            <button
+              type="button"
+              className="secondary"
               disabled={!editable}
-              onCommit={(value) =>
-                updateSheet({ titleBlock: { [key]: value } })
+              onClick={() => {
+                if (
+                  run(
+                    commandFactories.deleteDrawingView({
+                      sheetId: sheet.sheetId,
+                      viewId: selectedView.viewId
+                    })
+                  )
+                )
+                  setSelectedViewId(null);
+              }}
+            >
+              <Trash2 size={13} aria-hidden="true" /> Delete view
+            </button>
+          </div>
+        ) : (
+          <div className="drawing-panel-section">
+            <h3>Sheet</h3>
+            <TextField
+              label="Name"
+              value={sheet.name}
+              disabled={!editable}
+              onCommit={(name) =>
+                name.trim() &&
+                updateSheet({ name }, `Rename drawing to ${name.trim()}`)
               }
             />
-          ))}
-        </div>
+            <div className="drawing-field-row">
+              <label className="drawing-field">
+                <span>Paper</span>
+                <select
+                  value={sheet.paper.size}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    updateSheet({
+                      paper: {
+                        ...sheet.paper,
+                        size: event.target.value as DrawingPaperSize
+                      }
+                    })
+                  }
+                >
+                  {PAPER_SIZES.map((size) => (
+                    <option key={size} value={size}>
+                      {DRAWING_PAPER_LABELS[size]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="drawing-field">
+                <span>Orientation</span>
+                <select
+                  value={sheet.paper.orientation}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    updateSheet({
+                      paper: {
+                        ...sheet.paper,
+                        orientation: event.target
+                          .value as DrawingSheet['paper']['orientation']
+                      }
+                    })
+                  }
+                >
+                  <option value="landscape">Landscape</option>
+                  <option value="portrait">Portrait</option>
+                </select>
+              </label>
+            </div>
+            <div className="drawing-field-row">
+              <label className="drawing-field">
+                <span>Scale</span>
+                <select
+                  value={formatDrawingScale(sheet.scale)}
+                  disabled={!editable}
+                  onChange={(event) => {
+                    const scale = scaleOptions.find(
+                      (option) =>
+                        formatDrawingScale(option) === event.target.value
+                    );
+                    if (scale) updateSheet({ scale });
+                  }}
+                >
+                  {scaleOptions.map((scale) => (
+                    <option
+                      key={formatDrawingScale(scale)}
+                      value={formatDrawingScale(scale)}
+                    >
+                      {formatDrawingScale(scale)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="drawing-field">
+                <span>Projection</span>
+                <select
+                  value={sheet.projectionAngle}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    updateSheet({
+                      projectionAngle: event.target
+                        .value as DrawingSheet['projectionAngle']
+                    })
+                  }
+                >
+                  <option value="first">First angle</option>
+                  <option value="third">Third angle</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        )}
         <div className="drawing-panel-section">
-          <h3>
-            {selectedView
-              ? `${DRAWING_VIEW_LABELS[selectedView.orientation]} view`
-              : 'Views'}
-          </h3>
+          <h3>Views · {sheet.views.length}</h3>
           {/* Every view, whether or not it is on the page: a view left off
               the paper (a smaller sheet, an old document) can still be
               picked here, then moved back or deleted. */}
@@ -2629,143 +3116,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               );
             })}
           </div>
-          {/* Off the paper is said once, under Export, which it blocks. This
-              one blocks nothing, so it is plain text, not a live status
-              that would talk over the sheet's own banner. */}
+          {/* Off the paper is said once, over the sheet, where it blocks
+              export. This one blocks nothing, so it is plain text, not a
+              live status that would talk over the sheet's own banner. */}
           {!offPaper && layoutWarning && (
             <p className="drawing-field-warning">{layoutWarning}</p>
           )}
-          <button
-            type="button"
-            className="secondary"
-            disabled={!editable || sheet.views.length === 0}
-            title={
-              editDisabledReason ??
-              'Lay the views out again above the title block, at a smaller scale if they need it'
-            }
-            onClick={fitViews}
-          >
-            <Maximize size={13} aria-hidden="true" /> Fit views to sheet
-          </button>
-          {selectedView ? (
-            <>
-              <div className="drawing-field-row">
-                <NumberField
-                  label="Centre X (mm)"
-                  value={selectedView.centerMm.x}
-                  disabled={!editable}
-                  onCommit={(x) =>
-                    moveView(selectedView.viewId, {
-                      ...selectedView.centerMm,
-                      x
-                    })
-                  }
-                />
-                <NumberField
-                  label="Centre Y (mm)"
-                  value={selectedView.centerMm.y}
-                  disabled={!editable}
-                  onCommit={(y) =>
-                    moveView(selectedView.viewId, {
-                      ...selectedView.centerMm,
-                      y
-                    })
-                  }
-                />
-              </div>
-              {selectedView.parentViewId && (
-                <p className="drawing-hint">
-                  Projected from the{' '}
-                  {DRAWING_VIEW_LABELS[
-                    sheet.views.find(
-                      (view) => view.viewId === selectedView.parentViewId
-                    )!.orientation
-                  ].toLowerCase()}{' '}
-                  view: it stays aligned with it.
-                </p>
-              )}
-              <label className="drawing-check">
-                <input
-                  type="checkbox"
-                  checked={selectedView.hiddenLines}
-                  disabled={!editable}
-                  onChange={(event) =>
-                    run(
-                      commandFactories.updateDrawingView({
-                        sheetId: sheet.sheetId,
-                        viewId: selectedView.viewId,
-                        hiddenLines: event.target.checked
-                      })
-                    )
-                  }
-                />
-                Hidden lines
-              </label>
-              <fieldset className="drawing-bodies">
-                <legend>Bodies</legend>
-                {[
-                  ...liveBodies,
-                  // Bodies the view still names but the model no longer
-                  // has: listed so they can be unticked, which is how a
-                  // sheet blocked on a deleted body is repaired.
-                  ...selectedView.bodyIds.filter(
-                    (id) => !liveBodies.includes(id)
-                  )
-                ].map((id) => (
-                  <label key={id} className="drawing-check">
-                    <input
-                      type="checkbox"
-                      checked={selectedView.bodyIds.includes(id)}
-                      disabled={
-                        !editable ||
-                        // Not offered for removal until the rebuild says
-                        // whether it is really gone.
-                        (props.geometryPending && !liveBodies.includes(id)) ||
-                        (selectedView.bodyIds.length === 1 &&
-                          selectedView.bodyIds[0] === id)
-                      }
-                      onChange={(event) =>
-                        run(
-                          commandFactories.updateDrawingView({
-                            sheetId: sheet.sheetId,
-                            viewId: selectedView.viewId,
-                            bodyIds: event.target.checked
-                              ? [...selectedView.bodyIds, id]
-                              : selectedView.bodyIds.filter(
-                                  (entry) => entry !== id
-                                )
-                          })
-                        )
-                      }
-                    />
-                    {liveBodies.includes(id)
-                      ? (bodies[id]?.name ?? id)
-                      : props.geometryPending
-                        ? `${bodies[id]?.name ?? 'Body'} (updating…)`
-                        : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
-                  </label>
-                ))}
-              </fieldset>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!editable}
-                onClick={() => {
-                  if (
-                    run(
-                      commandFactories.deleteDrawingView({
-                        sheetId: sheet.sheetId,
-                        viewId: selectedView.viewId
-                      })
-                    )
-                  )
-                    setSelectedViewId(null);
-                }}
-              >
-                <Trash2 size={13} aria-hidden="true" /> Delete view
-              </button>
-            </>
-          ) : (
+          {!selectedView && (
             <p className="drawing-hint">
               Select a view on the sheet to move it or change what it shows.
               Drag it, or use the arrow keys (Shift for 10 mm).
@@ -2799,56 +3156,72 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               <Plus size={13} aria-hidden="true" /> Add view
             </button>
           </div>
-        </div>
-        <div className="drawing-panel-section">
-          <h3>Export</h3>
-          <div className="drawing-field-row">
-            <button
-              type="button"
-              className="primary"
-              disabled={exportReason !== null}
-              title={exportReason ?? 'Export this sheet as a vector PDF'}
-              onClick={() => void exportSheet('pdf')}
-            >
-              <FileDown size={13} aria-hidden="true" /> PDF
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={exportReason !== null}
-              title={exportReason ?? 'Export this sheet as SVG'}
-              onClick={() => void exportSheet('svg')}
-            >
-              <FileDown size={13} aria-hidden="true" /> SVG
-            </button>
-          </div>
-          {(brokenCount > 0 || (exportReason && exportReason === offPaper)) && (
-            <p className="drawing-annotation-status" role="status">
-              {exportReason}
-            </p>
-          )}
-          <p className="drawing-hint">
-            Lines come from the display tessellation and exact edge samples;
-            curved outlines are approximate to the display tolerance.
-          </p>
           <button
             type="button"
-            className="secondary drawing-delete-sheet"
-            disabled={!editable}
-            onClick={() => {
-              if (
-                run(
-                  commandFactories.deleteDrawingSheet({
-                    sheetId: sheet.sheetId
-                  })
-                )
-              )
-                setSelectedSheetId(null);
-            }}
+            className="secondary"
+            disabled={!editable || sheet.views.length === 0}
+            title={
+              editDisabledReason ??
+              'Lay the views out again above the title block, at a smaller scale if they need it'
+            }
+            onClick={fitViews}
           >
-            <Trash2 size={13} aria-hidden="true" /> Delete sheet
+            <Maximize size={13} aria-hidden="true" /> Fit views to sheet
           </button>
         </div>
+        <AnnotationList
+          sheet={sheet}
+          ready={sheetReady}
+          selected={selectedAnnotation}
+          resolutions={resolutions}
+          onSelect={(annotationId) => {
+            setSelectedAnnotationId(annotationId);
+            setSelectedViewId(null);
+          }}
+        />
+        {selection === null && (
+          <>
+            <div className="drawing-panel-section">
+              <h3>Title block</h3>
+              {TITLE_FIELDS.map(({ key, label }) => (
+                <TextField
+                  key={key}
+                  label={label}
+                  value={sheet.titleBlock[key] ?? ''}
+                  placeholder={key === 'title' ? document.name : undefined}
+                  printed
+                  disabled={!editable}
+                  onCommit={(value) =>
+                    updateSheet({ titleBlock: { [key]: value } })
+                  }
+                />
+              ))}
+            </div>
+            <div className="drawing-panel-section">
+              <p className="drawing-hint">
+                Lines come from the display tessellation and exact edge samples;
+                curved outlines are approximate to the display tolerance.
+              </p>
+              <button
+                type="button"
+                className="secondary drawing-delete-sheet"
+                disabled={!editable}
+                onClick={() => {
+                  if (
+                    run(
+                      commandFactories.deleteDrawingSheet({
+                        sheetId: sheet.sheetId
+                      })
+                    )
+                  )
+                    setSelectedSheetId(null);
+                }}
+              >
+                <Trash2 size={13} aria-hidden="true" /> Delete sheet
+              </button>
+            </div>
+          </>
+        )}
       </aside>
     </section>
   );

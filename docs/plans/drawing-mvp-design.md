@@ -328,10 +328,15 @@ sheet/view contract above with these recorded departures:
   from the Fit views to sheet placement helper.
 - **Workspace.** Peter chose this placement and accepted the fence and
   projection departures above (2026-10-19). Drawings open as a fourth
-  workspace mode, Draw: sheets in a left column, properties on the right, and
-  the sheet canvas between them, which draws
+  workspace mode, Draw, which draws
   the sheet over the stage and allows only `drawing.*` commands (undo included);
-  the model stays read-only there.
+  the model stays read-only there. Its layout ("paper first", chosen
+  2026-10-31): sheet tabs, sync state, zoom and export over the sheet; the
+  annotation tools on an icon rail beside the paper with one-key shortcuts;
+  a contextual properties panel on the right. While the model rebuilds the
+  sheet shows its last drawing of this session faded, never ready or
+  exportable. Dark paper is an editor-only, per-device preference; exports
+  are always black on white.
 
 ## Implementation decisions (D02 annotations, schema v31)
 
