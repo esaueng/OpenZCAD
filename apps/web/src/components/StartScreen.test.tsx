@@ -694,6 +694,13 @@ describe('StartScreen library shell', () => {
     // The same island and pixels as the workspace's Settings button, and
     // Settings puts its way back there.
     expect(settings.closest('.corner-slot')).not.toBeNull();
+    expect(settings.closest('.start-body')).toBeNull();
+    const toolbar = container.querySelector('.start-toolbar');
+    expect(toolbar).not.toBeNull();
+    expect(toolbar?.closest('.start-body')).toBeNull();
+    expect(
+      container.querySelector('.start-body .start-tile-grid')
+    ).not.toBeNull();
     expect(
       container.querySelector('.start-column-foot .start-settings-button')
     ).toBeNull();
