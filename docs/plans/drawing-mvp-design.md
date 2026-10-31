@@ -313,7 +313,12 @@ sheet/view contract above with these recorded departures:
   border or the title block is a warning only. "Fit views to sheet" is the
   explicit placement helper: one undoable `drawing.*` transaction that centres
   the views as a group above the title block and, only if they do not fit,
-  drops to the largest preset scale at which they do. As defence in depth the
+  drops to the largest preset scale at which they do. "Auto scale" is its
+  sibling, also one transaction: it re-grids the views (centres that share a
+  row or column keep sharing it, so projected views stay aligned) with even
+  gaps, at the largest preset at which the grid fits, growing or shrinking.
+  Presets run 50:1 to 1:1000 (ISO 5455 plus 4:1, 1:4, 1:8, 1:25, 1:250),
+  largest first. As defence in depth the
   composed page drops strokes and text past the paper's edge (lines are split
   at it), and the PDF content is clipped to its MediaBox.
 - **Editor-only overlays.** View names (and a view's "drawing…" or error
