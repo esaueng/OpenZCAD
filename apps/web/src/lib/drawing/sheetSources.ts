@@ -49,6 +49,8 @@ export function projectionBodyInput(
 export interface SectionBodyInput extends ProjectionBodyInput {
   /** The cut body's edges, for dimensions on the section. */
   edgeTopology: EdgeTopology[];
+  /** Why the kernel could not cut it exactly; it is then cut from its mesh. */
+  approximate?: string;
 }
 
 /** What a section view cuts: the same plane draws the same section. */

@@ -150,7 +150,9 @@ export function sectionPlacement(
   source: DrawingView,
   line: SectionLine,
   pointer: XY,
-  bodyIds: readonly BodyId[]
+  bodyIds: readonly BodyId[],
+  /** The least distance, in paper mm, from the source's centre. */
+  minReachMm = 20
 ): DrawingView | null {
   const candidates = drawingSectionOrientations(source.orientation, line.axis);
   if (candidates.length === 0) return null;
@@ -169,7 +171,7 @@ export function sectionPlacement(
   const sign =
     along.x * direction.x + along.y * direction.y + along.z * direction.z;
   const depth = line.at * sign;
-  const reach = side * Math.max(side * offset, 20);
+  const reach = side * Math.max(side * offset, minReachMm);
   const centerMm =
     line.axis === 'horizontal'
       ? { x: source.centerMm.x, y: source.centerMm.y + reach }

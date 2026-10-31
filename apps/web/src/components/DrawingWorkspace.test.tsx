@@ -1913,8 +1913,9 @@ describe('DrawingWorkspace section views (D03)', () => {
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
       bodyId
     ])!;
-    const requestSection = vi.fn(() =>
-      Promise.resolve({ [bodyId]: halfCube() })
+    const requestSection = vi.fn(
+      (_document: ProjectDocument, _bodyIds: BodyId[], _plane: unknown) =>
+        Promise.resolve({ [bodyId]: halfCube() })
     );
     renderSheet(withSection(fingerprint), requestSection);
     const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });

@@ -4,6 +4,11 @@ import {
   type DrawingViewFrame,
   type DrawingViewOrientation
 } from '@openzcad/shared';
+import {
+  clipBodyToSection,
+  clipPolyline,
+  type SectionClip
+} from './meshSection';
 
 /**
  * D01 view projection with hidden-line removal, in plain TypeScript.
@@ -52,6 +57,12 @@ export interface ProjectionBodyInput {
    * sheet hatches. Absent on a view that is not a section.
    */
   cutFaces?: readonly number[];
+  /**
+   * D03 fallback: cut this body by the half-space here, from its
+   * tessellation, because the kernel could not cut it exactly. Its normal
+   * is the view's direction of sight.
+   */
+  clip?: SectionClip;
 }
 
 export interface ViewProjectionInput {
@@ -87,6 +98,11 @@ export interface ViewProjection {
    * them. Attached after projection; never sent to or from a worker.
    */
   sectionEdges?: Readonly<Record<string, readonly EdgeTopology[]>>;
+  /**
+   * D03, main thread only: why some body of this section was cut from its
+   * tessellation instead of exactly by the kernel, when one was.
+   */
+  sectionApproximate?: string;
 }
 
 /**
@@ -1178,6 +1194,12 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       dot(frame.up, x, y, z),
       dot(frame.direction, x, y, z)
     ] as const;
+  // D03: a body the kernel could not cut exactly is cut here, from its
+  // tessellation (approximate). Its silhouettes still come from the whole
+  // body, clipped like its edges: a cut adds outline, never silhouette.
+  const bodies: ProjectionBodyInput[] = input.bodies.map((body) =>
+    body.clip ? clipBodyToSection(body, body.clip, frame) : body
+  );
 
   /** Each body's triangles, indexed on their own: see `OcclusionIndex`. */
   const bodyTriangles: Triangle[][] = [];
@@ -1189,14 +1211,14 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   };
   // Every scale that only absorbs float noise is the body's own: bodies far
   // apart (along the view or across it) must not coarsen each other.
-  const scales = input.bodies.map(bodyDiagonal);
-  const welds = input.bodies.map((body, bodyIndex) =>
+  const scales = bodies.map(bodyDiagonal);
+  const welds = bodies.map((body, bodyIndex) =>
     weldQuantum(body, scales[bodyIndex]!)
   );
-  const meshes = input.bodies.map((body, bodyIndex) =>
+  const meshes = bodies.map((body, bodyIndex) =>
     analyzeMesh(body, welds[bodyIndex]!)
   );
-  input.bodies.forEach((body, bodyIndex) => {
+  bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
     const sag = triangleSag(body, meshes[bodyIndex]);
     const triangles: Triangle[] = [];
@@ -1293,10 +1315,24 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   // Each line keeps its body's scale: a cutoff for degenerate or sliver
   // output must not grow with empty paper between bodies far apart.
   const lines: { points: number[]; scale: number; silhouette: boolean }[] = [];
-  input.bodies.forEach((body, bodyIndex) => {
+  bodies.forEach((body, bodyIndex) => {
     const scale = scales[bodyIndex]!;
     for (const edge of body.edges)
       lines.push({ points: Array.from(edge), scale, silhouette: false });
+    const source = input.bodies[bodyIndex]!;
+    if (source.clip) {
+      const { normal: n, depth } = source.clip;
+      const distance = (p: readonly [number, number, number]) =>
+        n.x * p[0] + n.y * p[1] + n.z * p[2] - depth;
+      for (const silhouette of bodySilhouettes(
+        source,
+        frame,
+        weldQuantum(source, bodyDiagonal(source))
+      ))
+        for (const piece of clipPolyline(silhouette.points, distance))
+          lines.push({ points: Array.from(piece), scale, silhouette: true });
+      return;
+    }
     for (const silhouette of bodySilhouettes(
       body,
       frame,
@@ -1313,7 +1349,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       bounds.minV = Math.min(bounds.minV, v);
       bounds.maxV = Math.max(bounds.maxV, v);
     }
-  const hatch = sectionHatch(input.bodies, project);
+  const hatch = sectionHatch(bodies, project);
   if (!Number.isFinite(bounds.minU))
     return {
       visible: [],

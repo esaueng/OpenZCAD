@@ -561,3 +561,77 @@ describe('a section down a blind bore', () => {
     expect(hatchStrokes([], () => [0, 0])).toEqual([]);
   });
 });
+
+describe('a section the kernel will not cut exactly', () => {
+  /** A 40 × 30 × 30 plate bored through by a Ø12 hole at (20, 15). */
+  function boredPlate(): ProjectDocument {
+    let document = createProjectDocument('Plate', toUserId('test'));
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, depth: 30, height: 30 }
+    });
+    const plate = document.bodyOrder.at(-1)!;
+    document = addPrimitiveFeature(document, {
+      name: 'Bore tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 6, height: 30 }
+    });
+    const tool = document.bodyOrder.at(-1)!;
+    document = transformBody(document, {
+      name: 'Bore position',
+      targetBodyId: tool,
+      translation: { x: 20, y: 15, z: 0 }
+    }).document;
+    return booleanBodies(document, {
+      name: 'Bore',
+      operation: 'subtract',
+      targetBodyIds: [plate, tool]
+    }).document;
+  }
+
+  it('cuts it from the tessellation instead, hatched and labelled approximate', async () => {
+    const document = boredPlate();
+    const bodyId = liveBody(document);
+    // Down the bore's axis, x = 20, seen along −X.
+    const section = view(sectionId, 'right', [bodyId], {
+      section: { sourceViewId: frontId, label: 'A', depth: -20 }
+    });
+    const cut = await sectionInputs(document, section);
+    const body = cut[bodyId]!;
+    // Measured against the pin: the exact-only boolean refuses this plane.
+    expect(body.approximate).toMatch(/could not cut it exactly/);
+    expect(body.cutFaces).toEqual([]);
+    expect(body.edgeTopology).toEqual([]);
+    const projection = projectView({
+      orientation: 'right',
+      hiddenLines: true,
+      bodies: [
+        {
+          ...body,
+          clip: drawingSectionPlane({ ...section, section: section.section! })
+        }
+      ]
+    });
+    // Behind the plane: y from 0 to 30 across (page right is +Y), z up to 30.
+    expect(projection.bounds!.minU).toBeCloseTo(0, 4);
+    expect(projection.bounds!.maxU).toBeCloseTo(30, 4);
+    expect(projection.bounds!.maxV).toBeCloseTo(30, 4);
+    // The cut face is the 30 × 30 square less the 12-wide bore, to the
+    // tessellation's chords.
+    const hatch = projection.hatch!;
+    let area = 0;
+    for (let i = 0; i + 5 < hatch.length; i += 6)
+      area +=
+        Math.abs(
+          (hatch[i + 2]! - hatch[i]!) * (hatch[i + 5]! - hatch[i + 1]!) -
+            (hatch[i + 4]! - hatch[i]!) * (hatch[i + 3]! - hatch[i + 1]!)
+        ) / 2;
+    expect(area).toBeGreaterThan(540 * 0.99);
+    expect(area).toBeLessThan(540 * 1.01);
+    // Nothing in front of the plane is drawn.
+    for (const line of [...projection.visible, ...projection.hidden])
+      expect(line.length).toBeGreaterThanOrEqual(4);
+    expect(projection.visible.length).toBeGreaterThan(0);
+  });
+});

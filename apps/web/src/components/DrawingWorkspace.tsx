@@ -585,7 +585,16 @@ function useViewProjections(
               if (!body) throw new Error(`Body ${id} has no geometry to draw.`);
               if (body.indices.length === 0) continue;
               const inputKey = sectionInputKey(view, id);
-              inputs[inputKey] = body;
+              // Refused by the kernel: the projection cuts its mesh.
+              inputs[inputKey] = body.approximate
+                ? {
+                    ...body,
+                    clip: drawingSectionPlane({
+                      ...view,
+                      section: view.section!
+                    })
+                  }
+                : body;
               ids.push(inputKey);
             }
             views.push({
@@ -603,11 +612,15 @@ function useViewProjections(
             const view = sectionKeys.get(key);
             const cut = view && known.sections.get(sectionPlaneKey(view)!);
             if (!view || !cut) return projection;
+            const approximate = view.bodyIds
+              .map((id) => cut[id]?.approximate)
+              .find((reason) => reason !== undefined);
             return {
               ...projection,
               sectionEdges: Object.fromEntries(
                 view.bodyIds.map((id) => [id, cut[id]?.edgeTopology ?? []])
-              )
+              ),
+              ...(approximate ? { sectionApproximate: approximate } : {})
             };
           };
           if (views.length === 0) return null;
@@ -2013,8 +2026,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       event.stopPropagation();
       // A projected view moves only along its free axis; a press along the
       // axis it shares with its base is not a move at all.
-      const base = selectedView.parentViewId
-        ? sheet.views.find((view) => view.viewId === selectedView.parentViewId)
+      const baseId =
+        selectedView.parentViewId ?? selectedView.section?.sourceViewId;
+      const base = baseId
+        ? sheet.views.find((view) => view.viewId === baseId)
         : undefined;
       const alignment = base
         ? drawingViewAlignment(base.orientation, selectedView.orientation)
@@ -2153,13 +2168,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     // Bases first: moving one carries its projected views, which are then
     // set to their own fitted centres.
     const depth = (view: DrawingView): number => {
+      // A section follows its source as a projected view its base.
+      const baseOf = (entry: DrawingView | undefined) =>
+        entry?.parentViewId ?? entry?.section?.sourceViewId;
       let count = 0;
-      let parent = view.parentViewId;
+      let parent = baseOf(view);
       while (parent && count < sheet.views.length) {
         count += 1;
-        parent = sheet.views.find(
-          (entry) => entry.viewId === parent
-        )?.parentViewId;
+        parent = baseOf(sheet.views.find((entry) => entry.viewId === parent));
       }
       return count;
     };
@@ -2408,6 +2424,30 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     line
       ? drawnViews.find(({ view }) => view.viewId === line.sourceViewId)
       : undefined;
+  /**
+   * How far from its source a section's centre must sit to clear it: half
+   * of each view's extent across the line, and a gap.
+   */
+  const sectionReach = (source: DrawingView, line: SectionLine): number => {
+    if (!shownSheet) return 0;
+    const k = drawingPaperPerModelUnit(shownSheet.scale, document.units);
+    const across = (extent: ViewExtent | null | undefined) =>
+      extent
+        ? line.axis === 'horizontal'
+          ? extent.maxV - extent.minV
+          : extent.maxU - extent.minU
+        : 0;
+    const orientation = drawingSectionOrientations(
+      source.orientation,
+      line.axis
+    )[0];
+    const own = orientation
+      ? estimateViewExtent(bodies, source.bodyIds, orientation)
+      : null;
+    return (
+      ((across(viewExtents.get(source.viewId)) + across(own)) * k) / 2 + 15
+    );
+  };
   /** The section view the tool would place now, as a preview. */
   const sectionDraft =
     sectionTool?.line && sectionTool.pointer && shownSheet
@@ -2419,7 +2459,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 source.view,
                 sectionTool.line,
                 sectionTool.pointer,
-                source.view.bodyIds
+                source.view.bodyIds,
+                sectionReach(source.view, sectionTool.line)
               )
             : null;
         })()
@@ -2437,7 +2478,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           source.view,
           sectionTool.line,
           at.point,
-          source.view.bodyIds
+          source.view.bodyIds,
+          sectionReach(source.view, sectionTool.line)
         );
       if (!draft) return;
       const view: DrawingView = { ...draft, viewId: createDrawingViewId() };
@@ -3166,7 +3208,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 <g
                   key={view.viewId}
                   className={`drawing-view${view.viewId === selectedViewId ? ' is-selected' : ''}${ready ? '' : ' is-placeholder'}`}
-                  data-view={view.orientation}
+                  data-view={
+                    view.section
+                      ? `section-${view.section.label}`
+                      : view.orientation
+                  }
                 >
                   {!ready && !ghostView && (
                     <rect
@@ -3517,6 +3563,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                       ? 'y'
                       : 'z';
                 const sign = normal[axis];
+                const drawn = projections.get(selectedView.viewId);
+                const approximate =
+                  drawn?.state === 'ready'
+                    ? drawn.projection.sectionApproximate
+                    : undefined;
                 return (
                   <>
                     <NumberField
@@ -3542,9 +3593,20 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                         ? DRAWING_VIEW_LABELS[source.orientation].toLowerCase()
                         : 'source'}{' '}
                       view along its line {section.label}-{section.label}: it
-                      stays aligned with it. Cut faces are hatched; outlines are
-                      the kernel&apos;s exact cut.
+                      stays aligned with it. Cut faces are hatched.
                     </p>
+                    {approximate ? (
+                      <p className="drawing-hint" role="note">
+                        Approximate: cut from the tessellation, to the display
+                        tolerance. {approximate} Its cut edges cannot be
+                        dimensioned.
+                      </p>
+                    ) : (
+                      <p className="drawing-hint">
+                        The cut is the kernel&apos;s exact boolean; hidden lines
+                        are approximate to the display tolerance.
+                      </p>
+                    )}
                   </>
                 );
               })()}

@@ -4190,7 +4190,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               faces: body.faces,
               edges: body.edges,
               cutFaces: body.cutFaces,
-              edgeTopology: body.edgeTopology
+              edgeTopology: body.edgeTopology,
+              ...(body.approximate ? { approximate: body.approximate } : {})
             }
           : {
               vertices: new Float32Array(),

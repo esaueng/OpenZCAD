@@ -39,6 +39,12 @@ import {
  * whole keeps its source hash; one it trims or creates has a new one, with
  * no lineage name, so a model edit that moves it leaves its dimension
  * broken until re-picked, never rebound.
+ *
+ * The pinned kernel's exact-only booleans refuse many such cuts — a plane
+ * through a box's cylindrical bore is refused at most positions, measured
+ * in `test/drawing-sections.test.ts`. A refused body is not dropped: it
+ * comes back whole with the refusal, and the drawing cuts its tessellation
+ * instead (`apps/web/src/lib/drawing/meshSection.ts`), labelled approximate.
  */
 
 /** The cutting plane `dot(normal, p) = depth`; `dot(normal, p) < depth` is removed. */
@@ -52,6 +58,13 @@ export interface DrawingSectionBody extends DrawingBodyTessellation {
   cutFaces: number[];
   /** The cut body's edges, for picking and resolving dimensions. */
   edgeTopology: EdgeTopology[];
+  /**
+   * Why the kernel could not cut this body exactly, when it could not. The
+   * tessellation is then of the whole (uncut) body, with no cut faces or
+   * edges: the drawing cuts it from its mesh instead, labelled approximate,
+   * and its cut edges cannot be dimensioned.
+   */
+  approximate?: string;
 }
 
 /** Why a section cannot be drawn; the view shows the message. */
@@ -90,10 +103,18 @@ function cutSolids(
   kernel: RemusKernel,
   shape: ExactShape,
   plane: DrawingSectionPlane
-): { solids: number[]; cut: boolean } {
+): {
+  solids: number[];
+  /** Behind or across the plane, uncut: what a fallback cuts from its mesh. */
+  uncut: number[];
+  cut: boolean;
+  refusal: string | null;
+} {
   const { axis, sign } = principalAxis(plane.normal);
   const solids: number[] = [];
+  const uncut: number[] = [];
   let cut = false;
+  let refusal: string | null = null;
   for (const solid of shape.solids) {
     const box = kernel.boundingBox(solid);
     const low = box[axis]!;
@@ -111,10 +132,12 @@ function cutSolids(
     // coplanar and the "cut" would remove nothing or everything.
     const flush = span * 1e-9;
     if (farthest <= plane.depth + flush) continue;
+    uncut.push(solid);
     if (nearest >= plane.depth - flush) {
       solids.push(solid);
       continue;
     }
+    cut = true;
     // A box over the removed side, a margin past the solid on every side.
     const margin = span;
     const lowCorner = [box[0]! - margin, box[1]! - margin, box[2]! - margin];
@@ -140,18 +163,16 @@ function cutSolids(
     try {
       result = kernel.cut(solid, tool);
     } catch (error) {
-      throw new DrawingSectionError(
-        `The kernel could not cut the section: ${error instanceof Error ? error.message : String(error)}`
-      );
+      refusal ??= `The kernel could not cut it exactly (${error instanceof Error ? error.message : String(error)}).`;
+      continue;
     }
-    if (kernel.validateSolidRelaxed(result) !== 0)
-      throw new DrawingSectionError(
-        'The kernel cut the section into an invalid solid.'
-      );
+    if (kernel.validateSolidRelaxed(result) !== 0) {
+      refusal ??= 'The kernel cut it into an invalid solid.';
+      continue;
+    }
     solids.push(result);
-    cut = true;
   }
-  return { solids, cut };
+  return { solids, uncut, cut, refusal };
 }
 
 /** The edges of `solids` as edge topology, numbered like a body's. */
@@ -243,8 +264,9 @@ function facesInPlane(
 /**
  * One body behind a section plane: its canonical drawing tessellation, the
  * faces the plane cut and the edges a dimension can use. Null when the body
- * lies wholly in front of the plane. Throws `DrawingSectionError` when the
- * kernel cannot cut it.
+ * lies wholly in front of the plane. A body the kernel refuses to cut
+ * comes back whole, with the refusal in `approximate`, for the drawing to
+ * cut from its mesh.
  */
 export function drawingSectionOfShape(
   kernel: RemusKernel,
@@ -254,6 +276,16 @@ export function drawingSectionOfShape(
 ): (DrawingSectionBody & { cut: boolean }) | null {
   if (!shape.solids.length) throw new Error('Exact body contains no solids.');
   const kept = cutSolids(kernel, shape, plane);
+  if (kept.refusal !== null) {
+    // Every solid the plane reaches, whole: the drawing cuts the mesh.
+    return {
+      ...drawingTessellationOfShape(kernel, { solids: kept.uncut }, budget),
+      cutFaces: [],
+      edgeTopology: [],
+      approximate: kept.refusal,
+      cut: true
+    };
+  }
   if (kept.solids.length === 0) return null;
   const mesh = drawingTessellationOfShape(
     kernel,

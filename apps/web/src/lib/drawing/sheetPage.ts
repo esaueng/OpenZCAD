@@ -5,6 +5,7 @@ import {
   drawingPaperMm,
   drawingPaperPerModelUnit,
   drawingSectionLine,
+  drawingViewAlignment,
   formatDrawingScale,
   projectToView,
   type DrawingSheet,
@@ -618,8 +619,8 @@ const SECTION_ARROW_MM = 8;
 const SECTION_ARROW_HEAD_MM = 3;
 const SECTION_ARROW_HALF_WIDTH_MM = 0.9;
 export const SECTION_LABEL_MM = 5;
-/** Below a section view's footprint, where its caption's baseline sits. */
-const SECTION_CAPTION_GAP_MM = 8;
+/** From a section view's footprint to its caption's far side. */
+const SECTION_CAPTION_GAP_MM = 7;
 
 /** The caption printed under a section view: "SECTION A-A". */
 export function sectionCaption(label: string): string {
@@ -819,9 +820,24 @@ export function composeSectionMarks(
     const own = drawn.get(view.viewId);
     if (own?.projection.bounds) {
       const box = viewPageBox(view, own.projection.bounds, sheet, units);
+      // Above the view (ISO 128-44), unless that is toward its source, below
+      // it: the caption never sits between the view and its cutting line.
+      const sourceView = sheet.views.find(
+        (entry) => entry.viewId === view.section!.sourceViewId
+      );
+      const below =
+        sourceView !== undefined &&
+        drawingViewAlignment(sourceView.orientation, view.orientation) ===
+          'column' &&
+        view.centerMm.y < sourceView.centerMm.y;
       texts.push({
         x: view.centerMm.x,
-        y: box.y - SECTION_CAPTION_GAP_MM,
+        y: below
+          ? box.y - SECTION_CAPTION_GAP_MM
+          : box.y +
+            box.height +
+            SECTION_CAPTION_GAP_MM -
+            SECTION_LABEL_MM * 0.7,
         sizeMm: SECTION_LABEL_MM * 0.7,
         text: sectionCaption(label),
         bold: true,
