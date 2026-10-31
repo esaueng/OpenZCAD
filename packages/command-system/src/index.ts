@@ -259,8 +259,10 @@ import {
   validateDatumPlaneDefinition,
   validateModelingPlane
 } from '@openzcad/document-core';
+import { drawingCommandInputs } from './drawing-annotations';
 import {
   createCadDocumentDigest,
+  isDrawingOperation,
   validateCadPatchProposalAgainstDigest,
   expandEditCandidateProposal,
   unmodifiedImportedSource,
@@ -1092,6 +1094,7 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
   const worm = input.gearType === 'worm';
   const wormWheel = input.gearType === 'worm-wheel';
   const enveloping = input.gearType === 'enveloping-worm';
+  const envelopingWheel = input.gearType === 'enveloping-wheel';
   const toothCount = (
     label: string,
     param: ParamValue,
@@ -1122,7 +1125,9 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
           ? 1
           : bevel
             ? MIN_BEVEL_TEETH
-            : 3
+            : envelopingWheel
+              ? MIN_ENVELOPED_TEETH
+              : 3
     );
   }
   if (worm || wormWheel) {
@@ -1198,8 +1203,53 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
         throw new Error(`An enveloping worm takes no ${label}.`);
       }
     }
+  } else if (envelopingWheel) {
+    if (input.mateTeeth === undefined) {
+      throw new Error('An enveloping wheel needs its worm’s thread starts.');
+    }
+    const starts = toothCount(
+      'worm starts',
+      input.mateTeeth,
+      1,
+      MAX_WORM_STARTS
+    );
+    if (value('teeth', input.teeth) < 2 * starts) {
+      throw new Error(
+        'An enveloping wheel needs at least two teeth per worm start.'
+      );
+    }
+    if (input.diameterFactor === undefined) {
+      throw new Error('An enveloping wheel needs its worm’s diameter factor.');
+    }
+    positive('diameter factor', input.diameterFactor);
+    if (input.wormLength === undefined) {
+      throw new Error('An enveloping wheel needs its worm’s length.');
+    }
+    // How far the worm reaches along its hourglass, and whether it cuts
+    // into the teeth near the faces, is the kernel's check.
+    positive('worm length', input.wormLength);
+    // The teeth are the straight-sided teeth that cut the worm, so they
+    // have no shift, fillet or helix of their own, and it is a new body.
+    for (const [label, present] of [
+      ['profile shift', input.profileShift],
+      ['root fillet', input.rootFillet],
+      ['helix angle', input.helixAngleDeg],
+      ['herringbone', input.herringbone],
+      ['shaft angle', input.shaftAngleDeg],
+      ['rim diameter', input.rimDiameter],
+      ['back depth', input.backDepth],
+      ['target body', input.targetBodyId],
+      ['fit', input.fit]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(`An enveloping wheel takes no ${label}.`);
+      }
+    }
   } else if (input.diameterFactor !== undefined) {
     throw new Error('Only a worm gear takes a diameter factor.');
+  }
+  if (input.wormLength !== undefined && !envelopingWheel) {
+    throw new Error('Only an enveloping wheel takes a worm length.');
   }
   if (input.throated !== undefined) {
     if (typeof input.throated !== 'boolean') {
@@ -1210,8 +1260,10 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     }
   }
   if (input.outsideDiameter !== undefined) {
-    if (input.throated !== true) {
-      throw new Error('Only a throated worm wheel takes an outside diameter.');
+    if (input.throated !== true && !envelopingWheel) {
+      throw new Error(
+        'Only a throated worm wheel or an enveloping wheel takes an outside diameter.'
+      );
     }
     // Whether it clears the tips and stays inside the throat torus is the
     // kernel's check, which needs the worm's dimensions.
@@ -1249,6 +1301,7 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     !worm &&
     !wormWheel &&
     !enveloping &&
+    !envelopingWheel &&
     (input.mateTeeth !== undefined || input.shaftAngleDeg !== undefined)
   ) {
     throw new Error('Only a bevel gear takes a mate and a shaft angle.');
@@ -1389,7 +1442,8 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
       !bevel &&
       !worm &&
       !wormWheel &&
-      !enveloping
+      !enveloping &&
+      !envelopingWheel
     ) {
       throw new Error('Only an external, bevel or worm gear takes a bore.');
     }
@@ -3324,6 +3378,26 @@ export function commandsForCadPatch(
   document: ProjectDocument,
   proposal: CadPatchProposal
 ): AnyCommand[] {
+  // A sheet edit (D06 slice E) never touches the model: its commands are
+  // the ones a person's picks make, run together as one undo step.
+  const drawingOperations = proposal.operations.filter(isDrawingOperation);
+  if (drawingOperations.length > 0) {
+    if (drawingOperations.length !== proposal.operations.length)
+      throw new Error(
+        'A proposal changes either the model or a drawing sheet, not both.'
+      );
+    return drawingCommandInputs(document, drawingOperations).map((input) =>
+      input.kind === 'add'
+        ? commandFactories.addDrawingAnnotation({
+            sheetId: input.sheetId,
+            annotation: input.annotation
+          })
+        : commandFactories.deleteDrawingAnnotation({
+            sheetId: input.sheetId,
+            annotationId: input.annotationId
+          })
+    );
+  }
   proposal = expandEditCandidateProposal(document, proposal);
   // Aliases share one namespace even when their targets have different types.
   // Keep this guard here too: direct typed callers need the parser's protection.
@@ -4538,6 +4612,12 @@ export function commandsForCadPatch(
           `Feature ${feature.name} does not expose an editable ${operation.field} dimension.`
         );
       }
+      case 'add_drawing_annotations':
+      case 'remove_drawing_annotations':
+        // Compiled above, before any model operation is looked at.
+        throw new Error(
+          'A proposal changes either the model or a drawing sheet, not both.'
+        );
     }
   };
 

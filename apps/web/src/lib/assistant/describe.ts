@@ -3,6 +3,7 @@
  * it is applied rather than trusted on the strength of its summary sentence.
  */
 import {
+  describeCadPatchOperation,
   isLocalBodyRef,
   normalizeLocalId,
   type CadDatumAxisDefinition,
@@ -198,6 +199,9 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — mirror ${describeBodyRef(operation.targetBodyId)} across ${describeBodyRef(operation.datum)}`;
     case 'add_datum_split':
       return `${operation.name} — split ${describeBodyRef(operation.targetBodyId)} in two at ${describeBodyRef(operation.datum)}`;
+    case 'add_drawing_annotations':
+    case 'remove_drawing_annotations':
+      return describeCadPatchOperation(operation);
     default: {
       // Every kind the contract allows has a line above; a new kind fails the
       // typecheck here instead of reaching a reviewer as "Unknown operation".

@@ -690,9 +690,9 @@ function nearerSide(
   let bestDistance = Infinity;
   for (const side of ['low', 'high'] as const) {
     const point = make(side);
-    const uv = dimensionPointInView(view, point, bodies, direction);
-    if (!uv) continue;
-    const [x, y] = toPage(uv[0], uv[1]);
+    const at = dimensionPointInView(view, point, bodies, direction);
+    if (!at) continue;
+    const [x, y] = toPage(at.uv[0], at.uv[1]);
     const distance = Math.hypot(x - click[0], y - click[1]);
     if (distance < bestDistance) {
       bestDistance = distance;

@@ -10,6 +10,7 @@ import {
   type DrawingEdgeRef,
   type DrawingExtremeSide,
   type DrawingFaceRef,
+  type DrawingPointAnchor,
   type DrawingPointRef,
   type DrawingView,
   type DrawingViewFrame,
@@ -481,7 +482,16 @@ function pointOf(
       )
     };
   }
-  if (point.anchor === 'center') {
+  return edgePoint(view, edge, point.anchor);
+}
+
+/** An open edge's end, or a face-on circle's centre (the D02 points). */
+function edgePoint(
+  view: DrawingView,
+  edge: EdgeTopology,
+  anchor: DrawingPointAnchor
+): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
+  if (anchor === 'center') {
     const circle = faceOnCircle(view, edge);
     return circle.ok
       ? {
@@ -496,12 +506,12 @@ function pointOf(
   }
   const ends = edgeEndsWithDepth(view, edge);
   if (!ends) return { ok: false, reason: 'closed-edge' };
-  return { ok: true, point: point.anchor === 'first' ? ends[0] : ends[1] };
+  return { ok: true, point: anchor === 'first' ? ends[0] : ends[1] };
 }
 
 /**
- * Where `point` lies in `view` for a horizontal or vertical dimension, in
- * view (u, v), or null when it does not resolve: what a picker compares a
+ * Where `point` lies in `view` for a horizontal or vertical dimension —
+ * its (u, v), depth and model point — or null when it does not resolve: what a picker compares a
  * click with to choose an extreme's side.
  */
 export function dimensionPointInView(
@@ -509,12 +519,12 @@ export function dimensionPointInView(
   point: DrawingPointRef,
   bodies: AnnotationBodies,
   direction: 'horizontal' | 'vertical'
-): UV | null {
+): { uv: UV; depth: number; model: Vector3 } | null {
   const frame = DRAWING_VIEW_FRAMES[view.orientation];
   const [along, across] =
     direction === 'horizontal' ? [frame.x, frame.up] : [frame.up, frame.x];
   const found = pointOf(view, point, bodies, along, across);
-  return found.ok ? found.point.uv : null;
+  return found.ok ? found.point : null;
 }
 
 /**
@@ -571,6 +581,21 @@ function sharpPoint(
   if (Math.abs(Math.abs(dot(curve.direction, frame.direction)) - 1) > 1e-6)
     return { ok: false, reason: 'no-sharp' };
   return { ok: true, point: viewPoint(frame, curve.point) };
+}
+
+/**
+ * Where a point anchor of `edge` lies in `view`: its (u, v), its depth into
+ * the view and the model point, by the same rule a dimension resolves it;
+ * null when the edge has no such point there (a closed edge's end, a
+ * circle seen edge-on).
+ */
+export function drawingPointInView(
+  view: DrawingView,
+  edge: EdgeTopology,
+  anchor: DrawingPointAnchor
+): { uv: UV; depth: number; model: Vector3 } | null {
+  const found = edgePoint(view, edge, anchor);
+  return found.ok ? found.point : null;
 }
 
 function projectedPolyline(view: DrawingView, edge: EdgeTopology): number[] {

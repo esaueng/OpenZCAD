@@ -162,7 +162,14 @@ Each needs its own schema bump, claimed from open PRs at the time
   checker must pass for the requested scope. A scoped request ("only the
   front view") reports what it leaves out rather than passing silently.
 - The assistant must be reachable from Draw; confirm the panel's mount
-  conditions there before this slice.
+  conditions there before this slice. (Done: the panel mounts in Draw and
+  there refuses model proposals; Draw-only proposals preview on the sheet
+  and apply as one undo step.)
+- Delivered first: the two operations, a sheet digest whose per-view edge
+  refs are the only edges a proposal may name, and a gate in
+  `apps/web/src/lib/drawing/assistantPreflight.ts` that refuses a proposal
+  whose annotations do not resolve or that leaves a repeated dimension. The
+  generator's candidates and repair plug in at that same function.
 
 ## Slice A decisions (dimension check, 2026-10-31)
 
@@ -182,8 +189,8 @@ Each needs its own schema bump, claimed from open PRs at the time
 
 ## Slice B decisions (schema v46, 2026-10-31)
 
-- **Version.** v44 is M14's double-enveloping worms and v45 is claimed by
-  D03 section views, so slice B takes v46. An older client refuses the
+- **Version.** v44 and v45 are M14's double-enveloping worms and wheels,
+  so slice B takes v46 (D03 section views follow at v47). An older client refuses the
   document; every addition is optional and absent on older annotations.
 - **Silhouette point** (`anchor: 'silhouette'`, `side: 'low' | 'high'`): a
   circular edge's extreme along a horizontal or vertical dimension's
@@ -218,6 +225,28 @@ Each needs its own schema bump, claimed from open PRs at the time
   hole centres, states that diameter or pitch; a chamfer dimension states
   its size-and-angle group. Revolved blend radii stay unmeasurable: no
   edge or face pick states a torus's tube radius yet.
+- **Generator.** Auto-dimension now ends position spans on rim silhouettes,
+  so the foot's two heights are placed; chamfer dimensions and pitch spans
+  are left to the person and reported as skipped until the generator
+  places them.
+
+## Slice C decisions (Auto-dimension, 2026-10-31)
+
+- **One model, two uses.** The generator reads the checker's requirements
+  and links (`readDimensionState`), so what it adds is by construction what
+  the check calls missing, and the corpus test re-runs the check after
+  Apply.
+- **Baseline per axis.** Each unlinked group of positions gets one span to
+  the datum group, anchored at its lowest position where an edge marks it.
+- **View choice.** Visible anchors first, then the view already holding the
+  body's dimensions; a size takes the first of its circles whose leader
+  clears the sheet (the next bolt hole when one is boxed in).
+- **Placement.** Rows 10 mm off the view outline, 8 mm apart, shortest span
+  nearest. A candidate is refused when its text overlaps text or a line,
+  a dimension line runs along another line, or lines cross anywhere but at
+  a foot (a shared baseline extension line) or a radial centre.
+- **Hidden lines.** With no visible anchor in any view, a dimension measures
+  hidden lines and the preview says so, until D03 sections.
 
 ## Slices
 

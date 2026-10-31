@@ -15,7 +15,9 @@ checker now counts rim silhouettes as position marks, a symmetric Ø span as a
 diameter or bolt-circle pitch, and chamfer dimensions as chamfer groups: the
 turned foot's Z positions, both chamfers and a bolt circle's pitch move from
 "can't dimension yet" to satisfiable, and a seven-dimension foot sheet passes
-with nothing missing or redundant. Evidence: `test/drawing-dimension-schema.test.ts`
+with nothing missing or redundant. Auto-dimension (slice C) ends position spans
+on rim silhouettes, so it now places the foot's heights, and reports chamfers
+and pitch diameters it leaves to the person. Evidence: `test/drawing-dimension-schema.test.ts`
 (real kernel bodies: the foot as a revolved profile, a planar chamfer, a
 two-hole plate; refusals; SVG/PDF byte-stable across a reload; picking),
 `test/drawing-dimension-audit.test.ts`, and the e2e in

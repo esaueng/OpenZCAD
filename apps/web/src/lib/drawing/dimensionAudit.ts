@@ -93,12 +93,12 @@ const sub = (a: Vector3, b: Vector3): Vector3 => ({
 const length = (a: Vector3) => Math.hypot(a.x, a.y, a.z);
 
 /** Same length within the kernel's relative tolerance. */
-function same(a: number, b: number): boolean {
+export function same(a: number, b: number): boolean {
   return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
 }
 
 /** The model axis `direction` runs along, if it runs along one. */
-function axisOf(direction: Vector3): AuditAxis | null {
+export function axisOf(direction: Vector3): AuditAxis | null {
   const n = length(direction);
   if (n < 1e-12) return null;
   for (const axis of AXES) {
@@ -108,13 +108,13 @@ function axisOf(direction: Vector3): AuditAxis | null {
 }
 
 /** A position on one model axis that a dimension may have to state. */
-interface Position {
+export interface Position {
   value: number;
   label: string;
 }
 
 /** One body's requirements, as positions per axis and size groups. */
-interface BodyRequirements {
+export interface BodyRequirements {
   positions: Record<AuditAxis, Position[]>;
   /** Positions a blend's radius already fixes, per axis. */
   derived: Record<AuditAxis, Position[]>;
@@ -126,7 +126,7 @@ interface BodyRequirements {
 }
 
 /** Like chamfers: one size and angle, stated once with a count. */
-interface ChamferGroup {
+export interface ChamferGroup {
   size: number;
   angleDeg: number;
   faces: FaceTopology[];
@@ -135,7 +135,7 @@ interface ChamferGroup {
 }
 
 /** Holes of one size spaced equally round a turned axis. */
-interface BoltCircle {
+export interface BoltCircle {
   pitchRadius: number;
   holeRadius: number;
   count: number;
@@ -143,7 +143,7 @@ interface BoltCircle {
   direction: Vector3;
 }
 
-interface SizeGroup {
+export interface SizeGroup {
   radius: number;
   /** A blend is dimensioned by radius, a hole or boss by diameter. */
   blend: boolean;
@@ -153,6 +153,26 @@ interface SizeGroup {
 
 function format(value: number, units: UnitSystem): string {
   return formatDrawingNumber(value, defaultDimensionDecimals('linear', units));
+}
+
+/** Whether a circle is one of `group`'s: its radius, about one of its axes. */
+export function circleInGroup(
+  group: SizeGroup,
+  circle: { center: Vector3; axis: Vector3; radius: number }
+): boolean {
+  return (
+    same(group.radius, circle.radius) &&
+    group.axes.some((axis) => {
+      if (Math.abs(Math.abs(dot(axis.direction, circle.axis)) - 1) > 1e-6)
+        return false;
+      const between = sub(circle.center, axis.point);
+      const along = dot(between, axis.direction);
+      return (
+        Math.sqrt(Math.max(0, dot(between, between) - along * along)) <=
+        1e-6 * Math.max(1, group.radius)
+      );
+    })
+  );
 }
 
 function addPosition(list: Position[], position: Position): void {
@@ -460,7 +480,7 @@ function bodyRequirements(
 }
 
 /** Union-find over one axis's positions. */
-class Links {
+export class Links {
   private readonly parent: number[];
   /** Accepted dimensions as edges between positions. */
   readonly edges: { a: number; b: number; id: DrawingAnnotationId }[] = [];
@@ -505,7 +525,11 @@ class Links {
 }
 
 /** Whether a view on the sheet measures along `axis` true size. */
-function viewsAlong(sheet: DrawingSheet, bodyId: string, axis: AuditAxis) {
+export function viewsAlong(
+  sheet: DrawingSheet,
+  bodyId: string,
+  axis: AuditAxis
+) {
   return sheet.views.filter((view) => {
     if (view.orientation === 'iso' || !view.bodyIds.includes(bodyId as never))
       return false;
@@ -555,11 +579,39 @@ function anchorable(
   });
 }
 
+/**
+ * A sheet's requirements and what its dimensions already state, per body:
+ * the positions each axis's dimensions link, and the size groups stated.
+ * The checker reports from it and the Auto-dimension generator (slice C)
+ * adds to it.
+ */
+export interface DimensionState {
+  audit: DrawingAudit;
+  bodies: Map<
+    string,
+    {
+      requirements: BodyRequirements;
+      links: Record<AuditAxis, Links>;
+      statedSizes: ReadonlySet<SizeGroup>;
+      statedChamfers: ReadonlySet<ChamferGroup>;
+      statedBoltCircles: ReadonlySet<BoltCircle>;
+    }
+  >;
+}
+
 export function auditDrawingDimensions(
   sheet: DrawingSheet,
   bodies: AnnotationBodies,
   units: UnitSystem
 ): DrawingAudit {
+  return readDimensionState(sheet, bodies, units).audit;
+}
+
+export function readDimensionState(
+  sheet: DrawingSheet,
+  bodies: AnnotationBodies,
+  units: UnitSystem
+): DimensionState {
   const audit: DrawingAudit = {
     missing: [],
     redundant: [],
@@ -718,22 +770,8 @@ export function auditDrawingDimensions(
     }
     const body = requirements.get(reading.bodyId);
     const circleAxis = axisOf(reading.circle.axis);
-    const group = body?.sizes.find(
-      (candidate) =>
-        same(candidate.radius, reading.circle.radius) &&
-        candidate.axes.some((axis) => {
-          if (
-            Math.abs(Math.abs(dot(axis.direction, reading.circle.axis)) - 1) >
-            1e-6
-          )
-            return false;
-          const between = sub(reading.circle.center, axis.point);
-          const along = dot(between, axis.direction);
-          return (
-            Math.sqrt(Math.max(0, dot(between, between) - along * along)) <=
-            1e-6 * Math.max(1, candidate.radius)
-          );
-        })
+    const group = body?.sizes.find((candidate) =>
+      circleInGroup(candidate, reading.circle)
     );
     if (!group || !circleAxis) {
       audit.unchecked.push({
@@ -903,7 +941,20 @@ export function auditDrawingDimensions(
       }
     }
   }
-  return audit;
+  const state: DimensionState['bodies'] = new Map();
+  for (const [bodyId, body] of requirements)
+    state.set(bodyId, {
+      requirements: body,
+      links: {
+        x: linksFor(bodyId, 'x'),
+        y: linksFor(bodyId, 'y'),
+        z: linksFor(bodyId, 'z')
+      },
+      statedSizes: new Set(sizeStatedBy.keys()),
+      statedChamfers: new Set(chamferStatedBy.keys()),
+      statedBoltCircles: new Set(boltStatedBy.keys())
+    });
+  return { audit, bodies: state };
 }
 
 /**
@@ -949,16 +1000,16 @@ function diameterAcross(
   return null;
 }
 
-function chamferLabel(group: ChamferGroup, units: UnitSystem): string {
+export function chamferLabel(group: ChamferGroup, units: UnitSystem): string {
   const count = group.faces.length > 1 ? `${group.faces.length}× ` : '';
   return `${count}${format(group.size, units)} × ${formatDrawingNumber(group.angleDeg, defaultDimensionDecimals('angle', units))}° chamfer`;
 }
 
-function boltLabel(circle: BoltCircle, units: UnitSystem): string {
+export function boltLabel(circle: BoltCircle, units: UnitSystem): string {
   return `Ø${format(2 * circle.pitchRadius, units)} pitch diameter of the ${circle.count}× Ø${format(2 * circle.holeRadius, units)} bolt circle`;
 }
 
-function sizeLabel(group: SizeGroup, units: UnitSystem): string {
+export function sizeLabel(group: SizeGroup, units: UnitSystem): string {
   const count = group.axes.length > 1 ? `${group.axes.length}× ` : '';
   return group.blend
     ? `${count}R${format(group.radius, units)} blend radius`

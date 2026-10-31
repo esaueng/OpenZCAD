@@ -555,6 +555,29 @@ function pointReferences(
   return 'faces' in point ? [...point.faces] : [point.edge];
 }
 
+/** Every edge an annotation refers to; a virtual sharp's faces are not. */
+export function drawingAnnotationEdges(
+  annotation: DrawingAnnotation
+): DrawingEdgeRef[] {
+  switch (annotation.kind) {
+    case 'linear':
+      return [annotation.from, annotation.to].flatMap((point) =>
+        'edge' in point ? [point.edge] : []
+      );
+    case 'chamfer':
+      return [];
+    default:
+      return drawingAnnotationReferences(annotation) as DrawingEdgeRef[];
+  }
+}
+
+/** The body an annotation measures (its first reference's), if any. */
+export function drawingAnnotationBodyId(
+  annotation: DrawingAnnotation
+): BodyId | null {
+  return drawingAnnotationReferences(annotation)[0]?.bodyId ?? null;
+}
+
 /** Every edge and face an annotation refers to, each body-scoped. */
 export function drawingAnnotationReferences(
   annotation: DrawingAnnotation

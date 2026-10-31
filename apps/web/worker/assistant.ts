@@ -203,6 +203,22 @@ Return only the strict structured output required by the response schema.`;
  * was illegible — are silent and expensive. This block makes the reading
  * explicit and pushes the unreadable cases into a question instead of a guess.
  */
+/**
+ * Appended only when the ask comes from a Draw sheet (D06 slice E): the
+ * digest then carries \`drawing\`, and the reply edits that sheet.
+ */
+export const DRAWING_SHEET_INSTRUCTIONS = `# Dimensioning the Draw sheet
+
+The user is on the Draw sheet in \`digest.drawing\`. Its model is locked: answer with \`add_drawing_annotations\` or \`remove_drawing_annotations\` on that sheetId, and no model operation in the same proposal. If they ask for a model change, say in a message that it is made in Build.
+
+- Every edge comes from \`digest.drawing.views[].edges\` of the view the annotation belongs to, by its \`ref\`. Never invent a ref, and never use a ref from another view.
+- Coordinates are paper millimetres, y up, from the view's centre: \`ends\` are an open edge's ends in page order (\`first\` is the left one, or the lower when level), \`center\` a circle's centre. A linear dimension measures between two points (an end of an open edge, or the centre of a circle the view sees true shape); \`horizontal\` measures along the page, \`vertical\` up it, and both points must differ along that direction. An edge whose two ends coincide on the page runs into the view: it marks a point, not a length.
+- A radius or diameter names one circle or arc with \`faceOn: true\`. An angle names two straight edges that are not parallel.
+- Place each dimension's text clear of its view: outside the footprint (\`widthMm\` × \`heightMm\` around the centre), about 8 mm out and 7 mm between stacked dimensions.
+- State each size and position once, from a datum: no closed chains and no value the others already fix. \`digest.drawing.annotations\` lists what the sheet already states, with values; do not repeat those. When \`digest.drawing.audit\` is present, it is the app's check: add what it reports missing and remove what it reports repeated. The app refuses a proposal whose annotations do not resolve or that leaves a repeated dimension.
+- If \`ready\` is false, the sheet is not drawn from the current model: ask the user to Update it instead of proposing annotations.
+- The summary says what is dimensioned in which view; assumptions say what was left out and why.`;
+
 const DRAWING_INSTRUCTIONS = `# Reading the attached drawing
 
 The images attached to this turn are engineering drawings of the part to model. Read them before planning any geometry, and follow this order.
@@ -630,12 +646,15 @@ export function assistantReplySchemaFor(env: CloudflareEnv): unknown {
 function requestInstructions(
   env: CloudflareEnv,
   runtime: AssistantRuntimeConfig | undefined,
-  hasAttachments = false
+  hasAttachments = false,
+  onDrawingSheet = false
 ) {
   const custom = runtime?.customInstructions.trim();
-  const baseInstructions = hasAttachments
-    ? `${CAD_ASSISTANT_INSTRUCTIONS}\n\n${DRAWING_INSTRUCTIONS}`
-    : CAD_ASSISTANT_INSTRUCTIONS;
+  const baseInstructions = [
+    CAD_ASSISTANT_INSTRUCTIONS,
+    ...(hasAttachments ? [DRAWING_INSTRUCTIONS] : []),
+    ...(onDrawingSheet ? [DRAWING_SHEET_INSTRUCTIONS] : [])
+  ].join('\n\n');
   const base = `${baseInstructions}\n\n${rolloutCapabilityInstructions(env)}`;
   return custom ? `${base}\n\n# User modeling preferences\n${custom}` : base;
 }
@@ -1287,7 +1306,8 @@ export async function streamAssistantProposal(
         instructions: requestInstructions(
           env,
           runtime,
-          (input.attachments?.length ?? 0) > 0
+          (input.attachments?.length ?? 0) > 0,
+          input.digest.drawing !== undefined
         ),
         input: assistantInput(input),
         ...reasoningRequest(
@@ -1318,7 +1338,8 @@ export async function streamAssistantProposal(
           requestInstructions(
             env,
             runtime,
-            (input.attachments?.length ?? 0) > 0
+            (input.attachments?.length ?? 0) > 0,
+            input.digest.drawing !== undefined
           ) +
             (promptedSchema
               ? jsonSchemaInstructions(env, safetyIdentifier?.endsWith('#r1'))
@@ -1355,7 +1376,8 @@ export async function streamAssistantProposal(
             requestInstructions(
               env,
               runtime,
-              (input.attachments?.length ?? 0) > 0
+              (input.attachments?.length ?? 0) > 0,
+              input.digest.drawing !== undefined
             ),
             anthropicMessages(input),
             env,

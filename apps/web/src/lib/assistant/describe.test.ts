@@ -318,6 +318,28 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     axis: 'x',
     spacing: 20,
     angleDeg: 0
+  },
+  add_drawing_annotations: {
+    kind: 'add_drawing_annotations',
+    sheetId: 'dsht_1',
+    annotations: [
+      {
+        annotationKind: 'diameter',
+        viewId: 'dvw_1',
+        direction: null,
+        from: null,
+        to: null,
+        edgeRefs: ['v1:e1'],
+        text: null,
+        placementMm: { x: 10, y: 10 },
+        decimals: null
+      }
+    ]
+  },
+  remove_drawing_annotations: {
+    kind: 'remove_drawing_annotations',
+    sheetId: 'dsht_1',
+    annotationIds: ['dann_1', 'dann_2']
   }
 };
 
