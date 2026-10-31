@@ -6,6 +6,7 @@ import {
   type BodyRepresentation,
   type DrawingAnnotation,
   type DrawingAnnotationId,
+  type DrawingLinearDimension,
   type DrawingSheet
 } from '@openzcad/shared';
 import {
@@ -231,16 +232,18 @@ describe('D06 Auto-dimension: the corpus', () => {
 
   it('leaves a bolt circle pitch to the report and dimensions the rest', async () => {
     const { bodies, bodyId } = await buildPart(adapter, flangeOperations());
-    const { before, plan, audit, after, views } = autoDimension(
+    const { plan, audit, after, views } = autoDimension(
       sheetOf(bodyId),
       bodies
     );
-    expect(audit).toMatchObject({ missing: [], redundant: [] });
-    expect(plan.skipped.map((entry) => entry.message)).toEqual(
-      before.unmeasurable.map((entry) => entry.message)
-    );
+    // Since v48 a Ø span between opposite holes states the pitch; the
+    // generator leaves that one to the person and says so.
+    expect(audit).toMatchObject({ redundant: [] });
+    expect(audit.missing.map((entry) => entry.message)).toEqual([
+      'Ø20 pitch diameter of the 4× Ø3 bolt circle.'
+    ]);
     expect(plan.skipped.map((entry) => entry.message)).toEqual([
-      '4× Ø3 on a Ø20 bolt circle: its pitch diameter needs a dimension D02 cannot place yet.'
+      "Ø20 pitch diameter of the 4× Ø3 bolt circle: Auto-dimension does not place pitch diameters yet; add a Ø span between two opposite holes' centres."
     ]);
     expectClearLayout(after, views, bodies);
   });
@@ -257,23 +260,44 @@ describe('D06 Auto-dimension: the corpus', () => {
     expectClearLayout(after, views, bodies);
   });
 
-  it('dimensions the turned foot as far as D02 can, and says what it skips', async () => {
+  it('dimensions the turned foot along its axis, and says what it skips', async () => {
     const { bodies, bodyId } = await buildPart(adapter, footOperations());
     const { before, plan, audit, after, views } = autoDimension(
       sheetOf(bodyId),
       bodies
     );
-    // Three diameters, seen face-on from above; the rest waits on slice B.
+    // Three diameters face-on from above, and (v48) the two heights off
+    // the rims' silhouettes in the front view.
     expect(kinds(plan.annotations)).toEqual([
       'diameter',
       'diameter',
-      'diameter'
+      'diameter',
+      'vertical',
+      'vertical'
     ]);
-    expect(plan.annotations.every((a) => a.viewId !== frontId)).toBe(true);
-    expect(plan.skipped.map((entry) => entry.message)).toEqual(
-      before.unmeasurable.map((entry) => entry.message)
+    const spans = plan.annotations.filter(
+      (a): a is DrawingLinearDimension => a.kind === 'linear'
     );
-    expect(audit).toMatchObject({ missing: [], redundant: [] });
+    expect(spans.every((a) => a.viewId === frontId)).toBe(true);
+    expect(spans.flatMap((a) => [a.from.anchor, a.to.anchor])).toEqual([
+      'silhouette',
+      'silhouette',
+      'silhouette',
+      'silhouette'
+    ]);
+    const chamfers = [
+      '4 × 45° chamfer: Auto-dimension does not place chamfer dimensions yet; add it with the Chamfer tool.',
+      '3.5 × 45° chamfer: Auto-dimension does not place chamfer dimensions yet; add it with the Chamfer tool.'
+    ];
+    expect(plan.skipped.map((entry) => entry.message)).toEqual([
+      ...before.unmeasurable.map((entry) => entry.message),
+      ...chamfers
+    ]);
+    expect(audit.redundant).toEqual([]);
+    expect(audit.missing.map((entry) => entry.message)).toEqual([
+      '4 × 45° chamfer.',
+      '3.5 × 45° chamfer.'
+    ]);
     expectClearLayout(after, views, bodies);
   });
 });
@@ -354,7 +378,9 @@ describe('D06 Auto-dimension: rules', () => {
     for (const annotation of plan.annotations) {
       const refs =
         annotation.kind === 'linear'
-          ? [annotation.from.edge, annotation.to.edge]
+          ? [annotation.from, annotation.to].flatMap((point) =>
+              'edge' in point ? [point.edge] : []
+            )
           : annotation.kind === 'diameter' || annotation.kind === 'radius'
             ? [annotation.edge]
             : [];

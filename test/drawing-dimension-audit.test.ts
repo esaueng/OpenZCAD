@@ -6,6 +6,7 @@ import {
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingEdgeRef,
+  type DrawingLinearDimension,
   type DrawingViewId,
   type EdgeTopology
 } from '@openzcad/shared';
@@ -112,32 +113,137 @@ function radial(
 const messages = (list: { message: string }[]) => list.map((f) => f.message);
 
 describe('D06 dimension audit: the turned foot', () => {
-  it('asks for each diameter once and names what D02 cannot dimension yet', async () => {
+  it('asks for each diameter, chamfer and axial position once', async () => {
     const { bodies, bodyId } = await build(footOperations());
     const audit = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
+    // Coaxial: nothing to locate across the axis. Along it, three faces
+    // need two dimensions; since slice B (v48) their rims' silhouettes mark
+    // them, and each chamfer is stated as size × angle.
     expect(messages(audit.missing)).toEqual([
       'Ø40 diameter.',
       'Ø33 diameter.',
-      'Ø25 diameter.'
+      'Ø25 diameter.',
+      '4 × 45° chamfer.',
+      '3.5 × 45° chamfer.',
+      'Z: nothing locates the face at z = 9 from the face at z = 0.',
+      'Z: nothing locates the face at z = 50 from the face at z = 0.'
     ]);
-    // Coaxial: nothing to locate across the axis. Along it, three faces
-    // need two dimensions, but only closed circles mark them.
     expect(messages(audit.unmeasurable)).toEqual([
-      '2× 45° chamfer or taper: its size and position need a chamfer dimension D02 cannot place yet.',
-      '3× R4 revolved blend: its radius needs a dimension D02 cannot place yet.',
-      expect.stringMatching(
-        /^Z: nothing locates the face at z = 9 from the face at z = 0: no edge marks it/
-      ),
-      expect.stringMatching(
-        /^Z: nothing locates the face at z = 50 from the face at z = 0: no edge marks it/
-      )
+      '3× R4 revolved blend: its radius needs a dimension D02 cannot place yet.'
     ]);
     expect(audit).toMatchObject({
       redundant: [],
       unchecked: [],
       stated: 0,
-      required: 5
+      required: 7
     });
+  });
+
+  it('passes a sheet that states every requirement once with the v48 anchors', async () => {
+    const { bodies, bodyId, body } = await build(footOperations());
+    const ref = (edge: EdgeTopology) => refOf(bodyId, edge);
+    const silhouette = (edge: EdgeTopology, side: 'low' | 'high') => ({
+      edge: ref(edge),
+      anchor: 'silhouette' as const,
+      side
+    });
+    const cone = (above: boolean) =>
+      body.topology!.faces.find(
+        (face) =>
+          face.geometry?.surfaceType.toLowerCase().includes('cone') &&
+          face.geometry.center.z > 20 === above
+      )!;
+    const chamfer = (name: string, above: boolean): DrawingAnnotation => ({
+      annotationId: id(name),
+      kind: 'chamfer',
+      viewId: frontId,
+      face: { bodyId, hash: cone(above).hash },
+      placementMm: { x: 40, y: above ? 10 : -30 }
+    });
+    const span = (
+      name: string,
+      direction: 'horizontal' | 'vertical',
+      from: ReturnType<typeof silhouette>,
+      to: ReturnType<typeof silhouette>,
+      extra: Partial<DrawingLinearDimension> = {}
+    ): DrawingAnnotation => ({
+      annotationId: id(name),
+      kind: 'linear',
+      viewId: frontId,
+      direction,
+      from,
+      to,
+      placementMm: { x: 45, y: 0 },
+      ...extra
+    });
+    const bottom = circleEdge(body, 16, { z: 0 });
+    const top = circleEdge(body, 16.5, { z: 50 });
+    const floor = circleEdge(body, 12.5, { z: 9 });
+    const bodyRim = circleEdge(body, 20, { z: 4 * S });
+    const annotations = [
+      span(
+        'height',
+        'vertical',
+        silhouette(bottom, 'high'),
+        silhouette(top, 'high')
+      ),
+      span(
+        'depth',
+        'vertical',
+        silhouette(floor, 'high'),
+        silhouette(top, 'high')
+      ),
+      // Ø40 across the body seen side-on.
+      span(
+        'd40',
+        'horizontal',
+        silhouette(bodyRim, 'low'),
+        silhouette(bodyRim, 'high'),
+        { diameter: true }
+      ),
+      radial(id('d33'), topId, 'diameter', ref(top)),
+      radial(
+        id('d25'),
+        topId,
+        'diameter',
+        ref(circleEdge(body, 12.5, { z: 50 }))
+      ),
+      chamfer('low', false),
+      chamfer('shoulder', true)
+    ];
+    const audit = auditDrawingDimensions(
+      sheetOf(bodyId, annotations),
+      bodies,
+      'mm'
+    );
+    expect(audit).toMatchObject({
+      missing: [],
+      redundant: [],
+      unchecked: [],
+      stated: 7,
+      required: 7
+    });
+    // The same Ø40 again face-on, and the floor thickness closing the chain.
+    const again = auditDrawingDimensions(
+      sheetOf(bodyId, [
+        ...annotations,
+        radial(id('d40again'), topId, 'diameter', ref(bodyRim)),
+        span(
+          'floor',
+          'vertical',
+          silhouette(bottom, 'low'),
+          silhouette(floor, 'low')
+        )
+      ]),
+      bodies,
+      'mm'
+    );
+    expect(
+      again.redundant.map(({ annotationId, reason }) => [annotationId, reason])
+    ).toEqual([
+      [id('d40again'), 'duplicate-size'],
+      [id('floor'), 'closed-chain']
+    ]);
   });
 
   it('flags a repeated diameter and leaves a derived circle unchecked', async () => {
@@ -177,7 +283,9 @@ describe('D06 dimension audit: the turned foot', () => {
       bodies,
       'mm'
     );
-    expect(audit.missing).toEqual([]);
+    expect(messages(audit.missing).filter((m) => m.startsWith('Ø'))).toEqual(
+      []
+    );
     expect(audit.redundant).toEqual([
       {
         annotationId: id('d25again'),
@@ -314,20 +422,44 @@ describe('D06 dimension audit: positions along an axis', () => {
 
 describe('D06 dimension audit: bolt circles', () => {
   it('states holes spaced round a bore by their pitch circle, not each position', async () => {
-    const { bodies, bodyId } = await build(flangeOperations());
+    const { bodies, bodyId, body } = await build(flangeOperations());
     const audit = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
     expect(messages(audit.missing)).toEqual([
       'Ø12 diameter.',
       '4× Ø3 diameter.',
+      'Ø20 pitch diameter of the 4× Ø3 bolt circle.',
       'X: nothing locates the Ø12 axis at x = 20 from the face at x = 0.',
       'X: nothing locates the face at x = 40 from the face at x = 0.',
       expect.stringMatching(/^Y: nothing locates the face at y = /),
       'Z: nothing locates the Ø12 axis at z = 20 from the face at z = 0.',
       'Z: nothing locates the face at z = 40 from the face at z = 0.'
     ]);
-    expect(messages(audit.unmeasurable)).toEqual([
-      '4× Ø3 on a Ø20 bolt circle: its pitch diameter needs a dimension D02 cannot place yet.'
-    ]);
+    expect(audit.unmeasurable).toEqual([]);
+    // A Ø span between two opposite holes' centres states the pitch circle.
+    const nearY = body.bbox.min.y;
+    const holeAt = (x: number) =>
+      refOf(bodyId, circleEdge(body, 1.5, { x, y: nearY }));
+    const pitch: DrawingAnnotation = {
+      ...linear(
+        id('pitch'),
+        frontId,
+        'horizontal',
+        holeAt(10),
+        'center',
+        holeAt(30),
+        'center'
+      ),
+      diameter: true
+    } as DrawingAnnotation;
+    const stated = auditDrawingDimensions(
+      sheetOf(bodyId, [pitch]),
+      bodies,
+      'mm'
+    );
+    expect(messages(stated.missing)).not.toContain(
+      'Ø20 pitch diameter of the 4× Ø3 bolt circle.'
+    );
+    expect(stated).toMatchObject({ redundant: [], unchecked: [], stated: 1 });
   });
 });
 

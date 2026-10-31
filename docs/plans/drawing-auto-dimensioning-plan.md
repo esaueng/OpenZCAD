@@ -187,6 +187,49 @@ Each needs its own schema bump, claimed from open PRs at the time
   blend (a chamfer's edge) are listed as "can't dimension yet" or "not
   checked", never as satisfied.
 
+## Slice B decisions (schema v48, 2026-10-31)
+
+- **Version.** v44 and v45 are M14's double-enveloping worms and wheels
+  and v47 is D03 section views, which landed first, so slice B takes v48. An older client refuses the
+  document; every addition is optional and absent on older annotations.
+- **Silhouette point** (`anchor: 'silhouette'`, `side: 'low' | 'high'`): a
+  circular edge's extreme along a horizontal or vertical dimension's
+  measuring direction. When the circle is level along it (a rim measured up
+  its axis), `side` picks its extreme across the page instead, so the
+  extension line starts at the rim's drawn end. A partial arc whose sweep
+  misses the extreme measures to its own end furthest that way. Aligned
+  dimensions take no extreme.
+- **Virtual sharp** (`anchor: 'virtual-sharp'`, two face references): read
+  from the exact surfaces the kernel publishes. Coaxial cylinders and cones,
+  or one and a plane square to their axis, meet in a circle, measured at its
+  extreme like a rim; two planes meet in a line, which must be end-on in the
+  view. Anything else breaks visibly (`no-sharp`), never guesses.
+- **Faces are held like edges**: body, ADR-011 hash, and the ADR-013
+  reference when the kernel proves one, through the same fail-closed
+  `resolveFace` ladder. Revolved faces are currently hash-only.
+- **Chamfer dimension** (`kind: 'chamfer'`, one face): its ends are its
+  virtual sharps with the faces either side, stepping through a blend
+  (torus, sphere, or a face the kernel marks `blend`) to the face beyond.
+  A cone reads as its axial length × half-angle; a plane as its leg on the
+  neighbour it makes the smaller angle with × that angle. Only side-on (a
+  cone) or edge-on (a plane); the foot reads 4 × 45° and 3.5 × 45°, so the
+  plan's single "2× 4 × 45°" is two requirements on this profile.
+- **Count** (2–999) on radius, diameter and chamfer; **Ø** on linear;
+  **reference** (in brackets) on any dimension; all stored as `true` or a
+  number, never `false`, so a save is byte-stable.
+- **Provenance** `{ generated: true, requirement }` marks what the
+  auto-dimensioner placed; a re-pick makes the dimension the person's own
+  and drops it, while a format edit keeps it.
+- **Checker.** A rim about an axis marks positions along it; a linear span
+  symmetric about a turned axis, or about a bolt circle's centre between two
+  hole centres, states that diameter or pitch; a chamfer dimension states
+  its size-and-angle group. Revolved blend radii stay unmeasurable: no
+  edge or face pick states a torus's tube radius yet.
+- **Generator.** Auto-dimension now ends position spans on rim silhouettes,
+  so the foot's two heights are placed; chamfer dimensions and pitch spans
+  are left to the person and reported as skipped until the generator
+  places them.
+
 ## Slice C decisions (Auto-dimension, 2026-10-31)
 
 - **One model, two uses.** The generator reads the checker's requirements

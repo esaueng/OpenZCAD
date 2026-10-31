@@ -4,12 +4,13 @@ import {
   createDrawingAnnotationId,
   drawingPaperMm,
   drawingPaperPerModelUnit,
+  drawingAnnotationBodyId,
   projectToView,
   type BodyId,
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingEdgeRef,
-  type DrawingPointAnchor,
+  type DrawingPointRef,
   type DrawingSheet,
   type DrawingView,
   type DrawingViewId,
@@ -19,6 +20,7 @@ import {
 } from '@openzcad/shared';
 import {
   annotationAnchor,
+  dimensionPointInView,
   drawingPointInView,
   drawnCoincidence,
   layoutAnnotation,
@@ -33,6 +35,8 @@ import {
 import { edgeRefFor } from './annotationPicking';
 import {
   axisOf,
+  boltLabel,
+  chamferLabel,
   circleInGroup,
   readDimensionState,
   same,
@@ -93,7 +97,9 @@ export interface AutoDimensionPlan {
 interface Anchor {
   edge: EdgeTopology;
   ref: DrawingEdgeRef;
-  anchor: DrawingPointAnchor;
+  point: DrawingPointRef;
+  /** A rim's silhouette (v48) is a point of one page direction only. */
+  direction?: 'horizontal' | 'vertical';
   model: Vector3;
   uv: XY;
   depth: number;
@@ -162,6 +168,22 @@ export function planAutoDimensions(
   const skipped: AutoDimensionSkip[] = state.audit.unmeasurable.map(
     (finding) => ({ ...finding })
   );
+  // v48 chamfer dimensions and Ø pitch spans are the check's, and a
+  // person's, but not placed here yet.
+  for (const [bodyId, body] of state.bodies) {
+    for (const group of body.requirements.chamfers)
+      if (!body.statedChamfers.has(group))
+        skipped.push({
+          bodyId,
+          message: `${chamferLabel(group, units)}: Auto-dimension does not place chamfer dimensions yet; add it with the Chamfer tool.`
+        });
+    for (const circle of body.requirements.boltCircles)
+      if (!body.statedBoltCircles.has(circle))
+        skipped.push({
+          bodyId,
+          message: `${boltLabel(circle, units)}: Auto-dimension does not place pitch diameters yet; add a Ø span between two opposite holes' centres.`
+        });
+  }
   const k = drawingPaperPerModelUnit(sheet.scale, units);
 
   const contexts: ViewContext[] = [];
@@ -203,12 +225,8 @@ export function planAutoDimensions(
     `${viewId}|${bodyId}`;
   for (const annotation of sheet.annotations ?? []) {
     if (annotation.kind === 'note' || !annotation.viewId) continue;
-    const bodyId =
-      annotation.kind === 'linear'
-        ? annotation.from.edge.bodyId
-        : annotation.kind === 'angle'
-          ? annotation.edges[0].bodyId
-          : annotation.edge.bodyId;
+    const bodyId = drawingAnnotationBodyId(annotation);
+    if (!bodyId) continue;
     const key = holdKey(annotation.viewId, bodyId);
     held.set(key, (held.get(key) ?? 0) + 1);
   }
@@ -241,7 +259,7 @@ export function planAutoDimensions(
         out.push({
           edge,
           ref,
-          anchor,
+          point: { edge: ref, anchor },
           model: point.model,
           uv: point.uv,
           depth: point.depth,
@@ -249,6 +267,33 @@ export function planAutoDimensions(
             edgeShown && (anchor === 'center' || onRuns(context, point.uv))
         });
       }
+      // A rim seen side-on draws as a line with no ends of its own: its
+      // silhouette end marks where it lies along the page.
+      if (edge.curve?.circle && isClosed(edge))
+        for (const direction of ['horizontal', 'vertical'] as const) {
+          const point: DrawingPointRef = {
+            edge: ref,
+            anchor: 'silhouette',
+            side: 'high'
+          };
+          const at = dimensionPointInView(
+            context.view,
+            point,
+            bodies,
+            direction
+          );
+          if (!at) continue;
+          out.push({
+            edge,
+            ref,
+            point,
+            direction,
+            model: at.model,
+            uv: at.uv,
+            depth: at.depth,
+            visible: edgeShown && onRuns(context, at.uv)
+          });
+        }
     }
     // Visible first, then nearest the viewer: the edge the view shows.
     out.sort(
@@ -365,8 +410,8 @@ export function planAutoDimensions(
             kind: 'linear',
             viewId: best.context.view.viewId,
             direction: best.direction,
-            from: { edge: best.from.ref, anchor: best.from.anchor },
-            to: { edge: best.to.ref, anchor: best.to.anchor },
+            from: best.from.point,
+            to: best.to.point,
             placementMm: { x: 0, y: 0 }
           }
         });
@@ -490,7 +535,11 @@ function bestSpan(
     // The best anchor at each value: anchors are sorted best first.
     const firstAt = (values: readonly number[]) =>
       values.flatMap((value) => {
-        const found = anchors.find((anchor) => same(anchor.model[axis], value));
+        const found = anchors.find(
+          (anchor) =>
+            (!anchor.direction || anchor.direction === direction) &&
+            same(anchor.model[axis], value)
+        );
         return found ? [{ value, anchor: found }] : [];
       });
     const froms = firstAt(datumValues);
