@@ -186,6 +186,7 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
         [
           'teeth',
           'mateTeeth',
+          'diameterFactor',
           'profileShift',
           'addendum',
           'dedendum',

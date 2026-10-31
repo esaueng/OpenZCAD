@@ -1063,6 +1063,8 @@ const MAX_GEAR_TEETH = 1000;
 const MAX_GEAR_HELIX_DEG = 45;
 /** M14: the fewest teeth on either gear of a bevel pair. */
 const MIN_BEVEL_TEETH = 4;
+/** M14: the most thread starts the kernel's worm generator builds. */
+const MAX_WORM_STARTS = 10;
 
 /**
  * Structural checks for a gear feature. Whether the tooth form is buildable
@@ -1085,29 +1087,82 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     return resolved;
   };
   const bevel = input.gearType === 'bevel';
-  const toothCount = (label: string, param: ParamValue, min: number): void => {
+  const worm = input.gearType === 'worm';
+  const wormWheel = input.gearType === 'worm-wheel';
+  const toothCount = (
+    label: string,
+    param: ParamValue,
+    min: number,
+    max = MAX_GEAR_TEETH
+  ): number => {
     const count = value(label, param);
     if (
       Math.abs(count - Math.round(count)) > 1e-9 ||
       count < min ||
-      count > MAX_GEAR_TEETH
+      count > max
     ) {
       throw new Error(
-        `Gear ${label} must be a whole number from ${min} to ${MAX_GEAR_TEETH}.`
+        `Gear ${label} must be a whole number from ${min} to ${max}.`
       );
     }
+    return count;
   };
-  toothCount(
-    'teeth',
-    input.teeth,
-    input.gearType === 'internal'
-      ? 6
-      : input.gearType === 'rack'
-        ? 1
-        : bevel
-          ? MIN_BEVEL_TEETH
-          : 3
-  );
+  if (worm) {
+    toothCount('starts', input.teeth, 1, MAX_WORM_STARTS);
+  } else {
+    toothCount(
+      'teeth',
+      input.teeth,
+      input.gearType === 'internal'
+        ? 6
+        : input.gearType === 'rack'
+          ? 1
+          : bevel
+            ? MIN_BEVEL_TEETH
+            : 3
+    );
+  }
+  if (worm || wormWheel) {
+    const starts = worm
+      ? value('starts', input.teeth)
+      : input.mateTeeth === undefined
+        ? undefined
+        : toothCount('worm starts', input.mateTeeth, 1, MAX_WORM_STARTS);
+    if (starts === undefined) {
+      throw new Error('A worm wheel needs its worm’s thread starts.');
+    }
+    if (worm && input.mateTeeth !== undefined) {
+      throw new Error('A worm takes no mate; its teeth are its starts.');
+    }
+    if (input.diameterFactor === undefined) {
+      throw new Error('A worm gear needs the worm’s diameter factor.');
+    }
+    // tan γ = z₁ / q: the lead angle stays within 45° while q ≥ z₁.
+    if (positive('diameter factor', input.diameterFactor) < starts) {
+      throw new Error(
+        'The worm’s lead angle exceeds 45°: use a diameter factor of at least its starts.'
+      );
+    }
+    // The worm's thread winds by its hand with no helix angle of its own;
+    // the wheel's follows from the lead angle. Both are new bodies.
+    const kind = worm ? 'worm' : 'worm wheel';
+    for (const [label, present] of [
+      ['profile shift', input.profileShift],
+      ['helix angle', input.helixAngleDeg],
+      ['herringbone', input.herringbone],
+      ['shaft angle', input.shaftAngleDeg],
+      ['rim diameter', input.rimDiameter],
+      ['back depth', input.backDepth],
+      ['target body', input.targetBodyId],
+      ['fit', input.fit]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(`A ${kind} takes no ${label}.`);
+      }
+    }
+  } else if (input.diameterFactor !== undefined) {
+    throw new Error('Only a worm or worm wheel takes a diameter factor.');
+  }
   if (bevel) {
     if (input.mateTeeth === undefined) {
       throw new Error('A bevel gear needs its mate’s tooth count.');
@@ -1137,8 +1192,9 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
       }
     }
   } else if (
-    input.mateTeeth !== undefined ||
-    input.shaftAngleDeg !== undefined
+    !worm &&
+    !wormWheel &&
+    (input.mateTeeth !== undefined || input.shaftAngleDeg !== undefined)
   ) {
     throw new Error('Only a bevel gear takes a mate and a shaft angle.');
   }
@@ -1273,8 +1329,8 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     value('x direction Z', input.xDirection.z);
   }
   if (input.boreDiameter !== undefined) {
-    if (input.gearType !== 'external' && !bevel) {
-      throw new Error('Only an external or bevel gear takes a bore.');
+    if (input.gearType !== 'external' && !bevel && !worm && !wormWheel) {
+      throw new Error('Only an external, bevel or worm gear takes a bore.');
     }
     positive('bore diameter', input.boreDiameter);
   }

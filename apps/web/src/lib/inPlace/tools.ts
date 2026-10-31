@@ -1928,6 +1928,25 @@ const gear: InPlaceToolSpec = {
       max: 180,
       exclusive: true,
       inOptions: true
+    },
+    {
+      id: 'starts',
+      label: 'Starts',
+      unit: 'count',
+      initial: 1,
+      integer: true,
+      min: 1,
+      max: 10,
+      inOptions: true
+    },
+    {
+      id: 'diameterFactor',
+      label: 'Diameter factor',
+      unit: 'count',
+      initial: 10,
+      min: 0,
+      exclusive: 'min',
+      inOptions: true
     }
   ],
   options: [
@@ -1954,6 +1973,16 @@ const gear: InPlaceToolSpec = {
           value: 'bevel',
           label: 'Bevel',
           note: 'Straight teeth tapering to a cone apex, to mesh at a shaft angle'
+        },
+        {
+          value: 'worm',
+          label: 'Worm',
+          note: 'A thread of one or more starts, driving a worm wheel at 90°'
+        },
+        {
+          value: 'worm-wheel',
+          label: 'Worm wheel',
+          note: 'The helical wheel that meshes with a worm of these starts and diameter factor'
         }
       ],
       initial: 'external'
@@ -1984,7 +2013,9 @@ const gear: InPlaceToolSpec = {
     const gearType =
       options.gearType === 'internal' ||
       options.gearType === 'rack' ||
-      options.gearType === 'bevel'
+      options.gearType === 'bevel' ||
+      options.gearType === 'worm' ||
+      options.gearType === 'worm-wheel'
         ? options.gearType
         : 'external';
     // An edited gear's own placement goes back as stored, expressions and
@@ -2024,6 +2055,44 @@ const gear: InPlaceToolSpec = {
         }
       };
     }
+    if (gearType === 'worm' || gearType === 'worm-wheel') {
+      // The thread's lead sets the helix and the worm's hand winds it, so a
+      // worm gear has no shift, helix angle or herringbone of its own.
+      const {
+        profileShift: _shift,
+        helixAngleDeg: _helix,
+        hand: _hand,
+        herringbone: _herringbone,
+        teeth,
+        ...wormFields
+      } = toothFields;
+      const savedGear = ctx.saved?.featureKind === 'gear' ? ctx.saved : null;
+      const starts = values.starts ?? 1;
+      return {
+        tool: 'gear',
+        gear: {
+          gearType,
+          ...wormFields,
+          ...(gearType === 'worm'
+            ? { teeth: starts }
+            : { teeth, mateTeeth: starts }),
+          diameterFactor: values.diameterFactor ?? 10,
+          ...(options.hand === 'left' || savedGear?.hand !== undefined
+            ? {
+                hand:
+                  options.hand === 'left'
+                    ? ('left' as const)
+                    : ('right' as const)
+              }
+            : {}),
+          faceWidth: values.faceWidth ?? 10,
+          origin: saved?.origin ? { ...saved.origin } : { ...frame.origin },
+          axis: saved?.axis ? { ...saved.axis } : { ...frame.normal },
+          ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {}),
+          ...(bore > 0 ? { boreDiameter: values.boreDiameter ?? bore } : {})
+        }
+      };
+    }
     return {
       tool: 'gear',
       gear: {
@@ -2042,12 +2111,19 @@ const gear: InPlaceToolSpec = {
       }
     };
   },
-  handles(slots, values) {
+  handles(slots, values, _ctx, options) {
     const frame = gearFrame(slots.plane);
     if (!frame) return [];
     const { origin, normal, radial } = frame;
     const base = keyOf('gear', origin.x, origin.y, origin.z);
-    const reach = ((values.module ?? 2) * ((values.teeth ?? 20) + 2)) / 2;
+    // A worm's tip circle follows its diameter factor, and its count chip
+    // is its starts.
+    const worm = options.gearType === 'worm';
+    const reach =
+      ((values.module ?? 2) *
+        ((worm ? (values.diameterFactor ?? 10) : (values.teeth ?? 20)) + 2)) /
+      2;
+    const count = worm ? 'starts' : 'teeth';
     const at = (by: number): Vector3 => ({
       x: origin.x + radial.x * by,
       y: origin.y + radial.y * by,
@@ -2061,9 +2137,9 @@ const gear: InPlaceToolSpec = {
         params: { origin, direction: normal }
       },
       {
-        valueId: 'teeth',
+        valueId: count,
         kind: 'chip',
-        key: `${base}:teeth`,
+        key: `${base}:${count}`,
         params: { anchor: at(reach * 1.15) }
       },
       {

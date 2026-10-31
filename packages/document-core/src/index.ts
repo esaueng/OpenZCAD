@@ -4665,6 +4665,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'herringbone',
     'mateTeeth',
     'shaftAngleDeg',
+    'diameterFactor',
     'origin',
     'axis',
     'xDirection',
@@ -4721,7 +4722,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   transform: ['axisRotation'],
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and
-  // `mateTeeth` only off a bevel gear, which the gear validation enforces.
+  // `mateTeeth` and `diameterFactor` only off the gear kinds that need them,
+  // which the gear validation enforces.
   gear: [
     'pitch',
     'pressureAngleDeg',
@@ -4736,6 +4738,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'herringbone',
     'mateTeeth',
     'shaftAngleDeg',
+    'diameterFactor',
     'xDirection',
     'boreDiameter',
     'rimDiameter',
