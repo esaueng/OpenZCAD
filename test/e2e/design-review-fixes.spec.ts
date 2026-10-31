@@ -160,14 +160,13 @@ test('precise hole creation, honest properties, recoverable errors and compact e
     exact: true
   });
   await expect(edit).toBeVisible();
+  // An in-place edit is the bar under the model alone: a card beside it
+  // only repeated the bar's values, Cancel and Done.
+  await expect(inspector(page)).toHaveCount(0);
   await enterCommandValue(page, 'diameter', '12');
   await expect(edit.getByRole('button', { name: /Done/ })).toBeEnabled();
-  await expect(inspector(page)).toContainText('Measurements (last applied)');
-  await expect(inspector(page)).toContainText('23214.6');
   await enterCommandValue(page, 'diameter', '100');
-  await expect(inspector(page)).toContainText('Measurements (last applied)');
-  await expect(inspector(page)).toContainText('23214.6');
-  await expect(inspector(page)).toContainText('last applied model');
+  await expect(inspector(page)).toHaveCount(0);
   await expect(edit.getByRole('status')).toContainText(
     'This cut would remove the entire target body'
   );

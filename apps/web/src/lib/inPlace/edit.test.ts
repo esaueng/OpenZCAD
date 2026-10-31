@@ -23,6 +23,7 @@ import type {
 } from '@openzcad/shared';
 import {
   withFeatureBuilt,
+  featureEditsInPlace,
   inPlaceEditBodyBox,
   inPlaceEditLineage,
   keepAbsentHoleSteps,
@@ -230,6 +231,20 @@ describe('which in-place command edits a stored feature', () => {
         })
       )
     ).toBe('axis-rotate');
+  });
+
+  it('says which History rows re-arm a command rather than open a card', () => {
+    const node = (data: unknown) => feature(data as FeatureData);
+    expect(
+      featureEditsInPlace(
+        node({ featureKind: 'fillet', targetBodyId: BODY, edges: [] })
+      )
+    ).toBe(true);
+    // An extrude re-arms the in-place Extrude, which has no tool id here.
+    expect(featureEditsInPlace(node({ featureKind: 'extrude' }))).toBe(true);
+    expect(
+      featureEditsInPlace(node({ featureKind: 'primitive', primitive: 'box' }))
+    ).toBe(false);
   });
 });
 

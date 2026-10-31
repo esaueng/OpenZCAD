@@ -50,9 +50,11 @@ test('explains a failed downstream edit and opens the exact feature for repair',
     .getByRole('button', { name: 'Edit Base corner fillets' })
     .click();
   await revealModelPanel(page, 'History');
+  // The fillet's edit is the bar under the model alone; no card repeats it.
   await expect(
-    inspector.getByRole('heading', { name: 'Base corner fillets' })
+    page.getByRole('group', { name: 'Edit Base corner fillets command' })
   ).toBeVisible();
+  await expect(inspector).toHaveCount(0);
   await expect(
     details.getByRole('button', { name: 'Inspect Union fin field' })
   ).toBeVisible();

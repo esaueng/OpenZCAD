@@ -3,7 +3,8 @@ import {
   MODEL_ONLY,
   railPanelButton,
   revealModelPanel,
-  stubApi
+  stubApi,
+  deleteFeatureFromHistory
 } from './openzcad-fixtures';
 
 interface Point3 {
@@ -599,8 +600,11 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await expect(keypad.locator('input')).toHaveValue('fillet_r');
   await keypad.locator('input').press('Escape');
   await expect(keypad).toHaveCount(0);
-  await inspector.getByLabel('More actions').click();
-  await inspector.getByRole('button', { name: 'Delete feature' }).click();
+  // The armed edit has no card; its row's menu deletes it.
+  await deleteFeatureFromHistory(
+    page,
+    page.locator('.feature-row', { hasText: 'Lower rim fillet' })
+  );
   await expect(status).not.toContainText(REBUILDING, { timeout: 60_000 });
   await railPanelButton(page, 'History').click();
   await expect(railPanelButton(page, 'History')).toHaveAttribute(

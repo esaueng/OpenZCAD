@@ -7,6 +7,7 @@ import { toUserId } from '@openzcad/shared';
 import type { Locator, Page, TestInfo } from '@playwright/test';
 import {
   editExtrudeFromHistory,
+  featureCardFromHistory,
   expect,
   revealModelPanel,
   stubApi,
@@ -353,11 +354,15 @@ for (const colorScheme of ['light', 'dark'] as const) {
       ).toBeVisible();
       await page.keyboard.press('Escape');
       await capture(page, testInfo, '320px-history-names');
-      const row = page.locator('.feature-row-main[title^="Extrude — "]');
-      const bar = await editExtrudeFromHistory(page, row, 'Extrude');
-      const title = page
-        .getByRole('region', { name: 'Feature inspector' })
-        .getByRole('heading', { name: 'Extrude', exact: true });
+      // The extrude's edit is its bar alone; its card is the readout.
+      const row = page.locator('.feature-row', {
+        has: page.locator('.feature-row-main[title^="Extrude — "]')
+      });
+      const inspector = await featureCardFromHistory(page, row);
+      const title = inspector.getByRole('heading', {
+        name: 'Extrude',
+        exact: true
+      });
       for (const size of [
         { width: 320, height: 568 },
         { width: 390, height: 844 },
@@ -373,7 +378,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
           .toBe(true);
         await capture(page, testInfo, `inspector-title-${size.width}px`);
       }
-      await bar.getByRole('button', { name: 'Cancel' }).click();
+      await page.keyboard.press('Escape');
     });
 
     test('sketch modify flyout follows a scrolled trigger and stays inside the viewport', async ({

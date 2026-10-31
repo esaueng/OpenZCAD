@@ -119,8 +119,18 @@ test('Hole: selecting the feature re-arms it in place, and Done closes it', asyn
   await expect(inspector).toHaveCount(0);
   await row(page, /^Hole/).click();
   await expect(chip).toHaveText('⌀ 8 mm');
+  // The bar is the whole edit: no card repeats its values beside it.
+  await expect(inspector).toHaveCount(0);
 
-  // The pinned feature keeps the overflow every edit card has.
+  // Its row menu's Measurements reads it out instead, leaving the edit, and
+  // that card keeps the overflow every edit card has.
+  await page.keyboard.press('Escape');
+  await expect(bar).toHaveCount(0);
+  await page.locator('.feature-row', { hasText: /^Hole/ }).hover();
+  await page.getByRole('button', { name: /^More actions for Hole/ }).click();
+  await page.getByRole('menuitem', { name: 'Measurements' }).click();
+  await expect(inspector).toContainText('mm³');
+  await expect(bar).toHaveCount(0);
   await inspector.getByLabel('More actions').click();
   await inspector.getByRole('button', { name: 'Delete feature' }).click();
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
