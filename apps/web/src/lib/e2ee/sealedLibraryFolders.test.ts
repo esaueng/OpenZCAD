@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { fromBase64Url, readLibraryFoldersHeader } from '@openzcad/crypto';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  fromBase64Url,
+  openLibraryFolders,
+  readLibraryFoldersHeader
+} from '@openzcad/crypto';
 import {
   createFolder,
   renameFolder,
@@ -7,6 +11,7 @@ import {
 } from '../libraryFolders';
 import {
   canonicalFolderJson,
+  localStorageFolderSequencePins,
   syncLibraryFolders,
   type FolderRecordCodec,
   type FolderSyncHost,
@@ -21,6 +26,10 @@ const CREATED = '2026-10-01T00:00:00.000Z';
 const USER = 'user_owner';
 const ACCOUNT_KEY = new Uint8Array(32).map((_, index) => index);
 const ROTATED_KEY = new Uint8Array(32).map((_, index) => 0x80 + index);
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function server() {
   let snapshot: LibraryFolderSnapshot = {
@@ -76,12 +85,12 @@ function memoryPins() {
 function device(
   remote: ReturnType<typeof server>,
   accountKey = ACCOUNT_KEY,
-  initial: LibraryFolders = { folders: [] }
+  initial: LibraryFolders = { folders: [] },
+  pins = memoryPins()
 ) {
   let shelf = initial;
   let record: ReturnType<FolderSyncHost['readRecord']> = null;
   let clock = T0;
-  const pins = memoryPins();
   let codec: FolderRecordCodec = sealedFolderCodec({
     accountKey,
     userId: USER,
@@ -191,6 +200,152 @@ describe('sealed library folders', () => {
     );
     expect(header.sequence).toBe(3);
   });
+
+  it.each(['write', 'read', 'recreate', 'rotate'] as const)(
+    'does not merge plaintext after a sealed-state pin (%s)',
+    async (prior) => {
+      const remote = server();
+      let laptop = device(remote);
+      laptop.edit((state) =>
+        createFolder(state, {
+          id: 'f-safe',
+          name: 'Safe',
+          projectIds: ['p1'],
+          now: CREATED
+        })
+      );
+      await laptop.sync();
+      if (prior === 'read') {
+        laptop = device(remote);
+        await laptop.sync();
+      }
+      if (prior === 'recreate') laptop.rotate(ACCOUNT_KEY);
+      if (prior === 'rotate') laptop.rotate(ROTATED_KEY);
+      expect(laptop.pins.read()).toBe(1);
+
+      // Storage controls both format and merge stamps, but has no account key.
+      let forged = createFolder(
+        { folders: [] },
+        {
+          id: 'f-safe',
+          name: 'Attacker rename',
+          projectIds: ['forged-project'],
+          now: new Date(T0 + 60_000).toISOString()
+        }
+      );
+      forged = createFolder(forged, {
+        id: 'f-injected',
+        name: 'Attacker folder',
+        now: new Date(T0 + 60_000).toISOString()
+      });
+      remote.put(1, canonicalFolderJson(folderSetFromDevice(forged)));
+
+      expect(await laptop.sync()).toBe('synced');
+      expect(names(laptop.shelf)).toEqual(['Safe']);
+      expect(laptop.shelf.folders[0]!.projectIds).toEqual(['p1']);
+      const sealed = fromBase64Url(remote.snapshot.record!);
+      expect(remote.snapshot.format).toBe(2);
+      expect(readLibraryFoldersHeader(sealed).sequence).toBe(2);
+      const opened = await openLibraryFolders(
+        prior === 'rotate' ? ROTATED_KEY : ACCOUNT_KEY,
+        USER,
+        sealed
+      );
+      expect(new TextDecoder().decode(opened.plaintext)).not.toContain(
+        'Attacker'
+      );
+    }
+  );
+
+  it('does not merge a plaintext conflict response after authenticated state', async () => {
+    const remote = server();
+    const laptop = device(remote);
+    laptop.edit((state) =>
+      createFolder(state, {
+        id: 'f-safe',
+        name: 'Safe',
+        projectIds: ['p1'],
+        now: CREATED
+      })
+    );
+    await laptop.sync();
+    laptop.edit((state) => renameFolder(state, 'f-safe', 'Updated'));
+    const forged = folderSetFromDevice(
+      createFolder(
+        { folders: [] },
+        { id: 'f-injected', name: 'Attacker folder', now: CREATED }
+      )
+    );
+    vi.spyOn(remote, 'save').mockImplementationOnce(() => {
+      remote.put(1, canonicalFolderJson(forged));
+      return Promise.resolve({ conflict: remote.snapshot });
+    });
+
+    expect(await laptop.sync()).toBe('synced');
+    expect(names(laptop.shelf)).toEqual(['Updated']);
+    expect(remote.snapshot.format).toBe(2);
+    expect(laptop.pins.read()).toBe(2);
+  });
+
+  it.each(['blocked', 'full', 'missing'] as const)(
+    'keeps the authenticated floor across codec recreation with %s storage',
+    async (storage) => {
+      const values = new Map<string, string>();
+      vi.stubGlobal(
+        'localStorage',
+        storage === 'missing'
+          ? undefined
+          : {
+              getItem(key: string) {
+                if (storage === 'blocked')
+                  throw new Error('Storage unavailable');
+                return values.get(key) ?? null;
+              },
+              setItem() {
+                throw new Error('Storage refused');
+              }
+            }
+      );
+      const accountId = `floor-${storage}`;
+      const remote = server();
+      const laptop = device(
+        remote,
+        ACCOUNT_KEY,
+        { folders: [] },
+        localStorageFolderSequencePins(accountId)
+      );
+      laptop.edit((state) =>
+        createFolder(state, {
+          id: 'f-safe',
+          name: 'Safe',
+          projectIds: ['p1'],
+          now: CREATED
+        })
+      );
+      await laptop.sync();
+      const recreated = localStorageFolderSequencePins(accountId);
+      expect(recreated.read()).toBe(1);
+      const codec = sealedFolderCodec({
+        accountKey: ACCOUNT_KEY,
+        userId: USER,
+        pins: recreated
+      });
+      const forged = folderSetFromDevice(
+        createFolder(
+          { folders: [] },
+          { id: 'f-injected', name: 'Attacker folder', now: CREATED }
+        )
+      );
+      expect(
+        await codec.decode({
+          revision: 2,
+          format: 1,
+          record: canonicalFolderJson(forged),
+          updatedAt: null
+        })
+      ).toEqual({ kind: 'replace' });
+    }
+  );
 
   it('replaces a copy sealed under a rotated-out account key', async () => {
     const remote = server();

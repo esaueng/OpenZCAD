@@ -35,9 +35,12 @@ export function sealedFolderCodec(options: {
   return {
     format: 2,
     async decode(snapshot) {
-      // Plaintext folders from before the account encrypted are read, then
-      // rewritten sealed.
-      if (snapshot.format === 1) return decodePlaintextFolders(snapshot.record);
+      // Migrate legacy plaintext only before this device has accepted sealed
+      // state. Storage cannot re-enable that migration after authentication.
+      if (snapshot.format === 1)
+        return pins.read() > 0
+          ? { kind: 'replace' }
+          : decodePlaintextFolders(snapshot.record);
       if (snapshot.format !== 2 || snapshot.record === null)
         return { kind: 'unsupported' };
       let sealed: Uint8Array;
