@@ -39,3 +39,20 @@ export async function spurGearDocument(helixAngleDeg = 0) {
     adapter.dispose();
   }
 }
+
+/** A spur gear built as its own body: module 0.8, 20 teeth, 10 wide. */
+export function standaloneSpurGearDocument() {
+  return gearBody(
+    createProjectDocument('Gear face width', toUserId('user_test')),
+    {
+      name: 'Gear',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 0.8,
+      teeth: 20,
+      faceWidth: 10,
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    }
+  ).document;
+}

@@ -65,6 +65,7 @@
     "test/exact-kernel-adapter.test.ts",
     "test/fleet-checkout-fixtures.test.ts",
     "test/flange-bolt-hole-resize.test.ts",
+    "test/gear-face-width-cap-drag.test.ts",
     "test/gear-height-preview-profile.test.ts",
     "test/geometry.test.ts",
     "test/io-step.test.ts",

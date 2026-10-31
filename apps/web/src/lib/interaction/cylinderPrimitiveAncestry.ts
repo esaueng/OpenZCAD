@@ -17,6 +17,7 @@ import {
 type CylinderDimension = 'radius' | 'height';
 type BoxDimension = 'width' | 'height' | 'depth';
 type BoxAxis = 'x' | 'y' | 'z';
+type GearData = Extract<FeatureNode['data'], { featureKind: 'gear' }>;
 
 /**
  * Cap roles, including a gear's: teeth cut along a cylinder name its caps
@@ -24,6 +25,26 @@ type BoxAxis = 'x' | 'y' | 'z';
  */
 const CAP_LINEAGE =
   /^(?:(?:primitive|modifier)\.cylinder|gear)\.face\.cap\.(start|end)$/;
+
+/** The cap roles of a gear built as its own body. */
+const GEAR_CAP_LINEAGE = /^gear\.face\.cap\.(start|end)$/;
+
+/**
+ * A gear built as its own body whose `faceWidth` is the straight axial
+ * distance between its caps: spur, helical or herringbone, external or
+ * internal. A bevel gear's width runs along its pitch cone, a worm's is a
+ * thread length and a rack's caps are its ends, so none of those is resized
+ * from a cap.
+ */
+function isFaceWidthGear(data: GearData): boolean {
+  return (
+    (data.gearType === 'external' || data.gearType === 'internal') &&
+    data.targetBodyId === undefined &&
+    data.faceWidth !== undefined &&
+    data.origin !== undefined &&
+    data.axis !== undefined
+  );
+}
 
 interface PrimitiveChain {
   primitive: FeatureNode;
@@ -53,8 +74,8 @@ interface PrimitiveChain {
 function primitiveChain(
   document: ProjectDocument,
   selectedBodyId: BodyId,
-  primitiveKind: 'cylinder' | 'box',
-  dimension: CylinderDimension | BoxDimension
+  primitiveKind: 'cylinder' | 'box' | 'gear',
+  dimension: CylinderDimension | BoxDimension | 'faceWidth'
 ): PrimitiveChain | null {
   const features = listFeaturesInOrder(document);
   const producerByBodyId = new Map(
@@ -81,6 +102,14 @@ function primitiveChain(
       (typeof producer.data.dimensions[dimension] === 'number' ||
         (primitiveKind === 'box' &&
           typeof producer.data.dimensions[dimension] === 'string'))
+    ) {
+      primitive = producer;
+      break;
+    }
+    if (
+      primitiveKind === 'gear' &&
+      producer.data.featureKind === 'gear' &&
+      isFaceWidthGear(producer.data)
     ) {
       primitive = producer;
       break;
@@ -291,5 +320,39 @@ export function primitiveBoxFaceAncestor(
   const chain = primitiveChain(document, selectedBodyId, 'box', dimension);
   return chain?.publishers.has(faceReference.producingFeatureId)
     ? { primitive: chain.primitive, dimension, axis, side, scale: chain.scale }
+    : null;
+}
+
+export interface GearCapAncestor {
+  gear: FeatureNode;
+  side: 'start' | 'end';
+  /** Converts the stored face width to a distance in the selected body's frame. */
+  scale: number;
+}
+
+/**
+ * The gear whose face width a cap drag on its own body should edit.
+ *
+ * Same contract as {@link primitiveCylinderCapAncestor}: the cap is proven
+ * by a v5 `gear.face.cap.*` role that a feature in the walked chain
+ * published, never by geometry. Teeth cut along a cylinder are that
+ * cylinder's height instead, and that walk finds them.
+ */
+export function gearFaceWidthCapAncestor(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5 | undefined,
+  faceHash: number
+): GearCapAncestor | null {
+  if (!faceReference || faceReference.currentHash !== faceHash) return null;
+  const match = GEAR_CAP_LINEAGE.exec(faceReference.lineageName);
+  if (!match) return null;
+  const chain = primitiveChain(document, selectedBodyId, 'gear', 'faceWidth');
+  return chain?.publishers.has(faceReference.producingFeatureId)
+    ? {
+        gear: chain.primitive,
+        side: match[1] as 'start' | 'end',
+        scale: chain.scale
+      }
     : null;
 }

@@ -24510,6 +24510,17 @@ export function App() {
           : {})
       };
     }
+    if (plan.kind === 'gear-width') {
+      return {
+        command: plan.command,
+        bodyId,
+        successMessage: `${plan.feature.name} face width set to ${formatNumber(plan.value)} ${base.units}.`,
+        validationTargets: affectedFeatureTargets(base, plan.feature.featureId),
+        ...(plan.preflightRejection
+          ? { preflightRejection: plan.preflightRejection }
+          : {})
+      };
+    }
     if (plan.kind === 'extrude-distance') {
       return {
         command: plan.command,
