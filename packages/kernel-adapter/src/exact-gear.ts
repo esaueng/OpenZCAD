@@ -29,6 +29,7 @@ import { resolveFeatureFaces } from './exact-reference-resolution';
 import { inheritMeshOrigin, validateGeneratedSolid } from './exact-shape-utils';
 import type { ExactShape } from './exact-types';
 import { KernelRefusal } from './kernel-refusal';
+import { unifyAndRequireValidSolid } from './kernel-validation';
 import {
   createRemusSemanticLineage,
   deriveRemusBooleanCarrierLineage,
@@ -594,7 +595,7 @@ function buildGearTeethOnBody(
       ? { xDirection: values.vector(data.xDirection, 'x direction') }
       : {})
   };
-  const { solid, details } = unwrap(
+  const { solid, details: cutDetails } = unwrap(
     gearKernel(kernel).cutGearTeethDetailed(
       targetSolid,
       face,
@@ -602,6 +603,7 @@ function buildGearTeethOnBody(
     ),
     'Gear'
   );
+  const details = unifyGearCaps(kernel, solid, cutDetails);
   validateGeneratedSolid(kernel, solid, 'Gear');
   raiseGearWarnings(ctx, feature, details);
   result.consumed.add(targetBodyId);
@@ -626,4 +628,64 @@ function buildGearTeethOnBody(
     ])
   });
   inheritMeshOrigin(result, targetBodyId, feature.bodyId);
+}
+
+/**
+ * Teeth cut along a body leave each end cap as two faces on one plane: the
+ * body's own disc inside the root circle and the gear's toothed ring around
+ * it. That reads as a seam, picks as half a cap, and no single face can be
+ * pushed or pulled. Unify them in place, which keeps every other face handle,
+ * and move a cap role whose face merged away onto the face that survived, so
+ * the whole cap keeps the gear's name.
+ */
+function unifyGearCaps(
+  kernel: RemusKernel,
+  solid: number,
+  details: GearOkDetails
+): GearOkDetails {
+  const roles = details.faceRoles ?? [];
+  const caps = roles.flatMap(({ face, role }) => {
+    const geometry = role.startsWith('cap.')
+      ? measureFaceGeometry(kernel, face)
+      : undefined;
+    return geometry?.normal && geometry.planeOffset !== undefined
+      ? [{ face, normal: geometry.normal, offset: geometry.planeOffset }]
+      : [];
+  });
+  if (caps.length === 0) return details;
+  const report = unifyAndRequireValidSolid(
+    kernel,
+    solid,
+    'Gear did not produce a valid closed solid.'
+  );
+  if (report.facesMerged === 0) return details;
+  const surviving = new Set(kernel.getSolidFaces(solid));
+  const named = new Set(roles.map(({ face }) => face));
+  const unnamedPlanes = Array.from(surviving).flatMap((face) => {
+    if (named.has(face)) return [];
+    const geometry = measureFaceGeometry(kernel, face);
+    return geometry?.normal && geometry.planeOffset !== undefined
+      ? [{ face, normal: geometry.normal, offset: geometry.planeOffset }]
+      : [];
+  });
+  const mergedInto = new Map<number, number>();
+  for (const cap of caps) {
+    if (surviving.has(cap.face)) continue;
+    const tolerance = Math.max(1, Math.abs(cap.offset)) * 1e-7;
+    const matches = unnamedPlanes.filter(
+      ({ normal, offset }) =>
+        normal.x * cap.normal.x +
+          normal.y * cap.normal.y +
+          normal.z * cap.normal.z >
+          1 - 1e-9 && Math.abs(offset - cap.offset) <= tolerance
+    );
+    if (matches.length === 1) mergedInto.set(cap.face, matches[0]!.face);
+  }
+  return {
+    ...details,
+    faceRoles: roles.flatMap(({ face, role }) => {
+      const current = surviving.has(face) ? face : mergedInto.get(face);
+      return current === undefined ? [] : [{ face: current, role }];
+    })
+  };
 }
