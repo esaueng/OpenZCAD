@@ -15,6 +15,10 @@ import {
   finishInPlaceCommand
 } from './openzcad-fixtures';
 
+interface GearReferenceWindow extends Window {
+  delayGearEdits: boolean;
+}
+
 async function exportedDocument(page: Page): Promise<ProjectDocument> {
   const menu = page.locator('details.file-menu');
   await menu.locator('summary').click();
@@ -45,10 +49,17 @@ async function setHeight(page: Page, height: number) {
     { timeout: 30_000 }
   );
   await waitForStillViewport(page);
-  const saved = await exportedDocument(page);
-  expect(listFeaturesInOrder(saved)[0]!.data).toMatchObject({
-    dimensions: { height }
-  });
+  // A still viewport and its chip can already show the preview while the
+  // exact release check is pending. Only the authored document proves commit.
+  await expect
+    .poll(
+      async () => listFeaturesInOrder(await exportedDocument(page))[0]!.data,
+      {
+        timeout: 30_000,
+        message: `The committed blank height reaches ${height}`
+      }
+    )
+    .toMatchObject({ dimensions: { height } });
 }
 
 test(
@@ -66,6 +77,21 @@ test(
       })
     );
     await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.addInitScript(() => {
+      const scope = window as unknown as GearReferenceWindow;
+      scope.delayGearEdits = false;
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, transfer) {
+        const post = () =>
+          send.call(this, message, transfer as StructuredSerializeOptions);
+        if (
+          scope.delayGearEdits &&
+          (message as { type?: string })?.type === 'sync'
+        ) {
+          setTimeout(post, 1500);
+        } else post();
+      };
+    });
     const document = await staleGearReferenceDocument();
     await page.goto('/');
     await expect(page).toHaveTitle(/OpenZCAD/);
@@ -89,6 +115,9 @@ test(
     await expectBodyCount(page, 1);
     await page.keyboard.press('f');
     await waitForStillViewport(page);
+    await page.evaluate(() => {
+      (window as unknown as GearReferenceWindow).delayGearEdits = true;
+    });
     await setHeight(page, 86);
     await page.keyboard.press('Escape');
     await revealModelPanel(page, 'History');
