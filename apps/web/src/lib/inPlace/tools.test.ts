@@ -327,7 +327,7 @@ describe('face tools build the card state', () => {
     expect(shown('mateTeeth')).toBe(false);
     expect(shown('outsideDiameter')).toBe(false);
     const option = (id: string) =>
-      spec.options.find((entry) => entry.id === id)?.when?.(state) !== false;
+      spec.options?.find((entry) => entry.id === id)?.when?.(state) !== false;
     expect(option('hand')).toBe(true);
     expect(option('throat')).toBe(false);
     expect(option('helix')).toBe(false);
