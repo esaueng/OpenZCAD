@@ -760,7 +760,7 @@ describe('StartScreen cloud project status', () => {
   it('does not relabel projects when the account listing failed', () => {
     renderStartScreen({ accountProjectListReached: false });
 
-    expect(screen.getByText('Account status unavailable')).toHaveAttribute(
+    expect(screen.getByText('Account unavailable')).toHaveAttribute(
       'title',
       'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
     );
@@ -883,9 +883,7 @@ describe('StartScreen library shell', () => {
     // say "1 / 2 saved" and "1 project is on this device only" one above
     // the other.
     const card = screen.getByRole('complementary', { name: 'Cloud sync' });
-    expect(
-      within(card).getByText('1 project saved on this device only')
-    ).toBeInTheDocument();
+    expect(within(card).getByText('1 on this device only')).toBeInTheDocument();
     expect(
       screen.getAllByRole('button', { name: /to my account/ })
     ).toHaveLength(1);
@@ -900,9 +898,10 @@ describe('StartScreen library shell', () => {
       cloudProjectIds: new Set([localProject.projectId])
     });
 
-    expect(
-      screen.getByText('1 project saved to your account')
-    ).toBeInTheDocument();
+    expect(screen.getByText('1 saved')).toHaveAttribute(
+      'title',
+      '1 project saved to your account.'
+    );
     expect(screen.queryByRole('button', { name: /to my account/ })).toBeNull();
   });
 

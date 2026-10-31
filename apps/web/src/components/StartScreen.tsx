@@ -2430,9 +2430,11 @@ export function StartScreen({
         tone: 'saved',
         Icon: CloudCheck,
         text:
+          syncTotals.total === 1 ? 'Saved' : `All ${syncTotals.total} saved`,
+        title:
           syncTotals.total === 1
-            ? 'Saved to your account'
-            : `All ${syncTotals.total} saved to your account`
+            ? 'Saved to your account.'
+            : `All ${syncTotals.total} saved to your account.`
       };
     }
     if (loading) {
@@ -2456,7 +2458,7 @@ export function StartScreen({
       return {
         tone: 'warning',
         Icon: CloudAlert,
-        text: 'Account status unavailable',
+        text: 'Account unavailable',
         title:
           'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
       };
@@ -2466,7 +2468,7 @@ export function StartScreen({
       return {
         tone: 'warning',
         Icon: CloudAlert,
-        text: `${count} ${count === 1 ? 'project' : 'projects'} saved on this device only`,
+        text: `${count} on this device only`,
         title: `${savedToAccountCount} of ${accountableProjects.length} projects are in your account; ${count === 1 ? 'one is' : `${count} are`} on this device only.`,
         progress: {
           saved: savedToAccountCount / accountableProjects.length,
@@ -2491,8 +2493,14 @@ export function StartScreen({
         saved === 0
           ? 'Signed in'
           : saved === 1
-            ? '1 project saved to your account'
-            : `All ${saved} projects saved to your account`
+            ? '1 saved'
+            : `All ${saved} saved`,
+      ...(saved > 0 && {
+        title:
+          saved === 1
+            ? '1 project saved to your account.'
+            : `All ${saved} projects saved to your account.`
+      })
     };
   }
 

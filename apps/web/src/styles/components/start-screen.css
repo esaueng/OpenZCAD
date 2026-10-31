@@ -728,6 +728,9 @@
 
 .start-account {
   display: grid;
+  /* minmax(0, …): an auto track grows to the sentence's unwrapped width, so
+     a long one ran past the column's edge instead of ellipsizing. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   padding: 6px 0 6px 8px;
   color: var(--color-text-subtle);
