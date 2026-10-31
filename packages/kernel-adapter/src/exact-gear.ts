@@ -81,6 +81,19 @@ function envelopingWormKernel(kernel: RemusKernel): EnvelopingWormKernel {
   return candidate as EnvelopingWormKernel;
 }
 
+/** The enveloping wheel entry point, on kernels from its release on. */
+interface EnvelopingWheelKernel {
+  makeEnvelopingWormWheelDetailed(spec: string): SolidOperationDetailedResult;
+}
+
+function envelopingWheelKernel(kernel: RemusKernel): EnvelopingWheelKernel {
+  const candidate = kernel as unknown as Partial<EnvelopingWheelKernel>;
+  if (typeof candidate.makeEnvelopingWormWheelDetailed !== 'function') {
+    throw new Error('This kernel build has no enveloping wheel generator.');
+  }
+  return candidate as EnvelopingWheelKernel;
+}
+
 /** The worm entry points, on kernels from the worm release on. */
 interface WormGearKernel {
   makeWormDetailed(spec: string): SolidOperationDetailedResult;
@@ -339,6 +352,8 @@ export function buildGearFeature(
     buildWormGearBody(ctx, feature, data, toothForm, module, values);
   } else if (data.gearType === 'enveloping-worm') {
     buildEnvelopingWormBody(ctx, feature, data, toothForm, module, values);
+  } else if (data.gearType === 'enveloping-wheel') {
+    buildEnvelopingWheelBody(ctx, feature, data, toothForm, module, values);
   } else if (data.targetBodyId === undefined) {
     buildNewGearBody(ctx, feature, data, toothForm, helical, module, values);
   } else {
@@ -559,6 +574,78 @@ function buildEnvelopingWormBody(
   const label = 'Enveloping worm';
   const { solid, details } = unwrap(
     envelopingWormKernel(kernel).makeEnvelopingWormDetailed(
+      JSON.stringify(spec)
+    ),
+    label
+  );
+  validateGeneratedSolid(kernel, solid, label);
+  raiseGearWarnings(ctx, feature, details);
+  result.shapes.set(feature.bodyId!, {
+    solids: [solid],
+    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+  });
+}
+
+/**
+ * The wheel a double-enveloping (Hindley) worm drives: its first cap on
+ * `origin`, along `axis`, the worm across the middle of its face. `teeth`
+ * are its own teeth, `mateTeeth` the worm's starts and `wormLength` the
+ * worm's length; its teeth have no shift or fillet, which the command
+ * validation refuses.
+ */
+function buildEnvelopingWheelBody(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'gear'>,
+  toothForm: Record<string, number>,
+  module: number | undefined,
+  values: GearValues
+): void {
+  const { kernel, result } = ctx;
+  if (
+    module === undefined ||
+    data.diameterFactor === undefined ||
+    data.mateTeeth === undefined ||
+    data.wormLength === undefined
+  ) {
+    throw new Error(
+      'An enveloping wheel needs a pitch and its worm’s starts, diameter factor and length.'
+    );
+  }
+  if (data.faceWidth === undefined || !data.origin || !data.axis) {
+    throw new Error('A new gear needs a face width, an origin and an axis.');
+  }
+  const {
+    profileShift: _shift,
+    rootFillet: _fillet,
+    teeth,
+    ...form
+  } = toothForm;
+  const axis = values.vector(data.axis, 'axis');
+  const spec = {
+    module,
+    starts: Math.round(values.resolve(data.mateTeeth, 'worm starts')),
+    wheelTeeth: teeth,
+    diameterFactor: values.resolve(data.diameterFactor, 'diameter factor'),
+    length: values.resolve(data.wormLength, 'worm length'),
+    faceWidth: values.resolve(data.faceWidth, 'face width'),
+    ...form,
+    ...(data.hand ? { hand: data.hand } : {}),
+    ...withNumber(
+      'outsideDiameter',
+      values.optional(data.outsideDiameter, 'outside diameter')
+    ),
+    origin: values.vector(data.origin, 'origin'),
+    axis,
+    xDirection: gearXDirection(data, axis, values),
+    ...withNumber(
+      'boreDiameter',
+      values.optional(data.boreDiameter, 'bore diameter')
+    )
+  };
+  const label = 'Enveloping wheel';
+  const { solid, details } = unwrap(
+    envelopingWheelKernel(kernel).makeEnvelopingWormWheelDetailed(
       JSON.stringify(spec)
     ),
     label

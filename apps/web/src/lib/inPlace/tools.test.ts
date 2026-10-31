@@ -406,6 +406,86 @@ describe('face tools build the card state', () => {
     expect(chips).toEqual(['starts', 'module']);
   });
 
+  it('gear: an enveloping wheel sends its worm and outside diameter', () => {
+    const spec = IN_PLACE_TOOL_SPECS.gear;
+    const slots: InPlaceSlots = {
+      ...EMPTY,
+      plane: {
+        kind: 'principal',
+        plane: 'XY',
+        origin: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 }
+      }
+    };
+    const ctx = { ...CTX, touched: ['helixAngleDeg', 'profileShift'] };
+    const values = {
+      teeth: 30,
+      module: 2,
+      faceWidth: 8,
+      starts: 1,
+      diameterFactor: 10,
+      wormLength: 24,
+      outsideDiameter: 65,
+      helixAngleDeg: 20,
+      profileShift: 0.3
+    };
+    // The throat option belongs to worm wheels; an enveloping wheel always
+    // wraps its worm.
+    const options = {
+      gearType: 'enveloping-wheel',
+      sizing: 'module',
+      throat: 'plain'
+    };
+    const request = spec.request(slots, values, options, ctx, {
+      outsideDiameter: 65
+    });
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: {
+        gearType: 'enveloping-wheel',
+        teeth: 30,
+        mateTeeth: 1,
+        pitch: 2,
+        diameterFactor: 10,
+        wormLength: 24,
+        outsideDiameter: 65,
+        faceWidth: 8
+      }
+    });
+    const gear = request?.tool === 'gear' ? request.gear : null;
+    for (const field of [
+      'helixAngleDeg',
+      'herringbone',
+      'profileShift',
+      'throated'
+    ]) {
+      expect(gear).not.toHaveProperty(field);
+    }
+    // Its worm's fields and outside diameter show; no throat choice does.
+    const state = { options, numbers: {} };
+    const shown = (id: string) =>
+      spec.values.find((value) => value.id === id)?.when?.(state) !== false;
+    for (const id of [
+      'starts',
+      'diameterFactor',
+      'wormLength',
+      'outsideDiameter'
+    ]) {
+      expect(shown(id)).toBe(true);
+    }
+    expect(shown('mateTeeth')).toBe(false);
+    const option = (id: string) =>
+      spec.options?.find((entry) => entry.id === id)?.when?.(state) !== false;
+    expect(option('hand')).toBe(true);
+    expect(option('throat')).toBe(false);
+    // Its count chip is its teeth, as on a worm wheel.
+    const chips = spec
+      .handles(slots, { module: 2, teeth: 30 }, CTX, options)
+      .filter((handle) => handle.kind === 'chip')
+      .map((handle) => handle.valueId);
+    expect(chips).toEqual(['teeth', 'module']);
+  });
+
   it('gear: a throated wheel sends its throat and outside diameter', () => {
     const spec = IN_PLACE_TOOL_SPECS.gear;
     const slots: InPlaceSlots = {
