@@ -170,7 +170,7 @@ test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-s
   expect(fullCode).toMatch(/^\d{5}( \d{5}){7}$/);
   await expect(
     encryptionIndicator(page).getByRole('button', {
-      name: 'Open Settings › Encryption'
+      name: 'Encryption settings'
     })
   ).toBeVisible();
   await page.keyboard.press('Escape');

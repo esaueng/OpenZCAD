@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  KeyRound,
-  Lock,
+  Check,
+  Copy,
   Settings as SettingsIcon,
   ShieldAlert
 } from 'lucide-react';
@@ -38,15 +38,16 @@ const UNLOCK_SENTENCE =
 const REPAIR_SENTENCE =
   'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.';
 
-const ENCRYPTED_SENTENCE =
-  'This project’s contents are encrypted on this device before they are saved.';
+const ENCRYPTED_SENTENCE = 'Encrypted on this device before it is saved.';
 
 interface Presentation {
   /** The accessible name; the verified one is the shelf badge's. */
   name: string;
-  title: string;
-  heading: string;
-  body: readonly string[];
+  /** One or two words, coloured by state. */
+  status: string;
+  text: string;
+  /** A secondary detail line under the text, if any. */
+  detail?: string;
 }
 
 function formatInstant(ms: number): string {
@@ -65,60 +66,88 @@ function presentationOf(
     case 'verified':
       return {
         name: ENCRYPTED_LABEL,
-        title: `${ENCRYPTED_LABEL}. This project’s contents are encrypted on this device, and the version this page last opened or saved passed verification.`,
-        heading: 'Verified',
-        body: [
-          ENCRYPTED_SENTENCE,
-          'The version this page last opened or saved is signed by one of your devices and does not move this browser back from a version it has already seen.'
-        ]
+        status: 'Verified',
+        text: `${ENCRYPTED_SENTENCE} This version is signed by one of your devices and is no older than one this browser has seen.`
       };
     case 'warning': {
       const warning = status.warning;
       return {
         name: `${ENCRYPTED_LABEL} · verification warning`,
-        title: `${ENCRYPTED_LABEL}. The version the account sent is older than the project’s last recorded activity.`,
-        heading: 'Verification warning',
-        body: [
-          'The version the account sent passed verification, but it was signed earlier than the project’s last recorded activity. This browser had not opened the project before, so it cannot tell whether a newer version was left out.',
-          ...(warning
-            ? [
-                `Signed ${formatInstant(warning.signedAt)} · last activity ${formatInstant(warning.updatedAt)}.`
-              ]
-            : [])
-        ]
+        status: 'Verification warning',
+        text: 'This version passed verification but is older than the project’s last activity. This browser has not opened the project before, so it cannot tell whether a newer version was left out.',
+        ...(warning
+          ? {
+              detail: `Signed ${formatInstant(warning.signedAt)} · last activity ${formatInstant(warning.updatedAt)}`
+            }
+          : {})
       };
     }
     case 'locked':
       return {
         name: `${ENCRYPTED_LABEL} · encryption locked`,
-        title: `${ENCRYPTED_LABEL}. ${UNLOCK_SENTENCE}`,
-        heading: 'Encryption locked on this device',
-        body: [UNLOCK_SENTENCE]
+        status: 'Locked on this device',
+        text: UNLOCK_SENTENCE
       };
     case 'problem': {
       const problem = status.problem;
       const failed = problem !== undefined;
       return {
         name: `${ENCRYPTED_LABEL} · ${failed ? 'verification failed' : 'repair needed'}`,
-        title: `${ENCRYPTED_LABEL}. ${failed ? 'A version of this project did not pass verification.' : REPAIR_SENTENCE}`,
-        heading: failed ? 'Verification failed' : 'Repair needed',
-        body: [
+        status: failed ? 'Verification failed' : 'Repair needed',
+        text: [
           ...(problem !== undefined ? [problem] : []),
           ...(needsRepair ? [REPAIR_SENTENCE] : [])
-        ]
+        ].join(' ')
       };
     }
     default:
       return {
         name: `${ENCRYPTED_LABEL} · not verified yet`,
-        title: `${ENCRYPTED_LABEL}. This page has not opened or saved a version of this project yet.`,
-        heading: 'Not verified yet',
-        body: [
-          ENCRYPTED_SENTENCE,
-          'This page has not opened or saved a version of it yet, so nothing has been verified.'
-        ]
+        status: 'Not verified yet',
+        text: `${ENCRYPTED_SENTENCE} Nothing is verified until this page opens or saves a version.`
       };
   }
+}
+
+type Shackle = 'open' | 'closed' | 'keyhole';
+
+/** Shut once a version is verified; open while nothing vouches for it yet. */
+function shackleOf(state: EncryptionStatusState): Shackle {
+  switch (state) {
+    case 'verified':
+      return 'closed';
+    case 'locked':
+      return 'keyhole';
+    default:
+      return 'open';
+  }
+}
+
+/**
+ * Lucide's lock, drawn here so one shape can change state: the shackle
+ * swings open about its right leg and back, and the keyhole fades in while
+ * this device's keys are locked.
+ */
+function Padlock({ size, shackle }: { size: number; shackle: Shackle }) {
+  return (
+    <svg
+      className={`padlock is-${shackle}`}
+      data-shackle={shackle}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path className="padlock-shackle" d="M7 11V7a5 5 0 0 1 10 0v4" />
+      <circle className="padlock-keyhole" cx="12" cy="16" r="1" />
+    </svg>
+  );
 }
 
 /**
@@ -136,6 +165,13 @@ export function EncryptionIndicator({
   const menuRef = useRef<HTMLDetailsElement>(null);
   const state: EncryptionStatusState = needsRepair ? 'problem' : status.state;
   const presentation = presentationOf(state, status, needsRepair);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   useEffect(() => {
     function closeOnOutsidePointer(event: PointerEvent) {
@@ -167,8 +203,12 @@ export function EncryptionIndicator({
     };
   }, []);
 
-  const Icon =
-    state === 'locked' ? KeyRound : state === 'problem' ? ShieldAlert : Lock;
+  const icon = (size: number) =>
+    state === 'problem' ? (
+      <ShieldAlert size={size} aria-hidden="true" />
+    ) : (
+      <Padlock size={size} shackle={shackleOf(state)} />
+    );
 
   return (
     <details
@@ -185,31 +225,66 @@ export function EncryptionIndicator({
       <summary
         className="encryption-indicator"
         aria-label={presentation.name}
-        title={presentation.title}
+        title={presentation.name}
       >
-        <Icon size={13} aria-hidden="true" />
+        {icon(13)}
       </summary>
       <div className="topbar-menu-panel encryption-menu-panel">
-        <strong className="topbar-menu-label">
-          <Lock size={12} aria-hidden="true" />
-          {ENCRYPTED_LABEL}
-        </strong>
-        <p className="encryption-menu-heading">{presentation.heading}</p>
-        {presentation.body.map((sentence) => (
-          <p key={sentence} className="encryption-menu-text">
-            {sentence}
-          </p>
-        ))}
+        <div className="encryption-menu-head">
+          <span className="encryption-menu-icon" aria-hidden="true">
+            {icon(14)}
+          </span>
+          <strong className="encryption-menu-title">{ENCRYPTED_LABEL}</strong>
+          <span className="encryption-menu-status">{presentation.status}</span>
+        </div>
+        {presentation.text ? (
+          <p className="encryption-menu-text">{presentation.text}</p>
+        ) : null}
+        {presentation.detail ? (
+          <p className="encryption-menu-detail">{presentation.detail}</p>
+        ) : null}
         {projectStateCode ? (
           <div className="encryption-menu-code">
-            <span className="topbar-menu-label">Project state code</span>
+            <div className="encryption-menu-code-head">
+              <span>Project state code</span>
+              <button
+                type="button"
+                className="encryption-menu-copy"
+                aria-label={
+                  copied
+                    ? 'Copied project state code'
+                    : 'Copy project state code'
+                }
+                title="Copy"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await navigator.clipboard.writeText(projectStateCode);
+                      setCopied(true);
+                    } catch {
+                      setCopied(false);
+                    }
+                  })();
+                }}
+              >
+                {copied ? (
+                  <Check size={12} aria-hidden="true" />
+                ) : (
+                  <Copy size={12} aria-hidden="true" />
+                )}
+              </button>
+            </div>
+            {/* Shown at full length: people compare it by eye (ADR-024). */}
             <code>{projectStateCode}</code>
+            <small>
+              Matches a collaborator’s code when you both see the same saved
+              version.
+            </small>
           </div>
         ) : null}
-        <div className="topbar-menu-sep" />
         <button
           type="button"
-          className="topbar-menu-item"
+          className="topbar-menu-item encryption-menu-settings"
           onClick={() => {
             const menu = menuRef.current;
             if (menu) {
@@ -220,7 +295,7 @@ export function EncryptionIndicator({
           }}
         >
           <SettingsIcon size={13} aria-hidden="true" />
-          <span>Open Settings › Encryption</span>
+          <span>Encryption settings</span>
         </button>
       </div>
     </details>
