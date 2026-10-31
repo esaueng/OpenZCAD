@@ -21,6 +21,7 @@ import {
   Plus,
   Radius,
   RefreshCw,
+  Scaling,
   StickyNote,
   Sun,
   Trash2,
@@ -75,6 +76,7 @@ import {
   type ViewProjection
 } from '../lib/drawing/projectView';
 import {
+  autoScaleSheet,
   composeSheetPage,
   type ComposedView,
   fitViewsToSheet,
@@ -1832,13 +1834,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return `${listNames(names)} ${names.length === 1 ? 'runs' : 'run'} off the paper. Fit views to sheet, or move ${names.length === 1 ? 'it' : 'them'} onto the page, to export.`;
   }
 
-  const fitViews = () => {
+  const fitViews = (autoScale = false) => {
     if (!sheet) return;
-    const fitted = fitViewsToSheet(sheet, viewExtents, document.units);
+    const label = autoScale ? 'Auto scale' : 'Fit views to sheet';
+    const fitted = (autoScale ? autoScaleSheet : fitViewsToSheet)(
+      sheet,
+      viewExtents,
+      document.units
+    );
     if (!fitted) {
       props.onStatus(
         sheet.views.length === 0
-          ? 'Add a view to fit it to the sheet.'
+          ? `Add a view to ${autoScale ? 'scale it' : 'fit it'} to the sheet.`
           : 'These views do not fit this paper at any scale. Pick a larger paper.'
       );
       return;
@@ -1879,11 +1886,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         : []),
       ...moves
     ];
-    if (run(composeCommands('Fit views to sheet', commands)))
+    if (run(composeCommands(label, commands)))
       props.onStatus(
-        scaled
-          ? `Fitted the views to the sheet at ${formatDrawingScale(fitted.scale)}.`
-          : 'Fitted the views to the sheet.'
+        autoScale
+          ? scaled
+            ? `Scaled the views to ${formatDrawingScale(fitted.scale)}, the largest scale that fits the sheet.`
+            : `${formatDrawingScale(fitted.scale)} is already the largest scale that fits the sheet.`
+          : scaled
+            ? `Fitted the views to the sheet at ${formatDrawingScale(fitted.scale)}.`
+            : 'Fitted the views to the sheet.'
       );
   };
   // Edges a tool can pick, kept while the drawn views and model are the same
@@ -3164,9 +3175,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               editDisabledReason ??
               'Lay the views out again above the title block, at a smaller scale if they need it'
             }
-            onClick={fitViews}
+            onClick={() => fitViews()}
           >
             <Maximize size={13} aria-hidden="true" /> Fit views to sheet
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!editable || sheet.views.length === 0}
+            title={
+              editDisabledReason ??
+              'Lay the views out again, evenly spaced, at the largest scale that fits above the title block'
+            }
+            onClick={() => fitViews(true)}
+          >
+            <Scaling size={13} aria-hidden="true" /> Auto scale
           </button>
         </div>
         <AnnotationList

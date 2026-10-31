@@ -14,6 +14,7 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import {
+  formatDrawingScale,
   toUserId,
   type BodyId,
   type BodyRepresentation,
@@ -1059,6 +1060,43 @@ describe('DrawingWorkspace', () => {
     const options = Array.from(scale.options, (option) => option.value);
     expect(options).toEqual(
       expect.arrayContaining(['1:200', '1:500', '1:1000'])
+    );
+    // The ISO enlargements and common intermediates, largest first.
+    expect(options).toEqual(
+      expect.arrayContaining(['50:1', '20:1', '4:1', '1:4', '1:25', '1:250'])
+    );
+    expect(options.slice(0, 3)).toEqual(['50:1', '20:1', '10:1']);
+  });
+
+  it('auto scales a hand-shrunk sheet back up in one undoable command', async () => {
+    const fitted = starter(
+      drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+    );
+    const sheet: DrawingSheet = {
+      ...fitted,
+      scale: { numerator: 1, denominator: 2 }
+    };
+    const { onCommand, onStatus } = setup({ sheet });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Auto scale' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.label).toBe('Auto scale');
+    const before: ProjectDocument = {
+      ...createProjectDocument('Bracket', toUserId('test')),
+      bodyOrder: [bodyId],
+      drawings: { sheets: [sheet] }
+    };
+    command.validate(before);
+    const after = command.apply(before);
+    expect(after.drawings!.sheets[0]!.scale).toEqual(fitted.scale);
+    expect(onStatus).toHaveBeenLastCalledWith(
+      `Scaled the views to ${formatDrawingScale(fitted.scale)}, the largest scale that fits the sheet.`
     );
   });
 
