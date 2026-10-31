@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { createFatLine } from '@openzcad/viewport';
 
 /** CSS pixels, independent of zoom and display density. */
