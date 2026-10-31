@@ -474,7 +474,13 @@ export function viewsAlong(
   axis: AuditAxis
 ) {
   return sheet.views.filter((view) => {
-    if (view.orientation === 'iso' || !view.bodyIds.includes(bodyId as never))
+    // A section (D03) draws a cut body whose edges are not the model's:
+    // dimensions read from model edges are not placed there (D06 slice F).
+    if (
+      view.orientation === 'iso' ||
+      view.section ||
+      !view.bodyIds.includes(bodyId as never)
+    )
       return false;
     const frame = DRAWING_VIEW_FRAMES[view.orientation];
     return axisOf(frame.x) === axis || axisOf(frame.up) === axis;
@@ -697,6 +703,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
+          !view.section &&
           group.axes.some(
             (axis) =>
               Math.abs(
