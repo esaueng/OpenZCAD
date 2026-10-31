@@ -15,6 +15,7 @@
   "gear.spec.ts": 15,
   "in-place-primitives.spec.ts": 15,
   "keyboard-focus-recovery.spec.ts": 8,
+  "library-folder-sync.spec.ts": 9,
   "measure.spec.ts": 7,
   "modeling.spec.ts": 136,
   "panel-suspension.spec.ts": 13,
