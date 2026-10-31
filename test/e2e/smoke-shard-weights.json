@@ -11,6 +11,7 @@
   "extrude-edit-in-place.spec.ts": 15,
   "extrude-in-place.spec.ts": 15,
   "extrude-through-all.spec.ts": 8,
+  "face-offset-continuity.spec.ts": 30,
   "feature-history.spec.ts": 21,
   "gear.spec.ts": 15,
   "in-place-primitives.spec.ts": 15,
