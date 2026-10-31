@@ -752,7 +752,11 @@ export function StartScreen({
     (project: ProjectSummary) => boolean
   > = {
     all: () => true,
-    pinned: (project) => projectOrganization(project).pinned,
+    // A pinned folder heads the shelf's Pinned group, so its projects count
+    // and show as pinned too.
+    pinned: (project) =>
+      projectOrganization(project).pinned ||
+      folderByProject.get(project.projectId)?.pinned === true,
     attention: needsAttention,
     local: (project) => localOnlyIds.has(project.projectId)
   };
@@ -3067,7 +3071,17 @@ export function StartScreen({
                       {group.label && (
                         <h3 className="start-shelf-group">
                           {group.label}
-                          <span>{group.items.length}</span>
+                          {/* Projects, not tiles, like the filter counts. */}
+                          <span>
+                            {group.items.reduce(
+                              (count, item) =>
+                                count +
+                                (item.folder
+                                  ? folderMembers(item.folder).length
+                                  : 1),
+                              0
+                            )}
+                          </span>
                         </h3>
                       )}
                       <div

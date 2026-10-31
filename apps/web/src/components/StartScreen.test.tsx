@@ -1896,6 +1896,54 @@ describe('StartScreen sidebar and shelf edge', () => {
     expect(grids[1]).not.toHaveClass('is-pinned-group');
   });
 
+  it('counts projects, not tiles, in the Pinned tab and group labels', () => {
+    // A pinned folder of two read as one tile in the Pinned label ("2") but
+    // none in the Pinned tab ("1"), and the tab did not show its projects.
+    const key = 'openzcad.library.folders.v1:device';
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        folders: [
+          {
+            id: 'fixtures',
+            name: 'Fixtures',
+            projectIds: ['in-a', 'in-b'],
+            pinned: true,
+            createdAt: '2026-10-30T12:00:00Z'
+          }
+        ]
+      })
+    );
+    const { container } = renderStartScreen({
+      projects: [
+        ...pinnedAndLoose(),
+        { ...localProject, projectId: toProjectId('in-a'), name: 'In A' },
+        { ...localProject, projectId: toProjectId('in-b'), name: 'In B' }
+      ]
+    });
+    const filters = screen.getByRole('group', { name: 'Show projects' });
+    expect(
+      within(filters).getByRole('button', { name: /^All/ })
+    ).toHaveTextContent('All4');
+    const pinnedFilter = within(filters).getByRole('button', {
+      name: /^Pinned/
+    });
+    expect(pinnedFilter).toHaveTextContent('Pinned3');
+    expect(
+      [...container.querySelectorAll('.start-shelf-group')].map(
+        (heading) => heading.textContent
+      )
+    ).toEqual(['Pinned3', 'Projects1']);
+
+    fireEvent.click(pinnedFilter);
+    expect(
+      [...container.querySelectorAll('.start-body .start-tile-project')].map(
+        (tile) => tile.querySelector('.start-tile-name')?.textContent
+      )
+    ).toEqual(expect.arrayContaining(['Pinned part', 'In A', 'In B']));
+    localStorage.removeItem(key);
+  });
+
   it('drops the count from an empty shelf', () => {
     const { container } = renderStartScreen();
     const count = (status: string) =>
