@@ -18,8 +18,12 @@ type CylinderDimension = 'radius' | 'height';
 type BoxDimension = 'width' | 'height' | 'depth';
 type BoxAxis = 'x' | 'y' | 'z';
 
+/**
+ * Cap roles, including a gear's: teeth cut along a cylinder name its caps
+ * `gear.face.cap.start|end`, at the same ends as the cylinder's own.
+ */
 const CAP_LINEAGE =
-  /^(?:primitive|modifier)\.cylinder\.face\.cap\.(start|end)$/;
+  /^(?:(?:primitive|modifier)\.cylinder|gear)\.face\.cap\.(start|end)$/;
 
 interface PrimitiveChain {
   primitive: FeatureNode;
@@ -33,9 +37,10 @@ interface PrimitiveChain {
  * with the features allowed to have named that face.
  *
  * Fillets and chamfers create new BodyIds, so a face on their result no
- * longer points directly at the primitive. Walk only that uninterrupted
- * result-body ancestry: crossing another body-producing feature would make a
- * primitive dimension edit ambiguous. In-place transforms are deliberately
+ * longer points directly at the primitive; so do gear teeth cut along a
+ * cylinder, which stay transparent to its height alone. Walk only that
+ * uninterrupted result-body ancestry: crossing another body-producing feature
+ * would make a primitive dimension edit ambiguous. In-place transforms are deliberately
  * transparent, matching the existing transformed-cylinder behavior.
  *
  * Direct edits in the chain are transparent only for a planar face offset
@@ -80,17 +85,23 @@ function primitiveChain(
       primitive = producer;
       break;
     }
-    if (
-      producer.data.featureKind !== 'fillet' &&
-      producer.data.featureKind !== 'chamfer'
-    ) {
+    const data = producer.data;
+    const targetBodyId =
+      data.featureKind === 'fillet' || data.featureKind === 'chamfer'
+        ? data.targetBodyId
+        : // Teeth cut along a cylinder span its whole wall and regenerate at
+          // any height, so a cap drag on the gear still means the cylinder's
+          // height. Its radius is the gear's to own.
+          data.featureKind === 'gear' &&
+            primitiveKind === 'cylinder' &&
+            dimension === 'height'
+          ? data.targetBodyId
+          : undefined;
+    if (targetBodyId === undefined) {
       return null;
     }
-    consumerIndexByBodyId.set(
-      producer.data.targetBodyId,
-      features.indexOf(producer)
-    );
-    bodyId = producer.data.targetBodyId;
+    consumerIndexByBodyId.set(targetBodyId, features.indexOf(producer));
+    bodyId = targetBodyId;
   }
 
   if (!primitive) {
