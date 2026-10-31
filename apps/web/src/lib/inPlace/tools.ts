@@ -1808,7 +1808,8 @@ function gearSummary(
   const teeth = state.numbers.teeth ?? 20;
   if (type === 'rack') {
     parts.push(`Pitch ${gearLength(module * Math.PI, units)}`);
-  } else if (type === 'worm') {
+  } else if (type === 'worm' || type === 'enveloping-worm') {
+    // An enveloping worm's pitch diameter and lead are at its throat.
     const factor = state.numbers.diameterFactor ?? 10;
     const starts = state.numbers.starts ?? 1;
     parts.push(`Pitch Ø ${gearLength(module * factor, units)}`);

@@ -331,6 +331,16 @@ describe('face tools build the card state', () => {
     expect(option('hand')).toBe(true);
     expect(option('throat')).toBe(false);
     expect(option('helix')).toBe(false);
+    // Its throat pitch diameter m·q and lead π·m·starts, not the wheel's.
+    expect(
+      spec.summary?.(
+        {
+          options: { gearType: 'enveloping-worm' },
+          numbers: { module: 2, teeth: 30, starts: 2, diameterFactor: 10 }
+        },
+        'mm'
+      )
+    ).toBe(`Module 2 mm · Pitch Ø 20 mm · Lead 12.566 mm`);
   });
 
   it('gear: an enveloping worm sends its starts and its wheel’s teeth', () => {
