@@ -64,7 +64,7 @@ import {
 import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 
 /**
- * D06 slice B (schema v45): the annotation additions that let a turned or
+ * D06 slice B (schema v46): the annotation additions that let a turned or
  * chamfered part be dimensioned at all — silhouette and virtual-sharp
  * points, chamfer dimensions, counts, Ø on a linear span, reference
  * dimensions and provenance — read from real kernel bodies.
@@ -79,6 +79,10 @@ beforeAll(async () => {
 afterAll(() => adapter.dispose());
 
 const S = Math.SQRT2;
+/** Typed asymmetric matchers, for object patterns. */
+const close = (value: number, digits = 6) =>
+  expect.closeTo(value, digits) as number;
+const matching = (pattern: RegExp) => expect.stringMatching(pattern) as string;
 const near = (a: number, b: number, tolerance = 1e-6) =>
   Math.abs(a - b) < tolerance;
 
@@ -237,7 +241,11 @@ function sheetOf(
       [
         [frontId, 'front', { x: 120, y: 110 }],
         [topId, 'top', { x: 120, y: 220 }]
-      ] as [DrawingViewId, DrawingView['orientation'], { x: number; y: number }][]
+      ] as [
+        DrawingViewId,
+        DrawingView['orientation'],
+        { x: number; y: number }
+      ][]
     ).map(([viewId, orientation, centerMm]) => ({
       viewId,
       orientation,
@@ -365,8 +373,8 @@ function drawnViews(
     projection: projectView({
       orientation: entry.orientation,
       hiddenLines: entry.hiddenLines,
-      bodies: entry.bodyIds.map(
-        (bodyId) => projectionBodyInput(bodies[bodyId]!)!
+      bodies: entry.bodyIds.map((bodyId) =>
+        projectionBodyInput(bodies[bodyId]!)!
       )
     })
   }));
@@ -390,9 +398,9 @@ async function footModel() {
   };
 }
 
-describe('D06 slice B schema (v45)', () => {
-  it('claims v45 and fences documents from newer clients', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(45);
+describe('D06 slice B schema (v46)', () => {
+  it('claims v46 and fences documents from newer clients', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(46);
     const document = createProjectDocument('Fence', toUserId('test'));
     const newer = {
       ...document,
@@ -404,7 +412,7 @@ describe('D06 slice B schema (v45)', () => {
         {
           projectId: document.projectId,
           expectedVersion: 0,
-          document: JSON.parse(JSON.stringify(newer))
+          document: JSON.parse(JSON.stringify(newer)) as unknown
         },
         document.projectId
       )
@@ -526,14 +534,23 @@ describe('D06 slice B schema (v45)', () => {
         },
         /cannot be a reference dimension/
       ],
-      [{ ...good, provenance: { generated: false, requirement: 'x' } }, /provenance/],
-      [{ ...good, provenance: { generated: true, requirement: '' } }, /provenance/],
+      [
+        { ...good, provenance: { generated: false, requirement: 'x' } },
+        /provenance/
+      ],
+      [
+        { ...good, provenance: { generated: true, requirement: '' } },
+        /provenance/
+      ],
       [
         { ...good, provenance: { generated: true, requirement: 'x', by: 'y' } },
         /provenance/
       ],
       [
-        { ...good, from: { edge: model.topRim, anchor: 'silhouette', side: 'up' } },
+        {
+          ...good,
+          from: { edge: model.topRim, anchor: 'silhouette', side: 'up' }
+        },
         /extreme side/
       ],
       [
@@ -655,7 +672,7 @@ describe('D06 slice B: a turned part dimensioned along its axis', () => {
     );
     expect(height).toMatchObject({
       ok: true,
-      resolved: { kind: 'linear', value: expect.closeTo(50, 9), label: '50' }
+      resolved: { kind: 'linear', value: close(50, 9), label: '50' }
     });
     // Level up the axis, `side` picks the rim's end across it: the right.
     if (!height.ok || height.resolved.kind !== 'linear') throw new Error();
@@ -675,7 +692,7 @@ describe('D06 slice B: a turned part dimensioned along its axis', () => {
     );
     expect(across).toMatchObject({
       ok: true,
-      resolved: { value: expect.closeTo(40, 9), label: 'Ø40' }
+      resolved: { value: close(40, 9), label: 'Ø40' }
     });
     // The bore floor is hidden in the front view, but a silhouette point
     // reads it all the same; the bore depth is 41.
@@ -700,22 +717,17 @@ describe('D06 slice B: a turned part dimensioned along its axis', () => {
     const sheet = sheetOf(bodyId);
     // The shoulder cone meets the Ø40 body at z = 25, behind its R4 blend.
     const toShoulder = resolvedIn(
-      linear(
-        id('s'),
-        'vertical',
-        silhouette(model.bottomRim, 'high'),
-        {
-          faces: [model.bodyFace, model.shoulderCone],
-          anchor: 'virtual-sharp',
-          side: 'high'
-        }
-      ),
+      linear(id('s'), 'vertical', silhouette(model.bottomRim, 'high'), {
+        faces: [model.bodyFace, model.shoulderCone],
+        anchor: 'virtual-sharp',
+        side: 'high'
+      }),
       sheet,
       bodies
     );
     expect(toShoulder).toMatchObject({
       ok: true,
-      resolved: { value: expect.closeTo(25, 6), label: '25' }
+      resolved: { value: close(25, 6), label: '25' }
     });
     if (!toShoulder.ok || toShoulder.resolved.kind !== 'linear')
       throw new Error();
@@ -739,16 +751,11 @@ describe('D06 slice B: a turned part dimensioned along its axis', () => {
     // Two coaxial cylinders never meet.
     expect(
       resolvedIn(
-        linear(
-          id('x'),
-          'vertical',
-          silhouette(model.bottomRim, 'high'),
-          {
-            faces: [model.bodyFace, model.neckFace],
-            anchor: 'virtual-sharp',
-            side: 'high'
-          }
-        ),
+        linear(id('x'), 'vertical', silhouette(model.bottomRim, 'high'), {
+          faces: [model.bodyFace, model.neckFace],
+          anchor: 'virtual-sharp',
+          side: 'high'
+        }),
         sheet,
         bodies
       )
@@ -772,22 +779,24 @@ describe('D06 slice B: a turned part dimensioned along its axis', () => {
       placementMm: { x: 40, y: -40 }
     });
     // Sharp on the bottom face, through the R4 blend to the body.
-    expect(resolvedIn(chamfer(model.bottomCone, frontId, 2), sheet, bodies))
-      .toMatchObject({
-        ok: true,
-        resolved: {
-          kind: 'chamfer',
-          value: expect.closeTo(4, 6),
-          angle: expect.closeTo(45, 6),
-          label: '2× 4 × 45°'
-        }
-      });
+    expect(
+      resolvedIn(chamfer(model.bottomCone, frontId, 2), sheet, bodies)
+    ).toMatchObject({
+      ok: true,
+      resolved: {
+        kind: 'chamfer',
+        value: close(4, 6),
+        angle: close(45, 6),
+        label: '2× 4 × 45°'
+      }
+    });
     // Blended at both ends: from the Ø40 body (z = 25) to the Ø33 neck.
-    expect(resolvedIn(chamfer(model.shoulderCone), sheet, bodies))
-      .toMatchObject({
-        ok: true,
-        resolved: { value: expect.closeTo(3.5, 6), label: '3.5 × 45°' }
-      });
+    expect(
+      resolvedIn(chamfer(model.shoulderCone), sheet, bodies)
+    ).toMatchObject({
+      ok: true,
+      resolved: { value: close(3.5, 6), label: '3.5 × 45°' }
+    });
     // Looking down the axis the cone is foreshortened; a cylinder is none.
     expect(
       resolvedIn(chamfer(model.bottomCone, topId), sheet, bodies)
@@ -817,8 +826,8 @@ describe('D06 slice B: a turned part dimensioned along its axis', () => {
     expect(resolvedIn(annotation, sheetOf(bodyId), bodies)).toMatchObject({
       ok: true,
       resolved: {
-        value: expect.closeTo(5, 6),
-        angle: expect.closeTo((Math.atan2(3, 5) * 180) / Math.PI, 6),
+        value: close(5, 6),
+        angle: close((Math.atan2(3, 5) * 180) / Math.PI, 6),
         label: '5 × 31°'
       }
     });
@@ -1011,15 +1020,17 @@ describe('D06 slice B picking', () => {
       id('h'),
       { x: 40, y: 0 }
     )!;
+    expect(resolveDrawingAnnotation(draft, front, bodies, 'mm')).toMatchObject({
+      ok: true,
+      resolved: { label: '50' }
+    });
     expect(
-      resolveDrawingAnnotation(draft, front, bodies, 'mm')
-    ).toMatchObject({ ok: true, resolved: { label: '50' } });
-    expect(drawingSetError({ sheets: [{ ...sheet, annotations: [draft] }] }))
-      .toBeNull();
+      drawingSetError({ sheets: [{ ...sheet, annotations: [draft] }] })
+    ).toBeNull();
     // An aligned span has no extreme to measure to.
     expect(pick(startAnnotationTool('aligned'), at(15.5, 0))).toMatchObject({
       ok: false,
-      message: expect.stringMatching(/horizontally or vertically/)
+      message: matching(/horizontally or vertically/)
     });
   });
 
@@ -1031,7 +1042,10 @@ describe('D06 slice B picking', () => {
     const faceHit = hitFace(faces, bodySide, 1);
     expect(faceHit?.face.hash).toBe(bodyFace.hash);
     const one = pick(startAnnotationTool('vertical'), bodySide);
-    expect(one).toMatchObject({ ok: true, tool: { faces: [bodyFace], points: [] } });
+    expect(one).toMatchObject({
+      ok: true,
+      tool: { faces: [bodyFace], points: [] }
+    });
     // The shoulder cone's right outline, half way up it.
     const shoulder = at(18.25, 26.75);
     const two = pick((one as { tool: AnnotationTool }).tool, shoulder);

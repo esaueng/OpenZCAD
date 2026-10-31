@@ -1098,7 +1098,9 @@ function DimensionFormat(props: {
       string,
       unknown
     >;
-    return (on ? { ...rest, [key]: true } : rest) as unknown as DrawingAnnotation;
+    return (on
+      ? { ...rest, [key]: true }
+      : rest) as unknown as DrawingAnnotation;
   };
   return (
     <>
@@ -1115,7 +1117,10 @@ function DimensionFormat(props: {
             aria-label="How many like features this states"
             onChange={(event) => {
               const value = Math.round(Number(event.target.value));
-              if (!Number.isFinite(value) || value > MAX_DRAWING_DIMENSION_COUNT)
+              if (
+                !Number.isFinite(value) ||
+                value > MAX_DRAWING_DIMENSION_COUNT
+              )
                 return;
               const { count: _previous, ...rest } = counted;
               props.onUpdate(

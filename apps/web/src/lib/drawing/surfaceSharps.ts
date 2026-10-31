@@ -131,7 +131,8 @@ function sharpOfSurfaces(a: Surface, b: Surface): SharpResult {
     };
   }
   // At least one surface of revolution: its axis is the shared one.
-  const lead = a.kind !== 'plane' ? a : (b as Exclude<Surface, { kind: 'plane' }>);
+  const lead =
+    a.kind !== 'plane' ? a : (b as Exclude<Surface, { kind: 'plane' }>);
   const origin = lead.kind === 'cylinder' ? lead.point : lead.apex;
   const axis = lead.axis;
   const extent = (surface: Surface) =>
@@ -207,9 +208,7 @@ function isBlend(face: FaceTopology): boolean {
   if (!g) return false;
   const type = g.surfaceType.toLowerCase();
   return (
-    g.featureType === 'blend' ||
-    type.includes('tor') ||
-    type.includes('sphere')
+    g.featureType === 'blend' || type.includes('tor') || type.includes('sphere')
   );
 }
 
@@ -289,7 +288,8 @@ export function readChamfer(
       const t = dot(sub(curve.center, surface.apex), surface.axis);
       if (
         !circles.some(
-          (known) => Math.abs(known.t - t) <= tolerance(known.t, t, curve.radius)
+          (known) =>
+            Math.abs(known.t - t) <= tolerance(known.t, t, curve.radius)
         )
       )
         circles.push({ t, curve });
@@ -311,11 +311,16 @@ export function readChamfer(
   const planes = ends
     .map((end) => ({ end, surface: surfaceOf(end) }))
     .filter(
-      (entry): entry is { end: FaceTopology; surface: Surface & { kind: 'plane' } } =>
+      (
+        entry
+      ): entry is { end: FaceTopology; surface: Surface & { kind: 'plane' } } =>
         entry.surface?.kind === 'plane'
     );
   const sides = planes
-    .map((entry) => ({ ...entry, sharp: sharpOfSurfaces(surface, entry.surface) }))
+    .map((entry) => ({
+      ...entry,
+      sharp: sharpOfSurfaces(surface, entry.surface)
+    }))
     .filter(
       ({ sharp }) =>
         sharp.ok &&
@@ -346,8 +351,7 @@ export function readChamfer(
   // with, and the angle is that one; a tie takes the first in hash order.
   const order = [0, 1].sort(
     (p, q) =>
-      angles[p]! - angles[q]! ||
-      planes[p]!.end.hash - planes[q]!.end.hash
+      angles[p]! - angles[q]! || planes[p]!.end.hash - planes[q]!.end.hash
   );
   const along = order[0]!;
   const line = along === 0 ? l0 : l1;

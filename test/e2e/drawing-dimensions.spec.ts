@@ -179,3 +179,69 @@ test('dimensions a drawing view from the model and follows its Update', async ({
   front = await frontViewBox(reopened);
   expect(front.right - front.left).toBeGreaterThan(0);
 });
+
+/**
+ * D06 slice B (schema v46): a turned part's rims are closed circles that a
+ * side view draws as lines. Picked there, they measure to their silhouette
+ * ends, so a cylinder's height and its side-view diameter are dimensioned.
+ */
+test("dimensions a cylinder's height and Ø off its rims' silhouettes", async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Turned');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '10', height: '20' }
+  });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Cylinder' })
+  ).toBeVisible();
+
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  const canvas = drawings.getByRole('application', { name: 'Sheet Sheet 1' });
+  const panel = drawings.getByRole('complementary', {
+    name: 'Drawing properties'
+  });
+  await expect(
+    canvas.locator('[data-view="front"]:not(.is-placeholder)')
+  ).toHaveCount(1, { timeout: 20_000 });
+  const tools = drawings.getByRole('toolbar', { name: 'Annotation tools' });
+  const front = await frontViewBox(canvas);
+  // Just inside the rims' right ends: the bottom and top rims seen side-on.
+  const inset = 1.5 * front.pxPerMm;
+
+  await tools.getByRole('button', { name: 'Vertical' }).click();
+  await page.mouse.click(front.right - inset, front.bottom);
+  await expect(drawings.locator('.drawing-tool-hint')).toContainText(
+    'pick the second point'
+  );
+  await page.mouse.click(front.right - inset, front.top);
+  await page.mouse.click(front.right + 12 * front.pxPerMm, front.centreY);
+  await expect(
+    canvas.getByRole('button', { name: 'Vertical dimension 20' })
+  ).toBeVisible();
+
+  // Across the top rim from its left end to its right: the diameter, then
+  // marked Ø and as a reference dimension from the panel.
+  await tools.getByRole('button', { name: 'Horizontal' }).click();
+  await page.mouse.click(front.left + inset, front.top);
+  await page.mouse.click(front.right - inset, front.top);
+  await page.mouse.click(front.centreX, front.top - 12 * front.pxPerMm);
+  await expect(
+    canvas.getByRole('button', { name: 'Horizontal dimension 20' })
+  ).toBeVisible();
+  await panel.getByLabel(/Ø diameter/).check();
+  await expect(
+    canvas.getByRole('button', { name: 'Horizontal dimension Ø20' })
+  ).toBeVisible();
+  await panel.getByLabel(/Reference dimension/).check();
+  await expect(
+    canvas.getByRole('button', { name: 'Horizontal dimension (Ø20)' })
+  ).toBeVisible();
+  await expect(canvas.locator('.drawing-texts')).toContainText('(Ø20)');
+});

@@ -20,7 +20,7 @@ import type { DrawingViewId } from './drawings';
  * broken, until someone re-picks or deletes it; nothing ever rebinds to a
  * nearby edge.
  *
- * D06 slice B (schema v45) adds what a turned or chamfered part needs and
+ * D06 slice B (schema v46) adds what a turned or chamfered part needs and
  * D02 could not say: a circular edge's silhouette extreme and two faces'
  * virtual sharp as dimension points, a chamfer dimension (`size × angle`),
  * a count (`4×`) on radial and chamfer dimensions, a Ø prefix on a linear
@@ -46,7 +46,7 @@ export interface DrawingEdgeRef {
   reference?: EdgeTopologyReferenceV5;
 }
 
-/** One model face, resolved by lineage, then by hash (schema v45). */
+/** One model face, resolved by lineage, then by hash (schema v46). */
 export interface DrawingFaceRef {
   bodyId: BodyId;
   /** ADR-011 fingerprint when the face was picked. */
@@ -77,7 +77,7 @@ export interface DrawingEdgePointRef {
 }
 
 /**
- * v45: a circular edge's extreme along the dimension's measuring direction.
+ * v46: a circular edge's extreme along the dimension's measuring direction.
  * A turned part's rims are closed circles with no ends, and seen side-on
  * they draw as lines whose ends are the part's silhouette: this is how its
  * height and its side-view diameter are dimensioned.
@@ -89,7 +89,7 @@ export interface DrawingSilhouettePointRef {
 }
 
 /**
- * v45: where two faces' underlying surfaces meet, though the part rounds or
+ * v46: where two faces' underlying surfaces meet, though the part rounds or
  * chamfers that corner away — a chamfer's virtual sharp with the body. Two
  * coaxial surfaces of revolution, or one and a plane square to their axis,
  * meet in a circle, measured at its extreme on `side`; two planes meet in a
@@ -112,7 +112,7 @@ export type DrawingPointRef =
 export type DrawingLinearDirection = 'horizontal' | 'vertical' | 'aligned';
 
 /**
- * v45: an annotation the auto-dimensioner placed, and the requirement it
+ * v46: an annotation the auto-dimensioner placed, and the requirement it
  * states, so a rerun replaces its own and leaves a person's alone. Absent
  * means a person placed it.
  */
@@ -138,7 +138,7 @@ interface DrawingDimensionBase extends DrawingAnnotationBase {
   /** Decimal places shown, trailing zeros trimmed; absent uses the units' default. */
   decimals?: number;
   /**
-   * v45: a reference dimension, shown in brackets: a value stated for
+   * v46: a reference dimension, shown in brackets: a value stated for
    * information although others already fix it. Absent is a dimension.
    */
   reference?: true;
@@ -149,7 +149,7 @@ export interface DrawingLinearDimension extends DrawingDimensionBase {
   direction: DrawingLinearDirection;
   from: DrawingPointRef;
   to: DrawingPointRef;
-  /** v45: a span across a cylinder seen side-on, labelled Ø. */
+  /** v46: a span across a cylinder seen side-on, labelled Ø. */
   diameter?: true;
 }
 
@@ -157,12 +157,12 @@ export interface DrawingRadialDimension extends DrawingDimensionBase {
   kind: 'radius' | 'diameter';
   /** A circular edge seen face-on in the view. */
   edge: DrawingEdgeRef;
-  /** v45: how many like features this states, shown "4×". */
+  /** v46: how many like features this states, shown "4×". */
   count?: number;
 }
 
 /**
- * v45: a chamfer stated as `size × angle`. The face is a cone about the
+ * v46: a chamfer stated as `size × angle`. The face is a cone about the
  * part's axis or a plane, seen side-on or edge-on in the view. Its two ends
  * are its virtual sharps with the faces either side (through any blend), so
  * a blended chamfer reads the same as a sharp one: on a cone the size is
@@ -528,7 +528,8 @@ export function drawingAnnotationError(
       if (
         value.direction === 'aligned' &&
         [value.from, value.to].some(
-          (point) => (point as DrawingPointRef).anchor === 'silhouette' ||
+          (point) =>
+            (point as DrawingPointRef).anchor === 'silhouette' ||
             (point as DrawingPointRef).anchor === 'virtual-sharp'
         )
       )

@@ -132,8 +132,7 @@ export function pickableFaces(
       const { faces, edges } = body.topology;
       for (const face of faces) {
         const lines = faceOutline(face, edges, frame.direction, page);
-        if (lines.length > 0)
-          out.push({ view, bodyId, face, lines, toPage });
+        if (lines.length > 0) out.push({ view, bodyId, face, lines, toPage });
       }
     }
   }
@@ -208,7 +207,7 @@ function faceOutline(
   if (!axis || !origin || !radiusAt || !square(axis)) return [];
   const points = boundaryPoints(face, edges);
   if (points.length < 2) return [];
-  const ts = points.map((point) => dot(sub(point, origin!), axis!));
+  const ts = points.map((point) => dot(sub(point, origin), axis));
   const t0 = Math.min(...ts);
   const t1 = Math.max(...ts);
   if (t1 - t0 <= 1e-9) return [];
@@ -218,8 +217,8 @@ function faceOutline(
       [t0, t1].map((t) =>
         page(
           add(
-            add(origin!, scale(axis!, t)),
-            scale(outward, (sign * radiusAt!(t)) / norm(outward))
+            add(origin, scale(axis, t)),
+            scale(outward, (sign * radiusAt(t)) / norm(outward))
           )
         )
       ) as [XY, XY]
@@ -742,14 +741,14 @@ export function applyAnnotationPick(
   // otherwise wins over the face outline it may lie on.
   if (
     faceHit &&
-    (tool.kind === 'chamfer' ||
-      (linear && (tool.faces.length === 1 || !hit)))
+    (tool.kind === 'chamfer' || (linear && (tool.faces.length === 1 || !hit)))
   )
     return applyFacePick(tool, faceHit, point, bodies);
   if (tool.kind === 'chamfer')
     return {
       ok: false,
-      message: 'Pick a chamfer’s outline: a cone seen side-on or a plane edge-on.'
+      message:
+        'Pick a chamfer’s outline: a cone seen side-on or a plane edge-on.'
     };
   if (linear && tool.faces.length === 1)
     return {
@@ -806,8 +805,7 @@ export function applyAnnotationPick(
           if (!hit.edge.curve?.circle)
             return {
               ok: false,
-              message:
-                'Pick an edge end, a straight edge, a circle or a rim.'
+              message: 'Pick an edge end, a straight edge, a circle or a rim.'
             };
           if (tool.kind === 'aligned')
             return {
@@ -1043,7 +1041,7 @@ export function repairedAnnotation(
   const kept: Record<string, unknown> = {};
   for (const key of ['decimals', 'count', 'diameter', 'reference'])
     if (format[key] !== undefined) kept[key] = format[key];
-  return { ...draft, ...kept } as DrawingAnnotation;
+  return { ...draft, ...kept };
 }
 
 /** Which annotation tool re-picks `annotation`'s references. */

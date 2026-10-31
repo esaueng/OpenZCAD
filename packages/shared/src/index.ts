@@ -190,12 +190,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // client would build a plain wheel in their place, so it must refuse.
 // v44 adds M14 double-enveloping worms (`gearType: 'enveloping-worm'`),
 // refused by older clients as an unknown gear kind.
-// v45 adds D06 slice B drawing annotations: silhouette and virtual-sharp
+// v45 is claimed by D03 section views (in flight in parallel).
+// v46 adds D06 slice B drawing annotations: silhouette and virtual-sharp
 // points, chamfer dimensions, counts, Ø on a linear span, reference
 // dimensions and provenance. An older client would refuse each as malformed
 // on load, or, past that, drop the meaning on its next save, so it must
 // refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 45 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 46 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

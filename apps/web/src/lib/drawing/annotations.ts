@@ -429,10 +429,16 @@ function circleExtreme(
 ): Vector3 {
   const sign = side === 'high' ? 1 : -1;
   for (const direction of [along, across]) {
-    const inPlane = sub(direction, scale(circle.axis, dot(direction, circle.axis)));
+    const inPlane = sub(
+      direction,
+      scale(circle.axis, dot(direction, circle.axis))
+    );
     const length = norm(inPlane);
     if (length > 1e-9)
-      return add(circle.center, scale(inPlane, (sign * circle.radius) / length));
+      return add(
+        circle.center,
+        scale(inPlane, (sign * circle.radius) / length)
+      );
   }
   return circle.center;
 }
@@ -467,7 +473,13 @@ function pointOf(
     const circle = edge.curve?.circle;
     if (!circle) return { ok: false, reason: 'not-circular' };
     if (!along || !across) return { ok: false, reason: 'degenerate' };
-    return { ok: true, point: viewPoint(frame, silhouettePoint(edge, circle, along, across, point.side)) };
+    return {
+      ok: true,
+      point: viewPoint(
+        frame,
+        silhouettePoint(edge, circle, along, across, point.side)
+      )
+    };
   }
   if (point.anchor === 'center') {
     const circle = faceOnCircle(view, edge);
@@ -734,7 +746,9 @@ export function resolveDrawingAnnotation(
         const width = norm(outward);
         segments = [1, -1].map((sign) =>
           chamfer.ends.map((end) =>
-            project(add(end.center, scale(outward, (sign * end.radius) / width)))
+            project(
+              add(end.center, scale(outward, (sign * end.radius) / width))
+            )
           )
         ) as [UV, UV][];
       } else {
@@ -746,9 +760,7 @@ export function resolveDrawingAnnotation(
           )
         )
           return failure('foreshortened');
-        segments = [
-          chamfer.ends.map((end) => project(end.point)) as [UV, UV]
-        ];
+        segments = [chamfer.ends.map((end) => project(end.point)) as [UV, UV]];
       }
       const lengthDecimals =
         annotation.decimals ?? defaultDimensionDecimals('chamfer', units);
@@ -833,12 +845,26 @@ export type AnnotationModelReading =
       to: Vector3;
       /** The measured model direction; absent for an aligned span. */
       direction?: Vector3;
+      /** Stated as a diameter (Ø) across a cylinder seen side-on. */
+      diameter: boolean;
     }
   | {
       kind: 'radius' | 'diameter';
       bodyId: string;
       circle: { center: Vector3; axis: Vector3; radius: number };
+    }
+  | {
+      kind: 'chamfer';
+      bodyId: string;
+      face: FaceTopology;
+      size: number;
+      angleDeg: number;
     };
+
+/** The body a dimension point belongs to. */
+function pointBody(point: DrawingPointRef): string {
+  return 'faces' in point ? point.faces[0].bodyId : point.edge.bodyId;
+}
 
 export function annotationModelReading(
   annotation: DrawingAnnotation,
@@ -848,26 +874,43 @@ export function annotationModelReading(
 ): AnnotationModelReading | null {
   if (!view || annotation.kind === 'note' || annotation.kind === 'angle')
     return null;
-  if (!resolveDrawingAnnotation(annotation, view, bodies, units).ok)
-    return null;
+  const resolution = resolveDrawingAnnotation(annotation, view, bodies, units);
+  if (!resolution.ok) return null;
+  const frame = DRAWING_VIEW_FRAMES[view.orientation];
   if (annotation.kind === 'linear') {
-    const fromEdge = lookupEdge(annotation.from.edge, view, bodies);
-    const toEdge = lookupEdge(annotation.to.edge, view, bodies);
-    if (!fromEdge.ok || !toEdge.ok) return null;
-    const from = pointOf(view, fromEdge.edge, annotation.from.anchor);
-    const to = pointOf(view, toEdge.edge, annotation.to.anchor);
+    const [along, across] =
+      annotation.direction === 'horizontal'
+        ? [frame.x, frame.up]
+        : annotation.direction === 'vertical'
+          ? [frame.up, frame.x]
+          : [null, null];
+    const from = pointOf(view, annotation.from, bodies, along, across);
+    const to = pointOf(view, annotation.to, bodies, along, across);
     if (!from.ok || !to.ok) return null;
-    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    // A virtual sharp's two faces may lie on two bodies; it then reads as a
+    // span between bodies.
+    const bodyOf = (point: DrawingPointRef) =>
+      'faces' in point && point.faces[0].bodyId !== point.faces[1].bodyId
+        ? ''
+        : pointBody(point);
     return {
       kind: 'linear',
-      bodyIds: [annotation.from.edge.bodyId, annotation.to.edge.bodyId],
+      bodyIds: [bodyOf(annotation.from), bodyOf(annotation.to)],
       from: from.point.model,
       to: to.point.model,
-      ...(annotation.direction === 'horizontal'
-        ? { direction: frame.x }
-        : annotation.direction === 'vertical'
-          ? { direction: frame.up }
-          : {})
+      ...(along ? { direction: along } : {}),
+      diameter: annotation.diameter === true
+    };
+  }
+  if (annotation.kind === 'chamfer') {
+    const found = lookupFace(annotation.face, view, bodies);
+    if (!found.ok || resolution.resolved.kind !== 'chamfer') return null;
+    return {
+      kind: 'chamfer',
+      bodyId: annotation.face.bodyId,
+      face: found.face,
+      size: resolution.resolved.value,
+      angleDeg: resolution.resolved.angle
     };
   }
   const found = lookupEdge(annotation.edge, view, bodies);
