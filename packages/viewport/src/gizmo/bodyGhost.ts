@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { createFatLineSegments, type FatLineResolution } from '../render/scene';
-import { SELECTION_SEMANTICS } from '../render/semantics';
 
-const GHOST_OPACITY = 0.22;
-const GHOST_EDGE_OPACITY = 0.45;
+// The original shape is a quiet reference behind the live solid, not another
+// selected body. In particular, an inward offset must not leave a bright
+// cyan copy of the face floating over its new position.
+const GHOST_COLOR = 0xb8bfcc;
+const GHOST_OPACITY = 0.08;
+const GHOST_EDGE_OPACITY = 0.18;
 
 export interface BodyGhost {
   /** Add beside the body it was taken from. */
@@ -20,8 +23,8 @@ export interface BodyGhost {
  * it was. The ghost sits a little behind the solid in depth, so wherever the
  * two surfaces coincide the solid wins, and the ghost shows only material
  * the change removes. Material the change adds covers the ghost. Its edges
- * stay, faintly, and `faceRange` (the dragged face's triangles) is filled in
- * the selection colour at its old place.
+ * stay, faintly, and `faceRange` marks the dragged face's original position
+ * with the same neutral reference colour.
  *
  * Take it before the body is deformed: it copies the body's positions.
  */
@@ -42,7 +45,7 @@ export function createBodyGhost(
   object.matrix.copy(body.matrixWorld);
   const geometry = body.geometry.clone();
   const material = new THREE.MeshStandardMaterial({
-    color: 0xb8bfcc,
+    color: GHOST_COLOR,
     roughness: 0.75,
     metalness: 0,
     transparent: true,
@@ -73,9 +76,9 @@ export function createBodyGhost(
     face = new THREE.Mesh(
       faceGeometry,
       new THREE.MeshBasicMaterial({
-        color: SELECTION_SEMANTICS.selected.face,
+        color: GHOST_COLOR,
         transparent: true,
-        opacity: 0.55,
+        opacity: GHOST_OPACITY,
         depthWrite: false,
         side: THREE.DoubleSide,
         polygonOffset: true,

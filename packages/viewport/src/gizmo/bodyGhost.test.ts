@@ -73,4 +73,24 @@ describe('the offset body ghost', () => {
     ghost.dispose();
     uncut.dispose();
   });
+
+  it('keeps the original face neutral and faint behind the live solid', () => {
+    const ghost = createBodyGhost(body(), {
+      faceRange: { triangleStart: 0, triangleCount: 2 }
+    });
+    const shell = ghost.object.getObjectByName(
+      'offset-body-ghost-shell'
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+    const face = ghost.object.getObjectByName(
+      'offset-body-ghost-face'
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    expect(face.material.color.getHex()).toBe(shell.material.color.getHex());
+    for (const material of materials(ghost.object)) {
+      expect(material.opacity).toBeGreaterThan(0);
+      expect(material.opacity).toBeLessThanOrEqual(0.18);
+      expect(material.depthTest).toBe(true);
+      expect(material.depthWrite).toBe(false);
+    }
+    ghost.dispose();
+  });
 });
