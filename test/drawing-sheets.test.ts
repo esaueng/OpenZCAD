@@ -16,6 +16,7 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   drawingPaperMm,
+  drawingPaperPerModelUnit,
   drawingSetError,
   MAX_PROJECT_NAME_LENGTH,
   projectedViewSide,
@@ -35,6 +36,7 @@ import { projectView } from '../apps/web/src/lib/drawing/projectView';
 import {
   composeSheetPage,
   fitText,
+  autoScaleSheet,
   fitViewsToSheet,
   sheetSafeText,
   sheetUnprintableCharacters,
@@ -1179,8 +1181,8 @@ describe('D01 sheet page and export', () => {
     }
 
     const fitted = fitViewsToSheet(a4, extents, 'mm')!;
-    // 5:1 no longer fits A4; the next preset that does is 2:1.
-    expect(fitted.scale).toEqual({ numerator: 2, denominator: 1 });
+    // 5:1 no longer fits A4; the next preset that does is 4:1.
+    expect(fitted.scale).toEqual({ numerator: 4, denominator: 1 });
     const laidOut: DrawingSheet = {
       ...a4,
       scale: fitted.scale,
@@ -1197,5 +1199,87 @@ describe('D01 sheet page and export', () => {
     // Already on the sheet: fitting keeps the scale and only centres.
     const again = fitViewsToSheet(created, extents, 'mm')!;
     expect(again.scale).toEqual(created.scale);
+  });
+
+  it('auto scales views to the largest preset, spaced evenly in a grid', async () => {
+    const { created, projections } = await starter('mm', 'third');
+    const extents = new Map(
+      projections.map(({ view: entry, projection }) => [
+        entry.viewId,
+        projection.bounds!
+      ])
+    );
+    const issues = (layout: DrawingSheet) =>
+      layout.views.map((entry) =>
+        viewPlacementIssue(
+          viewPageBox(entry, extents.get(entry.viewId)!, layout, 'mm'),
+          layout
+        )
+      );
+    const overlaps = (layout: DrawingSheet) => {
+      const boxes = layout.views.map((entry) =>
+        viewPageBox(entry, extents.get(entry.viewId)!, layout, 'mm')
+      );
+      return boxes.some((a, i) =>
+        boxes.some(
+          (b, j) =>
+            j > i &&
+            a.x < b.x + b.width &&
+            b.x < a.x + a.width &&
+            a.y < b.y + b.height &&
+            b.y < a.y + a.height
+        )
+      );
+    };
+    const apply = (
+      layout: DrawingSheet,
+      result: NonNullable<ReturnType<typeof autoScaleSheet>>
+    ): DrawingSheet => ({
+      ...layout,
+      scale: result.scale,
+      views: layout.views.map((entry) => ({
+        ...entry,
+        centerMm: result.centers.find((c) => c.viewId === entry.viewId)!
+          .centerMm
+      }))
+    });
+    // The starter already sits at its largest fitting scale.
+    expect(autoScaleSheet(created, extents, 'mm')!.scale).toEqual(
+      created.scale
+    );
+    // A scale picked by hand keeps the centres: enlarged, the views overlap,
+    // and fitting only scales that overlap down. Auto scale re-spaces them.
+    const enlarged: DrawingSheet = {
+      ...created,
+      scale: { numerator: 50, denominator: 1 }
+    };
+    expect(overlaps(enlarged)).toBe(true);
+    const fixed = apply(enlarged, autoScaleSheet(enlarged, extents, 'mm')!);
+    expect(fixed.scale).toEqual(created.scale);
+    expect(overlaps(fixed)).toBe(false);
+    expect(issues(fixed)).toEqual([null, null, null, null]);
+    const [front, top, right, iso] = fixed.views;
+    expect(top!.centerMm.x).toBe(front!.centerMm.x);
+    expect(right!.centerMm.y).toBe(front!.centerMm.y);
+    expect(iso!.centerMm.x).toBe(right!.centerMm.x);
+    expect(iso!.centerMm.y).toBe(top!.centerMm.y);
+    // Shrunk by hand, the views grow back to fill the paper.
+    const shrunk: DrawingSheet = {
+      ...created,
+      scale: { numerator: 1, denominator: 2 }
+    };
+    expect(fitViewsToSheet(shrunk, extents, 'mm')!.scale).toEqual(shrunk.scale);
+    expect(autoScaleSheet(shrunk, extents, 'mm')!.scale).toEqual(created.scale);
+    // A smaller paper takes a smaller scale, still on the sheet.
+    const a4: DrawingSheet = {
+      ...created,
+      paper: { size: 'A4', orientation: 'landscape' }
+    };
+    const onA4 = apply(a4, autoScaleSheet(a4, extents, 'mm')!);
+    expect(drawingPaperPerModelUnit(onA4.scale, 'mm')).toBeLessThan(
+      drawingPaperPerModelUnit(created.scale, 'mm')
+    );
+    expect(issues(onA4)).toEqual([null, null, null, null]);
+    expect(autoScaleSheet({ ...created, views: [] }, extents, 'mm')).toBe(null);
   });
 });

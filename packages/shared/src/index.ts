@@ -188,7 +188,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // `diameterFactor`), refused by older clients for the same reason.
 // v43 adds M14 throated worm wheels (`throated`, `outsideDiameter`); an older
 // client would build a plain wheel in their place, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 43 as const;
+// v44 adds M14 double-enveloping worms (`gearType: 'enveloping-worm'`),
+// refused by older clients as an unknown gear kind.
+// v45 adds M14 double-enveloping wheels (`gearType: 'enveloping-wheel'`,
+// `wormLength`), refused by older clients as an unknown gear kind.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 45 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -204,7 +208,14 @@ export type CanonicalPlaneBasisRevision = 2;
 export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus';
 /** M14: which gear body a gear feature builds. */
 export type GearType =
-  'external' | 'internal' | 'rack' | 'bevel' | 'worm' | 'worm-wheel';
+  | 'external'
+  | 'internal'
+  | 'rack'
+  | 'bevel'
+  | 'worm'
+  | 'worm-wheel'
+  | 'enveloping-worm'
+  | 'enveloping-wheel';
 /** M14: how a gear's `pitch` is read. */
 export type GearSizing = 'module' | 'circular-pitch' | 'diametral-pitch';
 /** M14: how teeth on a cylinder are sized against it. */
@@ -1798,7 +1809,8 @@ export type FeatureData =
        * M14 (schema v40): an involute spur, helical or herringbone gear,
        * internal (ring) gear or straight rack, built by the kernel's gear
        * generator; schema v41 adds straight bevel gears, schema v42 worms
-       * and worm wheels.
+       * and worm wheels, schema v44 double-enveloping worms and schema v45
+       * their wheels.
        *
        * Without `targetBodyId` the gear is a new body: its first cap is
        * centered on `origin`, it extrudes `faceWidth` along `axis`, and its
@@ -1825,7 +1837,7 @@ export type FeatureData =
        * cylinder's diameter.
        */
       pitch?: ParamValue;
-      /** The tooth count; a worm's thread starts. */
+      /** The tooth count; a worm's or enveloping worm's thread starts. */
       teeth: ParamValue;
       /** New bodies only; teeth on a cylinder span the whole face. */
       faceWidth?: ParamValue;
@@ -1886,6 +1898,29 @@ export type FeatureData =
        * lines as a hobbed throated wheel would.
        */
       diameterFactor?: ParamValue;
+      /*
+       * Enveloping worms (schema v44, `gearType: 'enveloping-worm'`): a
+       * double-enveloping (Hindley) worm whose hourglass wraps the wheel of
+       * `mateTeeth` teeth it drives. `teeth` holds its starts, `pitch` is the
+       * module (the wheel's, and the worm's axial module at the throat),
+       * `diameterFactor` its throat pitch diameter over the module,
+       * `faceWidth` its length centered on the throat, and `pressureAngleDeg`
+       * the angle of the wheel's straight flanks. Its thread is the surface
+       * those flanks sweep as the wheel and worm turn together; the wheel
+       * itself is the enveloping wheel below.
+       */
+      /**
+       * Enveloping wheels (schema v45, `gearType: 'enveloping-wheel'`): the
+       * wheel a double-enveloping worm of `mateTeeth` starts, this
+       * `diameterFactor` and `wormLength` drives; `teeth` are its own teeth
+       * and `faceWidth` its face, with the worm across its middle. In the
+       * mid-plane its teeth are exactly the straight-sided teeth that cut
+       * the worm; off it they are fitted inside what that worm, used as a
+       * hob, would leave. Its tips follow the throat across the middle and
+       * stand at `outsideDiameter` (absent: the throat diameter plus one
+       * module) either side.
+       */
+      wormLength?: ParamValue;
       /**
        * Worm wheels (schema v43): build the wheel on a throated blank. Across
        * the throat, centred on the face width where the worm sits, its tips
@@ -1896,8 +1931,8 @@ export type FeatureData =
        */
       throated?: boolean;
       /**
-       * Throated worm wheels: the outside diameter beside the throat; absent
-       * is the throat diameter plus one module.
+       * Throated worm wheels and enveloping wheels: the outside diameter
+       * beside the throat; absent is the throat diameter plus one module.
        */
       outsideDiameter?: ParamValue;
       /** New bodies: placement, see above. */

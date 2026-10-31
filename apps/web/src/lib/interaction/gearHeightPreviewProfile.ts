@@ -9,10 +9,8 @@ import type {
   ProjectDocument
 } from '@openzcad/shared';
 import type { LinearPreviewProfile } from '@openzcad/viewport';
-import {
-  gearFaceWidthCapAncestor,
-  primitiveCylinderCapAncestor
-} from './cylinderPrimitiveAncestry';
+import { primitiveCylinderCapAncestor } from './cylinderPrimitiveAncestry';
+import { gearCapAncestor } from './gearCapAncestry';
 
 /**
  * A spur gear, cut along a cylinder or built as its own body, regenerates the
@@ -52,8 +50,8 @@ export function gearHeightPreviewProfile(
         cap.reference,
         cap.hash
       ) !== null
-    : gearFaceWidthCapAncestor(document, body.bodyId, cap.reference, cap.hash)
-        ?.gear === producer;
+    : gearCapAncestor(document, body.bodyId, cap.reference, cap.hash)
+        ?.feature === producer;
   if (!proven) return null;
   try {
     const { scope } = getParameterScope(document);

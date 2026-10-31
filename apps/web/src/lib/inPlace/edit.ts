@@ -438,7 +438,13 @@ export function inPlaceEditSeed(
       seed.options.gearType = data.gearType;
       if (data.gearType === 'worm') {
         value('starts', data.teeth);
-      } else if (data.gearType === 'worm-wheel') {
+      } else if (data.gearType === 'enveloping-worm') {
+        value('starts', data.teeth);
+        value('teeth', data.mateTeeth);
+      } else if (
+        data.gearType === 'worm-wheel' ||
+        data.gearType === 'enveloping-wheel'
+      ) {
         value('starts', data.mateTeeth);
       } else {
         value('mateTeeth', data.mateTeeth);
@@ -447,6 +453,7 @@ export function inPlaceEditSeed(
       value('diameterFactor', data.diameterFactor);
       if (data.throated) seed.options.throat = 'throated';
       value('outsideDiameter', data.outsideDiameter);
+      value('wormLength', data.wormLength);
       value('faceWidth', data.faceWidth);
       value('boreDiameter', data.boreDiameter);
       value('rimDiameter', data.rimDiameter);
@@ -955,6 +962,7 @@ export function inPlaceFeatureUpdate(
         'diameterFactor',
         'throated',
         'outsideDiameter',
+        'wormLength',
         'xDirection',
         'boreDiameter',
         'rimDiameter',

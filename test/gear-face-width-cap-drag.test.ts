@@ -229,7 +229,7 @@ describe(
         (feature) => feature.data.featureKind === 'gear'
       )!;
       expect(stored.data.featureKind === 'gear' && stored.data.faceWidth).toBe(
-        '10 + (extra)'
+        '(10) + (extra)'
       );
       const body = (await derive(applied)).derived.bodyRepresentations[gearId]!;
       expect(body.volume).toBeCloseTo((gear.volume / 10) * 13, 3);
@@ -252,7 +252,7 @@ describe(
       const { document: start, gearId } = scene();
       const plan = drag(await derive(start), gearId, 'end', -10);
       expect(plan?.kind === 'gear-width' && plan.preflightRejection).toBe(
-        'That distance would leave the gear with no width.'
+        'That distance would leave the gear with no face width.'
       );
     });
 

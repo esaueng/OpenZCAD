@@ -17,13 +17,12 @@ import type {
   ProjectDocument
 } from '@openzcad/shared';
 import {
-  gearFaceWidthCapAncestor,
   primitiveBoxFaceAncestor,
-  primitiveCylinderCapAncestor,
-  type GearCapAncestor
+  primitiveCylinderCapAncestor
 } from './cylinderPrimitiveAncestry';
 import { extrudeCapAncestor } from './extrudeCapAncestry';
 import { planarFaceTravel } from './planarFaceTravel';
+import { gearCapAncestor } from './gearCapAncestry';
 
 /**
  * What a planar face offset turns into.
@@ -33,14 +32,18 @@ import { planarFaceTravel } from './planarFaceTravel';
  * new extent, which is what "make it taller" means once the rim carries a
  * blend. The far cap of an extrude likewise becomes an edit of its stored
  * distance, which is what keeps the extrude open after it lands: the same
- * handle keeps driving the same feature. A cap of a gear built as its own
- * body becomes an edit of its face width, so the teeth regenerate instead of
- * the kernel being asked to stretch involute flanks. Everything unproven
- * becomes the
+ * handle keeps driving the same feature. Everything unproven becomes the
  * generic exact push/pull, which is still exact, just local to the picked
  * face.
  */
 export type FaceOffsetPlan =
+  | {
+      kind: 'gear-width';
+      command: AnyCommand;
+      feature: FeatureNode;
+      value: number;
+      preflightRejection?: string;
+    }
   | {
       kind: 'primitive-dimension';
       command: AnyCommand;
@@ -55,14 +58,6 @@ export type FaceOffsetPlan =
       command: AnyCommand;
       feature: FeatureNode;
       /** The signed distance after the edit, evaluated. */
-      value: number;
-      preflightRejection?: string;
-    }
-  | {
-      kind: 'gear-width';
-      command: AnyCommand;
-      feature: FeatureNode;
-      /** The face width after the edit, evaluated, in the body's frame. */
       value: number;
       preflightRejection?: string;
     }
@@ -224,108 +219,6 @@ function shiftPrimitiveBase(
   return composeCommands(label, commands);
 }
 
-/** `base - factor × delta`, keeping an expression live. */
-function subtractScaled(
-  base: ParamValue,
-  factor: number,
-  delta: ParamValue
-): ParamValue {
-  if (Math.abs(factor) < 1e-12) return base;
-  if (typeof base === 'number' && typeof delta === 'number') {
-    return base - factor * delta;
-  }
-  const scaled = factor === 1 ? `(${delta})` : `${factor} * (${delta})`;
-  return `(${base}) - ${scaled}`;
-}
-
-/**
- * A gear cap drag as a face-width edit. The end cap only widens the gear;
- * the start cap also moves the origin back along the axis by the same
- * distance, so the end cap stays where it was. That holds only for a spur
- * gear: a helical tooth would turn at the far cap as the start moved.
- */
-function gearWidthPlan(
-  document: ProjectDocument,
-  ancestor: GearCapAncestor,
-  offset: number,
-  exact: ParamValue | undefined
-): FaceOffsetPlan | null {
-  const { gear, side, scale } = ancestor;
-  if (gear.data.featureKind !== 'gear') return null;
-  const data = gear.data;
-  const current = data.faceWidth;
-  if (current === undefined || !data.origin || !data.axis) return null;
-  const { scope } = getParameterScope(document);
-  let evaluated: number;
-  let axis: [number, number, number];
-  let helix: number;
-  try {
-    evaluated = resolveParamValue(current, scope, 'faceWidth', document.units);
-    axis = [data.axis.x, data.axis.y, data.axis.z].map((value) =>
-      resolveParamValue(value, scope, 'axis', document.units)
-    ) as [number, number, number];
-    helix = resolveParamValue(
-      data.helixAngleDeg ?? 0,
-      scope,
-      'angle',
-      document.units
-    );
-  } catch {
-    return null;
-  }
-  const length = Math.hypot(...axis);
-  if (!Number.isFinite(evaluated) || !Number.isFinite(length) || length < 1e-9)
-    return null;
-  // The drag was measured along the cap's outward normal, which is the
-  // gear's axis in whatever rigid placement it sits under.
-  const localOffset = Math.round(offset * 1000) / 1000 / scale;
-  const localExact =
-    typeof exact === 'string' && scale !== 1 ? `(${exact}) / ${scale}` : exact;
-  const delta: ParamValue =
-    typeof localExact === 'string' ? localExact : localOffset;
-  const value = evaluated + localOffset;
-  const faceWidth: ParamValue =
-    typeof current === 'string'
-      ? `(${current}) + (${delta})`
-      : typeof localExact === 'string'
-        ? `${current} + (${localExact})`
-        : value;
-  const label = 'Resize Gear Face Width';
-  let preflightRejection: string | undefined;
-  if (value <= 0) {
-    preflightRejection = 'That distance would leave the gear with no width.';
-  } else if (side === 'start' && (helix !== 0 || data.herringbone)) {
-    preflightRejection =
-      'Drag the other cap: moving this end of a helical gear would turn its teeth at the far end.';
-  }
-  const origin = data.origin;
-  const unit = axis.map((component) => component / length);
-  return {
-    kind: 'gear-width',
-    command: commandFactories.updateFeature(
-      {
-        featureId: gear.featureId,
-        data: {
-          faceWidth,
-          ...(side === 'start' && !preflightRejection
-            ? {
-                origin: {
-                  x: subtractScaled(origin.x, unit[0]!, delta),
-                  y: subtractScaled(origin.y, unit[1]!, delta),
-                  z: subtractScaled(origin.z, unit[2]!, delta)
-                }
-              }
-            : {})
-        }
-      },
-      label
-    ),
-    feature: gear,
-    value: value * scale,
-    ...(preflightRejection ? { preflightRejection } : {})
-  };
-}
-
 function roundedLength(value: number): string {
   return String(Math.round(value * 100) / 100);
 }
@@ -390,6 +283,62 @@ export function planFaceOffset(
     Math.abs(offset) <= 1e-9
   ) {
     return null;
+  }
+
+  const gear =
+    !input.localOnly &&
+    gearCapAncestor(document, bodyId, face.reference, faceHash);
+  if (gear && gear.feature.data.featureKind === 'gear') {
+    const data = gear.feature.data;
+    const localOffset = Math.round(offset * 1000) / 1000 / gear.scale;
+    const delta: ParamValue =
+      typeof exact === 'string'
+        ? gear.scale === 1
+          ? exact
+          : `(${exact}) / ${gear.scale}`
+        : localOffset;
+    const value = gear.width + localOffset;
+    const add = (current: ParamValue, change: ParamValue): ParamValue =>
+      typeof current === 'number' && typeof change === 'number'
+        ? current + change
+        : `(${current}) + (${change})`;
+    // Moving the start cap of a twisted gear would turn the teeth at the far
+    // cap, which stays put; only its end cap is a pure width edit.
+    const rejection =
+      value <= 0
+        ? 'That distance would leave the gear with no face width.'
+        : gear.side === 'start' && gear.twisted
+          ? 'Drag the other cap: moving this end of a helical gear would turn its teeth at the far end.'
+          : undefined;
+    const moveOrigin = gear.side === 'start' && rejection === undefined;
+    const origin = { ...data.origin! };
+    if (moveOrigin) {
+      for (const axis of ['x', 'y', 'z'] as const) {
+        if (gear.axis[axis] === 0) continue;
+        origin[axis] = add(
+          origin[axis],
+          typeof delta === 'number'
+            ? -delta * gear.axis[axis]
+            : `-(${delta}) * ${gear.axis[axis]}`
+        );
+      }
+    }
+    return {
+      kind: 'gear-width',
+      feature: gear.feature,
+      value: value * gear.scale,
+      command: commandFactories.updateFeature(
+        {
+          featureId: gear.feature.featureId,
+          data: {
+            faceWidth: add(data.faceWidth!, delta),
+            ...(moveOrigin ? { origin } : {})
+          }
+        },
+        `Resize ${gear.feature.name} face width`
+      ),
+      ...(rejection ? { preflightRejection: rejection } : {})
+    };
   }
 
   const extrude =
@@ -460,14 +409,6 @@ export function planFaceOffset(
       }
       return { ...plan, value: plan.value * cylinder.scale };
     }
-  }
-
-  const gear =
-    !input.localOnly &&
-    gearFaceWidthCapAncestor(document, bodyId, face.reference, faceHash);
-  if (gear) {
-    // A proven resize must never turn into a different operation on failure.
-    return gearWidthPlan(document, gear, offset, exact);
   }
 
   const box =
@@ -541,6 +482,8 @@ export function faceOffsetBaseline(
   face: Pick<FaceTopology, 'reference'>,
   faceHash: number
 ): FaceOffsetTotal | undefined {
+  const gear = gearCapAncestor(document, bodyId, face.reference, faceHash);
+  if (gear) return { total: gear.width * gear.scale, sense: 1 };
   const extrude = extrudeCapAncestor(
     document,
     bodyId,
@@ -549,26 +492,6 @@ export function faceOffsetBaseline(
   );
   if (extrude) {
     return { total: extrude.distance, sense: extrude.sense };
-  }
-  const gear = gearFaceWidthCapAncestor(
-    document,
-    bodyId,
-    face.reference,
-    faceHash
-  );
-  if (gear?.gear.data.featureKind === 'gear' && gear.gear.data.faceWidth) {
-    try {
-      const total =
-        resolveParamValue(
-          gear.gear.data.faceWidth,
-          getParameterScope(document).scope,
-          'faceWidth',
-          document.units
-        ) * gear.scale;
-      return Number.isFinite(total) ? { total, sense: 1 } : undefined;
-    } catch {
-      return undefined;
-    }
   }
   const cylinder = primitiveCylinderCapAncestor(
     document,

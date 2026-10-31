@@ -33,6 +33,7 @@
     "packages/shared/src/sha256-sync.test.ts",
     "packages/shared/src/sketch-composite-targets.test.ts",
     "packages/shared/src/sketch-reference-dimensions.test.ts",
+    "packages/viewport/src/render/edgeOverlay.test.ts",
     "test/api-routes.test.ts",
     "test/app-settings.test.ts",
     "test/assistant-anthropic.test.ts",

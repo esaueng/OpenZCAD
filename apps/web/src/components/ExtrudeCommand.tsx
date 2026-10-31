@@ -26,7 +26,7 @@ import {
   type ExtrudeFormValue,
   type ExtrudeToFacePicking
 } from '../lib/extrudeDraft';
-import type { ExtrudeChoice } from '../lib/extrudeInference';
+import type { ExtrudeChoice, ResolvedExtrude } from '../lib/extrudeInference';
 import { formatNumber, paramValueText } from '../lib/model';
 import { InPlaceCommandBar, type InPlaceOption } from './InPlaceCommandBar';
 
@@ -84,6 +84,8 @@ interface ExtrudeCommandProps {
   editing?: boolean;
   /** Why the last preview or Done was refused, said where the hint is. */
   note?: string | null;
+  /** The accepted exact preview's operation, while Automatic is selected. */
+  resolvedChoice?: ResolvedExtrude['inference'] | null;
   /** The edited feature's name as it is now (a rename since it opened). */
   name?: string;
   toFacePicking?: ExtrudeToFacePicking;
@@ -156,6 +158,7 @@ export function ExtrudeCommand({
   disabled,
   editing = false,
   note = null,
+  resolvedChoice = null,
   name,
   entryRefusal = null,
   toFacePicking,
@@ -347,7 +350,7 @@ export function ExtrudeCommand({
   const toFaceInfo =
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
   const regions = profileCount > 1 ? ` · ${profileCount} profiles` : '';
-  const hint = toFacePicking?.armed
+  const guidance = toFacePicking?.armed
     ? 'Click a planar face parallel to the sketch · Esc cancels'
     : toFace
       ? toFaceInfo
@@ -356,6 +359,21 @@ export function ExtrudeCommand({
       : throughAll
         ? `Through the whole target${regions} · ${FINISH}`
         : `Drag the arrows, or tap a value to type${regions} · ${FINISH}`;
+  const choice =
+    draft.choice.operation === 'automatic'
+      ? (resolvedChoice ?? draft.choice)
+      : draft.choice;
+  const target =
+    'targetBodyId' in choice
+      ? bodies.find((body) => body.bodyId === choice.targetBodyId)?.name
+      : null;
+  const operation =
+    choice.operation === 'automatic'
+      ? 'Automatic · checking operation'
+      : choice.operation === 'new-body'
+        ? 'New body'
+        : `${OPERATIONS.find((item) => item.value === choice.operation)!.label}${target ? ` · ${target}` : ''}`;
+  const hint = `${draft.choice.operation === 'automatic' && resolvedChoice ? 'Preview: ' : ''}${operation} · ${guidance}`;
 
   const options: InPlaceOption[] = [
     {

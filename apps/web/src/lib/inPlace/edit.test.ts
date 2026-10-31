@@ -339,6 +339,80 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toEqual(['hand', 'mateTeeth', 'diameterFactor']);
   });
 
+  it('gear: an enveloping worm keeps its starts and wheel teeth', () => {
+    const enveloping: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'enveloping-worm',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 2,
+      mateTeeth: 40,
+      diameterFactor: 10,
+      hand: 'left',
+      faceWidth: 30,
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    };
+    const node = feature(enveloping, 'body_e' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({
+      gearType: 'enveloping-worm',
+      hand: 'left'
+    });
+    const request = untouched(node)!;
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    expect(request.gear).toMatchObject({
+      gearType: 'enveloping-worm',
+      teeth: 2,
+      mateTeeth: 40,
+      diameterFactor: 10,
+      hand: 'left'
+    });
+    const saved = {
+      featureId: node.featureId,
+      name: node.name,
+      data: enveloping
+    };
+    expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+      'clearData'
+    );
+  });
+
+  it('gear: an enveloping wheel keeps its worm and outside diameter', () => {
+    const wheel: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'enveloping-wheel',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 30,
+      mateTeeth: 1,
+      diameterFactor: 10,
+      wormLength: 24,
+      outsideDiameter: 65,
+      faceWidth: 8,
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    };
+    const node = feature(wheel, 'body_w' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({ gearType: 'enveloping-wheel' });
+    const request = untouched(node)!;
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    expect(request.gear).toMatchObject({
+      gearType: 'enveloping-wheel',
+      teeth: 30,
+      mateTeeth: 1,
+      diameterFactor: 10,
+      wormLength: 24,
+      outsideDiameter: 65
+    });
+    expect(request.gear).not.toHaveProperty('throated');
+    const saved = { featureId: node.featureId, name: node.name, data: wheel };
+    expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+      'clearData'
+    );
+  });
+
   it('gear: a throated wheel keeps its throat until made plain', () => {
     const wheel: FeatureData = {
       featureKind: 'gear',

@@ -222,20 +222,33 @@ export interface DrawingScale {
   denominator: number;
 }
 
+/**
+ * Pickable sheet scales, largest first: the ISO 5455 series plus the common
+ * intermediates (4:1, 1:4, 1:8, 1:25, 1:250). The starter, "Fit views to
+ * sheet" and "Auto scale" walk this list in order and take the first that
+ * fits, so it must stay sorted from largest to smallest.
+ */
 export const DRAWING_SCALE_PRESETS: readonly DrawingScale[] = [
+  { numerator: 50, denominator: 1 },
+  { numerator: 20, denominator: 1 },
   { numerator: 10, denominator: 1 },
   { numerator: 5, denominator: 1 },
+  { numerator: 4, denominator: 1 },
   { numerator: 2, denominator: 1 },
   { numerator: 1, denominator: 1 },
   { numerator: 1, denominator: 2 },
+  { numerator: 1, denominator: 4 },
   { numerator: 1, denominator: 5 },
+  { numerator: 1, denominator: 8 },
   { numerator: 1, denominator: 10 },
   { numerator: 1, denominator: 20 },
+  { numerator: 1, denominator: 25 },
   { numerator: 1, denominator: 50 },
   { numerator: 1, denominator: 100 },
   // Large models: the starter falls back to these, and they must stay
   // pickable after the user tries another scale.
   { numerator: 1, denominator: 200 },
+  { numerator: 1, denominator: 250 },
   { numerator: 1, denominator: 500 },
   { numerator: 1, denominator: 1000 }
 ];
