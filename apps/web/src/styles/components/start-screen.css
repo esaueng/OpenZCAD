@@ -115,7 +115,7 @@
 /* Keep the restore card still before navigation is available, without
    presenting an escape that cannot be used during local discovery. */
 .startup-card button:disabled {
-  display: none;
+  visibility: hidden;
 }
 
 /* ── Building mark ──
@@ -255,7 +255,7 @@
 
 /* Keep the canvas at its final size while its first frame and panels load. */
 .workspace-reveal {
-  display: none;
+  visibility: hidden;
   opacity: 0;
 }
 
@@ -267,7 +267,7 @@
 
 /* A share destination covers the workspace without stopping its live work. */
 .workspace-reveal[aria-hidden='true'] {
-  display: none;
+  visibility: hidden;
   opacity: 0;
 }
 
@@ -647,9 +647,16 @@
   text-align: right;
 }
 
-/* An empty shelf says nothing rather than "0". */
+/* An empty shelf shows no "0", but the tab's name still says it is empty:
+   hidden from sight only, like .visually-hidden. */
 .start-shelf-count.is-zero {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .start-shelf-tabs button.is-active .start-shelf-count {

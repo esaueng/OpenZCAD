@@ -146,3 +146,18 @@ describe('start screen column and shelf edge', () => {
     );
   });
 });
+
+describe('workspace reveal', () => {
+  it('hides the loading workspace without taking it out of layout', () => {
+    // 31 Oct 2026: `display: none` here left a new project's workspace
+    // blank for good, since the ready state only restores visibility.
+    for (const selector of [
+      '.workspace-reveal',
+      ".workspace-reveal[aria-hidden='true']"
+    ]) {
+      const declarations = rule(css, selector);
+      expect(declarations).toMatch(/visibility:\s*hidden/);
+      expect(declarations).not.toMatch(/display:\s*none/);
+    }
+  });
+});

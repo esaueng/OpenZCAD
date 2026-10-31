@@ -1903,6 +1903,8 @@ describe('StartScreen sidebar and shelf edge', () => {
       container.querySelector(`#start-shelf-tab-${status} .start-shelf-count`);
     expect(count('active')).not.toHaveClass('is-zero');
     expect(count('archived')).toHaveClass('is-zero');
+    // Hidden from sight only: the tab still announces an empty shelf.
+    expect(screen.getByRole('tab', { name: 'Archive 0' })).toBeInTheDocument();
   });
 
   it('flags a scrolled shelf and the group label stuck under its line', () => {
