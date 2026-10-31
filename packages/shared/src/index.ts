@@ -192,7 +192,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // refused by older clients as an unknown gear kind.
 // v45 adds M14 double-enveloping wheels (`gearType: 'enveloping-wheel'`,
 // `wormLength`), refused by older clients as an unknown gear kind.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 45 as const;
+// v46 is claimed by D06 dimension schema anchors (in progress).
+// v47 adds D03 drawing section views (`DrawingView.section`). An older client
+// would draw the view uncut and without its section line, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 47 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

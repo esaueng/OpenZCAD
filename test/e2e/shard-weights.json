@@ -29,6 +29,7 @@
   "demo-legacy-share.spec.ts": 38,
   "docs-captures.spec.ts": 0,
   "drawing-dimensions.spec.ts": 11,
+  "drawing-sections.spec.ts": 16,
   "drawings.spec.ts": 32,
   "duplicate-step.spec.ts": 3,
   "dxf-sketch-import.spec.ts": 5,

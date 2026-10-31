@@ -88,6 +88,20 @@
   stroke-width: 0.8px;
 }
 
+/* D03 section hatching and the cutting-plane line. */
+.drawing-strokes.is-hatch {
+  stroke-width: 0.6px;
+}
+
+.drawing-strokes.is-chain {
+  stroke-width: 0.8px;
+  stroke-dasharray: 24 3 1 3;
+}
+
+.drawing-strokes.is-cutting {
+  stroke-width: 2.4px;
+}
+
 /* Dimension arrowheads: filled, not outlined. */
 .drawing-strokes polygon.is-filled {
   fill: #000000;
@@ -383,6 +397,33 @@
 .drawing-pick-surface {
   fill: transparent;
   cursor: crosshair;
+}
+
+/* D03 section tool: the line being drawn, and the view it will place. */
+.drawing-section-surface {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.drawing-section-draft {
+  pointer-events: none;
+}
+
+.drawing-section-preview {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 2px;
+  stroke-dasharray: 10 3 2 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.drawing-section-ghost {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
 }
 
 .drawing-annotation-status {
@@ -824,7 +865,8 @@
 
 /* While the model rebuilds: the last drawing, faded. Never exported. */
 .drawing-canvas.is-ghost .drawing-strokes.is-visible,
-.drawing-canvas.is-ghost .drawing-strokes.is-hidden {
+.drawing-canvas.is-ghost .drawing-strokes.is-hidden,
+.drawing-canvas.is-ghost .drawing-strokes.is-hatch {
   opacity: 0.3;
 }
 

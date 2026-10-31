@@ -12,6 +12,7 @@ import {
   type DrawingSheet,
   type DrawingView,
   type DrawingViewOrientation,
+  type EdgeTopology,
   type GeometryBodyRepresentation,
   type UnitSystem
 } from '@openzcad/shared';
@@ -42,6 +43,29 @@ export function projectionBodyInput(
       .filter((edge) => edge.displayRole !== 'seam' && edge.points.length >= 6)
       .map((edge) => edge.points)
   };
+}
+
+/** One body behind a section plane, from the geometry worker (D03). */
+export interface SectionBodyInput extends ProjectionBodyInput {
+  /** The cut body's edges, for dimensions on the section. */
+  edgeTopology: EdgeTopology[];
+  /** Why the kernel could not cut it exactly; it is then cut from its mesh. */
+  approximate?: string;
+}
+
+/** What a section view cuts: the same plane draws the same section. */
+export function sectionPlaneKey(
+  view: Pick<DrawingView, 'orientation' | 'section'>
+): string | null {
+  return view.section ? `${view.orientation}@${view.section.depth}` : null;
+}
+
+/** The projection input key of one body cut by a section view's plane. */
+export function sectionInputKey(
+  view: Pick<DrawingView, 'orientation' | 'section'>,
+  bodyId: string
+): string {
+  return `${bodyId}|section:${sectionPlaneKey(view)}`;
 }
 
 /** Two 32-bit FNV-style lanes over the text, as 16 hex digits. */

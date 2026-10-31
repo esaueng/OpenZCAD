@@ -189,9 +189,11 @@ export function planAutoDimensions(
     });
   }
   // Views that measure true size: every principal view, never the
-  // isometric one.
+  // isometric one. Not a section (D03) yet either: its cut body's edges are
+  // not the model's these dimensions are read from (D06 slice F).
   const measuring = contexts.filter(
-    (context) => context.view.orientation !== 'iso'
+    (context) =>
+      context.view.orientation !== 'iso' && context.view.section === undefined
   );
 
   // Dimensions per view and body, existing ones included: a feature's

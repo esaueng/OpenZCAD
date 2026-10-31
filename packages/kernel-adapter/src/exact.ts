@@ -14,6 +14,16 @@ import {
   type DrawingBodyTessellation
 } from './exact-drawing-tessellation';
 export type { DrawingBodyTessellation } from './exact-drawing-tessellation';
+import {
+  drawingSectionOfShape,
+  DrawingSectionError,
+  type DrawingSectionBody,
+  type DrawingSectionPlane
+} from './exact-drawing-section';
+export type {
+  DrawingSectionBody,
+  DrawingSectionPlane
+} from './exact-drawing-section';
 import { recognizePlanarEmboss } from './planar-emboss';
 import {
   rebuildReporter,
@@ -723,6 +733,19 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<Record<BodyId, DrawingBodyTessellation>>;
+  /**
+   * D03 section view input: each body cut exactly by the half-space behind
+   * `plane` (see `exact-drawing-section.ts`), then meshed like
+   * `drawingTessellation`, with its cut faces and edge topology. A body wholly
+   * in front of the plane comes back empty. Refuses, like
+   * `drawingTessellation`, a body that is unknown, consumed or hidden, and a
+   * plane that cuts none of the bodies.
+   */
+  drawingSection(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    plane: DrawingSectionPlane
+  ): Promise<Record<BodyId, DrawingSectionBody>>;
   /**
    * Solves one sketch's persisted constraints with the kernel's GCS and
    * returns the solved geometry plus classification, DOF, and per-constraint
@@ -4140,6 +4163,49 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
         result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
       }
+      return result;
+    });
+  }
+
+  drawingSection(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    plane: DrawingSectionPlane
+  ): Promise<Record<BodyId, DrawingSectionBody>> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const result: Record<BodyId, DrawingSectionBody> = {};
+      const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
+      let cut = false;
+      for (const bodyId of bodyIds) {
+        const shape = build.shapes.get(bodyId);
+        if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
+          throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
+        const body = drawingSectionOfShape(kernel, shape, plane, budget);
+        if (body?.cut) cut = true;
+        result[bodyId] = body
+          ? {
+              vertices: body.vertices,
+              indices: body.indices,
+              faces: body.faces,
+              edges: body.edges,
+              cutFaces: body.cutFaces,
+              edgeTopology: body.edgeTopology,
+              ...(body.approximate ? { approximate: body.approximate } : {})
+            }
+          : {
+              vertices: new Float32Array(),
+              indices: new Uint32Array(),
+              faces: [],
+              edges: [],
+              cutFaces: [],
+              edgeTopology: []
+            };
+      }
+      if (!cut)
+        throw new DrawingSectionError(
+          'The section line does not cut any body in this view.'
+        );
       return result;
     });
   }

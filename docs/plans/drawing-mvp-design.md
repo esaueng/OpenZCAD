@@ -401,3 +401,87 @@ command payload from older clients that would ignore its body replacements.
 Regression coverage:
 `test/drawing-body-succession.test.ts`, `DrawingWorkspace.test.tsx`, and
 `test/e2e/design-review-fixes.spec.ts`.
+
+## Implementation decisions (D03 section views, schema v47)
+
+The first D03 slice adds section views cut from a line drawn across a
+principal view. Detail views remain open.
+
+- **Shape.** A section is an ordinary `DrawingView` with an optional
+  `section: { sourceViewId, label, depth }`. Its `orientation` is its
+  direction of sight and must fold from the source view
+  (`drawingViewAlignment` non-null), so the section stays aligned with its
+  source exactly as a projected view stays aligned with its base, on the side
+  the sheet's projection angle gives that direction (third angle: the side it
+  is seen from). The cutting plane is normal to that direction and stores only
+  its depth along it, in model units: `dot(direction, p) = depth`, with the
+  material nearer the camera removed. Moving either view never moves the cut;
+  the section line on the source is derived (`drawingSectionLine`),
+  horizontal when the pair shares a column and vertical when it shares a row.
+  Labels are one or two capitals, unique per sheet, skipping I, O and Q. The
+  validator refuses a section of a section or of the isometric, a missing
+  source, an unaligned or wrong-side placement, a non-finite depth and unknown
+  keys. Named orientations keep the slice small: a horizontal line on a side
+  view, a vertical line on the top view and the back's mirror pairs have no
+  aligned principal orientation and are refused with a reason; free section
+  frames are a later field.
+- **Schema.** v47, built on v45 (M14 double-enveloping wheels); v46 is
+  claimed by the D06 dimension-schema slice. Older clients must refuse: they
+  would draw the view uncut and without its line.
+- **Commands.** `drawing.view.add` carries the whole section view;
+  `drawing.view.update` gains `sectionDepth` (the panel's "Cut at X/Y/Z" field,
+  in world coordinates). Moving a source carries its sections along (and a
+  projected view carries its own sections on), a section moves only along its
+  shared axis, switching projection angle mirrors it across its source, and
+  deleting a source deletes its sections with their annotations (one undoable
+  command).
+- **Projection.** The kernel's `section()` returns only the cap and refuses
+  the case a section view exists for most — a plane down a bore's axis. So the
+  geometry worker's drawing-tessellation request takes an optional section
+  plane (`drawingSection`): each solid crossing it is cut by an exact
+  half-space boolean (a box over the removed side), solids wholly in front are
+  dropped and solids wholly behind kept whole, and the result goes through the
+  same canonical tessellation and projection worker as any view. Every drawn
+  line, the cut outline included, is then a kernel-sampled exact edge; hidden
+  lines stay approximate to the display tolerance as in D01. Faces lying in the
+  plane are returned as `cutFaces` and hatched at 45°, 2.5 mm apart, measured
+  from the paper's corner; the hatch's curved boundaries follow the
+  tessellation's chords. Sections default to hidden lines off.
+- **Fallback.** Measured on the pin, the exact-only boolean refuses most
+  planes through a cylindrical hole in a box (x = 20 through a Ø12 bore fails,
+  x = 20.0001 succeeds, y = 15 succeeds). A refused body is not dropped: it
+  comes back whole with the refusal, and the projection cuts its tessellation
+  (`meshSection.ts`: triangles clipped, edges and silhouettes split at the
+  plane, the cap rebuilt from plane crossings, nested by containment and
+  triangulated). The panel says so ("Approximate: cut from the tessellation"),
+  and its cut edges carry no identity, so it cannot be dimensioned until the
+  kernel cuts it exactly. A plane that crosses no body is refused on the view
+  and blocks export by name; it is never drawn from an older model.
+- **Fence.** The cut is a function of the source bodies the sheet's
+  fingerprint already fences and of the stored depth, so sections follow the
+  same explicit Update, stale state and offline reopen as other views. Their
+  projections are cached by fingerprint and view intent (depth included).
+- **Dimensions.** The cut body's edges are published with ADR-011 hashes
+  (`edgeTopology`) and placed beside the model's bodies under a key no body id
+  can take (`sectionBodyKey`), so the D02 resolver, picker and layout work
+  unchanged on a section: an annotation still stores the model body id and an
+  edge hash. Edges the cut leaves whole keep their source hash; edges it trims
+  or creates (a bore's floor, its walls) have new hashes and no lineage name,
+  so an edit that moves one leaves its dimension broken until re-picked —
+  never rebound to a neighbour.
+- **Page.** New stroke kinds go through the one page model to the preview,
+  PDF and SVG: `hatch` (0.18 mm), `chain` (0.25 mm, ISO 128 long-dash-dot
+  12/1.5/0.5/1.5) across the source view 4 mm past its extent, `cutting`
+  (0.7 mm) for the line's 6 mm ends, filled arrows in the direction of sight,
+  the label at each end, and the caption "SECTION A-A" (WinAnsi has no en
+  dash) above the view, or below it when that would face its source. A sheet
+  without sections writes byte-identical PDF and SVG.
+- **Tool.** The rail's Section view tool (S): drag across a front, top or
+  side view; mostly sideways makes a horizontal line, mostly up or down a
+  vertical one, at the press point, snapped within 2 mm to the view's middle
+  or a circle's centre. The section then follows the pointer along its arrows,
+  aligned with its source and kept clear of it, and a click places it.
+- **Open.** Detail views; free (non-principal) section planes, offset and
+  aligned (stepped) sections; per-body hatch angles; lineage for cut edges so
+  a dimension survives an edit that moves them; exact cuts the pinned kernel
+  refuses (a Remus robustness ask).

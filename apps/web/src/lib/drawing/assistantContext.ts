@@ -24,6 +24,7 @@ import {
 } from '@openzcad/shared';
 import { edgeRefFor } from './annotationPicking';
 import {
+  annotationBody,
   edgeEndsInPageOrder,
   resolveSheetAnnotations,
   type AnnotationBodies,
@@ -112,12 +113,13 @@ function listedEdges(
     const edges: ListedEdge[] = [];
     let complete = true;
     for (const bodyId of view.bodyIds) {
-      const body = bodies[bodyId];
+      // A section view (D03) lists its cut body's edges, as its picks do.
+      const body = annotationBody(bodies, view, bodyId);
       if (!body?.topology || body.consumed) continue;
       for (const edge of body.topology.edges) {
         if (edge.displayRole === 'seam' || edge.points.length < 6) continue;
         // Only an edge a stored reference resolves back to, as a pick is.
-        if (edgeRefFor(bodies, bodyId, edge) === null) continue;
+        if (edgeRefFor(bodies, bodyId, edge, view) === null) continue;
         if (edges.length >= MAX_EDGES_PER_VIEW || budget <= 0) {
           complete = false;
           break;

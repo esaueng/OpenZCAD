@@ -1,8 +1,14 @@
 import {
   DRAWING_VIEW_FRAMES,
+  type EdgeTopology,
   type DrawingViewFrame,
   type DrawingViewOrientation
 } from '@openzcad/shared';
+import {
+  clipBodyToSection,
+  clipPolyline,
+  type SectionClip
+} from './meshSection';
 
 /**
  * D01 view projection with hidden-line removal, in plain TypeScript.
@@ -46,6 +52,17 @@ export interface ProjectionBodyInput {
   faces?: readonly { triangleStart: number; triangleCount: number }[];
   /** World-space xyz polylines of the body's physical edges. */
   edges: readonly (Float32Array | Float64Array | readonly number[])[];
+  /**
+   * D03: indices into `faces` of the faces a section plane cut, which the
+   * sheet hatches. Absent on a view that is not a section.
+   */
+  cutFaces?: readonly number[];
+  /**
+   * D03 fallback: cut this body by the half-space here, from its
+   * tessellation, because the kernel could not cut it exactly. Its normal
+   * is the view's direction of sight.
+   */
+  clip?: SectionClip;
 }
 
 export interface ViewProjectionInput {
@@ -68,6 +85,24 @@ export interface ViewProjection {
    * shares its arrays with the field above.
    */
   edgeRuns?: { visible: Float64Array[]; hidden: Float64Array[] };
+  /**
+   * D03: the cut faces of a section view, as flat `[u0, v0, u1, v1, u2, v2,
+   * …]` triangles in model units, for the sheet to hatch. They face the
+   * camera and lie in front of everything else the view draws. Absent when
+   * the view is not a section.
+   */
+  hatch?: Float64Array;
+  /**
+   * D03, main thread only: a section view's cut bodies' edges by model body
+   * id, from the geometry worker's section, so dimensions can be placed on
+   * them. Attached after projection; never sent to or from a worker.
+   */
+  sectionEdges?: Readonly<Record<string, readonly EdgeTopology[]>>;
+  /**
+   * D03, main thread only: why some body of this section was cut from its
+   * tessellation instead of exactly by the kernel, when one was.
+   */
+  sectionApproximate?: string;
 }
 
 /**
@@ -84,7 +119,8 @@ export function projectionBuffers(
     ...projection.visible,
     ...projection.hidden,
     ...(projection.edgeRuns?.visible ?? []),
-    ...(projection.edgeRuns?.hidden ?? [])
+    ...(projection.edgeRuns?.hidden ?? []),
+    ...(projection.hatch ? [projection.hatch] : [])
   ])
     buffers.add(line.buffer);
   return [...buffers];
@@ -1158,6 +1194,12 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       dot(frame.up, x, y, z),
       dot(frame.direction, x, y, z)
     ] as const;
+  // D03: a body the kernel could not cut exactly is cut here, from its
+  // tessellation (approximate). Its silhouettes still come from the whole
+  // body, clipped like its edges: a cut adds outline, never silhouette.
+  const bodies: ProjectionBodyInput[] = input.bodies.map((body) =>
+    body.clip ? clipBodyToSection(body, body.clip, frame) : body
+  );
 
   /** Each body's triangles, indexed on their own: see `OcclusionIndex`. */
   const bodyTriangles: Triangle[][] = [];
@@ -1169,14 +1211,14 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   };
   // Every scale that only absorbs float noise is the body's own: bodies far
   // apart (along the view or across it) must not coarsen each other.
-  const scales = input.bodies.map(bodyDiagonal);
-  const welds = input.bodies.map((body, bodyIndex) =>
+  const scales = bodies.map(bodyDiagonal);
+  const welds = bodies.map((body, bodyIndex) =>
     weldQuantum(body, scales[bodyIndex]!)
   );
-  const meshes = input.bodies.map((body, bodyIndex) =>
+  const meshes = bodies.map((body, bodyIndex) =>
     analyzeMesh(body, welds[bodyIndex]!)
   );
-  input.bodies.forEach((body, bodyIndex) => {
+  bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
     const sag = triangleSag(body, meshes[bodyIndex]);
     const triangles: Triangle[] = [];
@@ -1273,10 +1315,24 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   // Each line keeps its body's scale: a cutoff for degenerate or sliver
   // output must not grow with empty paper between bodies far apart.
   const lines: { points: number[]; scale: number; silhouette: boolean }[] = [];
-  input.bodies.forEach((body, bodyIndex) => {
+  bodies.forEach((body, bodyIndex) => {
     const scale = scales[bodyIndex]!;
     for (const edge of body.edges)
       lines.push({ points: Array.from(edge), scale, silhouette: false });
+    const source = input.bodies[bodyIndex]!;
+    if (source.clip) {
+      const { normal: n, depth } = source.clip;
+      const distance = (p: readonly [number, number, number]) =>
+        n.x * p[0] + n.y * p[1] + n.z * p[2] - depth;
+      for (const silhouette of bodySilhouettes(
+        source,
+        frame,
+        weldQuantum(source, bodyDiagonal(source))
+      ))
+        for (const piece of clipPolyline(silhouette.points, distance))
+          lines.push({ points: Array.from(piece), scale, silhouette: true });
+      return;
+    }
     for (const silhouette of bodySilhouettes(
       body,
       frame,
@@ -1293,12 +1349,14 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       bounds.minV = Math.min(bounds.minV, v);
       bounds.maxV = Math.max(bounds.maxV, v);
     }
+  const hatch = sectionHatch(bodies, project);
   if (!Number.isFinite(bounds.minU))
     return {
       visible: [],
       hidden: [],
       bounds: null,
-      edgeRuns: { visible: [], hidden: [] }
+      edgeRuns: { visible: [], hidden: [] },
+      ...(hatch ? { hatch } : {})
     };
 
   // Footprint slack: roundoff, at 10^-12 of the coordinates.
@@ -1516,8 +1574,41 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
           ? [line]
           : keptOf(line).map((piece) => piece.slice())
       )
-    }
+    },
+    ...(hatch ? { hatch } : {})
   };
+}
+
+/** The projected triangles of every body's cut faces, or undefined. */
+function sectionHatch(
+  bodies: readonly ProjectionBodyInput[],
+  project: (
+    x: number,
+    y: number,
+    z: number
+  ) => readonly [number, number, number]
+): Float64Array | undefined {
+  if (!bodies.some((body) => body.cutFaces)) return undefined;
+  const out: number[] = [];
+  for (const body of bodies) {
+    if (!body.cutFaces || !body.faces) continue;
+    const { vertices, indices } = body;
+    for (const index of body.cutFaces) {
+      const face = body.faces[index];
+      if (!face) continue;
+      const end = (face.triangleStart + face.triangleCount) * 3;
+      for (let t = face.triangleStart * 3; t < end; t += 1) {
+        const v = indices[t]! * 3;
+        const [u, w] = project(
+          vertices[v]!,
+          vertices[v + 1]!,
+          vertices[v + 2]!
+        );
+        out.push(u, w);
+      }
+    }
+  }
+  return new Float64Array(out);
 }
 
 /**
