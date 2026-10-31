@@ -4490,6 +4490,12 @@ export function ModelViewer({
     // just ahead of the value chip like a drawing callout's name tag. Tapping
     // either pill opens the same exact-entry keypad.
     const radiusLabelChip = hud.create('handle-label-chip');
+    // Keep the edge operation and its changing value in one browser layout.
+    // Measured widths are one frame old while dragging; using them to place
+    // two separate pills let a wider number slide under the operation tag.
+    const edgeChipPair = hud.create('handle-chip-pair');
+    edgeChipPair.hidden = false;
+    edgeChipPair.append(radiusLabelChip, offsetChip);
     radiusLabelChip.dataset.testid = 'direct-manipulation-mode';
     radiusLabelChip.textContent = 'Diameter';
     radiusLabelChip.addEventListener('click', (event) => {
@@ -6903,6 +6909,8 @@ export function ModelViewer({
       // renders once more, so the next one measures and places them again.
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
+      const pairWidth = edgeChipPair.offsetWidth;
+      const pairHeight = edgeChipPair.offsetHeight;
       const laneLeft = rightLaneLeft();
       // Above the bottom lane, where a command's bar stands (the in-place
       // Extrude's, under the region arrow it extrudes): a chip held there
@@ -7264,6 +7272,9 @@ export function ModelViewer({
           : rig?.kind === 'offset-face' || dimensionChipBesidePin
             ? 'pin'
             : 'default';
+      const pairedEdge =
+        rig?.kind === 'edge-radius' && !edgeHandleRef.current?.label;
+      edgeChipPair.toggleAttribute('data-paired', pairedEdge);
       // A chip at its starting value, with no hand on it, is a tap target
       // for exact entry and nothing more: it recedes until something moves.
       const engaged =
@@ -7381,13 +7392,21 @@ export function ModelViewer({
             const clearance = PIN_CHIP_GAP_PX / 2;
             const tagWidth = labelWidth;
             const valueWidth = chipWidth;
-            const width = tagWidth + 2 + valueWidth;
+            const width = pairedEdge ? pairWidth : tagWidth + 2 + valueWidth;
             // The whole pair keeps out from under the right lane (the anchor
             // dodge above only reserves a centred value's width): one that
             // would reach it goes to the pin's other side, and clamps only
             // when that side is under the lane too.
-            const limit =
-              laneLeft !== null ? laneLeft - 8 : Number.POSITIVE_INFINITY;
+            const limit = pairedEdge
+              ? Math.min(
+                  stageRect.width - 8,
+                  laneLeft !== null && laneLeft - 16 >= width
+                    ? laneLeft - 8
+                    : Number.POSITIVE_INFINITY
+                )
+              : laneLeft !== null
+                ? laneLeft - 8
+                : Number.POSITIVE_INFINITY;
             let start =
               screen.x >= pinScreenAt.x
                 ? screen.x - clearance
@@ -7398,8 +7417,27 @@ export function ModelViewer({
                 limit - width
               );
             }
-            place(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
-            place(radiusLabelChip, start + tagWidth, screen.y);
+            if (pairedEdge) {
+              // Clamp and dodge the whole group. Flex owns the gap, including
+              // the first frame after the value gains or loses a digit.
+              const x = Math.max(
+                8,
+                Math.min(start + chipDodge.dx, limit - width)
+              );
+              const y = Math.min(
+                screen.y + chipDodge.dy,
+                footTop === null
+                  ? Infinity
+                  : footTop - COMMAND_CHIP_MARGIN_PX - pairHeight / 2
+              );
+              hud.showAt(edgeChipPair, x, y);
+              chip.hidden = false;
+              radiusLabelChip.hidden = false;
+              screen = { x: x + width - valueWidth / 2, y };
+            } else {
+              place(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
+              place(radiusLabelChip, start + tagWidth, screen.y);
+            }
           } else {
             place(radiusLabelChip, screen.x - chipWidth / 2 - 2, screen.y);
           }
@@ -7413,6 +7451,7 @@ export function ModelViewer({
         chip.dataset.variant,
         radiusLabelChip.hidden,
         radiusLabelChip.textContent,
+        pairWidth,
         // A new dodge places the chip again once it has moved.
         chipDodge.dx,
         chipDodge.dy
