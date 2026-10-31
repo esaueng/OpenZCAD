@@ -131,9 +131,10 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
     '30'
   );
   await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '2');
+  // The viewport carries no "exact on release" badge over the part.
   await expect(
     page.getByText('Preview · exact on release', { exact: true })
-  ).toBeVisible();
+  ).toHaveCount(0);
   // The exact projection stays at the committed dimension while the disposable
   // body, edge and highlight buffers follow the hand. No worker result may
   // replace it with an older pointer value during this gesture: the edit

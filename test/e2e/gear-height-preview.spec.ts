@@ -189,9 +189,6 @@ test(
       await page.keyboard.up('Shift');
       await expect.poll(syncs).toBe(count + 1);
       await expect(
-        page.getByText('Checking exact result…', { exact: true })
-      ).toBeVisible();
-      await expect(
         page.getByRole('status', { name: 'Checking', exact: true })
       ).toBeVisible();
       if (height === 26)

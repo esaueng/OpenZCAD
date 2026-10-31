@@ -3440,7 +3440,6 @@ export function ModelViewer({
         return;
       }
       proxy.profile?.restore();
-      profilePreviewBadge.hidden = true;
       proxy.object.matrix.copy(proxy.originalMatrix);
       proxy.object.matrixAutoUpdate = proxy.originalMatrixAutoUpdate;
       proxy.object.matrixWorldNeedsUpdate = true;
@@ -3539,7 +3538,6 @@ export function ModelViewer({
           onCylinderRadiusPreviewRef.current(radius, true);
           return null;
         }
-        profilePreviewBadge.hidden = false;
         renderer.domElement.dataset.e2eCylinderProxyRadius = String(radius);
         return { radius, requestedAt: proxy.requestedAt };
       }
@@ -3576,13 +3574,6 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
-    const profilePreviewBadge = hud.create('direct-edit-hud');
-    profilePreviewBadge.textContent = 'Preview · exact on release';
-    profilePreviewBadge.setAttribute('role', 'status');
-    profilePreviewBadge.setAttribute('aria-live', 'polite');
-    profilePreviewBadge.style.left = '50%';
-    profilePreviewBadge.style.top = '100px';
-    profilePreviewBadge.style.transform = 'translateX(-50%)';
     let offsetBodyProxy: {
       preview: CylinderProfilePreview;
       pending: number | null;
@@ -3633,7 +3624,6 @@ export function ModelViewer({
     function discardOffsetBodyProxy() {
       offsetBodyProxy?.preview.restore();
       offsetBodyProxy = null;
-      profilePreviewBadge.hidden = true;
       delete renderer.domElement.dataset.e2eHeightProxyOffset;
     }
     function restoreOffsetBodyProxy() {
@@ -3741,7 +3731,6 @@ export function ModelViewer({
         return;
       }
       proxy.shown = offset;
-      profilePreviewBadge.hidden = false;
       renderer.domElement.dataset.e2eHeightProxyOffset = String(offset);
       refreshShadowMap();
       return { offset, requestedAt: proxy.requestedAt };
@@ -11141,15 +11130,6 @@ export function ModelViewer({
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
-      if (!profilePreviewBadge.hidden) {
-        const text =
-          offsetHandleRef.current?.locked ||
-          cylinderRadiusHandleRef.current?.locked
-            ? 'Checking exact result…'
-            : 'Preview · exact on release';
-        if (profilePreviewBadge.textContent !== text)
-          profilePreviewBadge.textContent = text;
-      }
       updateOffsetChip();
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.
