@@ -710,6 +710,59 @@ describe('assistant integration', () => {
     expect(request.input).toHaveLength(1);
   });
 
+  it('adds Draw-sheet guidance only when the ask comes from a sheet', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const env = {
+      AI_PROVIDER: 'responses-compatible',
+      AI_API_KEY: 'key',
+      AI_BASE_URL: 'https://models.example.test/v1/responses'
+    } as const;
+    const drawing = {
+      sheetId: 'dsht_one',
+      name: 'Sheet 1',
+      units: 'mm',
+      scale: '1:1',
+      paperMm: { width: 420, height: 297 },
+      ready: true,
+      views: [],
+      annotations: []
+    };
+    await streamAssistantProposal(
+      { ...input, digest: { ...input.digest, drawing } },
+      env,
+      'user_sheet'
+    );
+    await streamAssistantProposal(input, env, 'user_model');
+    const [onSheet, onModel] = fetchMock.mock.calls.map(
+      (call) =>
+        (JSON.parse(call[1]?.body as string) as { instructions: string })
+          .instructions
+    );
+    expect(onSheet).toContain('# Dimensioning the Draw sheet');
+    expect(onSheet).toContain('Never invent a ref');
+    expect(onModel).not.toContain('# Dimensioning the Draw sheet');
+
+    // The request carries the sheet only in its expected shape.
+    expect(
+      parseAssistantProposalRequest({
+        prompt: 'Add the dimensions',
+        digest: { ...input.digest, drawing }
+      }).digest.drawing
+    ).toEqual(drawing);
+    expect(() =>
+      parseAssistantProposalRequest({
+        prompt: 'Add the dimensions',
+        digest: { ...input.digest, drawing: { ...drawing, views: [{}] } }
+      })
+    ).toThrow(/digest.drawing/);
+  });
+
   it('requests a strict streamed response from the configured model', async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>

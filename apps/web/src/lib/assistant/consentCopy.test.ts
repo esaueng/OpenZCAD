@@ -25,6 +25,7 @@ import {
  */
 const DIGEST_TYPE_FIELDS: Record<keyof CadDocumentDigest, true> = {
   bodies: true,
+  drawing: true,
   editCatalog: true,
   features: true,
   name: true,
@@ -45,7 +46,7 @@ describe('what the assistant consent copy lists (ADR-024 6-1)', () => {
   it('pins this copy version to the exact request and digest fields', () => {
     // Changing either list needs a new copy version (which asks every user
     // again): never edit a published version's entry.
-    expect(ASSISTANT_CONSENT_COPY_VERSION).toBe(1);
+    expect(ASSISTANT_CONSENT_COPY_VERSION).toBe(2);
     expect(ASSISTANT_CONSENT_FIELDS_BY_COPY_VERSION[1]).toEqual({
       request: [
         'attachments',

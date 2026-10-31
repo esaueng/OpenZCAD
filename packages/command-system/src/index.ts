@@ -259,8 +259,10 @@ import {
   validateDatumPlaneDefinition,
   validateModelingPlane
 } from '@openzcad/document-core';
+import { drawingCommandInputs } from './drawing-annotations';
 import {
   createCadDocumentDigest,
+  isDrawingOperation,
   validateCadPatchProposalAgainstDigest,
   expandEditCandidateProposal,
   unmodifiedImportedSource,
@@ -3279,6 +3281,26 @@ export function commandsForCadPatch(
   document: ProjectDocument,
   proposal: CadPatchProposal
 ): AnyCommand[] {
+  // A sheet edit (D06 slice E) never touches the model: its commands are
+  // the ones a person's picks make, run together as one undo step.
+  const drawingOperations = proposal.operations.filter(isDrawingOperation);
+  if (drawingOperations.length > 0) {
+    if (drawingOperations.length !== proposal.operations.length)
+      throw new Error(
+        'A proposal changes either the model or a drawing sheet, not both.'
+      );
+    return drawingCommandInputs(document, drawingOperations).map((input) =>
+      input.kind === 'add'
+        ? commandFactories.addDrawingAnnotation({
+            sheetId: input.sheetId,
+            annotation: input.annotation
+          })
+        : commandFactories.deleteDrawingAnnotation({
+            sheetId: input.sheetId,
+            annotationId: input.annotationId
+          })
+    );
+  }
   proposal = expandEditCandidateProposal(document, proposal);
   // Aliases share one namespace even when their targets have different types.
   // Keep this guard here too: direct typed callers need the parser's protection.
@@ -4493,6 +4515,12 @@ export function commandsForCadPatch(
           `Feature ${feature.name} does not expose an editable ${operation.field} dimension.`
         );
       }
+      case 'add_drawing_annotations':
+      case 'remove_drawing_annotations':
+        // Compiled above, before any model operation is looked at.
+        throw new Error(
+          'A proposal changes either the model or a drawing sheet, not both.'
+        );
     }
   };
 

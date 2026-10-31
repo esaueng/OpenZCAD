@@ -30,6 +30,8 @@ import {
   MAX_ASSISTANT_ATTACHMENTS,
   parseCadPatchProposal,
   type AssistantReply,
+  type CadDigestDrawing,
+  type CadDocumentDigest,
   type CadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
@@ -137,6 +139,12 @@ interface AssistantPanelProps {
   /** Decides what an unconfigured assistant tells the user to do about it. */
   signedIn?: boolean;
   selection: CadSelectionContext;
+  /**
+   * D06 slice E: the Draw sheet the user is on, read when a request is sent;
+   * null outside Draw. It is the only source of edges a drawing proposal
+   * may name.
+   */
+  drawingDigest?: () => CadDigestDrawing | null;
   onAnalyze?(
     document: ProjectDocument,
     analysis: EditAnalysisRequest
@@ -196,6 +204,13 @@ interface AssistantPanelProps {
    * A plaintext project has no gate and nothing about it changes.
    */
   consent?: AssistantConsentGate | null;
+}
+
+function withDrawing(
+  digest: CadDocumentDigest,
+  drawing: CadDigestDrawing | null
+): CadDocumentDigest {
+  return drawing ? { ...digest, drawing } : digest;
 }
 
 let entrySequence = 0;
@@ -339,6 +354,7 @@ export function AssistantPanel({
   effectiveAssistant,
   signedIn = false,
   selection,
+  drawingDigest,
   onApply,
   onPreview,
   onAnalyze,
@@ -928,7 +944,10 @@ export function AssistantPanel({
                     ) ?? ''
                 }
               : {}),
-            digest: createCadDocumentDigest(doc, selection),
+            digest: withDrawing(
+              createCadDocumentDigest(doc, selection),
+              drawingDigest?.() ?? null
+            ),
             history: historyForRequest(conversation),
             // Verified just above: this project's consent lets it through.
             ...(consentRef.current ? { consentedProjectId: doc.projectId } : {}),
@@ -989,6 +1008,7 @@ export function AssistantPanel({
       doc,
       onPreview,
       selection,
+      drawingDigest,
       findDirectSuggestion,
       ensureConsent
     ]

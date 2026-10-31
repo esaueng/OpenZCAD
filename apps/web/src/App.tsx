@@ -23,6 +23,8 @@ import {
 } from './lib/analytics';
 import {
   PROJECT_MIGRATING_CODE,
+  type DrawingAnnotation,
+  type DrawingSheetId,
   type GeometryBodyRepresentation,
   type GeometryReadyState,
   type ParameterKind,
@@ -180,6 +182,7 @@ import type {
   CadPatchProposal,
   CadSelectionContext
 } from '@openzcad/ai-contracts';
+import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
 import {
   appendRevision,
   createCheckpoint,
@@ -3197,6 +3200,19 @@ export function App() {
     (BodyIsolation & { projectId: string }) | null
   >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
+  // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
+  const [drawingPreview, setDrawingPreview] = useState<{
+    sheetId: DrawingSheetId;
+    annotations: DrawingAnnotation[];
+  } | null>(null);
+  // The sheet on screen in Draw, as the assistant reads and checks it.
+  const drawingAssistantRef = useRef<DrawingAssistantSource | null>(null);
+  const handleDrawingAssistantSource = useCallback(
+    (source: DrawingAssistantSource | null) => {
+      drawingAssistantRef.current = source;
+    },
+    []
+  );
   const [faceGeometryPreview, setFaceGeometryPreview] = useState<{
     document: ProjectDocument;
     baseProjectId: ProjectDocument['projectId'];
@@ -5252,6 +5268,8 @@ export function App() {
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
+  const drawingModeRef = useRef(drawingMode);
+  drawingModeRef.current = drawingMode;
   // Ctrl+Shift+M steps View → Tweak → Build → Draw past whatever the project
   // locks. The shortcut and the palette row that advertises it both read
   // this, so the row always names where the key goes.
@@ -8702,6 +8720,8 @@ export function App() {
       setPreviewDoc(null);
       const before = managerRef.current.document.derived.bodyRepresentations;
       let next = managerRef.current.runTransaction(label, commands);
+      // A batch of sheet edits leaves the model alone, as one does alone.
+      if (commands.every(isDrawingCommand)) geometry.retainReadyGeometry(next);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
         recordCompleteCommit(next, derived);
@@ -14721,12 +14741,22 @@ export function App() {
 
   const aiPreviewEpochRef = useRef(0);
 
+  /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
+  function isDrawingProposal(proposal: CadPatchProposal): boolean {
+    return proposal.operations.some(
+      (operation) =>
+        operation.kind === 'add_drawing_annotations' ||
+        operation.kind === 'remove_drawing_annotations'
+    );
+  }
+
   async function handlePreviewPatch(
     proposal: CadPatchProposal | null
   ): Promise<AssistantPreviewOutcome> {
     const epoch = ++aiPreviewEpochRef.current;
     if (!proposal) {
       setPreviewDoc(null);
+      setDrawingPreview(null);
       setStatus('Preview cleared.');
       return { ok: true };
     }
@@ -14734,6 +14764,38 @@ export function App() {
     if (!current) {
       return { ok: false, reason: 'No project is open to preview.' };
     }
+    if (isDrawingProposal(proposal)) {
+      setPreviewDoc(null);
+      try {
+        const { preflightDrawingPatch } =
+          await import('./lib/drawing/assistantPreflight');
+        if (epoch !== aiPreviewEpochRef.current)
+          return { ok: false, reason: 'A newer preview replaced this one.' };
+        const { sheet } = preflightDrawingPatch(
+          current,
+          proposal,
+          drawingModeRef.current ? drawingAssistantRef.current : null
+        );
+        setDrawingPreview({
+          sheetId: sheet.sheetId,
+          annotations: sheet.annotations ?? []
+        });
+        setStatus('Previewing the proposed annotations.');
+        return { ok: true };
+      } catch (error) {
+        if (epoch === aiPreviewEpochRef.current) setDrawingPreview(null);
+        const reason = errorMessage(error, 'Drawing preview failed.');
+        setStatus(reason);
+        return { ok: false, reason };
+      }
+    }
+    setDrawingPreview(null);
+    if (drawingModeRef.current)
+      return {
+        ok: false,
+        reason:
+          'In Draw the assistant edits the sheet only. Switch to Build to change the model.'
+      };
     try {
       setStatus('Checking the AI preview against exact geometry…');
       const preflight = await preflightCadPatch(
@@ -14780,7 +14842,37 @@ export function App() {
     return run;
   }
 
+  async function applyDrawingPatch(
+    proposal: CadPatchProposal
+  ): Promise<boolean> {
+    const current = managerRef.current?.document;
+    if (!current || !ensureCanEditDrawings('apply this AI proposal')) {
+      return false;
+    }
+    try {
+      const { preflightDrawingPatch } =
+        await import('./lib/drawing/assistantPreflight');
+      const live = managerRef.current?.document;
+      if (!live || live !== current)
+        throw new Error(
+          'The document changed while the proposal was checked. Review it again.'
+        );
+      const { commands } = preflightDrawingPatch(
+        current,
+        proposal,
+        drawingModeRef.current ? drawingAssistantRef.current : null
+      );
+      const applied = executeTransaction('Apply AI annotations', commands);
+      if (applied) setDrawingPreview(null);
+      return applied;
+    } catch (error) {
+      setStatus(errorMessage(error, 'Annotations could not be added.'));
+      return false;
+    }
+  }
+
   async function applyPatch(proposal: CadPatchProposal): Promise<boolean> {
+    if (isDrawingProposal(proposal)) return applyDrawingPatch(proposal);
     if (!ensureCanEdit('apply this AI proposal')) {
       return false;
     }
@@ -28198,8 +28290,12 @@ export function App() {
   // sketch would throw both away.
   // Locked in Tweak as well: the assistant authors feature edits, which is
   // exactly what Tweak promises cannot happen.
+  // Draw is the exception (D06 slice E): there it edits the sheet only,
+  // never the model, and refuses a model proposal before showing it.
   const assistantAvailable =
-    cloudFunctionsEnabled && appSettings.assistant.enabled && !modelingLocked;
+    cloudFunctionsEnabled &&
+    appSettings.assistant.enabled &&
+    (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
   const baseToolCard = toolCardFor(interaction);
@@ -30429,6 +30525,11 @@ export function App() {
               signedIn={Boolean(session)}
               document={doc}
               selection={assistantSelection}
+              drawingDigest={() =>
+                drawingMode
+                  ? (drawingAssistantRef.current?.digest() ?? null)
+                  : null
+              }
               onApply={handleApplyPatch}
               onPreview={handlePreviewPatch}
               onAnalyze={async (document, analysis) =>
@@ -30474,6 +30575,8 @@ export function App() {
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message) => setStatus(message)}
+                onAssistantSource={handleDrawingAssistantSource}
+                previewAnnotations={drawingPreview}
               />
             </Suspense>
           </ErrorBoundary>

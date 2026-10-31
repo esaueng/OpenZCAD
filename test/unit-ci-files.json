@@ -1,5 +1,6 @@
 {
   "root": [
+    "packages/ai-contracts/src/drawing-annotations.test.ts",
     "packages/command-system/src/ai-modeling-operations.test.ts",
     "packages/crypto/src/account-records.test.ts",
     "packages/crypto/src/assistant-consent.test.ts",
@@ -51,6 +52,7 @@
     "test/deployment-config-validator.test.ts",
     "test/desktop-release-privacy.test.ts",
     "test/document-core.test.ts",
+    "test/drawing-assistant-operations.test.ts",
     "test/e2e-shards.test.ts",
     "test/e2ee-authority-fork.test.ts",
     "test/e2ee-authority-trust.test.ts",
@@ -107,6 +109,7 @@
     "src/components/StartScreen.test.tsx",
     "src/components/TopBar.test.tsx",
     "src/components/WorkspaceLoading.test.tsx",
+    "src/components/assistant/AssistantPanel.drawing.test.tsx",
     "src/hooks/useProjectView.test.tsx",
     "src/hooks/useScrollMemory.test.tsx",
     "src/lib/accountConflictRecovery.test.ts",

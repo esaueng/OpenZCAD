@@ -142,6 +142,10 @@ import {
   sheetBodyIds
 } from '../lib/drawing/sheetSources';
 import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
+import {
+  drawingAssistantDigest,
+  type DrawingAssistantSource
+} from '../lib/drawing/assistantContext';
 import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
 
 /**
@@ -197,6 +201,19 @@ export interface DrawingWorkspaceProps {
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
   onStatus: (message: string) => void;
+  /**
+   * D06: the sheet on screen as the assistant reads it, or null when there
+   * is none. Called whenever what it measures changes.
+   */
+  onAssistantSource?: (source: DrawingAssistantSource | null) => void;
+  /**
+   * An assistant proposal's annotations for one sheet, drawn in place of
+   * the sheet's own while the proposal is previewed.
+   */
+  previewAnnotations?: {
+    sheetId: DrawingSheetId;
+    annotations: DrawingAnnotation[];
+  } | null;
 }
 
 type SheetStatus =
@@ -1290,6 +1307,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const shownSheet = useMemo(() => {
     if (!sheet) return sheet;
     let shown = sheet;
+    const preview = props.previewAnnotations;
+    if (preview && preview.sheetId === sheet.sheetId)
+      shown = { ...shown, annotations: preview.annotations };
     if (liveDrag)
       shown = updateDrawingView(
         { ...document, drawings: { sheets: [sheet] } },
@@ -1309,7 +1329,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         )
       };
     return shown;
-  }, [sheet, liveDrag, liveAnnotationDrag, document]);
+  }, [sheet, liveDrag, liveAnnotationDrag, document, props.previewAnnotations]);
   const drawnViews: ComposedView[] = useMemo(
     () =>
       shownSheet
@@ -1376,6 +1396,47 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
   const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
+  // The assistant reads the sheet's own annotations, never a preview's, and
+  // only once every view is drawn: a partial sheet lists partial edges.
+  const { onAssistantSource } = props;
+  const assistantReady =
+    sheetReady &&
+    sheet !== null &&
+    drawnViews.length === sheet.views.length &&
+    !props.geometryPending;
+  useEffect(() => {
+    if (!onAssistantSource) return;
+    if (!sheet) {
+      onAssistantSource(null);
+      return;
+    }
+    let digest: ReturnType<typeof drawingAssistantDigest> | null = null;
+    onAssistantSource({
+      sheetId: sheet.sheetId,
+      ready: assistantReady,
+      bodies: drawBodies,
+      units: document.units,
+      digest: () =>
+        (digest ??= drawingAssistantDigest({
+          sheet,
+          views: drawnViews,
+          bodies: drawBodies,
+          units: document.units,
+          ready: assistantReady
+        }))
+    });
+  }, [
+    onAssistantSource,
+    sheet,
+    drawnViews,
+    drawBodies,
+    document.units,
+    assistantReady
+  ]);
+  useEffect(
+    () => () => onAssistantSource?.(null),
+    [onAssistantSource]
+  );
   /** Drawn from an earlier model than the document's: Update redraws it. */
   const outdated =
     status?.kind === 'stale' ||
