@@ -1672,6 +1672,7 @@ import {
   type WorkspaceMode,
   WORKSPACE_MODE_ORDER
 } from './lib/panelState';
+import { recordRecentTool } from './lib/toolRail';
 import {
   applyPreset,
   closePanel,
@@ -28598,9 +28599,29 @@ export function App() {
         }
         activeTool={tool ?? inPlace.tool}
         availability={shownAvailability}
-        onLaunchTool={launchTool}
+        onLaunchTool={(nextTool) => {
+          // The rail's suggestions lead with what the hand last reached for.
+          setPanelState((current) => ({
+            ...current,
+            recentTools: recordRecentTool(current.recentTools, nextTool)
+          }));
+          launchTool(nextTool);
+        }}
         pick={railPick}
         pickSummary={commandContextLabel(commandSelection) ?? ''}
+        pinnedTools={panelState.pinnedTools}
+        onPinnedToolsChange={(pinnedTools) =>
+          setPanelState((current) => ({ ...current, pinnedTools }))
+        }
+        recentTools={panelState.recentTools}
+        drawerFilter={panelState.toolDrawerFilter}
+        onDrawerFilterChange={(toolDrawerFilter) =>
+          setPanelState((current) => ({ ...current, toolDrawerFilter }))
+        }
+        drawerView={panelState.toolDrawerView}
+        onDrawerViewChange={(toolDrawerView) =>
+          setPanelState((current) => ({ ...current, toolDrawerView }))
+        }
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and

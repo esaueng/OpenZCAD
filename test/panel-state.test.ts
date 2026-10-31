@@ -72,6 +72,62 @@ describe('workspace panel state', () => {
     expect(loadPanelState().commandFoldOpen).toBe(true);
   });
 
+  it('pins the rail’s original tools to begin with and remembers a rearrangement', () => {
+    expect(defaultPanelState().pinnedTools).toEqual([
+      'sketch',
+      'extrude',
+      'box',
+      'cylinder',
+      'fillet',
+      'hole',
+      'transform',
+      'union'
+    ]);
+    // Unknown and repeated ids drop out; an emptied rail stays empty.
+    expect(
+      normalizePanelState({ pinnedTools: ['gear', 'warp', 'gear', 'box'] })
+        .pinnedTools
+    ).toEqual(['gear', 'box']);
+    expect(normalizePanelState({ pinnedTools: [] }).pinnedTools).toEqual([]);
+    expect(normalizePanelState({ pinnedTools: 'gear' }).pinnedTools).toEqual(
+      defaultPanelState().pinnedTools
+    );
+    savePanelState({
+      ...defaultPanelState(),
+      pinnedTools: ['hole', 'sketch'],
+      recentTools: ['chamfer']
+    });
+    expect(loadPanelState()).toMatchObject({
+      pinnedTools: ['hole', 'sketch'],
+      recentTools: ['chamfer']
+    });
+  });
+
+  it('lists the tools that fit in the drawer until all are asked for', () => {
+    expect(defaultPanelState().toolDrawerFilter).toBe('fits');
+    expect(
+      normalizePanelState({ toolDrawerFilter: 'all' }).toolDrawerFilter
+    ).toBe('all');
+    expect(
+      normalizePanelState({ toolDrawerFilter: 'some' }).toolDrawerFilter
+    ).toBe('fits');
+  });
+
+  it('opens the drawer simple until the advanced view is chosen', () => {
+    expect(defaultPanelState().toolDrawerView).toBe('simple');
+    expect(
+      normalizePanelState({ toolDrawerView: 'advanced' }).toolDrawerView
+    ).toBe('advanced');
+    expect(normalizePanelState({ toolDrawerView: 'pro' }).toolDrawerView).toBe(
+      'simple'
+    );
+  });
+
+  it('returns independent pin lists', () => {
+    defaultPanelState().pinnedTools.push('gear');
+    expect(defaultPanelState().pinnedTools).not.toContain('gear');
+  });
+
   it('remembers the sketch palette flyout across sketch sessions', () => {
     expect(defaultPanelState().sketchPaletteOpen).toBe(false);
     expect(
