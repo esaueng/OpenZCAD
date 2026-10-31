@@ -122,9 +122,10 @@ export function featureValueSummary(
       if (data.gearType === 'worm-wheel') {
         const starts =
           data.mateTeeth === undefined ? null : num(data.mateTeeth);
+        const wheel = data.throated ? 'throated worm wheel' : 'worm wheel';
         return starts === null
-          ? `${teeth} teeth, worm wheel`
-          : `${teeth} teeth, worm wheel for ${starts}-start worm`;
+          ? `${teeth} teeth, ${wheel}`
+          : `${teeth} teeth, ${wheel} for ${starts}-start worm`;
       }
       if (data.gearType === 'bevel') {
         const mate = data.mateTeeth === undefined ? null : num(data.mateTeeth);

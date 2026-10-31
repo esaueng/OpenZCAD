@@ -170,8 +170,10 @@ test('reorders under Last edited and keeps the arrangement', async ({
   await expect
     .poll(() => cardOrder(page))
     .toEqual([names[1], names[2], names[0]]);
-  // A hand arrangement is a custom order, so the shelf now shows that.
+  // A hand arrangement is a custom order, so the shelf now shows that. The
+  // sort menu says so on its own: no notice pushes the grid down.
   await expect(sort).toHaveValue('custom');
+  await expect(page.getByText(/Now sorted by/)).toHaveCount(0);
 });
 
 test('Escape puts a dragged card back', async ({ page }) => {

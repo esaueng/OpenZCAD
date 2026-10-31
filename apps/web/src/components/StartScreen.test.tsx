@@ -66,6 +66,7 @@ function renderStartScreen(
 afterEach(() => {
   sessionStorage.removeItem('openzcad.start.view');
   sessionStorage.removeItem('openzcad.start.scroll');
+  sessionStorage.removeItem('openzcad.start.draft');
 });
 
 describe('StartScreen properties', () => {
@@ -208,7 +209,7 @@ describe('StartScreen new part suggestion', () => {
     expect(input).not.toHaveValue('New Part');
   });
 
-  it('generates a new suggestion for each fresh mount', () => {
+  it('retains the suggestion on remount and generates a new one after creation', () => {
     let sample = 0;
     const getRandomValues = vi
       .spyOn(globalThis.crypto, 'getRandomValues')
@@ -224,8 +225,13 @@ describe('StartScreen new part suggestion', () => {
     const firstName =
       screen.getByLabelText<HTMLInputElement>('Project name').value;
     first.unmount();
-    renderStartScreen();
+    const second = renderStartScreen();
 
+    expect(screen.getByLabelText('Project name')).toHaveValue(firstName);
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(sessionStorage.getItem('openzcad.start.draft')).toBeNull();
+    second.unmount();
+    renderStartScreen();
     expect(screen.getByLabelText('Project name')).not.toHaveValue(firstName);
     getRandomValues.mockRestore();
   });
@@ -459,6 +465,109 @@ describe('StartScreen shelf wording', () => {
 });
 
 describe('StartScreen library discovery', () => {
+  it('keeps local cards hidden until the account folder scope is known', () => {
+    const key = 'openzcad.library.folders.v1:reload-user';
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        folders: [
+          {
+            id: 'fixtures',
+            name: 'Fixtures',
+            projectIds: [localProject.projectId],
+            pinned: true,
+            createdAt: '2026-10-30T12:00:00Z'
+          }
+        ]
+      })
+    );
+    const props = startScreenProps({
+      loading: true,
+      busy: true,
+      scopePending: true
+    });
+    const { container, rerender } = render(<StartScreen {...props} />);
+    expect(
+      container.querySelector('.start-tile-project:not(.start-tile-folder)')
+    ).toBeNull();
+    rerender(
+      <StartScreen
+        {...props}
+        scopePending={false}
+        folderAccountId="reload-user"
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 1 project' })
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('.start-tile-project:not(.start-tile-folder)')
+    ).toBeNull();
+    localStorage.removeItem(key);
+  });
+
+  it.each(['custom', 'edited', 'name'])(
+    'reserves folder tiles rather than their hidden members with %s sorting',
+    (sort) => {
+      sessionStorage.setItem('openzcad.start.view', JSON.stringify({ sort }));
+      const key = 'openzcad.library.folders.v1:device';
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          folders: [
+            {
+              id: 'fixtures',
+              name: 'Fixtures',
+              projectIds: [localProject.projectId, 'second'],
+              pinned: true,
+              createdAt: '2026-10-30T12:00:00Z'
+            }
+          ]
+        })
+      );
+      const { unmount } = renderStartScreen({
+        projects: [
+          localProject,
+          { ...localProject, projectId: toProjectId('second') },
+          { ...localProject, projectId: toProjectId('loose') }
+        ]
+      });
+      unmount();
+      const { container } = renderStartScreen({
+        projects: [],
+        loading: true,
+        busy: true
+      });
+      expect(
+        container.querySelectorAll('.start-tile-placeholder')
+      ).toHaveLength(2);
+      expect(
+        [...container.querySelectorAll('.start-shelf-group')].map(
+          (el) => el.textContent
+        )
+      ).toEqual(['Pinned…', 'Projects…']);
+      localStorage.removeItem(key);
+    }
+  );
+
+  it('restores the unfinished project name and units on reload without adopting a later default', () => {
+    const { unmount } = renderStartScreen();
+    fireEvent.change(screen.getByLabelText('Project name'), {
+      target: { value: 'My unfinished bracket' }
+    });
+    fireEvent.change(screen.getByLabelText('Units'), {
+      target: { value: 'inch' }
+    });
+    unmount();
+    const { rerender } = renderStartScreen({ defaultUnits: 'mm' });
+    expect(screen.getByLabelText('Project name')).toHaveValue(
+      'My unfinished bracket'
+    );
+    expect(screen.getByLabelText('Units')).toHaveValue('inch');
+    rerender(<StartScreen {...startScreenProps({ defaultUnits: 'cm' })} />);
+    expect(screen.getByLabelText('Units')).toHaveValue('inch');
+  });
+
   it.each(['grid', 'list'])(
     'keeps a known-empty %s shelf empty while discovery is pending',
     (layout) => {
@@ -774,7 +883,9 @@ describe('StartScreen library shell', () => {
     // say "1 / 2 saved" and "1 project is on this device only" one above
     // the other.
     const card = screen.getByRole('complementary', { name: 'Cloud sync' });
-    expect(within(card).getByText('1 project not saved')).toBeInTheDocument();
+    expect(
+      within(card).getByText('1 project saved on this device only')
+    ).toBeInTheDocument();
     expect(
       screen.getAllByRole('button', { name: /to my account/ })
     ).toHaveLength(1);
@@ -789,7 +900,9 @@ describe('StartScreen library shell', () => {
       cloudProjectIds: new Set([localProject.projectId])
     });
 
-    expect(screen.getByText('1 project saved')).toBeInTheDocument();
+    expect(
+      screen.getByText('1 project saved to your account')
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /to my account/ })).toBeNull();
   });
 

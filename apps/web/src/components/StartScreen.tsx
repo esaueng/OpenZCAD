@@ -63,7 +63,11 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { generateCutePartName } from '../lib/cutePartName';
-import { readLibraryLayout, saveLibraryLayout } from '../lib/libraryLayout';
+import {
+  readLibraryLayout,
+  saveLibraryLayout,
+  type LibraryLayout
+} from '../lib/libraryLayout';
 import {
   createFolder,
   deleteFolder,
@@ -116,6 +120,10 @@ interface StartScreenProps {
   busy: boolean;
   /** Discovery is pending; an empty array and absent session are not results. */
   loading?: boolean;
+  /** Account identity is still unknown; do not present an ungrouped device shelf. */
+  scopePending?: boolean;
+  /** Verified startup identity, available before account project discovery finishes. */
+  folderAccountId?: string | null;
   demos: DemoDefinition[];
   defaultUnits: UnitSystem;
   /** The grid's card size (Settings › Appearance); small is the original. */
@@ -235,6 +243,23 @@ function writeShelfLayout(layout: ShelfLayout) {
 }
 
 const LIBRARY_VIEW_KEY = 'openzcad.start.view';
+const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
+
+function readLibraryDraft(): { name: string; units: UnitSystem } | null {
+  try {
+    const stored: unknown = JSON.parse(
+      sessionStorage.getItem(LIBRARY_DRAFT_KEY) ?? 'null'
+    );
+    if (!stored || typeof stored !== 'object') return null;
+    const { name, units } = stored as Record<string, unknown>;
+    return typeof name === 'string' &&
+      (units === 'mm' || units === 'cm' || units === 'm' || units === 'inch')
+      ? { name, units }
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 interface LibraryView {
   shelf: ProjectStatus;
@@ -443,12 +468,14 @@ interface CloudSentence {
 }
 
 export function StartScreen({
-  projects,
+  projects: discoveredProjects,
   status,
   onReloadForUpdate,
   onReloadForLoadFailure,
   busy,
   loading = false,
+  scopePending = false,
+  folderAccountId,
   demos,
   defaultUnits,
   cardSize = 'small',
@@ -482,9 +509,26 @@ export function StartScreen({
   thumbnailAccountId,
   publishThumbnail
 }: StartScreenProps) {
+  const projects = scopePending ? [] : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
-  const [name, setName] = useState(generateCutePartName);
-  const [units, setUnits] = useState<UnitSystem>(defaultUnits);
+  const [initialDraft] = useState(readLibraryDraft);
+  const [name, setName] = useState(
+    () => initialDraft?.name ?? generateCutePartName()
+  );
+  const [units, setUnits] = useState<UnitSystem>(
+    initialDraft?.units ?? defaultUnits
+  );
+  const unitsEdited = useRef(initialDraft !== null);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        LIBRARY_DRAFT_KEY,
+        JSON.stringify({ name, units })
+      );
+    } catch {
+      // Draft persistence is optional when browser storage is unavailable.
+    }
+  }, [name, units]);
   const [initialView] = useState(readLibraryView);
   const [query, setQuery] = useState(initialView.query);
   const [shelf, setShelf] = useState<ProjectStatus>(initialView.shelf);
@@ -496,7 +540,9 @@ export function StartScreen({
   useEffect(() => {
     writeLibraryView({ shelf, filter, sort, query, folder: openFolderId });
   }, [shelf, filter, sort, query, openFolderId]);
-  const [folderState, updateFolders] = useLibraryFolders(thumbnailAccountId);
+  const [folderState, updateFolders] = useLibraryFolders(
+    folderAccountId === undefined ? thumbnailAccountId : folderAccountId
+  );
   useLibraryFolderCloudSync(thumbnailAccountId, folderState);
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
@@ -563,7 +609,7 @@ export function StartScreen({
   const canCreate = !busy && trimmedName.length > 0 && !nameTooLong;
 
   useEffect(() => {
-    setUnits(defaultUnits);
+    if (!unitsEdited.current) setUnits(defaultUnits);
   }, [defaultUnits]);
 
   // A tile menu is a transient overlay: any click that is not inside it, and
@@ -678,7 +724,7 @@ export function StartScreen({
   // Folders live on the Projects shelf. A project in one is shown inside it, not
   // loose on the shelf; a folder left open in a view that no longer has it
   // (ungrouped in another tab, say) reads as no folder.
-  const folders = folderState.folders;
+  const folders = scopePending ? [] : folderState.folders;
   const folderByProject = new Map<string, LibraryFolder>();
   for (const folder of folders) {
     for (const projectId of folder.projectIds) {
@@ -829,11 +875,9 @@ export function StartScreen({
    * ones (a folder orders its own projects).
    */
   function commitOrder(ids: string[], moved?: { id: string; group: string }) {
-    if (sort !== 'custom') {
-      // A hand arrangement is a custom order: keep showing it as placed.
-      setSort('custom');
-      setNotice('Now sorted by Custom order, so your arrangement stays.');
-    }
+    // A hand arrangement is a custom order: keep showing it as placed. The
+    // sort menu already reads "Custom order", so no notice repeats it.
+    if (sort !== 'custom') setSort('custom');
     if (openFolder) {
       updateFolders((state) => reorderFolderMembers(state, openFolder.id, ids));
       return;
@@ -2208,21 +2252,21 @@ export function StartScreen({
       item.project && recoveryCounts.has(item.project.name) ? [index] : []
     )
     .join(',');
+  const groupLayout = JSON.stringify(
+    shelfGroups.map((group) => ({
+      label: group.label,
+      count: group.items.length
+    }))
+  );
   useEffect(() => {
-    if (
-      loading ||
-      !filterable ||
-      activeFilter !== 'all' ||
-      search ||
-      sort !== 'custom'
-    )
-      return;
+    if (loading) return;
     saveLibraryLayout({
       all,
       pinned,
       attention,
       local,
-      footers: footerPositions ? footerPositions.split(',').map(Number) : []
+      footers: footerPositions ? footerPositions.split(',').map(Number) : [],
+      groups: JSON.parse(groupLayout) as LibraryLayout['groups']
     });
   }, [
     loading,
@@ -2234,13 +2278,22 @@ export function StartScreen({
     pinned,
     attention,
     local,
-    footerPositions
+    footerPositions,
+    groupLayout
   ]);
 
   // Matches the loaded shelf: an all-pinned shelf still heads its cards
   // with Pinned, and its empty Projects group shows only mid-drag.
-  const loadingGroups =
-    previousLayout && previousLayout.pinned > 0
+  const loadingGroups = previousLayout?.groups
+    ? previousLayout.groups
+        .map((group, index, groups) => ({
+          ...group,
+          offset: groups
+            .slice(0, index)
+            .reduce((sum, entry) => sum + entry.count, 0)
+        }))
+        .filter((group) => group.count > 0)
+    : previousLayout && previousLayout.pinned > 0
       ? [
           { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
           {
@@ -2262,6 +2315,11 @@ export function StartScreen({
 
   function createPart() {
     if (canCreate) {
+      try {
+        sessionStorage.removeItem(LIBRARY_DRAFT_KEY);
+      } catch {
+        /* optional */
+      }
       onCreate(trimmedName, units);
     }
   }
@@ -2373,7 +2431,7 @@ export function StartScreen({
       return {
         tone: 'warning',
         Icon: CloudAlert,
-        text: `${count} ${count === 1 ? 'project' : 'projects'} not saved`,
+        text: `${count} ${count === 1 ? 'project' : 'projects'} saved on this device only`,
         title: `${savedToAccountCount} of ${accountableProjects.length} projects are in your account; ${count === 1 ? 'one is' : `${count} are`} on this device only.`,
         progress: {
           saved: savedToAccountCount / accountableProjects.length,
@@ -2398,8 +2456,8 @@ export function StartScreen({
         saved === 0
           ? 'Signed in'
           : saved === 1
-            ? '1 project saved'
-            : `All ${saved} projects saved`
+            ? '1 project saved to your account'
+            : `All ${saved} projects saved to your account`
     };
   }
 
@@ -2501,7 +2559,10 @@ export function StartScreen({
               value={units}
               // Kept for the narrow layout, which hides the visible label.
               aria-label="Units"
-              onChange={(event) => setUnits(event.target.value as UnitSystem)}
+              onChange={(event) => {
+                unitsEdited.current = true;
+                setUnits(event.target.value as UnitSystem);
+              }}
             >
               <option value="mm">mm</option>
               <option value="cm">cm</option>

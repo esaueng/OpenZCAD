@@ -1982,6 +1982,22 @@ const GEAR_HELIX_OPTION: OptionSpec = {
   when: (state) => gearTwists(state) && (state.numbers.helixAngleDeg ?? 0) > 0
 };
 
+/** A worm wheel's blank; read only on a worm wheel. */
+const GEAR_THROAT_OPTION: OptionSpec = {
+  id: 'throat',
+  label: 'Throat',
+  choices: [
+    { value: 'plain', label: 'Plain' },
+    {
+      value: 'throated',
+      label: 'Throated',
+      note: 'The tips wrap the worm across the middle of the face'
+    }
+  ],
+  initial: 'plain',
+  when: (state) => state.options.gearType === 'worm-wheel'
+};
+
 /** Optional tooth-form fields: stored once set, else the kernel default. */
 const GEAR_FORM_FIELDS = [
   'pressureAngleDeg',
@@ -2163,6 +2179,19 @@ const gear: InPlaceToolSpec = {
       suffix: 'q',
       note: 'The worm’s pitch diameter over its module',
       when: (state) => gearIsWorm(state)
+    },
+    {
+      // 0 leaves a throated wheel's outside diameter to the kernel default.
+      id: 'outsideDiameter',
+      label: 'Outside diameter',
+      unit: 'length',
+      initial: 0,
+      min: 0,
+      inOptions: true,
+      note: 'Across the tips either side of the throat; 0 is the kernel’s default',
+      when: (state) =>
+        state.options.gearType === 'worm-wheel' &&
+        state.options.throat === 'throated'
     }
   ],
   layout: [
@@ -2176,7 +2205,9 @@ const gear: InPlaceToolSpec = {
         'circularPitch',
         'diametralPitch',
         'faceWidth',
-        'diameterFactor'
+        'diameterFactor',
+        'throat',
+        'outsideDiameter'
       ]
     },
     { label: 'Mate', items: ['mateTeeth', 'shaftAngleDeg'] },
@@ -2225,7 +2256,8 @@ const gear: InPlaceToolSpec = {
     },
     GEAR_SIZING_OPTION,
     GEAR_HAND_OPTION,
-    GEAR_HELIX_OPTION
+    GEAR_HELIX_OPTION,
+    GEAR_THROAT_OPTION
   ],
   defaults(_slots, _ctx, numbers): Record<string, number> {
     // A rim that clears an internal gear's roots with four modules to spare.
@@ -2304,6 +2336,9 @@ const gear: InPlaceToolSpec = {
       } = toothFields;
       const savedGear = ctx.saved?.featureKind === 'gear' ? ctx.saved : null;
       const starts = values.starts ?? 1;
+      const throated =
+        gearType === 'worm-wheel' && options.throat === 'throated';
+      const outside = numbers?.outsideDiameter ?? 0;
       return {
         tool: 'gear',
         gear: {
@@ -2313,6 +2348,14 @@ const gear: InPlaceToolSpec = {
             ? { teeth: starts }
             : { teeth, mateTeeth: starts }),
           diameterFactor: values.diameterFactor ?? 10,
+          ...(throated
+            ? {
+                throated: true,
+                ...(outside > 0
+                  ? { outsideDiameter: values.outsideDiameter ?? outside }
+                  : {})
+              }
+            : {}),
           ...(options.hand === 'left' || savedGear?.hand !== undefined
             ? {
                 hand:

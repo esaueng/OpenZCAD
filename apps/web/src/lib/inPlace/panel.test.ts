@@ -116,6 +116,15 @@ describe('in-place Options panel', () => {
     expect(worm).not.toContain('teeth');
     expect(worm).not.toContain('helixAngleDeg');
     expect(worm).not.toContain('helix');
+    expect(worm).not.toContain('throat');
+
+    // A wheel's throat, and its outside diameter only once it is throated.
+    const wheel = rowIds(gearPanel({ gearType: 'worm-wheel' })).flat();
+    expect(wheel).toContain('throat');
+    expect(wheel).not.toContain('outsideDiameter');
+    expect(
+      rowIds(gearPanel({ gearType: 'worm-wheel', throat: 'throated' })).flat()
+    ).toContain('outsideDiameter');
   });
 
   it('shows the pitch the sizing reads, and only that one', () => {

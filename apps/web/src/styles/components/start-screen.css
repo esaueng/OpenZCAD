@@ -1361,6 +1361,14 @@
 
 /* A part that renders to nothing keeps the same placeholder as one with no
    preview yet, captioned rather than swapped for a line of text. */
+.start-tile-thumb-loading {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--color-surface-2);
+  opacity: 0.25;
+}
+
 .start-tile-thumb-empty {
   position: absolute;
   inset-inline: var(--sp-2);

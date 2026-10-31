@@ -186,7 +186,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // would send the kernel a gear kind it has no builder for, so it must refuse.
 // v42 adds M14 worms and worm wheels (`gearType: 'worm' | 'worm-wheel'`,
 // `diameterFactor`), refused by older clients for the same reason.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 42 as const;
+// v43 adds M14 throated worm wheels (`throated`, `outsideDiameter`); an older
+// client would build a plain wheel in their place, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 43 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1884,6 +1886,20 @@ export type FeatureData =
        * lines as a hobbed throated wheel would.
        */
       diameterFactor?: ParamValue;
+      /**
+       * Worm wheels (schema v43): build the wheel on a throated blank. Across
+       * the throat, centred on the face width where the worm sits, its tips
+       * follow the torus about the worm's axis that keeps the worm's root
+       * clearance; either side they stand at `outsideDiameter`. The flanks
+       * stay the crossed helical wheel's, so contact is still at points.
+       * Absent is a plain (cylindrical-tip) wheel.
+       */
+      throated?: boolean;
+      /**
+       * Throated worm wheels: the outside diameter beside the throat; absent
+       * is the throat diameter plus one module.
+       */
+      outsideDiameter?: ParamValue;
       /** New bodies: placement, see above. */
       origin?: ParametricVector3;
       axis?: ParametricVector3;

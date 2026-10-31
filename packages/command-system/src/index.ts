@@ -1163,6 +1163,22 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
   } else if (input.diameterFactor !== undefined) {
     throw new Error('Only a worm or worm wheel takes a diameter factor.');
   }
+  if (input.throated !== undefined) {
+    if (typeof input.throated !== 'boolean') {
+      throw new Error('Gear throated must be true or false.');
+    }
+    if (input.throated && !wormWheel) {
+      throw new Error('Only a worm wheel can be throated.');
+    }
+  }
+  if (input.outsideDiameter !== undefined) {
+    if (input.throated !== true) {
+      throw new Error('Only a throated worm wheel takes an outside diameter.');
+    }
+    // Whether it clears the tips and stays inside the throat torus is the
+    // kernel's check, which needs the worm's dimensions.
+    positive('outside diameter', input.outsideDiameter);
+  }
   if (bevel) {
     if (input.mateTeeth === undefined) {
       throw new Error('A bevel gear needs its mate’s tooth count.');

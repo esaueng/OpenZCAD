@@ -1478,8 +1478,11 @@ import {
   retainPendingShelfOrder,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
-  resolveShelfThumbnail
+  resolveShelfThumbnail,
+  cachedThumbnailSource
 } from './lib/projectShelf';
+import { preparePartThumbnails } from './components/PartThumbnail';
+import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
   cachedShelfNames,
@@ -2627,6 +2630,9 @@ export function App() {
     useState(false);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [startupLibraryAccountId, setStartupLibraryAccountId] = useState<
+    string | null | undefined
+  >(undefined);
   // Shelf writes (pin, reorder, shelf moves) run one at a time, each built
   // from the rows the writes before it left, so two quick drags (or a drag
   // right after a pin) cannot rebuild a row from a stale snapshot and undo
@@ -6223,17 +6229,32 @@ export function App() {
           getKeySessionRevision() === keySessionRevision;
         const verifiedMetadata = new Map<string, ProjectSummary>();
         const local = listLocalProjects();
-        // Cards already stored on this device need neither cloud discovery nor
-        // decryption. Keep actions gated until account discovery settles.
-        void local.then(
-          (projects) => {
-            if (isCurrent() && !startupProjectId) {
-              setProjects(projects);
-              mark('startup.localLibrary.ready');
-            }
-          },
-          () => undefined
-        );
+        let listingPublished = false;
+        const prepareLibrary = async (
+          projects: ProjectSummary[],
+          accountId: string | null
+        ) => {
+          const folders = readLibraryFolders(
+            folderStorageKey(accountId)
+          ).folders;
+          const covers = new Set(
+            folders.map(
+              (folder) => folder.coverProjectId ?? folder.projectIds[0]
+            )
+          );
+          await preparePartThumbnails(
+            [
+              ...projects.filter((project) => covers.has(project.projectId)),
+              ...projects
+            ],
+            accountId,
+            async (project) =>
+              cachedThumbnailSource(
+                await loadProjectThumbnail(project.projectId).catch(() => null),
+                project
+              )
+          );
+        };
         void (
           bootCloudFunctionsEnabledRef.current
             ? api.health().catch(() => null)
@@ -6272,6 +6293,18 @@ export function App() {
           sessionPromise
         ]);
         if (!isCurrent()) return;
+        // Local cards and their account-scoped folders arrive together. Account
+        // listing/decryption still proceeds progressively, with actions gated.
+        void local
+          .then(async (projects) => {
+            if (startupProjectId) return;
+            await prepareLibrary(projects, activeSession?.userId ?? null);
+            if (!isCurrent() || listingPublished) return;
+            setStartupLibraryAccountId(activeSession?.userId ?? null);
+            setProjects(projects);
+            mark('startup.localLibrary.ready');
+          })
+          .catch(() => undefined);
         const progress: ProjectListingProgress = {
           isCurrent,
           onVerified(project) {
@@ -6382,19 +6415,18 @@ export function App() {
           accountDocumentNeedsRepair && startupProjectId
             ? startupProjectId
             : null;
-        void collaborationPromise.then((capabilities) => {
-          if (
-            isCurrent() &&
-            sessionRef.current?.userId === activeSession?.userId
-          )
-            setCollaborationRollout(capabilities);
-        });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
             rememberedRemote.version
           );
         }
+        if (!startupProjectId) {
+          await prepareLibrary(merged, activeSession?.userId ?? null);
+          if (!isCurrent()) return;
+        }
+        listingPublished = true;
+        setStartupLibraryAccountId(activeSession?.userId ?? null);
         setProjects(merged);
         setCloudProjectIds(listed.cloudProjectIds);
         setAccountProjectListReached(listed.remoteReached);
@@ -6405,6 +6437,13 @@ export function App() {
           sessionRef.current = activeSession;
           setSession(activeSession);
         }
+        void collaborationPromise.then((capabilities) => {
+          if (
+            isCurrent() &&
+            sessionRef.current?.userId === activeSession?.userId
+          )
+            setCollaborationRollout(capabilities);
+        });
         void remoteSettingsPromise.then((remoteSettings) => {
           if (
             !remoteSettings ||
@@ -27389,6 +27428,15 @@ export function App() {
           // at commit and must not strand the shelf disabled mid-import.
           busy={startupState !== 'ready'}
           loading={startupState === 'loading-library'}
+          scopePending={
+            startupState === 'loading-library' &&
+            startupLibraryAccountId === undefined
+          }
+          folderAccountId={
+            startupState === 'loading-library'
+              ? startupLibraryAccountId
+              : (thumbnailAccountUserId ?? null)
+          }
           demos={START_SCREEN_DEMOS}
           defaultUnits={appSettings.general.defaultUnits}
           cardSize={appSettings.appearance.libraryCardSize}
@@ -28839,6 +28887,7 @@ export function App() {
                   : 'unavailable'
           }
           collaborationStatus={collaboration.status}
+          collaborationFailure={collaboration.failureReason}
           collaboratorCount={collaboration.members.length}
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
