@@ -1065,6 +1065,8 @@ const MAX_GEAR_HELIX_DEG = 45;
 const MIN_BEVEL_TEETH = 4;
 /** M14: the most thread starts the kernel's worm generator builds. */
 const MAX_WORM_STARTS = 10;
+/** M14: the fewest wheel teeth an enveloping worm is built for. */
+const MIN_ENVELOPED_TEETH = 10;
 
 /**
  * Structural checks for a gear feature. Whether the tooth form is buildable
@@ -1089,6 +1091,8 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
   const bevel = input.gearType === 'bevel';
   const worm = input.gearType === 'worm';
   const wormWheel = input.gearType === 'worm-wheel';
+  const enveloping = input.gearType === 'enveloping-worm';
+  const envelopingWheel = input.gearType === 'enveloping-wheel';
   const toothCount = (
     label: string,
     param: ParamValue,
@@ -1107,7 +1111,7 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     }
     return count;
   };
-  if (worm) {
+  if (worm || enveloping) {
     toothCount('starts', input.teeth, 1, MAX_WORM_STARTS);
   } else {
     toothCount(
@@ -1119,7 +1123,9 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
           ? 1
           : bevel
             ? MIN_BEVEL_TEETH
-            : 3
+            : envelopingWheel
+              ? MIN_ENVELOPED_TEETH
+              : 3
     );
   }
   if (worm || wormWheel) {
@@ -1160,8 +1166,88 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
         throw new Error(`A ${kind} takes no ${label}.`);
       }
     }
+  } else if (enveloping) {
+    if (input.mateTeeth === undefined) {
+      throw new Error('An enveloping worm needs its wheel’s tooth count.');
+    }
+    const wheel = toothCount(
+      'wheel teeth',
+      input.mateTeeth,
+      MIN_ENVELOPED_TEETH
+    );
+    if (wheel < 2 * value('starts', input.teeth)) {
+      throw new Error(
+        'An enveloping worm’s wheel needs at least two teeth per start.'
+      );
+    }
+    if (input.diameterFactor === undefined) {
+      throw new Error('An enveloping worm needs its diameter factor.');
+    }
+    positive('diameter factor', input.diameterFactor);
+    // The thread is cut by the wheel's straight teeth, so it has no shift,
+    // fillet or helix of its own, and it is a new body.
+    for (const [label, present] of [
+      ['profile shift', input.profileShift],
+      ['root fillet', input.rootFillet],
+      ['helix angle', input.helixAngleDeg],
+      ['herringbone', input.herringbone],
+      ['shaft angle', input.shaftAngleDeg],
+      ['rim diameter', input.rimDiameter],
+      ['back depth', input.backDepth],
+      ['target body', input.targetBodyId],
+      ['fit', input.fit]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(`An enveloping worm takes no ${label}.`);
+      }
+    }
+  } else if (envelopingWheel) {
+    if (input.mateTeeth === undefined) {
+      throw new Error('An enveloping wheel needs its worm’s thread starts.');
+    }
+    const starts = toothCount(
+      'worm starts',
+      input.mateTeeth,
+      1,
+      MAX_WORM_STARTS
+    );
+    if (value('teeth', input.teeth) < 2 * starts) {
+      throw new Error(
+        'An enveloping wheel needs at least two teeth per worm start.'
+      );
+    }
+    if (input.diameterFactor === undefined) {
+      throw new Error('An enveloping wheel needs its worm’s diameter factor.');
+    }
+    positive('diameter factor', input.diameterFactor);
+    if (input.wormLength === undefined) {
+      throw new Error('An enveloping wheel needs its worm’s length.');
+    }
+    // How far the worm reaches along its hourglass, and whether it cuts
+    // into the teeth near the faces, is the kernel's check.
+    positive('worm length', input.wormLength);
+    // The teeth are the straight-sided teeth that cut the worm, so they
+    // have no shift, fillet or helix of their own, and it is a new body.
+    for (const [label, present] of [
+      ['profile shift', input.profileShift],
+      ['root fillet', input.rootFillet],
+      ['helix angle', input.helixAngleDeg],
+      ['herringbone', input.herringbone],
+      ['shaft angle', input.shaftAngleDeg],
+      ['rim diameter', input.rimDiameter],
+      ['back depth', input.backDepth],
+      ['target body', input.targetBodyId],
+      ['fit', input.fit]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(`An enveloping wheel takes no ${label}.`);
+      }
+    }
   } else if (input.diameterFactor !== undefined) {
-    throw new Error('Only a worm or worm wheel takes a diameter factor.');
+    throw new Error('Only a worm gear takes a diameter factor.');
+  }
+  if (input.wormLength !== undefined && !envelopingWheel) {
+    throw new Error('Only an enveloping wheel takes a worm length.');
   }
   if (input.throated !== undefined) {
     if (typeof input.throated !== 'boolean') {
@@ -1172,8 +1258,10 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     }
   }
   if (input.outsideDiameter !== undefined) {
-    if (input.throated !== true) {
-      throw new Error('Only a throated worm wheel takes an outside diameter.');
+    if (input.throated !== true && !envelopingWheel) {
+      throw new Error(
+        'Only a throated worm wheel or an enveloping wheel takes an outside diameter.'
+      );
     }
     // Whether it clears the tips and stays inside the throat torus is the
     // kernel's check, which needs the worm's dimensions.
@@ -1210,6 +1298,8 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
   } else if (
     !worm &&
     !wormWheel &&
+    !enveloping &&
+    !envelopingWheel &&
     (input.mateTeeth !== undefined || input.shaftAngleDeg !== undefined)
   ) {
     throw new Error('Only a bevel gear takes a mate and a shaft angle.');
@@ -1345,7 +1435,14 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     value('x direction Z', input.xDirection.z);
   }
   if (input.boreDiameter !== undefined) {
-    if (input.gearType !== 'external' && !bevel && !worm && !wormWheel) {
+    if (
+      input.gearType !== 'external' &&
+      !bevel &&
+      !worm &&
+      !wormWheel &&
+      !enveloping &&
+      !envelopingWheel
+    ) {
       throw new Error('Only an external, bevel or worm gear takes a bore.');
     }
     positive('bore diameter', input.boreDiameter);

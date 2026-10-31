@@ -323,14 +323,14 @@ export interface DrawingView {
    */
   parentViewId?: DrawingViewId;
   /**
-   * D03 (schema v45): this view is a section, cut from the model by a plane
+   * D03 (schema v47): this view is a section, cut from the model by a plane
    * drawn as a section line on its source view. Absent on every other view.
    */
   section?: DrawingSectionCut;
 }
 
 /**
- * A section view's cut (D03, schema v45). The cutting plane is normal to
+ * A section view's cut (D03, schema v47). The cutting plane is normal to
  * the section view's own direction of sight and stores only its depth along
  * it, in model units, so moving either view never moves the cut. Material
  * nearer the camera than the plane (`dot(direction, p) < depth`) is removed;

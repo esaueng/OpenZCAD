@@ -402,7 +402,7 @@ Regression coverage:
 `test/drawing-body-succession.test.ts`, `DrawingWorkspace.test.tsx`, and
 `test/e2e/design-review-fixes.spec.ts`.
 
-## Implementation decisions (D03 section views, schema v45)
+## Implementation decisions (D03 section views, schema v47)
 
 The first D03 slice adds section views cut from a line drawn across a
 principal view. Detail views remain open.
@@ -425,9 +425,9 @@ principal view. Detail views remain open.
   view, a vertical line on the top view and the back's mirror pairs have no
   aligned principal orientation and are refused with a reason; free section
   frames are a later field.
-- **Schema.** v45, built on v43 (v44 is claimed by open PR #1054, M14
-  worms). Older clients must refuse: they would draw the view uncut and
-  without its line.
+- **Schema.** v47, built on v45 (M14 double-enveloping wheels); v46 is
+  claimed by the D06 dimension-schema slice. Older clients must refuse: they
+  would draw the view uncut and without its line.
 - **Commands.** `drawing.view.add` carries the whole section view;
   `drawing.view.update` gains `sectionDepth` (the panel's "Cut at X/Y/Z" field,
   in world coordinates). Moving a source carries its sections along (and a

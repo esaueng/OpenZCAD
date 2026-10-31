@@ -532,6 +532,8 @@ for (const { name, build, sense } of [
         await expect(
           page.getByText('Checking geometry…', { exact: true }).first()
         ).toBeVisible();
+        await expect(page.getByText('Checking exact result…', { exact: true })).toBeVisible();
+        await expect(page.getByText('Preview · exact on release', { exact: true })).not.toBeVisible();
         expect(await rendered(canvas)).toEqual(held);
         await page.evaluate(() =>
           (

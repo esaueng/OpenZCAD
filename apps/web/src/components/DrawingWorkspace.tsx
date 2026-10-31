@@ -21,6 +21,7 @@ import {
   Plus,
   Radius,
   RefreshCw,
+  Ruler,
   Scaling,
   Scissors,
   StickyNote,
@@ -93,6 +94,8 @@ import {
   viewPageBox,
   viewPlacementIssue,
   type SheetPage,
+  type SheetStroke,
+  type SheetText,
   type ViewExtent,
   type ViewPlacementIssue
 } from '../lib/drawing/sheetPage';
@@ -124,6 +127,14 @@ import {
   type AnnotationBox,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
+import {
+  auditDrawingDimensions,
+  type DrawingAudit
+} from '../lib/drawing/dimensionAudit';
+import {
+  planAutoDimensions,
+  type AutoDimensionPlan
+} from '../lib/drawing/autoDimension';
 import {
   ANNOTATION_TOOL_LABELS,
   annotationToolHint,
@@ -988,6 +999,265 @@ function AnnotationList(props: {
   );
 }
 
+/** Annotations not yet placed, drawn on the sheet in the accent colour. */
+function AnnotationPreview(props: {
+  layer: { strokes: SheetStroke[]; texts: SheetText[] };
+  paperHeight: number;
+  label?: string;
+}) {
+  const height = props.paperHeight;
+  return (
+    <g
+      className="drawing-annotation-preview"
+      {...(props.label ? { 'aria-label': props.label, role: 'img' } : {})}
+    >
+      {props.layer.strokes.map((stroke, index) => (
+        <polyline
+          key={index}
+          className={stroke.filled ? 'is-filled' : undefined}
+          points={`${svgPoints(stroke.points, height)}${stroke.filled ? ` ${svgPoints(stroke.points.slice(0, 2), height)}` : ''}`}
+        />
+      ))}
+      {props.layer.texts.map((text, index) => {
+        const start = sheetTextStart(text);
+        return (
+          <text
+            key={index}
+            x={start.x}
+            y={height - start.y}
+            fontSize={text.sizeMm / 0.718}
+            transform={
+              text.angleDeg
+                ? `rotate(${-text.angleDeg} ${start.x} ${height - start.y})`
+                : undefined
+            }
+          >
+            {text.text}
+          </text>
+        );
+      })}
+    </g>
+  );
+}
+
+/** What Auto-dimension would add, shown on the sheet until Apply or Cancel. */
+function AutoDimensionPreview(props: {
+  plan: AutoDimensionPlan;
+  audit: DrawingAudit;
+  onApply: () => void;
+  onCancel: () => void;
+}) {
+  const { plan, audit } = props;
+  const count = plan.annotations.length;
+  // The check already lists what no dimension can state yet; only what
+  // Auto-dimension leaves for other reasons is listed here.
+  const unmeasurable = new Set(audit.unmeasurable.map((f) => f.message));
+  const left = plan.skipped.filter((f) => !unmeasurable.has(f.message));
+  const waiting = plan.skipped.length - left.length;
+  return (
+    <div
+      className="drawing-auto-preview"
+      role="group"
+      aria-label="Auto-dimension preview"
+    >
+      <p className="drawing-annotation-value">
+        {count === 0
+          ? 'Nothing it can add.'
+          : `Adds ${count} ${count === 1 ? 'dimension' : 'dimensions'}, shown on the sheet.`}
+      </p>
+      {plan.onHiddenLines > 0 && (
+        <p className="drawing-hint">
+          {plan.onHiddenLines === 1
+            ? '1 measures hidden lines'
+            : `${plan.onHiddenLines} measure hidden lines`}
+          : no view shows that feature visible.
+        </p>
+      )}
+      {waiting > 0 && (
+        <p className="drawing-hint">
+          Skips {waiting} it can&apos;t dimension yet, listed below.
+        </p>
+      )}
+      {left.length > 0 && (
+        <>
+          <p className="drawing-audit-heading is-warning">
+            Left for you · {left.length}
+          </p>
+          <ul
+            className="drawing-audit-list"
+            aria-label="Dimensions Auto-dimension leaves for you"
+          >
+            {left.map((finding) => (
+              <li key={finding.message}>{finding.message}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      <div className="drawing-auto-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={count === 0}
+          onClick={props.onApply}
+        >
+          Apply
+        </button>
+        <button type="button" className="secondary" onClick={props.onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * D06: whether the sheet's dimensions state every size and position the
+ * check can read, once. Read from the current model, so only a ready sheet
+ * reports; a repeated or unchecked dimension selects on click.
+ * Auto-dimension (slice C) previews what it would add here, and adds it as
+ * one command on Apply.
+ */
+function DimensionCheck(props: {
+  sheet: DrawingSheet;
+  ready: boolean;
+  audit: DrawingAudit | null;
+  resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
+  onSelect: (annotationId: DrawingAnnotationId) => void;
+  autoDisabledReason: string | null;
+  autoPlan: AutoDimensionPlan | null;
+  onAuto: () => void;
+  onApplyAuto: () => void;
+  onCancelAuto: () => void;
+}) {
+  const { sheet, audit } = props;
+  if (sheet.views.length === 0) return null;
+  const annotations = new Map(
+    (sheet.annotations ?? []).map((annotation) => [
+      annotation.annotationId,
+      annotation
+    ])
+  );
+  const entry = (annotationId: DrawingAnnotationId, message: string) => {
+    const annotation = annotations.get(annotationId);
+    return (
+      <button
+        key={annotationId}
+        type="button"
+        className="drawing-sheet-item drawing-audit-item"
+        onClick={() => props.onSelect(annotationId)}
+      >
+        {annotation
+          ? annotationName(
+              annotation,
+              props.resolutions.get(annotationId),
+              props.ready
+            )
+          : 'Dimension'}
+        <span className="drawing-audit-reason">{message}</span>
+      </button>
+    );
+  };
+  const complete =
+    audit !== null &&
+    audit.missing.length === 0 &&
+    audit.redundant.length === 0;
+  return (
+    <div className="drawing-panel-section">
+      <h3>Dimension check</h3>
+      {!props.ready || !audit ? (
+        <p className="drawing-hint">Checked once the sheet is drawn.</p>
+      ) : (
+        <>
+          <p className="drawing-annotation-value">
+            {complete
+              ? `Every size and position it reads is stated once (${audit.stated}).`
+              : `${audit.stated} of ${audit.required} stated`}
+          </p>
+          {props.autoPlan ? (
+            <AutoDimensionPreview
+              plan={props.autoPlan}
+              audit={audit}
+              onApply={props.onApplyAuto}
+              onCancel={props.onCancelAuto}
+            />
+          ) : (
+            <button
+              type="button"
+              className="secondary"
+              disabled={
+                props.autoDisabledReason !== null || audit.missing.length === 0
+              }
+              title={
+                props.autoDisabledReason ??
+                (audit.missing.length === 0
+                  ? 'No dimension it can place is missing.'
+                  : 'Add the missing dimensions, previewed before anything changes')
+              }
+              onClick={props.onAuto}
+            >
+              <Ruler size={13} aria-hidden="true" /> Auto-dimension
+            </button>
+          )}
+          {audit.missing.length > 0 && (
+            <>
+              <p className="drawing-audit-heading">
+                Missing · {audit.missing.length}
+              </p>
+              <ul
+                className="drawing-audit-list"
+                aria-label="Missing dimensions"
+              >
+                {audit.missing.map((finding) => (
+                  <li key={finding.message}>{finding.message}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {audit.redundant.length > 0 && (
+            <>
+              <p className="drawing-audit-heading is-warning">
+                Repeated · {audit.redundant.length}
+              </p>
+              <div className="drawing-view-list">
+                {audit.redundant.map((finding) =>
+                  entry(finding.annotationId, finding.message)
+                )}
+              </div>
+            </>
+          )}
+          {audit.unmeasurable.length > 0 && (
+            <>
+              <p className="drawing-audit-heading">
+                Can&apos;t dimension yet · {audit.unmeasurable.length}
+              </p>
+              <ul
+                className="drawing-audit-list"
+                aria-label="Requirements no dimension can state yet"
+              >
+                {audit.unmeasurable.map((finding) => (
+                  <li key={finding.message}>{finding.message}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {audit.unchecked.length > 0 && (
+            <>
+              <p className="drawing-audit-heading">
+                Not checked · {audit.unchecked.length}
+              </p>
+              <div className="drawing-view-list">
+                {audit.unchecked.map((finding) =>
+                  entry(finding.annotationId, finding.message)
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /**
  * D02: the selected annotation's properties. Values are shown only while the
  * sheet is ready: a stale sheet has not been redrawn from the model they
@@ -1272,6 +1542,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   } | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] =
     useState<DrawingAnnotationId | null>(null);
+  /** D06: Auto-dimension's proposal, previewed on the sheet it was made from. */
+  const [autoPlan, setAutoPlan] = useState<{
+    sheet: DrawingSheet;
+    plan: AutoDimensionPlan;
+  } | null>(null);
   /** Under the pointer while a tool is active: the edge and paper point. */
   const [hover, setHover] = useState<{
     edge: PickableEdge | null;
@@ -1614,6 +1889,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     status?.kind === 'stale' ||
     status?.kind === 'replaced' ||
     status?.kind === 'missing';
+  // D06: checked against the model the sheet draws, as its dimensions are.
+  const dimensionAudit = useMemo(
+    () =>
+      shownSheet && sheetReady
+        ? auditDrawingDimensions(shownSheet, drawBodies, document.units)
+        : null,
+    [shownSheet, sheetReady, drawBodies, document.units]
+  );
   // A tool picks from one sheet's drawn model: a sheet that stops being
   // ready (a collaborator's model edit, a rebuild), or another sheet taking
   // its place (an undo, a delete, a collaborator's edit), ends it rather
@@ -1683,9 +1966,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
     if (event.key === 'Escape') {
-      if (sectionTool) {
-        setSectionTool(null);
-      } else if (tool) {
+      if (sectionTool) setSectionTool(null);
+      else if (shownAutoPlan) setAutoPlan(null);
+      else if (tool) {
         setTool(null);
         setHover(null);
       } else if (selectedViewId || selectedAnnotationId) {
@@ -1724,6 +2007,56 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return () =>
       window.removeEventListener('keydown', listener, { capture: true });
   }, []);
+
+  // A proposal holds only for the sheet it was made from: any edit to that
+  // sheet (an undo, a collaborator, a model Update) drops it unapplied.
+  const shownAutoPlan =
+    autoPlan && sheetReady && autoPlan.sheet === sheet ? autoPlan.plan : null;
+  const autoDisabledReason = !editable
+    ? (editDisabledReason ?? 'Drawing edits are unavailable.')
+    : !sheetReady
+      ? 'Update the sheet to dimension it.'
+      : drawnViews.length < (sheet?.views.length ?? 0)
+        ? 'Wait for every view to be drawn.'
+        : null;
+  const startAutoDimension = () => {
+    if (!sheet || !shownSheet || autoDisabledReason) return;
+    setTool(null);
+    setHover(null);
+    const plan = planAutoDimensions(
+      shownSheet,
+      drawnViews,
+      drawBodies,
+      document.units
+    );
+    setAutoPlan({ sheet, plan });
+    if (plan.annotations.length === 0)
+      props.onStatus('Auto-dimension found nothing it can add.');
+  };
+  const applyAutoDimension = () => {
+    if (!sheet || !shownAutoPlan || shownAutoPlan.annotations.length === 0)
+      return;
+    const { annotations } = shownAutoPlan;
+    // One command, so one undo takes every added dimension away again.
+    if (
+      run(
+        composeCommands(
+          'Auto-dimension',
+          annotations.map((annotation) =>
+            commandFactories.addDrawingAnnotation({
+              sheetId: sheet.sheetId,
+              annotation
+            })
+          )
+        )
+      )
+    ) {
+      setAutoPlan(null);
+      props.onStatus(
+        `Added ${annotations.length} ${annotations.length === 1 ? 'dimension' : 'dimensions'}.`
+      );
+    }
+  };
 
   const run = (command: AnyCommand) => {
     if (!editable) {
@@ -2817,6 +3150,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ? DRAWING_SCALE_PRESETS
     : [...DRAWING_SCALE_PRESETS, sheet.scale];
   const block = titleBlockBox(sheet);
+  // Auto-dimension's proposal, laid out by the same rule the page uses.
+  const autoLayer = shownAutoPlan
+    ? composeSheetAnnotations(
+        { ...shownSheet, annotations: shownAutoPlan.annotations },
+        drawnViews,
+        resolveSheetAnnotations(
+          { ...shownSheet, annotations: shownAutoPlan.annotations },
+          drawBodies,
+          document.units
+        ),
+        document.units
+      )
+    : null;
   // While a finished tool waits for its placement, the annotation follows
   // the pointer, laid out by the same rule the page uses.
   const preview = (() => {
@@ -3338,33 +3684,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               );
             })}
             {tool && preview && (
-              <g className="drawing-annotation-preview">
-                {preview.strokes.map((stroke, index) => (
-                  <polyline
-                    key={index}
-                    className={stroke.filled ? 'is-filled' : undefined}
-                    points={`${svgPoints(stroke.points, paper.height)}${stroke.filled ? ` ${svgPoints(stroke.points.slice(0, 2), paper.height)}` : ''}`}
-                  />
-                ))}
-                {preview.texts.map((text, index) => {
-                  const start = sheetTextStart(text);
-                  return (
-                    <text
-                      key={index}
-                      x={start.x}
-                      y={paper.height - start.y}
-                      fontSize={text.sizeMm / 0.718}
-                      transform={
-                        text.angleDeg
-                          ? `rotate(${-text.angleDeg} ${start.x} ${paper.height - start.y})`
-                          : undefined
-                      }
-                    >
-                      {text.text}
-                    </text>
-                  );
-                })}
-              </g>
+              <AnnotationPreview layer={preview} paperHeight={paper.height} />
+            )}
+            {autoLayer && (
+              <AnnotationPreview
+                layer={autoLayer}
+                paperHeight={paper.height}
+                label="Auto-dimension preview"
+              />
             )}
             {tool && hover?.edge && (
               <polyline
@@ -3903,6 +4230,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             setSelectedAnnotationId(annotationId);
             setSelectedViewId(null);
           }}
+        />
+        <DimensionCheck
+          sheet={sheet}
+          ready={sheetReady}
+          audit={dimensionAudit}
+          resolutions={resolutions}
+          onSelect={(annotationId) => {
+            setSelectedAnnotationId(annotationId);
+            setSelectedViewId(null);
+          }}
+          autoDisabledReason={autoDisabledReason}
+          autoPlan={shownAutoPlan}
+          onAuto={startAutoDimension}
+          onApplyAuto={applyAutoDimension}
+          onCancelAuto={() => setAutoPlan(null)}
         />
         {selection === null && (
           <>

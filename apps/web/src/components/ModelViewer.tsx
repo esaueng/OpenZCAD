@@ -40,6 +40,8 @@ import {
   buildSketchDimensions
 } from './viewer/sketchDimensions';
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
+import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
+import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type {
@@ -1984,12 +1986,6 @@ const SKETCH_COLOR = 0x6798ff;
  */
 const AUTO_FRAME_MARGIN_NDC = 0.04;
 const SKETCH_SELECTED_COLOR = 0x9eb8ff;
-/**
- * Screen-space widths in CSS pixels for the non-body polylines. Native WebGL
- * lines were locked to one device pixel; a hair over one CSS pixel keeps the
- * previous visual weight while leaving the shader room to antialias.
- */
-const SKETCH_CURVE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
 /**
@@ -2642,6 +2638,7 @@ export function ModelViewer({
   const sketchReturnRef = useRef<{
     position: THREE.Vector3;
     target: THREE.Vector3;
+    up: THREE.Vector3;
     projection: ProjectionMode;
   } | null>(null);
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
@@ -3571,6 +3568,8 @@ export function ModelViewer({
     const dragHud = hud.create('direct-edit-hud');
     const profilePreviewBadge = hud.create('direct-edit-hud');
     profilePreviewBadge.textContent = 'Preview · exact on release';
+    profilePreviewBadge.setAttribute('role', 'status');
+    profilePreviewBadge.setAttribute('aria-live', 'polite');
     profilePreviewBadge.style.left = '50%';
     profilePreviewBadge.style.top = '100px';
     profilePreviewBadge.style.transform = 'translateX(-50%)';
@@ -4238,6 +4237,9 @@ export function ModelViewer({
       // under the bar and could not be tapped.
       const footTop = rigs.size > 0 ? bottomLaneTop() : null;
       const stageRect = renderer.domElement.getBoundingClientRect();
+      const offsetRect = offsetChip.hidden
+        ? null
+        : offsetChip.getBoundingClientRect();
       const chipStage = {
         left: stageRect.left,
         right: stageRect.right,
@@ -4408,13 +4410,26 @@ export function ModelViewer({
       // centre is 0.8 of its height above it.
       shown.sort((a, b) => a.order - b.order);
       const separated = separateChips(
-        shown.map(({ valueId, x, y }) => ({
-          id: valueId,
-          x,
-          y: y - (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT,
-          width: chipWidths.get(valueId) ?? 0,
-          height: chipHeights.get(valueId) ?? 0
-        })),
+        [
+          ...(offsetRect
+            ? [
+                {
+                  id: '__offset__',
+                  x: (offsetRect.left + offsetRect.right) / 2 - stageRect.left,
+                  y: (offsetRect.top + offsetRect.bottom) / 2 - stageRect.top,
+                  width: offsetRect.width,
+                  height: offsetRect.height
+                }
+              ]
+            : []),
+          ...shown.map(({ valueId, x, y }) => ({
+            id: valueId,
+            x,
+            y: y - (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT,
+            width: chipWidths.get(valueId) ?? 0,
+            height: chipHeights.get(valueId) ?? 0
+          }))
+        ],
         {
           left: COMMAND_CHIP_MARGIN_PX,
           top: 0,
@@ -4735,6 +4750,7 @@ export function ModelViewer({
         event as CustomEvent<{
           bodyId?: string;
           surface?: 'wall' | 'cap' | 'top-cap' | 'bottom-cap';
+          radius?: number;
           select?: boolean;
           resolve?: (
             geometry: Pick<
@@ -4754,7 +4770,11 @@ export function ModelViewer({
           !candidate.consumed &&
           (!detail?.bodyId || candidate.bodyId === detail.bodyId)
       );
-      const faces = body?.topology?.faces ?? [];
+      const faces = (body?.topology?.faces ?? []).filter(
+        (face) =>
+          detail?.radius === undefined ||
+          Math.abs((face.geometry?.radius ?? Infinity) - detail.radius) < 1e-8
+      );
       const face =
         detail?.surface === 'top-cap' || detail?.surface === 'bottom-cap'
           ? faces.find((candidate) =>
@@ -7083,14 +7103,14 @@ export function ModelViewer({
       if (rig?.kind === 'cylinder-radius') {
         rig.setSpanMode?.(cylinderDimensionModeRef.current);
       }
-      // Face-offset controls keep one horizontal layout throughout the
+      // Face and region-extrude controls keep one horizontal layout throughout
       // gesture. Switching onto a long projected line rotated the value
       // vertically and changed both its colour and position under the hand.
       let lineAngle: number | null = null;
       const line =
         rig &&
         !dimensionChipBesidePin &&
-        !(rig.kind === 'offset-face' && offsetHandleRef.current) &&
+        rig.kind !== 'offset-face' &&
         rig.kind !== 'edge-radius'
           ? (rig.chipLine?.() ?? null)
           : null;
@@ -12849,6 +12869,9 @@ export function ModelViewer({
     }
     const previous = offsetRigRef.current;
     const built = offsetRigBuiltRef.current;
+    // The region effect owns this shared slot while extruding. Exact draft
+    // frames replace bodies, but must not retire the region's distance rig.
+    if (!offsetHandle && previous && previous === regionRigRef.current) return;
     // Validating a released drag re-derives the same handle, locked. Keep the
     // rig where it was let go — value, ghost and proxy included — instead of
     // fading it out and back in around the commit. Meshes that land meanwhile
@@ -13168,14 +13191,14 @@ export function ModelViewer({
               basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
             )
         );
-        const line = createFatLine(vertices, {
+        const line = createSketchCurve(vertices, {
           color: view.selected
             ? SKETCH_SELECTED_COLOR
             : curve.construction
               ? 0x7b8da3
               : SKETCH_COLOR,
-          linewidth: view.selected ? 1.8 : SKETCH_CURVE_WIDTH,
-          opacity: view.selected ? 1 : curve.construction ? 0.72 : 0.9,
+          linewidth: view.selected ? 2.8 : SKETCH_CURVE_WIDTH,
+          opacity: curve.construction ? 0.72 : 1,
           closed: curve.closed,
           resolution: context.fatLineResolution()
         });
@@ -13186,7 +13209,7 @@ export function ModelViewer({
           line.userData[IMAGE_UNSELECTED_STYLE] = {
             color: curve.construction ? 0x7b8da3 : SKETCH_COLOR,
             linewidth: SKETCH_CURVE_WIDTH,
-            opacity: curve.construction ? 0.72 : 0.9
+            opacity: curve.construction ? 0.72 : 1
           };
         }
         if (curve.construction) {
@@ -14142,6 +14165,7 @@ export function ModelViewer({
     const returnPose = {
       position: context.camera.position.clone(),
       target: context.controls.target.clone(),
+      up: sketchReturnUp(context.camera),
       projection: context.projection
     };
     sketchReturnRef.current = returnPose;
@@ -14230,17 +14254,31 @@ export function ModelViewer({
     const pose = sketchEntryPose(sketchBasis, distance);
     context.controls.enableRotate = false;
     context.startCameraTween(
-      framedPose ?? {
-        position: new THREE.Vector3(
-          pose.position.x,
-          pose.position.y,
-          pose.position.z
-        ),
-        target: new THREE.Vector3(pose.target.x, pose.target.y, pose.target.z),
-        near: context.camera.near,
-        far: context.camera.far,
-        ...(sketchUp ? { up: sketchUp } : {})
-      },
+      // A user already looking at the plane has chosen its framing and roll.
+      // Keep both; the stored sketch basis and its axis labels stay unchanged.
+      alreadyFacesSketch(context.camera, sketchBasis.normal)
+        ? {
+            position: returnPose.position,
+            target: returnPose.target,
+            up: returnPose.up,
+            near: context.camera.near,
+            far: context.camera.far
+          }
+        : (framedPose ?? {
+            position: new THREE.Vector3(
+              pose.position.x,
+              pose.position.y,
+              pose.position.z
+            ),
+            target: new THREE.Vector3(
+              pose.target.x,
+              pose.target.y,
+              pose.target.z
+            ),
+            near: context.camera.near,
+            far: context.camera.far,
+            ...(sketchUp ? { up: sketchUp } : {})
+          }),
       () => {
         context.applyProjection('orthographic');
         context.syncOrthographic(true);
@@ -14274,6 +14312,7 @@ export function ModelViewer({
           {
             position: saved.position,
             target: saved.target,
+            up: saved.up,
             near: context.camera.near,
             far: context.camera.far
           },
@@ -14370,15 +14409,11 @@ export function ModelViewer({
         // overlays, subordinate to the entry camera glide, and opts into the
         // ease that set otherwise cuts. A body rebuilt mid-sketch re-enters
         // here at full opacity and fades again.
-        context.selection.easeOpacity(material);
-        material.transparent = true;
-        delete material.userData.restoreOpaque;
-        if (reducesMotion(reducedMotionRef.current)) {
-          material.opacity = 0.35;
-        } else {
-          material.userData.targetOpacity = 0.35;
-          context.fadeIns.add(material);
-        }
+        context.selection.fadeBodyOpacity(
+          material,
+          0.35,
+          reducesMotion(reducedMotionRef.current)
+        );
       } else if (stored.sketchRecede) {
         // The opacity the bodies pass set last, when it set one: an X-ray
         // switched during the sketch changed it after the recede began.
@@ -14388,17 +14423,11 @@ export function ModelViewer({
           applied === undefined
             ? stored.sketchRecede
             : { opacity: applied, transparent: applied < 1 };
-        if (reducesMotion(reducedMotionRef.current)) {
-          material.opacity = restore.opacity;
-          material.transparent = restore.transparent;
-        } else {
-          context.selection.easeOpacity(material);
-          material.userData.targetOpacity = restore.opacity;
-          if (!restore.transparent) {
-            material.userData.restoreOpaque = true;
-          }
-          context.fadeIns.add(material);
-        }
+        context.selection.fadeBodyOpacity(
+          material,
+          restore.opacity,
+          reducesMotion(reducedMotionRef.current)
+        );
         delete stored.sketchRecede;
       }
     });
@@ -14606,14 +14635,14 @@ export function ModelViewer({
       profileFill.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
       context.sketchGroup.add(profileFill);
 
-      const line = createFatLine(
+      const line = createSketchCurve(
         sketch.points.map(
           (point) => new THREE.Vector3(point.x, point.y, point.z)
         ),
         {
           color: sketch.selected ? SKETCH_SELECTED_COLOR : SKETCH_COLOR,
           linewidth: SKETCH_CURVE_WIDTH,
-          opacity: sketch.selected ? 1 : 0.5,
+          opacity: 1,
           closed: true,
           resolution: context.fatLineResolution()
         }
@@ -14623,7 +14652,7 @@ export function ModelViewer({
       if (sketch.selected) {
         line.userData[IMAGE_UNSELECTED_STYLE] = {
           color: SKETCH_COLOR,
-          opacity: 0.5
+          opacity: 1
         };
       }
       line.renderOrder = sketch.selected

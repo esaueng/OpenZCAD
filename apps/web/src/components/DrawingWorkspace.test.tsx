@@ -48,8 +48,11 @@ vi.mock('../lib/drawing/sheetSources', async (importOriginal) => {
 
 const bodyId = 'body_cube' as BodyId;
 
-/** A 10 mm cube at the origin with outward-wound faces and its 12 edges. */
-function cube(size = 10): BodyRepresentation {
+/**
+ * A 10 mm cube at the origin with outward-wound faces and its 12 edges;
+ * `exact` publishes each face's plane, as the kernel does.
+ */
+function cube(size = 10, exact = false): BodyRepresentation {
   const s = size;
   const corners = [
     [0, 0, 0],
@@ -104,7 +107,8 @@ function cube(size = 10): BodyRepresentation {
         topologyId: `f${index}`,
         hash: 100 + index,
         triangleStart: index * 2,
-        triangleCount: 2
+        triangleCount: 2,
+        ...(exact ? { geometry: CUBE_PLANES(s)[index]! } : {})
       })),
       edges: edgePairs.map(([a, b], index) => ({
         topologyId: `e${index}`,
@@ -136,10 +140,30 @@ function displayTessellation(
     );
 }
 
+/** The cube's faces, in `quads` order, as exact planes. */
+function CUBE_PLANES(s: number) {
+  const plane = (x: number, y: number, z: number, planeOffset: number) => ({
+    surfaceType: 'plane',
+    area: s * s,
+    center: { x: 0, y: 0, z: 0 },
+    normal: { x, y, z },
+    planeOffset
+  });
+  return [
+    plane(0, 0, -1, 0),
+    plane(0, 0, 1, s),
+    plane(0, -1, 0, 0),
+    plane(0, 1, 0, s),
+    plane(1, 0, 0, s),
+    plane(-1, 0, 0, 0)
+  ];
+}
+
 function setup(
   options: {
     sheet?: DrawingSheet;
     size?: number;
+    exactFaces?: boolean;
     editDisabledReason?: string | null;
     geometryPending?: boolean;
   } = {}
@@ -150,7 +174,7 @@ function setup(
     bodyOrder: [bodyId],
     ...(options.sheet ? { drawings: { sheets: [options.sheet] } } : {})
   };
-  const bodies = { [bodyId]: cube(options.size) };
+  const bodies = { [bodyId]: cube(options.size, options.exactFaces) };
   const onCommand = vi.fn((_command: AnyCommand) => true);
   const onStatus = vi.fn();
   render(
@@ -2036,5 +2060,142 @@ describe('DrawingWorkspace section views (D03)', () => {
       depth: -5
     });
     expect(view.centerMm.y).toBe(front.centerMm.y);
+  });
+});
+
+describe('DrawingWorkspace dimension check (D06)', () => {
+  const exactCube = () => cube(10, true);
+  const sheetWith = (annotations: DrawingAnnotation[]) => {
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [bodyId],
+      bodies: { [bodyId]: exactCube() },
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint({ [bodyId]: exactCube() }, [
+        bodyId
+      ])!
+    });
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    return {
+      ...sheet,
+      annotations: annotations.map((annotation) => ({
+        ...annotation,
+        viewId: front.viewId
+      })) as DrawingAnnotation[]
+    };
+  };
+  // The cube's front bottom edge, (0,0,0)–(10,0,0).
+  const width = (name: string): DrawingAnnotation => ({
+    annotationId: `dann_${name}` as DrawingAnnotationId,
+    kind: 'linear',
+    viewId: 'unset' as never,
+    direction: 'horizontal',
+    from: { edge: { bodyId, hash: 210 }, anchor: 'first' },
+    to: { edge: { bodyId, hash: 210 }, anchor: 'second' },
+    placementMm: { x: 0, y: -20 }
+  });
+
+  it('lists what the sheet still needs once it matches the model', async () => {
+    setup({ sheet: sheetWith([]), exactFaces: true });
+    const missing = await screen.findByRole('list', {
+      name: 'Missing dimensions'
+    });
+    expect(
+      within(missing)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'X: nothing locates the face at x = 10 from the face at x = 0.',
+      'Y: nothing locates the face at y = 10 from the face at y = 0.',
+      'Z: nothing locates the face at z = 10 from the face at z = 0.'
+    ]);
+    expect(screen.getByText('0 of 3 stated')).toBeTruthy();
+  });
+
+  it('selects a repeated dimension from the check', async () => {
+    setup({
+      sheet: sheetWith([width('first'), width('again')]),
+      exactFaces: true
+    });
+    const repeated = await screen.findByRole('button', {
+      name: /Another dimension already states this distance/
+    });
+    await userEvent.click(repeated);
+    expect(
+      screen
+        .getByRole('listbox', { name: 'Annotations on this sheet' })
+        .querySelector('[aria-selected="true"]')?.textContent
+    ).toBe('Horizontal dimension 10');
+    expect(screen.getByText('1 of 3 stated')).toBeTruthy();
+  });
+
+  it('previews Auto-dimension on the sheet, then adds it as one command', async () => {
+    const { onCommand, onStatus } = setup({
+      sheet: sheetWith([]),
+      exactFaces: true
+    });
+    const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
+    await waitFor(() => expect(auto).toBeEnabled());
+    await userEvent.click(auto);
+    const preview = screen.getByRole('group', {
+      name: 'Auto-dimension preview'
+    });
+    expect(
+      within(preview).getByText('Adds 3 dimensions, shown on the sheet.')
+    ).toBeTruthy();
+    // Drawn on the sheet, but nothing changes before Apply.
+    const drawn = screen.getByRole('img', { name: 'Auto-dimension preview' });
+    expect(
+      [...drawn.querySelectorAll('text')].map((text) => text.textContent)
+    ).toEqual(['10', '10', '10']);
+    expect(onCommand).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      within(preview).getByRole('button', { name: 'Apply' })
+    );
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.kind).toBe('transaction');
+    expect(command.label).toBe('Auto-dimension');
+    expect(command.commands?.map((entry) => entry.kind)).toEqual([
+      'drawing.annotation.add',
+      'drawing.annotation.add',
+      'drawing.annotation.add'
+    ]);
+    expect(onStatus).toHaveBeenCalledWith('Added 3 dimensions.');
+    expect(
+      screen.queryByRole('group', { name: 'Auto-dimension preview' })
+    ).toBeNull();
+  });
+
+  it('cancels the Auto-dimension preview on Escape, changing nothing', async () => {
+    const { onCommand } = setup({ sheet: sheetWith([]), exactFaces: true });
+    const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
+    await waitFor(() => expect(auto).toBeEnabled());
+    await userEvent.click(auto);
+    expect(
+      screen.getByRole('group', { name: 'Auto-dimension preview' })
+    ).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
+    expect(
+      screen.queryByRole('group', { name: 'Auto-dimension preview' })
+    ).toBeNull();
+    expect(
+      screen.queryByRole('img', { name: 'Auto-dimension preview' })
+    ).toBeNull();
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it('offers Auto-dimension only while the sheet can be edited', async () => {
+    setup({
+      sheet: sheetWith([]),
+      exactFaces: true,
+      editDisabledReason: 'Viewers cannot edit drawings.'
+    });
+    const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
+    expect(auto).toBeDisabled();
+    expect(auto).toHaveAttribute('title', 'Viewers cannot edit drawings.');
   });
 });

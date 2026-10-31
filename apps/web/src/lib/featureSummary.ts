@@ -119,6 +119,20 @@ export function featureValueSummary(
       if (data.gearType === 'worm') {
         return teeth === '1' ? 'Worm, 1 start' : `Worm, ${teeth} starts`;
       }
+      if (data.gearType === 'enveloping-worm') {
+        const starts = teeth === '1' ? '1 start' : `${teeth} starts`;
+        const wheel = data.mateTeeth === undefined ? null : num(data.mateTeeth);
+        return wheel === null
+          ? `Enveloping worm, ${starts}`
+          : `Enveloping worm, ${starts}, for ${wheel}-tooth wheel`;
+      }
+      if (data.gearType === 'enveloping-wheel') {
+        const starts =
+          data.mateTeeth === undefined ? null : num(data.mateTeeth);
+        return starts === null
+          ? `${teeth} teeth, enveloping wheel`
+          : `${teeth} teeth, enveloping wheel for ${starts}-start worm`;
+      }
       if (data.gearType === 'worm-wheel') {
         const starts =
           data.mateTeeth === undefined ? null : num(data.mateTeeth);

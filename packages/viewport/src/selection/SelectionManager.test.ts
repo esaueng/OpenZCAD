@@ -316,6 +316,42 @@ describe('the fade set', () => {
     return new THREE.MeshBasicMaterial({ transparent: true, opacity });
   }
 
+  it.each([false, true])(
+    'keeps body depth and stencil coherent through sketch fades (instant %s)',
+    (instant) => {
+      const { manager } = makeManager();
+      const material = new THREE.MeshPhongMaterial({ stencilWrite: true });
+      manager.fadeBodyOpacity(material, 0.35, instant);
+      for (let frame = 0; frame < 200 && manager.isSettling; frame += 1) {
+        manager.step(0.016);
+        expect(material.depthWrite).toBe(material.opacity === 1);
+        expect(material.stencilWrite).toBe(material.opacity === 1);
+      }
+      expect(material.opacity).toBe(0.35);
+      expect(material.transparent).toBe(true);
+      expect(material.depthWrite).toBe(false);
+      expect(material.stencilWrite).toBe(false);
+      manager.fadeBodyOpacity(material, 1, instant);
+      for (let frame = 0; frame < 200 && manager.isSettling; frame += 1) {
+        manager.step(0.016);
+        expect(material.depthWrite).toBe(material.opacity === 1);
+        expect(material.stencilWrite).toBe(material.opacity === 1);
+      }
+      expect(material.opacity).toBe(1);
+      expect(material.transparent).toBe(false);
+      expect(material.depthWrite).toBe(true);
+      expect(material.stencilWrite).toBe(true);
+      // An existing translucent appearance stays translucent after a round trip.
+      manager.fadeBodyOpacity(material, 0.6, true);
+      manager.fadeBodyOpacity(material, 0.35, instant);
+      manager.fadeBodyOpacity(material, 0.6, true);
+      expect(manager.isSettling).toBe(false);
+      expect(material.opacity).toBe(0.6);
+      expect(material.depthWrite).toBe(false);
+      expect(material.stencilWrite).toBe(false);
+    }
+  );
+
   it('cuts a registered material onto its target in the first step', () => {
     const { manager } = makeManager();
     const material = fading();
