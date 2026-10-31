@@ -104,9 +104,7 @@ for (const viewport of [
     await expect(
       page.locator('.start-tile-open', { hasText: 'Refresh bracket' })
     ).toBeVisible();
-    await expect(page.locator('.start-account')).toContainText(
-      '1 project saved'
-    );
+    await expect(page.locator('.start-account')).toContainText('1 saved');
     await expect(page.getByLabel('Project name')).toHaveValue(
       'Name kept during refresh'
     );
@@ -148,7 +146,7 @@ test('failed account listing finishes refresh with the saved device library', as
   await expect(
     page.locator('.start-tile-open', { hasText: 'Device refresh part' })
   ).toBeVisible();
-  await expect(page.getByText('Account status unavailable')).toHaveAttribute(
+  await expect(page.getByText('Account unavailable')).toHaveAttribute(
     'title',
     /Cloud project status is temporarily unavailable\./
   );

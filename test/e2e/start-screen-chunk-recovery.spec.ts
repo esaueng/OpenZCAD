@@ -44,6 +44,15 @@ for (const width of [1440, 390]) {
       timeout: TOAST_LIFETIME_MS + TOAST_EXIT_MS + 2000
     });
     const notice = page.locator('.start-update');
+    // Two words in the column; the full sentence is the tooltip and the
+    // screen-reader text.
+    await expect(notice.locator('.start-update-text')).toHaveText(
+      'Load failed'
+    );
+    await expect(notice.locator('.start-update-text')).toHaveAttribute(
+      'title',
+      /Check your connection/
+    );
     await expect(notice).toContainText('Check your connection');
     await expect(notice).not.toContainText(/new version/i);
     const reload = notice.getByRole('button', { name: 'Reload' });
