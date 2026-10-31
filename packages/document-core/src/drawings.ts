@@ -57,6 +57,8 @@ export interface DrawingViewUpdateInput {
   centerMm?: { x: number; y: number };
   hiddenLines?: boolean;
   bodyIds?: BodyId[];
+  /** D03: moves a section view's cutting plane, in model units. */
+  sectionDepth?: number;
 }
 
 export interface DrawingViewDeleteInput {
@@ -370,6 +372,11 @@ export function updateDrawingView(
         input.bodyIds.filter((id) => !view.bodyIds.includes(id))
       );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
+    if (input.sectionDepth !== undefined) {
+      if (!view.section)
+        throw new Error(`Drawing view ${input.viewId} is not a section.`);
+      view.section = { ...view.section, depth: input.sectionDepth };
+    }
     if (input.bodyIds) view.bodyIds = [...input.bodyIds];
     if (input.centerMm) {
       const parent = alignmentBase(sheet, view);

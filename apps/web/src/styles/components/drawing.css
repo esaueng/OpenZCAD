@@ -399,6 +399,33 @@
   cursor: crosshair;
 }
 
+/* D03 section tool: the line being drawn, and the view it will place. */
+.drawing-section-surface {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.drawing-section-draft {
+  pointer-events: none;
+}
+
+.drawing-section-preview {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 2px;
+  stroke-dasharray: 10 3 2 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.drawing-section-ghost {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
 .drawing-annotation-status {
   margin: 0;
   color: var(--color-error-text);

@@ -22,6 +22,7 @@ import {
   Radius,
   RefreshCw,
   Scaling,
+  Scissors,
   StickyNote,
   Sun,
   Trash2,
@@ -50,12 +51,10 @@ import {
   DRAWING_VIEW_ORIENTATIONS,
   drawingPaperMm,
   drawingPaperPerModelUnit,
-  drawingSectionLine,
   drawingSectionOrientations,
   drawingSectionPlane,
   drawingViewAlignment,
   formatDrawingScale,
-  nextDrawingSectionLabel,
   projectedViewSide,
   MAX_DRAWING_TEXT_LENGTH,
   type BodyId,
@@ -83,6 +82,8 @@ import {
 import {
   autoScaleSheet,
   composeSheetPage,
+  sectionCaption,
+  sectionLineOnPage,
   SHEET_STROKE_ORDER,
   type ComposedView,
   fitViewsToSheet,
@@ -152,6 +153,13 @@ import {
   type SectionBodyInput
 } from '../lib/drawing/sheetSources';
 import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
+import {
+  sectionLineFromDrag,
+  sectionPlacement,
+  sectionSnapTargets,
+  sectionSourceAt,
+  type SectionLine
+} from '../lib/drawing/sectionTool';
 import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
 
 /**
@@ -691,6 +699,13 @@ function useViewProjections(
   return states;
 }
 
+/** A view's name in the editor: its orientation, or "Section A-A". */
+function viewLabel(view: DrawingView): string {
+  return view.section
+    ? sectionCaption(view.section.label).replace('SECTION', 'Section')
+    : DRAWING_VIEW_LABELS[view.orientation];
+}
+
 function statusMessage(status: SheetStatus): string | null {
   switch (status.kind) {
     case 'ready':
@@ -840,6 +855,9 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   angle: 'G',
   note: 'N'
 };
+
+/** D03: the section view tool's key, beside the annotation tools'. */
+const SECTION_TOOL_KEY = 'S';
 
 const DARK_PAPER_STORAGE_KEY = 'openzcad.drawing.darkPaper';
 
@@ -1099,8 +1117,15 @@ function DrawingToolRail(props: {
   canUseTool: (kind: AnnotationToolKind) => boolean;
   disabledReason: (kind: AnnotationToolKind) => string;
   onTool: (kind: AnnotationToolKind | null) => void;
+  /** D03: the section view tool, beside the annotation tools. */
+  section: {
+    active: boolean;
+    usable: boolean;
+    disabledReason: string;
+    onToggle: () => void;
+  };
 }) {
-  const { tool } = props;
+  const { tool, section } = props;
   const groups: AnnotationToolKind[][] = [
     ['horizontal', 'vertical', 'aligned'],
     ['radius', 'diameter', 'angle'],
@@ -1117,7 +1142,7 @@ function DrawingToolRail(props: {
         type="button"
         className={`drawing-rail-button${tool ? '' : ' active'}`}
         aria-label="Select"
-        aria-pressed={!tool}
+        aria-pressed={!tool && !section.active}
         title="Select and move views and annotations (Esc)"
         onClick={() => props.onTool(null)}
       >
@@ -1155,6 +1180,24 @@ function DrawingToolRail(props: {
           })}
         </div>
       ))}
+      <div className="drawing-rail-group">
+        <button
+          type="button"
+          className={`drawing-rail-button${section.active ? ' active' : ''}`}
+          aria-label="Section view"
+          aria-pressed={section.active}
+          aria-keyshortcuts={SECTION_TOOL_KEY}
+          disabled={!section.usable}
+          title={
+            section.usable
+              ? `Section view: draw a line across a view (${SECTION_TOOL_KEY})`
+              : section.disabledReason
+          }
+          onClick={section.onToggle}
+        >
+          <Scissors size={16} aria-hidden="true" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -1204,6 +1247,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ? drag
       : null;
   const [tool, setTool] = useState<AnnotationTool | null>(null);
+  /**
+   * D03 section tool: a drag across a view draws its cutting-plane line
+   * (`drag`), then the section view follows the pointer (`line`, `pointer`)
+   * until a click places it.
+   */
+  const [sectionTool, setSectionTool] = useState<{
+    drag: { start: [number, number]; current: [number, number] } | null;
+    line: SectionLine | null;
+    pointer: [number, number] | null;
+  } | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] =
     useState<DrawingAnnotationId | null>(null);
   /** Under the pointer while a tool is active: the edge and paper point. */
@@ -1605,6 +1658,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           : 'Add a view to dimension it.';
   const chooseTool = (next: AnnotationTool | null) => {
     setTool(next && pinnedTool(next));
+    setSectionTool(null);
     setHover(null);
     if (next) canvasRef.current?.focus();
   };
@@ -1616,7 +1670,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
     if (event.key === 'Escape') {
-      if (tool) {
+      if (sectionTool) {
+        setSectionTool(null);
+      } else if (tool) {
         setTool(null);
         setHover(null);
       } else if (selectedViewId || selectedAnnotationId) {
@@ -1628,6 +1684,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     if (event.shiftKey) return;
+    if (event.key.toLowerCase() === SECTION_TOOL_KEY.toLowerCase()) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSectionTool();
+      return;
+    }
     const kind = ANNOTATION_TOOLS.find(
       (entry) =>
         ANNOTATION_TOOL_KEYS[entry].toLowerCase() === event.key.toLowerCase()
@@ -2065,7 +2127,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         const issue = placements.get(view.viewId);
         return issue === 'off-page' || issue === 'partly-off-page';
       })
-      .map((view) => DRAWING_VIEW_LABELS[view.orientation]);
+      .map((view) => viewLabel(view));
     if (names.length === 0) return null;
     return `${listNames(names)} ${names.length === 1 ? 'runs' : 'run'} off the paper. Fit views to sheet, or move ${names.length === 1 ? 'it' : 'them'} onto the page, to export.`;
   }
@@ -2318,6 +2380,144 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setHover({ edge: null, point: at.point });
   };
 
+  // D03 section tool.
+  const canSection =
+    sheetReady &&
+    editable &&
+    drawnViews.some(({ view }) => !view.section && view.orientation !== 'iso');
+  const sectionDisabledReason = !editable
+    ? (editDisabledReason ?? 'Drawing edits are unavailable.')
+    : !sheetReady
+      ? 'Update the sheet to add a section.'
+      : 'Add a front, top or side view to cut a section from.';
+  function toggleSectionTool() {
+    if (sectionTool) {
+      setSectionTool(null);
+      return;
+    }
+    if (!canSection) {
+      props.onStatus(sectionDisabledReason);
+      return;
+    }
+    setTool(null);
+    setHover(null);
+    setSectionTool({ drag: null, line: null, pointer: null });
+    canvasRef.current?.focus();
+  }
+  const sectionSource = (line: SectionLine | null) =>
+    line
+      ? drawnViews.find(({ view }) => view.viewId === line.sourceViewId)
+      : undefined;
+  /** The section view the tool would place now, as a preview. */
+  const sectionDraft =
+    sectionTool?.line && sectionTool.pointer && shownSheet
+      ? (() => {
+          const source = sectionSource(sectionTool.line);
+          return source
+            ? sectionPlacement(
+                shownSheet,
+                source.view,
+                sectionTool.line,
+                sectionTool.pointer,
+                source.view.bodyIds
+              )
+            : null;
+        })()
+      : null;
+  const onSectionPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !sectionTool || !shownSheet) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (sectionTool.line) {
+      const source = sectionSource(sectionTool.line);
+      const draft =
+        source &&
+        sectionPlacement(
+          shownSheet,
+          source.view,
+          sectionTool.line,
+          at.point,
+          source.view.bodyIds
+        );
+      if (!draft) return;
+      const view: DrawingView = { ...draft, viewId: createDrawingViewId() };
+      setSectionTool(null);
+      if (
+        run(
+          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
+        )
+      )
+        setSelectedViewId(view.viewId);
+      return;
+    }
+    if (!sectionSourceAt(shownSheet, drawnViews, at.point, document.units)) {
+      props.onStatus(
+        'Start the section line inside a front, top or side view.'
+      );
+      return;
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setSectionTool({
+      drag: { start: at.point, current: at.point },
+      line: null,
+      pointer: null
+    });
+  };
+  const onSectionPointerMove = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!sectionTool) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (sectionTool.drag)
+      setSectionTool({
+        ...sectionTool,
+        drag: { ...sectionTool.drag, current: at.point }
+      });
+    else if (sectionTool.line)
+      setSectionTool({ ...sectionTool, pointer: at.point });
+  };
+  const onSectionPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!sectionTool?.drag || !shownSheet) return;
+    const at = paperPoint(event);
+    const end = at?.point ?? sectionTool.drag.current;
+    const source = sectionSourceAt(
+      shownSheet,
+      drawnViews,
+      sectionTool.drag.start,
+      document.units
+    );
+    const axis =
+      Math.abs(end[0] - sectionTool.drag.start[0]) >=
+      Math.abs(end[1] - sectionTool.drag.start[1])
+        ? 'horizontal'
+        : 'vertical';
+    const line =
+      source &&
+      sectionLineFromDrag(
+        shownSheet,
+        source,
+        sectionTool.drag.start,
+        end,
+        document.units,
+        sectionSnapTargets(source, drawBodies, axis)
+      );
+    if (!line) {
+      setSectionTool({ drag: null, line: null, pointer: null });
+      props.onStatus('Drag across the view to draw the section line.');
+      return;
+    }
+    if (
+      drawingSectionOrientations(source.view.orientation, line.axis).length ===
+      0
+    ) {
+      setSectionTool({ drag: null, line: null, pointer: null });
+      props.onStatus(
+        `A ${line.axis} section line on the ${DRAWING_VIEW_LABELS[source.view.orientation].toLowerCase()} view has no aligned view to show it in. Draw it the other way.`
+      );
+      return;
+    }
+    setSectionTool({ drag: null, line, pointer: end });
+  };
+
   const updateAnnotation = (annotation: DrawingAnnotation, label?: string) => {
     if (!sheet) return;
     run(
@@ -2437,17 +2637,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const paper = drawingPaperMm(sheet.paper);
   const message = statusMessage(status);
   const offPaper = offPaperReason();
+  // A view that cannot be drawn (a section the kernel cannot cut, a model
+  // that cannot be meshed) says so by name: it will not finish drawing.
+  const refusedView = sheet.views.find(
+    (view) => projections.get(view.viewId)?.state === 'error'
+  );
+  const refusedState = refusedView && projections.get(refusedView.viewId);
+  const refusalReason =
+    refusedView && refusedState?.state === 'error'
+      ? `${viewLabel(refusedView)} cannot be drawn: ${refusedState.message}`
+      : null;
   const exportReason = !sheetReady
     ? message
-    : sheet.views.some(
-          (view) => projections.get(view.viewId)?.state !== 'ready'
-        )
-      ? outdated
-        ? 'Update the sheet to draw every view, then export.'
-        : 'Drawing the views…'
-      : brokenCount > 0
-        ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
-        : offPaper;
+    : refusalReason
+      ? refusalReason
+      : sheet.views.some(
+            (view) => projections.get(view.viewId)?.state !== 'ready'
+          )
+        ? outdated
+          ? 'Update the sheet to draw every view, then export.'
+          : 'Drawing the views…'
+        : brokenCount > 0
+          ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
+          : offPaper;
   // Not blocking: on the paper, but over the border or the title block.
   const layoutWarning = (() => {
     const names = sheet.views
@@ -2455,7 +2667,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         const issue = placements.get(view.viewId);
         return issue === 'past-border' || issue === 'over-title-block';
       })
-      .map((view) => DRAWING_VIEW_LABELS[view.orientation]);
+      .map((view) => viewLabel(view));
     return names.length === 0
       ? null
       : `${listNames(names)} ${names.length === 1 ? 'crosses' : 'cross'} the sheet border or the title block.`;
@@ -2625,7 +2837,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const canUpdate = status.kind === 'stale' || status.kind === 'replaced';
   const exportBlocked =
     (!message || keptDrawing !== null) &&
-    (brokenCount > 0 || (exportReason !== null && exportReason === offPaper));
+    (brokenCount > 0 ||
+      (exportReason !== null &&
+        (exportReason === offPaper || exportReason === refusalReason)));
   const selection: 'annotation' | 'view' | null = selectedAnnotation
     ? 'annotation'
     : selectedView
@@ -2947,7 +3161,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               const box = viewPageBox(view, extent, shownSheet, document.units);
               const pad = 3;
               const ready = state?.state === 'ready';
-              const label = DRAWING_VIEW_LABELS[view.orientation];
+              const label = viewLabel(view);
               return (
                 <g
                   key={view.viewId}
@@ -3123,6 +3337,79 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 onPointerLeave={() => setHover(null)}
               />
             )}
+            {sectionTool?.drag && (
+              <polyline
+                className="drawing-section-preview"
+                points={svgPoints(
+                  [...sectionTool.drag.start, ...sectionTool.drag.current],
+                  paper.height
+                )}
+              />
+            )}
+            {sectionDraft &&
+              (() => {
+                const source = sectionSource(sectionTool!.line);
+                const line =
+                  source &&
+                  sectionLineOnPage(
+                    shownSheet,
+                    sectionDraft,
+                    source,
+                    document.units
+                  );
+                const extent = estimateViewExtent(
+                  bodies,
+                  sectionDraft.bodyIds,
+                  sectionDraft.orientation
+                );
+                const k = drawingPaperPerModelUnit(
+                  shownSheet.scale,
+                  document.units
+                );
+                const width = extent ? (extent.maxU - extent.minU) * k : 20;
+                const height = extent ? (extent.maxV - extent.minV) * k : 20;
+                return (
+                  <g className="drawing-section-draft">
+                    {line && (
+                      <polyline
+                        className="drawing-section-preview"
+                        points={svgPoints(
+                          [...line.from, ...line.to],
+                          paper.height
+                        )}
+                      />
+                    )}
+                    <rect
+                      className="drawing-section-ghost"
+                      x={sectionDraft.centerMm.x - width / 2}
+                      y={paper.height - sectionDraft.centerMm.y - height / 2}
+                      width={width}
+                      height={height}
+                    />
+                    <text
+                      className="drawing-view-label"
+                      x={sectionDraft.centerMm.x - width / 2}
+                      y={
+                        paper.height - sectionDraft.centerMm.y + height / 2 + 4
+                      }
+                      fontSize={3}
+                    >
+                      {sectionCaption(sectionDraft.section!.label)}
+                    </text>
+                  </g>
+                );
+              })()}
+            {sectionTool && (
+              <rect
+                className="drawing-section-surface"
+                aria-label="Section line"
+                width={paper.width}
+                height={paper.height}
+                onPointerDown={onSectionPointerDown}
+                onPointerMove={onSectionPointerMove}
+                onPointerUp={onSectionPointerUp}
+              />
+            )}
           </svg>
           <DrawingToolRail
             tool={tool}
@@ -3131,7 +3418,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             onTool={(kind) =>
               chooseTool(kind ? startAnnotationTool(kind) : null)
             }
+            section={{
+              active: sectionTool !== null,
+              usable: canSection,
+              disabledReason: sectionDisabledReason,
+              onToggle: toggleSectionTool
+            }}
           />
+          {sectionTool && (
+            <div className="drawing-tool-hint" role="status">
+              <span>
+                {sectionTool.line
+                  ? 'Move the section view into place along its arrows, then click.'
+                  : 'Drag across a view to draw the section line.'}
+              </span>
+              <button
+                type="button"
+                className="drawing-tool-hint-cancel"
+                onClick={() => setSectionTool(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           {tool && (
             <div className="drawing-tool-hint" role="status">
               <span>{annotationToolHint(tool)}</span>
@@ -3163,7 +3472,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ) : selection === 'view' && selectedView ? (
           <div className="drawing-panel-section is-selection">
             <SelectionHeading
-              title={`${DRAWING_VIEW_LABELS[selectedView.orientation]} view`}
+              title={`${viewLabel(selectedView)} view`}
               onDeselect={deselect}
             />
             <div className="drawing-field-row">
@@ -3190,6 +3499,55 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 }
               />
             </div>
+            {selectedView.section &&
+              (() => {
+                const section = selectedView.section;
+                const source = sheet.views.find(
+                  (view) => view.viewId === section.sourceViewId
+                );
+                // The plane's world coordinate on the axis it is normal to.
+                const normal = drawingSectionPlane({
+                  ...selectedView,
+                  section
+                }).normal;
+                const axis =
+                  Math.abs(normal.x) === 1
+                    ? 'x'
+                    : Math.abs(normal.y) === 1
+                      ? 'y'
+                      : 'z';
+                const sign = normal[axis];
+                return (
+                  <>
+                    <NumberField
+                      label={`Cut at ${axis.toUpperCase()} (${document.units})`}
+                      value={section.depth * sign}
+                      disabled={!editable}
+                      onCommit={(value) =>
+                        run(
+                          commandFactories.updateDrawingView(
+                            {
+                              sheetId: sheet.sheetId,
+                              viewId: selectedView.viewId,
+                              sectionDepth: value * sign
+                            },
+                            'Move section plane'
+                          )
+                        )
+                      }
+                    />
+                    <p className="drawing-hint">
+                      Cut from the{' '}
+                      {source
+                        ? DRAWING_VIEW_LABELS[source.orientation].toLowerCase()
+                        : 'source'}{' '}
+                      view along its line {section.label}-{section.label}: it
+                      stays aligned with it. Cut faces are hatched; outlines are
+                      the kernel&apos;s exact cut.
+                    </p>
+                  </>
+                );
+              })()}
             {selectedView.parentViewId && (
               <p className="drawing-hint">
                 Projected from the{' '}
@@ -3403,7 +3761,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     setSelectedAnnotationId(null);
                   }}
                 >
-                  {DRAWING_VIEW_LABELS[view.orientation]}
+                  {viewLabel(view)}
                   {issue ? ` (${PLACEMENT_LABELS[issue]})` : ''}
                 </button>
               );

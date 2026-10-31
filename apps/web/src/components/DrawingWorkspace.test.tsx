@@ -23,12 +23,13 @@ import {
   type DrawingSheet,
   type ProjectDocument
 } from '@openzcad/shared';
-import { DrawingWorkspace } from './DrawingWorkspace';
+import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import {
   createStarterSheet,
   drawingSourceFingerprint,
-  projectionBodyInput
+  projectionBodyInput,
+  type SectionBodyInput
 } from '../lib/drawing/sheetSources';
 import {
   projectView,
@@ -1830,5 +1831,209 @@ describe('DrawingWorkspace QA fixes', () => {
         rect.mockRestore();
       }
     });
+  });
+});
+
+describe('DrawingWorkspace section views (D03)', () => {
+  /** The cube's x ≤ 5 half, as the geometry worker cuts it for a −X view. */
+  function halfCube(): SectionBodyInput {
+    const half = cube();
+    const vertices = Float32Array.from(half.mesh.vertices, (value, index) =>
+      index % 3 === 0 ? Math.min(value, 5) : value
+    );
+    const input = projectionBodyInput({
+      ...half,
+      mesh: { ...half.mesh, vertices }
+    })!;
+    return {
+      ...input,
+      // The +X quad, now at x = 5, is the cut face.
+      cutFaces: [4],
+      edgeTopology: half.topology!.edges.map((edge) => ({
+        ...edge,
+        points: edge.points.map((value, index) =>
+          index % 3 === 0 ? Math.min(value, 5) : value
+        )
+      }))
+    };
+  }
+
+  function withSection(fingerprint: string): DrawingSheet {
+    const sheet = starter(fingerprint);
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    return {
+      ...sheet,
+      views: [
+        front,
+        {
+          viewId: 'dvw_section' as DrawingSheet['views'][number]['viewId'],
+          orientation: 'right',
+          bodyIds: [bodyId],
+          // First angle: the right view sits left of the front.
+          centerMm: { x: front.centerMm.x - 60, y: front.centerMm.y },
+          hiddenLines: false,
+          section: { sourceViewId: front.viewId, label: 'A', depth: -5 }
+        }
+      ]
+    };
+  }
+
+  function renderSheet(
+    sheet: DrawingSheet,
+    requestSection: NonNullable<
+      Parameters<typeof DrawingWorkspace>[0]['requestSection']
+    >
+  ) {
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const bodies = { [bodyId]: cube() };
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const onStatus = vi.fn();
+    render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [sheet] }
+        }}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation(bodies)}
+        requestSection={requestSection}
+        editDisabledReason={null}
+        onCommand={onCommand}
+        onStatus={onStatus}
+      />
+    );
+    return { onCommand, onStatus };
+  }
+
+  it('draws a section hatched, with its cutting-plane line and caption', async () => {
+    resetRetainedProjections();
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const requestSection = vi.fn(() =>
+      Promise.resolve({ [bodyId]: halfCube() })
+    );
+    renderSheet(withSection(fingerprint), requestSection);
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-strokes.is-hatch polyline').length
+      ).toBeGreaterThan(0)
+    );
+    expect(requestSection).toHaveBeenCalledTimes(1);
+    expect(requestSection.mock.calls[0]![2]).toEqual({
+      normal: { x: -1, y: 0, z: 0 },
+      depth: -5
+    });
+    expect(
+      canvas.querySelectorAll('.drawing-strokes.is-chain polyline')
+    ).toHaveLength(1);
+    expect(
+      canvas.querySelectorAll('.drawing-strokes.is-cutting polyline')
+    ).toHaveLength(2);
+    expect(within(canvas).getByText('SECTION A-A')).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Section A-A' })).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+        .disabled
+    ).toBe(false);
+  });
+
+  it('shows a refused section on its view and refuses export, without retrying', async () => {
+    resetRetainedProjections();
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const requestSection = vi.fn(() =>
+      Promise.reject(
+        new Error('The section line does not cut any body in this view.')
+      )
+    );
+    renderSheet(withSection(fingerprint), requestSection);
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/Section A-A cannot be drawn/).length
+      ).toBeGreaterThan(0)
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+        .disabled
+    ).toBe(true);
+    expect(requestSection).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates a section from a line dragged across a view, placed by a click', async () => {
+    resetRetainedProjections();
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const sheet = starter(fingerprint);
+    const { onCommand } = renderSheet(sheet, () =>
+      Promise.resolve({ [bodyId]: halfCube() })
+    );
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Section view' }));
+    const surface = canvas.querySelector('.drawing-section-surface')!;
+    expect(surface).toBeTruthy();
+    // happy-dom has no screen matrix: drive the tool in paper millimetres
+    // through a CTM that maps client pixels to them one to one.
+    const paperHeight = 297;
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const client = (x: number, y: number) => ({
+      clientX: x,
+      clientY: paperHeight - y,
+      button: 0,
+      pointerId: 1
+    });
+    // Down the front view's middle, top to bottom: a vertical line at x = 5,
+    // starting a little off it so the snap to the middle has work to do.
+    const x = front.centerMm.x + 0.8;
+    fireEvent.pointerDown(surface, client(x, front.centerMm.y + 8));
+    fireEvent.pointerMove(surface, client(x, front.centerMm.y - 8));
+    fireEvent.pointerUp(surface, client(x, front.centerMm.y - 8));
+    // Placed to the left: in first angle that is the right view.
+    fireEvent.pointerMove(
+      surface,
+      client(front.centerMm.x - 50, front.centerMm.y)
+    );
+    expect(canvas.querySelector('.drawing-section-ghost')).toBeTruthy();
+    fireEvent.pointerDown(
+      surface,
+      client(front.centerMm.x - 50, front.centerMm.y)
+    );
+    const added = onCommand.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.kind === 'drawing.view.add');
+    expect(added).toBeTruthy();
+    const view = (added!.payload as { view: DrawingSheet['views'][number] })
+      .view;
+    expect(view.orientation).toBe('right');
+    // The plane x = 5 seen along −X: depth −5, snapped to the middle.
+    expect(view.section).toEqual({
+      sourceViewId: front.viewId,
+      label: 'A',
+      depth: -5
+    });
+    expect(view.centerMm.y).toBe(front.centerMm.y);
   });
 });

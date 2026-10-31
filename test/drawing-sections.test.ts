@@ -68,7 +68,6 @@ afterAll(() => adapter.dispose());
 
 const sheetId = 'dsht_sections' as DrawingSheetId;
 const frontId = 'dvw_front' as DrawingViewId;
-const topId = 'dvw_top' as DrawingViewId;
 const sectionId = 'dvw_section' as DrawingViewId;
 
 function boredCylinder(boreDepth = 18): ProjectDocument {
@@ -447,7 +446,7 @@ describe('a section down a blind bore', () => {
     // depth from the top.
     const bodies = sectionBodies(
       document,
-      synced.bodyRepresentations as Record<string, BodyRepresentation>,
+      synced.bodyRepresentations,
       section,
       edges
     );
