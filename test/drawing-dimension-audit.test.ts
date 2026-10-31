@@ -121,15 +121,16 @@ describe('D06 dimension audit: the turned foot', () => {
       'Ø25 diameter.'
     ]);
     // Coaxial: nothing to locate across the axis. Along it, three faces
-    // need two dimensions, but only closed circles mark them.
+    // need two dimensions, but only closed circles mark them: a section
+    // through the axis would.
     expect(messages(audit.unmeasurable)).toEqual([
       '2× 45° chamfer or taper: its size and position need a chamfer dimension D02 cannot place yet.',
       '3× R4 revolved blend: its radius needs a dimension D02 cannot place yet.',
       expect.stringMatching(
-        /^Z: nothing locates the face at z = 9 from the face at z = 0: no edge marks it/
+        /^Z: nothing locates the face at z = 9 from the face at z = 0: only circles seen edge-on mark it; add a section through their axis\.$/
       ),
       expect.stringMatching(
-        /^Z: nothing locates the face at z = 50 from the face at z = 0: no edge marks it/
+        /^Z: nothing locates the face at z = 50 from the face at z = 0: only circles seen edge-on mark it; add a section through their axis\.$/
       )
     ]);
     expect(audit).toMatchObject({

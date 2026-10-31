@@ -1090,6 +1090,9 @@ function AutoDimensionPreview(props: {
           : no view shows that feature visible.
         </p>
       )}
+      {plan.sectionAdvice && (
+        <p className="drawing-hint">{plan.sectionAdvice}</p>
+      )}
       {waiting > 0 && (
         <p className="drawing-hint">
           Skips {waiting} it can&apos;t dimension yet, listed below.
