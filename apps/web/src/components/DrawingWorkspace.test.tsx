@@ -1924,4 +1924,72 @@ describe('DrawingWorkspace dimension check (D06)', () => {
     ).toBe('Horizontal dimension 10');
     expect(screen.getByText('1 of 3 stated')).toBeTruthy();
   });
+
+  it('previews Auto-dimension on the sheet, then adds it as one command', async () => {
+    const { onCommand, onStatus } = setup({
+      sheet: sheetWith([]),
+      exactFaces: true
+    });
+    const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
+    await waitFor(() => expect(auto).toBeEnabled());
+    await userEvent.click(auto);
+    const preview = screen.getByRole('group', {
+      name: 'Auto-dimension preview'
+    });
+    expect(
+      within(preview).getByText('Adds 3 dimensions, shown on the sheet.')
+    ).toBeTruthy();
+    // Drawn on the sheet, but nothing changes before Apply.
+    const drawn = screen.getByRole('img', { name: 'Auto-dimension preview' });
+    expect(
+      [...drawn.querySelectorAll('text')].map((text) => text.textContent)
+    ).toEqual(['10', '10', '10']);
+    expect(onCommand).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      within(preview).getByRole('button', { name: 'Apply' })
+    );
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.kind).toBe('transaction');
+    expect(command.label).toBe('Auto-dimension');
+    expect(command.commands?.map((entry) => entry.kind)).toEqual([
+      'drawing.annotation.add',
+      'drawing.annotation.add',
+      'drawing.annotation.add'
+    ]);
+    expect(onStatus).toHaveBeenCalledWith('Added 3 dimensions.');
+    expect(
+      screen.queryByRole('group', { name: 'Auto-dimension preview' })
+    ).toBeNull();
+  });
+
+  it('cancels the Auto-dimension preview on Escape, changing nothing', async () => {
+    const { onCommand } = setup({ sheet: sheetWith([]), exactFaces: true });
+    const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
+    await waitFor(() => expect(auto).toBeEnabled());
+    await userEvent.click(auto);
+    expect(
+      screen.getByRole('group', { name: 'Auto-dimension preview' })
+    ).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
+    expect(
+      screen.queryByRole('group', { name: 'Auto-dimension preview' })
+    ).toBeNull();
+    expect(
+      screen.queryByRole('img', { name: 'Auto-dimension preview' })
+    ).toBeNull();
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it('offers Auto-dimension only while the sheet can be edited', async () => {
+    setup({
+      sheet: sheetWith([]),
+      exactFaces: true,
+      editDisabledReason: 'Viewers cannot edit drawings.'
+    });
+    const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
+    expect(auto).toBeDisabled();
+    expect(auto).toHaveAttribute('title', 'Viewers cannot edit drawings.');
+  });
 });

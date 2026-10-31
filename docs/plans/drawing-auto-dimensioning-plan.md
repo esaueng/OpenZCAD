@@ -180,6 +180,24 @@ Each needs its own schema bump, claimed from open PRs at the time
   blend (a chamfer's edge) are listed as "can't dimension yet" or "not
   checked", never as satisfied.
 
+## Slice C decisions (Auto-dimension, 2026-10-31)
+
+- **One model, two uses.** The generator reads the checker's requirements
+  and links (`readDimensionState`), so what it adds is by construction what
+  the check calls missing, and the corpus test re-runs the check after
+  Apply.
+- **Baseline per axis.** Each unlinked group of positions gets one span to
+  the datum group, anchored at its lowest position where an edge marks it.
+- **View choice.** Visible anchors first, then the view already holding the
+  body's dimensions; a size takes the first of its circles whose leader
+  clears the sheet (the next bolt hole when one is boxed in).
+- **Placement.** Rows 10 mm off the view outline, 8 mm apart, shortest span
+  nearest. A candidate is refused when its text overlaps text or a line,
+  a dimension line runs along another line, or lines cross anywhere but at
+  a foot (a shared baseline extension line) or a radial centre.
+- **Hidden lines.** With no visible anchor in any view, a dimension measures
+  hidden lines and the preview says so, until D03 sections.
+
 ## Slices
 
 | Slice | Delivers                                                                                          | Acceptance                                                                                                    |
