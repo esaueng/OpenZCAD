@@ -40,6 +40,7 @@ service-account*.json
 .netrc
 
 *.tsbuildinfo
+__pycache__/
 .worktrees/
 backups/
 perf-results
