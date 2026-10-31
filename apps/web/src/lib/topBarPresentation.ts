@@ -53,13 +53,14 @@ export const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
 const saveStateLabels = (states: readonly WorkspaceSaveState[]) =>
   states.map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
 /** Signed in: the account round-trip. Signed out: device saves only. */
-export const CLOUD_SAVE_LABEL_RESERVE = saveStateLabels([
-  'saving',
-  'syncing',
-  'synced',
-  'offline'
-]);
-export const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
+export const CLOUD_SAVE_LABEL_RESERVE = [
+  ...saveStateLabels(['saving', 'syncing', 'synced', 'offline']),
+  'Checking'
+];
+export const DEVICE_SAVE_LABEL_RESERVE = [
+  ...saveStateLabels(['saving', 'local']),
+  'Checking'
+];
 // "Joining…" rather than "Connecting…": the room is joined for the opening
 // frames of every cloud project, and the longer word would either resize the
 // chip on the way in or cost the bar four characters for good.

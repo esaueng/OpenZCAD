@@ -55,6 +55,7 @@ import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
+import { gearHeightPreviewProfile } from './lib/interaction/gearHeightPreviewProfile';
 import { stepPreviewProfile } from './lib/interaction/stepPreviewProfile';
 import {
   parameterMinimums,
@@ -22931,16 +22932,23 @@ export function App() {
       (face) =>
         face.topologyId === target.topologyId && face.hash === target.hash
     );
+    const gearProfile =
+      !profile && !boxProfile && doc
+        ? gearHeightPreviewProfile(doc, body, pickedFace)
+        : null;
     const terminalProfile =
-      !profile && !boxProfile ? capPreviewProfile(body, pickedFace) : null;
+      !profile && !boxProfile && !gearProfile
+        ? capPreviewProfile(body, pickedFace)
+        : null;
     const linearProfile = boxProfile ?? terminalProfile;
     // Any other planar face: move it with its blends and stretch the walls
     // they meet, when that is what the exact move would do.
     const stepProfile =
-      !profile && !linearProfile && !E2E_EXACT_FACE_DRAG
+      !profile && !linearProfile && !gearProfile && !E2E_EXACT_FACE_DRAG
         ? stepPreviewProfile(body, pickedFace)
         : null;
     return {
+      ...(gearProfile ? { gearHeightProfilePreview: gearProfile } : {}),
       ...(linearProfile ? { linearProfilePreview: linearProfile } : {}),
       ...(stepProfile ? { stepProfilePreview: stepProfile } : {}),
       ...(profile ? { profilePreview: profile } : {}),
@@ -28869,6 +28877,9 @@ export function App() {
       }
       topBar={
         <TopBar
+          editPending={
+            isOperationState(interaction) && interaction.phase === 'validating'
+          }
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}

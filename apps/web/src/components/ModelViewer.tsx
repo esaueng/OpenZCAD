@@ -119,6 +119,7 @@ import {
   createBoreProfilePreview,
   createCylinderProfilePreview,
   createLinearProfilePreview,
+  createOffsetBodyPreview,
   createStepStretchPreview,
   createBodyGhost,
   type BodyGhost,
@@ -436,6 +437,8 @@ export interface FaceResizeCommit {
 
 /** An armed face-offset handle: where it sits and which face it edits. */
 export interface OffsetHandleTarget {
+  /** Full straight-span stretch, proven by the gear's feature ancestry. */
+  gearHeightProfilePreview?: LinearPreviewProfile;
   linearProfilePreview?: LinearPreviewProfile;
   stepProfilePreview?: StepPreviewProfile;
   profilePreview?: CylinderPreviewProfile;
@@ -1796,6 +1799,7 @@ function sameOffsetHandleTarget(
     a.totalBaseline === b.totalBaseline &&
     a.totalSense === b.totalSense &&
     !a.linearProfilePreview === !b.linearProfilePreview &&
+    !a.gearHeightProfilePreview === !b.gearHeightProfilePreview &&
     !a.stepProfilePreview === !b.stepProfilePreview &&
     !a.profilePreview === !b.profilePreview
   );
@@ -3635,30 +3639,53 @@ export function ModelViewer({
       const object = target && context.objectsByBodyId.get(target.bodyId);
       if (!target || !object) return false;
       const linearProfile = target.linearProfilePreview;
-      const preview = linearProfile
-        ? createLinearProfilePreview(object, linearProfile)
-        : profile
-          ? (() => {
-              const axis = new THREE.Vector3()
-                .copy(profile.axisEnd)
-                .sub(profile.axisStart);
-              const oriented =
-                axis.dot(target.normal) >= 0
-                  ? profile
-                  : {
-                      ...profile,
-                      axisStart: profile.axisEnd,
-                      axisEnd: profile.axisStart
-                    };
-              return createCylinderProfilePreview(object, oriented, 'height');
-            })()
-          : target.stepProfilePreview
-            ? orientedStepPreview(
-                object,
-                target.stepProfilePreview,
-                target.normal
-              )
-            : null;
+      const gearProfile = target.gearHeightProfilePreview;
+      const preview = gearProfile
+        ? (() => {
+            // A proven spur gear is a whole straight extrusion. An affine
+            // scene transform keeps its dense mesh and selection overlays
+            // together without exceeding the profile buffer-cache budget
+            // after a tall edit retessellates the tooth walls.
+            const affine = createOffsetBodyPreview(
+              object,
+              [
+                gearProfile.axisStart.x,
+                gearProfile.axisStart.y,
+                gearProfile.axisStart.z,
+                gearProfile.axisEnd.x,
+                gearProfile.axisEnd.y,
+                gearProfile.axisEnd.z
+              ],
+              target.normal
+            );
+            return affine
+              ? { ...affine, cachedBytes: 32 * Float64Array.BYTES_PER_ELEMENT }
+              : null;
+          })()
+        : linearProfile
+          ? createLinearProfilePreview(object, linearProfile)
+          : profile
+            ? (() => {
+                const axis = new THREE.Vector3()
+                  .copy(profile.axisEnd)
+                  .sub(profile.axisStart);
+                const oriented =
+                  axis.dot(target.normal) >= 0
+                    ? profile
+                    : {
+                        ...profile,
+                        axisStart: profile.axisEnd,
+                        axisEnd: profile.axisStart
+                      };
+                return createCylinderProfilePreview(object, oriented, 'height');
+              })()
+            : target.stepProfilePreview
+              ? orientedStepPreview(
+                  object,
+                  target.stepProfilePreview,
+                  target.normal
+                )
+              : null;
       // Generic offsets edit one face (or one constituent of an imported
       // compound), not the whole body's extent. An affine body stretch moves
       // unrelated geometry and snaps back as exact frames arrive. A step
@@ -11019,6 +11046,15 @@ export function ModelViewer({
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
+      if (!profilePreviewBadge.hidden) {
+        const text =
+          offsetHandleRef.current?.locked ||
+          cylinderRadiusHandleRef.current?.locked
+            ? 'Checking exact result…'
+            : 'Preview · exact on release';
+        if (profilePreviewBadge.textContent !== text)
+          profilePreviewBadge.textContent = text;
+      }
       updateOffsetChip();
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.
