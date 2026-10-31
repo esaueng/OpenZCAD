@@ -560,14 +560,20 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
     expect(derived.warnings).toEqual([]);
     expect(derived.featureWarnings ?? []).toEqual([]);
     const body = derived.bodyRepresentations[enveloping.bodyId]!;
-    // m 2, q 10, 30 teeth: center distance 40, throat tip diameter 24, tip
-    // hourglass tube radius 28; the caps (±12 from the throat) are its
-    // widest sections, 2·(40 − √(28² − 12²)).
+    // m 2, q 10, 30 teeth: center distance 40, throat tip and root
+    // diameters 24 and 15, so tip and root hourglass tube radii 28 and 32.5;
+    // the caps (±12 from the throat) are the widest sections. Grooves break
+    // the tip circle there, so across the axis the body spans at least the
+    // full root circle and at most the tip circle.
     const endTip = 2 * (40 - Math.sqrt(28 ** 2 - 12 ** 2));
+    const endRoot = 2 * (40 - Math.sqrt(32.5 ** 2 - 12 ** 2));
     const box = body.bbox;
     expect(box.min.z).toBeLessThanOrEqual(1e-6);
     expect(box.max.z).toBeGreaterThanOrEqual(24 - 1e-6);
-    expect(box.max.x - box.min.x).toBeGreaterThanOrEqual(endTip - 0.05);
+    for (const extent of [box.max.x - box.min.x, box.max.y - box.min.y]) {
+      expect(extent).toBeGreaterThanOrEqual(endRoot - 0.05);
+      expect(extent).toBeLessThanOrEqual(endTip + 0.05);
+    }
     // Between the root hourglass at the throat and the tip cylinder at the
     // caps, less the bore.
     const bore = Math.PI * 9 * 24;
