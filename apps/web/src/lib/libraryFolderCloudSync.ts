@@ -329,24 +329,35 @@ const stoppedAccounts = new Set<string>();
 const encrypting = new Map<string, Promise<boolean>>();
 
 const SEQUENCE_PREFIX = 'openzcad.library.folders.sequence.v1';
+/** Shared across sync rounds even when persistent storage refuses a pin. */
+const sequenceFloors = new Map<string, number>();
 
 /** The highest sealed-record sequence this device opened or wrote. */
-function sequencePins(accountId: string) {
+export function localStorageFolderSequencePins(accountId: string) {
   const key = `${SEQUENCE_PREFIX}:${accountId}`;
+  const remember = (value: number): number => {
+    const floor = Math.max(
+      sequenceFloors.get(accountId) ?? 0,
+      Number.isSafeInteger(value) && value > 0 ? value : 0
+    );
+    sequenceFloors.set(accountId, floor);
+    return floor;
+  };
+  const read = (): number => {
+    try {
+      return remember(Number(globalThis.localStorage?.getItem(key) ?? 0));
+    } catch {
+      return remember(0);
+    }
+  };
   return {
-    read(): number {
-      try {
-        const value = Number(globalThis.localStorage?.getItem(key) ?? 0);
-        return Number.isSafeInteger(value) && value > 0 ? value : 0;
-      } catch {
-        return 0;
-      }
-    },
+    read,
     write(sequence: number) {
+      const floor = remember(Math.max(read(), sequence));
       try {
-        globalThis.localStorage?.setItem(key, String(sequence));
+        globalThis.localStorage?.setItem(key, String(floor));
       } catch {
-        // Without the pin, a rollback is caught only within this visit.
+        // The shared memory floor still protects this visit.
       }
     }
   };
@@ -395,7 +406,7 @@ export function useLibraryFolderCloudSync(
             return sealedFolderCodec({
               accountKey: account.accountKey,
               userId: accountId,
-              pins: sequencePins(accountId)
+              pins: localStorageFolderSequencePins(accountId)
             });
           });
           const outcome = await syncLibraryFolders(host);
