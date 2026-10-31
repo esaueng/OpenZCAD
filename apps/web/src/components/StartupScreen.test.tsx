@@ -14,6 +14,18 @@ describe('startup screen', () => {
     );
   }
 
+  it('announces creation without claiming to check saved copies', () => {
+    const { container } = render(
+      <StartupScreen projectName="New bracket" stage="creating" />
+    );
+    expect(
+      screen.getByRole('status', { name: 'Creating project' })
+    ).toHaveTextContent('New bracket');
+    expect(screen.getByText('Creating your project')).toBeVisible();
+    expect(screen.queryByText('Checking saved copies')).toBeNull();
+    expect(steps(container)).toEqual(['is-active', '', '']);
+  });
+
   it('names the part and the real stage it is in', () => {
     const { container, rerender } = render(
       <StartupScreen projectName="Selected bracket" />

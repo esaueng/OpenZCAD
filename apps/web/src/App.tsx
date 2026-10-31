@@ -1005,7 +1005,7 @@ const InPlaceCommandBar = withSuspense(
   )
 );
 
-const LazyViewerShell = lazyWithStaleChunkNotice(() =>
+const LazyViewerShell = preloadableLazy(() =>
   import('./components/ViewerShell').then((module) => ({
     default: module.ViewerShell
   }))
@@ -2292,6 +2292,7 @@ export function App() {
   const fragmentNavigationRef = useRef(0);
   const navigationBusyRef = useRef<object | null>(null);
   const [openingProject, setOpeningProject] = useState<string | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
@@ -2301,11 +2302,15 @@ export function App() {
     setOpeningProject(null);
     setBusy(false);
   }, []);
-  const startNavigationBusy = useCallback((projectName?: string) => {
+  const startNavigationBusy = useCallback((
+    projectName?: string,
+    creating = false
+  ) => {
     const owner = {};
     navigationBusyRef.current = owner;
     setBusy(true);
     setOpeningProject(projectName ?? null);
+    setCreatingProject(creating);
     return () => {
       if (navigationBusyRef.current !== owner) return;
       navigationBusyRef.current = null;
@@ -12243,7 +12248,10 @@ export function App() {
     const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
-    const finishBusy = startNavigationBusy();
+    const finishBusy = startNavigationBusy(name, true);
+    // Load the viewport while the account creates the project. No document
+    // or keys are speculated, and a failed warm-up leaves render recovery intact.
+    void loadWhenOnline(() => LazyViewerShell.preload()).catch(() => undefined);
     async function createLocal(userId: UserId, message?: string) {
       const localDocument = createProjectDocument(name, userId, units);
       await saveLocalProject(localDocument);
@@ -27330,7 +27338,8 @@ export function App() {
     return (
       <StartupScreen
         projectName={openingProject}
-        backLabel={doc ? 'Cancel opening' : 'Back to projects'}
+        stage={creatingProject ? 'creating' : 'opening'}
+        backLabel={doc ? (creatingProject ? 'Cancel creating' : 'Cancel opening') : 'Back to projects'}
         onBack={() => {
           beginProjectNavigation();
           setStatus('');

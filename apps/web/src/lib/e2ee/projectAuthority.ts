@@ -362,7 +362,11 @@ export async function acceptProjectAuthorityManifest(
   checkOwner(local.owner, value);
   const lists = [
     ctx.account.list,
-    ...((await ctx.members?.lists(projectId, [value.ownerUserId])) ?? [])
+    // The account view already contains our verified device list. Looking
+    // up co-members cannot add evidence about a manifest we signed ourselves.
+    ...(value.ownerUserId === ctx.account.userId
+      ? []
+      : ((await ctx.members?.lists(projectId, [value.ownerUserId])) ?? []))
   ];
   const owner = lists.find(
     (list) =>

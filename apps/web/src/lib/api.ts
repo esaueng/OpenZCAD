@@ -426,11 +426,13 @@ async function readOptionalJson(
  * account's copy; an older Worker or a static host reads as no.
  */
 export async function encryptsNewProjects(): Promise<boolean> {
-  const session = await readOptionalJson('/api/session');
+  const [session, config] = await Promise.all([
+    readOptionalJson('/api/session'),
+    readOptionalJson('/api/e2ee/config')
+  ]);
   const userId = typeof session?.userId === 'string' ? session.userId : null;
   const pins = localStoragePreferencePins();
   const pinnedOptIn = userId !== null && (await pins.optedIn(userId));
-  const config = await readOptionalJson('/api/e2ee/config');
   // A deployment-wide requirement overrides the beta opt-in. Choose the
   // encrypted path before any plaintext request; locked keys or inconsistent
   // availability must fail there instead of sending a document first.
