@@ -177,7 +177,14 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       );
       fields(
         data,
-        ['faceWidth', 'backlash', 'boreDiameter', 'rimDiameter', 'backDepth'],
+        [
+          'faceWidth',
+          'backlash',
+          'boreDiameter',
+          'rimDiameter',
+          'backDepth',
+          'wormLength'
+        ],
         rewrite,
         'length'
       );

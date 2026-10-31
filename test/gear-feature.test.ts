@@ -245,6 +245,63 @@ describe('gear command validation', () => {
     ).toThrow();
   });
 
+  it('accepts an enveloping wheel, which needs the v45 schema', () => {
+    const wheel: GearInput = {
+      ...valid,
+      gearType: 'enveloping-wheel',
+      teeth: 40,
+      mateTeeth: 2,
+      diameterFactor: 10,
+      wormLength: 30,
+      faceWidth: 10,
+      outsideDiameter: 86,
+      hand: 'left',
+      backlash: 0.1,
+      boreDiameter: 12
+    };
+    expect(() =>
+      commandFactories.gearBody(wheel).validate(document)
+    ).not.toThrow();
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(45);
+  });
+
+  it.each([
+    ['enveloping wheel without its worm', { mateTeeth: undefined }],
+    ['enveloping wheel for an 11-start worm', { mateTeeth: 11 }],
+    ['enveloping wheel of 9 teeth', { teeth: 9 }],
+    ['enveloping wheel of 11 teeth for 6 starts', { teeth: 11, mateTeeth: 6 }],
+    [
+      'enveloping wheel without a diameter factor',
+      { diameterFactor: undefined }
+    ],
+    ['enveloping wheel without a worm length', { wormLength: undefined }],
+    ['enveloping wheel with a zero worm length', { wormLength: 0 }],
+    ['enveloping wheel profile shift', { profileShift: 0.2 }],
+    ['enveloping wheel root fillet', { rootFillet: 0.3 }],
+    ['enveloping wheel helix angle', { helixAngleDeg: 10 }],
+    ['enveloping wheel shaft angle', { shaftAngleDeg: 90 }],
+    ['enveloping wheel on a body', { fit: 'module' as const }],
+    ['throated enveloping wheel', { throated: true }]
+  ])('refuses an %s', (_label, overrides) => {
+    const wheel: GearInput = {
+      ...valid,
+      gearType: 'enveloping-wheel',
+      teeth: 30,
+      mateTeeth: 1,
+      diameterFactor: 10,
+      wormLength: 24,
+      faceWidth: 8,
+      ...overrides
+    };
+    expect(() => commandFactories.gearBody(wheel).validate(document)).toThrow();
+  });
+
+  it('refuses a worm length on any other gear', () => {
+    expect(() =>
+      commandFactories.gearBody({ ...valid, wormLength: 24 }).validate(document)
+    ).toThrow(/Only an enveloping wheel takes a worm length/);
+  });
+
   it('accepts a throated worm wheel, which needs the v43 schema', () => {
     const wheel: GearInput = {
       ...valid,
@@ -594,6 +651,68 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
       expect(names).toContain(name);
     }
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('builds an enveloping wheel with its throat and creased flanks', async () => {
+    const wheel = newGear({
+      gearType: 'enveloping-wheel',
+      teeth: 30,
+      mateTeeth: 1,
+      diameterFactor: 10,
+      wormLength: 24,
+      faceWidth: 8,
+      boreDiameter: 12
+    });
+    const derived = await adapter.syncDocument(wheel.document);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.featureWarnings ?? []).toEqual([]);
+    const body = derived.bodyRepresentations[wheel.bodyId]!;
+    // m 2, 30 teeth: root diameter 55, throat (tip) diameter 64 and, by
+    // default, outside diameter 66 beside the throat.
+    const box = body.bbox;
+    expect(box.min.z).toBeLessThanOrEqual(1e-6);
+    expect(box.max.z).toBeGreaterThanOrEqual(8 - 1e-6);
+    expect(box.max.x - box.min.x).toBeGreaterThanOrEqual(64 - 0.05);
+    const bore = Math.PI * 36 * 8;
+    expect(body.volume).toBeGreaterThan(Math.PI * 27.5 ** 2 * 8 - bore);
+    expect(body.volume).toBeLessThan(Math.PI * 33 ** 2 * 8 - bore);
+    const names = body.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    for (const name of [
+      'gear.face.cap.start',
+      'gear.face.cap.end',
+      'gear.face.bore',
+      'gear.face.tooth[0].throat',
+      'gear.face.tooth[0].tip.start-half',
+      'gear.face.tooth[0].flank.plus.start-half',
+      'gear.face.tooth[0].flank.minus.end-half',
+      'gear.face.root[0]'
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('refuses an enveloping wheel whose throat is wider than its face', async () => {
+    const narrow = await adapter.syncDocument(
+      newGear({
+        gearType: 'enveloping-wheel',
+        teeth: 30,
+        mateTeeth: 1,
+        diameterFactor: 10,
+        wormLength: 24,
+        faceWidth: 6
+      }).document
+    );
+    const refusal = narrow.featureWarnings!.find(
+      (warning) => warning.kind === 'build-failed'
+    );
+    expect(refusal?.kernelRefusal).toMatchObject({
+      family: 'gear',
+      code: 'gear:invalid-parameter'
+    });
+    expect(refusal?.message).toMatch(/Enveloping wheel/);
   });
 
   it('refuses an enveloping worm whose bore reaches its throat root', async () => {

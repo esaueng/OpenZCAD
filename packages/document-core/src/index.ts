@@ -4668,6 +4668,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'diameterFactor',
     'throated',
     'outsideDiameter',
+    'wormLength',
     'origin',
     'axis',
     'xDirection',
@@ -4725,8 +4726,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and
   // `mateTeeth` and `diameterFactor` only off the gear kinds that need them,
-  // and `outsideDiameter` only with `throated`, which the gear validation
-  // enforces.
+  // and `outsideDiameter` only with `throated`, and `wormLength` only off an
+  // enveloping wheel, which the gear validation enforces.
   gear: [
     'pitch',
     'pressureAngleDeg',
@@ -4744,6 +4745,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'diameterFactor',
     'throated',
     'outsideDiameter',
+    'wormLength',
     'xDirection',
     'boreDiameter',
     'rimDiameter',
