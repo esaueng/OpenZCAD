@@ -290,7 +290,7 @@ describe('D06 dimension audit: the turned foot', () => {
           },
           side: 'low',
           placementMm: { x: -40, y: 0 }
-        } as DrawingAnnotation
+        }
       ]),
       bodies,
       'mm'
