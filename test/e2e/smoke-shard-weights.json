@@ -31,6 +31,7 @@
   "start-screen-responsive.spec.ts": 3,
   "start-screen-sync-failures.spec.ts": 4,
   "start-tile-reorder.spec.ts": 2,
+  "standalone-gear-height.spec.ts": 60,
   "text-authoring.spec.ts": 7,
   "tool-rail-pins.spec.ts": 6,
   "viewport.spec.ts": 12
