@@ -374,9 +374,11 @@ export interface AnnotationTool {
  * not a pick of what the view draws under another.
  */
 export function drawingViewSignature(
-  view: Pick<DrawingView, 'orientation' | 'hiddenLines' | 'bodyIds'>
+  view: Pick<DrawingView, 'orientation' | 'hiddenLines' | 'bodyIds' | 'section'>
 ): string {
-  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}`;
+  // A section's cut is what it draws too: moving the plane ends a tool.
+  const cut = view.section ? `|section:${view.section.depth}` : '';
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}`;
 }
 
 export function startAnnotationTool(
