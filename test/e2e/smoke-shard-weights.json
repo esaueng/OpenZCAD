@@ -28,5 +28,6 @@
   "start-screen-sync-failures.spec.ts": 4,
   "start-tile-reorder.spec.ts": 2,
   "text-authoring.spec.ts": 7,
+  "tool-rail-pins.spec.ts": 6,
   "viewport.spec.ts": 12
 }

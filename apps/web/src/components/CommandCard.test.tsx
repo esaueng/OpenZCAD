@@ -471,7 +471,9 @@ describe('CommandCard', () => {
       renderCard(selection);
       openDrawer();
       for (const [tool, meta] of Object.entries(TOOL_META)) {
-        const escaped = meta.label.replace(/[()]/g, '\\$&');
+        // Every RegExp metacharacter, backslash included, so a label is
+        // matched literally whatever it holds.
+        const escaped = meta.label.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
         expect(
           screen.getAllByRole('button', {
             name: new RegExp(`^${escaped}( \\(.\\))? — `)
