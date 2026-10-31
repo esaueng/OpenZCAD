@@ -41,8 +41,11 @@ import {
 } from './sheetPage';
 import {
   add,
+  blendTube,
+  chamferCorner,
   cross,
   dot,
+  neighbourFaces,
   norm,
   readChamfer,
   scale,
@@ -100,7 +103,8 @@ export type AnnotationBreak =
   | 'leader-hidden'
   | 'invalid-reference'
   | 'no-sharp'
-  | 'not-a-chamfer';
+  | 'not-a-chamfer'
+  | 'not-a-blend';
 
 type UV = [number, number];
 
@@ -197,6 +201,8 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'These two faces have no virtual sharp this can read (they are parallel, or not coaxial surfaces and planes square to their axis), or it is not a point in this view.';
     case 'not-a-chamfer':
       return 'This face is no longer a chamfer between two faces: a cone or plane with a virtual sharp at each end.';
+    case 'not-a-blend':
+      return 'This face is no longer a revolved blend (a torus), so it has no blend radius to state.';
   }
 }
 
@@ -486,6 +492,17 @@ function pointOf(
       return { ok: false, reason: 'no-sharp' };
     return sharpPoint(frame, sharp.curve, along, across, point.side);
   }
+  if (point.anchor === 'chamfer-corner') {
+    const face = lookupFace(point.face, view, bodies);
+    if (!face.ok) return face;
+    const like = lookupFace(point.like, view, bodies);
+    if (!like.ok) return like;
+    if (face.face === like.face) return { ok: false, reason: 'ambiguous' };
+    const corner = chamferCorner(face.face, like.face, face.faces, face.edges);
+    if (!corner.ok) return corner;
+    if (!along || !across) return { ok: false, reason: 'no-sharp' };
+    return sharpPoint(frame, corner.circle, along, across, point.side);
+  }
   const found = lookupEdge(point.edge, view, bodies);
   if (!found.ok) return found;
   const edge = found.edge;
@@ -581,6 +598,81 @@ function silhouettePoint(
   };
   const sign = side === 'high' ? 1 : -1;
   return sign * dot(first, along) >= sign * dot(last, along) ? first : last;
+}
+
+/**
+ * A revolved blend's tube in a view that sees its torus side-on: the
+ * circle it draws on `side` of the axis (the extreme across the page that
+ * way), and the arc of it the face covers, between where the blend meets
+ * the faces either side.
+ */
+function blendTubeInView(
+  view: DrawingView,
+  face: FaceTopology,
+  faces: readonly FaceTopology[],
+  edges: readonly EdgeTopology[],
+  side: DrawingExtremeSide
+):
+  | { ok: true; center: UV; radius: number; arc?: number[] }
+  | { ok: false; reason: AnnotationBreak } {
+  const g = face.geometry;
+  if (!g || !g.surfaceType.toLowerCase().includes('tor') || !g.axis)
+    return { ok: false, reason: 'not-a-blend' };
+  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const across = cross(frame.direction, g.axis);
+  const width = norm(across);
+  // True size only side-on: the axis lies in the view's plane.
+  if (width < 1 - 1e-6) return { ok: false, reason: 'foreshortened' };
+  // The extreme across the page on `side`, along whichever page direction
+  // the tube's offset from the axis mostly runs.
+  const page =
+    Math.abs(dot(across, frame.x)) >= Math.abs(dot(across, frame.up))
+      ? frame.x
+      : frame.up;
+  const sign = (side === 'high' ? 1 : -1) * Math.sign(dot(across, page));
+  const outward = scale(across, sign / width);
+  const tube = blendTube(face, outward);
+  if (!tube) return { ok: false, reason: 'not-a-blend' };
+  const project = (point: Vector3): UV => {
+    const p = projectToView(frame, point);
+    return [p.u, p.v];
+  };
+  const center = project(tube.center);
+  // Where the blend meets its neighbours: its boundary circles, each at
+  // its own extreme on this side.
+  const neighbours = new Set(
+    neighbourFaces(face, faces, edges).map((other) => other.hash)
+  );
+  const ends: number[] = [];
+  for (const edge of edges) {
+    const circle = edge.curve?.circle;
+    const adjacent = edge.adjacentFaceHashes ?? [];
+    if (
+      !circle ||
+      !adjacent.includes(face.hash) ||
+      !adjacent.some((hash) => neighbours.has(hash))
+    )
+      continue;
+    const at = project(add(circle.center, scale(outward, circle.radius)));
+    const angle = Math.atan2(at[1] - center[1], at[0] - center[0]);
+    if (!ends.some((known) => Math.abs(known - angle) < 1e-9)) ends.push(angle);
+  }
+  if (ends.length !== 2) return { ok: true, center, radius: tube.radius };
+  // A blend turns through less than half a circle: the shorter way round.
+  const [start, end] = ends as [number, number];
+  let sweep = end - start;
+  while (sweep > Math.PI) sweep -= 2 * Math.PI;
+  while (sweep < -Math.PI) sweep += 2 * Math.PI;
+  const arc: number[] = [];
+  const steps = 16;
+  for (let i = 0; i <= steps; i += 1) {
+    const t = start + (sweep * i) / steps;
+    arc.push(
+      center[0] + tube.radius * Math.cos(t),
+      center[1] + tube.radius * Math.sin(t)
+    );
+  }
+  return { ok: true, center, radius: tube.radius, arc };
 }
 
 /** A virtual sharp as a point of a horizontal or vertical dimension. */
@@ -739,6 +831,32 @@ export function resolveDrawingAnnotation(
     }
     case 'radius':
     case 'diameter': {
+      if ('face' in annotation) {
+        const found = lookupFace(annotation.face, view, bodies);
+        if (!found.ok) return failure(found.reason);
+        const tube = blendTubeInView(
+          view,
+          found.face,
+          found.faces,
+          found.edges,
+          annotation.side
+        );
+        if (!tube.ok) return failure(tube.reason);
+        return {
+          ok: true,
+          resolved: {
+            kind: 'radius',
+            center: tube.center,
+            radius: tube.radius,
+            ...(tube.arc ? { arc: tube.arc } : {}),
+            value: tube.radius,
+            label: dimensionLabel(
+              annotation,
+              `R${formatDrawingNumber(tube.radius, decimals)}`
+            )
+          }
+        };
+      }
       const found = lookupEdge(annotation.edge, view, bodies);
       if (!found.ok) return failure(found.reason);
       const circle = faceOnCircle(view, found.edge);
@@ -903,11 +1021,20 @@ export type AnnotationModelReading =
       face: FaceTopology;
       size: number;
       angleDeg: number;
+    }
+  | {
+      /** v49: a revolved blend's radius, read from its torus face. */
+      kind: 'blend-radius';
+      bodyId: string;
+      face: FaceTopology;
+      radius: number;
     };
 
 /** The body a dimension point belongs to. */
 function pointBody(point: DrawingPointRef): string {
-  return 'faces' in point ? point.faces[0].bodyId : point.edge.bodyId;
+  if ('faces' in point) return point.faces[0].bodyId;
+  if ('like' in point) return point.face.bodyId;
+  return point.edge.bodyId;
 }
 
 export function annotationModelReading(
@@ -955,6 +1082,16 @@ export function annotationModelReading(
       face: found.face,
       size: resolution.resolved.value,
       angleDeg: resolution.resolved.angle
+    };
+  }
+  if ('face' in annotation) {
+    const found = lookupFace(annotation.face, view, bodies);
+    if (!found.ok || resolution.resolved.kind !== 'radius') return null;
+    return {
+      kind: 'blend-radius',
+      bodyId: annotation.face.bodyId,
+      face: found.face,
+      radius: resolution.resolved.radius
     };
   }
   const found = lookupEdge(annotation.edge, view, bodies);

@@ -200,7 +200,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // dimensions and provenance. An older client would refuse each as malformed
 // on load, or, past that, drop the meaning on its next save, so it must
 // refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 48 as const;
+// v49 adds D06 slice D drawing annotations: the chamfer-corner point, a
+// radius on a revolved blend face, and provenance marking a dimension read
+// from raw geometry. An older client would refuse each as malformed.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 49 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

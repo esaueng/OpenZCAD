@@ -9,12 +9,14 @@ import {
   type BodyId,
   type DrawingAnnotation,
   type DrawingAnnotationId,
+  type DrawingAnnotationProvenance,
   type DrawingEdgeRef,
   type DrawingPointRef,
   type DrawingSheet,
   type DrawingView,
   type DrawingViewId,
   type EdgeTopology,
+  type FaceTopology,
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
@@ -32,9 +34,10 @@ import {
   type AnnotationLayout,
   type ResolvedAnnotation
 } from './annotations';
-import { edgeRefFor } from './annotationPicking';
+import { edgeRefFor, faceRefFor } from './annotationPicking';
 import {
   axisOf,
+  blendLabel,
   boltLabel,
   chamferLabel,
   circleInGroup,
@@ -42,8 +45,10 @@ import {
   same,
   sizeLabel,
   type AuditAxis,
+  type Position,
   type SizeGroup
 } from './dimensionAudit';
+import { readChamfer } from './surfaceSharps';
 import {
   SHEET_MARGIN_MM,
   titleBlockBox,
@@ -72,12 +77,20 @@ import {
  * dimension; nothing overlaps text, other views or the title block, and
  * all of it stays on the paper. Existing dimensions are kept and count.
  *
+ * Slice D adds what a turned part needs: one chamfer dimension per chamfer
+ * group, on a face that reads its size, with its count ("2× 4 × 45°"); one
+ * radius per revolved-blend group off a torus seen side-on ("3× R4"); and
+ * spans ending on virtual points — a step chamfer's corner or virtual
+ * sharp — where no edge lies. Each carries provenance naming what it
+ * states, and on an import one read from raw geometry says so.
+ *
  * What the checker cannot state yet, and anything that finds no edge or no
  * room, is skipped and reported. See
  * docs/plans/drawing-auto-dimensioning-plan.md.
  */
 
 type XY = [number, number];
+type DrawingFaceRefOrNull = ReturnType<typeof faceRefFor>;
 
 export interface AutoDimensionSkip {
   bodyId: string;
@@ -95,8 +108,8 @@ export interface AutoDimensionPlan {
 
 /** A point a linear dimension may end on, in one view. */
 interface Anchor {
-  edge: EdgeTopology;
-  ref: DrawingEdgeRef;
+  /** The edge it lies on; absent on a virtual point. */
+  edge?: EdgeTopology;
   point: DrawingPointRef;
   /** A rim's silhouette (v48) is a point of one page direction only. */
   direction?: 'horizontal' | 'vertical';
@@ -125,6 +138,8 @@ interface Planned {
   visible: boolean;
   /** What it states, for a report when it finds no room. */
   what: string;
+  /** On an import: what it states is raw geometry, not a feature. */
+  basis?: 'geometry';
   /**
    * For a size: every circle that could state it, best first. Placement
    * takes the first whose leader clears the rest of the sheet.
@@ -168,15 +183,9 @@ export function planAutoDimensions(
   const skipped: AutoDimensionSkip[] = state.audit.unmeasurable.map(
     (finding) => ({ ...finding })
   );
-  // v48 chamfer dimensions and Ø pitch spans are the check's, and a
-  // person's, but not placed here yet.
+  // v48 Ø pitch spans are the check's, and a person's, but not placed here
+  // yet.
   for (const [bodyId, body] of state.bodies) {
-    for (const group of body.requirements.chamfers)
-      if (!body.statedChamfers.has(group))
-        skipped.push({
-          bodyId,
-          message: `${chamferLabel(group, units)}: Auto-dimension does not place chamfer dimensions yet; add it with the Chamfer tool.`
-        });
     for (const circle of body.requirements.boltCircles)
       if (!body.statedBoltCircles.has(circle))
         skipped.push({
@@ -240,6 +249,33 @@ export function planAutoDimensions(
     return refs.get(edge)!;
   };
 
+  const faceRefs = new Map<FaceTopology, DrawingFaceRefOrNull>();
+  const faceRefOf = (bodyId: string, face: FaceTopology) => {
+    if (!faceRefs.has(face))
+      faceRefs.set(face, faceRefFor(bodies, bodyId as BodyId, face));
+    return faceRefs.get(face)!;
+  };
+  /** The point a position's virtual mark names, if it has one. */
+  const virtualPoint = (
+    bodyId: string,
+    position: Position
+  ): DrawingPointRef | null => {
+    const mark = position.mark;
+    if (!mark) return null;
+    if (mark.kind === 'corner') {
+      const face = faceRefOf(bodyId, mark.face);
+      const like = faceRefOf(bodyId, mark.like);
+      return face && like
+        ? { anchor: 'chamfer-corner', face, like, side: 'high' }
+        : null;
+    }
+    const a = faceRefOf(bodyId, mark.faces[0]);
+    const b = faceRefOf(bodyId, mark.faces[1]);
+    return a && b
+      ? { anchor: 'virtual-sharp', faces: [a, b], side: 'high' }
+      : null;
+  };
+
   const anchorCache = new Map<string, Anchor[]>();
   const anchorsOf = (context: ViewContext, bodyId: string): Anchor[] => {
     const key = holdKey(context.view.viewId, bodyId);
@@ -258,7 +294,6 @@ export function planAutoDimensions(
         if (!point) continue;
         out.push({
           edge,
-          ref,
           point: { edge: ref, anchor },
           model: point.model,
           uv: point.uv,
@@ -285,7 +320,6 @@ export function planAutoDimensions(
           if (!at) continue;
           out.push({
             edge,
-            ref,
             point,
             direction,
             model: at.model,
@@ -295,6 +329,32 @@ export function planAutoDimensions(
           });
         }
     }
+    // Virtual points (v48/v49) where no edge lies: a step chamfer's corner
+    // or its virtual sharp. Drawn with extension lines to the point, so
+    // nothing hidden is measured.
+    const positions = state.bodies.get(bodyId)?.requirements.positions;
+    for (const axis of AXES)
+      for (const position of positions?.[axis] ?? []) {
+        const point = virtualPoint(bodyId, position);
+        if (!point) continue;
+        for (const direction of ['horizontal', 'vertical'] as const) {
+          const at = dimensionPointInView(
+            context.view,
+            point,
+            bodies,
+            direction
+          );
+          if (!at || !same(at.model[axis], position.value)) continue;
+          out.push({
+            point,
+            direction,
+            model: at.model,
+            uv: at.uv,
+            depth: at.depth,
+            visible: true
+          });
+        }
+      }
     // Visible first, then nearest the viewer: the edge the view shows.
     out.sort(
       (a, b) => Number(b.visible) - Number(a.visible) || a.depth - b.depth
@@ -305,9 +365,42 @@ export function planAutoDimensions(
 
   const planned: Planned[] = [];
   const plan = (entry: Planned) => {
+    const imported = bodies[entry.bodyId]?.source === 'imported-step';
+    const provenance: DrawingAnnotationProvenance = {
+      generated: true,
+      requirement: entry.what.slice(0, 200),
+      ...(imported && entry.basis === 'geometry'
+        ? { basis: 'geometry' as const }
+        : {})
+    };
+    const stamp = (annotation: DrawingAnnotation) =>
+      ({ ...annotation, provenance }) as DrawingAnnotation;
+    entry = {
+      ...entry,
+      annotation: stamp(entry.annotation),
+      ...(entry.options
+        ? {
+            options: entry.options.map((option) => ({
+              ...option,
+              annotation: stamp(option.annotation)
+            }))
+          }
+        : {})
+    };
     planned.push(entry);
     const key = holdKey(entry.context.view.viewId, entry.bodyId);
     held.set(key, (held.get(key) ?? 0) + 1);
+  };
+
+  /** Best first: visible, then where the body's other dimensions are. */
+  const sortOptions = (
+    options: NonNullable<Planned['options']>,
+    bodyId: string
+  ) => {
+    const score = (option: NonNullable<Planned['options']>[number]) =>
+      (option.visible ? 1000 : 0) + 10 * holding(option.context, bodyId);
+    // Stable: equals keep the sheet's view order and the kernel's order.
+    options.sort((a, b) => score(b) - score(a));
   };
 
   for (const [bodyId, body] of state.bodies) {
@@ -347,9 +440,98 @@ export function planAutoDimensions(
           kind: group.blend ? ('radius' as const) : ('diameter' as const),
           viewId: circle.context.view.viewId,
           edge: circle.ref,
+          ...(group.axes.length > 1 ? { count: group.axes.length } : {}),
           placementMm: { x: 0, y: 0 }
         }
       }));
+      plan({ bodyId, what: label, ...options[0]!, options });
+    }
+    // Chamfers: one per group, with its count, on a face that reads the
+    // group's size (an end chamfer, not a step sized like it), side-on.
+    const edgesOf = bodies[bodyId]?.topology?.edges ?? [];
+    const facesOf = bodies[bodyId]?.topology?.faces ?? [];
+    for (const group of requirements.chamfers) {
+      if (body.statedChamfers.has(group)) continue;
+      const label = chamferLabel(group, units);
+      if (
+        state.audit.unmeasurable.some(
+          (f) => f.bodyId === bodyId && f.message.startsWith(`${label}:`)
+        )
+      )
+        continue;
+      const annotationId = createId();
+      const options: NonNullable<Planned['options']> = [];
+      for (const face of group.faces) {
+        const reading = readChamfer(face, facesOf, edgesOf);
+        if (!reading.ok || !same(reading.size, group.size)) continue;
+        const ref = faceRefOf(bodyId, face);
+        if (!ref || reading.kind !== 'cone') continue;
+        for (const context of sideOn(measuring, bodyId, reading.axis))
+          options.push({
+            context,
+            visible: faceShown(context, face, edgesOf),
+            annotation: {
+              annotationId,
+              kind: 'chamfer',
+              viewId: context.view.viewId,
+              face: ref,
+              ...(group.faces.length > 1 ? { count: group.faces.length } : {}),
+              placementMm: { x: 0, y: 0 }
+            }
+          });
+      }
+      if (options.length === 0) {
+        skipped.push({
+          bodyId,
+          message: `${label}: no view sees a face of it side-on that can be told apart from another.`
+        });
+        continue;
+      }
+      sortOptions(options, bodyId);
+      plan({ bodyId, what: label, ...options[0]!, options });
+    }
+    // Revolved blends: one radius per group, with its count, off a torus's
+    // tube seen side-on, on either side of its axis.
+    for (const group of requirements.blends) {
+      if (body.statedBlends.has(group)) continue;
+      const label = blendLabel(group, units);
+      if (
+        state.audit.unmeasurable.some(
+          (f) => f.bodyId === bodyId && f.message.startsWith(`${label}:`)
+        )
+      )
+        continue;
+      const annotationId = createId();
+      const options: NonNullable<Planned['options']> = [];
+      group.faces.forEach((face, index) => {
+        const ref = faceRefOf(bodyId, face);
+        if (!ref) return;
+        for (const context of sideOn(measuring, bodyId, group.axes[index]!))
+          for (const side of ['high', 'low'] as const)
+            options.push({
+              context,
+              visible: faceShown(context, face, edgesOf),
+              annotation: {
+                annotationId,
+                kind: 'radius',
+                viewId: context.view.viewId,
+                face: ref,
+                side,
+                ...(group.faces.length > 1
+                  ? { count: group.faces.length }
+                  : {}),
+                placementMm: { x: 0, y: 0 }
+              }
+            });
+      });
+      if (options.length === 0) {
+        skipped.push({
+          bodyId,
+          message: `${label}: no view sees a face of it side-on that can be told apart from another.`
+        });
+        continue;
+      }
+      sortOptions(options, bodyId);
       plan({ bodyId, what: label, ...options[0]!, options });
     }
     // Positions: each group not linked to the datum gets one dimension to it.
@@ -400,11 +582,17 @@ export function planAutoDimensions(
           });
           continue;
         }
+        const basisAt = (value: number) =>
+          positions.find((known) => same(known.value, value))?.basis;
         plan({
           bodyId,
           context: best.context,
           visible: best.from.visible && best.to.visible,
           what,
+          ...(basisAt(best.from.model[axis]) === 'geometry' ||
+          basisAt(best.to.model[axis]) === 'geometry'
+            ? { basis: 'geometry' as const }
+            : {}),
           annotation: {
             annotationId: createId(),
             kind: 'linear',
@@ -550,7 +738,10 @@ function bestSpan(
           1000 * (Number(from.anchor.visible) + Number(to.anchor.visible)) +
           100 * Number(same(from.value, lowest)) +
           10 * holding(context, bodyId) +
-          Number(from.anchor.edge === to.anchor.edge);
+          Number(
+            from.anchor.edge !== undefined &&
+              from.anchor.edge === to.anchor.edge
+          );
         if (!best || score > best.score)
           best = {
             context,
@@ -562,6 +753,33 @@ function bestSpan(
       }
   }
   return best;
+}
+
+/** The measuring views that see a surface of revolution about `axis` side-on. */
+function sideOn(
+  measuring: readonly ViewContext[],
+  bodyId: string,
+  axis: Vector3
+): ViewContext[] {
+  return measuring.filter((context) => {
+    if (!context.view.bodyIds.includes(bodyId as BodyId)) return false;
+    const d = DRAWING_VIEW_FRAMES[context.view.orientation].direction;
+    return Math.abs(axis.x * d.x + axis.y * d.y + axis.z * d.z) <= 1e-6;
+  });
+}
+
+/** Whether the view draws visible any edge bounding `face`. */
+function faceShown(
+  context: ViewContext,
+  face: FaceTopology,
+  edges: readonly EdgeTopology[]
+): boolean {
+  return edges.some(
+    (edge) =>
+      edge.displayRole !== 'seam' &&
+      (edge.adjacentFaceHashes ?? []).includes(face.hash) &&
+      edgeVisible(context, edge)
+  );
 }
 
 function isClosed(edge: EdgeTopology): boolean {
@@ -993,8 +1211,9 @@ function placeAll(
   }
 
   /**
-   * A radius or diameter's best placement: text out of its view on a
-   * leader that clears everything (`clear`), else anywhere it fits.
+   * A radius, diameter or chamfer's best placement: text out of its view on
+   * a leader that clears everything (`clear`), else anywhere it fits. A
+   * chamfer's leader starts at the middle of one of its drawn sides.
    */
   const placeRadial = (
     entry: Planned
@@ -1004,41 +1223,34 @@ function placeAll(
     clear: boolean;
   } | null => {
     const first = layoutOf(entry, entry.annotation);
-    if (
-      !first ||
-      (first.resolved.kind !== 'radius' && first.resolved.kind !== 'diameter')
-    )
-      return null;
+    if (!first) return null;
     const resolved = first.resolved;
     const toPage = entry.context.toPage;
-    const c = toPage(...resolved.center);
-    const r = resolved.radius * k;
+    const origins: { c: XY; r: number; aim?: XY }[] = [];
+    if (resolved.kind === 'radius' || resolved.kind === 'diameter') {
+      const c = toPage(...resolved.center);
+      let aim: XY | undefined;
+      if (resolved.arc && resolved.arc.length >= 4) {
+        // A blend's arc: point at its middle, where the arrow can land.
+        const middle = Math.floor(resolved.arc.length / 4) * 2;
+        const m = toPage(resolved.arc[middle]!, resolved.arc[middle + 1]!);
+        const length = Math.hypot(m[0] - c[0], m[1] - c[1]);
+        if (length > 1e-9)
+          aim = [(m[0] - c[0]) / length, (m[1] - c[1]) / length];
+      }
+      origins.push({ c, r: resolved.radius * k, ...(aim ? { aim } : {}) });
+    } else if (resolved.kind === 'chamfer') {
+      for (const [a, b] of resolved.segments) {
+        const p = toPage(...a);
+        const q = toPage(...b);
+        origins.push({ c: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], r: 0 });
+      }
+    } else return null;
     const box = entry.context.box;
     const outline = rectOf(box);
     const centre: XY = [box.x + box.width / 2, box.y + box.height / 2];
-    const outward =
-      Math.hypot(c[0] - centre[0], c[1] - centre[1]) > 1e-6
-        ? [c[0] - centre[0], c[1] - centre[1]]
-        : [1, 1];
-    const directions: XY[] = Array.from({ length: 8 }, (_, index) => {
-      const angle = Math.PI / 4 + (index * Math.PI) / 4;
-      return [Math.cos(angle), Math.sin(angle)] as XY;
-    }).sort(
-      (u, v) =>
-        v[0] * outward[0]! +
-        v[1] * outward[1]! -
-        (u[0] * outward[0]! + u[1] * outward[1]!)
-    );
-    if (resolved.arc && resolved.arc.length >= 4) {
-      // A blend's arc: point at its middle, where the arrow can land.
-      const middle = Math.floor(resolved.arc.length / 4) * 2;
-      const m = toPage(resolved.arc[middle]!, resolved.arc[middle + 1]!);
-      const length = Math.hypot(m[0] - c[0], m[1] - c[1]);
-      if (length > 1e-9)
-        directions.unshift([(m[0] - c[0]) / length, (m[1] - c[1]) / length]);
-    }
-    /** How far along `u` from the centre the view outline ends. */
-    const exit = (u: XY) => {
+    /** How far along `u` from `c` the view outline ends. */
+    const exit = (c: XY, u: XY) => {
       let t = Infinity;
       if (u[0] > 1e-9) t = Math.min(t, (outline.maxX - c[0]) / u[0]);
       if (u[0] < -1e-9) t = Math.min(t, (outline.minX - c[0]) / u[0]);
@@ -1048,29 +1260,40 @@ function placeAll(
     };
     let fallback: { annotation: DrawingAnnotation; print: Footprint } | null =
       null;
-    let chosen: { annotation: DrawingAnnotation; print: Footprint } | null =
-      null;
-    const reaches = (u: XY) => [
-      r + 5,
-      ...[0, 8, 18, 30].map((extra) => exit(u) + LEADER_CLEAR_MM + extra)
-    ];
-    for (let step = 0; step < 5 && !chosen; step += 1)
-      for (const u of directions) {
-        const reach = reaches(u)[step]!;
-        if (reach < r + 3) continue;
-        const annotation = placedAt(entry, [
-          c[0] + u[0] * reach,
-          c[1] + u[1] * reach
-        ]);
-        const laid = layoutOf(entry, annotation);
-        if (!laid || !fits(laid.print, entry.context, false)) continue;
-        if (!rectsOverlap(rectOf(laid.print.box), outline)) {
-          chosen = { annotation, print: laid.print };
-          break;
+    for (const { c, r, aim } of origins) {
+      const outward =
+        Math.hypot(c[0] - centre[0], c[1] - centre[1]) > 1e-6
+          ? [c[0] - centre[0], c[1] - centre[1]]
+          : [1, 1];
+      const directions: XY[] = Array.from({ length: 8 }, (_, index) => {
+        const angle = Math.PI / 4 + (index * Math.PI) / 4;
+        return [Math.cos(angle), Math.sin(angle)] as XY;
+      }).sort(
+        (u, v) =>
+          v[0] * outward[0]! +
+          v[1] * outward[1]! -
+          (u[0] * outward[0]! + u[1] * outward[1]!)
+      );
+      if (aim) directions.unshift(aim);
+      const reaches = (u: XY) => [
+        r + 5,
+        ...[0, 8, 18, 30].map((extra) => exit(c, u) + LEADER_CLEAR_MM + extra)
+      ];
+      for (let step = 0; step < 5; step += 1)
+        for (const u of directions) {
+          const reach = reaches(u)[step]!;
+          if (reach < r + 3) continue;
+          const annotation = placedAt(entry, [
+            c[0] + u[0] * reach,
+            c[1] + u[1] * reach
+          ]);
+          const laid = layoutOf(entry, annotation);
+          if (!laid || !fits(laid.print, entry.context, false)) continue;
+          if (!rectsOverlap(rectOf(laid.print.box), outline))
+            return { annotation, print: laid.print, clear: true };
+          fallback ??= { annotation, print: laid.print };
         }
-        fallback ??= { annotation, print: laid.print };
-      }
-    if (chosen) return { ...chosen, clear: true };
+    }
     return fallback && { ...fallback, clear: false };
   };
   // Then each radius or diameter: the first of its circles that takes a

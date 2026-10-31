@@ -248,6 +248,47 @@ Each needs its own schema bump, claimed from open PRs at the time
 - **Hidden lines.** With no visible anchor in any view, a dimension measures
   hidden lines and the preview says so, until D03 sections.
 
+## Slice D decisions (history-less imports, schema v49, 2026-10-31)
+
+- **Version.** No open PR claimed v49, so slice D takes it. Every addition is
+  optional, and an older client refuses the document.
+- **Recognition stays in the checker.** The exact recognizer publishes
+  nothing for the foot (no hole, boss or pocket proof fits a turned
+  profile), and the kernel's fillet bands cover straight blends only. So the
+  turned surfaces, chamfers and tori are read from the exact surfaces every
+  body publishes, the same way for an import as for a part with history: the
+  foot's import and its revolved original give the same eight requirements.
+  `recognizedImportedFeatures` faces still count as explained (below).
+- **A step chamfer is its sibling's chamfer.** A cone between two diameters
+  has a size only where the smaller one happens to cut it (the shoulder's
+  3.5). When an end chamfer of equal angle sits on the same larger diameter
+  and is at least as long, the step is taken as that chamfer: one counted
+  group ("2× 4 × 45°"), located at the corner it cut, which is its virtual
+  sharp with the larger diameter plus the sibling's size along the axis (the
+  29). It is stored as a `chamfer-corner` point naming both faces, so the
+  value is still read from the model. With no such sibling, a step keeps its
+  own size and is located at its virtual sharp with the larger diameter. A
+  chamfer dimension on the step's own face then reads 3.5 and is reported
+  as derived.
+- **Virtual sharps are the real positions.** Each chamfer's ends, and the
+  circles where blends meet the next face, are derived positions. A radius
+  or diameter on a circle that bounds a chamfer or blend and no hole or boss
+  (the contact Ø32) is derived rather than unchecked.
+- **Revolved blends.** A radius dimension may name a torus face and a side
+  instead of an edge: the tube circle seen side-on, with its arc between the
+  blend's boundary circles. Tori group by tube radius and count by face, so
+  "3× R4" is one requirement. No picker places one yet; Auto-dimension and
+  the assistant's checker do.
+- **Counts on sizes.** Auto-dimension now puts the count on every grouped
+  diameter or radius it places ("2× Ø6"), as well as on chamfers and blends.
+- **Raw geometry.** On an import, a planar face is explained by a feature
+  when it is part of the body's envelope (its bounding box) or a recognized
+  feature's face, or when it borders a turned surface about its normal (a
+  hole's floor, a boss's top, a shoulder). Any other face's position is raw
+  geometry, and a span to it carries `provenance.basis: 'geometry'`, which
+  the preview counts and the inspector names. Every generated dimension now
+  carries provenance with the requirement it states.
+
 ## Slices
 
 | Slice | Delivers                                                                                          | Acceptance                                                                                                    |

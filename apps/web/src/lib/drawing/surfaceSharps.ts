@@ -233,6 +233,8 @@ export type ChamferReading =
       kind: 'cone';
       /** The two end circles, nearer the axis's start first. */
       ends: [SharpCurve & { kind: 'circle' }, SharpCurve & { kind: 'circle' }];
+      /** The face beyond each end (through any blend), in `ends` order. */
+      endFaces: [FaceTopology, FaceTopology];
       axis: Vector3;
       size: number;
       angleDeg: number;
@@ -280,7 +282,11 @@ export function readChamfer(
     }
   }
   if (surface.kind === 'cone') {
-    const circles: { t: number; curve: SharpCurve & { kind: 'circle' } }[] = [];
+    const circles: {
+      t: number;
+      curve: SharpCurve & { kind: 'circle' };
+      face: FaceTopology;
+    }[] = [];
     for (const end of ends) {
       const sharp = virtualSharp(face, end);
       if (!sharp.ok || sharp.curve.kind !== 'circle') continue;
@@ -292,7 +298,7 @@ export function readChamfer(
             Math.abs(known.t - t) <= tolerance(known.t, t, curve.radius)
         )
       )
-        circles.push({ t, curve });
+        circles.push({ t, curve, face: end });
     }
     if (circles.length < 2) return { ok: false, reason: 'not-a-chamfer' };
     circles.sort((p, q) => p.t - q.t);
@@ -302,6 +308,7 @@ export function readChamfer(
       ok: true,
       kind: 'cone',
       ends: [low.curve, high.curve],
+      endFaces: [low.face, high.face],
       axis: surface.axis,
       size: high.t - low.t,
       angleDeg: (surface.halfAngle * 180) / Math.PI
@@ -363,5 +370,135 @@ export function readChamfer(
     ends: [l0, l1],
     size,
     angleDeg: angles[along]!
+  };
+}
+
+/**
+ * D06 slice D: how a cone chamfer ends. An end chamfer cuts a diameter's
+ * corner with an end face square to its axis, so its size is its own; a
+ * step chamfer runs from one diameter to another, and its size is only
+ * where the smaller one happens to cut it.
+ */
+export function chamferEnds(
+  reading: Extract<ChamferReading, { ok: true; kind: 'cone' }>
+):
+  | {
+      kind: 'end';
+      /** The end on the diameter, and on the end face. */
+      diameter: 0 | 1;
+    }
+  | {
+      kind: 'step';
+      /** The end on the larger diameter. */
+      larger: 0 | 1;
+    }
+  | null {
+  const kinds = reading.endFaces.map((face) => surfaceOf(face)?.kind);
+  if (kinds[0] === 'cylinder' && kinds[1] === 'plane')
+    return { kind: 'end', diameter: 0 };
+  if (kinds[0] === 'plane' && kinds[1] === 'cylinder')
+    return { kind: 'end', diameter: 1 };
+  if (kinds[0] === 'cylinder' && kinds[1] === 'cylinder')
+    return {
+      kind: 'step',
+      larger: reading.ends[0].radius >= reading.ends[1].radius ? 0 : 1
+    };
+  return null;
+}
+
+export type ChamferCornerResult =
+  | {
+      ok: true;
+      /** The corner, as a circle on the larger diameter. */
+      circle: SharpCurve & { kind: 'circle' };
+      /** The size and angle it takes from `like`. */
+      size: number;
+      angleDeg: number;
+    }
+  | { ok: false; reason: 'not-a-chamfer' | 'no-sharp' };
+
+/**
+ * The sharp corner a step chamfer cut, taken as the same chamfer as `like`:
+ * an end chamfer of equal angle on the same diameter. From the step's
+ * virtual sharp with that diameter, `like`'s size along the axis away from
+ * it. A shoulder chamfered 4 × 45° where a neck now meets it at 3.5 ends,
+ * as drawn, at the 4.
+ *
+ * Refused (`no-sharp`) when `like` is shorter than the step itself: the
+ * step would then run past the corner it claims to cut.
+ */
+export function chamferCorner(
+  face: FaceTopology,
+  like: FaceTopology,
+  faces: readonly FaceTopology[],
+  edges: readonly EdgeTopology[]
+): ChamferCornerResult {
+  const step = readChamfer(face, faces, edges);
+  const sibling = readChamfer(like, faces, edges);
+  if (
+    !step.ok ||
+    step.kind !== 'cone' ||
+    !sibling.ok ||
+    sibling.kind !== 'cone'
+  )
+    return { ok: false, reason: 'not-a-chamfer' };
+  const stepEnds = chamferEnds(step);
+  const siblingEnds = chamferEnds(sibling);
+  if (stepEnds?.kind !== 'step' || siblingEnds?.kind !== 'end')
+    return { ok: false, reason: 'not-a-chamfer' };
+  const body = step.ends[stepEnds.larger];
+  const other = step.ends[stepEnds.larger === 0 ? 1 : 0];
+  const theirs = sibling.ends[siblingEnds.diameter];
+  const tol = tolerance(body.radius, norm(body.center), norm(theirs.center));
+  // The same diameter: one radius about one axis.
+  const between = sub(theirs.center, body.center);
+  const along = dot(between, body.axis);
+  if (
+    Math.abs(Math.abs(dot(body.axis, theirs.axis)) - 1) > 1e-6 ||
+    Math.sqrt(Math.max(0, dot(between, between) - along * along)) > tol ||
+    Math.abs(body.radius - theirs.radius) > tol ||
+    Math.abs(step.angleDeg - sibling.angleDeg) > 1e-6
+  )
+    return { ok: false, reason: 'not-a-chamfer' };
+  if (sibling.size < step.size - tol) return { ok: false, reason: 'no-sharp' };
+  const away = unit(sub(other.center, body.center));
+  if (!away) return { ok: false, reason: 'no-sharp' };
+  return {
+    ok: true,
+    circle: {
+      kind: 'circle',
+      center: add(body.center, scale(away, sibling.size)),
+      axis: body.axis,
+      radius: body.radius
+    },
+    size: sibling.size,
+    angleDeg: sibling.angleDeg
+  };
+}
+
+/**
+ * A revolved blend's tube seen side-on: the torus's axis lies in the view
+ * plane, and its tube draws as a circle either side of it. `outward` is the
+ * unit direction from the axis to the tube on the chosen side.
+ */
+export function blendTube(
+  face: FaceTopology,
+  outward: Vector3
+): { center: Vector3; radius: number } | null {
+  const g = face.geometry;
+  if (
+    !g ||
+    !g.surfaceType.toLowerCase().includes('tor') ||
+    !g.torusCenter ||
+    !g.axis ||
+    g.majorRadius === undefined ||
+    g.minorRadius === undefined
+  )
+    return null;
+  const axis = unit(g.axis);
+  if (!axis || Math.abs(dot(axis, outward)) > 1e-6) return null;
+  return {
+    center: add(g.torusCenter, scale(outward, g.majorRadius)),
+    radius: g.minorRadius
   };
 }

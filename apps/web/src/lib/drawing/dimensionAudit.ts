@@ -1,5 +1,6 @@
 import {
   DRAWING_VIEW_FRAMES,
+  type BoundingBox,
   type DrawingAnnotationId,
   type DrawingSheet,
   type EdgeTopology,
@@ -13,7 +14,12 @@ import {
   formatDrawingNumber,
   type AnnotationBodies
 } from './annotations';
-import { readChamfer } from './surfaceSharps';
+import {
+  chamferCorner,
+  chamferEnds,
+  readChamfer,
+  type ChamferReading
+} from './surfaceSharps';
 
 /**
  * D06 slice A: does a sheet's dimension set state every size and location
@@ -40,6 +46,18 @@ import { readChamfer } from './surfaceSharps';
  * turned surface or a bolt circle states its diameter, and a chamfer
  * dimension states a chamfer — grouped by size and angle, so "2× 4 × 45°"
  * is one requirement.
+ *
+ * Slice D (schema v49) reads a history-less import the way its designer
+ * drew it. A chamfer is located at its virtual sharp, never where a blend
+ * meets it; a step chamfer running from one diameter into another, with an
+ * end chamfer of equal angle on the same diameter, is that same chamfer
+ * ("2× 4 × 45°"), located at the corner it cut (the foot's 29), and its
+ * length to the smaller diameter is derived. Revolved blends are stated by
+ * radius, grouped by count ("3× R4"), and a circle where a chamfer or blend
+ * meets the next face is derived (the foot's Ø32). On an import, a planar
+ * face no feature explains — not the part's envelope, not a recognized
+ * feature's face, not the floor or shoulder of a turned surface — is raw
+ * geometry, and its position is marked so (decision 2).
  *
  * Everything is read from the current model, as dimensions are; nothing is
  * stored. See docs/plans/drawing-auto-dimensioning-plan.md.
@@ -107,10 +125,23 @@ export function axisOf(direction: Vector3): AuditAxis | null {
   return null;
 }
 
+/**
+ * A point no edge marks, where a dimension ends on a v48/v49 virtual point:
+ * a step chamfer's corner sized like its sibling, or its virtual sharp with
+ * the larger diameter when it has no sibling.
+ */
+export type VirtualMark =
+  | { kind: 'corner'; face: FaceTopology; like: FaceTopology }
+  | { kind: 'sharp'; faces: [FaceTopology, FaceTopology] };
+
 /** A position on one model axis that a dimension may have to state. */
 export interface Position {
   value: number;
   label: string;
+  /** Where a dimension can end on it when no edge does. */
+  mark?: VirtualMark;
+  /** On an import: a face no recognized feature explains (decision 2). */
+  basis?: 'geometry';
 }
 
 /** One body's requirements, as positions per axis and size groups. */
@@ -120,9 +151,32 @@ export interface BodyRequirements {
   derived: Record<AuditAxis, Position[]>;
   sizes: SizeGroup[];
   chamfers: ChamferGroup[];
+  /** Revolved blends (tori) of one radius, stated once with a count. */
+  blends: BlendGroup[];
   boltCircles: BoltCircle[];
+  /**
+   * Circles where a chamfer or blend meets the next face, bounding no hole
+   * or boss: the feature's own size fixes them.
+   */
+  derivedCircles: { center: Vector3; axis: Vector3; radius: number }[];
   /** Requirements no dimension can state yet, already worded. */
   unmeasurable: string[];
+}
+
+/** Like revolved blends: one radius, stated once with a count. */
+export interface BlendGroup {
+  radius: number;
+  faces: FaceTopology[];
+  axes: Vector3[];
+}
+
+/** What a body's reading needs beyond its faces and edges. */
+interface BodyContext {
+  /** A history-less import, whose raw geometry is marked (decision 2). */
+  imported: boolean;
+  /** Faces of the import's recognized features. */
+  recognized: ReadonlySet<number>;
+  bbox?: BoundingBox;
 }
 
 /** Like chamfers: one size and angle, stated once with a count. */
@@ -197,12 +251,18 @@ function tangentTo(
 function bodyRequirements(
   faces: readonly FaceTopology[],
   edges: readonly EdgeTopology[],
-  units: UnitSystem
+  units: UnitSystem,
+  context: BodyContext = { imported: false, recognized: new Set() }
 ): BodyRequirements {
   const positions: BodyRequirements['positions'] = { x: [], y: [], z: [] };
   const derived: BodyRequirements['derived'] = { x: [], y: [], z: [] };
   const sizes: SizeGroup[] = [];
   const chamfers: ChamferGroup[] = [];
+  const blends: BlendGroup[] = [];
+  const cones: {
+    face: FaceTopology;
+    reading: Extract<ChamferReading, { ok: true; kind: 'cone' }>;
+  }[] = [];
   const boltCircles: BoltCircle[] = [];
   const unmeasurable = new Map<string, number>();
   const note = (message: string) =>
@@ -220,6 +280,35 @@ function bodyRequirements(
         }
   }
   const byHash = new Map(faces.map((face) => [face.hash, face]));
+
+  /**
+   * Whether a feature explains a planar face square to `along` at `value`:
+   * the part's envelope there, a recognized feature's face, or the floor,
+   * end or shoulder of a turned surface about that axis.
+   */
+  const explainedPlane = (
+    face: FaceTopology,
+    along: AuditAxis,
+    value: number
+  ): boolean => {
+    const bbox = context.bbox;
+    if (bbox && (same(bbox.min[along], value) || same(bbox.max[along], value)))
+      return true;
+    if (context.recognized.has(face.hash)) return true;
+    return [...(neighbours.get(face.hash) ?? [])].some((hash) => {
+      const g = byHash.get(hash)?.geometry;
+      if (!g || g.featureType === 'blend') return false;
+      const type = g.surfaceType.toLowerCase();
+      const direction = type.includes('cylind')
+        ? g.axisStart && g.axisEnd
+          ? sub(g.axisEnd, g.axisStart)
+          : null
+        : type.includes('cone')
+          ? (g.axis ?? null)
+          : null;
+      return direction !== null && axisOf(direction) === along;
+    });
+  };
 
   const addSize = (
     radius: number,
@@ -292,7 +381,10 @@ function bodyRequirements(
         const value = geometry.planeOffset * normal[along];
         addPosition(positions[along], {
           value,
-          label: `the face at ${along} = ${format(value, units)}`
+          label: `the face at ${along} = ${format(value, units)}`,
+          ...(context.imported && !explainedPlane(face, along, value)
+            ? { basis: 'geometry' as const }
+            : {})
         });
       }
     } else if (
@@ -366,31 +458,25 @@ function bodyRequirements(
         'turned',
         positions
       );
-      note(
-        `R${format(geometry.minorRadius, units)} revolved blend: its radius needs a dimension D02 cannot place yet`
+      // v49 states its radius off its tube, side-on.
+      let group = blends.find((known) =>
+        same(known.radius, geometry.minorRadius!)
       );
+      if (!group) {
+        group = { radius: geometry.minorRadius, faces: [], axes: [] };
+        blends.push(group);
+      }
+      group.faces.push(face);
+      group.axes.push(geometry.axis);
     } else if (type.includes('cone') && geometry.apex && geometry.axis) {
       addAxisPositions(geometry.apex, geometry.axis, 'turned', positions);
       // A chamfer runs between virtual sharps with the faces either side;
       // a cone that does not is a taper, which nothing states yet.
       const chamfer = readChamfer(face, faces, edges);
       if (chamfer.ok && chamfer.kind === 'cone') {
-        let group = chamfers.find(
-          (known) =>
-            same(known.size, chamfer.size) &&
-            same(known.angleDeg, chamfer.angleDeg)
-        );
-        if (!group) {
-          group = {
-            size: chamfer.size,
-            angleDeg: chamfer.angleDeg,
-            faces: [],
-            axes: []
-          };
-          chamfers.push(group);
-        }
-        group.faces.push(face);
-        group.axes.push(chamfer.axis);
+        // Grouped once every cone is read: a step chamfer takes its size
+        // from a sibling end chamfer.
+        cones.push({ face, reading: chamfer });
       } else {
         note(
           `${format(((geometry.halfAngle ?? 0) * 180) / Math.PI, units)}° taper: its size and position need a dimension this check does not read yet`
@@ -402,6 +488,74 @@ function bodyRequirements(
       );
     }
   }
+
+  // Chamfers by size and angle. An end chamfer's size is its own; a step
+  // chamfer between two diameters is sized like an end chamfer of equal
+  // angle on its larger diameter when there is one, and located at the
+  // corner that chamfer would cut, so "2× 4 × 45°" and the 29 state it.
+  // Without one it is located at its virtual sharp with the larger
+  // diameter. Either way its own ends are derived.
+  const ends = cones.map(({ reading }) => chamferEnds(reading));
+  cones.forEach(({ face, reading }, index) => {
+    const shape = ends[index];
+    let size = reading.size;
+    let corner: { like: FaceTopology; at: Vector3 } | null = null;
+    if (shape?.kind === 'step')
+      for (const [other, otherShape] of cones.map(
+        (cone, j) => [cone, ends[j]] as const
+      )) {
+        if (otherShape?.kind !== 'end') continue;
+        const found = chamferCorner(face, other.face, faces, edges);
+        if (!found.ok) continue;
+        size = found.size;
+        corner = { like: other.face, at: found.circle.center };
+        break;
+      }
+    let group = chamfers.find(
+      (known) =>
+        same(known.size, size) && same(known.angleDeg, reading.angleDeg)
+    );
+    if (!group) {
+      group = { size, angleDeg: reading.angleDeg, faces: [], axes: [] };
+      chamfers.push(group);
+    }
+    group.faces.push(face);
+    group.axes.push(reading.axis);
+    const along = axisOf(reading.axis);
+    if (!along || !shape) return;
+    const named = `the ${format(size, units)} × ${formatDrawingNumber(reading.angleDeg, defaultDimensionDecimals('angle', units))}° chamfer`;
+    const end = { label: `the end of ${named}` };
+    if (shape.kind === 'end') {
+      // Its end face is a position already; its end on the diameter follows.
+      addPosition(derived[along], {
+        value: reading.ends[shape.diameter].center[along],
+        ...end
+      });
+      return;
+    }
+    if (corner) {
+      const value = corner.at[along];
+      addPosition(positions[along], {
+        value,
+        label: `${named}'s corner at ${along} = ${format(value, units)}`,
+        mark: { kind: 'corner', face, like: corner.like }
+      });
+      for (const circle of reading.ends)
+        addPosition(derived[along], { value: circle.center[along], ...end });
+      return;
+    }
+    const sharp = reading.ends[shape.larger];
+    const value = sharp.center[along];
+    addPosition(positions[along], {
+      value,
+      label: `${named}'s virtual sharp at ${along} = ${format(value, units)}`,
+      mark: { kind: 'sharp', faces: [face, reading.endFaces[shape.larger]] }
+    });
+    addPosition(derived[along], {
+      value: reading.ends[shape.larger === 0 ? 1 : 0].center[along],
+      ...end
+    });
+  });
 
   // Three or more holes of one size at one distance from another turned
   // axis are a bolt circle: its pitch diameter and the count state them,
@@ -467,11 +621,31 @@ function bodyRequirements(
       });
   }
 
+  // A circle bounding a chamfer or a blend and no hole or boss: Ø32, where
+  // the foot's chamfer meets its contact face, follows from Ø40 and 4 × 45°.
+  const shaping = new Set([
+    ...chamfers.flatMap((group) => group.faces.map((face) => face.hash)),
+    ...blends.flatMap((group) => group.faces.map((face) => face.hash))
+  ]);
+  const derivedCircles: BodyRequirements['derivedCircles'] = [];
+  for (const edge of edges) {
+    const circle = edge.curve?.circle;
+    if (
+      !circle ||
+      !(edge.adjacentFaceHashes ?? []).some((hash) => shaping.has(hash)) ||
+      sizes.some((group) => circleInGroup(group, circle))
+    )
+      continue;
+    derivedCircles.push(circle);
+  }
+
   return {
     positions,
     derived,
     sizes,
     chamfers,
+    blends,
+    derivedCircles,
     boltCircles,
     unmeasurable: [...unmeasurable].map(([message, count]) =>
       count > 1 ? `${count}× ${message}` : message
@@ -600,6 +774,7 @@ export interface DimensionState {
       links: Record<AuditAxis, Links>;
       statedSizes: ReadonlySet<SizeGroup>;
       statedChamfers: ReadonlySet<ChamferGroup>;
+      statedBlends: ReadonlySet<BlendGroup>;
       statedBoltCircles: ReadonlySet<BoltCircle>;
     }
   >;
@@ -633,7 +808,15 @@ export function readDimensionState(
     if (!body || body.consumed || !body.topology) continue;
     requirements.set(
       bodyId,
-      bodyRequirements(body.topology.faces, body.topology.edges, units)
+      bodyRequirements(body.topology.faces, body.topology.edges, units, {
+        imported: body.source === 'imported-step',
+        recognized: new Set(
+          (body.topology.recognizedImportedFeatures ?? []).flatMap(
+            (feature) => feature.participatingFaceHashes
+          )
+        ),
+        bbox: body.bbox
+      })
     );
   }
   const links = new Map<string, Links>();
@@ -648,6 +831,7 @@ export function readDimensionState(
   };
   const sizeStatedBy = new Map<SizeGroup, DrawingAnnotationId>();
   const chamferStatedBy = new Map<ChamferGroup, DrawingAnnotationId>();
+  const blendStatedBy = new Map<BlendGroup, DrawingAnnotationId>();
   const boltStatedBy = new Map<BoltCircle, DrawingAnnotationId>();
 
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
@@ -678,6 +862,17 @@ export function readDimensionState(
         audit.unchecked.push({
           annotationId: id,
           message: 'It measures a chamfer this check does not read.'
+        });
+        continue;
+      }
+      // A step chamfer sized like its sibling reads, on its own face, only
+      // as far as the smaller diameter cuts it: that length follows.
+      if (!same(reading.size, group.size)) {
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'derived',
+          message: `It measures this chamfer only to the diameter that cuts it, which that diameter and the ${chamferLabel(group, units)} already fix.`,
+          statedBy: []
         });
         continue;
       }
@@ -774,11 +969,56 @@ export function readDimensionState(
       audit.stated += 1;
       continue;
     }
+    if (reading.kind === 'blend-radius') {
+      const group = requirements
+        .get(reading.bodyId)
+        ?.blends.find((candidate) => candidate.faces.includes(reading.face));
+      if (!group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message: 'It measures a blend this check does not read.'
+        });
+        continue;
+      }
+      const earlier = blendStatedBy.get(group);
+      if (earlier) {
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message: `Another dimension already states this ${blendLabel(group, units)}.`,
+          statedBy: [earlier]
+        });
+        continue;
+      }
+      blendStatedBy.set(group, id);
+      audit.stated += 1;
+      continue;
+    }
     const body = requirements.get(reading.bodyId);
     const circleAxis = axisOf(reading.circle.axis);
     const group = body?.sizes.find((candidate) =>
       circleInGroup(candidate, reading.circle)
     );
+    const circle = reading.circle;
+    if (
+      !group &&
+      body?.derivedCircles.some(
+        (known) =>
+          same(known.radius, circle.radius) &&
+          Math.abs(Math.abs(dot(known.axis, circle.axis)) - 1) <= 1e-6 &&
+          length(sub(known.center, circle.center)) <=
+            1e-6 * Math.max(1, circle.radius)
+      )
+    ) {
+      audit.redundant.push({
+        annotationId: id,
+        reason: 'derived',
+        message:
+          'It measures where a chamfer or blend meets the next face, which that feature and the diameter it shapes already fix.',
+        statedBy: []
+      });
+      continue;
+    }
     if (!group || !circleAxis) {
       audit.unchecked.push({
         annotationId: id,
@@ -871,6 +1111,29 @@ export function readDimensionState(
           message: `${label}: add a view that sees it side-on.`
         });
     }
+    for (const group of body.blends) {
+      audit.required += 1;
+      if (blendStatedBy.has(group)) continue;
+      const sideOn = sheet.views.some(
+        (view) =>
+          view.bodyIds.includes(bodyId as never) &&
+          view.orientation !== 'iso' &&
+          !view.section &&
+          group.axes.some(
+            (axis) =>
+              Math.abs(
+                dot(axis, DRAWING_VIEW_FRAMES[view.orientation].direction)
+              ) <= 1e-6
+          )
+      );
+      const label = blendLabel(group, units);
+      if (sideOn) audit.missing.push({ bodyId, message: `${label}.` });
+      else
+        audit.unmeasurable.push({
+          bodyId,
+          message: `${label}: add a view that sees it side-on.`
+        });
+    }
     for (const circle of body.boltCircles) {
       audit.required += 1;
       if (boltStatedBy.has(circle)) continue;
@@ -907,16 +1170,20 @@ export function readDimensionState(
         .sort((p, q) => p.position.value - q.position.value);
       const datum = graph.find(order[0]!.index);
       const seen = new Set([datum]);
+      // A virtual point (v48/v49) marks a position wherever a view sees
+      // its axis, which `viewsAlong` already requires.
+      const marks = (position: Position) =>
+        position.mark !== undefined
+          ? viewsAlong(sheet, bodyId, axis).length > 0
+          : anchorable(
+              sheet,
+              bodyId,
+              bodies[bodyId]!.topology!.edges,
+              axis,
+              position.value
+            );
       const datumCanAnchor = order.some(
-        ({ position, index }) =>
-          graph.find(index) === datum &&
-          anchorable(
-            sheet,
-            bodyId,
-            bodies[bodyId]!.topology!.edges,
-            axis,
-            position.value
-          )
+        ({ position, index }) => graph.find(index) === datum && marks(position)
       );
       for (const { position, index } of order) {
         const root = graph.find(index);
@@ -926,15 +1193,7 @@ export function readDimensionState(
         const canAnchor =
           datumCanAnchor &&
           order.some(
-            (entry) =>
-              graph.find(entry.index) === root &&
-              anchorable(
-                sheet,
-                bodyId,
-                bodies[bodyId]!.topology!.edges,
-                axis,
-                entry.position.value
-              )
+            (entry) => graph.find(entry.index) === root && marks(entry.position)
           );
         if (canAnchor) audit.missing.push({ bodyId, message });
         else
@@ -959,6 +1218,7 @@ export function readDimensionState(
       },
       statedSizes: new Set(sizeStatedBy.keys()),
       statedChamfers: new Set(chamferStatedBy.keys()),
+      statedBlends: new Set(blendStatedBy.keys()),
       statedBoltCircles: new Set(boltStatedBy.keys())
     });
   return { audit, bodies: state };
@@ -1010,6 +1270,11 @@ function diameterAcross(
 export function chamferLabel(group: ChamferGroup, units: UnitSystem): string {
   const count = group.faces.length > 1 ? `${group.faces.length}× ` : '';
   return `${count}${format(group.size, units)} × ${formatDrawingNumber(group.angleDeg, defaultDimensionDecimals('angle', units))}° chamfer`;
+}
+
+export function blendLabel(group: BlendGroup, units: UnitSystem): string {
+  const count = group.faces.length > 1 ? `${group.faces.length}× ` : '';
+  return `${count}R${format(group.radius, units)} blend radius`;
 }
 
 export function boltLabel(circle: BoltCircle, units: UnitSystem): string {

@@ -1081,6 +1081,9 @@ function AutoDimensionPreview(props: {
   const unmeasurable = new Set(audit.unmeasurable.map((f) => f.message));
   const left = plan.skipped.filter((f) => !unmeasurable.has(f.message));
   const waiting = plan.skipped.length - left.length;
+  const raw = plan.annotations.filter(
+    (annotation) => annotation.provenance?.basis === 'geometry'
+  ).length;
   return (
     <div
       className="drawing-auto-preview"
@@ -1098,6 +1101,12 @@ function AutoDimensionPreview(props: {
             ? '1 measures hidden lines'
             : `${plan.onHiddenLines} measure hidden lines`}
           : no view shows that feature visible.
+        </p>
+      )}
+      {raw > 0 && (
+        <p className="drawing-hint">
+          {raw === 1 ? '1 is' : `${raw} are`} read from raw geometry: no
+          recognized feature of the import states {raw === 1 ? 'it' : 'them'}.
         </p>
       )}
       {waiting > 0 && (
@@ -1378,7 +1387,10 @@ function AnnotationProperties(props: {
       )}
       {selected.provenance && (
         <p className="drawing-hint">
-          Placed by Auto-dimension. Re-picking it makes it yours.
+          {selected.provenance.basis === 'geometry'
+            ? 'Placed by Auto-dimension from raw geometry: no recognized feature of this import states it.'
+            : 'Placed by Auto-dimension.'}{' '}
+          Re-picking it makes it yours.
         </p>
       )}
       <div className="drawing-field-row">

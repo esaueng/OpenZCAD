@@ -1,35 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
-  drawingPaperMm,
-  drawingPaperPerModelUnit,
-  type BodyRepresentation,
   type DrawingAnnotation,
   type DrawingAnnotationId,
-  type DrawingLinearDimension,
-  type DrawingSheet
+  type DrawingLinearDimension
 } from '@openzcad/shared';
+import { resolveDrawingAnnotation } from '../apps/web/src/lib/drawing/annotations';
+import { planAutoDimensions } from '../apps/web/src/lib/drawing/autoDimension';
 import {
-  annotationAnchor,
-  layoutAnnotation,
-  resolveDrawingAnnotation,
-  resolveSheetAnnotations
-} from '../apps/web/src/lib/drawing/annotations';
-import {
-  annotationFootprint,
-  footprintClash,
-  planAutoDimensions
-} from '../apps/web/src/lib/drawing/autoDimension';
-import { auditDrawingDimensions } from '../apps/web/src/lib/drawing/dimensionAudit';
-import { projectView } from '../apps/web/src/lib/drawing/projectView';
-import {
-  SHEET_MARGIN_MM,
-  titleBlockBox,
   viewPageBox,
-  viewPageTransform,
-  type ComposedView
+  viewPageTransform
 } from '../apps/web/src/lib/drawing/sheetPage';
-import { projectionBodyInput } from '../apps/web/src/lib/drawing/sheetSources';
 import {
   boxOperations,
   buildPart,
@@ -41,6 +22,11 @@ import {
   sheetOf,
   stepOperations
 } from './helpers/drawing-dimension-fixtures';
+import {
+  autoDimension,
+  counter,
+  expectClearLayout
+} from './helpers/drawing-auto-dimension-harness';
 
 type Adapter = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let adapter: Adapter;
@@ -49,122 +35,6 @@ beforeAll(async () => {
   adapter = await createExactKernelAdapter();
 });
 afterAll(() => adapter.dispose());
-
-function drawnViews(
-  sheet: DrawingSheet,
-  bodies: Record<string, BodyRepresentation>
-): ComposedView[] {
-  return sheet.views.map((view) => ({
-    view,
-    projection: projectView({
-      orientation: view.orientation,
-      hiddenLines: view.hiddenLines,
-      bodies: view.bodyIds.map((bodyId) =>
-        projectionBodyInput(bodies[bodyId]!)!
-      )
-    })
-  }));
-}
-
-/** Deterministic ids, so a plan reads the same each run. */
-function counter() {
-  let next = 0;
-  return () => `dann_auto${(next += 1)}` as DrawingAnnotationId;
-}
-
-/**
- * Plans, applies and re-checks: the plan must leave nothing the checker
- * calls missing or repeated, and every dimension it adds must measure.
- */
-function autoDimension(
-  sheet: DrawingSheet,
-  bodies: Record<string, BodyRepresentation>
-) {
-  const views = drawnViews(sheet, bodies);
-  const before = auditDrawingDimensions(sheet, bodies, 'mm');
-  const plan = planAutoDimensions(sheet, views, bodies, 'mm', counter());
-  const after: DrawingSheet = {
-    ...sheet,
-    annotations: [...(sheet.annotations ?? []), ...plan.annotations]
-  };
-  const audit = auditDrawingDimensions(after, bodies, 'mm');
-  for (const [annotationId, resolution] of resolveSheetAnnotations(
-    after,
-    bodies,
-    'mm'
-  ))
-    expect(resolution, annotationId).toMatchObject({ ok: true });
-  return { views, before, plan, after, audit };
-}
-
-/** Every pair of annotations on `sheet` clear of each other, on the paper. */
-function expectClearLayout(
-  sheet: DrawingSheet,
-  views: readonly ComposedView[],
-  bodies: Record<string, BodyRepresentation>
-) {
-  const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
-  const paper = drawingPaperMm(sheet.paper);
-  const title = titleBlockBox(sheet);
-  const byId = new Map(views.map((entry) => [entry.view.viewId, entry]));
-  const outlines = views.map((entry) => ({
-    viewId: entry.view.viewId,
-    box: viewPageBox(entry.view, entry.projection.bounds!, sheet, 'mm')
-  }));
-  const overlaps = (
-    a: { x: number; y: number; width: number; height: number },
-    b: { x: number; y: number; width: number; height: number }
-  ) =>
-    a.x < b.x + b.width &&
-    b.x < a.x + a.width &&
-    a.y < b.y + b.height &&
-    b.y < a.y + a.height;
-  const prints = (sheet.annotations ?? []).map((annotation) => {
-    const entry = byId.get(annotation.viewId!)!;
-    const toPage = viewPageTransform(
-      entry.view,
-      entry.projection.bounds!,
-      sheet,
-      'mm'
-    );
-    const resolution = resolveDrawingAnnotation(
-      annotation,
-      entry.view,
-      bodies,
-      'mm'
-    );
-    if (!resolution.ok) throw new Error(resolution.message);
-    const layout = layoutAnnotation(
-      resolution.resolved,
-      toPage,
-      k,
-      annotationAnchor(annotation, entry.view)
-    );
-    const print = annotationFootprint(layout, resolution.resolved, toPage);
-    // On the paper, off the title block, clear of every other view, and a
-    // linear dimension's text clear of its own.
-    const { box } = print;
-    expect(box.x).toBeGreaterThanOrEqual(SHEET_MARGIN_MM);
-    expect(box.y).toBeGreaterThanOrEqual(SHEET_MARGIN_MM);
-    expect(box.x + box.width).toBeLessThanOrEqual(
-      paper.width - SHEET_MARGIN_MM
-    );
-    expect(box.y + box.height).toBeLessThanOrEqual(
-      paper.height - SHEET_MARGIN_MM
-    );
-    expect(overlaps(box, title)).toBe(false);
-    for (const outline of outlines)
-      if (outline.viewId !== annotation.viewId || annotation.kind === 'linear')
-        expect(overlaps(box, outline.box), annotation.annotationId).toBe(false);
-    return { id: annotation.annotationId, print };
-  });
-  for (let i = 0; i < prints.length; i += 1)
-    for (let j = i + 1; j < prints.length; j += 1)
-      expect(
-        footprintClash(prints[i]!.print, prints[j]!.print),
-        `${prints[i]!.id} × ${prints[j]!.id}`
-      ).toBeNull();
-}
 
 const kinds = (annotations: readonly DrawingAnnotation[]) =>
   annotations.map((annotation) =>
@@ -260,18 +130,22 @@ describe('D06 Auto-dimension: the corpus', () => {
     expectClearLayout(after, views, bodies);
   });
 
-  it('dimensions the turned foot along its axis, and says what it skips', async () => {
+  it('dimensions the turned foot completely: diameters, chamfer, blends and heights', async () => {
     const { bodies, bodyId } = await buildPart(adapter, footOperations());
-    const { before, plan, audit, after, views } = autoDimension(
+    const { plan, audit, after, views } = autoDimension(
       sheetOf(bodyId),
       bodies
     );
-    // Three diameters face-on from above, and (v48) the two heights off
-    // the rims' silhouettes in the front view.
+    // Three diameters face-on from above; in the front view (v49) the
+    // counted chamfer and blend radius, and (v48) the heights off the
+    // rims' silhouettes, the 29 to the shoulder chamfer's corner.
     expect(kinds(plan.annotations)).toEqual([
       'diameter',
       'diameter',
       'diameter',
+      'chamfer',
+      'radius',
+      'vertical',
       'vertical',
       'vertical'
     ]);
@@ -283,21 +157,19 @@ describe('D06 Auto-dimension: the corpus', () => {
       'silhouette',
       'silhouette',
       'silhouette',
+      'chamfer-corner',
+      'silhouette',
       'silhouette'
     ]);
-    const chamfers = [
-      '4 × 45° chamfer: Auto-dimension does not place chamfer dimensions yet; add it with the Chamfer tool.',
-      '3.5 × 45° chamfer: Auto-dimension does not place chamfer dimensions yet; add it with the Chamfer tool.'
-    ];
-    expect(plan.skipped.map((entry) => entry.message)).toEqual([
-      ...before.unmeasurable.map((entry) => entry.message),
-      ...chamfers
-    ]);
-    expect(audit.redundant).toEqual([]);
-    expect(audit.missing.map((entry) => entry.message)).toEqual([
-      '4 × 45° chamfer.',
-      '3.5 × 45° chamfer.'
-    ]);
+    expect(plan.skipped).toEqual([]);
+    expect(audit).toMatchObject({
+      missing: [],
+      redundant: [],
+      unmeasurable: [],
+      unchecked: [],
+      stated: 8,
+      required: 8
+    });
     expectClearLayout(after, views, bodies);
   });
 });
@@ -381,7 +253,8 @@ describe('D06 Auto-dimension: rules', () => {
           ? [annotation.from, annotation.to].flatMap((point) =>
               'edge' in point ? [point.edge] : []
             )
-          : annotation.kind === 'diameter' || annotation.kind === 'radius'
+          : (annotation.kind === 'diameter' || annotation.kind === 'radius') &&
+              'edge' in annotation
             ? [annotation.edge]
             : [];
       for (const ref of refs) expect(hashes.get(ref.hash)).toBe(1);
