@@ -188,7 +188,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // `diameterFactor`), refused by older clients for the same reason.
 // v43 adds M14 throated worm wheels (`throated`, `outsideDiameter`); an older
 // client would build a plain wheel in their place, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 43 as const;
+// v44 is claimed by M14 double-enveloping worms (open PR #1054).
+// v45 adds D03 drawing section views (`DrawingView.section`). An older client
+// would draw the view uncut and without its section line, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 45 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

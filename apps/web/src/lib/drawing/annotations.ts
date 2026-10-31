@@ -43,6 +43,25 @@ import {
 type SourceBody = BodyRepresentation | GeometryBodyRepresentation;
 export type AnnotationBodies = Readonly<Record<string, SourceBody | undefined>>;
 
+/**
+ * Where a section view's cut bodies sit in an {@link AnnotationBodies} map
+ * (D03): beside the model's own bodies, under a key no body id can take, so
+ * a dimension on a section measures the cut body's edges while its stored
+ * reference keeps naming the model body it was cut from.
+ */
+export function sectionBodyKey(viewId: DrawingViewId, bodyId: string): string {
+  return `${viewId}#section:${bodyId}`;
+}
+
+/** The body `view` draws for `bodyId`: its cut body when it is a section. */
+export function annotationBody(
+  bodies: AnnotationBodies,
+  view: Pick<DrawingView, 'viewId' | 'section'> | undefined,
+  bodyId: string
+): SourceBody | undefined {
+  return bodies[view?.section ? sectionBodyKey(view.viewId, bodyId) : bodyId];
+}
+
 export type AnnotationBreak =
   | 'body-missing'
   | 'not-in-view'
@@ -195,7 +214,7 @@ function lookupEdge(
   view: DrawingView,
   bodies: AnnotationBodies
 ): EdgeLookup {
-  const body = bodies[ref.bodyId];
+  const body = annotationBody(bodies, view, ref.bodyId);
   if (!body || body.consumed) return { ok: false, reason: 'body-missing' };
   if (!view.bodyIds.includes(ref.bodyId))
     return { ok: false, reason: 'not-in-view' };
@@ -1197,7 +1216,7 @@ function ownedLeaderPieces(
   // Every other physical edge of the view's bodies, in (u, v) with depths.
   const others: { points: XY[]; depths: number[] }[] = [];
   for (const bodyId of view.bodyIds) {
-    const body = bodies[bodyId];
+    const body = annotationBody(bodies, view, bodyId);
     if (!body?.topology || body.consumed) continue;
     for (const edge of body.topology.edges) {
       if (edge.displayRole === 'seam' || edge.points.length < 6) continue;

@@ -30471,6 +30471,9 @@ export function App() {
                 requestTessellation={(source, bodyIds, signal) =>
                   geometry.drawingTessellation(source, bodyIds, { signal })
                 }
+                requestSection={(source, bodyIds, plane, signal) =>
+                  geometry.drawingSection(source, bodyIds, plane, { signal })
+                }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message) => setStatus(message)}

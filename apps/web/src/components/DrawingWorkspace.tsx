@@ -50,8 +50,12 @@ import {
   DRAWING_VIEW_ORIENTATIONS,
   drawingPaperMm,
   drawingPaperPerModelUnit,
+  drawingSectionLine,
+  drawingSectionOrientations,
+  drawingSectionPlane,
   drawingViewAlignment,
   formatDrawingScale,
+  nextDrawingSectionLabel,
   projectedViewSide,
   MAX_DRAWING_TEXT_LENGTH,
   type BodyId,
@@ -63,7 +67,8 @@ import {
   type DrawingView,
   type DrawingViewId,
   type DrawingViewOrientation,
-  type ProjectDocument
+  type ProjectDocument,
+  type Vector3
 } from '@openzcad/shared';
 import { pruneProjectionCache } from '../lib/drawing/projectionCache';
 import {
@@ -78,6 +83,7 @@ import {
 import {
   autoScaleSheet,
   composeSheetPage,
+  SHEET_STROKE_ORDER,
   type ComposedView,
   fitViewsToSheet,
   sheetUnprintableCharacters,
@@ -113,6 +119,7 @@ import {
   markHiddenLeaders,
   previewAnnotationLayer,
   resolveSheetAnnotations,
+  sectionBodyKey,
   type AnnotationBox,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
@@ -139,7 +146,10 @@ import {
   defaultDrawingPaper,
   drawingSourceFingerprint,
   estimateViewExtent,
-  sheetBodyIds
+  sectionInputKey,
+  sectionPlaneKey,
+  sheetBodyIds,
+  type SectionBodyInput
 } from '../lib/drawing/sheetSources';
 import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
 import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
@@ -193,6 +203,18 @@ export interface DrawingWorkspaceProps {
     bodyIds: BodyId[],
     signal: AbortSignal
   ) => Promise<Record<string, ProjectionBodyInput>>;
+  /**
+   * D03: each body cut exactly by a section view's plane, meshed like
+   * `requestTessellation`, with its cut faces and edges. Rejects, with the
+   * reason the view shows, when the kernel cannot cut the section or the
+   * plane misses every body. Absent, section views refuse to draw.
+   */
+  requestSection?: (
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    plane: { normal: Vector3; depth: number },
+    signal: AbortSignal
+  ) => Promise<Record<string, SectionBodyInput>>;
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
@@ -251,7 +273,8 @@ function sheetStatus(
 
 /** What a view draws, independent of the model state it draws it from. */
 function viewIntentKey(view: DrawingView): string {
-  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}`;
+  const cut = view.section ? `|section:${view.section.depth}` : '';
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}`;
 }
 
 function projectionKey(fingerprint: string, view: DrawingView): string {
@@ -331,7 +354,8 @@ function useViewProjections(
   wanted: ReadonlySet<string>,
   status: SheetStatus | null,
   document: ProjectDocument,
-  requestTessellation: DrawingWorkspaceProps['requestTessellation']
+  requestTessellation: DrawingWorkspaceProps['requestTessellation'],
+  requestSection: DrawingWorkspaceProps['requestSection']
 ): Map<DrawingViewId, ViewState> {
   const client = useRef<DrawingProjectionClient | null>(null);
   /** Aborted on close: abandons tessellations still queued or running. */
@@ -352,11 +376,13 @@ function useViewProjections(
   const tessellations = useRef<{
     fingerprint: string;
     bodies: Map<BodyId, ProjectionBodyInput>;
+    /** D03 cut bodies, per section plane (`sectionPlaneKey`). */
+    sections: Map<string, Record<string, SectionBodyInput>>;
   } | null>(null);
   // Read when a pass starts, not effect inputs: a drawing edit replaces the
   // document without changing the model a ready sheet draws.
-  const latest = useRef({ document, requestTessellation });
-  latest.current = { document, requestTessellation };
+  const latest = useRef({ document, requestTessellation, requestSection });
+  latest.current = { document, requestTessellation, requestSection };
   /** Failed requests per view, so a worker that keeps failing is not retried forever. */
   const failures = useRef(new Map<string, number>());
   const mounted = useRef(false);
@@ -414,44 +440,104 @@ function useViewProjections(
     )
       return;
     // Every view this pass still needs goes in one request, with each body's
-    // geometry once however many views draw it.
+    // geometry once however many views draw it. A section view's bodies are
+    // the model's cut by its plane, asked for once per plane.
     const views: DrawingProjectionViewRequest[] = [];
     const bodyIds = new Set<BodyId>();
+    const cuts = new Map<
+      string,
+      {
+        plane: { normal: Vector3; depth: number };
+        bodyIds: Set<BodyId>;
+        views: DrawingView[];
+      }
+    >();
+    const sectionKeys = new Map<string, DrawingView>();
     const passMarkers = new Map<string, ViewState>();
     for (const view of sheet.views) {
       const key = projectionKey(fingerprint, view);
-      if (cache.current.has(key) || views.some((entry) => entry.key === key))
-        continue;
-      for (const id of view.bodyIds) bodyIds.add(id);
-      views.push({
-        key,
-        orientation: view.orientation,
-        hiddenLines: view.hiddenLines,
-        // In the key's order: the lines come out in body order, and a view
-        // whose bodies were removed and re-added must export the same bytes
-        // whether its projection was cached or made after a reload.
-        bodyIds: [...view.bodyIds].sort()
-      });
+      if (cache.current.has(key) || passMarkers.has(key)) continue;
+      const planeKey = sectionPlaneKey(view);
+      if (planeKey && view.section) {
+        const cut = cuts.get(planeKey) ?? {
+          plane: drawingSectionPlane({ ...view, section: view.section }),
+          bodyIds: new Set<BodyId>(),
+          views: []
+        };
+        for (const id of view.bodyIds) cut.bodyIds.add(id);
+        cut.views.push(view);
+        cuts.set(planeKey, cut);
+        sectionKeys.set(key, view);
+      } else {
+        for (const id of view.bodyIds) bodyIds.add(id);
+        views.push({
+          key,
+          orientation: view.orientation,
+          hiddenLines: view.hiddenLines,
+          // In the key's order: the lines come out in body order, and a view
+          // whose bodies were removed and re-added must export the same bytes
+          // whether its projection was cached or made after a reload.
+          bodyIds: [...view.bodyIds].sort()
+        });
+      }
       const marker: ViewState = { state: 'projecting' };
       cache.current.set(key, marker);
       passMarkers.set(key, marker);
       markers.current.set(key, marker);
     }
-    if (views.length > 0) {
+    if (passMarkers.size > 0) {
       outstanding.current = true;
       const owned = client.current;
       const { signal } = closed.current;
       if (tessellations.current?.fingerprint !== fingerprint)
-        tessellations.current = { fingerprint, bodies: new Map() };
+        tessellations.current = {
+          fingerprint,
+          bodies: new Map(),
+          sections: new Map()
+        };
       const known = tessellations.current;
       const missing = [...bodyIds].filter((id) => !known.bodies.has(id));
-      const { document: current, requestTessellation: tessellate } =
-        latest.current;
-      (missing.length > 0
-        ? tessellate(current, missing.sort(), signal)
-        : Promise.resolve<Record<string, ProjectionBodyInput>>({})
-      )
-        .then((meshed) => {
+      const {
+        document: current,
+        requestTessellation: tessellate,
+        requestSection: section
+      } = latest.current;
+      /** A section refused by the kernel: final, not a transport failure. */
+      const refusals = new Map<string, string>();
+      const sectioned = [...cuts].map(([planeKey, cut]) => {
+        if (known.sections.has(planeKey)) return Promise.resolve();
+        if (!section)
+          return Promise.resolve(
+            refusals.set(planeKey, 'Section views cannot be drawn here.')
+          ).then(() => undefined);
+        return section(
+          current,
+          [...cut.bodyIds].sort(),
+          cut.plane,
+          signal
+        ).then(
+          (bodies) => {
+            known.sections.set(planeKey, bodies);
+          },
+          (error: unknown) => {
+            if (error instanceof Error && error.name === 'AbortError')
+              throw error;
+            refusals.set(
+              planeKey,
+              error instanceof Error
+                ? error.message
+                : 'The section could not be cut.'
+            );
+          }
+        );
+      });
+      Promise.all([
+        missing.length > 0
+          ? tessellate(current, missing.sort(), signal)
+          : Promise.resolve<Record<string, ProjectionBodyInput>>({}),
+        ...sectioned
+      ])
+        .then(([meshed]) => {
           // Closed while the geometry worker meshed: a disposed client
           // would start a fresh worker nobody stops.
           if (client.current !== owned) {
@@ -470,23 +556,77 @@ function useViewProjections(
             if (!input) throw new Error(`Body ${id} has no geometry to draw.`);
             inputs[id] = input;
           }
+          // Section views project from their cut bodies; a body wholly in
+          // front of the plane is simply not in the section. A refused cut
+          // is shown on its view at once: retrying cannot change it.
+          for (const [key, view] of sectionKeys) {
+            const planeKey = sectionPlaneKey(view)!;
+            const refusal = refusals.get(planeKey);
+            const cut = known.sections.get(planeKey);
+            if (refusal || !cut) {
+              markers.current.delete(key);
+              cache.current.set(key, {
+                state: 'error',
+                message: refusal ?? 'The section could not be cut.'
+              });
+              continue;
+            }
+            const ids: string[] = [];
+            for (const id of [...view.bodyIds].sort()) {
+              const body = cut[id];
+              if (!body) throw new Error(`Body ${id} has no geometry to draw.`);
+              if (body.indices.length === 0) continue;
+              const inputKey = sectionInputKey(view, id);
+              inputs[inputKey] = body;
+              ids.push(inputKey);
+            }
+            views.push({
+              key,
+              orientation: view.orientation,
+              hiddenLines: view.hiddenLines,
+              bodyIds: ids
+            });
+          }
+          /** A section's projection, with its cut bodies' edges for D02. */
+          const withSection = (
+            key: string,
+            projection: ViewProjection
+          ): ViewProjection => {
+            const view = sectionKeys.get(key);
+            const cut = view && known.sections.get(sectionPlaneKey(view)!);
+            if (!view || !cut) return projection;
+            return {
+              ...projection,
+              sectionEdges: Object.fromEntries(
+                view.bodyIds.map((id) => [id, cut[id]?.edgeTopology ?? []])
+              )
+            };
+          };
+          if (views.length === 0) return null;
           // Each view shows as soon as it is projected, not when the
           // slowest view of the sheet is done.
-          return owned.project(inputs, views, (key, result) => {
-            failures.current.delete(key);
-            markers.current.delete(key);
-            cache.current.set(
-              key,
-              result.ok
-                ? { state: 'ready', projection: result.projection }
-                : { state: 'error', message: result.error }
-            );
-            if (mounted.current) setRevision((value) => value + 1);
-          });
+          return owned
+            .project(inputs, views, (key, result) => {
+              failures.current.delete(key);
+              markers.current.delete(key);
+              cache.current.set(
+                key,
+                result.ok
+                  ? {
+                      state: 'ready',
+                      projection: withSection(key, result.projection)
+                    }
+                  : { state: 'error', message: result.error }
+              );
+              if (mounted.current) setRevision((value) => value + 1);
+            })
+            .then((results) => ({ results, withSection, views }));
         })
         .then(
-          (results) => {
-            for (const view of views) {
+          (answer) => {
+            if (!answer) return;
+            const { results, withSection, views: asked } = answer;
+            for (const view of asked) {
               const result = results[view.key];
               // An answer clears the transport-failure count: retries are
               // counted per run of failures, not over the key's lifetime.
@@ -495,7 +635,10 @@ function useViewProjections(
               cache.current.set(
                 view.key,
                 result?.ok
-                  ? { state: 'ready', projection: result.projection }
+                  ? {
+                      state: 'ready',
+                      projection: withSection(view.key, result.projection)
+                    }
                   : {
                       state: 'error',
                       message: result?.error ?? 'Projection failed.'
@@ -512,17 +655,16 @@ function useViewProjections(
             // counts.
             const aborted =
               error instanceof Error && error.name === 'AbortError';
-            for (const view of views) {
+            for (const [key, marker] of passMarkers) {
               // A view already answered keeps its answer, and one another
               // workspace has asked for since is not this pass's to forget.
-              const marker = passMarkers.get(view.key);
-              markers.current.delete(view.key);
-              if (cache.current.get(view.key) !== marker) continue;
-              const tries = (failures.current.get(view.key) ?? 0) + 1;
-              if (!aborted) failures.current.set(view.key, tries);
-              if (aborted || tries < 3) cache.current.delete(view.key);
+              markers.current.delete(key);
+              if (cache.current.get(key) !== marker) continue;
+              const tries = (failures.current.get(key) ?? 0) + 1;
+              if (!aborted) failures.current.set(key, tries);
+              if (aborted || tries < 3) cache.current.delete(key);
               else
-                cache.current.set(view.key, {
+                cache.current.set(key, {
                   state: 'error',
                   message:
                     error instanceof Error
@@ -1249,7 +1391,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     wanted,
     status,
     document,
-    props.requestTessellation
+    props.requestTessellation,
+    props.requestSection
   );
   const keptDrawings = keptDrawingsFor(document.projectId);
   // A sheet whose model changed keeps the drawing it last made of the model
@@ -1275,7 +1418,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return states;
   }, [keptDrawing, sheet, liveProjections]);
   /** The bodies the drawing on screen measures: the kept model's, if kept. */
-  const drawBodies = keptDrawing?.bodies ?? bodies;
+  const modelBodies = keptDrawing?.bodies ?? bodies;
   const liveBodies = useMemo(
     () =>
       document.bodyOrder.filter((id) => {
@@ -1322,6 +1465,30 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         : [],
     [shownSheet, projections]
   );
+  /**
+   * The bodies the drawing's dimensions measure: the model's, and beside
+   * them each drawn section view's cut bodies (D03), whose edges a
+   * dimension on that section resolves against.
+   */
+  const drawBodies = useMemo(() => {
+    const sections = drawnViews.filter(
+      ({ view, projection }) => view.section && projection.sectionEdges
+    );
+    if (sections.length === 0) return modelBodies;
+    const merged: Record<string, BodyRepresentation | undefined> = {
+      ...modelBodies
+    };
+    for (const { view, projection } of sections)
+      for (const [bodyId, edges] of Object.entries(projection.sectionEdges!)) {
+        const body = modelBodies[bodyId];
+        if (!body) continue;
+        merged[sectionBodyKey(view.viewId, bodyId)] = {
+          ...body,
+          topology: { faces: [], edges: [...edges] }
+        };
+      }
+    return merged;
+  }, [drawnViews, modelBodies]);
   // Each complete drawing of a ready sheet is kept, by view intent, with the
   // bodies it measured: it outlives this workspace, so a model edit made in
   // Build leaves the sheet as it was drawn until someone Updates it. Views
@@ -2720,9 +2887,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               width={paper.width}
               height={paper.height}
             />
-            {(
-              ['border', 'thin', 'hidden', 'visible', 'dimension'] as const
-            ).map((kind) => (
+            {SHEET_STROKE_ORDER.map((kind) => (
               <g key={kind} className={`drawing-strokes is-${kind}`}>
                 {page.strokes
                   .filter((stroke) => stroke.kind === kind)

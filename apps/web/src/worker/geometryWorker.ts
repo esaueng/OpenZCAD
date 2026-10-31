@@ -17,6 +17,8 @@ import type {
   BuildCancellationSignal,
   createExactKernelAdapter,
   DrawingBodyTessellation,
+  DrawingSectionBody,
+  DrawingSectionPlane,
   DxfFaceSelector,
   ExactSectionPlane,
   MeshQualityReport,
@@ -147,6 +149,11 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       bodyIds: BodyId[];
+      /**
+       * D03: cut each body by this section plane first (the adapter's
+       * `drawingSection`), keeping what lies behind it.
+       */
+      section?: DrawingSectionPlane;
     }
   | {
       /** Reads live mass data, restoring exact history for a stale cache hit. */
@@ -277,7 +284,7 @@ export type GeometryDrawingTessellationResult =
       ok: true;
       requestId: string;
       /** Transferred, not copied. */
-      bodies: Record<BodyId, DrawingBodyTessellation>;
+      bodies: Record<BodyId, DrawingBodyTessellation | DrawingSectionBody>;
     }
   | {
       type: 'drawing-tessellation';
@@ -863,10 +870,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.type === 'drawing-tessellation') {
-        const bodies = await exact.drawingTessellation(
-          document,
-          request.bodyIds
-        );
+        const bodies = request.section
+          ? await exact.drawingSection(
+              document,
+              request.bodyIds,
+              request.section
+            )
+          : await exact.drawingTessellation(document, request.bodyIds);
         const transfer: ArrayBuffer[] = [];
         for (const body of Object.values(bodies)) {
           transfer.push(

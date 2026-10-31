@@ -4,6 +4,7 @@ import {
   DRAWING_VIEW_FRAMES,
   drawingPaperMm,
   drawingPaperPerModelUnit,
+  drawingSectionLine,
   formatDrawingScale,
   projectToView,
   type DrawingSheet,
@@ -26,7 +27,17 @@ import type { ViewProjection } from './projectView';
  */
 
 export type SheetStrokeKind =
-  'visible' | 'hidden' | 'border' | 'thin' | 'dimension';
+  | 'visible'
+  | 'hidden'
+  | 'border'
+  | 'thin'
+  | 'dimension'
+  /** D03 section hatching. */
+  | 'hatch'
+  /** D03 cutting-plane line: thin long-dash-dot across the view. */
+  | 'chain'
+  /** D03 the cutting-plane line's thick ends. */
+  | 'cutting';
 
 export interface SheetStroke {
   kind: SheetStrokeKind;
@@ -64,10 +75,36 @@ export const SHEET_STROKE_WIDTH_MM: Readonly<Record<SheetStrokeKind, number>> =
     hidden: 0.25,
     border: 0.5,
     thin: 0.25,
-    dimension: 0.25
+    dimension: 0.25,
+    hatch: 0.18,
+    chain: 0.25,
+    cutting: 0.7
   };
 /** Hidden-line dash and gap, in paper millimetres. */
 export const SHEET_HIDDEN_DASH_MM: readonly [number, number] = [3, 1.5];
+/** ISO 128 long-dash-dot (type 04) for the cutting-plane line, in paper mm. */
+export const SHEET_CHAIN_DASH_MM: readonly number[] = [12, 1.5, 0.5, 1.5];
+
+/** Each stroke kind's dash pattern, in paper millimetres; absent is solid. */
+export const SHEET_STROKE_DASH_MM: Readonly<
+  Partial<Record<SheetStrokeKind, readonly number[]>>
+> = { hidden: SHEET_HIDDEN_DASH_MM, chain: SHEET_CHAIN_DASH_MM };
+
+/**
+ * The order the preview and both writers draw stroke kinds in, back to
+ * front. A page with no strokes of a kind writes nothing for it, so a sheet
+ * without sections exports the same bytes as before D03.
+ */
+export const SHEET_STROKE_ORDER: readonly SheetStrokeKind[] = [
+  'border',
+  'thin',
+  'hatch',
+  'hidden',
+  'visible',
+  'chain',
+  'cutting',
+  'dimension'
+];
 
 export const SHEET_MARGIN_MM = 10;
 export const TITLE_BLOCK_HEIGHT_MM = 32;
@@ -503,6 +540,7 @@ export function composeSheetPage(
   /** D02 dimensions and notes, already laid out on this page. */
   annotations?: { strokes: SheetStroke[]; texts: SheetText[] }
 ): SheetPage {
+  const marks = composeSectionMarks(sheet, views, context.units);
   const paper = drawingPaperMm(sheet.paper);
   const strokes: SheetStroke[] = [
     {
@@ -524,6 +562,8 @@ export function composeSheetPage(
       sheet,
       context.units
     );
+    if (projection.hatch)
+      strokes.push(...hatchStrokes(projection.hatch, toPage));
     // Hidden first, so a visible line drawn over a coincident hidden one wins.
     for (const [kind, lines] of [
       ['hidden', projection.hidden],
@@ -552,13 +592,244 @@ export function composeSheetPage(
     heightMm: paper.height,
     strokes: [
       ...strokes,
+      ...marks.strokes,
       ...(annotations?.strokes ?? []),
       ...block.strokes
     ].flatMap((stroke) => clipStroke(stroke, onPaper)),
-    texts: [...(annotations?.texts ?? []), ...block.texts].filter((text) =>
-      insideRect(onPaper, text.x, text.y)
-    )
+    texts: [
+      ...marks.texts,
+      ...(annotations?.texts ?? []),
+      ...block.texts
+    ].filter((text) => insideRect(onPaper, text.x, text.y))
   };
+}
+
+// ---------------------------------------------------------------------------
+// D03 section views
+
+/** Hatch line spacing on the paper, in millimetres (ISO 128-50). */
+export const SECTION_HATCH_SPACING_MM = 2.5;
+/** How far the cutting-plane line runs past its view's extent. */
+const SECTION_LINE_OVERRUN_MM = 4;
+/** Length of the cutting-plane line's thick ends. */
+const SECTION_END_MM = 6;
+/** The section arrows: shaft, head length and half width. */
+const SECTION_ARROW_MM = 8;
+const SECTION_ARROW_HEAD_MM = 3;
+const SECTION_ARROW_HALF_WIDTH_MM = 0.9;
+export const SECTION_LABEL_MM = 5;
+/** Below a section view's footprint, where its caption's baseline sits. */
+const SECTION_CAPTION_GAP_MM = 8;
+
+/** The caption printed under a section view: "SECTION A-A". */
+export function sectionCaption(label: string): string {
+  // WinAnsi's en dash would print as a hyphen anyway (`sheetSafeText`).
+  return `SECTION ${label}-${label}`;
+}
+
+/**
+ * 45° hatching over a section view's cut faces, on the paper. Lines sit at
+ * whole multiples of the spacing measured from the paper's corner, so a view
+ * moved by a whole step hatches identically, and each is clipped to the
+ * union of the cut triangles: the pieces one line crosses are merged where
+ * neighbouring triangles meet, so a face hatches as one run per crossing.
+ * The cut faces' curved boundaries are chords of the display tolerance.
+ */
+export function hatchStrokes(
+  triangles: ArrayLike<number>,
+  toPage: (u: number, v: number) => [number, number],
+  spacing = SECTION_HATCH_SPACING_MM
+): SheetStroke[] {
+  // s runs across the hatch lines, t along them (direction (1, 1)/√2).
+  const lines = new Map<number, [number, number][]>();
+  for (let i = 0; i + 5 < triangles.length; i += 6) {
+    const corners = [0, 2, 4].map((o) => {
+      const [x, y] = toPage(triangles[i + o]!, triangles[i + o + 1]!);
+      return [(x - y) / Math.SQRT2, (x + y) / Math.SQRT2] as const;
+    });
+    const sMin = Math.min(...corners.map(([c]) => c));
+    const sMax = Math.max(...corners.map(([c]) => c));
+    for (let k = Math.ceil(sMin / spacing); k * spacing <= sMax; k += 1) {
+      const s = k * spacing;
+      const ts: number[] = [];
+      for (let e = 0; e < 3; e += 1) {
+        const [s0, t0] = corners[e]!;
+        const [s1, t1] = corners[(e + 1) % 3]!;
+        if ((s0 - s) * (s1 - s) > 0 || s0 === s1) continue;
+        ts.push(t0 + ((t1 - t0) * (s - s0)) / (s1 - s0));
+      }
+      if (ts.length < 2) continue;
+      const low = Math.min(...ts);
+      const high = Math.max(...ts);
+      if (high - low <= 1e-9) continue;
+      let pieces = lines.get(k);
+      if (!pieces) lines.set(k, (pieces = []));
+      pieces.push([low, high]);
+    }
+  }
+  const strokes: SheetStroke[] = [];
+  for (const k of [...lines.keys()].sort((a, b) => a - b)) {
+    const s = k * spacing;
+    const pieces = lines.get(k)!.sort((a, b) => a[0] - b[0]);
+    let [from, to] = pieces[0]!;
+    const emit = () => {
+      const a = [(s + from) / Math.SQRT2, (from - s) / Math.SQRT2];
+      const b = [(s + to) / Math.SQRT2, (to - s) / Math.SQRT2];
+      strokes.push({ kind: 'hatch', points: [a[0]!, a[1]!, b[0]!, b[1]!] });
+    };
+    for (const [low, high] of pieces.slice(1)) {
+      if (low <= to + 1e-6) to = Math.max(to, high);
+      else {
+        emit();
+        [from, to] = [low, high];
+      }
+    }
+    emit();
+  }
+  return strokes;
+}
+
+function sectionArrow(
+  tail: [number, number],
+  sight: [number, number]
+): SheetStroke[] {
+  const tip: [number, number] = [
+    tail[0] + sight[0] * SECTION_ARROW_MM,
+    tail[1] + sight[1] * SECTION_ARROW_MM
+  ];
+  const base: [number, number] = [
+    tip[0] - sight[0] * SECTION_ARROW_HEAD_MM,
+    tip[1] - sight[1] * SECTION_ARROW_HEAD_MM
+  ];
+  const w = SECTION_ARROW_HALF_WIDTH_MM;
+  return [
+    { kind: 'thin', points: [tail[0], tail[1], base[0], base[1]] },
+    {
+      kind: 'dimension',
+      filled: true,
+      closed: true,
+      points: [
+        tip[0],
+        tip[1],
+        base[0] - sight[1] * w,
+        base[1] + sight[0] * w,
+        base[0] + sight[1] * w,
+        base[1] - sight[0] * w
+      ]
+    }
+  ];
+}
+
+/**
+ * Where a section view's cutting-plane line lies on its source view, on the
+ * paper, with its direction of sight there; null when the source is not
+ * drawn yet or the two do not fold.
+ */
+export function sectionLineOnPage(
+  sheet: Pick<DrawingSheet, 'scale'>,
+  section: DrawingView,
+  source: ComposedView,
+  units: UnitSystem
+): {
+  from: [number, number];
+  to: [number, number];
+  sight: [number, number];
+} | null {
+  const bounds = source.projection.bounds;
+  if (!section.section || !bounds) return null;
+  const line = drawingSectionLine(
+    source.view.orientation,
+    section.orientation,
+    section.section.depth
+  );
+  if (!line) return null;
+  const toPage = viewPageTransform(source.view, bounds, sheet, units);
+  const overrun = SECTION_LINE_OVERRUN_MM;
+  if (line.axis === 'horizontal') {
+    const [x0, y] = toPage(bounds.minU, line.at);
+    const [x1] = toPage(bounds.maxU, line.at);
+    return {
+      from: [x0 - overrun, y],
+      to: [x1 + overrun, y],
+      sight: line.sight
+    };
+  }
+  const [x, y0] = toPage(line.at, bounds.minV);
+  const [, y1] = toPage(line.at, bounds.maxV);
+  return { from: [x, y0 - overrun], to: [x, y1 + overrun], sight: line.sight };
+}
+
+/**
+ * The marks every section view puts on the page: its cutting-plane line
+ * across the source view (thin chain, thick ends, arrows in the direction
+ * of sight and the section's letter at each), and its caption under the
+ * section view itself. A mark is drawn once the view it sits on is.
+ */
+export function composeSectionMarks(
+  sheet: Pick<DrawingSheet, 'scale' | 'views'>,
+  views: readonly ComposedView[],
+  units: UnitSystem
+): { strokes: SheetStroke[]; texts: SheetText[] } {
+  const strokes: SheetStroke[] = [];
+  const texts: SheetText[] = [];
+  const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
+  for (const view of sheet.views) {
+    if (!view.section) continue;
+    const label = view.section.label;
+    const source = drawn.get(view.section.sourceViewId);
+    const line = source && sectionLineOnPage(sheet, view, source, units);
+    if (line) {
+      const { from, to, sight } = line;
+      strokes.push({ kind: 'chain', points: [...from, ...to] });
+      const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+      const along: [number, number] = [
+        (to[0] - from[0]) / length,
+        (to[1] - from[1]) / length
+      ];
+      const end = Math.min(SECTION_END_MM, length / 3);
+      for (const [point, inward] of [
+        [from, along],
+        [to, [-along[0], -along[1]] as [number, number]]
+      ] as const) {
+        strokes.push({
+          kind: 'cutting',
+          points: [
+            point[0],
+            point[1],
+            point[0] + inward[0] * end,
+            point[1] + inward[1] * end
+          ]
+        });
+        strokes.push(...sectionArrow([point[0], point[1]], sight));
+        // The letter beside the arrow, on the side away from the view.
+        texts.push({
+          x: point[0] - inward[0] * 2 + sight[0] * (SECTION_ARROW_MM * 0.6),
+          y:
+            point[1] -
+            inward[1] * 2 +
+            sight[1] * (SECTION_ARROW_MM * 0.6) -
+            SECTION_LABEL_MM / 2,
+          sizeMm: SECTION_LABEL_MM,
+          text: label,
+          bold: true,
+          align: 'middle'
+        });
+      }
+    }
+    const own = drawn.get(view.viewId);
+    if (own?.projection.bounds) {
+      const box = viewPageBox(view, own.projection.bounds, sheet, units);
+      texts.push({
+        x: view.centerMm.x,
+        y: box.y - SECTION_CAPTION_GAP_MM,
+        sizeMm: SECTION_LABEL_MM * 0.7,
+        text: sectionCaption(label),
+        bold: true,
+        align: 'middle'
+      });
+    }
+  }
+  return { strokes, texts };
 }
 
 /** How a view's footprint sits on its sheet; null when it is clear. */
