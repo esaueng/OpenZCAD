@@ -829,11 +829,9 @@ export function StartScreen({
    * ones (a folder orders its own projects).
    */
   function commitOrder(ids: string[], moved?: { id: string; group: string }) {
-    if (sort !== 'custom') {
-      // A hand arrangement is a custom order: keep showing it as placed.
-      setSort('custom');
-      setNotice('Now sorted by Custom order, so your arrangement stays.');
-    }
+    // A hand arrangement is a custom order: keep showing it as placed. The
+    // sort menu already reads "Custom order", so no notice repeats it.
+    if (sort !== 'custom') setSort('custom');
     if (openFolder) {
       updateFolders((state) => reorderFolderMembers(state, openFolder.id, ids));
       return;
