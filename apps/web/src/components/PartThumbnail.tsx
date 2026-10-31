@@ -171,6 +171,63 @@ function thumbnailFor(
   return pending;
 }
 
+/** Prime a bounded first screen from device images before mounting its tiles.
+ * A slow/blocked store cannot hold the library; unfinished reads remain reusable.
+ * The caller supplies a cache-only loader: no document loads or uploads here.
+ */
+export async function preparePartThumbnails(
+  projects: readonly ProjectSummary[],
+  accountId: string | null,
+  loadCached: PartThumbnailProps['loadThumbnail']
+): Promise<void> {
+  const revision = getKeySessionRevision();
+  const sessionVersion = getKeySessionVersion();
+  const unique = [
+    ...new Map(projects.map((project) => [project.projectId, project])).values()
+  ];
+  const reads = unique.slice(0, 16).map(async (project) => {
+    const protectedImage = project.storageFormat === 2;
+    if (
+      projectNeedsUpdate(project) ||
+      (protectedImage && (!accountId || !isKeySessionActive()))
+    )
+      return;
+    const authorization = protectedImage
+      ? `protected:${accountId}:${sessionVersion}`
+      : 'device';
+    const key = `${authorization}:${project.projectId}:${project.updatedAt}:${project.documentVersion ?? ''}:${project.thumbnailArtifactId ?? ''}`;
+    // A cache-only miss must not occupy the normal request slot: a mounted
+    // tile still needs to try its account artifact after a slow device read.
+    const source = await loadCached(project).catch(() => undefined);
+    if (
+      source === undefined ||
+      thumbnails.has(project.projectId) ||
+      thumbnailPromises.has(key)
+    )
+      return;
+    await thumbnailFor(
+      key,
+      authorization,
+      protectedImage,
+      () => !protectedImage || isCurrentKeySession(revision),
+      project,
+      async () => source,
+      async () => undefined
+    );
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(reads),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 120);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * One placeholder for every tile without a picture. An empty part used to
  * swap the wire cube for a line of mono text, so two tiles in the same row
@@ -230,12 +287,9 @@ export function PartThumbnail({
     : 'device';
   const cacheKey = `${authorization}:${project.projectId}:${project.updatedAt}:${project.documentVersion ?? ''}:${project.thumbnailArtifactId ?? ''}`;
   const previewRef = useRef<Element | null>(null);
-  const attachPreview = useCallback(
-    (node: SVGSVGElement | HTMLImageElement | null) => {
-      previewRef.current = node;
-    },
-    []
-  );
+  const attachPreview = useCallback((node: Element | null) => {
+    previewRef.current = node;
+  }, []);
   const [result, setResult] = useState<ThumbnailResult | undefined>(() =>
     authorized
       ? cachedThumbnail(project.projectId, authorization, protectedImage)
@@ -316,6 +370,16 @@ export function PartThumbnail({
       <img ref={attachPreview} src={visible.source} alt="" draggable={false} />
     );
   }
+  // Unknown/loading is not an empty model. Keep its slot quiet while the
+  // cache/decode completes; the wire cube is reserved for a confirmed miss.
+  if (!visible)
+    return (
+      <span
+        ref={attachPreview}
+        className="start-tile-thumb-loading"
+        aria-hidden="true"
+      />
+    );
   return (
     <ThumbnailPlaceholder
       empty={visible?.key === cacheKey && visible.source === null}

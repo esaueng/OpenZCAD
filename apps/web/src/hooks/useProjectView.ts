@@ -92,6 +92,24 @@ export function useProjectView(projectId: string | null): ProjectView {
    * effect below needs to persist it without re-running on every orbit.
    */
   const cameraRef = useRef<ViewportCameraState | null>(null);
+  // A reload can interrupt the controller's damping/settle timer. Keep its
+  // latest pose on pagehide too; idle frames still never write storage.
+  const flushView = useRef<() => void>(() => {});
+  flushView.current = () => {
+    if (projectId && cameraRef.current) persist(projectId, cameraRef.current);
+  };
+  useEffect(() => {
+    const flush = () => flushView.current();
+    const hidden = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', hidden);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', hidden);
+    };
+  }, []);
 
   function persist(
     id: string,

@@ -33,6 +33,7 @@ import {
 } from './viewer/orientationCubeOverlay';
 import { mark, measure, timed } from '../lib/perf';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
+import { useWorkspaceFrameReady } from './WorkspaceLoading';
 import { recordEditPhase } from '../lib/editTrace';
 import {
   avoidSketchDimensionOverlays,
@@ -2300,6 +2301,9 @@ export function ModelViewer({
   middleDragRef.current = settings.middleDrag;
   const pointerNavigationRef = useRef(settings.pointerNavigation);
   pointerNavigationRef.current = settings.pointerNavigation;
+  const reportWorkspaceFrame = useWorkspaceFrameReady();
+  const reportWorkspaceFrameRef = useRef(reportWorkspaceFrame);
+  reportWorkspaceFrameRef.current = reportWorkspaceFrame;
   const initialViewRef = useRef(initialView);
   const viewRequestRef = useRef(viewRequest);
   viewRequestRef.current = viewRequest;
@@ -11110,6 +11114,7 @@ export function ModelViewer({
         }
       });
       pendingTracedFrameRef.current = false;
+      reportWorkspaceFrameRef.current();
       const presented = pendingEditFrameRef.current;
       if (presented) {
         pendingEditFrameRef.current = undefined;

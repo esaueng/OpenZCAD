@@ -97,6 +97,7 @@ interface CollaborationOptions {
 
 export interface CollaborationClientState {
   status: CollaborationStatus;
+  failureReason?: string | null;
   members: CollaborationMember[];
   role: ProjectAccessRole | null;
   /** The lease held by this browser client, never another member's lease. */
@@ -151,6 +152,7 @@ export function useCollaboration({
     projectId: string | null;
     wanted: boolean;
     status: CollaborationStatus;
+    reason?: string | null;
   }>({ projectId: null, wanted: false, status: 'offline' });
   const [members, setMembers] = useState<CollaborationMember[]>([]);
   const [role, setRole] = useState<ProjectAccessRole | null>(null);
@@ -240,9 +242,12 @@ export function useCollaboration({
   const roomWanted = Boolean(enabled && projectId && userId && displayName);
   const stampRef = useRef({ projectId, wanted: roomWanted });
   stampRef.current = { projectId, wanted: roomWanted };
-  const setStatus = useCallback((next: CollaborationStatus) => {
-    setStatusEntry({ ...stampRef.current, status: next });
-  }, []);
+  const setStatus = useCallback(
+    (next: CollaborationStatus, reason: string | null = null) => {
+      setStatusEntry({ ...stampRef.current, status: next, reason });
+    },
+    []
+  );
   const status: CollaborationStatus =
     roomWanted && (statusEntry.projectId !== projectId || !statusEntry.wanted)
       ? 'connecting'
@@ -634,7 +639,7 @@ export function useCollaboration({
       );
       const rejected = rejectionStatus(message);
       if (rejected) {
-        setStatus(rejected);
+        setStatus(rejected, message.type === 'error' ? message.message : null);
         return;
       }
       if (message.type === 'conflict') {
@@ -1135,7 +1140,10 @@ export function useCollaboration({
             )
           );
           pendingDocument = null;
-          setStatus(rejected);
+          setStatus(
+            rejected,
+            message.type === 'error' ? message.message : null
+          );
         }
       };
       socket.addEventListener('close', (event: { code?: number }) => {
@@ -1448,6 +1456,10 @@ export function useCollaboration({
 
   return {
     status,
+    failureReason:
+      statusEntry.projectId === projectId && status === 'rejected'
+        ? (statusEntry.reason ?? null)
+        : null,
     members,
     role,
     lease,

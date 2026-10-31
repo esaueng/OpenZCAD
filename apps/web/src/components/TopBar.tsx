@@ -80,6 +80,7 @@ interface TopBarProps {
   session: AuthSession | null;
   accountState: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
   collaborationStatus: CollaborationStatus;
+  collaborationFailure?: string | null;
   collaboratorCount: number;
   projectSharingEnabled: boolean;
   workspaceMode: WorkspaceMode;
@@ -154,6 +155,7 @@ export function TopBar({
   session,
   accountState,
   collaborationStatus,
+  collaborationFailure,
   collaboratorCount,
   projectSharingEnabled,
   workspaceMode,
@@ -386,7 +388,7 @@ export function TopBar({
   // status is `offline` — which, beside "Save to my account", read as a
   // connection problem rather than the plain fact that nothing is shared yet.
   const collaborationLabel = knownDeviceOnly
-    ? COLLABORATION_LABELS.rejected
+    ? 'Not shared'
     : collaborationStatus === 'live'
       ? `${collaboratorCount} live`
       : COLLABORATION_LABELS[collaborationStatus];
@@ -579,7 +581,9 @@ export function TopBar({
               className={`collaboration-state ${collaborationStatus}`}
               title={
                 session
-                  ? `Project sharing · ${collaborationLabel}`
+                  ? collaborationFailure && collaborationStatus === 'rejected'
+                    ? `Connection refused: ${collaborationFailure}`
+                    : `Project sharing · ${collaborationLabel}`
                   : 'Sign in to share'
               }
               // Each name carries the label the chip shows (WCAG 2.5.3).

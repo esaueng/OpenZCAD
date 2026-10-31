@@ -11,6 +11,8 @@ function renderTopBar(
     signedIn?: boolean;
     saveToAccount?: boolean;
     knownDeviceOnly?: boolean;
+    collaborationStatus?: 'offline' | 'rejected' | 'connecting';
+    collaborationFailure?: string;
     geometryPending?: boolean;
     geometryFailed?: boolean;
     canExport?: boolean;
@@ -50,7 +52,8 @@ function renderTopBar(
           : null
       }
       accountState={options.signedIn ? 'signed-in' : 'signed-out'}
-      collaborationStatus="offline"
+      collaborationStatus={options.collaborationStatus ?? 'offline'}
+      collaborationFailure={options.collaborationFailure}
       collaboratorCount={0}
       projectSharingEnabled
       workspaceMode="build"
@@ -153,6 +156,20 @@ describe('TopBar save chip', () => {
 });
 
 describe('TopBar sharing chip', () => {
+  it('describes a room refusal without claiming the project is unshared', () => {
+    renderTopBar({
+      signedIn: true,
+      collaborationStatus: 'rejected',
+      collaborationFailure: 'The room could not confirm this edit.'
+    });
+    expect(
+      screen.getByRole('button', { name: 'Open project sharing · Unavailable' })
+    ).toHaveAttribute(
+      'title',
+      'Connection refused: The room could not confirm this edit.'
+    );
+    expect(screen.queryByText('Not shared')).toBeNull();
+  });
   it('says to sign in, and goes to sign-in, when signed out', () => {
     const { onOpenSharing, onSignIn } = renderTopBar();
     // Its name starts with the label it shows (WCAG 2.5.3).

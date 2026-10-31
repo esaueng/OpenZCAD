@@ -4,7 +4,7 @@ import { unitTestInclude } from '../../scripts/unit-suites.mjs';
 
 export default defineConfig({
   test: {
-    include: unitTestInclude('web'),
+    ...(unitTestInclude('web') ? { include: unitTestInclude('web') } : {}),
     environment: 'happy-dom',
     setupFiles: [fileURLToPath(new URL('./src/test/setup.ts', import.meta.url))]
   }
