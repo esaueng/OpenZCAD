@@ -1544,6 +1544,7 @@ import {
   keepAbsentHoleSteps,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
+  inPlaceEditFacePick,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
@@ -9559,7 +9560,7 @@ export function App() {
               true
             )
           : null;
-        return pick && reference ? { ...pick, reference } : pick;
+        return inPlaceEditFacePick(pick, reference);
       },
       edge: (bodyId, hash, reference) => {
         const found = resolveEdge(representations[bodyId], {
@@ -22295,8 +22296,7 @@ export function App() {
             }) ?? undefined)
           : pick.point;
       const next: FacePick = {
-        ...fresh,
-        ...(pick.reference ? { reference: pick.reference } : {}),
+        ...inPlaceEditFacePick(fresh, pick.reference)!,
         ...(pick.savedPosition ? { savedPosition: true as const } : {}),
         ...(point ? { point } : {})
       };

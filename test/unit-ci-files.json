@@ -70,6 +70,7 @@
     "test/flange-bolt-hole-resize.test.ts",
     "test/gear-face-width-cap-drag.test.ts",
     "test/gear-height-preview-profile.test.ts",
+    "test/gear-stale-reference.test.ts",
     "test/geometry.test.ts",
     "test/io-step.test.ts",
     "test/parameter-delete-references.test.ts",

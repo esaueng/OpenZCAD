@@ -105,6 +105,18 @@ export interface InPlaceEditContext {
   ): { origin: Vector3; direction: Vector3 } | null;
 }
 
+/** Keep the authored face identity together while placing handles on its live geometry. */
+export function inPlaceEditFacePick(
+  pick: FacePick | null,
+  reference: FaceTopologyReferenceV5 | undefined
+): FacePick | null {
+  // A later feature may publish a different reference on the live face.
+  // Preserve the original target's reference AND its hash until a re-pick.
+  return pick && reference
+    ? { ...pick, hash: reference.currentHash, reference }
+    : pick;
+}
+
 export interface InPlaceEditSeed {
   featureId: FeatureId;
   nodeId: string;
