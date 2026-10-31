@@ -130,13 +130,21 @@ for (const refusal of ['oversize', 'rejected', 'update-required'] as const) {
       refusal === 'oversize'
         ? 'Local only'
         : refusal === 'rejected'
-          ? 'Not shared'
+          ? 'Unavailable'
           : 'Update required'
     );
     const saved = page.getByRole('status', {
       name: 'Local only',
       exact: true
     });
+    if (refusal === 'rejected') {
+      await expect(
+        page.getByRole('button', { name: 'Open project sharing · Unavailable' })
+      ).toHaveAttribute(
+        'title',
+        'Connection refused: The room refused this edit.'
+      );
+    }
     await expect(saved).toBeVisible();
     await expect(saved.locator('.spin')).toHaveCount(0);
     await expect(

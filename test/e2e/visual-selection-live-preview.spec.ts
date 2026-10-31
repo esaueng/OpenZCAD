@@ -463,6 +463,8 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toContainText('Validating');
+  await expect(chip).toBeVisible();
+  await expect(chip).toHaveAttribute('data-variant', 'pin');
   // While the release validates, the open Objects panel must disclose the
   // preview's incomplete analysis.
   await revealModelPanel(page, 'Objects');
@@ -483,6 +485,8 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   await expect(page.getByRole('contentinfo')).toContainText(
     'Cylinder height set to 31 mm.'
   );
+  await expect(chip).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(page.getByText('Preparing model details…')).toBeHidden();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect

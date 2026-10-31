@@ -32,6 +32,7 @@ import {
 import { placeImage as placedImage } from '../lib/inPlace/image';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
 import type { InPlaceEditSeed } from '../lib/inPlace/edit';
+import { inPlacePanelState } from '../lib/inPlace/panel';
 import { findFeature } from '@openzcad/document-core';
 import type { PlacementPick } from '../lib/inPlace/primitives';
 
@@ -470,9 +471,11 @@ export function useInPlaceCommand(
         ? { reshapedLater: true }
         : {}),
       imagePlaneBasis: (plane) =>
-        optionsRef.current.imagePlaneBasis?.(plane) ?? null
+        optionsRef.current.imagePlaneBasis?.(plane) ?? null,
+      ...(options.units ? { units: options.units } : {})
     }),
     [
+      options.units,
       options.sketchViews,
       options.datumAxes,
       options.linearSnap,
@@ -1640,7 +1643,27 @@ export function useInPlaceCommand(
           options[other] = current.options[optionId] ?? optionSpec.initial;
         }
       }
-      return { ...current, options };
+      // Values the choice carries (a gear's pitch in its new terms) land as
+      // numbers, set if what they came from was.
+      const spec = IN_PLACE_TOOL_SPECS[current.tool];
+      const carried = spec.optionCarries?.(
+        optionId,
+        value,
+        inPlacePanelState(spec, current.options, numbersFor(current)),
+        ctxRef.current
+      );
+      if (!carried) return { ...current, options };
+      const values = { ...current.values };
+      const raws = { ...current.raws };
+      const touched = new Set(current.touched);
+      for (const [id, { value: number, from }] of Object.entries(carried)) {
+        const target = spec.values.find((candidate) => candidate.id === id);
+        values[id] = target ? clampValue(target, number) : number;
+        delete raws[id];
+        if (touched.has(from)) touched.add(id);
+        else touched.delete(id);
+      }
+      return { ...current, options, values, raws, touched: [...touched] };
     });
   }, []);
 

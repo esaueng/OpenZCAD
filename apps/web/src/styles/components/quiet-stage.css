@@ -1850,7 +1850,7 @@ button.command-rail svg {
   height: 16px;
 }
 
-button.command-rail:hover:not(:disabled):not(.active) {
+button.command-rail:hover:not(:disabled, [aria-disabled='true']):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1877,38 +1877,288 @@ button.command-rail.active {
    is still a working button that arms its own picking. */
 /* Clearly lighter than a disabled tool (--opacity-disabled), which
    it is not: at 0.55 the two were within a step of each other. */
-button.command-rail.is-dim:not(:disabled),
-.command-tile.is-dim:not(:disabled) {
+button.command-rail.is-dim:not(:disabled, [aria-disabled='true']),
+.command-tile.is-dim:not(:disabled, [aria-disabled='true']) {
   opacity: 0.7;
 }
 
-button.command-rail.is-dim:hover:not(:disabled),
-.command-tile.is-dim:hover:not(:disabled) {
+button.command-rail.is-dim:hover:not(:disabled, [aria-disabled='true']),
+.command-tile.is-dim:hover:not(:disabled, [aria-disabled='true']) {
   opacity: 1;
 }
 
 /* Greyed, not hidden: the icons never move, and the reason is the
    button's description. */
-button.command-rail:disabled {
+button.command-rail:is(:disabled, [aria-disabled='true']) {
   color: var(--color-text-muted);
   opacity: var(--opacity-disabled);
   cursor: default;
 }
 
-/* Every tool the rail does not carry, by name, beside the rail, under
-   fixed group headings. Two columns keep the panel compact. */
+/* The pins are the rail's drop zone: a tool dragged from the drawer or the
+   suggestions lands where the accent line is drawn. The line is a shadow,
+   not an element, so the buttons never shift under the pointer. */
+.command-rail-pins {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-md);
+}
+
+.command-rail-pins.is-drop-target {
+  outline: 1px dashed var(--color-accent-border);
+  outline-offset: 1px;
+}
+
+/* Where a dragged tool will land: its own icon, at the rail's size, in an
+   accent outline. A pin being moved leaves its old place empty. */
+.command-rail-slot {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px dashed var(--color-accent-border);
+  border-radius: var(--radius-md);
+}
+
+.command-rail-slot svg {
+  width: 16px;
+  height: 16px;
+}
+
+button.command-rail.is-dragging {
+  display: none;
+}
+
+/* What the pointer carries: the rail button the tool will become. Drawn
+   off screen for the browser's picture and removed right after. */
+.command-drag-image {
+  position: fixed;
+  top: -100px;
+  left: -100px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+
+.command-drag-image svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* With every pin taken off, a dashed slot shows where they go. */
+.command-rail-empty {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--color-text-subtle);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.command-rail-empty svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Suggestions are the rail's, not the hand's: a dotted divider above them
+   and a small accent mark on each say they come and go with the pick. The
+   mark is a background, so the button needs no positioning of its own. */
+.command-rail-divider.is-suggested {
+  height: 0;
+  background: none;
+  border-top: 1px dotted var(--color-border-strong);
+}
+
+button.command-rail.is-suggested {
+  background-image: radial-gradient(
+    circle at calc(100% - 4px) 4px,
+    var(--color-accent) 1.5px,
+    transparent 2px
+  );
+}
+
+/* Every tool by name, beside the rail: one tall column — search and the
+   fits/all switch at the head, the list under the palette's own headings,
+   and the pin hint or the hidden count at the foot. */
 .command-flyout {
   position: absolute;
   top: 0;
   left: calc(100% + var(--island-gap));
-  width: 244px;
+  width: 236px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+/* The drawer's frame: the stage's full height rather than a box hanging
+   from the rail's top. It lifts by the room between the stage's top and the
+   float's (the float is centred, or lifted onto the readout, by the
+   translate on it, whose percentages are its height: the same terms here)
+   and runs down to the readout's reserve. The advanced sheet fills it, at a
+   fixed height, so a filter or a search changes the list, never the sheet
+   under the pointer. The simple list stands on the same foot and grows up,
+   so the switch between them, at the foot, never moves. */
+.viewer-area .workspace-column-float .command-flyout {
+  --sheet-top: min(
+    0px,
+    calc(
+      max(50%, 100% - var(--column-band-room)) -
+        (100vh - var(--stage-top) - var(--island-gap)) / 2
+    )
+  );
+  --sheet-h: calc(
+    100vh - var(--stage-top) - var(--island-gap) * 2 - var(--readout-reserve)
+  );
+}
+
+.viewer-area .workspace-column-float .command-flyout.is-advanced {
+  top: var(--sheet-top);
+  height: var(--sheet-h);
+  max-height: none;
+}
+
+.viewer-area .workspace-column-float .command-flyout.is-simple {
+  top: auto;
+  bottom: calc(100% - var(--sheet-top) - var(--sheet-h));
+  max-height: var(--sheet-h);
+}
+
+@media (max-height: 600px) {
+  .viewer-area .workspace-column-float .command-flyout {
+    --sheet-h: calc(100vh - var(--stage-top) - var(--island-gap));
+  }
+
+  /* A short window has width to spare and no height: the sheet takes two
+     columns, so its last tile is half the scroll away (in one column the
+     list ran 1,000px through a 216px window at 844 x 390). */
+  .command-flyout.is-advanced {
+    width: 400px;
+  }
+
+  .command-flyout.is-advanced .command-flyout-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+  }
+
+  .command-flyout.is-advanced
+    .command-flyout-list
+    > :is(
+      .command-flyout-heading,
+      .command-flyout-empty,
+      .command-flyout-more
+    ) {
+    grid-column: 1 / -1;
+  }
+}
+
+/* The simple list is narrower: names alone, no keys or pins. */
+.command-flyout.is-simple {
+  width: 196px;
+}
+
+.command-flyout.is-unpin-target {
+  border-color: var(--color-accent-border);
+}
+
+.command-flyout-head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 6px 4px;
+  border-bottom: var(--border-thin);
+}
+
+.command-flyout-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.command-flyout-search:focus-within {
+  border-color: var(--color-accent-border);
+}
+
+.command-flyout-search svg {
+  flex: 0 0 auto;
+}
+
+.command-flyout-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  outline: none;
+  font-size: var(--fs-sm);
+}
+
+.command-flyout-filter {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr auto;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+}
+
+.command-flyout-filter > button {
+  min-height: 22px;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.command-flyout-filter > button:hover:not([aria-pressed='true']) {
+  color: var(--color-text);
+}
+
+.command-flyout-filter > button[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+/* Capped to the stage (with the rail rule above); the list scrolls on the
+   wheel and to a focused row, its bar hidden and its edges shaded the way
+   the column's tools are. Positioned, so the headings' offsets are its. */
+.command-flyout-list {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   gap: 1px;
   padding: 4px;
-  /* Capped to the stage (with the rail rule above); the list scrolls on the
-     wheel and to a focused tile, its bar hidden and its edges shaded the
-     way the column's tools are. */
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
@@ -1922,16 +2172,11 @@ button.command-rail:disabled {
     linear-gradient(transparent, var(--color-scroll-shade)) bottom / 100% 10px
       no-repeat scroll,
     var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
-  animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
 /* Small caps labels share .panel-eyebrow's type (inspector.css); this one
    was sans, 11.5px semibold in the dim tone. */
 .command-flyout-heading {
-  grid-column: 1 / -1;
   padding: 6px 7px 2px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
@@ -1945,14 +2190,21 @@ button.command-rail:disabled {
   padding-top: 2px;
 }
 
+.command-flyout-empty {
+  margin: 0;
+  padding: 12px 8px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
 /* Whole groups past the fold (Pattern, under Bodies, at a laptop height)
-   are named at the flyout's foot over a fade, not left to a 10px shade:
+   are named at the list's foot over a fade, not left to a 10px shade:
    the commands were there, but read as missing. It goes once they are in
    view. */
 .command-flyout-more {
   position: sticky;
-  bottom: 0;
-  grid-column: 1 / -1;
+  bottom: -4px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1963,7 +2215,7 @@ button.command-rail:disabled {
   color: var(--color-text);
   background: linear-gradient(transparent, var(--color-surface) 45%);
   border: 0;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  border-radius: 0;
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
   cursor: pointer;
@@ -1983,10 +2235,133 @@ button.command-rail:disabled {
   background: var(--color-surface-hover);
 }
 
-.command-tile {
+.command-flyout-foot {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 4px 2px 9px;
+  border-top: var(--border-thin);
+}
+
+.command-flyout-hint {
+  flex: 0 1 auto;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.command-flyout.is-unpin-target .command-flyout-hint {
+  color: var(--color-accent);
+}
+
+/* The switch between the simple and advanced views, at the same place in
+   both: the foot's left, with what the short list left out counted. */
+.command-flyout-view {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 6px;
+  margin-left: -6px;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.command-flyout-view:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.command-flyout.is-simple .command-flyout-view {
+  flex: 1 1 auto;
+}
+
+.command-flyout-spacer {
+  flex: 1 1 auto;
+}
+
+.command-flyout-count {
+  margin-left: auto;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.command-flyout-reset,
+.command-tile-pin {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.command-flyout-reset:hover:not(:disabled),
+.command-tile-pin:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.command-flyout-reset:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* A row is the tool's button and its pin. The pin shows on hover and
+   focus, and stays, filled, while the tool is pinned. */
+.command-tile-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.command-tile-pin {
+  opacity: 0;
+}
+
+.command-tile-row:hover .command-tile-pin,
+.command-tile-pin:focus-visible,
+.command-tile-row.is-pinned .command-tile-pin {
+  opacity: 1;
+}
+
+.command-tile-row.is-pinned .command-tile-pin {
+  color: var(--color-accent);
+}
+
+.command-tile-row.is-pinned .command-tile-pin svg {
+  fill: currentColor;
+}
+
+@media (hover: none) {
+  .command-tile-pin {
+    opacity: 1;
+  }
+}
+
+.command-tile {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   min-height: 30px;
   padding: 4px 7px;
@@ -1997,6 +2372,10 @@ button.command-rail:disabled {
   text-align: left;
 }
 
+.command-tile[draggable='true'] {
+  cursor: grab;
+}
+
 .command-tile svg {
   flex: 0 0 auto;
   width: 14px;
@@ -2004,13 +2383,21 @@ button.command-rail:disabled {
 }
 
 .command-tile > span {
+  flex: 1 1 auto;
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.3;
 }
 
-.command-tile:hover:not(:disabled):not(.active) {
+.command-tile > kbd {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.command-tile:hover:not(:disabled, [aria-disabled='true']):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -2021,7 +2408,7 @@ button.command-rail:disabled {
   border-color: var(--color-accent-border);
 }
 
-.command-tile:disabled {
+.command-tile:is(:disabled, [aria-disabled='true']) {
   color: var(--color-text-muted);
   opacity: var(--opacity-disabled);
   cursor: default;
@@ -3752,4 +4139,213 @@ button.model-panel-grip[aria-expanded='true'] {
   color: var(--color-bg);
   background: var(--color-accent);
   border-color: var(--color-accent-border);
+}
+
+/* The Options panel as a parameter sheet: one 26px row per value or
+   choice, names in a column on the left, controls on the right, so a
+   gear's dozen numbers fit beside the model rather than over it. */
+.in-place-command-options-panel.in-place-params {
+  width: min(360px, calc(100vw - 32px));
+  padding: 8px 10px 10px;
+  font-size: var(--fs-sm);
+}
+
+.in-place-params-summary {
+  margin: 0 0 6px;
+  padding: 5px 7px;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
+.in-place-params-section + .in-place-params-section {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.in-place-params-heading {
+  margin: 0 0 4px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+/* A folded group's title is its toggle, with a chevron that turns. */
+.in-place-params-section.is-foldable > .in-place-params-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin-bottom: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: start;
+  cursor: pointer;
+}
+
+.in-place-params-section.is-foldable > .in-place-params-heading::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.in-place-params-section.is-open > .in-place-params-heading {
+  margin-bottom: 4px;
+}
+
+.in-place-params-section.is-open > .in-place-params-heading::before {
+  transform: rotate(45deg);
+}
+
+.in-place-params-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.in-place-params .in-place-option + .in-place-option {
+  margin-top: 0;
+}
+
+.in-place-param-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  min-height: 26px;
+}
+
+.in-place-param-row > .in-place-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.in-place-param-row > .in-place-option-note {
+  grid-column: 2;
+  max-width: none;
+  margin: 0;
+}
+
+/* Choices sit joined, as one control, and share the row's width. */
+.in-place-param-segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-param-segments > .in-place-option-choice {
+  flex: 1 1 auto;
+  min-height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  border-color: transparent;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.in-place-param-segments > .in-place-option-choice[aria-checked='true'] {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.in-place-param-select,
+.in-place-param-field {
+  box-sizing: border-box;
+  min-height: 26px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-param-select {
+  width: 100%;
+  padding: 0 6px;
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.in-place-param-fields {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.in-place-param-field {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  min-width: 0;
+  padding: 0 6px;
+}
+
+.in-place-param-field:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.in-place-param-field.is-refused {
+  border-color: var(--color-error);
+  box-shadow: 0 0 0 1px var(--color-error);
+}
+
+.in-place-param-field input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.in-place-param-axis,
+.in-place-param-suffix {
+  flex: none;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.in-place-param-axis {
+  margin-right: 4px;
+  font-family: var(--font-mono);
+}
+
+.in-place-param-suffix {
+  margin-left: 4px;
+}
+
+/* A value's name scrubs it: dragged sideways, it steps the number. */
+.in-place-param-value > .in-place-option-label.is-scrubbable {
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.in-place-param-value.is-vector .in-place-param-field {
+  padding: 0 4px;
+}
+
+.in-place-params-actions {
+  margin-top: 8px;
 }

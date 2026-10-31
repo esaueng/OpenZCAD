@@ -11,11 +11,13 @@
   "extrude-edit-in-place.spec.ts": 15,
   "extrude-in-place.spec.ts": 15,
   "extrude-through-all.spec.ts": 8,
+  "face-offset-continuity.spec.ts": 30,
   "feature-history.spec.ts": 21,
   "gear.spec.ts": 15,
   "in-place-primitives.spec.ts": 15,
   "keyboard-focus-recovery.spec.ts": 8,
   "library-folder-sync.spec.ts": 9,
+  "library-reload-stability.spec.ts": 5,
   "measure.spec.ts": 7,
   "modeling.spec.ts": 136,
   "panel-suspension.spec.ts": 13,
@@ -28,5 +30,6 @@
   "start-screen-sync-failures.spec.ts": 4,
   "start-tile-reorder.spec.ts": 2,
   "text-authoring.spec.ts": 7,
+  "tool-rail-pins.spec.ts": 6,
   "viewport.spec.ts": 12
 }

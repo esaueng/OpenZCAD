@@ -326,6 +326,204 @@ describe('InPlaceCommandBar', () => {
     expect(onValue).toHaveBeenCalledWith('x', { x: 0, y: 0 });
   });
 
+  it('types a value in place, with its own unit beside it', () => {
+    const onValueCommit = vi.fn((_id: string, text: string) => text !== 'x');
+    const onCancel = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Gear"
+        hint="Drag the face width"
+        canFinish
+        values={[
+          {
+            id: 'pressureAngleDeg',
+            label: 'Pressure angle',
+            text: '20',
+            suffix: '°',
+            value: 20,
+            step: 1,
+            min: 0,
+            max: 45
+          }
+        ]}
+        onValueCommit={onValueCommit}
+        onDone={vi.fn()}
+        onCancel={onCancel}
+      />
+    );
+    const field = screen.getByRole('textbox', { name: 'Pressure angle' });
+    expect(field).toHaveValue('20');
+    // The unit is the value's own: an angle reads in degrees, never "mm".
+    expect(field.parentElement?.textContent).toBe('°');
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '25' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(onValueCommit).toHaveBeenLastCalledWith('pressureAngleDeg', '25');
+    // A refused entry is marked and kept for correcting.
+    fireEvent.change(field, { target: { value: 'x' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveValue('x');
+    // Escape puts the field back without committing or canceling.
+    onValueCommit.mockClear();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    fireEvent.blur(field);
+    expect(onValueCommit).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(field).toHaveValue('20');
+  });
+
+  it('steps a value with the arrow keys, within its limits', () => {
+    const onValueCommit = vi.fn(() => true);
+    render(
+      <InPlaceCommandBar
+        title="Gear"
+        hint="Drag the face width"
+        canFinish
+        values={[
+          {
+            id: 'teeth',
+            label: 'Teeth',
+            text: '20',
+            value: 20,
+            step: 1,
+            min: 1,
+            max: 21,
+            integer: true
+          }
+        ]}
+        onValueCommit={onValueCommit}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const field = screen.getByRole('textbox', { name: 'Teeth' });
+    fireEvent.keyDown(field, { key: 'ArrowUp' });
+    expect(onValueCommit).toHaveBeenLastCalledWith('teeth', '21');
+    // Ten at a time with Shift, held to the maximum.
+    fireEvent.keyDown(field, { key: 'ArrowUp', shiftKey: true });
+    expect(onValueCommit).toHaveBeenLastCalledWith('teeth', '21');
+    fireEvent.keyDown(field, { key: 'ArrowDown', shiftKey: true });
+    expect(onValueCommit).toHaveBeenLastCalledWith('teeth', '10');
+  });
+
+  it('scrubs a value on its name, previewing until the release', () => {
+    const onValueCommit = vi.fn(() => true);
+    const onValuePreview = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Gear"
+        hint="Drag the face width"
+        canFinish
+        values={[
+          {
+            id: 'faceWidth',
+            label: 'Face width',
+            text: '10',
+            suffix: 'mm',
+            value: 10,
+            step: 1,
+            min: 0
+          }
+        ]}
+        onValueCommit={onValueCommit}
+        onValuePreview={onValuePreview}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const label = screen.getByText('Face width');
+    fireEvent.pointerDown(label, { pointerId: 1, button: 0, clientX: 100 });
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: 112 });
+    expect(onValuePreview).toHaveBeenLastCalledWith('faceWidth', 13);
+    expect(onValueCommit).not.toHaveBeenCalled();
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: 20 });
+    expect(onValuePreview).toHaveBeenLastCalledWith('faceWidth', 0);
+    fireEvent.pointerUp(label, { pointerId: 1, clientX: 20 });
+    expect(onValueCommit).toHaveBeenCalledWith('faceWidth', '0');
+  });
+
+  it('lays rows out by section, folding the rarely changed away', () => {
+    render(
+      <InPlaceCommandBar
+        title="Gear"
+        hint="Drag the face width"
+        canFinish
+        summary="Module 2 mm · Pitch Ø 40 mm"
+        options={[
+          {
+            id: 'gearType',
+            label: 'Gear',
+            value: 'external',
+            choices: [
+              { value: 'external', label: 'External' },
+              { value: 'internal', label: 'Internal (ring)' },
+              { value: 'rack', label: 'Rack' },
+              { value: 'bevel', label: 'Bevel' },
+              { value: 'worm', label: 'Worm' },
+              { value: 'worm-wheel', label: 'Worm wheel' }
+            ]
+          }
+        ]}
+        values={[
+          { id: 'teeth', label: 'Teeth', text: '20', value: 20 },
+          { id: 'backlash', label: 'Backlash', text: '0', value: 0 },
+          { id: 'x', label: 'Corner X', text: '1', value: 1 },
+          { id: 'y', label: 'Corner Y', text: '2', value: 2 }
+        ]}
+        sections={[
+          {
+            rows: [
+              { kind: 'option', id: 'gearType' },
+              { kind: 'value', id: 'teeth' },
+              {
+                kind: 'vector',
+                label: 'Corner',
+                ids: ['x', 'y'],
+                axes: ['X', 'Y']
+              }
+            ]
+          },
+          {
+            label: 'Tooth form',
+            collapsed: true,
+            rows: [{ kind: 'value', id: 'backlash' }]
+          }
+        ]}
+        onValueCommit={vi.fn(() => true)}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Module 2 mm · Pitch Ø 40 mm')).toBeTruthy();
+    // Six or more choices are a menu, not a row of buttons.
+    expect(screen.getByRole('combobox', { name: 'Gear' })).toHaveValue(
+      'external'
+    );
+    expect(screen.queryByRole('radiogroup', { name: 'Gear' })).toBeNull();
+    // Folded by a button: the bar's Options stay its only summary.
+    const fold = screen.getByRole('button', { name: 'Tooth form' });
+    const folded = document.getElementById(
+      fold.getAttribute('aria-controls')!
+    )!;
+    expect(fold).toHaveAttribute('aria-expanded', 'false');
+    expect(folded.hidden).toBe(true);
+    expect(folded.textContent).toContain('Backlash');
+    expect(document.querySelectorAll('summary')).toHaveLength(1);
+    fireEvent.click(fold);
+    expect(fold).toHaveAttribute('aria-expanded', 'true');
+    expect(folded.hidden).toBe(false);
+    // A point's fields share its row, each named for its axis.
+    expect(screen.getByRole('textbox', { name: 'Corner X' })).toHaveValue('1');
+    expect(screen.getByRole('textbox', { name: 'Corner Y' })).toHaveValue('2');
+    const rows = document.querySelectorAll('.in-place-param-row');
+    expect(
+      [...rows].map(
+        (row) => row.querySelector('.in-place-option-label')?.textContent
+      )
+    ).toEqual(['Gear', 'Teeth', 'Corner', 'Backlash']);
+  });
+
   it('names Done and Cancel by their verbs, their keys as shortcuts', () => {
     render(
       <InPlaceCommandBar

@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
-import { PartThumbnail } from './PartThumbnail';
+import { PartThumbnail, preparePartThumbnails } from './PartThumbnail';
 import {
   allowKeySession,
   blockKeySession,
@@ -26,6 +26,79 @@ function summary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
 }
 
 describe('PartThumbnail', () => {
+  it('does not prime an encrypted preview while the key session is locked', async () => {
+    blockKeySession();
+    const load = vi.fn().mockResolvedValue('private-preview');
+    await preparePartThumbnails(
+      [summary({ storageFormat: 2 })],
+      'locked-user',
+      load
+    );
+    expect(load).not.toHaveBeenCalled();
+  });
+  it('has a decoded device preview on its first render after startup preparation', async () => {
+    const project = summary();
+    const load = vi.fn().mockResolvedValue('data:image/webp;base64,AA');
+    await preparePartThumbnails([project], null, load);
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(view.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,AA'
+    );
+    expect(view.container.querySelector('svg')).toBeNull();
+  });
+
+  it('does not strand a cloud preview behind a timed-out cache-only startup read', async () => {
+    const project = summary({ thumbnailArtifactId: toArtifactId('cloud') });
+    const stalled = deferred<string | undefined>();
+    await preparePartThumbnails([project], null, () => stalled.promise);
+    const load = vi.fn().mockResolvedValue('data:image/webp;base64,CC');
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/webp;base64,CC'
+      )
+    );
+    await act(async () => stalled.resolve(undefined));
+    expect(view.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,CC'
+    );
+  });
+
+  it('uses a quiet slot rather than an empty-model glyph while decoding', async () => {
+    const project = summary();
+    const waiting = deferred<string>();
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={() => waiting.promise}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(view.container.querySelector('svg')).toBeNull();
+    expect(
+      view.container.querySelector('.start-tile-thumb-loading')
+    ).toBeInTheDocument();
+    await act(async () => waiting.resolve('data:image/webp;base64,AA'));
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toBeInTheDocument()
+    );
+  });
+
   beforeEach(() => {
     vi.stubGlobal('IntersectionObserver', undefined);
     vi.spyOn(HTMLImageElement.prototype, 'decode').mockResolvedValue(undefined);
@@ -362,7 +435,7 @@ describe('PartThumbnail', () => {
     const observer = observers[0];
     if (!observer) throw new Error('Preview observer was not created');
     expect(observer.observe).toHaveBeenCalledWith(
-      view.container.querySelector('svg')
+      view.container.querySelector('.start-tile-thumb-loading')
     );
     expect(loadThumbnail).not.toHaveBeenCalled();
     act(() =>
@@ -502,7 +575,7 @@ describe('PartThumbnail', () => {
         <PartThumbnail
           project={project}
           loadThumbnail={vi.fn().mockResolvedValue(null)}
-          publishThumbnail={vi.fn()}
+          publishThumbnail={vi.fn().mockResolvedValue(undefined)}
         />
         {project.name}
       </button>

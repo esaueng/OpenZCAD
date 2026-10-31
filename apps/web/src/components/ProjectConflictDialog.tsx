@@ -43,6 +43,7 @@ function ModifiedAt({ value }: { value: string }) {
         year: 'numeric',
         hour: 'numeric',
         minute: '2-digit',
+        second: '2-digit',
         timeZoneName: 'short'
       })}
     </time>
@@ -143,6 +144,10 @@ export function ProjectConflictDialog({
                 )}
               </span>
               <ModifiedAt value={localModified} />
+              <span className="conflict-choice-detail">
+                {conflict.localDocument.revisions.length} edits ·{' '}
+                {conflict.localDocument.checkpoints.length} save points
+              </span>
             </span>
             <ChevronRight size={16} aria-hidden="true" />
           </button>
@@ -161,6 +166,10 @@ export function ProjectConflictDialog({
                 )}
               </span>
               <ModifiedAt value={remoteModified} />
+              <span className="conflict-choice-detail">
+                {conflict.remoteDocument.revisions.length} edits ·{' '}
+                {conflict.remoteDocument.checkpoints.length} save points
+              </span>
             </span>
             <ChevronRight size={16} aria-hidden="true" />
           </button>
@@ -174,7 +183,7 @@ export function ProjectConflictDialog({
             <span className="conflict-choice-content">
               <span className="conflict-choice-label">Keep both</span>
               <span className="conflict-choice-detail">
-                {other} stays original; yours becomes a copy.
+                {other} stays original; yours is saved as a copy on this device.
               </span>
             </span>
             <ChevronRight size={16} aria-hidden="true" />

@@ -33,6 +33,7 @@ import {
 } from './viewer/orientationCubeOverlay';
 import { mark, measure, timed } from '../lib/perf';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
+import { useWorkspaceFrameReady } from './WorkspaceLoading';
 import { recordEditPhase } from '../lib/editTrace';
 import {
   avoidSketchDimensionOverlays,
@@ -2300,6 +2301,9 @@ export function ModelViewer({
   middleDragRef.current = settings.middleDrag;
   const pointerNavigationRef = useRef(settings.pointerNavigation);
   pointerNavigationRef.current = settings.pointerNavigation;
+  const reportWorkspaceFrame = useWorkspaceFrameReady();
+  const reportWorkspaceFrameRef = useRef(reportWorkspaceFrame);
+  reportWorkspaceFrameRef.current = reportWorkspaceFrame;
   const initialViewRef = useRef(initialView);
   const viewRequestRef = useRef(viewRequest);
   viewRequestRef.current = viewRequest;
@@ -5652,6 +5656,7 @@ export function ModelViewer({
             bodyFaces: {
               visible: boolean;
               opacity: number;
+              emissive: number;
               triangles: number;
               depthTest: boolean;
               depthWrite: boolean;
@@ -5685,6 +5690,7 @@ export function ModelViewer({
       const bodyFaces: {
         visible: boolean;
         opacity: number;
+        emissive: number;
         triangles: number;
         bounds?: { min: number[]; max: number[] };
         worldBounds?: { min: number[]; max: number[] };
@@ -5703,6 +5709,7 @@ export function ModelViewer({
         bodyFaces.push({
           visible: mesh.visible && mesh.material.visible,
           opacity: mesh.material.opacity,
+          emissive: mesh.material.emissive.getHex(),
           triangles: Math.floor(
             (mesh.geometry.index?.count ??
               mesh.geometry.getAttribute('position')?.count ??
@@ -7020,12 +7027,15 @@ export function ModelViewer({
       if (rig?.kind === 'cylinder-radius') {
         rig.setSpanMode?.(cylinderDimensionModeRef.current);
       }
-      // A rig with a dimension line lays its label along the line, rotated
-      // to read with it, once the line is long enough on screen to carry
-      // the two pills. Otherwise the label hangs beside the pin.
+      // Face-offset controls keep one horizontal layout throughout the
+      // gesture. Switching onto a long projected line rotated the value
+      // vertically and changed both its colour and position under the hand.
       let lineAngle: number | null = null;
       const line =
-        rig && !dimensionChipBesidePin && rig.kind !== 'edge-radius'
+        rig &&
+        !dimensionChipBesidePin &&
+        !(rig.kind === 'offset-face' && offsetHandleRef.current) &&
+        rig.kind !== 'edge-radius'
           ? (rig.chipLine?.() ?? null)
           : null;
       if (line) {
@@ -11110,6 +11120,7 @@ export function ModelViewer({
         }
       });
       pendingTracedFrameRef.current = false;
+      reportWorkspaceFrameRef.current();
       const presented = pendingEditFrameRef.current;
       if (presented) {
         pendingEditFrameRef.current = undefined;
@@ -11620,7 +11631,11 @@ export function ModelViewer({
       // Exact frames replace bodies mid-drag; once the drag is over, the
       // next bodies are the committed or restored part.
       // Typed entry keeps its ghost the same way while exact frames land.
-      if (!offsetDragActiveRef.current && !offsetHandleRef.current?.entry)
+      if (
+        !offsetDragActiveRef.current &&
+        !offsetHandleRef.current?.entry &&
+        !offsetHandleRef.current?.locked
+      )
         offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
@@ -11863,6 +11878,11 @@ export function ModelViewer({
           material.userData.targetOpacity = SELECTED_FACE_OPACITY;
         }
         const fill = new THREE.Mesh(geometry, material);
+        // A regenerated face is still the active offset selection. Do not
+        // restart its opacity ramp for every preview/commit mesh install.
+        if (offsetHandleRef.current?.bodyId === body.bodyId) {
+          material.opacity = material.userData.targetOpacity as number;
+        }
         fill.renderOrder = ownColour
           ? VIEWPORT_RENDER_ORDER.SELECTED_FACE_FILL
           : VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
@@ -11929,6 +11949,9 @@ export function ModelViewer({
           })
         );
         hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
+        if (offsetHandleRef.current?.bodyId === body.bodyId) {
+          hiddenMaterial.opacity = SELECTED_FACE_HIDDEN_OPACITY;
+        }
         context.selection.easeOpacity(hiddenMaterial);
         context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
@@ -12740,6 +12763,22 @@ export function ModelViewer({
       built.handle = offsetHandle;
       return;
     }
+    if (
+      previous &&
+      offsetHandle &&
+      built &&
+      !built.handle.locked &&
+      !built.handle.entry &&
+      sameOffsetHandleTarget(built.handle, offsetHandle)
+    ) {
+      // Preview cleanup and the analysis echo can re-derive an already
+      // re-armed handle. Its semantic target did not change: preserve the
+      // rig and HUD rather than hiding them for another render frame.
+      built.handle = offsetHandle;
+      previous.setValue(offsetHandle.initialValue ?? 0);
+      context.requestRender();
+      return;
+    }
     // The handle validation held, re-armed on the face it just moved (or
     // restored after a refusal), takes over from the one on screen at once.
     const takesOver =
@@ -12753,7 +12792,9 @@ export function ModelViewer({
     }
     offsetRigRef.current = null;
     offsetRigBuiltRef.current = null;
-    if (offsetChipRef.current) {
+    // The replacement rig is ready in this effect, but its HUD is placed by
+    // the next frame. Keep the submitted value visible across that handoff.
+    if (offsetChipRef.current && !takesOver) {
       offsetChipRef.current.hidden = true;
     }
     if (!offsetHandle) {

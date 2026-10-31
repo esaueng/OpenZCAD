@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
   type ComponentProps,
   type ReactNode
@@ -39,6 +40,28 @@ export function WorkspaceAppShell({
 }
 
 const PendingWorkspace = createContext<(() => () => void) | null>(null);
+const WorkspaceModelReady = createContext(true);
+
+/** The viewer releases its initial pending slot only after it draws the ready
+ * model at the restored camera. Unmount/error recovery also releases the slot.
+ */
+export function useWorkspaceFrameReady() {
+  const register = useContext(PendingWorkspace);
+  const ready = useContext(WorkspaceModelReady);
+  const release = useRef<(() => void) | undefined>(undefined);
+  useLayoutEffect(() => {
+    release.current = register?.();
+    return () => {
+      release.current?.();
+      release.current = undefined;
+    };
+  }, [register]);
+  return useCallback(() => {
+    if (!ready) return;
+    release.current?.();
+    release.current = undefined;
+  }, [ready]);
+}
 
 /** Suspense fallbacks join the initial reveal without coupling their loaders. */
 export function useWorkspacePending() {
@@ -84,21 +107,23 @@ export function WorkspaceLoading({
 
   return (
     <PendingWorkspace.Provider value={register}>
-      <div
-        className={`workspace-reveal${revealed ? ' is-ready' : ''}`}
-        inert={!revealed || covered}
-        aria-hidden={!revealed || covered}
-      >
-        {children}
-      </div>
-      {!revealed && !covered && (
-        <StartupScreen
-          projectName={projectName}
-          stage={ready ? 'panels' : 'model'}
-          onBack={onBack}
-          loadingChunks={pending > 0}
-        />
-      )}
+      <WorkspaceModelReady.Provider value={ready}>
+        <div
+          className={`workspace-reveal${revealed ? ' is-ready' : ''}`}
+          inert={!revealed || covered}
+          aria-hidden={!revealed || covered}
+        >
+          {children}
+        </div>
+        {!revealed && !covered && (
+          <StartupScreen
+            projectName={projectName}
+            stage={ready ? 'panels' : 'model'}
+            onBack={onBack}
+            loadingChunks={pending > 0}
+          />
+        )}
+      </WorkspaceModelReady.Provider>
     </PendingWorkspace.Provider>
   );
 }

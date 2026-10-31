@@ -28,8 +28,22 @@ afterEach(() => {
 });
 
 describe('project camera pose persistence', () => {
+  it('saves the latest pose when reload interrupts the settle timer', () => {
+    const { result, unmount } = renderHook(() =>
+      useProjectView('reload-camera')
+    );
+    act(() => result.current.onCameraChange('reload-camera', transientPose));
+    expect(workspaceSession.loadProjectView('reload-camera')).toBeNull();
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(workspaceSession.loadProjectView('reload-camera')?.camera).toEqual(
+      transientPose
+    );
+    unmount();
+  });
   it('keeps a transient pose in memory and writes only the settled pose', async () => {
-    const writes = vi.spyOn(Storage.prototype, 'setItem');
+    const writes = vi.spyOn(localStorage, 'setItem');
     const { result } = renderHook(() => useProjectView('project-1'));
 
     act(() => result.current.onCameraChange('project-1', transientPose));

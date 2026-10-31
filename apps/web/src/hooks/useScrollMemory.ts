@@ -43,7 +43,6 @@ export function useScrollMemory(
       pending.current = null;
       return;
     }
-    let reached = true;
     for (const selector of ['', ...selectors]) {
       const element = scroller(root, selector);
       const top = stored.tops[selector];
@@ -51,9 +50,10 @@ export function useScrollMemory(
         continue;
       }
       element.scrollTop = top;
-      reached &&= Math.abs(element.scrollTop - top) <= 1;
     }
-    if (reached || ready) {
+    // A matching skeleton is not the final shelf: a shorter device listing
+    // can arrive before the account's rows and clamp the scroll again.
+    if (ready) {
       pending.current = null;
     }
   });

@@ -99,7 +99,7 @@ test('saves unopened legacy projects with undo history from the library', async 
   // Reloading refreshes the shelf; no project has been opened or edited.
   await page.reload();
   await expect(page.locator('.start-account-text')).toHaveText(
-    '3 projects not saved'
+    '3 projects saved on this device only'
   );
   await page.getByRole('button', { name: /Save.*account/ }).click();
   await expect(page.locator('.start-account-text')).toHaveText(
@@ -107,7 +107,7 @@ test('saves unopened legacy projects with undo history from the library', async 
   );
   await page.getByRole('button', { name: 'Dismiss sync results' }).click();
   await expect(page.locator('.start-account-text')).toHaveText(
-    'All 3 projects saved'
+    'All 3 projects saved to your account'
   );
   expect(
     saved.map((document) => savedFrom.get(document.projectId)).sort()

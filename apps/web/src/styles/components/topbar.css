@@ -200,40 +200,170 @@
   color: var(--color-error);
 }
 
-/* Drops from the left-hand island, so it opens rightwards. */
+/* The indicator's padlock. Unlocked, the shackle lifts and flips about its
+   right leg, which reads as a swivel when it changes; it shuts once a
+   version is verified. The keyhole shows while this device's keys are
+   locked. */
+.padlock {
+  overflow: visible;
+}
+
+.padlock-shackle {
+  transform-box: view-box;
+  transform-origin: 17px 11px;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.padlock.is-open .padlock-shackle {
+  transform: translateY(-2px) scaleX(-1);
+}
+
+.padlock-keyhole {
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.padlock.is-keyhole .padlock-keyhole {
+  opacity: 1;
+}
+
+/* Drops from the left-hand island, so it opens rightwards. The state
+   colour set on the menu carries into the panel's icon and status word. */
+.encryption-menu {
+  --encryption-tone: var(--color-success);
+}
+
+.encryption-menu.is-unverified {
+  --encryption-tone: var(--color-text-subtle);
+}
+
+.encryption-menu.is-warning,
+.encryption-menu.is-locked {
+  --encryption-tone: var(--color-warning);
+}
+
+.encryption-menu.is-problem {
+  --encryption-tone: var(--color-error);
+}
+
 .encryption-menu-panel {
   left: 0;
   right: auto;
-  width: min(320px, 80vw);
+  width: min(300px, 80vw);
+  display: grid;
+  gap: 10px;
 }
 
-.encryption-menu-heading {
-  margin: 0 8px 4px;
+.encryption-menu-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.encryption-menu-icon {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--encryption-tone);
+  background: color-mix(in srgb, var(--encryption-tone) 14%, transparent);
+  border-radius: 50%;
+}
+
+.encryption-menu-title {
   color: var(--color-text);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
-.encryption-menu-text {
-  margin: 0 8px 6px;
+.encryption-menu-status {
+  color: var(--encryption-tone);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+}
+
+.encryption-menu-text,
+.encryption-menu-detail {
+  margin: 0;
+  padding: 0 4px;
   color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 1.45;
+}
+
+.encryption-menu-detail {
+  margin-top: -6px;
+  color: var(--color-text-subtle);
+}
+
+.encryption-menu-code {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  background: var(--color-surface-1);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.encryption-menu-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.encryption-menu-copy {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.encryption-menu-copy:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+/* Shown at full length: people compare it by eye (ADR-024). The narrow
+   measure wraps the groups into two even rows. */
+.encryption-menu-code code {
+  max-width: 24ch;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  word-spacing: 0.15em;
+}
+
+.encryption-menu-code small {
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   line-height: 1.4;
 }
 
-/* Shown at full length: people compare it by eye (ADR-024). */
-.encryption-menu-code {
-  display: grid;
-  gap: 2px;
-  margin: 4px 0 6px;
+/* Qualified to outrank `.topbar-menu-item`, which comes later and clears
+   the border. */
+.encryption-menu-panel > .encryption-menu-settings {
+  margin-top: -2px;
+  padding-top: 8px;
+  border-top: var(--border-thin);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
-.encryption-menu-code code {
-  margin: 0 8px;
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  overflow-wrap: anywhere;
+/* A single-line row: the shared two-row icon span pushed it below the
+   label. */
+.encryption-menu-panel > .encryption-menu-settings svg {
+  grid-row: auto;
 }
 
 /* Auto-flowing columns: the account chip comes and goes with account state,

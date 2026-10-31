@@ -1163,8 +1163,8 @@ export async function seedPanelLayout(
 }
 
 /**
- * Opens the command card's "More tools" fold the way a returning user left
- * it, unless the spec has already said otherwise.
+ * Opens the command card's "More tools" drawer, listing every tool, the way
+ * a returning user left it, unless the spec has already said otherwise.
  */
 export async function seedOpenCommandFold(page: Page) {
   await page.addInitScript(() => {
@@ -1176,6 +1176,17 @@ export async function seedOpenCommandFold(page: Page) {
         : {};
       if (typeof state.commandFoldOpen !== 'boolean') {
         state.commandFoldOpen = true;
+        window.localStorage.setItem(key, JSON.stringify(state));
+      }
+      // Specs click tools by name whether or not they fit the pick, so
+      // the drawer opens advanced and lists every tool unless a spec chose
+      // otherwise.
+      if (state.toolDrawerFilter === undefined) {
+        state.toolDrawerFilter = 'all';
+        window.localStorage.setItem(key, JSON.stringify(state));
+      }
+      if (state.toolDrawerView === undefined) {
+        state.toolDrawerView = 'advanced';
         window.localStorage.setItem(key, JSON.stringify(state));
       }
     } catch {
@@ -1602,7 +1613,8 @@ export async function openMoveOptions(move: Locator) {
 
 /**
  * Types exact values behind an in-place command's Options (a primitive's
- * position), each through its keypad, and closes Options again.
+ * position), each in its field (or an Extrude's on its keypad), and closes
+ * Options again.
  */
 export async function setInPlaceOptionValues(
   page: Page,
@@ -1633,6 +1645,17 @@ export async function setBarValues(
   for (const [label, value] of Object.entries(values)) {
     if ((await options.getAttribute('open')) === null) {
       await options.locator('summary').click();
+    }
+    // An in-place command's values are typed in the panel itself; the
+    // Extrude's still open its keypad.
+    const field = bar.getByRole('textbox', { name: label, exact: true });
+    if ((await field.count()) > 0) {
+      await field.fill(value);
+      await field.press('Enter');
+      await expect(field).not.toHaveAttribute('aria-invalid', 'true');
+      await field.blur();
+      await expect(field).toHaveValue(value);
+      continue;
     }
     await bar.getByRole('button', { name: label, exact: true }).click();
     const keypad = page.locator('.numeric-keypad');

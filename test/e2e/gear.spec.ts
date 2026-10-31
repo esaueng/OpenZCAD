@@ -173,3 +173,58 @@ test('Gear teeth in place: teeth cut along a picked cylinder keep its diameter',
   expect(teeth).not.toHaveProperty('pitch');
   expect(teeth).not.toHaveProperty('fit');
 });
+
+test('Gear parameters: typed in place, in their own units, only where they apply', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await openPart(page, 'Gear parameters', 'box', {
+    width: 40,
+    height: 30,
+    depth: 20
+  });
+  await startTool(page, /^Gear(?! teeth)/, 'Gear');
+  const bar = page.getByRole('group', { name: 'Gear command' });
+  await expect
+    .poll(() => pickPlanarFace(page, { x: 0, y: 0, z: 1 }))
+    .not.toBeNull();
+  await bar.locator('details.in-place-command-options summary').click();
+  const panel = bar.locator('.in-place-command-options-panel');
+  // An angle reads in degrees and a shift in modules, never in mm.
+  await panel.getByText('Tooth form').click();
+  const pressure = panel.getByRole('textbox', { name: 'Pressure angle' });
+  await expect(pressure).toHaveValue('20');
+  await expect(pressure.locator('..')).toContainText('°');
+  await expect(
+    panel.getByRole('textbox', { name: 'Profile shift' }).locator('..')
+  ).toContainText('× m');
+  // A spur gear has no hand until its teeth twist.
+  await expect(panel.getByRole('radiogroup', { name: 'Hand' })).toHaveCount(0);
+  const helix = panel.getByRole('textbox', { name: 'Helix angle' });
+  await helix.fill('15');
+  await helix.press('Enter');
+  await expect(panel.getByRole('radiogroup', { name: 'Hand' })).toBeVisible();
+  // Another sizing keeps the tooth: module 2 is 12.7 teeth per inch.
+  await panel
+    .getByRole('radiogroup', { name: 'Size by' })
+    .getByRole('radio', { name: 'Diametral pitch' })
+    .click();
+  const diametral = panel.getByRole('textbox', { name: 'Diametral pitch' });
+  await expect(diametral).toHaveValue('12.7');
+  await expect(panel.getByRole('textbox', { name: 'Module' })).toHaveCount(0);
+  const teeth = panel.getByRole('textbox', { name: 'Teeth' });
+  await teeth.fill('24');
+  await teeth.press('Enter');
+  await expect(page.getByTestId('command-handle-teeth')).toContainText('24');
+  await bar.locator('details.in-place-command-options summary').click();
+  await finishInPlaceCommand(page, 'Gear');
+  const [gear] = await gearData(page);
+  expect(gear).toMatchObject({
+    gearType: 'external',
+    sizing: 'diametral-pitch',
+    teeth: 24,
+    helixAngleDeg: 15
+  });
+  expect((gear as { pitch: number }).pitch).toBeCloseTo(12.7);
+});

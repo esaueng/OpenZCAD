@@ -727,6 +727,12 @@ import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
 import type { KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
+import { evaluateKeypadInput } from './lib/keypad';
+import {
+  inPlacePanelSections,
+  inPlacePanelState,
+  inPlaceValueStep
+} from './lib/inPlace/panel';
 import {
   IDLE,
   composingTextDraft,
@@ -1472,8 +1478,11 @@ import {
   retainPendingShelfOrder,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
-  resolveShelfThumbnail
+  resolveShelfThumbnail,
+  cachedThumbnailSource
 } from './lib/projectShelf';
+import { preparePartThumbnails } from './components/PartThumbnail';
+import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
   cachedShelfNames,
@@ -1672,6 +1681,7 @@ import {
   type WorkspaceMode,
   WORKSPACE_MODE_ORDER
 } from './lib/panelState';
+import { recordRecentTool } from './lib/toolRail';
 import {
   applyPreset,
   closePanel,
@@ -2621,6 +2631,9 @@ export function App() {
     useState(false);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [startupLibraryAccountId, setStartupLibraryAccountId] = useState<
+    string | null | undefined
+  >(undefined);
   // Shelf writes (pin, reorder, shelf moves) run one at a time, each built
   // from the rows the writes before it left, so two quick drags (or a drag
   // right after a pin) cannot rebuild a row from a stale snapshot and undo
@@ -4649,10 +4662,24 @@ export function App() {
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       setLastValidPreview(null);
-      dispatchInteraction({ type: 'commit-complete' });
-      setSelectedTopology({ bodyId, kind: 'body' });
       setSelectedEdges([]);
-      setSelectedBodyIds([bodyId]);
+      if (
+        pending?.interaction.mode === 'face' &&
+        pending.interaction.op === 'offset-face'
+      ) {
+        // Finish on the moved face directly. A temporary body selection can
+        // repaint the entire part and arm unrelated controls; if the face
+        // cannot be proved, end neutrally rather than selecting a guess.
+        if (!reselectOffsetFace(pending.interaction.target, pending.value)) {
+          dispatchInteraction({ type: 'commit-complete' });
+          setSelectedTopology(null);
+          setSelectedBodyIds([]);
+        }
+      } else {
+        dispatchInteraction({ type: 'commit-complete' });
+        setSelectedTopology({ bodyId, kind: 'body' });
+        setSelectedBodyIds([bodyId]);
+      }
       inferFeatureNodeFor(bodyId);
     },
     onBusy: setBusy,
@@ -6217,17 +6244,32 @@ export function App() {
           getKeySessionRevision() === keySessionRevision;
         const verifiedMetadata = new Map<string, ProjectSummary>();
         const local = listLocalProjects();
-        // Cards already stored on this device need neither cloud discovery nor
-        // decryption. Keep actions gated until account discovery settles.
-        void local.then(
-          (projects) => {
-            if (isCurrent() && !startupProjectId) {
-              setProjects(projects);
-              mark('startup.localLibrary.ready');
-            }
-          },
-          () => undefined
-        );
+        let listingPublished = false;
+        const prepareLibrary = async (
+          projects: ProjectSummary[],
+          accountId: string | null
+        ) => {
+          const folders = readLibraryFolders(
+            folderStorageKey(accountId)
+          ).folders;
+          const covers = new Set(
+            folders.map(
+              (folder) => folder.coverProjectId ?? folder.projectIds[0]
+            )
+          );
+          await preparePartThumbnails(
+            [
+              ...projects.filter((project) => covers.has(project.projectId)),
+              ...projects
+            ],
+            accountId,
+            async (project) =>
+              cachedThumbnailSource(
+                await loadProjectThumbnail(project.projectId).catch(() => null),
+                project
+              )
+          );
+        };
         void (
           bootCloudFunctionsEnabledRef.current
             ? api.health().catch(() => null)
@@ -6266,6 +6308,18 @@ export function App() {
           sessionPromise
         ]);
         if (!isCurrent()) return;
+        // Local cards and their account-scoped folders arrive together. Account
+        // listing/decryption still proceeds progressively, with actions gated.
+        void local
+          .then(async (projects) => {
+            if (startupProjectId) return;
+            await prepareLibrary(projects, activeSession?.userId ?? null);
+            if (!isCurrent() || listingPublished) return;
+            setStartupLibraryAccountId(activeSession?.userId ?? null);
+            setProjects(projects);
+            mark('startup.localLibrary.ready');
+          })
+          .catch(() => undefined);
         const progress: ProjectListingProgress = {
           isCurrent,
           onVerified(project) {
@@ -6376,19 +6430,18 @@ export function App() {
           accountDocumentNeedsRepair && startupProjectId
             ? startupProjectId
             : null;
-        void collaborationPromise.then((capabilities) => {
-          if (
-            isCurrent() &&
-            sessionRef.current?.userId === activeSession?.userId
-          )
-            setCollaborationRollout(capabilities);
-        });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
             rememberedRemote.version
           );
         }
+        if (!startupProjectId) {
+          await prepareLibrary(merged, activeSession?.userId ?? null);
+          if (!isCurrent()) return;
+        }
+        listingPublished = true;
+        setStartupLibraryAccountId(activeSession?.userId ?? null);
         setProjects(merged);
         setCloudProjectIds(listed.cloudProjectIds);
         setAccountProjectListReached(listed.remoteReached);
@@ -6399,6 +6452,13 @@ export function App() {
           sessionRef.current = activeSession;
           setSession(activeSession);
         }
+        void collaborationPromise.then((capabilities) => {
+          if (
+            isCurrent() &&
+            sessionRef.current?.userId === activeSession?.userId
+          )
+            setCollaborationRollout(capabilities);
+        });
         void remoteSettingsPromise.then((remoteSettings) => {
           if (
             !remoteSettings ||
@@ -21036,6 +21096,7 @@ export function App() {
     );
   }, [doc, inPlaceEditFeatureId]);
   const inPlace = useInPlaceCommand({
+    ...(doc?.units ? { units: doc.units } : {}),
     sketchViews: availableSketchViews,
     datumAxes: inPlaceDatumAxes,
     linearSnap: appSettings.sketching.snapEnabled
@@ -21413,6 +21474,121 @@ export function App() {
       ...(at ? { fixedClientAnchor: at } : {})
     });
     return true;
+  }
+  /**
+   * The command's Options panel: its rows as they stand (a gear's tooth
+   * form only where it applies), each value with its unit, and what the
+   * choices come to.
+   */
+  const inPlacePanel = useMemo(() => {
+    if (!inPlaceSpec) return null;
+    const state = inPlacePanelState(
+      inPlaceSpec,
+      inPlace.options,
+      inPlace.values
+    );
+    // A value is named as its chip names it ("Y count").
+    const handleLabels = new Map(
+      inPlace.handles.map((handle) => [handle.valueId, handle.label])
+    );
+    const labelOf = (value: { id: string; label: string }) =>
+      handleLabels.get(value.id) ?? value.label;
+    const sections = inPlacePanelSections(
+      inPlaceSpec,
+      state,
+      new Set(handleLabels.keys()),
+      inPlace.optionSpecs.map((option) => option.id),
+      labelOf
+    );
+    const shown = new Set(
+      sections.flatMap((section) =>
+        section.rows.flatMap((row) =>
+          row.kind === 'option' ? [] : row.kind === 'vector' ? row.ids : [row.id]
+        )
+      )
+    );
+    const values = inPlaceSpec.values
+      .filter((value) => shown.has(value.id))
+      .map((value) => {
+        const number = state.numbers[value.id] ?? value.initial;
+        const suffix =
+          value.suffix ??
+          (value.unit === 'angle'
+            ? '°'
+            : value.unit === 'length'
+              ? inPlaceUnits
+              : undefined);
+        return {
+          id: value.id,
+          label: labelOf(value),
+          text:
+            inPlace.raws[value.id] ??
+            formatNumber(displayedValue(value, number)),
+          ...(suffix ? { suffix } : {}),
+          value: number,
+          step: inPlaceValueStep(value, number),
+          ...(value.min === undefined ? {} : { min: value.min }),
+          ...(value.max === undefined ? {} : { max: value.max }),
+          ...(value.integer ? { integer: true } : {}),
+          ...(value.note ? { note: value.note } : {})
+        };
+      });
+    return {
+      sections,
+      values,
+      summary: inPlaceSpec.summary?.(state, inPlaceUnits) ?? null
+    };
+  }, [
+    inPlaceSpec,
+    inPlace.options,
+    inPlace.values,
+    inPlace.raws,
+    inPlace.handles,
+    inPlace.optionSpecs,
+    inPlaceUnits
+  ]);
+  /**
+   * A value typed in the Options panel: a number or an expression, as the
+   * keypad takes it, refused (false) where the keypad would refuse it.
+   */
+  function commitInPlacePanelValue(valueId: string, text: string): boolean {
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    if (!valueSpec) return false;
+    const evaluation = evaluateKeypadInput(
+      text,
+      valueSpec.unit === 'length'
+        ? inPlaceUnits
+        : valueSpec.unit === 'angle'
+          ? 'deg'
+          : 'count',
+      inPlaceUnits,
+      parameterScope.scope
+    );
+    if (!evaluation.ok || evaluation.value === undefined) return false;
+    // Expressions stay parametric in the stored feature.
+    const accepted = inPlace.setValue(
+      valueId,
+      evaluation.value,
+      evaluation.isExpression ? evaluation.normalizedRaw : undefined
+    );
+    if (accepted) {
+      commandSetterRef.current?.(
+        valueId,
+        clampValue(valueSpec, evaluation.value)
+      );
+    }
+    return accepted;
+  }
+  /** A value scrubbed on its panel label: the handle and preview follow. */
+  function previewInPlacePanelValue(valueId: string, value: number) {
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    if (valueSpec && !valueInRange(valueSpec, value)) return;
+    commandSetterRef.current?.(valueId, value);
+    inPlace.previewValue(valueId, value);
   }
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
@@ -24396,21 +24572,18 @@ export function App() {
         : null;
     offsetPreview.stop();
     offsetPreviewValueRef.current = null;
-    const target = current.target;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
       reuse ? reuse.successMessage : plan.successMessage,
       offset,
-      // The moved face stays the selection, armed for the next drag, rather
-      // than handing over to a whole-body selection that recolours the part.
-      () => reselectOffsetFace(target, offset),
+      undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
     );
     return true;
   }
 
-  function reselectOffsetFace(target: FaceTarget, offset: number) {
+  function reselectOffsetFace(target: FaceTarget, offset: number): boolean {
     // An extrude cap or a box side edits a total length, whose handle does
     // not restart from zero on the moved face, unless the card was switched
     // to a local Offset Face.
@@ -24418,7 +24591,7 @@ export function App() {
       !target.localFaceOffset &&
       (target.extrudeFeatureId || target.resizeBodyFeatureId)
     )
-      return;
+      return false;
     const bodyId = target.bodyId as BodyId;
     const faces =
       managerRef.current?.document.derived.bodyRepresentations[bodyId]?.topology
@@ -24441,7 +24614,7 @@ export function App() {
           offset
         )
       : null;
-    if (!moved?.geometry) return;
+    if (!moved?.geometry) return false;
     const { reference: _staleReference, ...stableTarget } = target;
     const shift = (value: [number, number, number]) =>
       value.map(
@@ -24468,6 +24641,7 @@ export function App() {
     });
     setSelectedBodyIds([bodyId]);
     dispatchInteraction({ type: 'select-face', target: nextTarget });
+    return true;
   }
 
   function handleResizeThroughHole(
@@ -27267,6 +27441,15 @@ export function App() {
           // at commit and must not strand the shelf disabled mid-import.
           busy={startupState !== 'ready'}
           loading={startupState === 'loading-library'}
+          scopePending={
+            startupState === 'loading-library' &&
+            startupLibraryAccountId === undefined
+          }
+          folderAccountId={
+            startupState === 'loading-library'
+              ? startupLibraryAccountId
+              : (thumbnailAccountUserId ?? null)
+          }
           demos={START_SCREEN_DEMOS}
           defaultUnits={appSettings.general.defaultUnits}
           cardSize={appSettings.appearance.libraryCardSize}
@@ -28598,9 +28781,29 @@ export function App() {
         }
         activeTool={tool ?? inPlace.tool}
         availability={shownAvailability}
-        onLaunchTool={launchTool}
+        onLaunchTool={(nextTool) => {
+          // The rail's suggestions lead with what the hand last reached for.
+          setPanelState((current) => ({
+            ...current,
+            recentTools: recordRecentTool(current.recentTools, nextTool)
+          }));
+          launchTool(nextTool);
+        }}
         pick={railPick}
         pickSummary={commandContextLabel(commandSelection) ?? ''}
+        pinnedTools={panelState.pinnedTools}
+        onPinnedToolsChange={(pinnedTools) =>
+          setPanelState((current) => ({ ...current, pinnedTools }))
+        }
+        recentTools={panelState.recentTools}
+        drawerFilter={panelState.toolDrawerFilter}
+        onDrawerFilterChange={(toolDrawerFilter) =>
+          setPanelState((current) => ({ ...current, toolDrawerFilter }))
+        }
+        drawerView={panelState.toolDrawerView}
+        onDrawerViewChange={(toolDrawerView) =>
+          setPanelState((current) => ({ ...current, toolDrawerView }))
+        }
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
@@ -28717,6 +28920,7 @@ export function App() {
                   : 'unavailable'
           }
           collaborationStatus={collaboration.status}
+          collaborationFailure={collaboration.failureReason}
           collaboratorCount={collaboration.members.length}
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
@@ -30334,25 +30538,11 @@ export function App() {
                     );
                     if (edge) inPlace.pickEdge(edge);
                   }}
-                  values={inPlaceSpec.values
-                    .filter((value) => value.inOptions)
-                    .map((value) => ({
-                      id: value.id,
-                      label: value.label,
-                      text:
-                        inPlace.raws[value.id] ??
-                        `${formatNumber(inPlace.values[value.id] ?? value.initial)} ${inPlaceUnits}`
-                    }))}
-                  onValue={(valueId, at) => {
-                    const valueSpec = inPlaceSpec.values.find(
-                      (candidate) => candidate.id === valueId
-                    );
-                    openInPlaceKeypad(
-                      valueId,
-                      inPlace.values[valueId] ?? valueSpec?.initial ?? 0,
-                      at
-                    );
-                  }}
+                  sections={inPlacePanel?.sections}
+                  summary={inPlacePanel?.summary ?? null}
+                  values={inPlacePanel?.values ?? []}
+                  onValueCommit={commitInPlacePanelValue}
+                  onValuePreview={previewInPlacePanelValue}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
                 />
