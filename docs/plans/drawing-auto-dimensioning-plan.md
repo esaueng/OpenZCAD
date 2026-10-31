@@ -164,6 +164,22 @@ Each needs its own schema bump, claimed from open PRs at the time
 - The assistant must be reachable from Draw; confirm the panel's mount
   conditions there before this slice.
 
+## Slice A decisions (dimension check, 2026-10-31)
+
+- **Positions.** Along each model axis: planar faces square to it, and the
+  axes of holes, bosses and turned surfaces across it. A cylinder tangent to
+  an adjacent planar face is a blend, positioned by its radius alone; a span
+  ending at its tangent or axis is reported as derived.
+- **Bolt circles.** Three or more holes of one size equidistant from another
+  turned axis are one bolt circle. Live testing on the Pipe Flange demo
+  showed the alternative: per-hole X/Y positions doubled the requirement
+  count (12 against 6). Its pitch diameter is reported as not dimensionable
+  until slice B; the holes' clocking angle is not yet checked.
+- **Not counted, never guessed.** Revolved blend radii, chamfers and tapers,
+  sloped faces, angles, cross-body spans and circles that bound no hole or
+  blend (a chamfer's edge) are listed as "can't dimension yet" or "not
+  checked", never as satisfied.
+
 ## Slices
 
 | Slice | Delivers                                                                                          | Acceptance                                                                                                    |
