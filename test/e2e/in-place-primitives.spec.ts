@@ -193,8 +193,8 @@ test('a box drawn right to left names its real lowest corner', async ({
   const bar = page.getByRole('group', { name: 'Box command' });
   await bar.locator('summary').click();
   await expect(
-    bar.getByRole('button', { name: 'Corner X', exact: true })
-  ).toHaveText(/^5(\.0)? mm$/);
+    bar.getByRole('textbox', { name: 'Corner X', exact: true })
+  ).toHaveValue(/^5(\.0)?$/);
   await bar.locator('summary').click();
   await setInPlaceOptionValues(page, 'Box', { 'Corner X': '2' });
   await finishInPlaceCommand(page, 'Box');

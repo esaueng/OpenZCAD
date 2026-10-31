@@ -727,6 +727,12 @@ import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
 import type { KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
+import { evaluateKeypadInput } from './lib/keypad';
+import {
+  inPlacePanelSections,
+  inPlacePanelState,
+  inPlaceValueStep
+} from './lib/inPlace/panel';
 import {
   IDLE,
   composingTextDraft,
@@ -21036,6 +21042,7 @@ export function App() {
     );
   }, [doc, inPlaceEditFeatureId]);
   const inPlace = useInPlaceCommand({
+    ...(doc?.units ? { units: doc.units } : {}),
     sketchViews: availableSketchViews,
     datumAxes: inPlaceDatumAxes,
     linearSnap: appSettings.sketching.snapEnabled
@@ -21413,6 +21420,121 @@ export function App() {
       ...(at ? { fixedClientAnchor: at } : {})
     });
     return true;
+  }
+  /**
+   * The command's Options panel: its rows as they stand (a gear's tooth
+   * form only where it applies), each value with its unit, and what the
+   * choices come to.
+   */
+  const inPlacePanel = useMemo(() => {
+    if (!inPlaceSpec) return null;
+    const state = inPlacePanelState(
+      inPlaceSpec,
+      inPlace.options,
+      inPlace.values
+    );
+    // A value is named as its chip names it ("Y count").
+    const handleLabels = new Map(
+      inPlace.handles.map((handle) => [handle.valueId, handle.label])
+    );
+    const labelOf = (value: { id: string; label: string }) =>
+      handleLabels.get(value.id) ?? value.label;
+    const sections = inPlacePanelSections(
+      inPlaceSpec,
+      state,
+      new Set(handleLabels.keys()),
+      inPlace.optionSpecs.map((option) => option.id),
+      labelOf
+    );
+    const shown = new Set(
+      sections.flatMap((section) =>
+        section.rows.flatMap((row) =>
+          row.kind === 'option' ? [] : row.kind === 'vector' ? row.ids : [row.id]
+        )
+      )
+    );
+    const values = inPlaceSpec.values
+      .filter((value) => shown.has(value.id))
+      .map((value) => {
+        const number = state.numbers[value.id] ?? value.initial;
+        const suffix =
+          value.suffix ??
+          (value.unit === 'angle'
+            ? '°'
+            : value.unit === 'length'
+              ? inPlaceUnits
+              : undefined);
+        return {
+          id: value.id,
+          label: labelOf(value),
+          text:
+            inPlace.raws[value.id] ??
+            formatNumber(displayedValue(value, number)),
+          ...(suffix ? { suffix } : {}),
+          value: number,
+          step: inPlaceValueStep(value, number),
+          ...(value.min === undefined ? {} : { min: value.min }),
+          ...(value.max === undefined ? {} : { max: value.max }),
+          ...(value.integer ? { integer: true } : {}),
+          ...(value.note ? { note: value.note } : {})
+        };
+      });
+    return {
+      sections,
+      values,
+      summary: inPlaceSpec.summary?.(state, inPlaceUnits) ?? null
+    };
+  }, [
+    inPlaceSpec,
+    inPlace.options,
+    inPlace.values,
+    inPlace.raws,
+    inPlace.handles,
+    inPlace.optionSpecs,
+    inPlaceUnits
+  ]);
+  /**
+   * A value typed in the Options panel: a number or an expression, as the
+   * keypad takes it, refused (false) where the keypad would refuse it.
+   */
+  function commitInPlacePanelValue(valueId: string, text: string): boolean {
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    if (!valueSpec) return false;
+    const evaluation = evaluateKeypadInput(
+      text,
+      valueSpec.unit === 'length'
+        ? inPlaceUnits
+        : valueSpec.unit === 'angle'
+          ? 'deg'
+          : 'count',
+      inPlaceUnits,
+      parameterScope.scope
+    );
+    if (!evaluation.ok || evaluation.value === undefined) return false;
+    // Expressions stay parametric in the stored feature.
+    const accepted = inPlace.setValue(
+      valueId,
+      evaluation.value,
+      evaluation.isExpression ? evaluation.normalizedRaw : undefined
+    );
+    if (accepted) {
+      commandSetterRef.current?.(
+        valueId,
+        clampValue(valueSpec, evaluation.value)
+      );
+    }
+    return accepted;
+  }
+  /** A value scrubbed on its panel label: the handle and preview follow. */
+  function previewInPlacePanelValue(valueId: string, value: number) {
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    if (valueSpec && !valueInRange(valueSpec, value)) return;
+    commandSetterRef.current?.(valueId, value);
+    inPlace.previewValue(valueId, value);
   }
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
@@ -30334,25 +30456,11 @@ export function App() {
                     );
                     if (edge) inPlace.pickEdge(edge);
                   }}
-                  values={inPlaceSpec.values
-                    .filter((value) => value.inOptions)
-                    .map((value) => ({
-                      id: value.id,
-                      label: value.label,
-                      text:
-                        inPlace.raws[value.id] ??
-                        `${formatNumber(inPlace.values[value.id] ?? value.initial)} ${inPlaceUnits}`
-                    }))}
-                  onValue={(valueId, at) => {
-                    const valueSpec = inPlaceSpec.values.find(
-                      (candidate) => candidate.id === valueId
-                    );
-                    openInPlaceKeypad(
-                      valueId,
-                      inPlace.values[valueId] ?? valueSpec?.initial ?? 0,
-                      at
-                    );
-                  }}
+                  sections={inPlacePanel?.sections}
+                  summary={inPlacePanel?.summary ?? null}
+                  values={inPlacePanel?.values ?? []}
+                  onValueCommit={commitInPlacePanelValue}
+                  onValuePreview={previewInPlacePanelValue}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
                 />

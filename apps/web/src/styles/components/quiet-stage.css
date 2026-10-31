@@ -3753,3 +3753,212 @@ button.model-panel-grip[aria-expanded='true'] {
   background: var(--color-accent);
   border-color: var(--color-accent-border);
 }
+
+/* The Options panel as a parameter sheet: one 26px row per value or
+   choice, names in a column on the left, controls on the right, so a
+   gear's dozen numbers fit beside the model rather than over it. */
+.in-place-command-options-panel.in-place-params {
+  width: min(360px, calc(100vw - 32px));
+  padding: 8px 10px 10px;
+  font-size: var(--fs-sm);
+}
+
+.in-place-params-summary {
+  margin: 0 0 6px;
+  padding: 5px 7px;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
+.in-place-params-section + .in-place-params-section {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.in-place-params-heading {
+  margin: 0 0 4px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+/* A folded group's title is its toggle, with a chevron that turns. */
+.in-place-params-section.is-foldable > .in-place-params-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin-bottom: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: start;
+  cursor: pointer;
+}
+
+.in-place-params-section.is-foldable > .in-place-params-heading::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.in-place-params-section.is-open > .in-place-params-heading {
+  margin-bottom: 4px;
+}
+
+.in-place-params-section.is-open > .in-place-params-heading::before {
+  transform: rotate(45deg);
+}
+
+.in-place-params-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.in-place-params .in-place-option + .in-place-option {
+  margin-top: 0;
+}
+
+.in-place-param-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  min-height: 26px;
+}
+
+.in-place-param-row > .in-place-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.in-place-param-row > .in-place-option-note {
+  grid-column: 2;
+  max-width: none;
+  margin: 0;
+}
+
+/* Choices sit joined, as one control, and share the row's width. */
+.in-place-param-segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-param-segments > .in-place-option-choice {
+  flex: 1 1 auto;
+  min-height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  border-color: transparent;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.in-place-param-segments > .in-place-option-choice[aria-checked='true'] {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.in-place-param-select,
+.in-place-param-field {
+  box-sizing: border-box;
+  min-height: 26px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-param-select {
+  width: 100%;
+  padding: 0 6px;
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.in-place-param-fields {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.in-place-param-field {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  min-width: 0;
+  padding: 0 6px;
+}
+
+.in-place-param-field:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.in-place-param-field.is-refused {
+  border-color: var(--color-error);
+  box-shadow: 0 0 0 1px var(--color-error);
+}
+
+.in-place-param-field input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.in-place-param-axis,
+.in-place-param-suffix {
+  flex: none;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.in-place-param-axis {
+  margin-right: 4px;
+  font-family: var(--font-mono);
+}
+
+.in-place-param-suffix {
+  margin-left: 4px;
+}
+
+/* A value's name scrubs it: dragged sideways, it steps the number. */
+.in-place-param-value > .in-place-option-label.is-scrubbable {
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.in-place-param-value.is-vector .in-place-param-field {
+  padding: 0 4px;
+}
+
+.in-place-params-actions {
+  margin-top: 8px;
+}

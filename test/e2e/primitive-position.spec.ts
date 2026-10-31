@@ -32,8 +32,8 @@ test('places a cylinder on a box from the position its Options name', async ({
   await boxBar.locator('summary').click();
   for (const axis of ['X', 'Y', 'Z']) {
     await expect(
-      boxBar.getByRole('button', { name: `Corner ${axis}`, exact: true })
-    ).toHaveText('0 mm');
+      boxBar.getByRole('textbox', { name: `Corner ${axis}`, exact: true })
+    ).toHaveValue('0');
   }
   await boxBar.locator('summary').click();
   // The default box: 30 × 18 × 24 from the origin corner.
@@ -43,7 +43,7 @@ test('places a cylinder on a box from the position its Options name', async ({
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const cylinderBar = page.getByRole('group', { name: 'Cylinder command' });
   await expect(
-    cylinderBar.getByRole('button', { name: /^Corner/ })
+    cylinderBar.getByRole('textbox', { name: /^Corner/, includeHidden: true })
   ).toHaveCount(0);
   // The center of the box's top face.
   await setInPlaceOptionValues(page, 'Cylinder', {

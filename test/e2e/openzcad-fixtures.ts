@@ -1602,7 +1602,8 @@ export async function openMoveOptions(move: Locator) {
 
 /**
  * Types exact values behind an in-place command's Options (a primitive's
- * position), each through its keypad, and closes Options again.
+ * position), each in its field (or an Extrude's on its keypad), and closes
+ * Options again.
  */
 export async function setInPlaceOptionValues(
   page: Page,
@@ -1633,6 +1634,17 @@ export async function setBarValues(
   for (const [label, value] of Object.entries(values)) {
     if ((await options.getAttribute('open')) === null) {
       await options.locator('summary').click();
+    }
+    // An in-place command's values are typed in the panel itself; the
+    // Extrude's still open its keypad.
+    const field = bar.getByRole('textbox', { name: label, exact: true });
+    if ((await field.count()) > 0) {
+      await field.fill(value);
+      await field.press('Enter');
+      await expect(field).not.toHaveAttribute('aria-invalid', 'true');
+      await field.blur();
+      await expect(field).toHaveValue(value);
+      continue;
     }
     await bar.getByRole('button', { name: label, exact: true }).click();
     const keypad = page.locator('.numeric-keypad');
