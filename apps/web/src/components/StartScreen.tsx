@@ -752,7 +752,11 @@ export function StartScreen({
     (project: ProjectSummary) => boolean
   > = {
     all: () => true,
-    pinned: (project) => projectOrganization(project).pinned,
+    // A pinned folder heads the shelf's Pinned group, so its projects count
+    // and show as pinned too.
+    pinned: (project) =>
+      projectOrganization(project).pinned ||
+      folderByProject.get(project.projectId)?.pinned === true,
     attention: needsAttention,
     local: (project) => localOnlyIds.has(project.projectId)
   };
@@ -2430,9 +2434,11 @@ export function StartScreen({
         tone: 'saved',
         Icon: CloudCheck,
         text:
+          syncTotals.total === 1 ? 'Saved' : `All ${syncTotals.total} saved`,
+        title:
           syncTotals.total === 1
-            ? 'Saved to your account'
-            : `All ${syncTotals.total} saved to your account`
+            ? 'Saved to your account.'
+            : `All ${syncTotals.total} saved to your account.`
       };
     }
     if (loading) {
@@ -2456,7 +2462,7 @@ export function StartScreen({
       return {
         tone: 'warning',
         Icon: CloudAlert,
-        text: 'Account status unavailable',
+        text: 'Account unavailable',
         title:
           'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
       };
@@ -2466,7 +2472,7 @@ export function StartScreen({
       return {
         tone: 'warning',
         Icon: CloudAlert,
-        text: `${count} ${count === 1 ? 'project' : 'projects'} saved on this device only`,
+        text: `${count} on this device only`,
         title: `${savedToAccountCount} of ${accountableProjects.length} projects are in your account; ${count === 1 ? 'one is' : `${count} are`} on this device only.`,
         progress: {
           saved: savedToAccountCount / accountableProjects.length,
@@ -2491,8 +2497,14 @@ export function StartScreen({
         saved === 0
           ? 'Signed in'
           : saved === 1
-            ? '1 project saved to your account'
-            : `All ${saved} projects saved to your account`
+            ? '1 saved'
+            : `All ${saved} saved`,
+      ...(saved > 0 && {
+        title:
+          saved === 1
+            ? '1 project saved to your account.'
+            : `All ${saved} projects saved to your account.`
+      })
     };
   }
 
@@ -3059,7 +3071,17 @@ export function StartScreen({
                       {group.label && (
                         <h3 className="start-shelf-group">
                           {group.label}
-                          <span>{group.items.length}</span>
+                          {/* Projects, not tiles, like the filter counts. */}
+                          <span>
+                            {group.items.reduce(
+                              (count, item) =>
+                                count +
+                                (item.folder
+                                  ? folderMembers(item.folder).length
+                                  : 1),
+                              0
+                            )}
+                          </span>
                         </h3>
                       )}
                       <div
@@ -3310,13 +3332,18 @@ export function StartScreen({
               role="alert"
             >
               <span className="start-update-dot" aria-hidden="true" />
+              {/* Two words beside Reload, like the update's; the full
+                  sentence is in the tooltip and read to screen readers. */}
               <span
                 className="start-update-text"
-                // The bar clips a long sentence; the tooltip keeps it whole.
                 title={onReloadForUpdate ? undefined : STALE_CHUNK_MESSAGE}
+                aria-hidden={onReloadForUpdate ? undefined : true}
               >
-                {onReloadForUpdate ? 'New version ready' : STALE_CHUNK_MESSAGE}
+                {onReloadForUpdate ? 'New version ready' : 'Load failed'}
               </span>
+              {!onReloadForUpdate && (
+                <span className="visually-hidden">{STALE_CHUNK_MESSAGE}</span>
+              )}
               <button
                 type="button"
                 onClick={onReloadForUpdate ?? onReloadForLoadFailure}

@@ -41,6 +41,29 @@ test(
 );
 
 test(
+  'a long sync sentence ellipsizes inside the column',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openLibrary(page, 1440);
+    // An auto grid track sized to the unwrapped sentence, so a long one ran
+    // past the column's edge instead of ellipsizing.
+    const text = page.locator('.start-account-text');
+    await text.evaluate((element) => {
+      element.textContent = 'All 89 projects saved to your account and more';
+    });
+    const box = await text.boundingBox();
+    const column = await page.locator('.start-column-foot').boundingBox();
+    if (!box || !column) throw new Error('Sync readout is missing');
+    expect(box.x + box.width).toBeLessThanOrEqual(column.x + column.width);
+    expect(
+      await text.evaluate(
+        (element) => element.scrollWidth > element.clientWidth
+      )
+    ).toBe(true);
+  }
+);
+
+test(
   'a phone shows two cards a row and keeps the wordmark',
   { tag: '@ci-smoke' },
   async ({ page }) => {

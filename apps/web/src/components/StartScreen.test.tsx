@@ -760,7 +760,7 @@ describe('StartScreen cloud project status', () => {
   it('does not relabel projects when the account listing failed', () => {
     renderStartScreen({ accountProjectListReached: false });
 
-    expect(screen.getByText('Account status unavailable')).toHaveAttribute(
+    expect(screen.getByText('Account unavailable')).toHaveAttribute(
       'title',
       'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
     );
@@ -883,9 +883,7 @@ describe('StartScreen library shell', () => {
     // say "1 / 2 saved" and "1 project is on this device only" one above
     // the other.
     const card = screen.getByRole('complementary', { name: 'Cloud sync' });
-    expect(
-      within(card).getByText('1 project saved on this device only')
-    ).toBeInTheDocument();
+    expect(within(card).getByText('1 on this device only')).toBeInTheDocument();
     expect(
       screen.getAllByRole('button', { name: /to my account/ })
     ).toHaveLength(1);
@@ -900,9 +898,10 @@ describe('StartScreen library shell', () => {
       cloudProjectIds: new Set([localProject.projectId])
     });
 
-    expect(
-      screen.getByText('1 project saved to your account')
-    ).toBeInTheDocument();
+    expect(screen.getByText('1 saved')).toHaveAttribute(
+      'title',
+      '1 project saved to your account.'
+    );
     expect(screen.queryByRole('button', { name: /to my account/ })).toBeNull();
   });
 
@@ -1895,6 +1894,54 @@ describe('StartScreen sidebar and shelf edge', () => {
     expect(grids).toHaveLength(2);
     expect(grids[0]).toHaveClass('is-pinned-group');
     expect(grids[1]).not.toHaveClass('is-pinned-group');
+  });
+
+  it('counts projects, not tiles, in the Pinned tab and group labels', () => {
+    // A pinned folder of two read as one tile in the Pinned label ("2") but
+    // none in the Pinned tab ("1"), and the tab did not show its projects.
+    const key = 'openzcad.library.folders.v1:device';
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        folders: [
+          {
+            id: 'fixtures',
+            name: 'Fixtures',
+            projectIds: ['in-a', 'in-b'],
+            pinned: true,
+            createdAt: '2026-10-30T12:00:00Z'
+          }
+        ]
+      })
+    );
+    const { container } = renderStartScreen({
+      projects: [
+        ...pinnedAndLoose(),
+        { ...localProject, projectId: toProjectId('in-a'), name: 'In A' },
+        { ...localProject, projectId: toProjectId('in-b'), name: 'In B' }
+      ]
+    });
+    const filters = screen.getByRole('group', { name: 'Show projects' });
+    expect(
+      within(filters).getByRole('button', { name: /^All/ })
+    ).toHaveTextContent('All4');
+    const pinnedFilter = within(filters).getByRole('button', {
+      name: /^Pinned/
+    });
+    expect(pinnedFilter).toHaveTextContent('Pinned3');
+    expect(
+      [...container.querySelectorAll('.start-shelf-group')].map(
+        (heading) => heading.textContent
+      )
+    ).toEqual(['Pinned3', 'Projects1']);
+
+    fireEvent.click(pinnedFilter);
+    expect(
+      [...container.querySelectorAll('.start-body .start-tile-project')].map(
+        (tile) => tile.querySelector('.start-tile-name')?.textContent
+      )
+    ).toEqual(expect.arrayContaining(['Pinned part', 'In A', 'In B']));
+    localStorage.removeItem(key);
   });
 
   it('drops the count from an empty shelf', () => {
