@@ -735,7 +735,11 @@ function buildGearTeethOnBody(
   const face = resolveFeatureFaces(
     kernel,
     shape,
-    [data.faceHash],
+    // Older in-place edits paired the live face hash with the original
+    // reference. The reference still names the intended wall across height
+    // changes; resolve it with its own hash so it cannot silently downgrade
+    // to a legacy hash pick. Invalid or missing lineage remains terminal.
+    [data.faceReference?.currentHash ?? data.faceHash],
     data.faceReference ? [data.faceReference] : undefined,
     'Gear'
   )[0]!;

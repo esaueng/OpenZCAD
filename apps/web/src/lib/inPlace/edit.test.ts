@@ -27,6 +27,7 @@ import {
   inPlaceEditLineage,
   keepAbsentHoleSteps,
   inPlaceEditMovedBodies,
+  inPlaceEditFacePick,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
@@ -105,9 +106,10 @@ function feature(data: FeatureData, bodyId?: BodyId): FeatureNode {
  */
 function untouched(
   node: FeatureNode,
-  changed: Record<string, number> = {}
+  changed: Record<string, number> = {},
+  editContext: InPlaceEditContext = EDIT_CTX
 ): ResolvedInPlaceRequest | null {
-  const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+  const armed = inPlaceEditSeed(node, editContext)!;
   const spec = IN_PLACE_TOOL_SPECS[armed.tool];
   const axis =
     armed.seed.axes.find(
@@ -557,6 +559,49 @@ describe('an untouched edit writes the feature back as stored', () => {
         { tool: 'gear', gear: spur }
       )?.clearData
     ).toEqual(['helixAngleDeg', 'hand']);
+  });
+
+  it('gear: reopening after a height change keeps the authored hash and reference together', () => {
+    const reference = {
+      kind: 'face',
+      producingFeatureId: 'feat_blank',
+      lineageName: 'primitive.cylinder.face.wall',
+      currentHash: 99
+    } as FaceTopologyReferenceV5;
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      targetBodyId: BODY,
+      faceHash: 99,
+      faceReference: reference
+    };
+    const live = {
+      ...TOP,
+      // The wall moved, and later topology may name it under another feature.
+      hash: 11,
+      reference: { ...reference, producingFeatureId: 'feat_later' as FeatureId }
+    };
+    const ctx: InPlaceEditContext = {
+      ...EDIT_CTX,
+      face: (_bodyId, _hash, stored) => inPlaceEditFacePick(live, stored)
+    };
+    const request = untouched(feature(data, BODY), { teeth: 24 }, ctx)!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: { teeth: 24, faceHash: 99, faceReference: reference }
+    });
+    const pick = inPlaceEditFacePick(live, reference)!;
+    expect(pick.topologyId).toBe(live.topologyId);
+    expect(pick.centroid).toEqual(live.centroid);
+    // The background placement refresh must use the same pairing as seeding.
+    expect(
+      inPlaceEditFacePick({ ...live, hash: 12 }, pick.reference)
+    ).toMatchObject({ hash: 99, reference, topologyId: live.topologyId });
+    expect(live.hash).toBe(11);
+    expect(inPlaceEditFacePick(live, undefined)).toBe(live);
+    expect(inPlaceEditFacePick(null, reference)).toBeNull();
   });
 
   it('gear: a herringbone gear reopens as one and returns to a single helix', () => {
