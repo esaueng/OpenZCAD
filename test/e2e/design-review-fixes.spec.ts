@@ -245,7 +245,7 @@ test('a drawing follows a finishing body on explicit Update and saves from Draw'
   const banner = drawings.locator('.drawing-banner');
   await expect(banner).toContainText('Finishing features replaced a body');
   await expect(
-    drawings.getByRole('button', { name: 'PDF', exact: true })
+    drawings.getByRole('button', { name: 'Export PDF' })
   ).toBeDisabled();
   await banner.getByRole('button', { name: 'Update' }).click();
   await expect(sheet.locator('.drawing-view.is-placeholder')).toHaveCount(0, {
@@ -255,7 +255,7 @@ test('a drawing follows a finishing body on explicit Update and saves from Draw'
     sheet.getByRole('button', { name: 'Diameter dimension Ø10' })
   ).toBeVisible();
   await expect(
-    drawings.getByRole('button', { name: 'PDF', exact: true })
+    drawings.getByRole('button', { name: 'Export PDF' })
   ).toBeEnabled();
   await page.screenshot({
     path: testInfo.outputPath('drawing-after-fillet-update.png')

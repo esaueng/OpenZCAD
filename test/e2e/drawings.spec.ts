@@ -83,6 +83,8 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
   await expect.poll(() => viewCentreX(panel)).toBe(121);
 
   // Scale: 1:2 halves the drawn span through the shared page transform.
+  // Escape leaves the view for the sheet's own settings.
+  await page.keyboard.press('Escape');
   const frontBox = canvas.locator('[data-view="front"] .drawing-view-hit');
   const scale = panel.getByLabel('Scale');
   const initial = await scale.inputValue();
@@ -106,7 +108,7 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
 
   // Export: a vector PDF on A3 and an SVG in millimetres.
   let downloadPromise = page.waitForEvent('download');
-  await panel.getByRole('button', { name: 'PDF', exact: true }).click();
+  await drawings.getByRole('button', { name: 'Export PDF' }).click();
   let download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('Drawing-sheet-Sheet-1.pdf');
   const pdf = (await readDownload(download)).toString('latin1');
@@ -116,7 +118,7 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
     'Exported the drawing to Drawing-sheet-Sheet-1.pdf.'
   );
   downloadPromise = page.waitForEvent('download');
-  await panel.getByRole('button', { name: 'SVG', exact: true }).click();
+  await drawings.getByRole('button', { name: 'Export SVG' }).click();
   download = await downloadPromise;
   const svg = (await readDownload(download)).toString('utf8');
   expect(svg).toContain('width="420mm" height="297mm"');
@@ -139,16 +141,12 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
       timeout: 20_000
     }
   );
-  await expect(
-    panel.getByRole('button', { name: 'PDF', exact: true })
-  ).toBeDisabled();
+  await expect(drawings.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
   await expect(canvas.locator('.drawing-view.is-placeholder')).toHaveCount(4);
 
   await banner.getByRole('button', { name: 'Update' }).click();
   await expect(banner).toHaveCount(0);
-  await expect(
-    panel.getByRole('button', { name: 'PDF', exact: true })
-  ).toBeEnabled({
+  await expect(drawings.getByRole('button', { name: 'Export PDF' })).toBeEnabled({
     timeout: 20_000
   });
   await expect(canvas.locator('.drawing-view.is-placeholder')).toHaveCount(0);
@@ -192,12 +190,12 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
 
 async function exportSheet(
   page: Page,
-  panel: Locator
+  drawings: Locator
 ): Promise<{ pdf: Buffer; svg: Buffer }> {
   const bytes: Buffer[] = [];
   for (const format of ['PDF', 'SVG']) {
     const downloadPromise = page.waitForEvent('download');
-    await panel.getByRole('button', { name: format, exact: true }).click();
+    await drawings.getByRole('button', { name: `Export ${format}` }).click();
     bytes.push(await readDownload(await downloadPromise));
   }
   return { pdf: bytes[0]!, svg: bytes[1]! };
@@ -257,7 +255,7 @@ test('exports the same bytes after a reload re-meshes the model', async ({
   await expect(
     canvas.locator('.drawing-strokes.is-hidden polyline').first()
   ).toBeAttached();
-  const before = await exportSheet(page, panel);
+  const before = await exportSheet(page, drawings);
 
   await expect(page.locator('.save-state')).toHaveClass(/is-(synced|local)\b/);
   await page.reload();
@@ -274,13 +272,10 @@ test('exports the same bytes after a reload re-meshes the model', async ({
   await expect(
     reopenedCanvas.locator('.drawing-view.is-placeholder')
   ).toHaveCount(0, { timeout: 30_000 });
-  const reopenedPanel = reopened.getByRole('complementary', {
-    name: 'Drawing properties'
-  });
   await expect(
-    reopenedPanel.getByRole('button', { name: 'PDF', exact: true })
+    reopened.getByRole('button', { name: 'Export PDF' })
   ).toBeEnabled();
-  const after = await exportSheet(page, reopenedPanel);
+  const after = await exportSheet(page, reopened);
   expect(after.svg.toString('utf8')).toBe(before.svg.toString('utf8'));
   expect(after.pdf.equals(before.pdf)).toBe(true);
 });

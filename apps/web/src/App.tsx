@@ -30440,6 +30440,12 @@ export function App() {
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
+                rebuildProgress={
+                  geometry.state.phase === 'rebuilding' &&
+                  geometry.state.progress?.stage === 'feature'
+                    ? geometry.state.progress
+                    : null
+                }
                 defaultBodyIds={drawingDefaultBodyIds}
                 requestTessellation={(source, bodyIds, signal) =>
                   geometry.drawingTessellation(source, bodyIds, { signal })
