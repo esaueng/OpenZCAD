@@ -8,17 +8,28 @@ import {
   type BodyRepresentation,
   type DrawingAnnotation,
   type DrawingEdgeRef,
-  type DrawingPointAnchor,
+  type DrawingExtremeSide,
+  type DrawingFaceRef,
+  type DrawingPointRef,
   type DrawingView,
+  type DrawingViewFrame,
   type EdgeTopology,
+  type EdgeTopologyReferenceV5,
+  type FaceTopology,
+  type FaceTopologyReferenceV5,
   type GeometryBodyRepresentation,
-  type UnitSystem
+  type UnitSystem,
+  type Vector3
 } from '@openzcad/shared';
 import {
   inspectTopologyWitness,
   topologyHashOfWitness
 } from '@openzcad/kernel-adapter/topology-lineage';
-import { resolveEdge, topologyResolutionMessage } from '../topologyResolution';
+import {
+  resolveEdge,
+  resolveFace,
+  topologyResolutionMessage
+} from '../topologyResolution';
 import {
   sheetSafeText,
   textWidthMm,
@@ -27,6 +38,17 @@ import {
   type SheetStroke,
   type SheetText
 } from './sheetPage';
+import {
+  add,
+  cross,
+  dot,
+  norm,
+  readChamfer,
+  scale,
+  sub,
+  virtualSharp,
+  type SharpCurve
+} from './surfaceSharps';
 
 /**
  * D02 annotation geometry: from a stored annotation to what it measures in
@@ -56,7 +78,9 @@ export type AnnotationBreak =
   | 'degenerate'
   | 'foreshortened'
   | 'leader-hidden'
-  | 'invalid-reference';
+  | 'invalid-reference'
+  | 'no-sharp'
+  | 'not-a-chamfer';
 
 type UV = [number, number];
 
@@ -81,6 +105,17 @@ export type ResolvedAnnotation =
        */
       arc?: number[];
       value: number;
+      label: string;
+    }
+  | {
+      kind: 'chamfer';
+      /**
+       * The chamfer's profile in the view, between its two virtual sharps:
+       * both sides of a cone seen side-on, or a plane's one edge-on line.
+       */
+      segments: [UV, UV][];
+      value: number;
+      angle: number;
       label: string;
     }
   | {
@@ -138,6 +173,10 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The view no longer draws any of the edge this note points at.';
     case 'foreshortened':
       return 'This view does not see what this measures true size (it slopes into the view, or the view is isometric); dimension it where it lies parallel to the view.';
+    case 'no-sharp':
+      return 'These two faces have no virtual sharp this can read (they are parallel, or not coaxial surfaces and planes square to their axis), or it is not a point in this view.';
+    case 'not-a-chamfer':
+      return 'This face is no longer a chamfer between two faces: a cone or plane with a virtual sharp at each end.';
   }
 }
 
@@ -157,6 +196,23 @@ export function formatDrawingNumber(value: number, decimals: number): string {
   return /^-0(\.0*)?$/.test(trimmed) ? '0' : trimmed;
 }
 
+/**
+ * A dimension's text from its value: the count, the value, and brackets for
+ * a reference dimension. WinAnsi has no diameter sign; Ø (U+00D8) is the
+ * usual stand-in, and × (U+00D7) is in it.
+ */
+function dimensionLabel(
+  annotation: Exclude<DrawingAnnotation, { kind: 'note' }>,
+  text: string
+): string {
+  const count =
+    'count' in annotation && annotation.count !== undefined
+      ? `${annotation.count}× `
+      : '';
+  const label = `${count}${text}`;
+  return annotation.reference ? `(${label})` : label;
+}
+
 export function defaultDimensionDecimals(
   kind: Exclude<DrawingAnnotation['kind'], 'note'>,
   units: UnitSystem
@@ -174,17 +230,22 @@ function failure(reason: AnnotationBreak): AnnotationResolution {
  * contradicts it, `hash-only` when there is no reference or the scheme
  * cannot check its witness.
  */
-export function referenceTrust(
-  ref: Pick<DrawingEdgeRef, 'reference'>
-): 'trusted' | 'invalid' | 'hash-only' {
-  if (!ref.reference) return 'hash-only';
-  const inspection = inspectTopologyWitness('edge', ref.reference.witness);
+export function referenceTrust(ref: {
+  reference?: EdgeTopologyReferenceV5 | FaceTopologyReferenceV5;
+}): 'trusted' | 'invalid' | 'hash-only' {
+  const reference = ref.reference;
+  if (!reference) return 'hash-only';
+  const inspection =
+    reference.kind === 'face'
+      ? inspectTopologyWitness('face', reference.witness)
+      : inspectTopologyWitness('edge', reference.witness);
   if (inspection.status === 'invalid') return 'invalid';
   if (inspection.status === 'unsupported') return 'hash-only';
-  return topologyHashOfWitness('edge', ref.reference.witness) ===
-    ref.reference.currentHash
-    ? 'trusted'
-    : 'invalid';
+  const hash =
+    reference.kind === 'face'
+      ? topologyHashOfWitness('face', reference.witness)
+      : topologyHashOfWitness('edge', reference.witness);
+  return hash === reference.currentHash ? 'trusted' : 'invalid';
 }
 
 type EdgeLookup =
@@ -212,6 +273,41 @@ function lookupEdge(
   );
   return found.ok
     ? { ok: true, edge: found.entry }
+    : { ok: false, reason: found.reason };
+}
+
+type FaceLookup =
+  | {
+      ok: true;
+      face: FaceTopology;
+      faces: readonly FaceTopology[];
+      edges: readonly EdgeTopology[];
+    }
+  | { ok: false; reason: AnnotationBreak };
+
+/** {@link lookupEdge} for a face, with its body's faces and edges. */
+function lookupFace(
+  ref: DrawingFaceRef,
+  view: DrawingView,
+  bodies: AnnotationBodies
+): FaceLookup {
+  const body = bodies[ref.bodyId];
+  if (!body || body.consumed) return { ok: false, reason: 'body-missing' };
+  if (!view.bodyIds.includes(ref.bodyId))
+    return { ok: false, reason: 'not-in-view' };
+  const trust = referenceTrust(ref);
+  if (trust === 'invalid') return { ok: false, reason: 'invalid-reference' };
+  const found = resolveFace(
+    body,
+    trust === 'trusted' ? ref : { bodyId: ref.bodyId, hash: ref.hash }
+  );
+  return found.ok
+    ? {
+        ok: true,
+        face: found.entry,
+        faces: body.topology?.faces ?? [],
+        edges: body.topology?.edges ?? []
+      }
     : { ok: false, reason: found.reason };
 }
 
@@ -250,6 +346,8 @@ interface ViewPoint {
   uv: UV;
   /** Distance into the view along its direction, in model units. */
   depth: number;
+  /** The same point in model space. */
+  model: Vector3;
 }
 
 /** {@link edgeEndsInPageOrder}, keeping each end's depth. */
@@ -270,8 +368,13 @@ function edgeEndsWithDepth(
       : !level(a.v, b.v)
         ? a.v < b.v
         : a.depth <= b.depth;
-  const ua: ViewPoint = { uv: [a.u, a.v], depth: a.depth };
-  const ub: ViewPoint = { uv: [b.u, b.v], depth: b.depth };
+  const at = (i: number): Vector3 => ({ x: p[i]!, y: p[i + 1]!, z: p[i + 2]! });
+  const ua: ViewPoint = { uv: [a.u, a.v], depth: a.depth, model: at(0) };
+  const ub: ViewPoint = {
+    uv: [b.u, b.v],
+    depth: b.depth,
+    model: at(p.length - 3)
+  };
   return aFirst ? [ua, ub] : [ub, ua];
 }
 
@@ -308,20 +411,154 @@ function faceOnCircle(
   };
 }
 
+function viewPoint(frame: DrawingViewFrame, model: Vector3): ViewPoint {
+  const p = projectToView(frame, model);
+  return { uv: [p.u, p.v], depth: p.depth, model };
+}
+
+/**
+ * A circle's extreme along `along` (unit, model space) on `side`; when the
+ * circle is level along it — a rim seen side-on, measured up its axis —
+ * every point is as far, and `side` picks the extreme along `across`.
+ */
+function circleExtreme(
+  circle: { center: Vector3; axis: Vector3; radius: number },
+  along: Vector3,
+  across: Vector3,
+  side: DrawingExtremeSide
+): Vector3 {
+  const sign = side === 'high' ? 1 : -1;
+  for (const direction of [along, across]) {
+    const inPlane = sub(direction, scale(circle.axis, dot(direction, circle.axis)));
+    const length = norm(inPlane);
+    if (length > 1e-9)
+      return add(circle.center, scale(inPlane, (sign * circle.radius) / length));
+  }
+  return circle.center;
+}
+
+/**
+ * Where a point of a horizontal or vertical dimension lies. `along` is the
+ * model direction the dimension measures (null for an aligned one, which
+ * takes no extreme) and `across` the view's other page direction.
+ */
 function pointOf(
   view: DrawingView,
-  edge: EdgeTopology,
-  anchor: DrawingPointAnchor
+  point: DrawingPointRef,
+  bodies: AnnotationBodies,
+  along: Vector3 | null,
+  across: Vector3 | null
 ): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
-  if (anchor === 'center') {
+  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  if (point.anchor === 'virtual-sharp') {
+    const found = point.faces.map((ref) => lookupFace(ref, view, bodies));
+    for (const entry of found) if (!entry.ok) return entry;
+    const [a, b] = found as Extract<FaceLookup, { ok: true }>[];
+    if (a!.face === b!.face) return { ok: false, reason: 'ambiguous' };
+    const sharp = virtualSharp(a!.face, b!.face);
+    if (!sharp.ok || !along || !across)
+      return { ok: false, reason: 'no-sharp' };
+    return sharpPoint(frame, sharp.curve, along, across, point.side);
+  }
+  const found = lookupEdge(point.edge, view, bodies);
+  if (!found.ok) return found;
+  const edge = found.edge;
+  if (point.anchor === 'silhouette') {
+    const circle = edge.curve?.circle;
+    if (!circle) return { ok: false, reason: 'not-circular' };
+    if (!along || !across) return { ok: false, reason: 'degenerate' };
+    return { ok: true, point: viewPoint(frame, silhouettePoint(edge, circle, along, across, point.side)) };
+  }
+  if (point.anchor === 'center') {
     const circle = faceOnCircle(view, edge);
     return circle.ok
-      ? { ok: true, point: { uv: circle.center, depth: circle.depth } }
+      ? {
+          ok: true,
+          point: {
+            uv: circle.center,
+            depth: circle.depth,
+            model: edge.curve!.circle!.center
+          }
+        }
       : circle;
   }
   const ends = edgeEndsWithDepth(view, edge);
   if (!ends) return { ok: false, reason: 'closed-edge' };
-  return { ok: true, point: anchor === 'first' ? ends[0] : ends[1] };
+  return { ok: true, point: point.anchor === 'first' ? ends[0] : ends[1] };
+}
+
+/**
+ * Where `point` lies in `view` for a horizontal or vertical dimension, in
+ * view (u, v), or null when it does not resolve: what a picker compares a
+ * click with to choose an extreme's side.
+ */
+export function dimensionPointInView(
+  view: DrawingView,
+  point: DrawingPointRef,
+  bodies: AnnotationBodies,
+  direction: 'horizontal' | 'vertical'
+): UV | null {
+  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const [along, across] =
+    direction === 'horizontal' ? [frame.x, frame.up] : [frame.up, frame.x];
+  const found = pointOf(view, point, bodies, along, across);
+  return found.ok ? found.point.uv : null;
+}
+
+/**
+ * A circular edge's extreme on `side`. A partial arc whose sweep misses the
+ * circle's extreme is measured to its own end furthest that way.
+ */
+function silhouettePoint(
+  edge: EdgeTopology,
+  circle: { center: Vector3; axis: Vector3; radius: number },
+  along: Vector3,
+  across: Vector3,
+  side: DrawingExtremeSide
+): Vector3 {
+  const extreme = circleExtreme(circle, along, across, side);
+  if (isClosed(edge)) return extreme;
+  const p = edge.points;
+  let nearest = Infinity;
+  for (let i = 0; i + 5 < p.length; i += 3) {
+    const a: Vector3 = { x: p[i]!, y: p[i + 1]!, z: p[i + 2]! };
+    const b: Vector3 = { x: p[i + 3]!, y: p[i + 4]!, z: p[i + 5]! };
+    const ab = sub(b, a);
+    const t = Math.min(
+      1,
+      Math.max(0, dot(sub(extreme, a), ab) / Math.max(dot(ab, ab), 1e-300))
+    );
+    nearest = Math.min(nearest, norm(sub(extreme, add(a, scale(ab, t)))));
+  }
+  // On the arc within its chordal sag.
+  if (nearest <= Math.max(1e-6, 0.02 * circle.radius)) return extreme;
+  const first: Vector3 = { x: p[0]!, y: p[1]!, z: p[2]! };
+  const last: Vector3 = {
+    x: p[p.length - 3]!,
+    y: p[p.length - 2]!,
+    z: p[p.length - 1]!
+  };
+  const sign = side === 'high' ? 1 : -1;
+  return sign * dot(first, along) >= sign * dot(last, along) ? first : last;
+}
+
+/** A virtual sharp as a point of a horizontal or vertical dimension. */
+function sharpPoint(
+  frame: DrawingViewFrame,
+  curve: SharpCurve,
+  along: Vector3,
+  across: Vector3,
+  side: DrawingExtremeSide
+): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
+  if (curve.kind === 'circle')
+    return {
+      ok: true,
+      point: viewPoint(frame, circleExtreme(curve, along, across, side))
+    };
+  // Two planes meet in a line: a point only where the view sees it end-on.
+  if (Math.abs(Math.abs(dot(curve.direction, frame.direction)) - 1) > 1e-6)
+    return { ok: false, reason: 'no-sharp' };
+  return { ok: true, point: viewPoint(frame, curve.point) };
 }
 
 function projectedPolyline(view: DrawingView, edge: EdgeTopology): number[] {
@@ -397,13 +634,16 @@ export function resolveDrawingAnnotation(
     annotation.decimals ?? defaultDimensionDecimals(annotation.kind, units);
   switch (annotation.kind) {
     case 'linear': {
-      const fromEdge = lookupEdge(annotation.from.edge, view, bodies);
-      if (!fromEdge.ok) return failure(fromEdge.reason);
-      const toEdge = lookupEdge(annotation.to.edge, view, bodies);
-      if (!toEdge.ok) return failure(toEdge.reason);
-      const from = pointOf(view, fromEdge.edge, annotation.from.anchor);
+      const frame = DRAWING_VIEW_FRAMES[view.orientation];
+      const [along, across] =
+        annotation.direction === 'horizontal'
+          ? [frame.x, frame.up]
+          : annotation.direction === 'vertical'
+            ? [frame.up, frame.x]
+            : [null, null];
+      const from = pointOf(view, annotation.from, bodies, along, across);
       if (!from.ok) return failure(from.reason);
-      const to = pointOf(view, toEdge.edge, annotation.to.anchor);
+      const to = pointOf(view, annotation.to, bodies, along, across);
       if (!to.ok) return failure(to.reason);
       const du = to.point.uv[0] - from.point.uv[0];
       const dv = to.point.uv[1] - from.point.uv[1];
@@ -434,7 +674,10 @@ export function resolveDrawingAnnotation(
           from: from.point.uv,
           to: to.point.uv,
           value,
-          label: formatDrawingNumber(value, decimals)
+          label: dimensionLabel(
+            annotation,
+            `${annotation.diameter ? 'Ø' : ''}${formatDrawingNumber(value, decimals)}`
+          )
         }
       };
     }
@@ -456,8 +699,70 @@ export function resolveDrawingAnnotation(
             ? {}
             : { arc: projectedPolyline(view, found.edge) }),
           value,
-          // WinAnsi has no diameter sign; Ø (U+00D8) is the usual stand-in.
-          label: `${annotation.kind === 'radius' ? 'R' : 'Ø'}${formatDrawingNumber(value, decimals)}`
+          label: dimensionLabel(
+            annotation,
+            `${annotation.kind === 'radius' ? 'R' : 'Ø'}${formatDrawingNumber(value, decimals)}`
+          )
+        }
+      };
+    }
+    case 'chamfer': {
+      const found = lookupFace(annotation.face, view, bodies);
+      if (!found.ok) return failure(found.reason);
+      const frame = DRAWING_VIEW_FRAMES[view.orientation];
+      // A planar chamfer is true size only edge-on.
+      const normal = found.face.geometry?.normal;
+      if (normal && Math.abs(dot(normal, frame.direction)) > 1e-6)
+        return failure('foreshortened');
+      const chamfer = readChamfer(
+        found.face,
+        found.faces,
+        found.edges,
+        frame.direction
+      );
+      if (!chamfer.ok) return failure(chamfer.reason);
+      const project = (point: Vector3): UV => {
+        const p = projectToView(frame, point);
+        return [p.u, p.v];
+      };
+      let segments: [UV, UV][];
+      if (chamfer.kind === 'cone') {
+        // True size only side-on: the axis lies in the view's plane.
+        if (Math.abs(dot(chamfer.axis, frame.direction)) > 1e-6)
+          return failure('foreshortened');
+        const outward = cross(frame.direction, chamfer.axis);
+        const width = norm(outward);
+        segments = [1, -1].map((sign) =>
+          chamfer.ends.map((end) =>
+            project(add(end.center, scale(outward, (sign * end.radius) / width)))
+          )
+        ) as [UV, UV][];
+      } else {
+        // A planar chamfer is true size where its ends are seen end-on.
+        if (
+          chamfer.ends.some(
+            (end) =>
+              Math.abs(Math.abs(dot(end.direction, frame.direction)) - 1) > 1e-6
+          )
+        )
+          return failure('foreshortened');
+        segments = [
+          chamfer.ends.map((end) => project(end.point)) as [UV, UV]
+        ];
+      }
+      const lengthDecimals =
+        annotation.decimals ?? defaultDimensionDecimals('chamfer', units);
+      return {
+        ok: true,
+        resolved: {
+          kind: 'chamfer',
+          segments,
+          value: chamfer.size,
+          angle: chamfer.angleDeg,
+          label: dimensionLabel(
+            annotation,
+            `${formatDrawingNumber(chamfer.size, lengthDecimals)} × ${formatDrawingNumber(chamfer.angleDeg, ANGLE_DECIMALS)}°`
+          )
         }
       };
     }
@@ -504,7 +809,10 @@ export function resolveDrawingAnnotation(
           vertex,
           rays: ordered,
           value,
-          label: `${formatDrawingNumber(value, decimals)}°`
+          label: dimensionLabel(
+            annotation,
+            `${formatDrawingNumber(value, decimals)}°`
+          )
         }
       };
     }
@@ -856,6 +1164,48 @@ function angleLayout(
   return { strokes, texts: [placed.text], box: placed.box };
 }
 
+/**
+ * A chamfer callout: its text at the placement, and a leader to the middle
+ * of the side of the chamfer nearer it.
+ */
+function chamferLayout(
+  resolved: Extract<ResolvedAnnotation, { kind: 'chamfer' }>,
+  toPage: (u: number, v: number) => XY,
+  anchor: XY
+): AnnotationLayout {
+  const placed = placedText(
+    resolved.label,
+    [anchor[0], anchor[1] - TEXT_LIFT_MM],
+    0,
+    'start'
+  );
+  const box = placed.box;
+  const middle: XY = [box.x + box.width / 2, box.y + box.height / 2];
+  const tips = resolved.segments.map(([a, b]) => {
+    const p = toPage(...a);
+    const q = toPage(...b);
+    return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2] as XY;
+  });
+  const tip = tips.reduce((best, candidate) =>
+    Math.hypot(candidate[0] - middle[0], candidate[1] - middle[1]) <
+    Math.hypot(best[0] - middle[0], best[1] - middle[1])
+      ? candidate
+      : best
+  );
+  const from: XY = [tip[0] < middle[0] ? box.x : box.x + box.width, middle[1]];
+  const length = Math.hypot(tip[0] - from[0], tip[1] - from[1]);
+  const strokes: SheetStroke[] = [];
+  if (length > 1e-6) {
+    const direction: XY = [
+      (tip[0] - from[0]) / length,
+      (tip[1] - from[1]) / length
+    ];
+    if (length > ARROW_LENGTH_MM) strokes.push(line(from, tip));
+    strokes.push(arrow(tip, direction, Math.min(ARROW_LENGTH_MM, length)));
+  }
+  return { strokes, texts: [placed.text], box };
+}
+
 function nearestOnPolyline(points: XY[], to: XY): XY | null {
   let best: XY | null = null;
   let bestDistance = Infinity;
@@ -1017,6 +1367,8 @@ export function layoutAnnotation(
       return radialLayout(resolved, toPage, k, anchor);
     case 'angle':
       return angleLayout(resolved, toPage, anchor);
+    case 'chamfer':
+      return chamferLayout(resolved, toPage, anchor);
   }
 }
 

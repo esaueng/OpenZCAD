@@ -272,7 +272,7 @@ describe('D02 annotation section (schema v31)', () => {
     const ref = refOf(bodyId, top);
     const good = linear(id('w'), 'horizontal', ref, 'first', ref, 'second');
     const cases: [unknown, RegExp][] = [
-      [{ ...good, kind: 'chamfer' }, /unknown kind/],
+      [{ ...good, kind: 'hole-callout' }, /unknown kind/],
       [{ ...good, viewId: 'dvw_gone' }, /view that is not on its sheet/],
       [{ ...good, annotationId: 'x' }, /invalid id/],
       [{ ...good, placementMm: { x: Infinity, y: 0 } }, /placement/],

@@ -1,7 +1,7 @@
 import {
   assertDrawingSet,
   deepClone,
-  drawingAnnotationEdges,
+  drawingAnnotationReferences,
   type DrawingAnnotation,
   type DrawingAnnotationId,
   drawingPaperMm,
@@ -195,7 +195,7 @@ export function updateDrawingSheet(
         ];
       }
       for (const annotation of sheet.annotations ?? []) {
-        for (const edge of drawingAnnotationEdges(annotation)) {
+        for (const edge of drawingAnnotationReferences(annotation)) {
           edge.bodyId = replacements.get(edge.bodyId) ?? edge.bodyId;
         }
       }
@@ -417,13 +417,13 @@ function assertAnnotationEdgesInView(
   annotation: DrawingAnnotation,
   previous?: DrawingAnnotation
 ): void {
-  const edges = drawingAnnotationEdges(annotation);
+  const edges = drawingAnnotationReferences(annotation);
   if (edges.length === 0) return;
   const view = sheet.views.find((entry) => entry.viewId === annotation.viewId);
   if (!view)
     throw new Error(`Drawing view ${String(annotation.viewId)} not found.`);
   const kept = new Set(
-    (previous ? drawingAnnotationEdges(previous) : []).map((edge) =>
+    (previous ? drawingAnnotationReferences(previous) : []).map((edge) =>
       JSON.stringify(edge)
     )
   );

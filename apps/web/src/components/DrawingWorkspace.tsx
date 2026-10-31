@@ -25,6 +25,7 @@ import {
   StickyNote,
   Sun,
   Trash2,
+  TriangleRight,
   X,
   ZoomIn,
   ZoomOut,
@@ -39,6 +40,7 @@ import { updateDrawingView } from '@openzcad/document-core';
 import {
   createDrawingAnnotationId,
   createDrawingViewId,
+  MAX_DRAWING_DIMENSION_COUNT,
   MAX_DRAWING_DIMENSION_DECIMALS,
   MAX_DRAWING_NOTE_LENGTH,
   type DrawingAnnotation,
@@ -124,15 +126,19 @@ import {
   draftRefusal,
   drawingViewSignature,
   drawnLines,
+  drawnOutlines,
   hitEdge,
+  hitFace,
   pickableEdges,
+  pickableFaces,
   pickedEnough,
   repairedAnnotation,
   repairToolKind,
   startAnnotationTool,
   type AnnotationTool,
   type AnnotationToolKind,
-  type PickableEdge
+  type PickableEdge,
+  type PickableFace
 } from '../lib/drawing/annotationPicking';
 import {
   createStarterSheet,
@@ -674,6 +680,7 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'radius',
   'diameter',
   'angle',
+  'chamfer',
   'note'
 ];
 
@@ -685,6 +692,7 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     radius: Radius,
     diameter: Diameter,
     angle: Angle,
+    chamfer: TriangleRight,
     note: StickyNote
   };
 
@@ -696,6 +704,7 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   radius: 'R',
   diameter: 'D',
   angle: 'G',
+  chamfer: 'C',
   note: 'N'
 };
 
@@ -742,6 +751,7 @@ const ANNOTATION_KIND_LABELS: Readonly<
   radius: 'Radius',
   diameter: 'Diameter',
   angle: 'Angle',
+  chamfer: 'Chamfer',
   note: 'Note'
 };
 
@@ -852,7 +862,9 @@ function AnnotationProperties(props: {
       ) : resolution?.ok && selected.kind !== 'note' ? (
         <p className="drawing-annotation-value">
           {resolution.resolved.label}
-          {selected.kind === 'angle' ? '' : ` ${props.units}`}
+          {selected.kind === 'angle' || selected.kind === 'chamfer'
+            ? ''
+            : ` ${props.units}`}
         </p>
       ) : null}
       {selected.kind === 'note' ? (
@@ -897,6 +909,18 @@ function AnnotationProperties(props: {
           </select>
         </label>
       )}
+      {selected.kind !== 'note' && (
+        <DimensionFormat
+          selected={selected}
+          editable={editable}
+          onUpdate={props.onUpdate}
+        />
+      )}
+      {selected.provenance && (
+        <p className="drawing-hint">
+          Placed by Auto-dimension. Re-picking it makes it yours.
+        </p>
+      )}
       <div className="drawing-field-row">
         {(selected.kind !== 'note' || selected.leader) && (
           <button
@@ -927,6 +951,92 @@ function AnnotationProperties(props: {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * D06 format flags: a count on radial and chamfer dimensions, Ø on a linear
+ * span across a cylinder, and reference dimensions in brackets.
+ */
+function DimensionFormat(props: {
+  selected: Exclude<DrawingAnnotation, { kind: 'note' }>;
+  editable: boolean;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable } = props;
+  const counted =
+    selected.kind === 'radius' ||
+    selected.kind === 'diameter' ||
+    selected.kind === 'chamfer'
+      ? selected
+      : null;
+  const flag = <K extends 'reference' | 'diameter'>(
+    key: K,
+    on: boolean
+  ): DrawingAnnotation => {
+    const { [key]: _previous, ...rest } = selected as unknown as Record<
+      string,
+      unknown
+    >;
+    return (on ? { ...rest, [key]: true } : rest) as unknown as DrawingAnnotation;
+  };
+  return (
+    <>
+      {counted && (
+        <label className="drawing-field">
+          <span>Count</span>
+          <input
+            type="number"
+            min={1}
+            max={MAX_DRAWING_DIMENSION_COUNT}
+            step={1}
+            value={counted.count ?? 1}
+            disabled={!editable}
+            aria-label="How many like features this states"
+            onChange={(event) => {
+              const value = Math.round(Number(event.target.value));
+              if (!Number.isFinite(value) || value > MAX_DRAWING_DIMENSION_COUNT)
+                return;
+              const { count: _previous, ...rest } = counted;
+              props.onUpdate(
+                value >= 2 ? { ...rest, count: value } : rest,
+                'Format dimension'
+              );
+            }}
+          />
+        </label>
+      )}
+      {selected.kind === 'linear' && (
+        <label className="drawing-check">
+          <input
+            type="checkbox"
+            checked={selected.diameter === true}
+            disabled={!editable}
+            onChange={(event) =>
+              props.onUpdate(
+                flag('diameter', event.target.checked),
+                'Format dimension'
+              )
+            }
+          />
+          <span>Ø diameter (across a cylinder seen side-on)</span>
+        </label>
+      )}
+      <label className="drawing-check">
+        <input
+          type="checkbox"
+          checked={selected.reference === true}
+          disabled={!editable}
+          onChange={(event) =>
+            props.onUpdate(
+              flag('reference', event.target.checked),
+              'Format dimension'
+            )
+          }
+        />
+        <span>Reference dimension (in brackets)</span>
+      </label>
+    </>
   );
 }
 
@@ -961,7 +1071,7 @@ function DrawingToolRail(props: {
   const { tool } = props;
   const groups: AnnotationToolKind[][] = [
     ['horizontal', 'vertical', 'aligned'],
-    ['radius', 'diameter', 'angle'],
+    ['radius', 'diameter', 'angle', 'chamfer'],
     ['note']
   ];
   return (
@@ -1067,6 +1177,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   /** Under the pointer while a tool is active: the edge and paper point. */
   const [hover, setHover] = useState<{
     edge: PickableEdge | null;
+    /** A face outline, for the tools that pick faces. */
+    face: PickableFace | null;
     point: [number, number];
   } | null>(null);
   const [annotationDrag, setAnnotationDrag] = useState<{
@@ -1973,12 +2085,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     bodies: DrawingWorkspaceProps['bodies'];
     edges: PickableEdge[];
     drawn: ReturnType<typeof drawnLines>;
+    faces: PickableFace[];
+    outlines: ReturnType<typeof drawnOutlines>;
   } | null>(null);
   const currentPickable = (): {
     edges: PickableEdge[];
     drawn: ReturnType<typeof drawnLines>;
+    faces: PickableFace[];
+    outlines: ReturnType<typeof drawnOutlines>;
   } => {
-    if (!shownSheet || !sheetReady) return { edges: [], drawn: new Map() };
+    if (!shownSheet || !sheetReady)
+      return { edges: [], drawn: new Map(), faces: [], outlines: new Map() };
     const cached = pickCache.current;
     if (
       cached &&
@@ -1995,7 +2112,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       views: drawnViews,
       bodies: drawBodies,
       edges: pickableEdges(shownSheet, drawnViews, drawBodies, document.units),
-      drawn: drawnLines(shownSheet, drawnViews, document.units)
+      drawn: drawnLines(shownSheet, drawnViews, document.units),
+      faces: pickableFaces(shownSheet, drawnViews, drawBodies, document.units),
+      outlines: drawnOutlines(shownSheet, drawnViews, document.units)
     };
     pickCache.current = entry;
     return entry;
@@ -2003,6 +2122,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const edgeAt = (point: [number, number], pxPerMm: number) => {
     const { edges, drawn } = currentPickable();
     return hitEdge(edges, point, pickTolerance(pxPerMm), drawn);
+  };
+  const faceAt = (point: [number, number], pxPerMm: number) => {
+    const { faces, outlines } = currentPickable();
+    return hitFace(faces, point, pickTolerance(pxPerMm), outlines);
   };
 
   /** A pointer position in paper millimetres (y up), with the zoom. */
@@ -2114,8 +2237,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const onPickPointerMove = (event: ReactPointerEvent<SVGRectElement>) => {
     const at = paperPoint(event);
     if (!at || !tool) return;
+    const picking = !pickedEnough(tool);
     setHover({
-      edge: pickedEnough(tool) ? null : edgeAt(at.point, at.pxPerMm),
+      edge: picking ? edgeAt(at.point, at.pxPerMm) : null,
+      face: picking ? faceAt(at.point, at.pxPerMm) : null,
       point: at.point
     });
   };
@@ -2133,7 +2258,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       hit,
       at.point,
       viewAt(at.point),
-      drawBodies
+      drawBodies,
+      faceAt(at.point, at.pxPerMm)
     );
     if (!result.ok) {
       props.onStatus(result.message);
@@ -2148,7 +2274,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     setTool(pinnedTool(result.tool));
-    setHover({ edge: null, point: at.point });
+    setHover({ edge: null, face: null, point: at.point });
   };
 
   const updateAnnotation = (annotation: DrawingAnnotation, label?: string) => {
@@ -2941,12 +3067,25 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 })}
               </g>
             )}
-            {tool && hover?.edge && (
+            {tool && hover?.edge && tool.kind !== 'chamfer' && (
               <polyline
                 className="drawing-pick-highlight"
                 points={svgPoints(hover.edge.page.flat(), paper.height)}
               />
             )}
+            {tool &&
+              hover?.face &&
+              (tool.kind === 'chamfer' ||
+                ((tool.kind === 'horizontal' || tool.kind === 'vertical') &&
+                  (tool.faces.length === 1 || !hover.edge))) &&
+              hover.face.lines.map((line, index) => (
+                <polyline
+                  key={index}
+                  className="drawing-pick-highlight"
+                  data-pick="face"
+                  points={svgPoints(line.flat(), paper.height)}
+                />
+              ))}
             {tool && (
               <rect
                 className="drawing-pick-surface"

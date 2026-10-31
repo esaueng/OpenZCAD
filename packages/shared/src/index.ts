@@ -188,7 +188,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // `diameterFactor`), refused by older clients for the same reason.
 // v43 adds M14 throated worm wheels (`throated`, `outsideDiameter`); an older
 // client would build a plain wheel in their place, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 43 as const;
+// v44 is claimed by M14 double-enveloping worms (open in parallel).
+// v45 adds D06 slice B drawing annotations: silhouette and virtual-sharp
+// points, chamfer dimensions, counts, Ø on a linear span, reference
+// dimensions and provenance. An older client would refuse each as malformed
+// on load, or, past that, drop the meaning on its next save, so it must
+// refuse the document.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 45 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
