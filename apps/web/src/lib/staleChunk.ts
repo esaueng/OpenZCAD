@@ -59,8 +59,41 @@ export function onStaleChunk(listener: StaleChunkListener): () => void {
   };
 }
 
-export function reportStaleChunk(): void {
+export function reportStaleChunk(error?: unknown): void {
+  if (error !== undefined) refreshFailedChunk(error);
   for (const listener of listeners) listener();
+}
+
+/**
+ * Until the Worker answered asset misses itself (`worker/assetFallback.ts`),
+ * a missing chunk came back as the app shell, and `_headers` marked that HTML
+ * immutable under the chunk's URL. A reload does not revalidate an immutable
+ * entry, so the import kept failing. Fetching the failed URL past the cache
+ * replaces the entry, and the reload the notice offers then loads the chunk.
+ */
+export function refreshFailedChunk(
+  error: unknown,
+  fetcher: typeof fetch | undefined = globalThis.fetch
+): void {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+  const named =
+    /(?:https?:\/\/[^\s'"]+)?\/assets\/[^\s'"]+?\.(?:js|css)\b/.exec(message);
+  if (!named || typeof fetcher !== 'function') return;
+  let url: URL;
+  try {
+    url = new URL(named[0], window.location.href);
+  } catch {
+    return;
+  }
+  if (url.origin !== window.location.origin) return;
+  void fetcher(url.href, { cache: 'reload' })
+    .then((response) => response.arrayBuffer())
+    .catch(() => undefined);
 }
 
 /**
@@ -74,7 +107,7 @@ export function lazyWithStaleChunkNotice<T extends ComponentType<any>>(
 ): LazyExoticComponent<T> {
   return lazy(() =>
     factory().catch((error: unknown) => {
-      if (isChunkLoadError(error)) reportStaleChunk();
+      if (isChunkLoadError(error)) reportStaleChunk(error);
       throw error;
     })
   );
@@ -98,7 +131,7 @@ export function watchPreloadErrors(target: Window = window): () => void {
     // warm-up's failure can be told apart from one the user is waiting on.
     const timer = window.setTimeout(() => {
       timers.delete(timer);
-      if (!isSpeculativeFailure(error)) reportStaleChunk();
+      if (!isSpeculativeFailure(error)) reportStaleChunk(error);
     }, 0);
     timers.add(timer);
   };
@@ -164,7 +197,7 @@ export function preloadableLazy<T extends ComponentType<any>>(
   // offline is not something the user asked for or can see.
   const Lazy = lazy(() =>
     load().catch((error: unknown) => {
-      if (isChunkLoadError(error)) reportStaleChunk();
+      if (isChunkLoadError(error)) reportStaleChunk(error);
       throw error;
     })
   );

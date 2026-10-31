@@ -1236,8 +1236,9 @@
   justify-content: center;
 }
 
-/* Offline guidance is readable beside the compact rail, never squeezed into it. */
-.view-tools-loading > span:not(.workspace-loading-ring) {
+/* A rail's offline or failure note is readable beside the compact rail,
+   never squeezed into it: toward the stage, leftward from View's bar. */
+.rail-note {
   position: absolute;
   top: 0;
   right: calc(100% + var(--island-gap));
@@ -1249,6 +1250,11 @@
   border: var(--border-thin);
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
+}
+
+.rail-note strong {
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
 }
 
 .workspace.column-layout .view-mode-button,
@@ -2432,6 +2438,18 @@ button.command-rail.is-suggested {
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
+}
+
+/* While its chunk loads the rail holds its place with a spinner. */
+.workspace-column-float > .tweak-rail-loading {
+  min-height: 120px;
+  justify-content: center;
+}
+
+/* Tweak's rail is on the left, so its note opens rightward. */
+.tweak-rail > .rail-note {
+  right: auto;
+  left: calc(100% + var(--island-gap));
 }
 
 .tweak-rail-divider {

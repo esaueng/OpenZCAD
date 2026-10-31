@@ -3,6 +3,7 @@ import {
   MODEL_VISIBLE_WAIT_MS,
   lazyChunkUrls,
   modelVisible,
+  prefetchChunk,
   prefetchLazyChunks
 } from './lazyChunkPrefetch';
 import { MODEL_VISIBLE_MARK } from './startupReadiness';
@@ -188,5 +189,34 @@ describe('lazy chunk prefetch', () => {
     prefetchLazyChunks(document, '/', load, ready());
     vi.advanceTimersByTime(10_000);
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it('replaces app-shell HTML cached under a chunk URL with the chunk', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response('<!doctype html>', {
+          headers: { 'content-type': 'text/html' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response('export {}', {
+          headers: { 'content-type': 'text/javascript' }
+        })
+      );
+    await prefetchChunk('/assets/TweakPanel-abc.js', fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls[1]![1]).toMatchObject({ cache: 'reload' });
+  });
+
+  it('reads a real chunk once, from the cache when it is there', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('export {}', {
+        headers: { 'content-type': 'text/javascript' }
+      })
+    );
+    await prefetchChunk('/assets/TweakPanel-abc.js', fetcher);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0]![1]).not.toHaveProperty('cache');
   });
 });

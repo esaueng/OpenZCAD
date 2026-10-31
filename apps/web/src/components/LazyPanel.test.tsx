@@ -101,6 +101,59 @@ describe('lazy panels', () => {
     expect(screen.queryByText(/updated|new version/i)).toBeNull();
   });
 
+  it.each([
+    ['View tools', 'view-tools', 'view-mode-bar'],
+    ['Parameters panel', 'tweak-rail', 'tweak-rail']
+  ] as const)(
+    'keeps a failed %s in its rail with a note and a Reload',
+    async (label, presentation, railClass) => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const reload = vi.fn();
+      vi.spyOn(window, 'location', 'get').mockReturnValue({
+        ...window.location,
+        reload
+      });
+      const Rail = createLazyPanel<object>(
+        label,
+        () =>
+          Promise.reject(
+            new TypeError(
+              'Failed to fetch dynamically imported module: /assets/rail.js'
+            )
+          ),
+        presentation
+      );
+      render(<Rail />);
+      const alert = await screen.findByRole('alert');
+      // The rail's own shape, never the panel card that covered the stage
+      // or was squeezed to a word per line in a 40px column.
+      expect(alert).toHaveClass(railClass);
+      expect(alert).not.toHaveClass('error-boundary');
+      expect(alert).toHaveTextContent(`${label} could not be shown.`);
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: `Reload workspace to restore ${label.toLowerCase()}`
+        })
+      );
+      expect(reload).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('keeps the Tweak rail its width while loading, with offline guidance beside it', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const Rail = createLazyPanel<object>(
+      'Parameters panel',
+      () => new Promise(() => undefined),
+      'tweak-rail'
+    );
+    render(<Rail />);
+    const status = await screen.findByRole('status');
+    expect(status).toHaveClass('tweak-rail', 'tweak-rail-loading');
+    expect(
+      screen.getByText('Connect to the internet to load this panel.')
+    ).toHaveClass('rail-note');
+  });
+
   it('retains loaded identity across updates and reopens a cached panel offline', async () => {
     const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
     const mount = vi.fn();

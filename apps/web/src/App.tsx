@@ -1217,7 +1217,8 @@ const TweakPanel = createLazyPanel<ComponentProps<typeof TweakPanelComponent>>(
   () =>
     import('./components/TweakPanel').then((module) => ({
       default: module.TweakPanel
-    }))
+    })),
+  'tweak-rail'
 );
 // The text tool's card exists only while text is being composed.
 const LazySketchTextCard = lazyWithStaleChunkNotice(() =>

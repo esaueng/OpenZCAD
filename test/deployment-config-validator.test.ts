@@ -86,6 +86,20 @@ describe('deployment configuration preflight', () => {
     );
   });
 
+  it('rejects the asset layer SPA fallback, which caches HTML as a chunk', () => {
+    const config = {
+      ...hostedConfig(),
+      assets: {
+        ...hostedConfig().assets,
+        not_found_handling: 'single-page-application'
+      }
+    };
+
+    expect(validateDeploymentConfig(config, { target: 'selfhost' })).toContain(
+      'assets.not_found_handling must be "none" so the Worker answers missing chunks'
+    );
+  });
+
   it('rejects duplicate bindings and committed secret values', () => {
     const config = hostedConfig();
     config.assets.binding = 'DB';

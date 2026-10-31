@@ -1,3 +1,5 @@
+import { missingAssetResponse } from './assetFallback';
+
 /** The pinned OCCT Embind runtime generates JS bindings in this worker only. */
 export const FREECAD_WORKER_PATH = /^\/assets\/freecadImportWorker-[\w-]+\.js$/;
 export const FREECAD_WORKER_CSP =
@@ -11,7 +13,9 @@ export async function serveFreecadWorkerAsset(
     return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
   }
   const asset = await assets.fetch(request);
-  // A missing chunk can fall back to the SPA HTML. Never relax that policy.
+  // A missing worker must not reach the cache as `immutable` (assetFallback).
+  if (asset.status === 404) return missingAssetResponse();
+  // Anything else that is not the script keeps its policy. Never relax it.
   if (
     !asset.ok ||
     !/^(?:text|application)\/javascript\b/i.test(
