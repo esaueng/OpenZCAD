@@ -187,12 +187,18 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
 
 .selection-refusal-lane .selection-callout-error {
   flex: 1 1 240px;
+  color: var(--color-text);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.selection-refusal-lane
+  .selection-callout-diagnostic.is-expandable:not(.is-expanded)
+  .selection-callout-error {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
-  color: var(--color-text);
-  line-height: 1.3;
 }
 
 .selection-refusal-lane .selection-callout-recovery {
@@ -205,6 +211,15 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   color: var(--color-text);
   background: transparent;
   border: var(--border-thin);
+}
+
+.selection-refusal-lane
+  .selection-callout-diagnostic.is-expanded
+  .selection-callout-error {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  overflow-wrap: anywhere;
 }
 
 .selection-refusal-lane .selection-callout-recovery:hover {

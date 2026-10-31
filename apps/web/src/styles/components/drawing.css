@@ -403,6 +403,40 @@
   color: var(--color-error-text);
 }
 
+.drawing-audit-heading {
+  margin: 4px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.drawing-audit-heading.is-warning {
+  color: var(--color-warning);
+}
+
+.drawing-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.drawing-audit-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawing-audit-reason {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
 @media (max-width: 760px) {
   .drawing-workspace {
     flex-direction: column;

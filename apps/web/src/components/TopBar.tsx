@@ -71,6 +71,8 @@ interface TopBarProps {
   geometryFailed?: boolean;
   /** A proposed direct edit has not passed validation or been saved yet. */
   editPending?: boolean;
+  editRefusal?: string | null;
+  onReviewEditFailure?(): void;
   /**
    * Import sources that exist only in this browser because their cloud
    * archival failed. Nonzero shows the File-menu action that retries the
@@ -152,6 +154,8 @@ export function TopBar({
   geometryPending = false,
   geometryFailed = false,
   editPending = false,
+  editRefusal: proposedEditRefusal = null,
+  onReviewEditFailure,
   localOnlySourceCount,
   artifacts: storedArtifacts,
   meshCleanup,
@@ -220,13 +224,21 @@ export function TopBar({
     !saveToAccount &&
     editPending &&
     (saveState === 'synced' || saveState === 'local');
+  // A refused proposal must not cover a device/account save failure or a
+  // newer validation in progress. The saved revision remains unchanged.
+  const editRefusal =
+    !editPending && ['local', 'synced', 'syncing'].includes(saveState)
+      ? proposedEditRefusal
+      : null;
   const saveGlyph: SaveGlyph = checkingEdit
     ? 'busy'
-    : modelPending
-      ? geometryFailed
-        ? 'warning'
-        : 'busy'
-      : saveGlyphFor(saveState);
+    : editRefusal
+      ? 'warning'
+      : modelPending
+        ? geometryFailed
+          ? 'warning'
+          : 'busy'
+        : saveGlyphFor(saveState);
 
   useEffect(() => {
     if (editingProjectName) {
@@ -327,16 +339,22 @@ export function TopBar({
   // The chip takes a click only where its label names an action: saving a
   // local project to the account, restoring a broken account copy, or
   // uploading a source that exists only here. Elsewhere it is a readout.
+  const reviewRefusal = Boolean(editRefusal && onReviewEditFailure);
   const saveChipActs =
-    saveToAccount || saveState === 'repair' || saveState === 'local-source';
+    reviewRefusal ||
+    saveToAccount ||
+    saveState === 'repair' ||
+    saveState === 'local-source';
   const presentation = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
-  const saveText = saveToAccount
-    ? 'Save to my account'
-    : checkingEdit
-      ? 'Checking'
-      : presentation.topBarLabel;
+  const saveText = editRefusal
+    ? 'Edit not applied'
+    : saveToAccount
+      ? 'Save to my account'
+      : checkingEdit
+        ? 'Checking'
+        : presentation.topBarLabel;
   const modelReadiness =
-    !checkingEdit && modelPending
+    !checkingEdit && !editRefusal && modelPending
       ? geometryFailed
         ? 'model unavailable'
         : 'preparing model'
@@ -346,9 +364,11 @@ export function TopBar({
   const saveLabel = modelReadiness
     ? `${saveText} · ${modelReadiness}`
     : saveText;
-  const saveTitle = checkingEdit
-    ? `The proposed edit is being checked before it is applied and saved. ${presentation.title}`
-    : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
+  const saveTitle = editRefusal
+    ? `${editRefusal} Open the activity log for details.`
+    : checkingEdit
+      ? `The proposed edit is being checked before it is applied and saved. ${presentation.title}`
+      : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
       {/* Keyed by the glyph, not the state: saving → syncing keeps the
@@ -566,10 +586,10 @@ export function TopBar({
               className={`save-state topbar-action is-${saveState}`}
               type="button"
               disabled={!projectName}
-              onClick={onSave}
+              onClick={reviewRefusal ? onReviewEditFailure : onSave}
               aria-label={saveLabel}
               title={
-                saveToAccount
+                saveToAccount && !editRefusal
                   ? 'Save this local project and its source files to your account.'
                   : saveTitle
               }

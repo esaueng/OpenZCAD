@@ -392,7 +392,6 @@ async function footModel() {
 
 describe('D06 slice B schema (v45)', () => {
   it('claims v45 and fences documents from newer clients', () => {
-    // v44 is the parallel M14 double-enveloping worm claim.
     expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(45);
     const document = createProjectDocument('Fence', toUserId('test'));
     const newer = {

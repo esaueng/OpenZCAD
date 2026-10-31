@@ -67,6 +67,20 @@ function choice(group: string, label: string) {
 }
 
 describe('in-place Extrude bar', () => {
+  it('names an automatic preview operation and its target outside Options', () => {
+    setup({
+      resolvedChoice: {
+        operation: 'cut',
+        targetBodyId: plate,
+        reason: 'enclosed',
+        tolerance: 1e-6
+      }
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^Preview: Cut · Plate/
+    );
+  });
+
   it('finishes only once the arrow sets a distance, then creates that draft', async () => {
     const user = userEvent.setup();
     const { distanceSetterRef, commandRef, onSubmit, onPreview } = setup();

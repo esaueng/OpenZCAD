@@ -22,6 +22,7 @@ import {
 } from './cylinderPrimitiveAncestry';
 import { extrudeCapAncestor } from './extrudeCapAncestry';
 import { planarFaceTravel } from './planarFaceTravel';
+import { gearCapAncestor } from './gearCapAncestry';
 
 /**
  * What a planar face offset turns into.
@@ -36,6 +37,13 @@ import { planarFaceTravel } from './planarFaceTravel';
  * face.
  */
 export type FaceOffsetPlan =
+  | {
+      kind: 'gear-width';
+      command: AnyCommand;
+      feature: FeatureNode;
+      value: number;
+      preflightRejection?: string;
+    }
   | {
       kind: 'primitive-dimension';
       command: AnyCommand;
@@ -277,6 +285,58 @@ export function planFaceOffset(
     return null;
   }
 
+  const gear =
+    !input.localOnly &&
+    gearCapAncestor(document, bodyId, face.reference, faceHash);
+  if (gear && gear.feature.data.featureKind === 'gear') {
+    const data = gear.feature.data;
+    const localOffset = Math.round(offset * 1000) / 1000 / gear.scale;
+    const delta: ParamValue =
+      typeof exact === 'string'
+        ? gear.scale === 1
+          ? exact
+          : `(${exact}) / ${gear.scale}`
+        : localOffset;
+    const value = gear.width + localOffset;
+    const add = (current: ParamValue, change: ParamValue): ParamValue =>
+      typeof current === 'number' && typeof change === 'number'
+        ? current + change
+        : `(${current}) + (${change})`;
+    const origin = { ...data.origin! };
+    if (gear.side === 'start' && value > 0) {
+      for (const axis of ['x', 'y', 'z'] as const) {
+        if (gear.axis[axis] === 0) continue;
+        origin[axis] = add(
+          origin[axis],
+          typeof delta === 'number'
+            ? -delta * gear.axis[axis]
+            : `-(${delta}) * ${gear.axis[axis]}`
+        );
+      }
+    }
+    return {
+      kind: 'gear-width',
+      feature: gear.feature,
+      value: value * gear.scale,
+      command: commandFactories.updateFeature(
+        {
+          featureId: gear.feature.featureId,
+          data: {
+            faceWidth: add(data.faceWidth!, delta),
+            ...(gear.side === 'start' && value > 0 ? { origin } : {})
+          }
+        },
+        `Resize ${gear.feature.name} face width`
+      ),
+      ...(value <= 0
+        ? {
+            preflightRejection:
+              'That distance would leave the gear with no face width.'
+          }
+        : {})
+    };
+  }
+
   const extrude =
     !input.localOnly &&
     extrudeCapAncestor(document, bodyId, face.reference, faceHash);
@@ -418,6 +478,8 @@ export function faceOffsetBaseline(
   face: Pick<FaceTopology, 'reference'>,
   faceHash: number
 ): FaceOffsetTotal | undefined {
+  const gear = gearCapAncestor(document, bodyId, face.reference, faceHash);
+  if (gear) return { total: gear.width * gear.scale, sense: 1 };
   const extrude = extrudeCapAncestor(
     document,
     bodyId,

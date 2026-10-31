@@ -16,6 +16,7 @@ function renderTopBar(
     geometryPending?: boolean;
     geometryFailed?: boolean;
     editPending?: boolean;
+    editRefusal?: string;
     canExport?: boolean;
     exportWithheld?: string | null;
     exportUnavailableReason?: string | null;
@@ -30,7 +31,8 @@ function renderTopBar(
     onSignIn: vi.fn(),
     onImportFiles: vi.fn(),
     onOpenMeshExport: vi.fn(),
-    onRenameProject: vi.fn()
+    onRenameProject: vi.fn(),
+    onReviewEditFailure: vi.fn()
   };
   render(
     <TopBar
@@ -44,6 +46,7 @@ function renderTopBar(
       geometryPending={options.geometryPending}
       geometryFailed={options.geometryFailed}
       editPending={options.editPending}
+      editRefusal={options.editRefusal}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
@@ -148,6 +151,43 @@ describe('TopBar save chip', () => {
     const chip = screen.getByRole('status', { name: 'Local only' });
     fireEvent.click(chip);
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('shows a new validation instead of an earlier refusal', () => {
+    renderTopBar({
+      saveState: 'synced',
+      editPending: true,
+      editRefusal: 'The previous proposal was refused.'
+    });
+    expect(screen.getByRole('status', { name: 'Checking' })).toHaveTextContent(
+      'Checking'
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Edit not applied' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens the refusal log without saving the old model again', () => {
+    const handlers = renderTopBar({
+      saveState: 'synced',
+      editRefusal: 'The proposed edit would remove the body.'
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit not applied' }));
+    expect(handlers.onReviewEditFailure).toHaveBeenCalledOnce();
+    expect(handlers.onSave).not.toHaveBeenCalled();
+  });
+
+  it('keeps a device write failure ahead of a refused proposal', () => {
+    renderTopBar({
+      saveState: 'device-failed',
+      editRefusal: 'The proposed edit was refused.'
+    });
+    expect(
+      screen.queryByRole('button', { name: 'Edit not applied' })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Not saved' })).toHaveTextContent(
+      'Not saved'
+    );
   });
 
   it('stays a button where its label names an action', () => {
