@@ -2230,14 +2230,15 @@
 }
 
 .start-update.is-failure .start-update-dot {
-  align-self: flex-start;
-  margin-top: 6px;
   background: var(--color-warning);
 }
 
 .start-update-text {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .start-update button {

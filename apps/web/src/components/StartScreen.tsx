@@ -3318,13 +3318,18 @@ export function StartScreen({
               role="alert"
             >
               <span className="start-update-dot" aria-hidden="true" />
+              {/* Two words beside Reload, like the update's; the full
+                  sentence is in the tooltip and read to screen readers. */}
               <span
                 className="start-update-text"
-                // The bar clips a long sentence; the tooltip keeps it whole.
                 title={onReloadForUpdate ? undefined : STALE_CHUNK_MESSAGE}
+                aria-hidden={onReloadForUpdate ? undefined : true}
               >
-                {onReloadForUpdate ? 'New version ready' : STALE_CHUNK_MESSAGE}
+                {onReloadForUpdate ? 'New version ready' : 'Load failed'}
               </span>
+              {!onReloadForUpdate && (
+                <span className="visually-hidden">{STALE_CHUNK_MESSAGE}</span>
+              )}
               <button
                 type="button"
                 onClick={onReloadForUpdate ?? onReloadForLoadFailure}
