@@ -1499,7 +1499,6 @@ import {
   type LivePreviewOptions
 } from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
-import { useMediaQuery } from './hooks/useMediaQuery';
 import { createPrimitiveCommand } from './lib/primitivePlacement';
 import { footprintPlacement } from './lib/inPlace/primitives';
 import {
@@ -1548,6 +1547,7 @@ import {
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
+  featureEditsInPlace,
   type InPlaceEditSeed
 } from './lib/inPlace/edit';
 import { PreviewRebuilds } from './lib/previewRebuilds';
@@ -1809,7 +1809,6 @@ const CYLINDER_RADIUS_REST_MS = 250;
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
  */
-const NARROW_WINDOW_QUERY = '(max-width: 960px)';
 /**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
@@ -21403,7 +21402,6 @@ export function App() {
     regionKeypadText.current = null;
     setKeypad((current) => (current?.kind === 'extrude' ? null : current));
   }, [extrudeSessionKey]);
-  const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
   // Creation commands take the stage; edits of an existing feature leave the
@@ -25227,7 +25225,10 @@ export function App() {
 
   function applyHistorySelection(
     next: string | null,
-    current: ProjectDocument
+    current: ProjectDocument,
+    // False opens the feature's readout without re-arming the in-place
+    // command that edits it: History's Measurements.
+    armInPlace = true
   ) {
     extrudeEditRequest.current += 1;
     // A new selection replaces a running in-place command, edit or create.
@@ -25308,13 +25309,12 @@ export function App() {
     setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
     // U09 phase 7: a feature an in-place command made re-arms that command,
     // seeded from it, with its handles on the model; the row stays pinned.
-    if (node?.kind === 'feature' && inPlaceToolForFeature(node.data)) {
-      startInPlaceEdit(node);
-      return;
-    }
-    // So does an extrude, on the in-place Extrude.
-    if (node?.kind === 'feature' && node.data.featureKind === 'extrude') {
-      startExtrudeEdit(node);
+    if (node?.kind === 'feature' && featureEditsInPlace(node)) {
+      if (armInPlace) {
+        // So does an extrude, on the in-place Extrude.
+        if (node.data.featureKind === 'extrude') startExtrudeEdit(node);
+        else startInPlaceEdit(node);
+      }
       return;
     }
     // F19: an edit card opens already editable. The Inspector's own forms do;
@@ -26451,6 +26451,21 @@ export function App() {
     }
   }
 
+  /**
+   * Opens the readout of a feature an in-place command edits. Its row re-arms
+   * that command instead, and the command's bar under the model is the whole
+   * edit, so the readout has no card while it runs.
+   */
+  function showFeatureMeasurements(feature: FeatureNode) {
+    const current = managerRef.current?.document;
+    if (!current) return;
+    if (moveHasUnappliedChange(movePreview)) {
+      handleSelectFeatureFromTree(feature.id, false);
+      return;
+    }
+    applyHistorySelection(feature.id, current, false);
+  }
+
   function handleFeatureContextMenu(
     at: { clientX: number; clientY: number },
     feature: FeatureNode,
@@ -26466,6 +26481,18 @@ export function App() {
         item: { id: 'edit', label: 'Edit properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
       },
+      ...(featureEditsInPlace(feature)
+        ? [
+            {
+              item: {
+                id: 'measurements',
+                label: 'Measurements',
+                icon: <Ruler size={13} aria-hidden="true" />
+              },
+              run: () => showFeatureMeasurements(feature)
+            }
+          ]
+        : []),
       // The row's hover buttons, in words: the tour sends people here for
       // the row's actions, and a menu that lacked them hid half the row.
       ...(row?.rename
@@ -28478,10 +28505,11 @@ export function App() {
     !modelingLocked &&
     !directMode &&
     movePreview === null &&
-    // A narrow window floats the inspector over the stage: while a feature
-    // it reads out is edited in place, the stage is the edit's handles and
-    // chips, and the readout returns when the edit ends.
-    !(inPlace.editing && narrowWindow) &&
+    // A feature edited in place is edited on the model: its values, Cancel
+    // and Done are in the bar under it, so a card beside it only repeated
+    // them. The readout returns when the edit ends.
+    !inPlace.editing &&
+    extrudeEdit === null &&
     // A pick alone opens no card (the Inspector draws nothing for it), so
     // the shell must not hold a lane for one: an empty inspector float
     // reads as a full-width card on a phone and hides the viewer rail. The
@@ -30517,9 +30545,6 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
-                inPlaceEditFeatureId={
-                  inPlace.editing?.featureId ?? extrudeEdit?.featureId ?? null
-                }
                 onEditSketchInViewport={(feature) => {
                   if (feature.data.featureKind !== 'sketch' || !doc) {
                     return;

@@ -414,7 +414,7 @@ describe('Inspector feature provenance', () => {
       featureSelectionSource: 'pinned',
       onEditModelingFeature
     });
-    const { rerender } = render(<Inspector {...props} />);
+    render(<Inspector {...props} />);
     const inspector = screen.getByRole('region', {
       name: 'Feature inspector'
     });
@@ -427,14 +427,6 @@ describe('Inspector feature provenance', () => {
       within(inspector).getByRole('button', { name: 'Edit fillet' })
     );
     expect(onEditModelingFeature).toHaveBeenCalledWith(feature);
-    // While its in-place command edits it, there is nothing to re-arm.
-    rerender(<Inspector {...props} inPlaceEditFeatureId={feature.featureId} />);
-    expect(screen.getByText('Measurements (last applied)')).toBeVisible();
-    expect(
-      screen.queryByRole('button', { name: 'Edit fillet' })
-    ).not.toBeInTheDocument();
-    // The card says where its values went, rather than only measuring.
-    expect(screen.getByText(/Edit the fillet on the model/)).toBeVisible();
     fireEvent.click(screen.getByLabelText('More actions'));
     expect(
       screen.getByRole('button', { name: /Delete feature/ })
@@ -711,48 +703,6 @@ describe('imported face recognition display', () => {
 
 describe('on-demand mass properties in Inspector', () => {
   const lazyBody = { ...body, massProperties: undefined };
-
-  it('measures the committed body and document during an in-place preview', async () => {
-    const committed = createProjectDocument(
-      'Applied properties',
-      toUserId('mass-ui')
-    );
-    committed.derived.bodyRepresentations[bodyId] = lazyBody;
-    const previewBody = { ...lazyBody, volume: 121 };
-    const preview = {
-      ...committed,
-      derived: {
-        ...committed.derived,
-        bodyRepresentations: { [bodyId]: previewBody }
-      }
-    };
-    const worker = {
-      massProperties: vi.fn().mockResolvedValue({
-        status: 'ready',
-        properties: body.massProperties!,
-        epoch: 1
-      })
-    };
-    render(
-      <Inspector
-        {...makeProps({
-          featureSelectionSource: 'pinned',
-          inPlaceEditFeatureId: feature.featureId,
-          selectedBody: previewBody,
-          document: committed,
-          massPropertiesDocument: preview,
-          massPropertiesWorker: worker
-        })}
-      />
-    );
-    expect(screen.getByText('Measurements (last applied)')).toBeVisible();
-    expect(screen.getByText('120 mm³')).toBeVisible();
-    expect(screen.queryByText('121 mm³')).toBeNull();
-    fireEvent.click(screen.getByText('Mass properties (at unit density)'));
-    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledOnce());
-    expect(worker.massProperties.mock.calls[0]?.[0]).toBe(committed);
-    expect(worker.massProperties.mock.calls[0]?.[1]).toBe(bodyId);
-  });
 
   it('replaces a committed measurement with the matching preview document', async () => {
     const committed = createProjectDocument(

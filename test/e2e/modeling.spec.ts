@@ -19,6 +19,7 @@ import {
   seedUnitlessImportUnits,
   MODEL_ONLY,
   bodyCardFromHistory,
+  featureCardFromHistory,
   clickWorldPoint,
   createShellInPlace,
   enterCommandValue,
@@ -1248,7 +1249,7 @@ test('fillets all twelve edges of a box in one exact feature', { tag: '@ci-smoke
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await fillet.locator('.feature-row-main').click();
+  await featureCardFromHistory(page, fillet);
   await expect(page.locator('.panel-body')).toContainText('volume', {
     ignoreCase: true
   });

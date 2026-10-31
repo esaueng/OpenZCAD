@@ -1234,6 +1234,30 @@ export async function revealModelPanel(
 }
 
 /**
+ * Opens a feature's measurements from its History row. A feature an in-place
+ * command edits re-arms that command when its row is clicked, and the
+ * command's bar is the whole edit, so its readout is the row menu's
+ * Measurements; any other row opens its card directly. Returns the Feature
+ * inspector.
+ */
+export async function featureCardFromHistory(page: Page, row: Locator) {
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await row.scrollIntoViewIfNeeded();
+  await row.hover();
+  await row.getByRole('button', { name: /^More actions for / }).click();
+  const measurements = page.getByRole('menuitem', { name: 'Measurements' });
+  const edit = page.getByRole('menuitem', { name: 'Edit properties' });
+  await expect(edit).toBeVisible();
+  if (await measurements.isVisible()) {
+    await measurements.click();
+  } else {
+    await edit.click();
+  }
+  await expect(inspector).toBeVisible();
+  return inspector;
+}
+
+/**
  * Opens the last-built body's measurements the way a user reads them: from
  * the last live feature's History row (a pick, from the viewport or an
  * Objects row, opens no card). Returns the Feature inspector, whose card
@@ -1248,11 +1272,8 @@ export async function bodyCardFromHistory(page: Page) {
   }
   await revealModelPanel(page, 'History');
   // Sketches build no body; the last live feature row built the body.
-  const rows = page.locator(
-    '.feature-row:not(.consumed):not(.is-sketch) .feature-row-main'
-  );
-  await rows.last().click();
-  await expect(inspector).toBeVisible();
+  const rows = page.locator('.feature-row:not(.consumed):not(.is-sketch)');
+  await featureCardFromHistory(page, rows.last());
   // Reading from History is an explicit request to keep it alongside the
   // form; feature forms otherwise give the model the stage.
   await revealModelPanel(page, 'History');

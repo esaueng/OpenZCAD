@@ -124,8 +124,6 @@ export interface InspectorCallbacks {
    * in-place command that made it.
    */
   onEditModelingFeature?(feature: FeatureNode): void;
-  /** The feature an in-place command is editing now, if any. */
-  inPlaceEditFeatureId?: FeatureId | null;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
   onResizeThroughHole(
     selection: TopologySelection,
@@ -1537,11 +1535,7 @@ export function Inspector(props: InspectorProps) {
       form = null;
       editableFormOpen = false;
     }
-    const editingInPlace =
-      inPlaceTool !== null &&
-      props.inPlaceEditFeatureId === selectedFeature.featureId;
-    const measureLastApplied =
-      editingInPlace || (!objectReadout && editableFormOpen);
+    const measureLastApplied = !objectReadout && editableFormOpen;
     // The viewport may already show a valid uncommitted preview. These
     // readouts promise last-applied values, including on-demand mass queries,
     // so take both the representation and its document from the committed one.
@@ -1599,8 +1593,7 @@ export function Inspector(props: InspectorProps) {
             this only shows when that was refused — exact geometry still
             loading, say — and is the way to retry once it is ready. */}
         {inPlaceTool
-          ? !editingInPlace &&
-            props.onEditModelingFeature && (
+          ? props.onEditModelingFeature && (
               <button
                 type="button"
                 className="secondary feature-edit-launch"
@@ -1620,15 +1613,6 @@ export function Inspector(props: InspectorProps) {
                 Edit {TOOL_META[data.featureKind].label.toLowerCase()}
               </button>
             )}
-        {/* The command's values and Done are in the bar under the model;
-            without this the card read as measurements with no way to edit. */}
-        {editingInPlace && inPlaceTool && (
-          <p className="inspector-edit-hint">
-            Edit the {TOOL_META[inPlaceTool].label.toLowerCase()} on the model:
-            drag a handle or type a value in the bar below.{' '}
-            <kbd>Enter</kbd> applies, <kbd>Esc</kbd> cancels.
-          </p>
-        )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (

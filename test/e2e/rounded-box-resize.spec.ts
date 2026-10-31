@@ -3,7 +3,8 @@ import {
   expect,
   stubApi,
   blendEdgesInPlace,
-  createPrimitiveInPlace
+  createPrimitiveInPlace,
+  featureCardFromHistory
 } from './openzcad-fixtures';
 
 test('resizes a rounded box from its minimum side with exact entry, drag, cancel and undo', async ({
@@ -71,7 +72,10 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
     ).toBeVisible();
   };
   const checkShape = async (depth: number) => {
-    await fillet.click();
+    await featureCardFromHistory(
+      page,
+      page.locator('.feature-row', { has: fillet })
+    );
     await expect(page.locator('.panel-body')).toContainText(
       `40 × ${depth} × 10 mm`
     );
@@ -82,11 +86,10 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
     await expect(
       page.locator('.feature-row-main', { hasText: 'Offset face' })
     ).toHaveCount(0);
-    // The row re-armed the fillet (U09 phase 7), which owns the model's
-    // clicks: leave it before picking a face.
+    // Close the readout before picking a face.
     await page.keyboard.press('Escape');
     await expect(
-      page.getByRole('group', { name: 'Edit Fillet command' })
+      page.getByRole('region', { name: 'Feature inspector' })
     ).toHaveCount(0);
   };
   await checkShape(24);

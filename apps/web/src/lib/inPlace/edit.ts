@@ -184,6 +184,17 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
   }
 }
 
+/**
+ * Whether selecting the feature re-arms an in-place command on it (an
+ * extrude re-arms the in-place Extrude) rather than opening a card.
+ */
+export function featureEditsInPlace(feature: FeatureNode): boolean {
+  return (
+    inPlaceToolForFeature(feature.data) !== null ||
+    feature.data.featureKind === 'extrude'
+  );
+}
+
 function zeroVector(vector: ParametricVector3): boolean {
   return [vector.x, vector.y, vector.z].every(
     (value) => value === 0 || value === '0'
