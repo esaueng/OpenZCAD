@@ -1677,6 +1677,7 @@ import {
 import { usePanelSuspension } from './hooks/usePanelSuspension';
 import { sketchObjectLabels } from './lib/sketch/objectLabels';
 import {
+  commandSuspendsPanels,
   loadPanelState,
   savePanelState,
   type PanelState,
@@ -21405,27 +21406,23 @@ export function App() {
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
-  // Editors and creation commands take the stage. Pinned imported/direct-edit
-  // details are read-only, so inspecting them leaves the panels open. Read
-  // the active command rather than inferring it from the selected feature.
-  const panelFeature = selectedFeatureNode
-    ? doc?.nodes[selectedFeatureNode.id]
-    : null;
+  // Creation commands take the stage; edits of an existing feature leave the
+  // panels open (see `commandSuspendsPanels`). Read the active command rather
+  // than inferring it from the selected feature.
   // Plane selection and the entered sketch belong to one editing session.
   const sketchPanelSession = interaction.mode === 'sketch' || tool === 'sketch';
   const panels = usePanelSuspension(panelState, {
     workspaceMode: resolvedWorkspaceMode,
     sketching: sketchPanelSession,
-    editing:
-      movePreview === null &&
-      (inPlace.active ||
-        extrudeSessionKey !== null ||
-        (tool !== null && tool !== 'transform') ||
-        (featureSelectionSource === 'pinned' &&
-          panelFeature?.kind === 'feature' &&
-          (panelFeature.data.featureKind === 'primitive' ||
-            panelFeature.featureId === inPlaceEditing?.featureId ||
-            panelFeature.featureId === extrudeEditFeatureId))),
+    editing: commandSuspendsPanels({
+      inPlace: { active: inPlace.active, editing: inPlaceEditing !== null },
+      extrude: {
+        active: extrudeSessionKey !== null,
+        editing: extrudeEditFeatureId !== null
+      },
+      tool: { name: tool, editing: modelingEditFeature !== null },
+      moving: movePreview !== null
+    }),
     sessionId: sketchPanelSession
       ? // Acquiring a canonical sketch ID is still the same editing session.
         'active'

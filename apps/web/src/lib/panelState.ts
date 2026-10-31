@@ -325,6 +325,33 @@ export interface PanelSuspension {
 
 export type SuspendablePanel = 'panels' | 'fold';
 
+/**
+ * Whether the running command takes the stage from the model panels.
+ *
+ * Only creating something does. Editing a feature that already exists is
+ * opened from a History or Objects row, and hiding the panel the user just
+ * clicked in lost their place: the card sits beside the dock instead. Move
+ * runs over the docks as a drag does.
+ */
+export function commandSuspendsPanels(command: {
+  /** The in-place command is running; `editing` when on an existing feature. */
+  inPlace: { active: boolean; editing: boolean };
+  /** The in-place Extrude bar is up; `editing` when re-armed from History. */
+  extrude: { active: boolean; editing: boolean };
+  /** A carded creation tool, or a datum card editing an existing datum. */
+  tool: { name: string | null; editing: boolean };
+  moving: boolean;
+}): boolean {
+  if (command.moving) return false;
+  return (
+    (command.inPlace.active && !command.inPlace.editing) ||
+    (command.extrude.active && !command.extrude.editing) ||
+    (command.tool.name !== null &&
+      command.tool.name !== 'transform' &&
+      !command.tool.editing)
+  );
+}
+
 /** What shows, given what the user chose and the mode. */
 export function effectivePanels(
   state: Pick<PanelState, 'commandFoldOpen'>,
