@@ -2662,7 +2662,7 @@ export function StartScreen({
         )}
       </nav>
 
-      <div className="start-body">
+      <div className="start-stage">
         <section
           id="start-shelf-panel"
           className="start-section"
@@ -2835,215 +2835,219 @@ export function StartScreen({
             )}
           </div>
 
-          {shelf === 'deleted' && shelfProjects.length > 0 && (
-            <div className="start-shelf-bar">
-              <span className="start-shelf-hint">
-                Deleted projects are kept for {TRASH_RETENTION_DAYS} days, then
-                destroyed.
-              </span>
-              <button
-                type="button"
-                className="start-shelf-action is-destructive"
-                disabled={busy}
-                onClick={() => onEmptyTrash(shelfProjects)}
+          <div className="start-body">
+            {shelf === 'deleted' && shelfProjects.length > 0 && (
+              <div className="start-shelf-bar">
+                <span className="start-shelf-hint">
+                  Deleted projects are kept for {TRASH_RETENTION_DAYS} days,
+                  then destroyed.
+                </span>
+                <button
+                  type="button"
+                  className="start-shelf-action is-destructive"
+                  disabled={busy}
+                  onClick={() => onEmptyTrash(shelfProjects)}
+                >
+                  <Trash2 size={13} aria-hidden="true" />
+                  Empty trash
+                </button>
+              </div>
+            )}
+
+            {/* The heading and cloud card show refresh progress; announce it once. */}
+            {loading && (
+              <div
+                className="start-loading visually-hidden"
+                role="status"
+                aria-label="Loading library"
               >
-                <Trash2 size={13} aria-hidden="true" />
-                Empty trash
-              </button>
-            </div>
-          )}
-
-          {/* The heading and cloud card show refresh progress; announce it once. */}
-          {loading && (
-            <div
-              className="start-loading visually-hidden"
-              role="status"
-              aria-label="Loading library"
-            >
-              Loading your projects and account…
-            </div>
-          )}
-          {loading && userProjects.length === 0 && (
-            <>
-              {layout === 'list' && (
-                <div className="start-list-head" aria-hidden="true">
-                  <span>Name</span>
-                  <span>Status</span>
-                  <span>Edited</span>
-                  <span>Saves</span>
-                </div>
-              )}
-              {loadingGroups.map((group) => (
-                <Fragment key={group.label ?? 'all'}>
-                  {group.label && (
-                    <h3 className="start-shelf-group" aria-hidden="true">
-                      {group.label}
-                      <span>…</span>
-                    </h3>
-                  )}
-                  <div
-                    className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
-                    aria-hidden="true"
-                  >
-                    {Array.from({ length: group.count }, (_, index) => (
-                      <div
-                        className="start-tile start-tile-placeholder"
-                        key={index}
-                      >
-                        <div className="start-tile-open">
-                          <span className="start-tile-thumb" />
-                          {/* The real tile's text rows also own list sizing. */}
-                          <span className="start-tile-body">
-                            <strong className="start-tile-name">&nbsp;</strong>
-                            <small className="start-tile-meta">
-                              <span className="start-tile-when">
-                                <time>&nbsp;</time>
-                              </span>
-                              {layout === 'list' && (
-                                <span className="start-tile-rev">&nbsp;</span>
-                              )}
-                            </small>
-                          </span>
-                          <span className="start-tile-flags" />
-                        </div>
-                        {/* Only a row grows by its copies line; a card
-                            keeps its count in the corner. */}
-                        {layout === 'list' &&
-                          previousLayout?.footers.includes(
-                            group.offset + index
-                          ) && <div className="start-tile-copies" />}
-                      </div>
-                    ))}
+                Loading your projects and account…
+              </div>
+            )}
+            {loading && userProjects.length === 0 && (
+              <>
+                {layout === 'list' && (
+                  <div className="start-list-head" aria-hidden="true">
+                    <span>Name</span>
+                    <span>Status</span>
+                    <span>Edited</span>
+                    <span>Saves</span>
                   </div>
-                </Fragment>
-              ))}
-            </>
-          )}
-
-          {notice && (
-            <p className="start-folder-notice" role="status">
-              {notice}
-            </p>
-          )}
-
-          {openFolder && !loading && baseProjects.length === 0 && (
-            <div className="start-empty start-folder-empty" role="status">
-              <FolderOpen size={28} aria-hidden="true" />
-              <strong>This folder is empty</strong>
-              <span>
-                Drag projects onto it on the shelf, or select projects and use
-                Move to.
-              </span>
-            </div>
-          )}
-
-          {items.length > 0 && (
-            <>
-              {layout === 'list' && (
-                <div className="start-list-head" aria-hidden="true">
-                  <span>Name</span>
-                  <span>Status</span>
-                  <span>Edited</span>
-                  <span>Saves</span>
-                </div>
-              )}
-              {shelfGroups.map((group) =>
-                // An empty group only shows as a drop target mid-drag.
-                group.items.length === 0 && !reorder.draggingId ? null : (
+                )}
+                {loadingGroups.map((group) => (
                   <Fragment key={group.label ?? 'all'}>
                     {group.label && (
-                      <h3 className="start-shelf-group">
+                      <h3 className="start-shelf-group" aria-hidden="true">
                         {group.label}
-                        <span>{group.items.length}</span>
+                        <span>…</span>
                       </h3>
                     )}
                     <div
-                      className={
-                        layout === 'list'
-                          ? 'start-tile-grid is-list'
-                          : `start-tile-grid is-${cardSize}`
-                      }
-                      data-tile-group={canReorder ? group.group : undefined}
+                      className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
+                      aria-hidden="true"
                     >
-                      {group.items.map((item) =>
-                        item.folder
-                          ? renderFolderTile(item.folder)
-                          : renderProjectTile(item.project!)
-                      )}
-                      {group.items.length === 0 && (
-                        <p className="start-drop-zone">
-                          {group.group === 'pinned'
-                            ? 'Drop here to pin'
-                            : 'Drop here to unpin'}
-                        </p>
-                      )}
+                      {Array.from({ length: group.count }, (_, index) => (
+                        <div
+                          className="start-tile start-tile-placeholder"
+                          key={index}
+                        >
+                          <div className="start-tile-open">
+                            <span className="start-tile-thumb" />
+                            {/* The real tile's text rows also own list sizing. */}
+                            <span className="start-tile-body">
+                              <strong className="start-tile-name">
+                                &nbsp;
+                              </strong>
+                              <small className="start-tile-meta">
+                                <span className="start-tile-when">
+                                  <time>&nbsp;</time>
+                                </span>
+                                {layout === 'list' && (
+                                  <span className="start-tile-rev">&nbsp;</span>
+                                )}
+                              </small>
+                            </span>
+                            <span className="start-tile-flags" />
+                          </div>
+                          {/* Only a row grows by its copies line; a card
+                              keeps its count in the corner. */}
+                          {layout === 'list' &&
+                            previousLayout?.footers.includes(
+                              group.offset + index
+                            ) && <div className="start-tile-copies" />}
+                        </div>
+                      ))}
                     </div>
                   </Fragment>
-                )
-              )}
-            </>
-          )}
+                ))}
+              </>
+            )}
 
-          {!loading &&
-            !search &&
-            activeFilter !== 'all' &&
-            shelfProjects.length > 0 &&
-            matchingProjects.length === 0 && (
-              <p className="start-no-matches" role="status">
-                No projects here right now.
-                <button type="button" onClick={() => setFilter('all')}>
-                  Show all projects
-                </button>
+            {notice && (
+              <p className="start-folder-notice" role="status">
+                {notice}
               </p>
             )}
 
-          {!loading && shelfProjects.length === 0 && (
-            <div className="start-empty" role="status">
-              <span className="start-empty-mark" aria-hidden="true">
-                <BrandMark />
-              </span>
-              {shelf === 'active' && partsElsewhere ? (
-                <>
-                  <strong>No projects on this shelf</strong>
-                  <span>{`All your projects are in ${partsElsewhere}.`}</span>
-                </>
-              ) : shelf === 'active' ? (
-                <>
-                  <strong>No projects yet</strong>
-                  <span>
-                    Name one and press New project, or open a demo to see a
-                    project walk through its revisions.
-                  </span>
-                </>
-              ) : shelf === 'archived' ? (
-                <>
-                  <strong>Nothing archived.</strong>
-                  <span>
-                    Archive a project to keep it without it crowding the grid.
-                  </span>
-                </>
-              ) : (
-                <>
-                  <strong>Nothing in the trash.</strong>
-                  <span>
-                    Deleted projects wait here for {TRASH_RETENTION_DAYS} days
-                    before they are destroyed.
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-
-          {search &&
-            shelfProjects.length > 0 &&
-            matchingProjects.length === 0 && (
-              <p className="start-no-matches" role="status">
-                No projects match “{query.trim()}”.
-                <button type="button" onClick={() => setQuery('')}>
-                  Clear search
-                </button>
-              </p>
+            {openFolder && !loading && baseProjects.length === 0 && (
+              <div className="start-empty start-folder-empty" role="status">
+                <FolderOpen size={28} aria-hidden="true" />
+                <strong>This folder is empty</strong>
+                <span>
+                  Drag projects onto it on the shelf, or select projects and use
+                  Move to.
+                </span>
+              </div>
             )}
+
+            {items.length > 0 && (
+              <>
+                {layout === 'list' && (
+                  <div className="start-list-head" aria-hidden="true">
+                    <span>Name</span>
+                    <span>Status</span>
+                    <span>Edited</span>
+                    <span>Saves</span>
+                  </div>
+                )}
+                {shelfGroups.map((group) =>
+                  // An empty group only shows as a drop target mid-drag.
+                  group.items.length === 0 && !reorder.draggingId ? null : (
+                    <Fragment key={group.label ?? 'all'}>
+                      {group.label && (
+                        <h3 className="start-shelf-group">
+                          {group.label}
+                          <span>{group.items.length}</span>
+                        </h3>
+                      )}
+                      <div
+                        className={
+                          layout === 'list'
+                            ? 'start-tile-grid is-list'
+                            : `start-tile-grid is-${cardSize}`
+                        }
+                        data-tile-group={canReorder ? group.group : undefined}
+                      >
+                        {group.items.map((item) =>
+                          item.folder
+                            ? renderFolderTile(item.folder)
+                            : renderProjectTile(item.project!)
+                        )}
+                        {group.items.length === 0 && (
+                          <p className="start-drop-zone">
+                            {group.group === 'pinned'
+                              ? 'Drop here to pin'
+                              : 'Drop here to unpin'}
+                          </p>
+                        )}
+                      </div>
+                    </Fragment>
+                  )
+                )}
+              </>
+            )}
+
+            {!loading &&
+              !search &&
+              activeFilter !== 'all' &&
+              shelfProjects.length > 0 &&
+              matchingProjects.length === 0 && (
+                <p className="start-no-matches" role="status">
+                  No projects here right now.
+                  <button type="button" onClick={() => setFilter('all')}>
+                    Show all projects
+                  </button>
+                </p>
+              )}
+
+            {!loading && shelfProjects.length === 0 && (
+              <div className="start-empty" role="status">
+                <span className="start-empty-mark" aria-hidden="true">
+                  <BrandMark />
+                </span>
+                {shelf === 'active' && partsElsewhere ? (
+                  <>
+                    <strong>No projects on this shelf</strong>
+                    <span>{`All your projects are in ${partsElsewhere}.`}</span>
+                  </>
+                ) : shelf === 'active' ? (
+                  <>
+                    <strong>No projects yet</strong>
+                    <span>
+                      Name one and press New project, or open a demo to see a
+                      project walk through its revisions.
+                    </span>
+                  </>
+                ) : shelf === 'archived' ? (
+                  <>
+                    <strong>Nothing archived.</strong>
+                    <span>
+                      Archive a project to keep it without it crowding the grid.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <strong>Nothing in the trash.</strong>
+                    <span>
+                      Deleted projects wait here for {TRASH_RETENTION_DAYS} days
+                      before they are destroyed.
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {search &&
+              shelfProjects.length > 0 &&
+              matchingProjects.length === 0 && (
+                <p className="start-no-matches" role="status">
+                  No projects match “{query.trim()}”.
+                  <button type="button" onClick={() => setQuery('')}>
+                    Clear search
+                  </button>
+                </p>
+              )}
+          </div>
         </section>
         {selecting && (
           <LibrarySelectionBar

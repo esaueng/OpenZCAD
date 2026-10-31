@@ -88,19 +88,19 @@ describe('start screen shelf line and Settings', () => {
     'utf8'
   ).replace(/\/\*[\s\S]*?\*\//g, '');
 
-  it('pins the line in the column layout and keeps Settings above it', () => {
-    const pinned = /\.start-toolbar\s*\{([^}]*position:\s*sticky[^}]*)\}/.exec(
-      css
+  it('keeps the head separate from a bounded scrolling shelf', () => {
+    // A sticky head bounced independently of page-anchored Settings on macOS.
+    // The section now owns a fixed head row and a shrinkable scrolling body.
+    expect(rule(css, '.start-stage')).toMatch(/grid-area:\s*body/);
+    expect(rule(css, '.start-section')).toMatch(
+      /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)/
     );
-    expect(pinned).not.toBeNull();
-    const declarations = pinned![1]!;
-    expect(declarations).toMatch(/top:\s*0/);
-    expect(declarations).toMatch(/background:/);
-    const lineLayer = Number(/z-index:\s*(\d+)/.exec(declarations)![1]);
-    const slotLayer = Number(
-      /z-index:\s*(\d+)/.exec(rule(slot, '.corner-slot'))![1]
-    );
-    expect(slotLayer).toBeGreaterThan(lineLayer);
+    const body = rule(css, '.start-body');
+    expect(body).toMatch(/min-height:\s*0/);
+    expect(body).toMatch(/overflow-y:\s*auto/);
+    expect(body).toMatch(/overflow-x:\s*hidden/);
+    // Preview mounts must not undo wheel scrolling or reload restoration.
+    expect(body).toMatch(/overflow-anchor:\s*none/);
   });
 
   it('ends Settings where the line and cards end, past any scrollbar', () => {
