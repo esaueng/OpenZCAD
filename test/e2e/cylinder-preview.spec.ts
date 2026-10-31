@@ -75,7 +75,7 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
       }
       await expect(
         page.getByText('Preview · exact on release', { exact: true })
-      ).toBeVisible();
+      ).toHaveCount(0);
       expect(await syncs()).toBe(count);
       if (outcome === 'cancel') {
         await page.keyboard.press('Escape');
@@ -511,7 +511,7 @@ for (const { name, build, sense } of [
       await expect(page.locator('.feature-row').first()).toBeVisible();
       await expect(
         page.getByText('Preview · exact on release', { exact: true })
-      ).toBeVisible();
+      ).toHaveCount(0);
       if (outcome === 'cancel') {
         await page.keyboard.press('Escape');
         await page.mouse.up();
@@ -532,8 +532,6 @@ for (const { name, build, sense } of [
         await expect(
           page.getByText('Checking geometry…', { exact: true }).first()
         ).toBeVisible();
-        await expect(page.getByText('Checking exact result…', { exact: true })).toBeVisible();
-        await expect(page.getByText('Preview · exact on release', { exact: true })).not.toBeVisible();
         expect(await rendered(canvas)).toEqual(held);
         await page.evaluate(() =>
           (

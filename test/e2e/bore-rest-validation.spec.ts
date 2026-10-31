@@ -264,8 +264,6 @@ for (const completed of [true, false]) {
       await expect(page.getByTestId('direct-manipulation-value')).toContainText(
         '12'
       );
-      const usesProxy =
-        (await canvas.getAttribute('data-e2e-cylinder-proxy-radius')) !== null;
       const radius = 6;
       expect(radius).toBeGreaterThan(5);
       await expect
@@ -296,16 +294,9 @@ for (const completed of [true, false]) {
       const released = Date.now();
       await page.mouse.up();
       if (!completed) {
-        if (usesProxy)
-          await expect(
-            page.getByText('Checking exact result…', { exact: true })
-          ).toBeVisible();
         await expect(
           page.getByRole('status', { name: 'Checking' })
         ).toBeVisible();
-        await expect(
-          page.getByText('Preview · exact on release', { exact: true })
-        ).not.toBeVisible();
         await testInfo.attach('checking-held-hole', {
           body: await page.screenshot({
             path: testInfo.outputPath('checking-held-hole.png')

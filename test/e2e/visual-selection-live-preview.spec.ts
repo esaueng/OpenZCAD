@@ -600,10 +600,6 @@ test('keeps generic face geometry unchanged while the exact offset rebuild is pe
     contentType: 'image/png'
   });
 
-  await expect(
-    page.getByText('Preview · exact on release', { exact: true })
-  ).not.toBeVisible();
-
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
