@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Check,
   Copy,
-  KeyRound,
-  Lock,
   Settings as SettingsIcon,
   ShieldAlert
 } from 'lucide-react';
@@ -111,6 +109,47 @@ function presentationOf(
   }
 }
 
+type Shackle = 'open' | 'closed' | 'keyhole';
+
+/** Shut once a version is verified; open while nothing vouches for it yet. */
+function shackleOf(state: EncryptionStatusState): Shackle {
+  switch (state) {
+    case 'verified':
+      return 'closed';
+    case 'locked':
+      return 'keyhole';
+    default:
+      return 'open';
+  }
+}
+
+/**
+ * Lucide's lock, drawn here so one shape can change state: the shackle
+ * swings open about its right leg and back, and the keyhole fades in while
+ * this device's keys are locked.
+ */
+function Padlock({ size, shackle }: { size: number; shackle: Shackle }) {
+  return (
+    <svg
+      className={`padlock is-${shackle}`}
+      data-shackle={shackle}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path className="padlock-shackle" d="M7 11V7a5 5 0 0 1 10 0v4" />
+      <circle className="padlock-keyhole" cx="12" cy="16" r="1" />
+    </svg>
+  );
+}
+
 /**
  * The editor's at-a-glance encryption status for an end-to-end encrypted
  * project (ADR-024 Phase 4): a lock beside the project name that opens a
@@ -164,8 +203,12 @@ export function EncryptionIndicator({
     };
   }, []);
 
-  const Icon =
-    state === 'locked' ? KeyRound : state === 'problem' ? ShieldAlert : Lock;
+  const icon = (size: number) =>
+    state === 'problem' ? (
+      <ShieldAlert size={size} aria-hidden="true" />
+    ) : (
+      <Padlock size={size} shackle={shackleOf(state)} />
+    );
 
   return (
     <details
@@ -184,12 +227,12 @@ export function EncryptionIndicator({
         aria-label={presentation.name}
         title={presentation.name}
       >
-        <Icon size={13} aria-hidden="true" />
+        {icon(13)}
       </summary>
       <div className="topbar-menu-panel encryption-menu-panel">
         <div className="encryption-menu-head">
           <span className="encryption-menu-icon" aria-hidden="true">
-            <Icon size={14} />
+            {icon(14)}
           </span>
           <strong className="encryption-menu-title">{ENCRYPTED_LABEL}</strong>
           <span className="encryption-menu-status">{presentation.status}</span>

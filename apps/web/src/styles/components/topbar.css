@@ -200,6 +200,33 @@
   color: var(--color-error);
 }
 
+/* The indicator's padlock. Unlocked, the shackle lifts and flips about its
+   right leg, which reads as a swivel when it changes; it shuts once a
+   version is verified. The keyhole shows while this device's keys are
+   locked. */
+.padlock {
+  overflow: visible;
+}
+
+.padlock-shackle {
+  transform-box: view-box;
+  transform-origin: 17px 11px;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.padlock.is-open .padlock-shackle {
+  transform: translateY(-2px) scaleX(-1);
+}
+
+.padlock-keyhole {
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.padlock.is-keyhole .padlock-keyhole {
+  opacity: 1;
+}
+
 /* Drops from the left-hand island, so it opens rightwards. The state
    colour set on the menu carries into the panel's icon and status word. */
 .encryption-menu {

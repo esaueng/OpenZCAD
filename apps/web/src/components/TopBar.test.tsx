@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthSession } from '@openzcad/shared';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
@@ -537,6 +537,23 @@ describe('TopBar encryption indicator', () => {
     expect(
       await screen.findByRole('button', { name: 'Copied project state code' })
     ).toBeVisible();
+  });
+
+  it('shuts the padlock only once a version is verified', () => {
+    const shackle = (status: EncryptionIndicatorProps['status']) => {
+      renderTopBar({ encryption: indicator(status) });
+      const lock = document.querySelector('.encryption-indicator');
+      const value =
+        lock?.querySelector('[data-shackle]')?.getAttribute('data-shackle') ??
+        null;
+      cleanup();
+      return value;
+    };
+    expect(shackle({ state: 'verified' })).toBe('closed');
+    expect(shackle({ state: 'unverified' })).toBe('open');
+    expect(shackle({ state: 'warning' })).toBe('open');
+    expect(shackle({ state: 'locked' })).toBe('keyhole');
+    expect(shackle({ state: 'problem', problem: 'Bad head.' })).toBeNull();
   });
 
   it('closes on Escape and hands focus back to the lock', () => {
