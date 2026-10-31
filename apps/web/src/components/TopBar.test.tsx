@@ -4,6 +4,7 @@ import type { AuthSession } from '@openzcad/shared';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { TopBar } from './TopBar';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
+import { WORKSPACE_MODE_OPTIONS } from '../lib/topBarPresentation';
 
 function renderTopBar(
   options: {
@@ -22,6 +23,7 @@ function renderTopBar(
     exportUnavailableReason?: string | null;
     projectName?: string;
     encryption?: EncryptionIndicatorProps | null;
+    buildModeDisabledReason?: string;
   } = {}
 ) {
   const handlers = {
@@ -32,7 +34,8 @@ function renderTopBar(
     onImportFiles: vi.fn(),
     onOpenMeshExport: vi.fn(),
     onRenameProject: vi.fn(),
-    onReviewEditFailure: vi.fn()
+    onReviewEditFailure: vi.fn(),
+    onWorkspaceMode: vi.fn()
   };
   render(
     <TopBar
@@ -63,9 +66,8 @@ function renderTopBar(
       projectSharingEnabled
       workspaceMode="build"
       canRenameProject
-      buildModeDisabledReason={null}
+      buildModeDisabledReason={options.buildModeDisabledReason ?? null}
       tweakModeDisabledReason={null}
-      onWorkspaceMode={vi.fn()}
       onExportStep={vi.fn()}
       onArchiveLocalSources={vi.fn()}
       onExportDiagnostics={vi.fn()}
@@ -78,6 +80,49 @@ function renderTopBar(
   );
   return handlers;
 }
+
+describe('TopBar workspace mode help', () => {
+  it.each(WORKSPACE_MODE_OPTIONS)(
+    'explains $label on keyboard focus without changing mode',
+    ({ label, hint, mode }) => {
+      const { onWorkspaceMode } = renderTopBar();
+      const button = screen.getByRole('button', { name: label });
+      expect(button).not.toHaveAttribute('title');
+      expect(button).toHaveAttribute('aria-pressed', String(mode === 'build'));
+
+      fireEvent.focus(button);
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveTextContent(hint);
+      expect(button).toHaveAttribute('aria-describedby', tooltip.id);
+      expect(onWorkspaceMode).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(button, { key: 'Escape' });
+      expect(screen.queryByRole('tooltip')).toBeNull();
+      fireEvent.click(button);
+      expect(onWorkspaceMode).toHaveBeenCalledWith(mode);
+    }
+  );
+
+  it('explains a mode on hover and hides the help when the pointer leaves', async () => {
+    renderTopBar();
+    const button = screen.getByRole('button', { name: 'Draw' });
+    fireEvent.pointerEnter(button);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'The model stays read-only.'
+    );
+    fireEvent.pointerLeave(button);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('keeps unavailable modes disabled with their reason', () => {
+    renderTopBar({
+      buildModeDisabledReason: 'This shared model is read-only.'
+    });
+    const button = screen.getByRole('button', { name: 'Build' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', 'This shared model is read-only.');
+  });
+});
 
 describe('TopBar save chip', () => {
   it.each(['synced', 'local'] as const)(

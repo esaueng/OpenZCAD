@@ -10489,22 +10489,14 @@ export function App() {
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
       closeFeaturePanel();
-      // The lane says where the user now is; the activity log is for what
-      // happened to the model, and a mode switch is neither.
-      setStatus(
-        mode === 'view'
-          ? 'View mode · the model is read-only here.'
-          : mode === 'drawing'
-            ? 'Draw mode · lay out drawing sheets; the model is read-only here.'
-            : 'Tweak mode · adjust parameters; the design stays locked.',
-        { unlogged: true }
-      );
     } else {
       // The tape survives the trip — leaving to make an edit and coming back
       // should not cost the figures you just took — but recording stops.
       setMeasuring(false);
-      setStatus('Build mode · modeling tools are back.', { unlogged: true });
     }
+    // The selected control identifies the workspace; its tooltip explains it.
+    // The old workspace's prompt is over, even if it was just set or sticky.
+    setStatusEntry((current) => ({ ...current, at: 0, sticky: false }));
     setWorkspaceMode(mode);
   }
 

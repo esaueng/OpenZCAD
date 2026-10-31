@@ -38,7 +38,7 @@ export const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
     // A verb like its neighbours, and no wider than them: the segments are
     // equal, so the longest label sets the whole switch's width.
     label: 'Draw',
-    hint: 'Lay out drawing sheets of the model and export them as PDF or SVG.',
+    hint: 'Lay out drawing sheets and export PDF or SVG. The model stays read-only.',
     Icon: DraftingCompass
   }
 ];

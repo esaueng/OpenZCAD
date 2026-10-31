@@ -53,6 +53,17 @@
   text-overflow: ellipsis;
 }
 
+.tooltip[data-multiline] {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.tooltip[data-multiline] .tooltip-description {
+  flex-basis: 100%;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 @keyframes tooltip-in {
   from {
     opacity: 0;
