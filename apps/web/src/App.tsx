@@ -4656,10 +4656,24 @@ export function App() {
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       setLastValidPreview(null);
-      dispatchInteraction({ type: 'commit-complete' });
-      setSelectedTopology({ bodyId, kind: 'body' });
       setSelectedEdges([]);
-      setSelectedBodyIds([bodyId]);
+      if (
+        pending?.interaction.mode === 'face' &&
+        pending.interaction.op === 'offset-face'
+      ) {
+        // Finish on the moved face directly. A temporary body selection can
+        // repaint the entire part and arm unrelated controls; if the face
+        // cannot be proved, end neutrally rather than selecting a guess.
+        if (!reselectOffsetFace(pending.interaction.target, pending.value)) {
+          dispatchInteraction({ type: 'commit-complete' });
+          setSelectedTopology(null);
+          setSelectedBodyIds([]);
+        }
+      } else {
+        dispatchInteraction({ type: 'commit-complete' });
+        setSelectedTopology({ bodyId, kind: 'body' });
+        setSelectedBodyIds([bodyId]);
+      }
       inferFeatureNodeFor(bodyId);
     },
     onBusy: setBusy,
@@ -24436,21 +24450,18 @@ export function App() {
         : null;
     offsetPreview.stop();
     offsetPreviewValueRef.current = null;
-    const target = current.target;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
       reuse ? reuse.successMessage : plan.successMessage,
       offset,
-      // The moved face stays the selection, armed for the next drag, rather
-      // than handing over to a whole-body selection that recolours the part.
-      () => reselectOffsetFace(target, offset),
+      undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
     );
     return true;
   }
 
-  function reselectOffsetFace(target: FaceTarget, offset: number) {
+  function reselectOffsetFace(target: FaceTarget, offset: number): boolean {
     // An extrude cap or a box side edits a total length, whose handle does
     // not restart from zero on the moved face, unless the card was switched
     // to a local Offset Face.
@@ -24458,7 +24469,7 @@ export function App() {
       !target.localFaceOffset &&
       (target.extrudeFeatureId || target.resizeBodyFeatureId)
     )
-      return;
+      return false;
     const bodyId = target.bodyId as BodyId;
     const faces =
       managerRef.current?.document.derived.bodyRepresentations[bodyId]?.topology
@@ -24481,7 +24492,7 @@ export function App() {
           offset
         )
       : null;
-    if (!moved?.geometry) return;
+    if (!moved?.geometry) return false;
     const { reference: _staleReference, ...stableTarget } = target;
     const shift = (value: [number, number, number]) =>
       value.map(
@@ -24508,6 +24519,7 @@ export function App() {
     });
     setSelectedBodyIds([bodyId]);
     dispatchInteraction({ type: 'select-face', target: nextTarget });
+    return true;
   }
 
   function handleResizeThroughHole(
