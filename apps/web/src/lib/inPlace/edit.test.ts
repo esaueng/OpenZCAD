@@ -339,6 +339,47 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toEqual(['hand', 'mateTeeth', 'diameterFactor']);
   });
 
+  it('gear: a throated wheel keeps its throat until made plain', () => {
+    const wheel: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'worm-wheel',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 30,
+      mateTeeth: 2,
+      diameterFactor: 10,
+      throated: true,
+      outsideDiameter: 65,
+      faceWidth: 12,
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    };
+    const node = feature(wheel, 'body_w' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.seed.options).toMatchObject({
+      gearType: 'worm-wheel',
+      throat: 'throated'
+    });
+    const request = untouched(node)!;
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    expect(request.gear).toMatchObject({
+      throated: true,
+      outsideDiameter: 65
+    });
+    const saved = { featureId: node.featureId, name: node.name, data: wheel };
+    expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+      'clearData'
+    );
+    const {
+      throated: _throated,
+      outsideDiameter: _outside,
+      ...plain
+    } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(saved, { tool: 'gear', gear: plain })?.clearData
+    ).toEqual(['throated', 'outsideDiameter']);
+  });
+
   it('gear: a bevel gear keeps its mate and shaft angle, and drops them as a spur', () => {
     const data: FeatureData = {
       featureKind: 'gear',

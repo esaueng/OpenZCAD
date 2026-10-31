@@ -314,6 +314,62 @@ describe('face tools build the card state', () => {
     expect(chips).toEqual(['starts', 'module']);
   });
 
+  it('gear: a throated wheel sends its throat and outside diameter', () => {
+    const spec = IN_PLACE_TOOL_SPECS.gear;
+    const slots: InPlaceSlots = {
+      ...EMPTY,
+      plane: {
+        kind: 'principal',
+        plane: 'XY',
+        origin: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 }
+      }
+    };
+    const values = {
+      teeth: 30,
+      module: 2,
+      faceWidth: 12,
+      starts: 2,
+      diameterFactor: 10,
+      outsideDiameter: 65
+    };
+    const options = {
+      gearType: 'worm-wheel',
+      sizing: 'module',
+      throat: 'throated'
+    };
+    const throated = spec.request(slots, values, options, CTX, {
+      outsideDiameter: 65
+    });
+    expect(throated).toMatchObject({
+      tool: 'gear',
+      gear: { gearType: 'worm-wheel', throated: true, outsideDiameter: 65 }
+    });
+    // 0 leaves the outside diameter to the kernel default.
+    const byDefault = spec.request(
+      slots,
+      { ...values, outsideDiameter: 0 },
+      options,
+      CTX,
+      { outsideDiameter: 0 }
+    );
+    const gear = byDefault?.tool === 'gear' ? byDefault.gear : null;
+    expect(gear).toMatchObject({ throated: true });
+    expect(gear).not.toHaveProperty('outsideDiameter');
+    // A plain wheel, and a worm, take neither.
+    for (const other of [
+      { ...options, throat: 'plain' },
+      { ...options, gearType: 'worm' }
+    ]) {
+      const request = spec.request(slots, values, other, CTX, {
+        outsideDiameter: 65
+      });
+      const plain = request?.tool === 'gear' ? request.gear : null;
+      expect(plain).not.toHaveProperty('throated');
+      expect(plain).not.toHaveProperty('outsideDiameter');
+    }
+  });
+
   it('gear: a bevel gear sends its mate and drops spur-only fields', () => {
     const spec = IN_PLACE_TOOL_SPECS.gear;
     const slots: InPlaceSlots = {

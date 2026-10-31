@@ -198,13 +198,40 @@ describe('gear command validation', () => {
     expect(() => commandFactories.gearBody(worm).validate(document)).toThrow();
   });
 
+  it('accepts a throated worm wheel, which needs the v43 schema', () => {
+    const wheel: GearInput = {
+      ...valid,
+      gearType: 'worm-wheel',
+      teeth: 30,
+      mateTeeth: 2,
+      diameterFactor: 10,
+      throated: true,
+      outsideDiameter: 66
+    };
+    expect(() =>
+      commandFactories.gearBody(wheel).validate(document)
+    ).not.toThrow();
+    expect(() =>
+      commandFactories
+        .gearBody({ ...wheel, outsideDiameter: undefined })
+        .validate(document)
+    ).not.toThrow();
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(43);
+  });
+
   it.each([
     ['worm wheel without its worm', { mateTeeth: undefined }],
     ['worm wheel for 11 starts', { mateTeeth: 11 }],
     ['worm wheel of 2 teeth', { teeth: 2 }],
     ['worm wheel steeper than 45°', { mateTeeth: 4, diameterFactor: 3 }],
     ['worm wheel helix angle', { helixAngleDeg: 10 }],
-    ['worm wheel on a body', { fit: 'module' as const }]
+    ['worm wheel on a body', { fit: 'module' as const }],
+    ['worm wheel outside diameter unthroated', { outsideDiameter: 66 }],
+    [
+      'throated worm wheel of zero outside diameter',
+      { throated: true, outsideDiameter: 0 }
+    ],
+    ['worm wheel throated by a string', { throated: 'yes' as never }]
   ])('refuses a %s', (_label, overrides) => {
     const wheel: GearInput = {
       ...valid,
@@ -240,7 +267,9 @@ describe('gear command validation', () => {
     ['fit on a new body', { fit: 'module' as const }],
     ['mate teeth off a bevel gear', { mateTeeth: 40 }],
     ['shaft angle off a bevel gear', { shaftAngleDeg: 90 }],
-    ['diameter factor off a worm gear', { diameterFactor: 10 }]
+    ['diameter factor off a worm gear', { diameterFactor: 10 }],
+    ['throated spur gear', { throated: true }],
+    ['outside diameter off a worm wheel', { outsideDiameter: 50 }]
   ])('refuses %s', (_label, overrides) => {
     expect(() =>
       commandFactories.gearBody({ ...valid, ...overrides }).validate(document)
@@ -392,6 +421,82 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
     ]) {
       expect(names).toContain(name);
     }
+  });
+
+  it('builds a throated worm wheel whose tips wrap the worm', async () => {
+    const throated = newGear({
+      gearType: 'worm-wheel',
+      teeth: 30,
+      mateTeeth: 2,
+      diameterFactor: 10,
+      faceWidth: 12,
+      hand: 'left',
+      boreDiameter: 12,
+      throated: true,
+      outsideDiameter: 65
+    });
+    const derived = await adapter.syncDocument(throated.document);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.featureWarnings ?? []).toEqual([]);
+    const body = derived.bodyRepresentations[throated.bodyId]!;
+    // m_x 2, q 10: centre distance 40 and tip diameter 64. Half a module
+    // past the tips keeps them wide enough; the kernel's default of a whole
+    // module thins them to an advisory on this wheel.
+    const box = body.bbox;
+    expect(box.min.z).toBeCloseTo(0, 9);
+    expect(box.max.z).toBeCloseTo(12, 9);
+    expect(Math.abs(box.max.x - box.min.x - 65)).toBeLessThan(0.1);
+    // Tips past the plain wheel's beside the throat, short of them across
+    // it: between the root cylinder and the outside cylinder, less the bore.
+    const bore = Math.PI * 36 * 12;
+    expect(body.volume).toBeGreaterThan(Math.PI * 27.5 ** 2 * 12 - bore);
+    expect(body.volume).toBeLessThan(Math.PI * 32.5 ** 2 * 12 - bore);
+    const names = body.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    for (const name of [
+      'gear.face.tooth[0].throat',
+      'gear.face.tooth[0].tip.start-half',
+      'gear.face.tooth[0].tip.end-half',
+      'gear.face.tooth[29].throat'
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(new Set(names).size).toBe(names.length);
+    const plain = newGear({
+      gearType: 'worm-wheel',
+      teeth: 30,
+      mateTeeth: 2,
+      diameterFactor: 10,
+      faceWidth: 12,
+      hand: 'left',
+      boreDiameter: 12
+    });
+    const plainNames = (
+      await adapter.syncDocument(plain.document)
+    ).bodyRepresentations[plain.bodyId]!.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    expect(plainNames.some((name) => name?.endsWith('.throat'))).toBe(false);
+  });
+
+  it('refuses a throated worm wheel whose outside diameter is below its tips', async () => {
+    const derived = await adapter.syncDocument(
+      newGear({
+        gearType: 'worm-wheel',
+        teeth: 30,
+        mateTeeth: 2,
+        diameterFactor: 10,
+        faceWidth: 12,
+        throated: true,
+        outsideDiameter: 63
+      }).document
+    );
+    const refusal = derived.featureWarnings!.find(
+      (warning) => warning.kind === 'build-failed'
+    );
+    expect(refusal?.kernelRefusal).toMatchObject({ family: 'gear' });
+    expect(refusal?.message).toMatch(/Throated worm wheel/);
   });
 
   it('refuses a worm whose bore reaches its root', async () => {

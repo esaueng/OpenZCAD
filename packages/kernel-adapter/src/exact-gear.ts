@@ -418,8 +418,9 @@ function buildBevelGearBody(
  * A worm, or the helical wheel that meshes with one: the first cap on
  * `origin`, along `axis`. A worm's `teeth` are its starts and its `pitch` the
  * axial module; a wheel carries its worm's starts as `mateTeeth` and takes
- * the worm's module, so its transverse module is that module. Neither has a
- * profile shift; the command validation refuses one.
+ * the worm's module, so its transverse module is that module. A throated
+ * wheel's tips follow the worm's clearance torus across the throat. Neither
+ * has a profile shift; the command validation refuses one.
  */
 function buildWormGearBody(
   ctx: FeatureBuildContext,
@@ -454,6 +455,11 @@ function buildWormGearBody(
     starts,
     diameterFactor: values.resolve(data.diameterFactor, 'diameter factor'),
     ...(worm ? { length: width } : { teeth, faceWidth: width }),
+    ...(data.throated ? { throated: true } : {}),
+    ...withNumber(
+      'outsideDiameter',
+      values.optional(data.outsideDiameter, 'outside diameter')
+    ),
     ...form,
     ...(data.hand ? { hand: data.hand } : {}),
     origin: values.vector(data.origin, 'origin'),
@@ -464,7 +470,11 @@ function buildWormGearBody(
       values.optional(data.boreDiameter, 'bore diameter')
     )
   };
-  const label = worm ? 'Worm' : 'Worm wheel';
+  const label = worm
+    ? 'Worm'
+    : data.throated
+      ? 'Throated worm wheel'
+      : 'Worm wheel';
   const generator = wormGearKernel(kernel);
   const { solid, details } = unwrap(
     worm

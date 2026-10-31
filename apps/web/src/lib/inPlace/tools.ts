@@ -1782,6 +1782,21 @@ const GEAR_HELIX_OPTION: OptionSpec = {
   initial: 'single'
 };
 
+/** A worm wheel's blank; read only on a worm wheel. */
+const GEAR_THROAT_OPTION: OptionSpec = {
+  id: 'throat',
+  label: 'Throat',
+  choices: [
+    { value: 'plain', label: 'Plain' },
+    {
+      value: 'throated',
+      label: 'Throated',
+      note: 'The tips wrap the worm across the middle of the face'
+    }
+  ],
+  initial: 'plain'
+};
+
 /** Optional tooth-form fields: stored once set, else the kernel default. */
 const GEAR_FORM_FIELDS = [
   'pressureAngleDeg',
@@ -1947,6 +1962,15 @@ const gear: InPlaceToolSpec = {
       min: 0,
       exclusive: 'min',
       inOptions: true
+    },
+    {
+      // 0 leaves a throated wheel's outside diameter to the kernel default.
+      id: 'outsideDiameter',
+      label: 'Outside diameter',
+      unit: 'length',
+      initial: 0,
+      min: 0,
+      inOptions: true
     }
   ],
   options: [
@@ -1989,7 +2013,8 @@ const gear: InPlaceToolSpec = {
     },
     GEAR_SIZING_OPTION,
     GEAR_HAND_OPTION,
-    GEAR_HELIX_OPTION
+    GEAR_HELIX_OPTION,
+    GEAR_THROAT_OPTION
   ],
   defaults(_slots, _ctx, numbers): Record<string, number> {
     // A rim that clears an internal gear's roots with four modules to spare.
@@ -2068,6 +2093,9 @@ const gear: InPlaceToolSpec = {
       } = toothFields;
       const savedGear = ctx.saved?.featureKind === 'gear' ? ctx.saved : null;
       const starts = values.starts ?? 1;
+      const throated =
+        gearType === 'worm-wheel' && options.throat === 'throated';
+      const outside = numbers?.outsideDiameter ?? 0;
       return {
         tool: 'gear',
         gear: {
@@ -2077,6 +2105,14 @@ const gear: InPlaceToolSpec = {
             ? { teeth: starts }
             : { teeth, mateTeeth: starts }),
           diameterFactor: values.diameterFactor ?? 10,
+          ...(throated
+            ? {
+                throated: true,
+                ...(outside > 0
+                  ? { outsideDiameter: values.outsideDiameter ?? outside }
+                  : {})
+              }
+            : {}),
           ...(options.hand === 'left' || savedGear?.hand !== undefined
             ? {
                 hand:
