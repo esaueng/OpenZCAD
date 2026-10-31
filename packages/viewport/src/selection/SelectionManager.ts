@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import type { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import type { GeometryBodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type {
+  GeometryBodyRepresentation,
+  TopologySelection
+} from '@openzcad/shared';
 import type { PickCandidate } from '../pick/PickService';
 import {
   batchedEdgeTarget,
@@ -18,7 +21,10 @@ import {
   EDGE_SELECTED_WIDTH,
   idleEdgeColor
 } from '../pick/edges';
-import { VIEWPORT_RENDER_ORDER } from '../render/scene';
+import {
+  updateBodyMaterialOpacity,
+  VIEWPORT_RENDER_ORDER
+} from '../render/scene';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 import { createFaceHighlightGeometry } from './faceHighlightGeometry';
 import { easeToward, fadeStepMs, SETTLE_EPSILON } from '../motion';
@@ -311,6 +317,7 @@ export class SelectionManager {
   private readonly fadeTargets = new WeakMap<THREE.Material, number>();
   /** Materials whose opacity eases rather than cuts (see `easeOpacity`). */
   private readonly easedMaterials = new WeakSet<THREE.Material>();
+  private readonly fadingBodies = new WeakSet<THREE.Material>();
 
   hoveredBodyId: string | null = null;
   /** Legacy per-edge visual, retained while ModelViewer adopts edge batches. */
@@ -367,6 +374,23 @@ export class SelectionManager {
   easeOpacity<T extends THREE.Material>(material: T): T {
     this.easedMaterials.add(material);
     return material;
+  }
+
+  /** Body fades must change depth/stencil ownership along with blending. */
+  fadeBodyOpacity(material: THREE.Material, opacity: number, instant: boolean) {
+    delete material.userData.restoreOpaque;
+    material.userData.targetOpacity = opacity;
+    if (instant) {
+      this.fadeIns.delete(material);
+      this.fadeTargets.delete(material);
+      this.fadingBodies.delete(material);
+      updateBodyMaterialOpacity(material, opacity);
+    } else {
+      this.easeOpacity(material);
+      this.fadingBodies.add(material);
+      this.fadeIns.add(material);
+    }
+    this.options.requestRender();
   }
 
   /** True while any overlay is still on its way to its target. */
@@ -681,6 +705,9 @@ export class SelectionManager {
       } else {
         material.opacity = target;
       }
+      if (this.fadingBodies.has(material)) {
+        updateBodyMaterialOpacity(material, material.opacity);
+      }
       if (material.opacity === target) {
         // A material faded back to full opacity goes back to the opaque pass
         // once it settles: leaving `transparent` set keeps it in depth-sorted
@@ -696,6 +723,7 @@ export class SelectionManager {
         }
         this.fadeIns.delete(material);
         this.fadeTargets.delete(material);
+        this.fadingBodies.delete(material);
       }
     }
   }

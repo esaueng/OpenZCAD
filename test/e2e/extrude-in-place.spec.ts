@@ -153,9 +153,9 @@ async function startExtrude(page: Page, canvas: Locator) {
   return bar;
 }
 
-test('Extrude in place: a draft dragged on its wall, typed on its chip, refused beside a back distance', async ({
+test('Extrude in place: a draft dragged on its wall, typed on its chip, refused beside a back distance', { tag: '@ci-smoke' }, async ({
   page
-}) => {
+}, testInfo) => {
   test.setTimeout(150_000);
   await stubApi(page);
   const errors: string[] = [];
@@ -207,6 +207,39 @@ test('Extrude in place: a draft dragged on its wall, typed on its chip, refused 
   // Its chip opens the keypad: an exact 3°.
   await enterCommandValue(page, 'draftAngle', '3');
   await expect(chip).toHaveText('Draft 3°');
+  await testInfo.attach('extrude-controls-prepared', { body: await page.screenshot({ path: testInfo.outputPath('extrude-controls-prepared.png') }), contentType: 'image/png' });
+  await expect(page.getByTestId('direct-manipulation-value')).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => {
+      const controls = await Promise.all([
+        page.getByTestId('direct-manipulation-value').boundingBox(),
+        page.getByTestId('direct-manipulation-mode').boundingBox(),
+        chip.boundingBox(),
+        page.getByTestId('command-handle-backDistance').boundingBox()
+      ]);
+      return controls.filter((box) => box !== null).every(
+        (a, index) =>
+          a &&
+          controls.filter((box) => box !== null).every(
+            (b, other) =>
+              index === other ||
+              !b ||
+              a.x + a.width <= b.x ||
+              b.x + b.width <= a.x ||
+              a.y + a.height <= b.y ||
+              b.y + b.height <= a.y
+          )
+      );
+    })
+    .toBe(true);
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveCSS(
+    'rotate',
+    'none'
+  );
+  const valueBounds = (await page.getByTestId('direct-manipulation-value').boundingBox())!;
+  expect(valueBounds.width).toBeGreaterThan(valueBounds.height);
+  await expect(bar).toContainText('Preview: New body');
+  await testInfo.attach('extrude-controls', { body: await page.screenshot({ path: testInfo.outputPath('extrude-controls.png') }), contentType: 'image/png' });
   // The bar's Options read the same value.
   const options = bar.locator('details.in-place-command-options');
   await options.locator('summary').click();

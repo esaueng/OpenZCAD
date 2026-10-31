@@ -126,6 +126,13 @@ export function featureValueSummary(
           ? `Enveloping worm, ${starts}`
           : `Enveloping worm, ${starts}, for ${wheel}-tooth wheel`;
       }
+      if (data.gearType === 'enveloping-wheel') {
+        const starts =
+          data.mateTeeth === undefined ? null : num(data.mateTeeth);
+        return starts === null
+          ? `${teeth} teeth, enveloping wheel`
+          : `${teeth} teeth, enveloping wheel for ${starts}-start worm`;
+      }
       if (data.gearType === 'worm-wheel') {
         const starts =
           data.mateTeeth === undefined ? null : num(data.mateTeeth);

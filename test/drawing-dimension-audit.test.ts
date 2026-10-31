@@ -1,28 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseCadPatchProposal } from '@openzcad/ai-contracts';
-import {
-  CommandManager,
-  commandsForCadPatch,
-  composeCommands
-} from '@openzcad/command-system';
-import { createProjectDocument, findSketch } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
-  toUserId,
   type BodyId,
-  type DocumentNode,
-  type ProjectDocument,
-  type SketchId,
   type BodyRepresentation,
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingEdgeRef,
-  type DrawingSheet,
-  type DrawingSheetId,
-  type DrawingView,
   type DrawingViewId,
   type EdgeTopology
 } from '@openzcad/shared';
+import {
+  buildPart,
+  flangeOperations,
+  footOperations,
+  frontId,
+  plateOperations,
+  roundedOperations,
+  sheetOf,
+  stepOperations,
+  topId
+} from './helpers/drawing-dimension-fixtures';
 import { auditDrawingDimensions } from '../apps/web/src/lib/drawing/dimensionAudit';
 
 type Adapter = Awaited<ReturnType<typeof createExactKernelAdapter>>;
@@ -33,148 +30,11 @@ beforeAll(async () => {
 });
 afterAll(() => adapter.dispose());
 
+const build = (operations: unknown[]) => buildPart(adapter, operations);
 const S = Math.SQRT2;
 
-/** The turned foot of the D06 plan, as one revolved profile on XZ. */
-function footProfile() {
-  const line = (x1: number, y1: number, x2: number, y2: number) => ({
-    objectKind: 'line',
-    x1,
-    y1,
-    x2,
-    y2
-  });
-  const arc = (
-    centerX: number,
-    centerY: number,
-    startAngleDeg: number,
-    endAngleDeg: number
-  ) => ({
-    objectKind: 'arc',
-    centerX,
-    centerY,
-    radius: 4,
-    startAngleDeg,
-    endAngleDeg
-  });
-  const h = 4 * S;
-  return [
-    line(0, 0, 16, 0),
-    line(16, 0, 16 + h / 2, h / 2),
-    arc(16, h, -45, 0),
-    line(20, h, 20, 29 - h),
-    arc(16, 29 - h, 0, 45),
-    line(16 + h / 2, 29 - h / 2, 20.5 - h / 2, 24.5 + h / 2),
-    arc(20.5, 24.5 + h, 180, 225),
-    line(16.5, 24.5 + h, 16.5, 50),
-    line(16.5, 50, 12.5, 50),
-    line(12.5, 50, 12.5, 9),
-    line(12.5, 9, 0, 9),
-    line(0, 9, 0, 0)
-  ];
-}
-
-/**
- * A revolve proposal turns the sketch's first object; the foot's profile is
- * a chain of lines and arcs, so point its revolve at every object, as the
- * Revolve tool does for a picked region.
- */
-function revolveWholeSketches(document: ProjectDocument): ProjectDocument {
-  const nodes = { ...document.nodes } as Record<string, DocumentNode>;
-  for (const [key, node] of Object.entries(nodes)) {
-    const data = (
-      node as { data?: { featureKind?: string; sketchId?: SketchId } }
-    ).data;
-    if (data?.featureKind !== 'revolve' || !data.sketchId) continue;
-    const sketch = findSketch(document, data.sketchId)!;
-    nodes[key] = {
-      ...node,
-      data: {
-        ...data,
-        profile: { all: true, sourceEntityIds: [...sketch.objectIds] }
-      }
-    } as DocumentNode;
-  }
-  return { ...document, nodes };
-}
-
-async function build(operations: unknown[]) {
-  const manager = new CommandManager(
-    createProjectDocument('Audit', toUserId('user_audit'))
-  );
-  manager.execute(
-    composeCommands(
-      'Build',
-      commandsForCadPatch(
-        manager.document,
-        parseCadPatchProposal({
-          proposalId: 'proposal_audit',
-          summary: 'Build a test part.',
-          assumptions: [],
-          operations
-        })
-      )
-    )
-  );
-  const document = revolveWholeSketches(manager.document);
-  const synced = await adapter.syncDocument(document);
-  expect(synced.warnings).toEqual([]);
-  const bodies = synced.bodyRepresentations;
-  const bodyId = document.bodyOrder.at(-1)!;
-  return { document, bodies, bodyId, body: bodies[bodyId]! };
-}
-
-const footOperations = () => [
-  {
-    kind: 'add_sketch',
-    name: 'Profile',
-    plane: 'XZ',
-    offset: 0,
-    objects: footProfile(),
-    localId: '$profile'
-  },
-  {
-    kind: 'add_revolve',
-    name: 'Foot',
-    localId: '$foot',
-    sketchId: '$profile',
-    axis: 'vertical',
-    angleDeg: null
-  }
-];
-
-const frontId = 'dvw_front' as DrawingViewId;
-const topId = 'dvw_top' as DrawingViewId;
 const id = (name: string) => `dann_${name}` as DrawingAnnotationId;
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
-
-function sheetOf(
-  bodyId: BodyId,
-  annotations: DrawingAnnotation[] = [],
-  orientations: DrawingView['orientation'][] = ['front', 'top']
-): DrawingSheet {
-  const ids: Partial<Record<DrawingView['orientation'], DrawingViewId>> = {
-    front: frontId,
-    top: topId
-  };
-  return {
-    sheetId: 'dsht_audit' as DrawingSheetId,
-    name: 'Sheet 1',
-    paper: { size: 'A3', orientation: 'landscape' },
-    scale: { numerator: 1, denominator: 1 },
-    projectionAngle: 'third',
-    titleBlock: {},
-    source: { fingerprint: 'v1:test' },
-    views: orientations.map((orientation, index) => ({
-      viewId: ids[orientation] ?? (`dvw_${orientation}` as DrawingViewId),
-      orientation,
-      bodyIds: [bodyId],
-      centerMm: { x: 100, y: 100 + 100 * index },
-      hiddenLines: false
-    })),
-    ...(annotations.length > 0 ? { annotations } : {})
-  };
-}
 
 function refOf(bodyId: BodyId, edge: EdgeTopology): DrawingEdgeRef {
   return {
@@ -333,33 +193,6 @@ describe('D06 dimension audit: the turned foot', () => {
   });
 });
 
-/** An L section on XZ: steps at z = 10 and x = 10, extruded 8 along Y. */
-const stepOperations = () => [
-  {
-    kind: 'add_sketch',
-    name: 'Step',
-    plane: 'XZ',
-    offset: 0,
-    objects: [
-      [0, 0, 30, 0],
-      [30, 0, 30, 10],
-      [30, 10, 10, 10],
-      [10, 10, 10, 20],
-      [10, 20, 0, 20],
-      [0, 20, 0, 0]
-    ].map(([x1, y1, x2, y2]) => ({ objectKind: 'line', x1, y1, x2, y2 })),
-    localId: '$step'
-  },
-  {
-    kind: 'add_extrude',
-    name: 'Step',
-    localId: '$stepBody',
-    sketchId: '$step',
-    distance: 8,
-    samplePoint: { x: 5, y: 5 }
-  }
-];
-
 describe('D06 dimension audit: positions along an axis', () => {
   it('needs one dimension fewer than an axis has positions, and refuses a closed chain', async () => {
     const { bodies, bodyId, body } = await build(stepOperations());
@@ -433,34 +266,7 @@ describe('D06 dimension audit: positions along an axis', () => {
   });
 
   it('locates a hole by its centre and counts a repeated one once', async () => {
-    const { bodies, bodyId, body } = await build([
-      {
-        kind: 'add_sketch',
-        name: 'Plate',
-        plane: 'XZ',
-        offset: 0,
-        objects: [
-          {
-            objectKind: 'rectangle',
-            width: 40,
-            height: 20,
-            centerX: 20,
-            centerY: 10
-          },
-          { objectKind: 'circle', radius: 3, centerX: 10, centerY: 10 },
-          { objectKind: 'circle', radius: 3, centerX: 30, centerY: 10 }
-        ],
-        localId: '$plate'
-      },
-      {
-        kind: 'add_extrude',
-        name: 'Plate',
-        localId: '$plateBody',
-        sketchId: '$plate',
-        distance: 6,
-        samplePoint: { x: 2, y: 2 }
-      }
-    ]);
+    const { bodies, bodyId, body } = await build(plateOperations());
     const before = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
     expect(messages(before.missing)).toEqual([
       '2× Ø6 diameter.',
@@ -508,43 +314,7 @@ describe('D06 dimension audit: positions along an axis', () => {
 
 describe('D06 dimension audit: bolt circles', () => {
   it('states holes spaced round a bore by their pitch circle, not each position', async () => {
-    const hole = (centerX: number, centerY: number) => ({
-      objectKind: 'circle',
-      radius: 1.5,
-      centerX,
-      centerY
-    });
-    const { bodies, bodyId } = await build([
-      {
-        kind: 'add_sketch',
-        name: 'Flange',
-        plane: 'XZ',
-        offset: 0,
-        objects: [
-          {
-            objectKind: 'rectangle',
-            width: 40,
-            height: 40,
-            centerX: 20,
-            centerY: 20
-          },
-          { objectKind: 'circle', radius: 6, centerX: 20, centerY: 20 },
-          hole(30, 20),
-          hole(20, 30),
-          hole(10, 20),
-          hole(20, 10)
-        ],
-        localId: '$flange'
-      },
-      {
-        kind: 'add_extrude',
-        name: 'Flange',
-        localId: '$flangeBody',
-        sketchId: '$flange',
-        distance: 5,
-        samplePoint: { x: 2, y: 2 }
-      }
-    ]);
+    const { bodies, bodyId } = await build(flangeOperations());
     const audit = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
     expect(messages(audit.missing)).toEqual([
       'Ø12 diameter.',
@@ -563,37 +333,7 @@ describe('D06 dimension audit: bolt circles', () => {
 
 describe('D06 dimension audit: blends', () => {
   it('asks for a corner radius, not its position, and calls a dimension to its tangent derived', async () => {
-    const { bodies, bodyId, body } = await build([
-      {
-        kind: 'add_sketch',
-        name: 'Rounded',
-        plane: 'XZ',
-        offset: 0,
-        objects: [
-          { objectKind: 'line', x1: 0, y1: 0, x2: 30, y2: 0 },
-          { objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: 15 },
-          {
-            objectKind: 'arc',
-            centerX: 25,
-            centerY: 15,
-            radius: 5,
-            startAngleDeg: 0,
-            endAngleDeg: 90
-          },
-          { objectKind: 'line', x1: 25, y1: 20, x2: 0, y2: 20 },
-          { objectKind: 'line', x1: 0, y1: 20, x2: 0, y2: 0 }
-        ],
-        localId: '$rounded'
-      },
-      {
-        kind: 'add_extrude',
-        name: 'Rounded',
-        localId: '$roundedBody',
-        sketchId: '$rounded',
-        distance: 8,
-        samplePoint: { x: 5, y: 5 }
-      }
-    ]);
+    const { bodies, bodyId, body } = await build(roundedOperations());
     const before = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
     expect(messages(before.missing)).toEqual([
       'R5 blend radius.',

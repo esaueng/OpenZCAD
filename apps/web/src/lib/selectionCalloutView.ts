@@ -103,6 +103,21 @@ function diagnostic(
   message.className = 'selection-callout-error';
   message.textContent = error.message;
   row.append(message);
+  if (error.message.length > 100) {
+    row.classList.add('is-expandable');
+    const expand = button(
+      owner,
+      'selection-callout-recovery',
+      'Read more',
+      () => {
+        const expanded = row.classList.toggle('is-expanded');
+        expand.setAttribute('aria-expanded', String(expanded));
+        expand.textContent = expanded ? 'Less' : 'Read more';
+      }
+    );
+    expand.setAttribute('aria-expanded', 'false');
+    row.append(expand);
+  }
   const culprit = error.culprit;
   if (culprit) {
     row.append(
