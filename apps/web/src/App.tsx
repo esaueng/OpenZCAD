@@ -24510,11 +24510,11 @@ export function App() {
           : {})
       };
     }
-    if (plan.kind === 'extrude-distance') {
+    if (plan.kind === 'extrude-distance' || plan.kind === 'gear-width') {
       return {
         command: plan.command,
         bodyId,
-        successMessage: `${plan.feature.name} distance set to ${formatNumber(plan.value)} ${base.units}.`,
+        successMessage: `${plan.feature.name} ${plan.kind === 'gear-width' ? 'face width' : 'distance'} set to ${formatNumber(plan.value)} ${base.units}.`,
         validationTargets: affectedFeatureTargets(base, plan.feature.featureId),
         ...(plan.preflightRejection
           ? { preflightRejection: plan.preflightRejection }
