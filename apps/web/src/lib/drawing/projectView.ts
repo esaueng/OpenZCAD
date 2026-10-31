@@ -345,6 +345,51 @@ export class OcclusionIndex {
 const CELL_SPLIT_LOAD = 64;
 /** How many times a cell may be refined, below the top grid. */
 const MAX_GRID_LEVEL = 4;
+/**
+ * A refinement is kept only when it files its cell's triangles at most this
+ * many times over: slivers that cross the whole cell gain nothing from it.
+ */
+const MAX_REFINED_FILINGS = 4;
+
+/** Cells per side of a grid over `count` triangles. */
+function occlusionGridSize(count: number): number {
+  return Math.max(8, Math.min(256, Math.ceil(Math.sqrt(count / 2))));
+}
+
+/** Which triangles one `crossings` query has collected so far. */
+interface QueryMarks {
+  /** Per triangle, the last query that collected it. */
+  stamp: Uint32Array;
+  query: number;
+  found: number[];
+}
+
+/** The u-range a triangle's footprint covers within a horizontal strip. */
+const stripRange = { low: Infinity, high: -Infinity };
+
+function takeEdgeInStrip(
+  pu: number,
+  pv: number,
+  qu: number,
+  qv: number,
+  bottom: number,
+  top: number
+): void {
+  if (pv >= bottom && pv <= top) {
+    stripRange.low = Math.min(stripRange.low, pu);
+    stripRange.high = Math.max(stripRange.high, pu);
+  }
+  if ((pv - bottom) * (qv - bottom) < 0) {
+    const u = pu + ((qu - pu) * (bottom - pv)) / (qv - pv);
+    stripRange.low = Math.min(stripRange.low, u);
+    stripRange.high = Math.max(stripRange.high, u);
+  }
+  if ((pv - top) * (qv - top) < 0) {
+    const u = pu + ((qu - pu) * (top - pv)) / (qv - pv);
+    stripRange.low = Math.min(stripRange.low, u);
+    stripRange.high = Math.max(stripRange.high, u);
+  }
+}
 
 /**
  * A uniform grid of triangle indices over a box, refined where it is dense:
@@ -365,6 +410,14 @@ export class OcclusionGrid {
   private readonly cellU: number;
   private readonly cellV: number;
   private remainingEntries: number;
+  /** Scratch for `crossings`, made on the grid it is asked of. */
+  private marks?: QueryMarks;
+  /**
+   * True when filing passed `abandonAbove` entries and stopped part way: a
+   * refinement candidate that could never be kept. Its cells are incomplete
+   * and it must not be used.
+   */
+  readonly abandoned: boolean = false;
 
   constructor(
     private readonly triangles: Triangle[],
@@ -376,7 +429,8 @@ export class OcclusionGrid {
     private readonly coverTolerance: number,
     entryBudget = MAX_OCCLUSION_GRID_ENTRIES,
     members?: readonly number[],
-    level = 0
+    level = 0,
+    abandonAbove = Infinity
   ) {
     if (!Number.isSafeInteger(entryBudget) || entryBudget < 0)
       throw new Error('Invalid drawing projection memory budget.');
@@ -386,10 +440,7 @@ export class OcclusionGrid {
     const entryLimit = Math.min(entryBudget, MAX_OCCLUSION_GRID_ENTRIES);
     let entries = 0;
     const indices = members ?? triangles.map((_, index) => index);
-    this.size = Math.max(
-      8,
-      Math.min(256, Math.ceil(Math.sqrt(indices.length / 2)))
-    );
+    this.size = occlusionGridSize(indices.length);
     this.maxU = bounds.maxU;
     this.maxV = bounds.maxV;
     this.minU = bounds.minU;
@@ -397,62 +448,79 @@ export class OcclusionGrid {
     this.cellU = Math.max((bounds.maxU - bounds.minU) / this.size, 1e-12);
     this.cellV = Math.max((bounds.maxV - bounds.minV) / this.size, 1e-12);
     this.cells = Array.from({ length: this.size * this.size }, () => []);
+    this.children = new Array<OcclusionGrid | undefined>(this.cells.length);
     // Each triangle goes only into the cells it covers, row by row: clip it
     // to the row's strip and take the strip's u-range. Bounding boxes would
     // put a long thin sliver (a fan around a shared vertex) into every cell
     // of its box, which on a dense mesh runs to billions of entries.
-    for (const index of indices) {
-      const triangle = triangles[index]!;
-      const corners = [
-        [triangle.u0, triangle.v0],
-        [triangle.u1, triangle.v1],
-        [triangle.u2, triangle.v2]
-      ] as const;
-      const j0 = this.row(Math.min(triangle.v0, triangle.v1, triangle.v2));
-      const j1 = this.row(Math.max(triangle.v0, triangle.v1, triangle.v2));
+    filing: for (const index of indices) {
+      const t = triangles[index]!;
+      const j0 = this.row(Math.min(t.v0, t.v1, t.v2));
+      const j1 = this.row(Math.max(t.v0, t.v1, t.v2));
       for (let j = j0; j <= j1; j += 1) {
         // The strip, widened by a hair so a triangle touching its boundary
         // still lands in both rows.
         const bottom = this.minV + j * this.cellV - this.cellV * 1e-9;
         const top = this.minV + (j + 1) * this.cellV + this.cellV * 1e-9;
-        let low = Infinity;
-        let high = -Infinity;
-        const take = (u: number) => {
-          low = Math.min(low, u);
-          high = Math.max(high, u);
-        };
-        for (let e = 0; e < 3; e += 1) {
-          const [pu, pv] = corners[e]!;
-          const [qu, qv] = corners[(e + 1) % 3]!;
-          if (pv >= bottom && pv <= top) take(pu);
-          for (const line of [bottom, top]) {
-            if ((pv - line) * (qv - line) < 0)
-              take(pu + ((qu - pu) * (line - pv)) / (qv - pv));
-          }
-        }
-        if (low > high) continue;
-        const i0 = this.column(low);
-        const i1 = this.column(high);
+        stripRange.low = Infinity;
+        stripRange.high = -Infinity;
+        takeEdgeInStrip(t.u0, t.v0, t.u1, t.v1, bottom, top);
+        takeEdgeInStrip(t.u1, t.v1, t.u2, t.v2, bottom, top);
+        takeEdgeInStrip(t.u2, t.v2, t.u0, t.v0, bottom, top);
+        if (stripRange.low > stripRange.high) continue;
+        const i0 = this.column(stripRange.low);
+        const i1 = this.column(stripRange.high);
         const added = i1 - i0 + 1;
         if (added > entryLimit - entries)
           throw new Error(
             'Drawing view exceeds its projection memory budget; show fewer bodies or choose another view.'
           );
+        if (entries + added > abandonAbove) {
+          this.abandoned = true;
+          break filing;
+        }
         entries += added;
         for (let i = i0; i <= i1; i += 1)
           this.cells[j * this.size + i]!.push(index);
       }
     }
     this.remainingEntries = entryLimit - entries;
-    this.children = new Array<OcclusionGrid | undefined>(this.cells.length);
     if (level === 0) this.refine(0);
+  }
+
+  /**
+   * At least how many entries a grid over `box` would file for `members`:
+   * every row strictly between a triangle's first and last holds it.
+   */
+  private static leastFilings(
+    triangles: readonly Triangle[],
+    members: readonly number[],
+    box: { minV: number; maxV: number }
+  ): number {
+    const size = occlusionGridSize(members.length);
+    const cellV = Math.max((box.maxV - box.minV) / size, 1e-12);
+    const row = (v: number) =>
+      Math.min(size - 1, Math.max(0, Math.floor((v - box.minV) / cellV)));
+    let least = 0;
+    for (const index of members) {
+      const t = triangles[index]!;
+      least += Math.max(
+        0,
+        row(Math.max(t.v0, t.v1, t.v2)) - row(Math.min(t.v0, t.v1, t.v2)) - 1
+      );
+    }
+    return least;
   }
 
   /**
    * Gives each dense cell a finer grid of its own, kept only when it spreads
    * the cell's triangles out (half the load or less in its fullest cell)
    * without filing them many times over: a fan of slivers meeting at one
-   * point, or slivers crossing the whole cell, gain nothing from it.
+   * point, or slivers crossing the whole cell, gain nothing from it. A
+   * candidate that is sure to file too many is never built, and one that
+   * files too many stops there: on a side view of a dense part, nearly every
+   * cell holds slivers that cross it, and building each candidate in full
+   * only to drop it was most of the view's time.
    */
   private refine(level: number): void {
     if (level >= MAX_GRID_LEVEL) return;
@@ -475,22 +543,28 @@ export class OcclusionGrid {
         box.minV = Math.min(box.minV, t.v0, t.v1, t.v2);
         box.maxV = Math.max(box.maxV, t.v0, t.v1, t.v2);
       }
+      const bounds = {
+        minU: Math.max(box.minU, this.minU + i * this.cellU),
+        minV: Math.max(box.minV, this.minV + j * this.cellV),
+        maxU: Math.min(box.maxU, this.minU + (i + 1) * this.cellU),
+        maxV: Math.min(box.maxV, this.minV + (j + 1) * this.cellV)
+      };
+      const filings = cell.length * MAX_REFINED_FILINGS;
+      if (OcclusionGrid.leastFilings(this.triangles, cell, bounds) > filings)
+        return;
       const child = new OcclusionGrid(
         this.triangles,
-        {
-          minU: Math.max(box.minU, this.minU + i * this.cellU),
-          minV: Math.max(box.minV, this.minV + j * this.cellV),
-          maxU: Math.min(box.maxU, this.minU + (i + 1) * this.cellU),
-          maxV: Math.min(box.maxV, this.minV + (j + 1) * this.cellV)
-        },
+        bounds,
         this.coverTolerance,
         this.remainingEntries,
         cell,
-        level + 1
+        level + 1,
+        filings
       );
       if (
+        child.abandoned ||
         child.maxCellLoad > cell.length / 2 ||
-        child.entryCount > cell.length * 4
+        child.entryCount > filings
       )
         return;
       child.refine(level + 1);
@@ -519,18 +593,25 @@ export class OcclusionGrid {
     );
   }
 
-  /** Adds the triangles of every finest cell segment a→b passes through. */
+  /**
+   * Adds the triangles of every finest cell segment a→b passes through to
+   * `marks.found`, each once, in the order first met.
+   */
   private collect(
     au: number,
     av: number,
     bu: number,
     bv: number,
-    seen: Set<number>
+    marks: QueryMarks
   ): void {
     for (const key of this.cellsAlong(au, av, bu, bv)) {
       const child = this.children[key];
       if (!child) {
-        for (const index of this.cells[key]!) seen.add(index);
+        for (const index of this.cells[key]!)
+          if (marks.stamp[index] !== marks.query) {
+            marks.stamp[index] = marks.query;
+            marks.found.push(index);
+          }
         continue;
       }
       // Only the stretch over that cell walks its finer grid; a hair of
@@ -549,7 +630,7 @@ export class OcclusionGrid {
         av + (bv - av) * t0,
         au + (bu - au) * t1,
         av + (bv - av) * t1,
-        seen
+        marks
       );
     }
   }
@@ -589,30 +670,34 @@ export class OcclusionGrid {
     // Every finest cell the segment passes through, by an exact supercover
     // walk: triangles are filed under every cell they cover, so a triangle
     // the segment crosses is in one of these cells.
-    const seen = new Set<number>();
-    this.collect(au, av, bu, bv, seen);
+    // One set of marks per grid tree, reused by every query: a fresh set
+    // per segment was a large share of a dense view's time.
+    if (!this.marks || this.marks.query === 0xffffffff)
+      this.marks = {
+        stamp: new Uint32Array(this.triangles.length),
+        query: 0,
+        found: []
+      };
+    const marks = this.marks;
+    marks.query += 1;
+    marks.found.length = 0;
+    this.collect(au, av, bu, bv, marks);
     const out: { t: number; depth: boolean; onA?: boolean; onB?: boolean }[] =
       [];
-    const denomFloor = 1e-18;
-    for (const index of seen) {
+    const edgeCut = (pu: number, pv: number, qu: number, qv: number) => {
+      const eu = qu - pu;
+      const ev = qv - pv;
+      const denom = du * ev - dv * eu;
+      if (Math.abs(denom) <= 1e-18) return;
+      const s = ((pu - au) * ev - (pv - av) * eu) / denom;
+      const r = ((pu - au) * dv - (pv - av) * du) / denom;
+      if (s > 0 && s < 1 && r >= 0 && r <= 1) out.push({ t: s, depth: false });
+    };
+    for (const index of marks.found) {
       const t = this.triangles[index]!;
-      const corners = [
-        [t.u0, t.v0],
-        [t.u1, t.v1],
-        [t.u2, t.v2]
-      ] as const;
-      for (let e = 0; e < 3; e += 1) {
-        const [pu, pv] = corners[e]!;
-        const [qu, qv] = corners[(e + 1) % 3]!;
-        const eu = qu - pu;
-        const ev = qv - pv;
-        const denom = du * ev - dv * eu;
-        if (Math.abs(denom) <= denomFloor) continue;
-        const s = ((pu - au) * ev - (pv - av) * eu) / denom;
-        const r = ((pu - au) * dv - (pv - av) * du) / denom;
-        if (s > 0 && s < 1 && r >= 0 && r <= 1)
-          out.push({ t: s, depth: false });
-      }
+      edgeCut(t.u0, t.v0, t.u1, t.v1);
+      edgeCut(t.u1, t.v1, t.u2, t.v2);
+      edgeCut(t.u2, t.v2, t.u0, t.v0);
       // Where the segment's depth meets this triangle's occlusion
       // threshold (an edge piercing a face, two bodies that intersect, or an
       // edge leaving a face it starts on): `occluded` tests
@@ -1407,13 +1492,30 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       start = index + 1;
     }
   }
+  // The edge runs' hidden lines are the same arrays as the edges' entries
+  // in `hidden`: each is reconciled with the visible lines once, and the
+  // edge runs take copies of its pieces, keeping buffers of their own.
+  const reconcile = coincidentHiddenFilter(visible, span * 1e-6);
+  const kept = new Map<Float64Array, Float64Array[]>();
+  const keptOf = (line: Float64Array) => {
+    let pieces = kept.get(line);
+    if (!pieces) {
+      pieces = reconcile(line);
+      kept.set(line, pieces);
+    }
+    return pieces;
+  };
   return {
     visible,
-    hidden: dropCoincidentHidden(hidden, visible, span * 1e-6),
+    hidden: hidden.flatMap(keptOf),
     bounds,
     edgeRuns: {
       visible: edgeVisible,
-      hidden: dropCoincidentHidden(edgeHidden, visible, span * 1e-6)
+      hidden: edgeHidden.flatMap((line) =>
+        visible.length === 0
+          ? [line]
+          : keptOf(line).map((piece) => piece.slice())
+      )
     }
   };
 }
@@ -1680,6 +1782,18 @@ export function dropCoincidentHidden(
   tolerance: number
 ): Float64Array[] {
   if (hidden.length === 0 || visible.length === 0) return hidden;
+  return hidden.flatMap(coincidentHiddenFilter(visible, tolerance));
+}
+
+/**
+ * `dropCoincidentHidden` for one hidden line at a time, indexing the visible
+ * lines once for every line it is asked about.
+ */
+function coincidentHiddenFilter(
+  visible: Float64Array[],
+  tolerance: number
+): (line: Float64Array) => Float64Array[] {
+  if (visible.length === 0) return (line) => [line];
   const segments: number[] = [];
   for (const line of visible)
     for (let i = 2; i + 1 < line.length; i += 2)
@@ -1766,8 +1880,8 @@ export function dropCoincidentHidden(
     return gaps;
   };
 
-  const out: Float64Array[] = [];
-  for (const line of hidden) {
+  return (line) => {
+    const out: Float64Array[] = [];
     let run: number[] = [];
     const flush = () => {
       if (run.length >= 4) out.push(Float64Array.from(run));
@@ -1798,6 +1912,6 @@ export function dropCoincidentHidden(
       atVertex = pieces.at(-1)?.[1] === 1;
     }
     flush();
-  }
-  return out;
+    return out;
+  };
 }

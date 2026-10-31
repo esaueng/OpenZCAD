@@ -1325,6 +1325,85 @@ describe('D01 coincident-line index', () => {
 });
 
 describe('D01 occlusion grid', () => {
+  it('drops refinements that cannot help without building them', () => {
+    // A side view of a dense part: 200 slivers side by side, each crossing
+    // the whole height, with one far triangle widening the grid so they all
+    // pile into its first column. Every refinement of those cells would file
+    // each sliver in every one of its rows, so none is kept. Building each
+    // candidate in full only to drop it was most of such a view's time, and
+    // it charged the view's budget for entries it never kept.
+    const sliver = (k: number): Triangle => ({
+      u0: k * 5e-4,
+      v0: 0,
+      d0: 0,
+      u1: k * 5e-4 + 4e-4,
+      v1: 0,
+      d1: 0,
+      u2: k * 5e-4 + 2e-4,
+      v2: 10,
+      d2: 0,
+      area: 4e-3,
+      tol: 0
+    });
+    const triangles = Array.from({ length: 200 }, (_, k) => sliver(k));
+    triangles.push({
+      u0: 99,
+      v0: 0,
+      d0: 0,
+      u1: 100,
+      v1: 0,
+      d1: 0,
+      u2: 100,
+      v2: 1,
+      d2: 0,
+      area: 1,
+      tol: 0
+    });
+    const bounds = { minU: 0, minV: 0, maxU: 100, maxV: 10 };
+    const full = new OcclusionGrid(triangles, bounds, 1e-12);
+    // Only the top level is kept…
+    expect(full.maxCellLoad).toBe(200);
+    // …and a budget with room for it and not for a full candidate holds.
+    const budgeted = new OcclusionGrid(
+      triangles,
+      bounds,
+      1e-12,
+      full.entryCount + 1000
+    );
+    expect(budgeted.entryCount).toBe(full.entryCount);
+    expect(budgeted.abandoned).toBe(false);
+    // Occlusion is unchanged: inside a sliver, between two, and on the far one.
+    expect(budgeted.occluded(2e-4, 1, 1)).toBe(true);
+    expect(budgeted.occluded(4.5e-4, 1, 1)).toBe(false);
+    expect(budgeted.occluded(99.9, 0.5, 1)).toBe(true);
+  });
+
+  it('abandons a candidate past the filings it may make', () => {
+    const triangle: Triangle = {
+      u0: 0,
+      v0: 0,
+      d0: 0,
+      u1: 1,
+      v1: 0,
+      d1: 0,
+      u2: 0,
+      v2: 1,
+      d2: 0,
+      area: 1,
+      tol: 0
+    };
+    const bounds = { minU: 0, minV: 0, maxU: 1, maxV: 1 };
+    const filed = new OcclusionGrid([triangle], bounds, 1e-12).entryCount;
+    expect(
+      new OcclusionGrid([triangle], bounds, 1e-12, undefined, [0], 1, filed)
+        .abandoned
+    ).toBe(false);
+    expect(
+      new OcclusionGrid([triangle], bounds, 1e-12, undefined, [0], 1, filed - 1)
+        .abandoned
+    ).toBe(true);
+  });
+
   it('counts parent and refined cells in the shared view entry budget', () => {
     // Two small tessellated patches in one group exercise refinement of a
     // concatenated mesh; a second group exercises the view-wide allowance.
