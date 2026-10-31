@@ -1,40 +1,42 @@
 import type { ReactNode } from 'react';
 import {
-  ArrowUpFromLine,
   Axis3d,
   Box,
-  Combine,
-  Cone,
   Cog,
-  CopyPlus,
+  Cone,
   Cylinder,
   Drill,
-  Expand,
   FlipHorizontal2,
-  Globe,
-  Grid3x3,
   ImagePlus,
-  Layers,
   Move3d,
-  Orbit,
-  PanelTopOpen,
   PenLine,
-  Pyramid,
   Radius,
   Rotate3d,
-  RotateCw,
   Scaling,
-  Scissors,
-  Settings,
-  Shapes,
-  Slice,
-  Spline,
-  SquareDashed,
-  SquareStack,
-  Tornado,
-  Torus,
-  TriangleRight
+  SquaresIntersect,
+  SquaresSubtract,
+  SquaresUnite,
+  Torus
 } from 'lucide-react';
+import {
+  chamferGlyph,
+  circularPatternGlyph,
+  draftGlyph,
+  extrudeGlyph,
+  gearTeethGlyph,
+  gridPatternGlyph,
+  helicalSweepGlyph,
+  linearPatternGlyph,
+  loftGlyph,
+  planeGlyph,
+  revolveGlyph,
+  shellGlyph,
+  solidOffsetGlyph,
+  sphereGlyph,
+  splitGlyph,
+  sweepGlyph,
+  thickenGlyph
+} from './toolIcons';
 import { platformShortcutLabel } from './platformShortcut';
 
 export type ToolId =
@@ -110,9 +112,11 @@ export const PRIMITIVE_TOOLS: ToolId[] = [
 
 const icon = (node: ReactNode) => node;
 
-// Every tool has its own glyph: the tile shows a name beside it, but a
-// folded group shows the icon alone, and two tools sharing one icon read as
-// the same tool.
+// Every tool has its own glyph: the rail shows the icon alone, and two
+// tools sharing one icon read as the same tool. Nor does a tool borrow
+// another surface's glyph (the viewer's grid and section, a panel's layers,
+// the app's settings, the sketch's spline): see ./toolIcons for the drawn
+// ones.
 export const TOOL_META: Record<ToolId, ToolMeta> = {
   sketch: {
     label: 'Sketch',
@@ -123,7 +127,7 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   },
   'datum-plane': {
     label: 'Plane',
-    icon: icon(<SquareDashed size={16} aria-hidden="true" />),
+    icon: planeGlyph,
     group: 'create',
     hint: 'Offset plane or midplane to sketch, split or mirror on'
   },
@@ -155,7 +159,7 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   },
   sphere: {
     label: 'Sphere',
-    icon: icon(<Globe size={16} aria-hidden="true" />),
+    icon: sphereGlyph,
     group: 'create',
     hint: 'Ball solid'
   },
@@ -173,34 +177,34 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   },
   extrude: {
     label: 'Extrude',
-    icon: icon(<ArrowUpFromLine size={16} aria-hidden="true" />),
+    icon: extrudeGlyph,
     group: 'from-sketch',
     shortcut: 'E',
     hint: 'Push a sketch into a solid'
   },
   revolve: {
     label: 'Revolve',
-    icon: icon(<RotateCw size={16} aria-hidden="true" />),
+    icon: revolveGlyph,
     group: 'from-sketch',
     shortcut: 'R',
     hint: 'Spin a sketch around an axis'
   },
   loft: {
     label: 'Loft',
-    icon: icon(<Layers size={16} aria-hidden="true" />),
+    icon: loftGlyph,
     group: 'from-sketch',
     hint: 'Blend through two or more closed sketch profiles'
   },
   sweep: {
     label: 'Sweep',
-    icon: icon(<Spline size={16} aria-hidden="true" />),
+    icon: sweepGlyph,
     group: 'from-sketch',
     hint: 'Carry a closed profile along a sketch path'
   },
   'helical-sweep': {
     label: 'Helical sweep',
     short: 'Helical',
-    icon: icon(<Tornado size={16} aria-hidden="true" />),
+    icon: helicalSweepGlyph,
     group: 'from-sketch',
     hint: 'Carry a closed profile around a parametric helix'
   },
@@ -212,7 +216,7 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   },
   chamfer: {
     label: 'Chamfer',
-    icon: icon(<TriangleRight size={16} aria-hidden="true" />),
+    icon: chamferGlyph,
     group: 'edges-faces',
     hint: 'Pick an edge, then set its distance'
   },
@@ -230,32 +234,32 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   },
   'gear-teeth': {
     label: 'Gear teeth',
-    icon: icon(<Settings size={16} aria-hidden="true" />),
+    icon: gearTeethGlyph,
     group: 'edges-faces',
     hint: 'Cut gear teeth along a cylindrical boss or bore'
   },
   shell: {
     label: 'Shell',
-    icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
+    icon: shellGlyph,
     group: 'edges-faces',
     hint: 'Open selected faces and add an inward wall thickness'
   },
   draft: {
     label: 'Draft',
-    icon: icon(<Pyramid size={16} aria-hidden="true" />),
+    icon: draftGlyph,
     group: 'edges-faces',
     hint: 'Taper selected faces along a pull direction'
   },
   thicken: {
     label: 'Thicken',
-    icon: icon(<SquareStack size={16} aria-hidden="true" />),
+    icon: thickenGlyph,
     group: 'edges-faces',
     hint: 'Turn one exact face into a solid wall'
   },
   'solid-offset': {
     label: 'Solid offset',
     short: 'Offset',
-    icon: icon(<Expand size={16} aria-hidden="true" />),
+    icon: solidOffsetGlyph,
     group: 'edges-faces',
     hint: 'Offset every face outward with sharp joins'
   },
@@ -287,27 +291,27 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   },
   split: {
     label: 'Split',
-    icon: icon(<Slice size={16} aria-hidden="true" />),
+    icon: splitGlyph,
     group: 'bodies',
     hint: 'Cut a body into two along a plane'
   },
   union: {
     label: 'Union',
-    icon: icon(<Combine size={16} aria-hidden="true" />),
+    icon: icon(<SquaresUnite size={16} aria-hidden="true" />),
     group: 'bodies',
     shortcut: 'U',
     hint: 'Merge bodies into one'
   },
   subtract: {
     label: 'Subtract',
-    icon: icon(<Scissors size={16} aria-hidden="true" />),
+    icon: icon(<SquaresSubtract size={16} aria-hidden="true" />),
     group: 'bodies',
     shortcut: 'X',
     hint: 'Cut bodies out of a base body'
   },
   intersect: {
     label: 'Intersect',
-    icon: icon(<Shapes size={16} aria-hidden="true" />),
+    icon: icon(<SquaresIntersect size={16} aria-hidden="true" />),
     group: 'bodies',
     shortcut: 'I',
     hint: 'Keep only the overlap of bodies'
@@ -315,21 +319,21 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   'linear-pattern': {
     label: 'Linear pattern',
     short: 'Linear',
-    icon: icon(<CopyPlus size={16} aria-hidden="true" />),
+    icon: linearPatternGlyph,
     group: 'pattern',
     hint: 'Repeat a body along an axis'
   },
   'circular-pattern': {
     label: 'Circular pattern',
     short: 'Circular',
-    icon: icon(<Orbit size={16} aria-hidden="true" />),
+    icon: circularPatternGlyph,
     group: 'pattern',
     hint: 'Repeat a body around an axis'
   },
   'grid-pattern': {
     label: 'Grid pattern',
     short: 'Grid',
-    icon: icon(<Grid3x3 size={16} aria-hidden="true" />),
+    icon: gridPatternGlyph,
     group: 'pattern',
     hint: 'Repeat a body along two directions'
   }

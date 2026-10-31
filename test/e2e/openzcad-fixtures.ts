@@ -1163,8 +1163,8 @@ export async function seedPanelLayout(
 }
 
 /**
- * Opens the command card's "More tools" fold the way a returning user left
- * it, unless the spec has already said otherwise.
+ * Opens the command card's "More tools" drawer, listing every tool, the way
+ * a returning user left it, unless the spec has already said otherwise.
  */
 export async function seedOpenCommandFold(page: Page) {
   await page.addInitScript(() => {
@@ -1176,6 +1176,17 @@ export async function seedOpenCommandFold(page: Page) {
         : {};
       if (typeof state.commandFoldOpen !== 'boolean') {
         state.commandFoldOpen = true;
+        window.localStorage.setItem(key, JSON.stringify(state));
+      }
+      // Specs click tools by name whether or not they fit the pick, so
+      // the drawer opens advanced and lists every tool unless a spec chose
+      // otherwise.
+      if (state.toolDrawerFilter === undefined) {
+        state.toolDrawerFilter = 'all';
+        window.localStorage.setItem(key, JSON.stringify(state));
+      }
+      if (state.toolDrawerView === undefined) {
+        state.toolDrawerView = 'advanced';
         window.localStorage.setItem(key, JSON.stringify(state));
       }
     } catch {

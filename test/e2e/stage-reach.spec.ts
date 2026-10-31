@@ -140,12 +140,17 @@ test('UI-07: the More tools list scrolls to its last tile in short windows', asy
     .locator('.command-flyout')
     .getByRole('button', { name: /^Grid pattern/ });
   await clickCentre(page, grid);
+  // Launched, it is a recent tool the rail now suggests, so its row in the
+  // drawer names it as on the rail.
+  const armed = page
+    .locator('.command-flyout')
+    .getByRole('button', { name: /^(On rail: )?Grid pattern/ });
   // The new command suspends the fold; request it to inspect its active tile.
   await expect(
     page.getByRole('group', { name: 'Grid pattern command' })
   ).toBeVisible();
   await page.getByRole('button', { name: /^More tools/ }).click();
-  await expect(grid).toHaveClass(/active/);
+  await expect(armed).toHaveClass(/active/);
   await page.keyboard.press('Escape');
   await expect(page.locator('.feature-row-main')).toHaveCount(1);
 });

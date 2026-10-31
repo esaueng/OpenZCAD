@@ -6,7 +6,13 @@
  * also keeps it off the settings sync path, where every field has to survive the
  * worker's strict parser.
  */
-import type { ToolGroup } from './tools';
+import type { ToolGroup, ToolId } from './tools';
+import {
+  DEFAULT_PINNED_TOOLS,
+  normalizeToolList,
+  type ToolDrawerFilter,
+  type ToolDrawerView
+} from './toolRail';
 
 export const PANEL_STATE_STORAGE_KEY = 'openzcad-panel-state:v1';
 
@@ -104,6 +110,24 @@ export interface PanelState {
    */
   commandFoldOpen: boolean;
   /**
+   * The tools pinned to the verb rail, in the user's order. Starts as the
+   * rail's original eight; dragged from the drawer, reordered on the rail
+   * and unpinned from either. Empty is a choice, not a fallback.
+   */
+  pinnedTools: ToolId[];
+  /** The tools last launched from the rail or drawer, newest first. */
+  recentTools: ToolId[];
+  /**
+   * What the "More tools" drawer lists: the tools that fit what is picked
+   * and can run now, or every tool.
+   */
+  toolDrawerFilter: ToolDrawerFilter;
+  /**
+   * The drawer's view: the simple list of what fits, or the advanced sheet
+   * with search, every tool and the pins. Simple to begin with.
+   */
+  toolDrawerView: ToolDrawerView;
+  /**
    * The sketch palette flyout (overview, snapping, grid, constraints)
    * beside the sketch rail. Closed to begin with, and remembered across
    * sketch sessions: leaving a sketch and editing it again should not fold
@@ -146,6 +170,10 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   },
   drawerOpen: false,
   commandFoldOpen: false,
+  pinnedTools: [...DEFAULT_PINNED_TOOLS],
+  recentTools: [],
+  toolDrawerFilter: 'fits',
+  toolDrawerView: 'simple',
   sketchPaletteOpen: false,
   tweakPanelOpen: true,
   sectionPanelOpen: true
@@ -165,6 +193,10 @@ function copyDefaults(): PanelState {
     toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups },
     drawerOpen: DEFAULT_PANEL_STATE.drawerOpen,
     commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen,
+    pinnedTools: [...DEFAULT_PANEL_STATE.pinnedTools],
+    recentTools: [...DEFAULT_PANEL_STATE.recentTools],
+    toolDrawerFilter: DEFAULT_PANEL_STATE.toolDrawerFilter,
+    toolDrawerView: DEFAULT_PANEL_STATE.toolDrawerView,
     sketchPaletteOpen: DEFAULT_PANEL_STATE.sketchPaletteOpen,
     tweakPanelOpen: DEFAULT_PANEL_STATE.tweakPanelOpen,
     sectionPanelOpen: DEFAULT_PANEL_STATE.sectionPanelOpen
@@ -199,6 +231,16 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.commandFoldOpen === 'boolean') {
     state.commandFoldOpen = root.commandFoldOpen;
+  }
+  const pinnedTools = normalizeToolList(root.pinnedTools);
+  if (pinnedTools) state.pinnedTools = pinnedTools;
+  const recentTools = normalizeToolList(root.recentTools);
+  if (recentTools) state.recentTools = recentTools;
+  if (root.toolDrawerFilter === 'fits' || root.toolDrawerFilter === 'all') {
+    state.toolDrawerFilter = root.toolDrawerFilter;
+  }
+  if (root.toolDrawerView === 'simple' || root.toolDrawerView === 'advanced') {
+    state.toolDrawerView = root.toolDrawerView;
   }
   if (typeof root.sketchPaletteOpen === 'boolean') {
     state.sketchPaletteOpen = root.sketchPaletteOpen;
