@@ -384,15 +384,19 @@ export function TopBar({
           <CloudOff size={14} />
         )}
       </span>
+      {/* Start-aligned so the reserve's slack trails the label. While the
+          readiness follows it, the slack would sit mid-phrase, and the
+          chip is resizing for the readiness anyway. */}
       <StableLabel
         reserve={
-          saveToAccount
-            ? ['Save to my account']
-            : accountState === 'signed-in'
-              ? CLOUD_SAVE_LABEL_RESERVE
-              : DEVICE_SAVE_LABEL_RESERVE
+          modelReadiness
+            ? [saveText]
+            : saveToAccount
+              ? ['Save to my account']
+              : accountState === 'signed-in'
+                ? CLOUD_SAVE_LABEL_RESERVE
+                : DEVICE_SAVE_LABEL_RESERVE
         }
-        align="center"
       >
         {saveText}
       </StableLabel>
@@ -634,7 +638,7 @@ export function TopBar({
               disabled={!projectName}
               onClick={session ? onOpenSharing : onSignIn}
             >
-              <Users size={13} aria-hidden="true" />
+              <Users size={14} aria-hidden="true" />
               {collaborationStatus === 'live' ? (
                 // Only drawn once the row has collapsed to icons; the label
                 // carries the count everywhere else.
