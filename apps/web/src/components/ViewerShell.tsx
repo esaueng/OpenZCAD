@@ -147,8 +147,10 @@ interface ViewerShellProps {
   previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
   pickListEnabled: boolean;
-  /** Settings → Advanced → Frame rate overlay, in the top-left corner. */
+  /** Settings → Advanced → Frame rate overlay, a movable floating panel. */
   frameRateOverlay?: boolean;
+  /** The panel's close button: turns the overlay setting off. */
+  onCloseFrameRateOverlay?: () => void;
   settings: ViewerSettings;
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
@@ -421,6 +423,7 @@ export function ViewerShell({
   selectedEdges,
   pickListEnabled,
   frameRateOverlay = false,
+  onCloseFrameRateOverlay,
   settings,
   fitSignal,
   autoFrame = null,
@@ -960,7 +963,12 @@ export function ViewerShell({
       {modeOverlay}
       {/* Upright at the model's left edge, or along the foot on a phone. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
-      {frameRateOverlay && <ViewportFrameStats sinkRef={frameStatsRef} />}
+      {frameRateOverlay && (
+        <ViewportFrameStats
+          sinkRef={frameStatsRef}
+          onClose={onCloseFrameRateOverlay}
+        />
+      )}
     </section>
   );
 }

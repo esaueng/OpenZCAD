@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   BURST_GAP_MS,
+  FPS_SERIES_SECONDS,
   FRAME_WINDOW_MS,
   FrameStatsMeter,
   HISTORY_LENGTH,
+  HITCH_MS,
   IDLE_AFTER_MS,
+  RECENT_INTERVALS,
   formatCount
 } from './frameStats';
 
@@ -76,6 +79,55 @@ describe('FrameStatsMeter', () => {
     frames(meter, 0, HISTORY_LENGTH * 3, 16);
     expect(meter.history).toHaveLength(HISTORY_LENGTH);
     expect(meter.history.every((value) => value === 16)).toBe(true);
+  });
+
+  it('reports recent average, 1% and 0.1% lows from the slowest frames', () => {
+    const meter = new FrameStatsMeter();
+    // 990 frames at 10 ms, then 10 hitches of 40 ms: the slowest 1%.
+    let at = frames(meter, 0, 991, 10);
+    for (let index = 0; index < 10; index += 1) {
+      at += 40;
+      meter.record({ at, renderMs: 0.5, drawCalls: 1, triangles: 1 });
+    }
+    const recent = meter.recentStats();
+    expect(recent.frames).toBe(1_000);
+    expect(recent.averageFps).toBeCloseTo(1_000 / 10.3, 5);
+    expect(recent.low1Fps).toBeCloseTo(25, 5);
+    expect(recent.low01Fps).toBeCloseTo(25, 5);
+    expect(recent.minFps).toBeCloseTo(25, 5);
+    expect(recent.p99FrameMs).toBe(40);
+    expect(recent.worstFrameMs).toBe(40);
+    expect(recent.hitches).toBe(10);
+    expect(HITCH_MS).toBeLessThan(40);
+  });
+
+  it('keeps rest out of the lows and bounds the recent window', () => {
+    const meter = new FrameStatsMeter();
+    expect(meter.recentStats().averageFps).toBeNull();
+    const first = frames(meter, 0, 10, 16);
+    frames(meter, first + BURST_GAP_MS + 1_000, 10, 16);
+    expect(meter.recentStats().minFps).toBeCloseTo(62.5, 5);
+    frames(meter, 100_000, RECENT_INTERVALS + 50, 8);
+    const recent = meter.recentStats();
+    expect(recent.frames).toBe(RECENT_INTERVALS);
+    expect(recent.minFps).toBeCloseTo(125, 5);
+  });
+
+  it('graphs one frame rate per second and breaks over rest', () => {
+    const meter = new FrameStatsMeter();
+    // A second at 50 fps, two seconds of rest, then a second at 100 fps.
+    frames(meter, 10_000, 50, 20);
+    const last = frames(meter, 13_000, 100, 10);
+    const series = meter.fpsSeries(last);
+    expect(series).toHaveLength(FPS_SERIES_SECONDS);
+    expect(series.at(-1)).toBeCloseTo(100, 5);
+    expect(series.at(-2)).toBeNull();
+    expect(series.at(-3)).toBeNull();
+    expect(series.at(-4)).toBeCloseTo(50, 5);
+    // Seconds that fell off the graph's span are not read back.
+    expect(meter.fpsSeries(last + FPS_SERIES_SECONDS * 1_000)).toEqual(
+      new Array(FPS_SERIES_SECONDS).fill(null)
+    );
   });
 });
 
