@@ -38,6 +38,29 @@ const REWRITES: { pattern: RegExp; sentence: string }[] = [
 ];
 
 /**
+ * The typed warnings that describe `derived`, the derived state on screen.
+ *
+ * A committed document's `derived` has its `featureWarnings` stripped
+ * (`attachDerivedState`), so after a rebuild settles they live only in the
+ * session's attribution record. That record applies only to the exact
+ * `derived` object it was taken from: commands share `derived` by reference,
+ * so identity says whether it still describes what is shown.
+ */
+export function shownFeatureWarnings<D extends object>(
+  derived: (D & { featureWarnings?: readonly FeatureWarning[] }) | undefined,
+  attribution: {
+    derived: object;
+    featureWarnings: readonly FeatureWarning[];
+  } | null
+): readonly FeatureWarning[] | undefined {
+  if (!derived) return undefined;
+  if (derived.featureWarnings) return derived.featureWarnings;
+  return attribution?.derived === derived
+    ? attribution.featureWarnings
+    : undefined;
+}
+
+/**
  * The Diagnostics list as a person should read it.
  *
  * `warnings` is the rebuild's channel to the commit gate and the tests, and

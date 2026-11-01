@@ -382,7 +382,10 @@ import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
-import { presentedDiagnostics } from './lib/diagnosticsRows';
+import {
+  presentedDiagnostics,
+  shownFeatureWarnings
+} from './lib/diagnosticsRows';
 import { sweepFacetingAdvisories } from './lib/sweepFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
@@ -7175,7 +7178,7 @@ export function App() {
       ? currentFaceGeometryPreview.geometry.featureWarnings
       : currentGeometrySnapshot
         ? currentGeometrySnapshot.featureWarnings
-        : shown?.derived.featureWarnings;
+        : shownFeatureWarnings(shown?.derived, featureAttribution);
     return presentedDiagnostics(
       [...warnings, ...faceting.map((advisory) => advisory.message)],
       faceting.length
@@ -7187,7 +7190,8 @@ export function App() {
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
     previewDoc,
-    doc
+    doc,
+    featureAttribution
   ]);
 
   // Keyed on the derived body table, not the whole document: commands clone
