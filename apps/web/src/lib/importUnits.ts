@@ -1,5 +1,6 @@
 import {
   UNIT_TO_MM,
+  type ProjectDocument,
   type SketchObjectData,
   type UnitlessImportUnits,
   type UnitSystem
@@ -155,4 +156,32 @@ export function verticesReadAs<T extends ArrayLike<number>>(
 ): number[] {
   const scale = UNIT_TO_MM[reading];
   return Array.from(vertices, (value) => value * scale);
+}
+
+/**
+ * What the Inspector says about the unit an imported mesh body was read in,
+ * or null when there is nothing to say: the body is not an import's own, or
+ * its file declared a unit. A unitless file imported before the reading was
+ * saved (schema v52) says so rather than guessing.
+ */
+export function importedMeshUnitsReadout(
+  document: Pick<ProjectDocument, 'nodes'> | null | undefined,
+  bodyId: string
+): string | null {
+  if (!document?.nodes) return null;
+  for (const node of Object.values(document.nodes)) {
+    if (
+      node.kind !== 'feature' ||
+      node.bodyId !== bodyId ||
+      node.data.featureKind !== 'imported-mesh'
+    )
+      continue;
+    const { assumedUnits, sourceName } = node.data;
+    if (assumedUnits)
+      return `${IMPORT_UNIT_LABELS[assumedUnits]} (the file stated none)`;
+    return isUnitlessMeshFileName(sourceName)
+      ? 'Not recorded (imported before units were saved)'
+      : null;
+  }
+  return null;
 }

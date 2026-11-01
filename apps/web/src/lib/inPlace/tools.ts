@@ -478,7 +478,7 @@ export type InPlaceRequest =
       gear: GearRequest;
     }
   | {
-      /** A schema v52 thread, as the feature stores it. */
+      /** A schema v53 thread, as the feature stores it. */
       tool: 'thread';
       thread: ThreadRequest;
     }

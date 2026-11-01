@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   describeReadingSize,
   historicalUnitlessReading,
+  importedMeshUnitsReadout,
   isUnitlessMeshFileName,
   meshExtent,
   settledUnitlessReading,
@@ -71,5 +72,57 @@ describe('sizing each choice', () => {
       '0.787 × 0.394 in'
     );
     expect(describeReadingSize([1.5, 0], 'm', 'cm')).toBe('150 × 0 cm');
+  });
+});
+
+describe('imported mesh units readout', () => {
+  const documentWith = (data: Record<string, unknown>) =>
+    ({
+      nodes: {
+        feature_1: {
+          kind: 'feature',
+          bodyId: 'body_1',
+          data: {
+            featureKind: 'imported-mesh',
+            artifactId: 'artifact_1',
+            triangleCount: 1,
+            ...data
+          }
+        }
+      }
+    }) as unknown as Parameters<typeof importedMeshUnitsReadout>[0];
+
+  it('names the unit a unitless file was read in', () => {
+    expect(
+      importedMeshUnitsReadout(
+        documentWith({ sourceName: 'part.stl', assumedUnits: 'inch' }),
+        'body_1'
+      )
+    ).toBe('Inches (the file stated none)');
+  });
+
+  it('says when an older unitless import did not record it', () => {
+    expect(
+      importedMeshUnitsReadout(
+        documentWith({ sourceName: 'scan.obj' }),
+        'body_1'
+      )
+    ).toBe('Not recorded (imported before units were saved)');
+  });
+
+  it('says nothing for files that declare a unit, or other bodies', () => {
+    expect(
+      importedMeshUnitsReadout(
+        documentWith({ sourceName: 'print.3mf' }),
+        'body_1'
+      )
+    ).toBeNull();
+    expect(
+      importedMeshUnitsReadout(
+        documentWith({ sourceName: 'part.stl', assumedUnits: 'mm' }),
+        'body_2'
+      )
+    ).toBeNull();
+    expect(importedMeshUnitsReadout(null, 'body_1')).toBeNull();
   });
 });

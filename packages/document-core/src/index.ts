@@ -552,7 +552,7 @@ export type GearInput = Omit<
 };
 
 /**
- * Schema v52: a thread feature's input — its {@link FeatureData} fields plus
+ * Schema v53: a thread feature's input — its {@link FeatureData} fields plus
  * the command's name and optional preallocated ids.
  */
 export type ThreadInput = Omit<
@@ -677,6 +677,8 @@ export interface ImportedMeshInput {
    * store. This is also what the `import.mesh` command log entry carries.
    */
   meshPayloadRef?: ImportedSourceReference;
+  /** The unit a file that stated none was read in (v52); see the feature. */
+  assumedUnits?: UnitSystem;
   ids?: BodyFeatureIds;
 }
 
@@ -3627,7 +3629,7 @@ export function gearBody(
 }
 
 /**
- * Schema v52: adds a screw thread on `targetBodyId`'s cylindrical face, which
+ * Schema v53: adds a screw thread on `targetBodyId`'s cylindrical face, which
  * consumes that body.
  */
 export function threadBody(
@@ -3856,7 +3858,8 @@ export function importMeshBody(
       triangleCount: input.triangleCount,
       ...(input.meshPayloadRef
         ? { meshPayloadRef: { ...input.meshPayloadRef } }
-        : { vertices: input.vertices!, indices: input.indices! })
+        : { vertices: input.vertices!, indices: input.indices! }),
+      ...(input.assumedUnits ? { assumedUnits: input.assumedUnits } : {})
     }
   };
 
@@ -4746,7 +4749,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'triangleCount',
     'vertices',
     'indices',
-    'meshPayloadRef'
+    'meshPayloadRef',
+    'assumedUnits'
   ]
 };
 
@@ -4774,7 +4778,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   revolve: ['axisRef', 'profile'],
   pattern: ['axisRef'],
   transform: ['axisRotation'],
-  // Schema v52: every size and placement field falls back to the face or its
+  // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
   // without a lineage name drops the old face's reference.

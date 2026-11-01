@@ -1063,9 +1063,9 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   }
 }
 
-/** Schema v52: the most thread starts the kernel's thread generator builds. */
+/** Schema v53: the most thread starts the kernel's thread generator builds. */
 const MAX_THREAD_STARTS = 16;
-/** Schema v52: the steepest flank the kernel's thread generator builds. */
+/** Schema v53: the steepest flank the kernel's thread generator builds. */
 const MAX_THREAD_FLANK_DEG = 75;
 
 /**

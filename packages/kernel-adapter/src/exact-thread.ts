@@ -1,5 +1,5 @@
 /**
- * Schema v52 thread features: a screw thread modeled on a body's cylindrical
+ * Schema v53 thread features: a screw thread modeled on a body's cylindrical
  * face by the kernel's thread generator.
  *
  * The kernel owns the thread: its helical surfaces, their certified fit, the

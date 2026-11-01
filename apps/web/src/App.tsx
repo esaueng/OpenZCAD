@@ -15410,7 +15410,7 @@ export function App() {
           try {
             outcome = await validatedFeature.run(
               meshImport.importedMeshCommand(
-                parsed,
+                { ...parsed, assumedUnits: reading },
                 hold.form,
                 `artifact_local_${crypto.randomUUID()}`,
                 previewIds
@@ -15471,7 +15471,7 @@ export function App() {
                     );
                   }
                   return meshImport.importedMeshCommand(
-                    parsed,
+                    { ...parsed, assumedUnits: reading },
                     hold.form,
                     archived.artifactId,
                     previewIds
@@ -15580,6 +15580,7 @@ export function App() {
           setStatus(`${file.name} was not imported: you cancelled it.`);
           return;
         }
+        mesh = { ...mesh, assumedUnits: reading };
         if (reading !== 'mm') {
           // A uniform enlargement: the worker's rebuild check, run on the
           // millimetre reading, still holds for every larger unit.
@@ -15644,6 +15645,8 @@ export function App() {
       indices: number[];
       /** Set when the file declared a unit that was converted to millimetres. */
       sourceUnit?: string;
+      /** The unit a file that stated none was read in. */
+      assumedUnits?: UnitSystem;
     };
   }): Promise<void> {
     const { file, contentType, artifactKind, importManager, mesh } = input;

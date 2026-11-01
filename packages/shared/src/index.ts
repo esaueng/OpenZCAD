@@ -207,10 +207,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // counterbore's rim). An older client would refuse it as malformed.
 // v51 adds a countersunk hole's callout and the outside angle on D06
 // drawing dimensions. An older client would refuse either as malformed.
-// v52 adds modeled screw threads (`featureKind: 'thread'`) on a body's
+// v52 records the unit an imported mesh was read in when its file stated
+// none (`assumedUnits`). An older client would drop it on its next save.
+// v53 adds modeled screw threads (`featureKind: 'thread'`) on a body's
 // cylindrical face. An older client has no builder for the kind and would
 // drop the thread on rebuild, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 52 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 53 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1986,7 +1988,7 @@ export type FeatureData =
     }
   | {
       /**
-       * Schema v52: a screw thread modeled on a body's cylindrical face
+       * Schema v53: a screw thread modeled on a body's cylindrical face
        * (`faceHash`, anchored by `faceReference`). A boss takes an external
        * thread, a bore an internal one; the kernel reads which from the face.
        * The body is consumed and the threaded body replaces it.
@@ -2193,6 +2195,15 @@ export type FeatureData =
        * from accepting this document and silently omitting its imported body.
        */
       meshPayloadRef?: ImportedSourceReference;
+      /**
+       * v52: the unit this mesh's numbers were read in, for a file that
+       * stated none (STL, OBJ, PLY), as chosen at import or settled by the
+       * unitless-import preference. The vertices are already converted to
+       * document units, so this changes no geometry; it records the one
+       * assumption a 25.4x mistake hides behind. Absent for files that
+       * declare their unit and for imports saved before v52.
+       */
+      assumedUnits?: UnitSystem;
     }
   | {
       featureKind: 'imported-step';
