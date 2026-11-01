@@ -1,4 +1,10 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
+import {
+  createChipEntryButton,
+  nameCommandChip,
+  prepareCommandChip,
+  spokenChipText
+} from '../lib/inPlace/chipNames';
 import type { FrameStatsSink } from '../lib/frameStats';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
@@ -752,6 +758,11 @@ export type CommandHandleView = (
   max?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
   format(value: number): string;
+  /**
+   * The chip's accessible name for a value, in words: "Radius 12 mm".
+   * Without it the chip is named by its visible text.
+   */
+  describe?(value: number): string;
 };
 
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
@@ -4147,6 +4158,11 @@ export function ModelViewer({
     });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
+    // The value is its own button rather than the chip: the chip also holds
+    // the radius/diameter switch, and a button may not contain another. A
+    // click on it reaches the chip's handler below like any other.
+    const offsetEntry = createChipEntryButton();
+    offsetChip.append(offsetEntry);
     const dimensionPrefix = document.createElement('button');
     dimensionPrefix.type = 'button';
     dimensionPrefix.className = 'handle-dimension-prefix';
@@ -4290,8 +4306,10 @@ export function ModelViewer({
           (handle) => handle.valueId === valueId
         );
         if (!view) continue;
-        const text = view.format(entry.rig ? entry.rig.value() : view.value);
+        const shownValue = entry.rig ? entry.rig.value() : view.value;
+        const text = view.format(shownValue);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        nameCommandChip(entry.chip, view.describe?.(shownValue));
         entry.chip.hidden = false;
       }
       const chipWidths = new Map(
@@ -4394,6 +4412,7 @@ export function ModelViewer({
             : { dx: 0, dy: 0 };
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        nameCommandChip(entry.chip, view.describe?.(value));
         shown.push({
           valueId,
           entry,
@@ -7313,13 +7332,27 @@ export function ModelViewer({
             ? 'Switch to radius entry'
             : 'Switch to diameter entry'
         );
-        chip.replaceChildren(
-          dimensionPrefix,
+        offsetEntry.replaceChildren(
           ` ${formatNumber(displayValue)}\u00a0`,
           units
         );
+        nameCommandChip(
+          offsetEntry,
+          `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue)} ${unitLabelRef.current}`
+        );
+        // Only when the layout changes: re-inserting a focused button on
+        // every frame would drop its focus.
+        if (
+          chip.firstChild !== dimensionPrefix ||
+          chip.lastChild !== offsetEntry ||
+          chip.childNodes.length !== 2
+        )
+          chip.replaceChildren(dimensionPrefix, offsetEntry);
       } else {
-        renderChipText(chip, text);
+        renderChipText(offsetEntry, text);
+        nameCommandChip(offsetEntry, spokenChipText(text));
+        if (chip.firstChild !== offsetEntry || chip.childNodes.length !== 1)
+          chip.replaceChildren(offsetEntry);
       }
       chip.dataset.variant =
         lineAngle !== null
@@ -13805,7 +13838,7 @@ export function ModelViewer({
       const chip = makeChip();
       chip.dataset.testid = `command-handle-${handle.valueId}`;
       const valueId = handle.valueId;
-      chip.addEventListener('click', () => {
+      const openKeypad = () => {
         const entry = commandRigsRef.current.get(valueId);
         const view = commandHandlesRef.current.find(
           (candidate) => candidate.valueId === valueId
@@ -13813,7 +13846,8 @@ export function ModelViewer({
         const value = entry?.rig ? entry.rig.value() : view?.value;
         if (value !== undefined)
           onOpenCommandKeypadRef.current?.(valueId, value);
-      });
+      };
+      prepareCommandChip(chip, openKeypad);
       rigs.set(handle.valueId, {
         key: handle.key,
         rig,

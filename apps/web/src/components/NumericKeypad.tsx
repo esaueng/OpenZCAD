@@ -21,6 +21,10 @@ import {
 import { unitLabel } from '../lib/measurements';
 import { MODEL_PANEL_OBSTACLES } from '../lib/selectionCalloutView';
 import { formatNumber } from '../lib/model';
+import {
+  keypadReturnTarget,
+  returnKeypadFocus
+} from '../lib/keypadReturnFocus';
 
 export interface KeypadRequest {
   /** U09: which in-place command value a `command` entry edits. */
@@ -235,6 +239,9 @@ export function NumericKeypad({
     : request.label;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Read on the first render, before the field takes focus below.
+  const [returnTarget] = useState(keypadReturnTarget);
+  useEffect(() => () => returnKeypadFocus(returnTarget), [returnTarget]);
   const selectInitial = useRef(request.selectInitial ?? true);
   const initialPreviewed = useRef(false);
   const untouchedPrefill = useRef(request.selectInitial !== false);

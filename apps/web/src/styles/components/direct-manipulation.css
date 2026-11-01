@@ -388,6 +388,11 @@
   background: rgba(26, 30, 36, 0.98);
 }
 
+.handle-value-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 /* The number carries the weight; the prefix and units step back. */
 .chip-number {
   font-weight: 600;
@@ -1844,4 +1849,23 @@
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
+}
+
+/* The offset chip's value as its own button (beside the radius/diameter
+   switch): it looks like the chip's text, and only its focus ring shows. */
+.handle-value-entry {
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  background: none;
+  border: 0;
+  cursor: inherit;
+}
+
+.handle-value-entry:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }

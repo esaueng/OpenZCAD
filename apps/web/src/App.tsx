@@ -383,6 +383,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
+import { commandChipName } from './lib/inPlace/chipNames';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
@@ -21874,7 +21875,9 @@ export function App() {
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
           ...(valueSpec?.max === undefined ? {} : { max: valueSpec.max }),
-          format
+          format,
+          describe: (value: number) =>
+            commandChipName(label, round(value), valueSpec?.unit, inPlaceUnits)
         };
       }),
     // The viewer keys its rigs on `key`, so a value change here only moves
