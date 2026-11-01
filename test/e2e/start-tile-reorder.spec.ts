@@ -22,6 +22,25 @@ async function cardOrder(page: Page) {
   return page.locator('.start-tile-name').allTextContents();
 }
 
+/** Where the shelf title line's first word is drawn, and in what type. */
+async function leadingTitle(page: Page) {
+  const lead = page
+    .locator('.start-toolbar-title')
+    .locator('.start-crumb, h2')
+    .first();
+  return lead.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const style = getComputedStyle(element);
+    return {
+      text: element.textContent,
+      left: Math.round(range.getBoundingClientRect().left),
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight
+    };
+  });
+}
+
 /**
  * Presses on a card's preview and drags it to another card's far side, the
  * side it would land on: a card's middle is where a hold makes a folder.
@@ -102,10 +121,18 @@ test(
       .poll(() => cardOrder(page))
       .toEqual(['Reorder pair', names[1]]);
 
+    const rootTitle = await leadingTitle(page);
     await page
       .getByRole('button', { name: 'Open folder Reorder pair, 2 projects' })
       .click();
     await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);
+    // Opening a folder only appends to the title line: the way back out reads
+    // as the same Projects heading, in the same place and type.
+    const folderTitle = await leadingTitle(page);
+    expect(folderTitle.text).toBe(rootTitle.text);
+    expect(Math.abs(folderTitle.left - rootTitle.left)).toBeLessThanOrEqual(1);
+    expect(folderTitle.fontSize).toBe(rootTitle.fontSize);
+    expect(folderTitle.fontWeight).toBe(rootTitle.fontWeight);
     // The folder outlives a reload: it is kept on this device.
     await page.reload();
     await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);

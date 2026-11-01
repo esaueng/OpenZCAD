@@ -2749,12 +2749,18 @@
   font-weight: var(--fw-medium);
 }
 
-/* The way back out of a folder, beside its name. */
+/* The way back out of a folder, beside its name. It is the shelf's own
+   heading, dimmed: same type and, with the hover padding pulled back out,
+   the same left edge, so opening a folder only appends to the title line. */
 .start-crumb {
+  margin-left: -6px;
   padding: 2px 6px;
   color: var(--color-text-muted);
   border-radius: var(--radius-sm);
-  font-size: var(--fs-lg);
+  font-size: 18px;
+  font-weight: var(--fw-medium);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .start-crumb:hover {
