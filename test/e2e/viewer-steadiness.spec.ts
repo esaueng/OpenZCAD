@@ -6,7 +6,8 @@ import {
   stubApi,
   expectBodyCount,
   enableFullRender,
-  locateEdge
+  locateEdge,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 /**
@@ -339,6 +340,12 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
     return direction.map((value) => value / length);
   };
   const faceOn = (pose: CameraState) => Math.abs(viewDirection(pose)[2]!);
+  // The pick hook resolves before React commits its selection. Let the
+  // initial framing and picked-face state settle before the shortcut.
+  await expect(
+    page.getByRole('group', { name: 'Picked', exact: true })
+  ).toBeVisible();
+  await waitForStillViewport(page);
   await page.keyboard.press('Space');
   // The glide ends looking straight down the face normal.
   await expect
@@ -357,18 +364,10 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
   await page.mouse.move(fromX + 30, fromY - 180, { steps: 12 });
   await page.mouse.up();
   await page.keyboard.up('Shift');
-  // Let the orbit's damping settle before taking the reference pose.
-  let turned = await camera(canvas);
-  await expect
-    .poll(async () => {
-      const next = await camera(canvas);
-      const moved = Math.hypot(
-        ...next.position.map((value, axis) => value - turned.position[axis]!)
-      );
-      turned = next;
-      return moved;
-    })
-    .toBeLessThan(1e-6);
+  // Consecutive reads may see the same RAF while damping still runs.
+  // Require a full quiet window before taking the reference pose.
+  await waitForStillViewport(page);
+  const turned = await camera(canvas);
   // Turned well away from looking straight down the face normal.
   expect(faceOn(turned)).toBeLessThan(0.99);
 
@@ -377,7 +376,7 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
   await page.getByRole('button', { name: 'Hide body Box 1' }).click();
   await page.getByRole('button', { name: 'Show body Box 1' }).click();
   await expectBodyCount(page, 1);
-  await page.waitForTimeout(1000);
+  await waitForStillViewport(page);
   const after = await camera(canvas);
   // Not glided back to the face: still looking the way it was turned (a
   // re-frame may nudge the distance, not the direction).
