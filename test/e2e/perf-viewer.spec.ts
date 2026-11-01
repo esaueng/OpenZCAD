@@ -143,7 +143,9 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
   }
   // Large documents can still be restoring the workspace after the normal
   // five-second UI assertion window, especially under validation load.
-  await expect(async () => expectBodyCount(page, count)).toPass({ timeout: 60_000 });
+  await expect(async () => expectBodyCount(page, count)).toPass({
+    timeout: 60_000
+  });
   await page.keyboard.press('Escape');
   const canvas = page.locator('.viewer-host canvas').first();
   await expect(canvas).toBeVisible();

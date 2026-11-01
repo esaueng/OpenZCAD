@@ -74,9 +74,7 @@ describe('InteractionShaderWarmup', () => {
       expect(
         meshes.map((mesh) => mesh.geometry.hasAttribute('normal'))
       ).toEqual([true, true, true, true, false, false]);
-      expect(
-        meshes.slice(0, 4).map((mesh) => mesh.material.side)
-      ).toEqual([
+      expect(meshes.slice(0, 4).map((mesh) => mesh.material.side)).toEqual([
         THREE.BackSide,
         THREE.FrontSide,
         THREE.BackSide,

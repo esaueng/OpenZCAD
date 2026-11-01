@@ -73,7 +73,11 @@ describe('FrameStatsMeter', () => {
       drawCalls: 1,
       triangles: 1
     });
-    expect(meter.summarize(1_300)).toMatchObject({ idle: false, cpuMs: 1_300, renderMs: 1_000 });
+    expect(meter.summarize(1_300)).toMatchObject({
+      idle: false,
+      cpuMs: 1_300,
+      renderMs: 1_000
+    });
     expect(meter.summarize(1_300 + IDLE_AFTER_MS + 1).idle).toBe(true);
   });
   it('reports full callback CPU separately from render calls and frame intervals', () => {

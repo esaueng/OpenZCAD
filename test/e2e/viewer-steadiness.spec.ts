@@ -176,7 +176,9 @@ test('the activity lane yields the prompt placeholder to guidance only while no 
   await page.keyboard.press('Escape');
   const input = page.locator('.command-bar-input').first();
   await input.blur();
-  await expect(page.locator('.workspace-hint')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.workspace-hint')).toBeVisible({
+    timeout: 15_000
+  });
   const color = () =>
     input.evaluate(
       (element) => getComputedStyle(element, '::placeholder').color
