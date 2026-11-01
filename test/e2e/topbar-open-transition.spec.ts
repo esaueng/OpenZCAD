@@ -169,10 +169,11 @@ test('opens a cloud project without the action row flashing stale states or refl
   await page.goto('/');
   await page.getByLabel('Project name').fill('Open Transition Part');
   await page.getByRole('button', { name: 'New project' }).click();
-  const actions = page
-    .locator('.topbar')
-    .getByRole('group', { name: 'Workspace actions' });
-  await expect(actions.getByRole('status', { name: 'Saved' })).toBeVisible({
+  const topbar = page.locator('.topbar');
+  const actions = topbar.getByRole('group', { name: 'Workspace actions' });
+  // The save status follows the project name in the identity island.
+  const identity = topbar.locator('.topbar-identity');
+  await expect(identity.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: 15_000
   });
   await expect(
@@ -210,10 +211,21 @@ test('opens a cloud project without the action row flashing stale states or refl
       if (node.nodeType === Node.TEXT_NODE) return [node.textContent ?? ''];
       return Array.from(node.childNodes).flatMap(labels);
     };
+    // The save status sits in the identity island and presence shows a
+    // glyph on wide screens, so a sample reads the status's label, the
+    // presence chip's name and the action row's visible text.
     const sample = () => {
       const row = document.querySelector('.topbar-actions');
       if (!row) return;
-      const text = labels(row).join(' ').replace(/\s+/g, ' ').trim();
+      const save = document.querySelector('.topbar-identity > .save-state');
+      const presence = row.querySelector('.collaboration-state');
+      const text = [
+        save ? labels(save).join(' ') : '',
+        presence?.getAttribute('aria-label') ?? '',
+        labels(row).join(' ')
+      ]
+        .map((part) => part.replace(/\s+/g, ' ').trim())
+        .join(' | ');
       const width = Math.round(row.getBoundingClientRect().width);
       const last = samples.at(-1);
       if (!last || last.text !== text || last.width !== width) {
@@ -228,7 +240,7 @@ test('opens a cloud project without the action row flashing stale states or refl
     });
   });
   await tile.click();
-  await expect(actions.getByRole('status', { name: 'Saved' })).toBeVisible({
+  await expect(identity.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: 15_000
   });
   await expect(
@@ -248,8 +260,10 @@ test('opens a cloud project without the action row flashing stale states or refl
     expect(text).not.toContain('Offline');
     expect(text).not.toContain('Connecting');
   }
-  expect(texts.at(-1)).toBe('Saved 1 live File 2 Settings');
-  // Every label the row cycles through fits the width it reserved, so the
-  // row never moves while it settles.
+  expect(texts.at(-1)).toBe(
+    'Saved | Open project sharing · 1 live | 1 File 2 Settings'
+  );
+  // The action row holds no status label, and presence reserves its count,
+  // so the row never moves while the project settles.
   expect(new Set(samples.map((entry) => entry.width)).size).toBe(1);
 });
