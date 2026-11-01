@@ -19,6 +19,7 @@ import {
 import {
   boxOperations,
   buildPart,
+  countersunkPlate,
   flangeOperations,
   footOperations,
   frontId,
@@ -26,7 +27,8 @@ import {
   roundedOperations,
   sheetOf,
   slopedOperations,
-  stepOperations
+  stepOperations,
+  topId
 } from './helpers/drawing-dimension-fixtures';
 import {
   autoDimension,
@@ -154,10 +156,45 @@ describe('D06 Auto-dimension: the corpus', () => {
       bodies,
       'mm'
     );
-    // Its edges meet at the slope's corner with the top face: 135° inside.
+    // Its edges meet at the slope's corner with the top face, 135° inside;
+    // v51 states it outside, on the top face's extension, as 45°.
+    expect(angle).toMatchObject({ kind: 'angle', outside: 1 });
     expect(resolved.ok && resolved.resolved.kind).toBe('angle');
     if (resolved.ok && resolved.resolved.kind === 'angle')
-      expect(resolved.resolved.value).toBeCloseTo(135, 6);
+      expect(resolved.resolved.value).toBeCloseTo(45, 6);
+    expect(plan.skipped).toEqual([]);
+    expect(audit).toMatchObject({
+      missing: [],
+      redundant: [],
+      unmeasurable: [],
+      unchecked: []
+    });
+    expect(audit.stated).toBe(audit.required);
+    expectClearLayout(after, views, bodies);
+  });
+
+  it('calls out countersunk holes in one note, not a diameter and a chamfer', async () => {
+    const { bodies, bodyId } = await countersunkPlate(adapter);
+    const { before, plan, audit, after, views } = autoDimension(
+      sheetOf(bodyId, [], ['top', 'front']),
+      bodies
+    );
+    expect(before.missing.map((entry) => entry.message)).toEqual(
+      expect.arrayContaining(['2× Ø6 diameter.', '2× 3 × 45° chamfer.'])
+    );
+    const callouts = plan.annotations.filter(
+      (annotation) =>
+        annotation.kind === 'diameter' && annotation.countersink !== undefined
+    );
+    expect(callouts).toHaveLength(1);
+    expect(kinds(plan.annotations)).not.toContain('chamfer');
+    const top = views.find((v) => v.view.viewId === topId)!.view;
+    expect(
+      resolveDrawingAnnotation(callouts[0]!, top, bodies, 'mm')
+    ).toMatchObject({
+      ok: true,
+      resolved: { label: '2× Ø6 THRU, CSK Ø12 × 90°' }
+    });
     expect(plan.skipped).toEqual([]);
     expect(audit).toMatchObject({
       missing: [],

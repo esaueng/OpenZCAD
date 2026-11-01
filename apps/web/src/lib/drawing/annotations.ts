@@ -105,7 +105,8 @@ export type AnnotationBreak =
   | 'no-sharp'
   | 'not-a-chamfer'
   | 'not-a-blend'
-  | 'not-a-counterbore';
+  | 'not-a-counterbore'
+  | 'not-a-countersink';
 
 type UV = [number, number];
 
@@ -150,6 +151,12 @@ export type ResolvedAnnotation =
       rays: [[UV, UV], [UV, UV]];
       value: number;
       label: string;
+      /**
+       * v51: the ray turned outward, now from the vertex along its edge's
+       * extension, and that edge's near end, where its extension line
+       * starts.
+       */
+      outside?: { index: 0 | 1; from: UV };
     }
   | {
       kind: 'note';
@@ -206,6 +213,8 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'This face is no longer a revolved blend (a torus), so it has no blend radius to state.';
     case 'not-a-counterbore':
       return 'These circles no longer make a counterbored hole: a larger bore on the same axis, opening onto the hole.';
+    case 'not-a-countersink':
+      return 'These circles no longer make a countersunk hole: a cone on the same axis, opening onto the hole.';
   }
 }
 
@@ -866,6 +875,35 @@ export function resolveDrawingAnnotation(
       if (!circle.ok) return failure(circle.reason);
       const value =
         annotation.kind === 'radius' ? circle.radius : 2 * circle.radius;
+      if (annotation.countersink) {
+        const rim = lookupEdge(annotation.countersink, view, bodies);
+        if (!rim.ok) return failure(rim.reason);
+        const body = annotationBody(bodies, view, annotation.edge.bodyId);
+        const reading = readCountersink(
+          found.edge,
+          rim.edge,
+          body?.topology?.edges ?? [],
+          body?.topology?.faces ?? []
+        );
+        if (!reading.ok) return failure(reading.reason);
+        const number = (n: number) => formatDrawingNumber(n, decimals);
+        const hole = reading.through
+          ? `Ø${number(value)} THRU`
+          : `Ø${number(value)} × ${number(reading.holeDepth)} DEEP`;
+        return {
+          ok: true,
+          resolved: {
+            kind: 'diameter',
+            center: circle.center,
+            radius: circle.radius,
+            value,
+            label: dimensionLabel(
+              annotation,
+              `${hole}, CSK Ø${number(2 * reading.rim.radius)} × ${formatDrawingNumber(reading.angleDeg, ANGLE_DECIMALS)}°`
+            )
+          }
+        };
+      }
       if (annotation.counterbore) {
         const bore = lookupEdge(annotation.counterbore, view, bodies);
         if (!bore.ok) return failure(bore.reason);
@@ -996,6 +1034,17 @@ export function resolveDrawingAnnotation(
         const db = Math.hypot(b[0] - vertex[0], b[1] - vertex[1]);
         return da <= db ? ([a, b] as [UV, UV]) : ([b, a] as [UV, UV]);
       }) as [[UV, UV], [UV, UV]];
+      const outside = annotation.outside;
+      const near = outside === undefined ? null : ordered[outside][0];
+      if (outside !== undefined) {
+        // Turned outward: the ray runs from the vertex the other way along
+        // its edge's line, as far as the edge reaches.
+        const far = ordered[outside][1];
+        ordered[outside] = [
+          vertex,
+          [2 * vertex[0] - far[0], 2 * vertex[1] - far[1]]
+        ];
+      }
       const d = ordered.map(([, far]) => {
         const length = Math.hypot(far[0] - vertex[0], far[1] - vertex[1]);
         return [
@@ -1018,7 +1067,10 @@ export function resolveDrawingAnnotation(
           label: dimensionLabel(
             annotation,
             `${formatDrawingNumber(value, decimals)}°`
-          )
+          ),
+          ...(outside !== undefined
+            ? { outside: { index: outside, from: near! } }
+            : {})
         }
       };
     }
@@ -1136,6 +1188,106 @@ export function readCounterbore(
   };
 }
 
+export type CountersinkReading =
+  | {
+      ok: true;
+      /** The cone's outer rim, where it opens onto the face. */
+      rim: { center: Vector3; axis: Vector3; radius: number };
+      /** Its included angle, in degrees. */
+      angleDeg: number;
+      cone: FaceTopology;
+      /** Where the countersink opens, and the hole's far end, on the axis. */
+      opening: Vector3;
+      end: Vector3;
+      /** From where it opens to the hole's far end. */
+      holeDepth: number;
+      through: boolean;
+    }
+  | { ok: false; reason: AnnotationBreak };
+
+/**
+ * A countersunk hole read from the hole's rim and the cone's outer rim: a
+ * cone coaxial with the hole bounded by that rim, opening onto the face.
+ * The hole is THRU when its far rim lies on the part's extreme along the
+ * axis; a blind hole's depth runs from where the countersink opens.
+ */
+export function readCountersink(
+  holeEdge: EdgeTopology,
+  rimEdge: EdgeTopology,
+  edges: readonly EdgeTopology[],
+  faces: readonly FaceTopology[]
+): CountersinkReading {
+  const hole = holeEdge.curve?.circle;
+  const rim = rimEdge.curve?.circle;
+  if (!hole || !rim) return { ok: false, reason: 'not-circular' };
+  const axis = scale(hole.axis, 1 / norm(hole.axis));
+  const tol = 1e-6 * Math.max(1, norm(hole.center), rim.radius);
+  const offAxis = (point: Vector3) => {
+    const between = sub(point, hole.center);
+    const along = dot(between, axis);
+    return Math.sqrt(Math.max(0, dot(between, between) - along * along));
+  };
+  const coaxial = (direction: Vector3, point: Vector3) =>
+    Math.abs(Math.abs(dot(axis, direction) / norm(direction)) - 1) <= 1e-6 &&
+    offAxis(point) <= tol;
+  if (!coaxial(rim.axis, rim.center) || rim.radius <= hole.radius + tol)
+    return { ok: false, reason: 'not-a-countersink' };
+  const cone = faces.find((face) => {
+    const g = face.geometry;
+    return (
+      g?.apex !== undefined &&
+      g.axis !== undefined &&
+      g.halfAngle !== undefined &&
+      (rimEdge.adjacentFaceHashes ?? []).includes(face.hash) &&
+      coaxial(g.axis, g.apex)
+    );
+  });
+  if (!cone) return { ok: false, reason: 'not-a-countersink' };
+  const opening = dot(sub(rim.center, hole.center), axis);
+  const holeRims: number[] = [];
+  for (const edge of edges) {
+    const c = edge.curve?.circle;
+    if (
+      !c ||
+      Math.abs(c.radius - hole.radius) > tol ||
+      !coaxial(c.axis, c.center)
+    )
+      continue;
+    const t = dot(sub(c.center, hole.center), axis);
+    if (!holeRims.some((known) => Math.abs(known - t) <= tol)) holeRims.push(t);
+  }
+  if (holeRims.length < 2) return { ok: false, reason: 'not-a-countersink' };
+  const nearest = holeRims.reduce((best, t) =>
+    Math.abs(t - opening) < Math.abs(best - opening) ? t : best
+  );
+  const away = Math.sign(nearest - opening) || 1;
+  const end = holeRims.reduce((far, t) =>
+    (t - opening) * away > (far - opening) * away ? t : far
+  );
+  let extreme = end;
+  for (const edge of edges) {
+    const p = edge.points;
+    for (let i = 0; i + 2 < p.length; i += 3) {
+      const t = dot(
+        sub({ x: p[i]!, y: p[i + 1]!, z: p[i + 2]! }, hole.center),
+        axis
+      );
+      if ((t - extreme) * away > 0) extreme = t;
+    }
+  }
+  const at = (t: number) => add(hole.center, scale(axis, t));
+  return {
+    ok: true,
+    rim,
+    angleDeg: (2 * cone.geometry!.halfAngle! * 180) / Math.PI,
+    cone,
+    opening: at(opening),
+    end: at(end),
+    holeDepth: Math.abs(end - opening),
+    through: Math.abs(extreme - end) <= tol
+  };
+}
+
 /**
  * D06: what a dimension measures, in model space, for checking a sheet's
  * dimension set against the part. The same lookups as
@@ -1159,6 +1311,8 @@ export type AnnotationModelReading =
       circle: { center: Vector3; axis: Vector3; radius: number };
       /** v50: a counterbored hole's callout states its bore and depth too. */
       counterbore?: Extract<CounterboreReading, { ok: true }>;
+      /** v51: a countersunk hole's callout states its cone too. */
+      countersink?: Extract<CountersinkReading, { ok: true }>;
     }
   | {
       kind: 'chamfer';
@@ -1260,6 +1414,26 @@ export function annotationModelReading(
   const found = lookupEdge(annotation.edge, view, bodies);
   const circle = found.ok ? found.edge.curve?.circle : undefined;
   if (!circle) return null;
+  if (annotation.countersink) {
+    const rim = lookupEdge(annotation.countersink, view, bodies);
+    const body = annotationBody(bodies, view, annotation.edge.bodyId);
+    const reading =
+      found.ok && rim.ok
+        ? readCountersink(
+            found.edge,
+            rim.edge,
+            body?.topology?.edges ?? [],
+            body?.topology?.faces ?? []
+          )
+        : null;
+    if (!reading?.ok) return null;
+    return {
+      kind: annotation.kind,
+      bodyId: annotation.edge.bodyId,
+      circle,
+      countersink: reading
+    };
+  }
   if (annotation.counterbore) {
     // Resolved above, so the bore and its reading are there.
     const bore = lookupEdge(annotation.counterbore, view, bodies);
@@ -1597,7 +1771,25 @@ function angleLayout(
   );
   // Extension lines where the arc lies beyond an edge's far end or short of
   // its near end.
+  const turned = resolved.outside;
+  if (turned) {
+    // The outward ray's extension line runs from its edge's near end,
+    // through the vertex, to just past the arc.
+    const d = dirs[turned.index];
+    const from = toPage(...turned.from);
+    const start = Math.hypot(from[0] - v[0], from[1] - v[1]);
+    const along = (t: number): XY => [v[0] + d[0] * t, v[1] + d[1] * t];
+    strokes.push(
+      line(
+        start > EXTENSION_GAP_MM
+          ? along(-start + EXTENSION_GAP_MM)
+          : along(EXTENSION_GAP_MM),
+        along(radius + EXTENSION_OVERSHOOT_MM)
+      )
+    );
+  }
   rays.forEach(([near, far], index) => {
+    if (turned?.index === index) return;
     const d = dirs[index]!;
     const nearDistance = Math.hypot(near[0] - v[0], near[1] - v[1]);
     const farDistance = Math.hypot(far[0] - v[0], far[1] - v[1]);

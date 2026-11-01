@@ -49,6 +49,7 @@ import {
   slopeLabel,
   viewEdges,
   type AuditAxis,
+  type ChamferGroup,
   type Position,
   type SizeGroup,
   type SlopeGroup
@@ -546,6 +547,90 @@ export function planAutoDimensions(
         }
       }
     }
+    // Countersunk holes (v51): one callout states the hole and its cone,
+    // and a blind hole's depth, on the hole's circle with the cone's outer
+    // rim around it. Either already stated keeps them apart.
+    const calledOutChamfers = new Set<ChamferGroup>();
+    for (const group of requirements.countersinks) {
+      if (statedSizes.has(group.hole) || body.statedChamfers.has(group.chamfer))
+        continue;
+      const annotationId = createId();
+      const cones = new Set(group.chamfer.faces.map((face) => face.hash));
+      const options = circleOptions(
+        measuring,
+        bodyId,
+        edgesOf,
+        group.hole,
+        refOf,
+        holding
+      ).flatMap((circle) => {
+        const hole = circle.edge.curve!.circle!;
+        // The widest circle of a cone of the group about this hole.
+        const rims = edgesOf(circle.context, bodyId)
+          .filter((edge) => {
+            const rim = edge.curve?.circle;
+            return (
+              rim !== undefined &&
+              edge.displayRole !== 'seam' &&
+              (edge.adjacentFaceHashes ?? []).some((hash) => cones.has(hash)) &&
+              circleInGroup(
+                {
+                  radius: rim.radius,
+                  blend: false,
+                  axes: [{ point: hole.center, direction: hole.axis }]
+                },
+                rim
+              ) &&
+              rim.radius > hole.radius
+            );
+          })
+          .sort(
+            (a, b) =>
+              b.curve!.circle!.radius - a.curve!.circle!.radius ||
+              Number(edgeVisible(circle.context, b)) -
+                Number(edgeVisible(circle.context, a))
+          );
+        for (const rim of rims) {
+          const ref = refOf(circle.context, bodyId, rim);
+          if (ref)
+            return [
+              {
+                context: circle.context,
+                visible: circle.visible,
+                annotation: {
+                  annotationId,
+                  kind: 'diameter' as const,
+                  viewId: circle.context.view.viewId,
+                  edge: circle.ref,
+                  countersink: ref,
+                  ...(group.hole.axes.length > 1
+                    ? { count: group.hole.axes.length }
+                    : {}),
+                  placementMm: { x: 0, y: 0 }
+                }
+              }
+            ];
+        }
+        return [];
+      });
+      if (options.length === 0) continue;
+      const what = `${sizeLabel(group.hole, units)} countersunk`;
+      plan({ bodyId, what, subject: what, ...options[0]!, options });
+      calledOut.add(group.hole);
+      calledOutChamfers.add(group.chamfer);
+      for (const copy of group.instances) {
+        if (copy.through) continue;
+        const graph = links[copy.along];
+        const index = (value: number) =>
+          requirements.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const a = index(copy.opening);
+        const b = index(copy.end);
+        if (a >= 0 && b >= 0 && graph.find(a) !== graph.find(b))
+          graph.link(a, b, annotationId);
+      }
+    }
     // Sizes: one radius or diameter per group, on a circle seen face-on.
     for (const group of requirements.sizes) {
       if (statedSizes.has(group) || calledOut.has(group)) continue;
@@ -592,7 +677,8 @@ export function planAutoDimensions(
     const bodyEdges = bodies[bodyId]?.topology?.edges ?? [];
     const bodyFaces = bodies[bodyId]?.topology?.faces ?? [];
     for (const group of requirements.chamfers) {
-      if (body.statedChamfers.has(group)) continue;
+      if (body.statedChamfers.has(group) || calledOutChamfers.has(group))
+        continue;
       const label = chamferLabel(group, units);
       if (
         state.audit.unmeasurable.some(
@@ -694,17 +780,22 @@ export function planAutoDimensions(
         group,
         edgesOf,
         refOf
-      ).map((option) => ({
-        context: option.context,
-        visible: option.visible,
-        annotation: {
-          annotationId,
-          kind: 'angle' as const,
-          viewId: option.context.view.viewId,
-          edges: option.edges,
-          placementMm: { x: 0, y: 0 }
-        }
-      }));
+      ).flatMap((option) =>
+        // The outside angle first (v51): the axis edge's ray turned onto its
+        // extension, so a 135° corner reads 45° off the part; then inside.
+        ([1, undefined] as const).map((outside) => ({
+          context: option.context,
+          visible: option.visible,
+          annotation: {
+            annotationId,
+            kind: 'angle' as const,
+            viewId: option.context.view.viewId,
+            edges: option.edges,
+            ...(outside !== undefined ? { outside } : {}),
+            placementMm: { x: 0, y: 0 }
+          }
+        }))
+      );
       if (options.length === 0) {
         skipped.push({
           bodyId,

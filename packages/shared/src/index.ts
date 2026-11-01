@@ -205,7 +205,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // from raw geometry. An older client would refuse each as malformed.
 // v50 adds a counterbored hole's callout on a D06 diameter dimension (the
 // counterbore's rim). An older client would refuse it as malformed.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 50 as const;
+// v51 adds a countersunk hole's callout and the outside angle on D06
+// drawing dimensions. An older client would refuse either as malformed.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 51 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

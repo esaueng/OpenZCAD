@@ -464,5 +464,37 @@ describe('D06 slice D: schema v49 annotations', () => {
     expect(error({ ...base, kind: 'radius', face: face(14) })).toBe(
       'It has an unknown extreme side.'
     );
+    // v51: a countersink likewise, never with a counterbore; an outside
+    // angle turns one of the two edges it names.
+    expect(
+      error({
+        ...base,
+        kind: 'diameter',
+        edge,
+        countersink: { ...edge, hash: 23 }
+      })
+    ).toBeNull();
+    expect(
+      error({
+        ...base,
+        kind: 'radius',
+        edge,
+        countersink: { ...edge, hash: 23 }
+      })
+    ).toBe('It names a countersink, which only a diameter callout states.');
+    expect(
+      error({
+        ...base,
+        kind: 'diameter',
+        edge,
+        counterbore: { ...edge, hash: 22 },
+        countersink: { ...edge, hash: 23 }
+      })
+    ).toBe('It names both a counterbore and a countersink.');
+    const edges = [edge, { ...edge, hash: 24 }];
+    expect(error({ ...base, kind: 'angle', edges, outside: 1 })).toBeNull();
+    expect(error({ ...base, kind: 'angle', edges, outside: 2 })).toBe(
+      'It turns outward an edge it does not name.'
+    );
   });
 });
