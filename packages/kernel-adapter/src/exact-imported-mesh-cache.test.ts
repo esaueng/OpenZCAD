@@ -9,6 +9,14 @@ const ref = {
   checksumSha256: 'a'.repeat(64)
 } as unknown as Parameters<typeof importedMeshCacheKey>[0]['meshPayloadRef'];
 
+/** A one-triangle reference mesh: 72 + 12 buffer bytes. */
+function referenceMesh() {
+  return {
+    vertices: new Float64Array(9),
+    indices: Uint32Array.of(0, 1, 2)
+  };
+}
+
 describe('imported mesh conversion cache', () => {
   it('keys a referenced payload by checksum and triangle count, never embedded facets', () => {
     expect(
@@ -30,7 +38,7 @@ describe('imported mesh conversion cache', () => {
     expect(importedMeshCacheKey({ triangleCount: 1 })).toBeUndefined();
   });
 
-  it('remembers a refused conversion as well as a converted solid', () => {
+  it('remembers a refused conversion, with its reference mesh, as well as a converted solid', () => {
     const cache = new ImportedMeshCache(1024);
     const solid = {
       kind: 'solid' as const,
@@ -38,14 +46,26 @@ describe('imported mesh conversion cache', () => {
       advisories: ['Kept the original mesh as a reference.']
     };
     expect(cache.store('solid', solid)).toBe('cached');
-    expect(
-      cache.store('refused', { kind: 'reference', message: 'Open shell.' })
-    ).toBe('cached');
+    const refused = {
+      kind: 'reference' as const,
+      message: 'Open shell.',
+      mesh: referenceMesh()
+    };
+    expect(cache.store('refused', refused)).toBe('cached');
     expect(cache.lookup('solid')).toBe(solid);
-    expect(cache.lookup('refused')).toEqual({
-      kind: 'reference',
-      message: 'Open shell.'
-    });
+    // The same mesh object comes back, so its display projection is reused.
+    expect(cache.lookup('refused')).toBe(refused);
+  });
+
+  it('charges a refused entry for its reference mesh buffers', () => {
+    const cache = new ImportedMeshCache(80);
+    expect(
+      cache.store('mesh', {
+        kind: 'reference',
+        message: '',
+        mesh: referenceMesh()
+      })
+    ).toBe('budget-exceeded');
   });
 
   it('charges backing buffers and evicts the oldest entry to stay in budget', () => {
@@ -74,12 +94,20 @@ describe('imported mesh conversion cache', () => {
 
   it('is disabled by a zero budget and cleared with the STEP cache it rides on', () => {
     const disabled = new ImportedMeshCache(0);
-    expect(disabled.store('x', { kind: 'reference', message: 'refused' })).toBe(
-      'budget-exceeded'
-    );
+    expect(
+      disabled.store('x', {
+        kind: 'reference',
+        message: 'refused',
+        mesh: referenceMesh()
+      })
+    ).toBe('budget-exceeded');
     const meshes = new ImportedMeshCache(1024);
     const steps = new ImportedStepCache(1024, meshes);
-    meshes.store('x', { kind: 'reference', message: 'refused' });
+    meshes.store('x', {
+      kind: 'reference',
+      message: 'refused',
+      mesh: referenceMesh()
+    });
     steps.clear();
     expect(meshes.lookup('x')).toBeUndefined();
   });
