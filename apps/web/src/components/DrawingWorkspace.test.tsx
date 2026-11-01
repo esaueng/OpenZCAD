@@ -2177,6 +2177,129 @@ describe('DrawingWorkspace dimension check (D06)', () => {
     expect(screen.getByText('0 of 3 stated')).toBeTruthy();
   });
 
+  it('keys findings that read alike apart, so no stale row outlives its finding', async () => {
+    // Two like bodies word their findings identically; keyed by message,
+    // React kept an orphan row ("Missing · 1" over two bullets).
+    const twinId = 'body_twin' as BodyId;
+    const bodies = {
+      [bodyId]: cube(10, true),
+      [twinId]: { ...cube(10, true), bodyId: twinId, name: 'Twin' }
+    };
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [bodyId, twinId],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, [bodyId, twinId])!
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <DrawingWorkspace
+          document={{
+            ...createProjectDocument('Bracket', toUserId('test')),
+            bodyOrder: [bodyId, twinId],
+            drawings: { sheets: [sheet] }
+          }}
+          bodies={bodies}
+          geometryPending={false}
+          defaultBodyIds={[bodyId, twinId]}
+          requestTessellation={displayTessellation(bodies)}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const missing = await screen.findByRole('list', {
+        name: 'Missing dimensions'
+      });
+      const items = within(missing).getAllByRole('listitem');
+      expect(items).toHaveLength(6);
+      expect(new Set(items.map((item) => item.textContent)).size).toBe(3);
+      expect(screen.getByText('Missing · 6')).toBeTruthy();
+      expect(
+        error.mock.calls.some((call) =>
+          call.some((part) => String(part).includes('same key'))
+        )
+      ).toBe(false);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('calls a position no dimension can name unplaceable, not missing', async () => {
+    // As on a mirrored part, the edges that mark x = 10 share their hash
+    // with another edge, so neither a pick nor Auto-dimension can name one:
+    // the check used to list it missing, an Auto-dimension run never closed.
+    const base = cube(10, true);
+    const shared = (points: readonly number[]) =>
+      points[0] === 10 && points[3] === 10
+        ? 999
+        : points[1] === points[4] && points[2] === points[5]
+          ? 998
+          : null;
+    const body: BodyRepresentation = {
+      ...base,
+      topology: {
+        ...base.topology!,
+        edges: base.topology!.edges.map((edge) => ({
+          ...edge,
+          hash: shared(edge.points) ?? edge.hash
+        }))
+      }
+    };
+    const bodies = { [bodyId]: body };
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [bodyId],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, [bodyId])!
+    });
+    render(
+      <DrawingWorkspace
+        document={{
+          ...createProjectDocument('Bracket', toUserId('test')),
+          bodyOrder: [bodyId],
+          drawings: { sheets: [sheet] }
+        }}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation(bodies)}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    const missing = await screen.findByRole('list', {
+      name: 'Missing dimensions'
+    });
+    expect(
+      within(missing)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'Y: nothing locates the face at y = 10 from the face at y = 0.',
+      'Z: nothing locates the face at z = 10 from the face at z = 0.'
+    ]);
+    expect(
+      within(
+        screen.getByRole('list', {
+          name: 'Requirements no dimension can state yet'
+        })
+      )
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toContain(
+      'X: nothing locates the face at x = 10 from the face at x = 0: every edge that marks it shares its identity with another edge, so no dimension can name it.'
+    );
+  });
+
   it('selects a repeated dimension from the check', async () => {
     setup({
       sheet: sheetWith([width('first'), width('again')]),

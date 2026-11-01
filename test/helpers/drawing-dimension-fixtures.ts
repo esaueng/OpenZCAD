@@ -350,6 +350,54 @@ export const roundedOperations = () => [
 ];
 
 /**
+ * A 30 × 20 block on XZ whose top-right corner is a 45° slope, rounded R5
+ * into the right face: the arc is tangent to x = 30 and to the slope, so
+ * its centre (25, 10) follows from them and its radius.
+ */
+export const slopedOperations = () => {
+  const c = 5 / Math.SQRT2;
+  const end = { x: 25 + c, z: 10 + c };
+  return [
+    {
+      kind: 'add_sketch',
+      name: 'Sloped',
+      plane: 'XZ',
+      offset: 0,
+      objects: [
+        { objectKind: 'line', x1: 0, y1: 0, x2: 30, y2: 0 },
+        { objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: 10 },
+        {
+          objectKind: 'arc',
+          centerX: 25,
+          centerY: 10,
+          radius: 5,
+          startAngleDeg: 0,
+          endAngleDeg: 45
+        },
+        {
+          objectKind: 'line',
+          x1: end.x,
+          y1: end.z,
+          x2: end.x - (20 - end.z),
+          y2: 20
+        },
+        { objectKind: 'line', x1: end.x - (20 - end.z), y1: 20, x2: 0, y2: 20 },
+        { objectKind: 'line', x1: 0, y1: 20, x2: 0, y2: 0 }
+      ],
+      localId: '$sloped'
+    },
+    {
+      kind: 'add_extrude',
+      name: 'Sloped',
+      localId: '$slopedBody',
+      sketchId: '$sloped',
+      distance: 8,
+      samplePoint: { x: 5, y: 5 }
+    }
+  ];
+};
+
+/**
  * D06 slice D: a part as a history-less import. Exports `bodyId` of the
  * built `document` as STEP through the kernel and imports it back, so the
  * body carries only what the file does: faces and edges, no features.
