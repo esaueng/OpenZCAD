@@ -1,4 +1,9 @@
 import {
+  localHistoryAppend,
+  retainLocalHistoryAppend,
+  type LocalHistoryAppend
+} from './lib/localHistoryAppend';
+import {
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
@@ -2693,6 +2698,8 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  const [latestLocalAppend, setLatestLocalAppend] =
+    useState<LocalHistoryAppend | null>(null);
   // Exact solved geometry is a read view; commands and persistence keep doc.
   const sketchReadDocument = doc ? resolvedSketchDocument(doc) : null;
   // Held here, not in the panels: a move between the dock and the phone lane
@@ -8477,6 +8484,9 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    setLatestLocalAppend((append) =>
+      retainLocalHistoryAppend(append, normalized)
+    );
     // A replacement can share the project and version of the document a
     // commit completed (an adopted conflict copy) without sharing its model.
     forgetCompleteCommit();
@@ -8717,7 +8727,8 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
-      const before = managerRef.current.document.derived.bodyRepresentations;
+      const beforeDocument = managerRef.current.document;
+      const before = beforeDocument.derived.bodyRepresentations;
       let next = managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
@@ -8738,6 +8749,8 @@ export function App() {
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
+      const appended = localHistoryAppend(beforeDocument, next);
+      if (appended) setLatestLocalAppend(appended);
       setDoc(next);
       if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
@@ -8778,7 +8791,8 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
-      const before = managerRef.current.document.derived.bodyRepresentations;
+      const beforeDocument = managerRef.current.document;
+      const before = beforeDocument.derived.bodyRepresentations;
       let next = managerRef.current.runTransaction(label, commands);
       // A batch of sheet edits leaves the model alone, as one does alone.
       if (commands.every(isDrawingCommand)) geometry.retainReadyGeometry(next);
@@ -8789,6 +8803,8 @@ export function App() {
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
+      const appended = localHistoryAppend(beforeDocument, next);
+      if (appended) setLatestLocalAppend(appended);
       setDoc(next);
       if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
@@ -28865,6 +28881,11 @@ export function App() {
       geometryPendingShown={panelGeometryPendingShown}
       relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
+      localAppend={
+        latestLocalAppend?.projectId === doc?.projectId
+          ? latestLocalAppend
+          : null
+      }
       selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}

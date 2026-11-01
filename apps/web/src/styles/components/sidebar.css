@@ -619,6 +619,17 @@
   background: var(--color-accent-dim);
 }
 
+.history-latest[data-pending='true'] {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--color-surface);
+}
+
+.history-timeline .feature-row {
+  scroll-margin-top: calc(2em + 16px);
+}
+
 .history-find {
   display: flex;
   align-items: center;

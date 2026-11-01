@@ -30,6 +30,7 @@ export function historyCount(features: readonly FeatureNode[]): number {
 export type HistoryPanelProps = Pick<
   ModelPanelSource,
   | 'features'
+  | 'localAppend'
   | 'representations'
   | 'failedFeatureIds'
   | 'relatedFeatureIds'
@@ -55,6 +56,7 @@ export type HistoryPanelProps = Pick<
 
 export function HistoryPanel({
   features,
+  localAppend,
   representations,
   failedFeatureIds,
   relatedFeatureIds,
@@ -81,7 +83,9 @@ export function HistoryPanel({
   return (
     <>
       <HistoryTimeline
+        key={document?.projectId}
         features={features}
+        localAppend={localAppend}
         representations={representations}
         failedFeatureIds={failedFeatureIds}
         relatedFeatureIds={relatedFeatureIds}

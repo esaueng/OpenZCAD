@@ -95,6 +95,7 @@ it('keeps a brief rebuild quiet without calling the step broken', () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -121,6 +122,185 @@ describe('HistoryTimeline', () => {
     expect(props.onSelectFeature).not.toHaveBeenCalled();
     expect(row('Feature 1')).toHaveClass('selected');
     vi.restoreAllMocks();
+  });
+
+  it('follows a successful local append without changing the selected publisher', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const { props, rerender } = renderTimeline({
+      selectedFeatureNodeId: 'node-1'
+    });
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[...props.features, feature(5)]}
+        localAppend={{ projectId: 'history', nodeId: 'node-5', version: 5 }}
+      />
+    );
+    const scroll = vi.fn();
+    row('Feature 5').scrollIntoView = scroll;
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(props.onSelectFeature).not.toHaveBeenCalled();
+    expect(row('Feature 1')).toHaveClass('selected');
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a user browsing older history in place and offers the actual new operation', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const { props, rerender, container } = renderTimeline();
+    const list = container.querySelector('.feature-list')!;
+    Object.defineProperties(list, {
+      scrollHeight: { value: 500 },
+      clientHeight: { value: 100 },
+      scrollTop: { value: 0, writable: true }
+    });
+    fireEvent.scroll(list);
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[...props.features, feature(5)]}
+        localAppend={{ projectId: 'history', nodeId: 'node-5', version: 5 }}
+      />
+    );
+    const scroll = vi.fn();
+    row('Feature 5').scrollIntoView = scroll;
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(scroll).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show new operation: Feature 5' })
+    );
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(props.onSelectFeature).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('preserves the filter and focus until the new-operation reveal is requested', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const { props, rerender } = renderTimeline({ findOpen: true });
+    const input = screen.getByRole('searchbox', { name: 'Find a step' });
+    input.focus();
+    fireEvent.change(input, { target: { value: 'Feature 1' } });
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[...props.features, feature(5)]}
+        localAppend={{ projectId: 'history', nodeId: 'node-5', version: 5 }}
+      />
+    );
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(input).toHaveValue('Feature 1');
+    expect(input).toHaveFocus();
+    expect(screen.queryByText('Feature 5')).toBeNull();
+    expect(props.onCloseFind).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show new operation: Feature 5' })
+    );
+    const scroll = vi.fn();
+    row('Feature 5').scrollIntoView = scroll;
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(input).toHaveValue('');
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(props.onSelectFeature).not.toHaveBeenCalled();
+  });
+
+  it('keeps the unseen local target through a peer append and drops it on undo', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const { props, rerender, container } = renderTimeline();
+    const list = container.querySelector('.feature-list')!;
+    Object.defineProperties(list, {
+      scrollHeight: { value: 500 },
+      clientHeight: { value: 100 },
+      scrollTop: { value: 0, writable: true }
+    });
+    fireEvent.scroll(list);
+    const signal = { projectId: 'history', nodeId: 'node-5', version: 5 };
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[...props.features, feature(5)]}
+        localAppend={signal}
+      />
+    );
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[...props.features, feature(5), feature(6)]}
+        localAppend={signal}
+      />
+    );
+    const localScroll = vi.fn();
+    row('Feature 5').scrollIntoView = localScroll;
+    const remoteScroll = vi.fn();
+    row('Feature 6').scrollIntoView = remoteScroll;
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show new operation: Feature 5' })
+    );
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(localScroll).toHaveBeenCalledOnce();
+    expect(remoteScroll).not.toHaveBeenCalled();
+    fireEvent.wheel(list);
+    fireEvent.scroll(list);
+    const nextSignal = { ...signal, version: 7, nodeId: 'node-7' };
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[...props.features, feature(7)]}
+        localAppend={nextSignal}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Show new operation: Feature 7' })
+    ).toBeInTheDocument();
+    rerender(<HistoryTimeline {...props} localAppend={nextSignal} />);
+    expect(
+      screen.queryByRole('button', { name: /Show new operation:/ })
+    ).toBeNull();
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[...props.features, feature(7)]}
+        localAppend={nextSignal}
+      />
+    );
+    expect(
+      screen.queryByRole('button', { name: /Show new operation:/ })
+    ).toBeNull();
+  });
+
+  it('does not follow a remote append without a local commit signal', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const { props, rerender } = renderTimeline();
+    rerender(
+      <HistoryTimeline {...props} features={[...props.features, feature(5)]} />
+    );
+    const scroll = vi.fn();
+    row('Feature 5').scrollIntoView = scroll;
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(scroll).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('button', { name: /Show new operation/ })
+    ).toBeNull();
   });
 
   it('marks only the last feature before a rollback-suppressed suffix', () => {
