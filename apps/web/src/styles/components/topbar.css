@@ -856,3 +856,80 @@ button.save-state:focus-visible,
     font-size: inherit;
   }
 }
+
+/* The model is still preparing behind a saved revision: a dot on the
+   save glyph rather than a spinner, which read as a save in flight. */
+.save-state-icon {
+  position: relative;
+}
+
+.save-state-pending {
+  position: absolute;
+  top: -3px;
+  right: -2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1.5px var(--color-surface);
+  animation: save-pending-pulse 1.4s var(--ease-out) infinite;
+}
+
+/* Presence glyphs (TopBar PresenceGlyph): faded while joining, struck
+   through while offline. */
+.presence-glyph {
+  position: relative;
+  display: inline-flex;
+}
+
+.presence-glyph.is-joining {
+  animation: save-pending-pulse 1.4s var(--ease-out) infinite;
+}
+
+.presence-glyph.is-offline::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 50%;
+  width: 1.5px;
+  border-radius: 1px;
+  background: currentcolor;
+  /* A surface-coloured edge cuts the strokes it crosses, so the slash
+     reads as a slash rather than a scribble. */
+  box-shadow: 0 0 0 1.5px var(--color-surface);
+  transform: translateX(-50%) rotate(-45deg);
+}
+
+@keyframes save-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Still distinct without motion: the dot stays, the joining group stays
+   faded. */
+[data-reduced-motion='true'] .save-state-pending,
+[data-reduced-motion='true'] .presence-glyph.is-joining {
+  animation: none;
+}
+
+[data-reduced-motion='true'] .presence-glyph.is-joining {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-state-pending,
+  .presence-glyph.is-joining {
+    animation: none;
+  }
+
+  .presence-glyph.is-joining {
+    opacity: 0.5;
+  }
+}

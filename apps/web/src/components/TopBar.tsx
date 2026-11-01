@@ -15,6 +15,7 @@ import {
   Settings as SettingsIcon,
   TriangleAlert,
   Upload,
+  UserPlus,
   Users
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
@@ -144,6 +145,30 @@ interface TopBarProps {
   encryption?: EncryptionIndicatorProps | null;
 }
 
+/**
+ * One glyph per presence state, so the icon-only chip tells them apart
+ * without its tooltip: an invitation while nothing is shared, the group
+ * faded while joining and struck through while offline. Colour still marks
+ * live (green) and the states that need a look (amber), via the chip.
+ */
+function PresenceGlyph({
+  status
+}: {
+  status: CollaborationStatus | 'not-shared';
+}) {
+  if (status === 'not-shared') {
+    return <UserPlus size={14} aria-hidden="true" />;
+  }
+  return (
+    <span
+      className={`presence-glyph${status === 'connecting' ? ' is-joining' : status === 'offline' ? ' is-offline' : ''}`}
+      aria-hidden="true"
+    >
+      <Users size={14} />
+    </span>
+  );
+}
+
 export function TopBar({
   projectName,
   units,
@@ -234,10 +259,8 @@ export function TopBar({
     ? 'busy'
     : editRefusal
       ? 'warning'
-      : modelPending
-        ? geometryFailed
-          ? 'warning'
-          : 'busy'
+      : modelPending && geometryFailed
+        ? 'warning'
         : saveGlyphFor(saveState);
 
   useEffect(() => {
@@ -360,6 +383,10 @@ export function TopBar({
         : 'preparing model'
       : null;
   const readinessVisible = modelReadiness !== null && geometryFailed;
+  // The revision is saved, so the glyph says so; a pulsing dot on it marks
+  // the model still preparing. A spinner beside "Saved" read as a save
+  // still in flight.
+  const modelPreparing = modelReadiness !== null && !geometryFailed;
   // The accessible name keeps the readiness the glyph shows, and still
   // begins with the visible label (WCAG 2.5.3).
   const saveLabel = modelReadiness
@@ -400,12 +427,13 @@ export function TopBar({
           ) : (
             <CloudOff size={14} />
           )}
+          {modelPreparing ? <i className="save-state-pending" /> : null}
         </span>
         {saveText}
       </StableLabel>
       {/* Readiness is announced alongside the storage label. Preparing is
-          shown by the spinner alone (the tooltip spells it out); a failed
-          model stays in words, as it needs a look. */}
+          shown by the glyph's dot alone (the tooltip spells it out); a
+          failed model stays in words, as it needs a look. */}
       {modelReadiness ? (
         <span
           className={`save-model-readiness${readinessVisible ? '' : ' visually-hidden'}`}
@@ -648,7 +676,9 @@ export function TopBar({
               disabled={!projectName}
               onClick={session ? onOpenSharing : onSignIn}
             >
-              <Users size={14} aria-hidden="true" />
+              <PresenceGlyph
+                status={knownDeviceOnly ? 'not-shared' : collaborationStatus}
+              />
               {collaborationStatus === 'live' ? (
                 // Only drawn once the row has collapsed to icons; the label
                 // carries the count everywhere else.

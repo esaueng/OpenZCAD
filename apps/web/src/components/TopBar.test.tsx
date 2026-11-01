@@ -173,6 +173,18 @@ describe('TopBar save chip', () => {
       screen.getByRole('status', { name: 'Saved · model unavailable' })
     ).toHaveAttribute('title', expect.stringContaining('activity log'));
   });
+  it('shows no preparing dot once the model has failed', () => {
+    renderTopBar({
+      saveState: 'synced',
+      signedIn: true,
+      geometryPending: true,
+      geometryFailed: true
+    });
+    const chip = screen.getByRole('status', {
+      name: 'Saved · model unavailable'
+    });
+    expect(chip.querySelector('.save-state-pending')).toBeNull();
+  });
   it('keeps its width to the short labels while the model prepares', () => {
     renderTopBar({
       saveState: 'synced',
@@ -187,8 +199,10 @@ describe('TopBar save chip', () => {
     expect(slot?.getAttribute('data-reserve')).not.toContain('model');
     // Announced through the live region's content, not only its name.
     expect(chip).toHaveTextContent('Saved · preparing model');
-    expect(chip.querySelector('.spin')).not.toBeNull();
-    // Shown by the spinner; the words are for assistive technology only.
+    // Saved, so no spinner: a dot on the check marks the preparing model.
+    expect(chip.querySelector('.spin')).toBeNull();
+    expect(chip.querySelector('.save-state-pending')).not.toBeNull();
+    // Shown by the dot; the words are for assistive technology only.
     expect(chip.querySelector('.save-model-readiness')).toHaveClass(
       'visually-hidden'
     );
@@ -266,6 +280,28 @@ describe('TopBar save chip', () => {
 });
 
 describe('TopBar sharing chip', () => {
+  it.each([
+    [{ collaborationStatus: 'connecting' as const }, 'Joining…', 'is-joining'],
+    [{ collaborationStatus: 'offline' as const }, 'Offline', 'is-offline']
+  ])('draws a distinct presence glyph for %o', (options, label, modifier) => {
+    renderTopBar({ signedIn: true, ...options });
+    const chip = screen.getByRole('button', {
+      name: `Open project sharing · ${label}`
+    });
+    expect(chip.querySelector('.presence-glyph')).toHaveClass(modifier);
+  });
+  it('draws an invitation glyph for a project that is not shared', () => {
+    renderTopBar({
+      signedIn: true,
+      saveToAccount: true,
+      knownDeviceOnly: true
+    });
+    const chip = screen.getByRole('button', {
+      name: 'Open project sharing · Not shared'
+    });
+    expect(chip.querySelector('.presence-glyph')).toBeNull();
+    expect(chip.querySelector('.lucide-user-plus')).not.toBeNull();
+  });
   it('describes a room refusal without claiming the project is unshared', () => {
     renderTopBar({
       signedIn: true,
