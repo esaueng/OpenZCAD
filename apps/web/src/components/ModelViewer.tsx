@@ -1,5 +1,10 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
-import { nameCommandChip, prepareCommandChip } from '../lib/inPlace/chipNames';
+import {
+  createChipEntryButton,
+  nameCommandChip,
+  prepareCommandChip,
+  spokenChipText
+} from '../lib/inPlace/chipNames';
 import type { FrameStatsSink } from '../lib/frameStats';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
@@ -4153,6 +4158,11 @@ export function ModelViewer({
     });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
+    // The value is its own button rather than the chip: the chip also holds
+    // the radius/diameter switch, and a button may not contain another. A
+    // click on it reaches the chip's handler below like any other.
+    const offsetEntry = createChipEntryButton();
+    offsetChip.append(offsetEntry);
     const dimensionPrefix = document.createElement('button');
     dimensionPrefix.type = 'button';
     dimensionPrefix.className = 'handle-dimension-prefix';
@@ -7322,13 +7332,27 @@ export function ModelViewer({
             ? 'Switch to radius entry'
             : 'Switch to diameter entry'
         );
-        chip.replaceChildren(
-          dimensionPrefix,
+        offsetEntry.replaceChildren(
           ` ${formatNumber(displayValue)}\u00a0`,
           units
         );
+        nameCommandChip(
+          offsetEntry,
+          `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue)} ${unitLabelRef.current}`
+        );
+        // Only when the layout changes: re-inserting a focused button on
+        // every frame would drop its focus.
+        if (
+          chip.firstChild !== dimensionPrefix ||
+          chip.lastChild !== offsetEntry ||
+          chip.childNodes.length !== 2
+        )
+          chip.replaceChildren(dimensionPrefix, offsetEntry);
       } else {
-        renderChipText(chip, text);
+        renderChipText(offsetEntry, text);
+        nameCommandChip(offsetEntry, spokenChipText(text));
+        if (chip.firstChild !== offsetEntry || chip.childNodes.length !== 1)
+          chip.replaceChildren(offsetEntry);
       }
       chip.dataset.variant =
         lineAngle !== null

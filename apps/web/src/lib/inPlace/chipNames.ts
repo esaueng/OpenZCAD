@@ -75,3 +75,37 @@ export function nameCommandChip(
     chip.setAttribute('aria-label', name);
   }
 }
+
+/**
+ * A drag chip's visible text ("R 2 mm", "Total 30 mm", "12 mm") as words
+ * for its accessible name: a glyph prefix is spoken, and a bare number is
+ * named as the value it is.
+ */
+export function spokenChipText(text: string): string {
+  const match = /^(.*?)(-?\d[\d.,]*)(\s?\S*)$/.exec(text.trim());
+  if (!match) return text.trim();
+  const [, prefix = '', number = '', units = ''] = match;
+  const name = prefix.trim() ? spokenValueName(prefix) : 'Value';
+  return `${name} ${number}${units}`.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The value button inside a drag chip that also holds another control (the
+ * offset chip's radius/diameter switch), so the chip itself cannot be a
+ * button. Its click bubbles to the chip's own handler, which opens exact
+ * entry.
+ */
+export function createChipEntryButton(): HTMLButtonElement {
+  const entry = document.createElement('button');
+  entry.type = 'button';
+  entry.className = 'handle-value-entry';
+  entry.addEventListener('pointerdown', () => markKeypadOpener(entry, false));
+  entry.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    // The workspace reads Enter and Space as its own shortcuts; the
+    // button's own activation still opens exact entry.
+    event.stopPropagation();
+    markKeypadOpener(entry, true);
+  });
+  return entry;
+}

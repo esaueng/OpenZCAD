@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   commandChipName,
+  createChipEntryButton,
   nameCommandChip,
   prepareCommandChip,
+  spokenChipText,
   spokenValueName
 } from './chipNames';
 
@@ -63,5 +65,44 @@ describe('command chip controls', () => {
     expect(chip).toHaveAttribute('aria-label', 'Radius 2 mm');
     nameCommandChip(chip, undefined);
     expect(chip).not.toHaveAttribute('aria-label');
+  });
+});
+
+describe('drag chip names', () => {
+  it('speaks the offset chip text as words', () => {
+    expect(spokenChipText('R 2 mm')).toBe('Radius 2 mm');
+    expect(spokenChipText('Total 30.5 mm')).toBe('Total 30.5 mm');
+    expect(spokenChipText('-4 mm')).toBe('Value -4 mm');
+    expect(spokenChipText('12°')).toBe('Value 12°');
+    expect(spokenChipText('Pick a face')).toBe('Pick a face');
+  });
+});
+
+describe('drag chip entry button', () => {
+  it('is a real button whose activation reaches the chip, not the workspace', () => {
+    const chip = document.createElement('div');
+    const entry = createChipEntryButton();
+    chip.append(entry);
+    document.body.appendChild(chip);
+    const opened = vi.fn();
+    const workspace = vi.fn();
+    chip.addEventListener('click', opened);
+    window.addEventListener('keydown', workspace);
+    try {
+      expect(entry.type).toBe('button');
+      entry.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+      );
+      expect(workspace).not.toHaveBeenCalled();
+      // Marked as a keyboard opening, so the keypad hands focus back.
+      expect(entry).toHaveAttribute('data-keypad-return-focus');
+      entry.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      expect(entry).not.toHaveAttribute('data-keypad-return-focus');
+      entry.click();
+      expect(opened).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('keydown', workspace);
+      chip.remove();
+    }
   });
 });
