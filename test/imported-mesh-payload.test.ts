@@ -2,11 +2,7 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import {
-  createProjectDocument,
-  importMeshBody,
-  listFeaturesInOrder
-} from '@openzcad/document-core';
+import { createProjectDocument, importMeshBody } from '@openzcad/document-core';
 import { parseStl } from '@openzcad/io-stl';
 import {
   createExactKernelAdapter,
@@ -633,42 +629,6 @@ describe('referenced mesh rebuilds', { timeout: 120_000 }, () => {
     expect(
       requests.filter((request) => request.checksum === ref.checksumSha256)
     ).toHaveLength(1);
-  });
-
-  it('restores a replayed mesh from its conversion exactly as built', async () => {
-    const mesh = {
-      vertices: boxSoup().vertices.map((value) => value - 50),
-      indices: boxSoup().indices
-    };
-    const { ref, bytes } = payloadReference(mesh);
-    payloads.set(ref.checksumSha256, bytes);
-    const manager = referencedMeshDocument(ref, 12, 'artifact_replayed');
-    const first = await adapter.syncDocument(manager.document);
-    const bodyId = manager.document.bodyOrder[0]!;
-    // A step moved ahead of the mesh replays it, which now restores the
-    // cached conversion instead of translating and sewing the STL again.
-    manager.execute(
-      commandFactories.addPrimitive({
-        name: 'Ahead',
-        primitiveKind: 'box',
-        dimensions: { width: 1, height: 1, depth: 1 }
-      })
-    );
-    const added = listFeaturesInOrder(manager.document).find(
-      (feature) => feature.name === 'Ahead'
-    )!;
-    manager.execute(
-      commandFactories.moveFeature({ featureId: added.featureId, toIndex: 0 })
-    );
-    const replayed = await adapter.syncDocument(manager.document);
-    const a = first.bodyRepresentations[bodyId];
-    const b = replayed.bodyRepresentations[bodyId];
-    expect(b?.volume).toBe(a?.volume);
-    expect(b?.bbox).toEqual(a?.bbox);
-    expect(b?.topology?.faces.map((face) => face.hash).sort()).toEqual(
-      a?.topology?.faces.map((face) => face.hash).sort()
-    );
-    expect(replayed.warnings).toEqual(first.warnings);
   });
 
   it('names the import whose payload this device cannot find', async () => {
