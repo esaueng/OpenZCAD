@@ -1059,10 +1059,12 @@
   display: none;
 }
 
-/* While the guidance shows, the placeholder makes way for it. */
+/* While the guidance shows, the placeholder makes way for it. Keep the
+   activity query on its own lane and take guidance state from the readout;
+   querying the viewer made HUD text invalidate the entire viewer subtree. */
 :where(.workspace:not(.with-assistant))
-  .viewer-area:not(:has(.activity-pill))
-  .command-bar-lane:has(> .workspace-hint)
+  .activity-lane:not(:has(> .activity-pill))
+  ~ .command-bar-lane.has-guidance
   .command-bar:not(.open)
   .command-bar-input::placeholder {
   color: transparent;

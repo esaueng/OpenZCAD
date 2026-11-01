@@ -245,6 +245,7 @@ export function WorkspaceReadout({
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
   const syncLabel = WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel;
+  const hasGuidance = commandRow == null && Boolean((prompt && !shown) || pick);
   // Always in the tree, as the page's contentinfo landmark: what the status
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
@@ -255,7 +256,10 @@ export function WorkspaceReadout({
           already carries for assistive tech, so it is drawn here but hidden
           from the tree; a live status message takes its place while the
           toast is up. */}
-      <div className="command-bar-lane" ref={laneRef}>
+      <div
+        className={`command-bar-lane${hasGuidance ? ' has-guidance' : ''}`}
+        ref={laneRef}
+      >
         {commandRow ??
           ((prompt && !shown) || pick ? (
             <p className="workspace-hint">

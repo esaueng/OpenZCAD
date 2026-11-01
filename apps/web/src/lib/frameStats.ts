@@ -8,6 +8,8 @@ export interface FrameSample {
   renderMs: number;
   /** Entire viewer callback, including cube, labels and layout; not GPU time. */
   cpuMs?: number;
+  /** The previous frame kept this animation running; long gaps are hitches. */
+  continuous?: boolean;
   drawCalls: number;
   triangles: number;
 }
@@ -40,9 +42,9 @@ export const FRAME_WINDOW_MS = 1_000;
 /** No frame for this long and the overlay reports the viewer at rest. */
 export const IDLE_AFTER_MS = 500;
 /**
- * A gap longer than this between two frames is the viewer resting between
- * gestures, not a slow frame: an on-demand loop that sat still for three
- * seconds did not draw a three-second frame.
+ * Fallback for samples without known animation continuity. A sleeping
+ * on-demand loop did not draw a three-second frame, but a self-scheduled
+ * animation can genuinely stall longer than this.
  */
 export const BURST_GAP_MS = 250;
 /** Frame intervals kept for the overlay's frame time graph. */
@@ -100,7 +102,9 @@ function lowFps(sorted: Float64Array, fraction: number): number {
  * computed only when the overlay repaints, a few times a second.
  */
 export class FrameStatsMeter {
-  private readonly samples: FrameSample[] = [];
+  private readonly samples: (FrameSample & {
+    activeInterval: number | null;
+  })[] = [];
   /**
    * Interval before each sample (null when it began a new burst), kept for
    * the sparkline. Oldest first.
@@ -120,8 +124,10 @@ export class FrameStatsMeter {
   record(sample: FrameSample): void {
     const interval = this.last === null ? null : sample.at - this.last.at;
     this.last = sample;
-    this.samples.push(sample);
-    const active = interval !== null && interval <= BURST_GAP_MS;
+    const active =
+      interval !== null &&
+      (interval <= BURST_GAP_MS || sample.continuous === true);
+    this.samples.push({ ...sample, activeInterval: active ? interval : null });
     this.history.push(active ? interval : null);
     if (this.history.length > HISTORY_LENGTH) this.history.shift();
     if (active) {
@@ -143,7 +149,10 @@ export class FrameStatsMeter {
 
   summarize(now: number): FrameStatsSummary {
     this.prune(now);
-    const idle = this.last === null || now - this.last.at > IDLE_AFTER_MS;
+    const idle =
+      this.last === null ||
+      now - (this.last.at + (this.last.cpuMs ?? this.last.renderMs)) >
+        IDLE_AFTER_MS;
     const samples = this.samples;
     let intervalSum = 0;
     let intervals = 0;
@@ -158,9 +167,9 @@ export class FrameStatsMeter {
         cpuSum += sample.cpuMs;
         cpuSamples += 1;
       }
-      if (index === 0) continue;
-      const interval = sample.at - samples[index - 1]!.at;
-      if (interval > BURST_GAP_MS) continue;
+      // Keep an interval ending in this window even when its start was pruned.
+      const interval = sample.activeInterval;
+      if (interval === null) continue;
       intervalSum += interval;
       intervals += 1;
       worst = Math.max(worst, interval);
@@ -250,7 +259,9 @@ export class FrameStatsMeter {
   private prune(now: number): void {
     const oldest = now - FRAME_WINDOW_MS;
     let drop = 0;
-    while (drop < this.samples.length && this.samples[drop]!.at < oldest) {
+    while (drop < this.samples.length) {
+      const sample = this.samples[drop]!;
+      if (sample.at + (sample.cpuMs ?? sample.renderMs) >= oldest) break;
       drop += 1;
     }
     if (drop > 0) this.samples.splice(0, drop);

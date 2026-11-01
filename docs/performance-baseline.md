@@ -1134,3 +1134,131 @@ all invalidation/settling edges, graph read/write order, full-frame versus
 render-only timing, no handle-panel scans during orbit, and stationary hover.
 Existing `viewer-steadiness.spec.ts` also covers active edge handles and
 normal-to-face navigation. Raw captures stay outside the repository.
+
+## First-hover shaders and large-scene spikes (2026-11-01, H02)
+
+This follow-up compares the previous viewer pass (`cc07ba6`) with the highlight,
+ruler and guidance-selector fixes on the same local machine. The target was a
+2x improvement where measurable, not a claim that every operation becomes twice
+as fast. Full rendering, exact geometry, tessellation and visual settings stayed
+enabled. These are local measurements, not production-site verification.
+
+### Causes and changes
+
+- **First hover:** the 32-cylinder trace linked five new programs and spent
+  168.2 ms in shader/program diagnostic calls during hover. The visible and
+  hidden face films need front/back variants; the hidden edge pass adds another
+  line variant. Empty highlight-slot geometry had previously warmed different
+  program keys: missing position/normal attributes and flat-shaded Lambert.
+  Highlight preparation now supplies the actual attribute flags, keeps six
+  material owners for the renderer lifetime, and covers both sides explicitly.
+  Three's async readiness check tracks only the current program of each
+  material, so distinct side owners also make both passes participate in it.
+- **Deferred driver work:** parallel linking alone still leaves shader
+  diagnostics and uniform reflection until first use. Empty-buffer preparation
+  passes initialize those without submitting GL draws, clears or shadow work.
+  Reflection yields between variants rather than forming one large startup
+  task. Renderer clear/shadow state is restored after each pass, pending work
+  stops on disposal, and body rebuilds do not evict the retained programs.
+- **Zoom layout:** changing the ruler length replaced identical output text
+  twice per redraw. Those child-list mutations invalidated a placeholder rule
+  querying activity and guidance across the workspace. The ruler now retains
+  unchanged label nodes, accessible labels and bitmap dimensions. When a bitmap
+  is reused it clears its entire backing surface before drawing again.
+- **Diagnostic spikes:** genuine numeric changes still triggered broad
+  invalidation through that rule. Guidance presence now comes from the readout's
+  render state; the activity query stays on its own lane. This preserves the
+  pill/hint/placeholder behavior while removing the viewer-wide invalidations.
+- **Honest diagnostics:** a self-scheduled animation's gaps above 250 ms now
+  remain in the history, percentiles, lows and hitch count. Rest between gestures
+  and browser visibility pauses remain excluded. A long callback is not reported
+  as idle immediately after it finishes. Raw performance marks include animation
+  continuity, and the opt-in probe records slow shader calls and startup phases.
+
+### Matched results
+
+Headed Edge 156, Intel UHD/D3D11, a 1600x1000 CSS viewport and DPR 1 were used for
+both arms. Antialiasing, environment, shadows and the model's draw load were
+unchanged. The two quiet 128-cylinder repeats alternated baseline/candidate;
+neither CPU profiling, GPU queries nor timeline recording ran during those
+measurements. Separate attribution runs used identical tracing/query settings
+in both arms. The 128-body scene submits about 215k rendered triangles, with
+261–262 model-scene draws and 277 geometries in both arms.
+
+| Workload | Baseline | Candidate | Interpretation |
+| --- | ---: | ---: | --- |
+| 32 bodies, traced hover shader diagnostic time | 168.2 ms; 5 links | no call above 0.3 ms; 0 links | Prepared programs reused on first hover |
+| 32 bodies, traced worst hover callback | 150.1 ms | 11.1 ms | 92.6% less callback time at the worst sample |
+| 32 bodies, traced zoom p99 | 75.0 ms | 33.3 ms | 55.6% lower tail latency |
+| 32 bodies, traced diagnostics-orbit p99 | 75.1 ms | 41.9 ms | 44.2% lower tail latency |
+| 32 bodies, quiet repeat zoom mean / p99 | 35.6 / 79.2 ms | 17.9 / 37.5 ms | About 2x throughput; 52.7% lower p99 |
+| 128 bodies, quiet A zoom mean / p99 | 81.2 / 141.7 ms | 19.4 / 50.1 ms | 4.18x throughput; 64.6% lower p99 |
+| 128 bodies, quiet B zoom mean / p99 | 75.7 / 104.2 ms | 19.6 / 54.2 ms | 3.85x throughput; 48.0% lower p99 |
+| 128 bodies, quiet A diagnostics-orbit p99 | 95.9 ms | 58.5 ms | 39.0% lower tail latency |
+| 128 bodies, quiet B diagnostics-orbit p99 | 100.0 ms | 54.2 ms | 45.8% lower tail latency |
+
+The traced 32-body zoom spent 4,805.6 ms in layout before and 105.2 ms after
+(97.8% less across the phase); the worst layout fell from 63.7 to 2.3 ms.
+Diagnostics-orbit layout fell from 1,062.8 to 195.2 ms, with zero broad
+placeholder invalidations after the fix. Quiet 32-body diagnostics-orbit p99
+was unchanged at 58.3 ms in one repeat, and its mean regressed from 20.4 to
+23.3 ms. Ordinary orbiting improved less than zoom. These results do not establish
+a universal 100% performance improvement.
+
+There is still cold startup work: the final traced preparation took 395.7 ms
+including asynchronous linking and scheduling. Six reflection tasks took
+0.5–37.1 ms each, rather than the earlier single 158.8 ms preparation block.
+The renderer's first model frame presents before preparation starts; an
+interaction arriving before preparation completes can still encounter cold work.
+The visible-render improvements are not a reduction of all shader compilation.
+
+All six quiet production captures completed without page/console errors. The
+existing D3D11 X4122 shader precision warning remained; shader diagnostics were
+not disabled. Dev captures also exercised the changed code through hot reload.
+Some contained HTTP 401 console entries and failed the capture's strict error
+assertion; the production-bundle captures are the error-free browser evidence.
+
+### Regression coverage and next measurements
+
+The focused suite covers program attributes and side readiness, retained-owner
+disposal, cancellation before/during/between preparation tasks, restoration on
+failure, unchanged ruler nodes/bitmaps, guidance state, long stalls and visibility
+pauses. Browser regressions assert **zero GL draw/clear commands during
+reflection passes**, reuse on real face/edge hover after another exact body is added,
+and the activity pill's placeholder/hint behavior. Existing handle, cube and
+normal-to-face regressions remain required.
+
+The maintained probe accepts `OZ_VIEWER_BODIES=2`, `32` or `128`. Use the preceding
+reproduction instructions with a fresh external output directory for every arm;
+`hover.json` now includes slow main-viewer shader calls and `summary.json` includes
+startup preparation/reflection timings. Keep quiet samples separate from traces.
+
+Local verification: 5,015 web tests across 465 files and 220 parity tests pass
+(one parity skip); the focused viewer/lifecycle set has 48 passing tests. Lint
+has zero errors and 18 existing warnings; typecheck and the full build/bundle
+gate pass. The complete Windows root run remains failed: 8,739 passed, 41 failed,
+51 skipped, across the same 15 previously failing files. A four-file immutable
+prior-commit control reproduces two partial-revolve failures with 93 passing
+tests; it does not individually establish the cause of all 41 root failures.
+No backend/kernel assertion was changed to accommodate them.
+
+Next work should follow the remaining bottleneck rather than apply a global
+quality reduction:
+
+1. Collect denser disjoint-safe GPU samples of the floor grid and gradient
+   backdrop. Sparse draw samples suggest roughly 2–4 ms for the grid and 2–3 ms
+   for the backdrop, versus tens of microseconds per individual body/edge draw;
+   those samples are attribution clues, not a stable GPU acceptance baseline.
+2. Profile the remaining diagnostic text layout on very large object/history
+   trees. Layout containment alone did not establish an independent layout root
+   in the measured browser and was removed. Preserve panel sizing, drag,
+   collapse, fonts and accessible values in any replacement.
+3. Measure cold preparation separately from first hover, including input arriving
+   before readiness and drivers without parallel compilation. Keep both
+   preparation duration and its largest main-thread task visible.
+4. Add imported assemblies and direct face/edge editing workloads. This pass
+   measures camera/hover rendering and generated cylinder arrays; it does not
+   qualify million-triangle imports, kernel recomputation or every CAD gesture.
+5. Repeat on target GPUs and display/DPR settings before setting an absolute FPS
+   gate. Preserve on-demand idle sleep and report CPU, GPU and frame intervals
+   separately. H02's broader geometry/cache acceptance remains Partial.

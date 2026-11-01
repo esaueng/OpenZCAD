@@ -17,6 +17,16 @@ import {
 // Deliberate measurement, never an absolute FPS gate. Keep profiles and model
 // captures in an explicitly chosen directory outside the source checkout.
 const output = process.env.OZ_VIEWER_PERF_OUT;
+interface ShaderCall {
+  operation: string;
+  at: number;
+  ms: number;
+}
+declare global {
+  interface Window {
+    __ozViewerShaderCalls?: ShaderCall[];
+  }
+}
 test.skip(
   !process.env.OZ_PERF || !output,
   'Set OZ_PERF=1 and OZ_VIEWER_PERF_OUT to an evidence directory.'
@@ -58,8 +68,36 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
     if (message.type() === 'warning') warnings.push(message.text());
   });
   await stubApi(page);
-  const count = process.env.OZ_VIEWER_BODIES === '32' ? 32 : 2;
-  if (count === 32) {
+  await page.addInitScript(() => {
+    window.__ozViewerShaderCalls = [];
+    const prototype = WebGL2RenderingContext.prototype;
+    for (const operation of [
+      'linkProgram',
+      'getProgramInfoLog',
+      'getShaderInfoLog'
+    ] as const) {
+      const original = prototype[operation];
+      Object.defineProperty(prototype, operation, {
+        configurable: true,
+        writable: true,
+        value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
+          const at = performance.now();
+          const result: unknown = Reflect.apply(original, this, args);
+          const ms = performance.now() - at;
+          if (
+            this.canvas instanceof HTMLCanvasElement &&
+            this.canvas.closest('.viewer-host') &&
+            (ms > 0.3 || operation === 'linkProgram')
+          )
+            window.__ozViewerShaderCalls!.push({ operation, at, ms });
+          return result;
+        }
+      });
+    }
+  });
+  const requested = Number(process.env.OZ_VIEWER_BODIES ?? 2);
+  const count = [2, 32, 128].includes(requested) ? requested : 2;
+  if (count > 2) {
     await page.route('**/api/projects', (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
       let document = createProjectDocument(
@@ -103,7 +141,9 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
     await createPrimitiveInPlace(page, 'box');
     await createPrimitiveInPlace(page, 'cylinder', { at: { x: 30 } });
   }
-  await expectBodyCount(page, count);
+  // Large documents can still be restoring the workspace after the normal
+  // five-second UI assertion window, especially under validation load.
+  await expect(async () => expectBodyCount(page, count)).toPass({ timeout: 60_000 });
   await page.keyboard.press('Escape');
   const canvas = page.locator('.viewer-host canvas').first();
   await expect(canvas).toBeVisible();
@@ -120,6 +160,12 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
       dpr: devicePixelRatio
     };
   });
+  const startup = await page.evaluate(() =>
+    performance
+      .getEntriesByType('measure')
+      .filter((entry) => entry.name.startsWith('oz:viewer.'))
+      .map((entry) => ({ name: entry.name, ms: entry.duration }))
+  );
   const results: {
     name: string;
     intervals: ReturnType<typeof stats>;
@@ -128,7 +174,10 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
     overlays: ReturnType<typeof stats>;
   }[] = [];
   async function record(name: string, action: () => Promise<unknown>) {
-    await page.evaluate(() => performance.clearMarks('oz:viewer.frame'));
+    await page.evaluate(() => {
+      performance.clearMarks('oz:viewer.frame');
+      window.__ozViewerShaderCalls = [];
+    });
     await client.send('Profiler.enable');
     await client.send('Profiler.start');
     await action();
@@ -138,6 +187,7 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
         (entry) =>
           (entry as PerformanceMark).detail as {
             frameMs: number | null;
+            continuous: boolean;
             cpuMs: number;
             renderMs: number;
             overlayMs: number;
@@ -145,6 +195,9 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
             triangles: number;
           }
       )
+    );
+    const shaderCalls = await page.evaluate(
+      () => window.__ozViewerShaderCalls ?? []
     );
     // The first mark may follow a resting viewer: do not call its idle gap a
     // slow frame. Keep all subsequent intervals, including genuine hitches.
@@ -162,7 +215,7 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
     results.push(summary);
     writeFileSync(
       join(folder, `${name}.json`),
-      JSON.stringify({ frames, profile, summary })
+      JSON.stringify({ frames, shaderCalls, profile, summary })
     );
   }
   const box = (await canvas.boundingBox())!;
@@ -210,7 +263,11 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
   await page.screenshot({ path: join(folder, 'viewer.png') });
   writeFileSync(
     join(folder, 'summary.json'),
-    JSON.stringify({ browser, gpu, count, errors, warnings, results }, null, 2)
+    JSON.stringify(
+      { browser, gpu, count, errors, warnings, startup, results },
+      null,
+      2
+    )
   );
   expect(errors).toEqual([]);
   expect(

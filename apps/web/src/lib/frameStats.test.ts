@@ -26,6 +26,56 @@ function frames(
 }
 
 describe('FrameStatsMeter', () => {
+  it('retains long animation stalls while excluding sleep between gestures', () => {
+    const meter = new FrameStatsMeter();
+    meter.record({ at: 0, renderMs: 0.5, drawCalls: 1, triangles: 1 });
+    meter.record({
+      at: 400,
+      continuous: true,
+      renderMs: 0.5,
+      drawCalls: 1,
+      triangles: 1
+    });
+    meter.record({
+      at: 2_000,
+      continuous: true,
+      renderMs: 0.5,
+      drawCalls: 1,
+      triangles: 1
+    });
+    expect(meter.summarize(2_000)).toMatchObject({
+      frameMs: 1_600,
+      worstFrameMs: 1_600
+    });
+    expect(meter.recentStats()).toMatchObject({
+      frames: 2,
+      hitches: 2,
+      worstFrameMs: 1_600
+    });
+    expect(meter.history).toEqual([null, 400, 1_600]);
+    meter.record({
+      at: 4_000,
+      continuous: false,
+      renderMs: 0.5,
+      drawCalls: 1,
+      triangles: 1
+    });
+    expect(meter.history.at(-1)).toBeNull();
+    expect(meter.recentStats().frames).toBe(2);
+  });
+
+  it('does not report a long callback as idle immediately after it completes', () => {
+    const meter = new FrameStatsMeter();
+    meter.record({
+      at: 0,
+      renderMs: 1_000,
+      cpuMs: 1_300,
+      drawCalls: 1,
+      triangles: 1
+    });
+    expect(meter.summarize(1_300)).toMatchObject({ idle: false, cpuMs: 1_300, renderMs: 1_000 });
+    expect(meter.summarize(1_300 + IDLE_AFTER_MS + 1).idle).toBe(true);
+  });
   it('reports full callback CPU separately from render calls and frame intervals', () => {
     const meter = new FrameStatsMeter();
     meter.record({
