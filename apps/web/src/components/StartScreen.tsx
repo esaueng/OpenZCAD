@@ -2321,8 +2321,9 @@ export function StartScreen({
     groupLayout
   ]);
 
-  // Matches the loaded shelf: an all-pinned shelf still heads its cards
-  // with Pinned, and its empty Projects group shows only mid-drag.
+  // Matches the loaded shelf: an all-pinned shelf still keeps its pinned
+  // cards apart (unlabelled), and its empty Projects group shows only
+  // mid-drag.
   const loadingGroups = previousLayout?.groups
     ? previousLayout.groups
         .map((group, index, groups) => ({
@@ -2990,7 +2991,7 @@ export function StartScreen({
                 )}
                 {loadingGroups.map((group) => (
                   <Fragment key={group.label ?? 'all'}>
-                    {group.label && (
+                    {group.label && group.label !== 'Pinned' && (
                       <h3 className="start-shelf-group" aria-hidden="true">
                         {group.label}
                         <span>…</span>
@@ -3068,7 +3069,9 @@ export function StartScreen({
                   // An empty group only shows as a drop target mid-drag.
                   group.items.length === 0 && !reorder.draggingId ? null : (
                     <Fragment key={group.label ?? 'all'}>
-                      {group.label && (
+                      {/* Pinned goes unlabelled, as inside a folder: the
+                          cards' own pins mark it. */}
+                      {group.label && group.group !== 'pinned' && (
                         <h3 className="start-shelf-group">
                           {group.label}
                           {/* Projects, not tiles, like the filter counts. */}
@@ -3085,17 +3088,7 @@ export function StartScreen({
                         </h3>
                       )}
                       <div
-                        className={[
-                          'start-tile-grid',
-                          layout === 'list' ? 'is-list' : `is-${cardSize}`,
-                          // The label says these are pinned, so their pins
-                          // wait for the pointer.
-                          group.label && group.group === 'pinned'
-                            ? 'is-pinned-group'
-                            : ''
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
+                        className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
                         data-tile-group={canReorder ? group.group : undefined}
                       >
                         {group.items.map((item) =>

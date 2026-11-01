@@ -230,7 +230,9 @@ test.describe('with a pinned part', () => {
       route.fulfill({ json: { projects: pinned } })
     );
     await page.reload();
-    await expect(page.getByRole('heading', { name: /^Pinned/ })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: `Unpin ${names[0]}`, exact: true })
+    ).toBeVisible();
   });
 
   test('pins a part dropped onto a pinned one', async ({ page }) => {

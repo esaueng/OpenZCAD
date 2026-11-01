@@ -2110,11 +2110,9 @@
   opacity: 1;
 }
 
-/* Inside the labelled Pinned group the label already says it, so the pin
-   waits for the pointer like the other actions. */
-.start-tile-grid:not(.is-pinned-group)
-  .start-tile-project.is-pinned
-  .start-tile-pin {
+/* The Pinned group has no label, so a pinned card's or folder's pin stays
+   in sight. */
+.start-tile.is-pinned .start-tile-pin {
   opacity: 1;
 }
 
