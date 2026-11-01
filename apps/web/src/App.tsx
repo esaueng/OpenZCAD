@@ -13058,9 +13058,9 @@ export function App() {
         phase: 'error',
         title: 'This share link is incomplete',
         message:
-          'The link is incomplete or has been changed, so the shared model cannot be opened.',
+          'Part of the link is missing or was changed, so the model can’t be opened.',
         guidance:
-          'Ask the owner to send the full link again. Copy everything, including the part after #share=.',
+          'Ask the owner to send it again, and copy everything after #share=.',
         retryable: false
       });
       return;
@@ -13114,8 +13114,7 @@ export function App() {
             title: 'This share link is unavailable',
             message:
               'It may have expired or been revoked, or the owner may have removed the model.',
-            guidance:
-              'Ask the owner to check its sharing settings or send you a new link.',
+            guidance: 'Ask the owner for a new link.',
             retryable: false
           });
           return;
@@ -13156,7 +13155,7 @@ export function App() {
               ? describeFailure(error)
               : errorMessage(error, 'Could not open the share link.'),
             guidance:
-              'Check your connection and try again. If it still won’t open, ask the owner to check the link and its sharing settings.',
+              'Check your connection and try again. If it keeps failing, ask the owner to check the link.',
             retryable: true
           });
         }

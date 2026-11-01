@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Link2, Link2Off, LoaderCircle, RotateCw } from 'lucide-react';
+import { Link2Off, LoaderCircle, RotateCw } from 'lucide-react';
 import { BrandMark } from './BrandMark';
 import { useModalFocus } from '../lib/useModalFocus';
 
@@ -55,7 +55,11 @@ export function SharePage({
           className={`share-page-icon${loading ? '' : ' error'}`}
           aria-hidden="true"
         >
-          {loading ? <Link2 size={28} /> : <Link2Off size={28} />}
+          {loading ? (
+            <LoaderCircle size={22} className="spin" />
+          ) : (
+            <Link2Off size={22} />
+          )}
         </div>
         <div role="status" aria-live="polite">
           <h1 id="share-page-heading" ref={heading} tabIndex={-1}>
@@ -63,22 +67,13 @@ export function SharePage({
           </h1>
           <p className="share-page-message">
             {loading
-              ? 'Loading the model and checking its shared files.'
+              ? 'Loading the model and verifying its files.'
               : state.message}
           </p>
         </div>
-        <p className="share-page-guidance">
-          {loading
-            ? 'Keep this page open. You can return to your projects at any time.'
-            : state.guidance}
-        </p>
+        {!loading && <p className="share-page-guidance">{state.guidance}</p>}
         <div className="share-page-actions">
-          {loading ? (
-            <span className="share-page-progress">
-              <LoaderCircle size={16} className="spin" aria-hidden="true" />
-              Opening model
-            </span>
-          ) : canRetry ? (
+          {canRetry ? (
             <button className="primary" type="button" onClick={onRetry}>
               <RotateCw size={16} aria-hidden="true" />
               Try again
