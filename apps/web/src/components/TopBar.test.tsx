@@ -126,6 +126,14 @@ describe('TopBar workspace mode help', () => {
 });
 
 describe('TopBar save chip', () => {
+  it('follows the project name instead of leading the action row', () => {
+    renderTopBar({ saveState: 'synced', signedIn: true });
+    const chip = screen.getByRole('status', { name: 'Saved' });
+    expect(chip.closest('.topbar-identity')).not.toBeNull();
+    expect(
+      screen.getByRole('group', { name: 'Workspace actions' })
+    ).not.toContainElement(chip);
+  });
   it.each(['synced', 'local'] as const)(
     'shows an uncommitted edit being checked instead of %s',
     (saveState) => {

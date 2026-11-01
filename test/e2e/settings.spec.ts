@@ -16,60 +16,68 @@ import {
   pickObjectsBody
 } from './openzcad-fixtures';
 
-test('discloses free built-in AI data use and lets users choose a personal model', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await stubApi(page, { assistantEnabled: true });
-  await page.route('**/api/settings', (route) =>
-    route.fulfill({
-      json: {
-        settings: {
-          ...DEFAULT_APP_SETTINGS,
-          assistant: { ...DEFAULT_APP_SETTINGS.assistant, enabled: true }
-        },
-        revision: 1,
-        synced: true,
-        credential: { stored: false, storageAvailable: true },
-        effectiveAssistant: {
-          configured: true,
-          source: 'deployment',
-          provider: 'openrouter',
-          model: 'minimax/minimax-m3.1-flash:free',
-          reasoningEffort: 'high'
+test(
+  'discloses free built-in AI data use and lets users choose a personal model',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page, { assistantEnabled: true });
+    await page.route('**/api/settings', (route) =>
+      route.fulfill({
+        json: {
+          settings: {
+            ...DEFAULT_APP_SETTINGS,
+            assistant: { ...DEFAULT_APP_SETTINGS.assistant, enabled: true }
+          },
+          revision: 1,
+          synced: true,
+          credential: { stored: false, storageAvailable: true },
+          effectiveAssistant: {
+            configured: true,
+            source: 'deployment',
+            provider: 'openrouter',
+            model: 'minimax/minimax-m3.1-flash:free',
+            reasoningEffort: 'high'
+          }
         }
-      }
-    })
-  );
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings' });
-  await expect(settings).toContainText('minimax/minimax-m3.1-flash:free');
-  await expect(
-    settings.getByText(/Free with no personal API key/)
-  ).toBeVisible();
-  await expect(
-    settings.getByText(/may retain this data or use it for training/)
-  ).toBeVisible();
-  await expect(
-    settings.getByRole('link', { name: 'OpenRouter data policies' })
-  ).toHaveAttribute(
-    'href',
-    'https://openrouter.ai/docs/guides/privacy/provider-logging'
-  );
-  await settings.getByRole('radio', { name: 'Personal token' }).click();
-  await expect(settings.getByLabel('AI model', { exact: true })).toBeVisible();
-  await settings.getByLabel('AI model', { exact: true }).fill('another/model');
-  await expect(settings.getByLabel('AI model', { exact: true })).toHaveValue(
-    'another/model'
-  );
-  await expect(
-    settings.getByLabel('Personal API token', { exact: true })
-  ).toBeVisible();
-  await expect(
-    settings.getByText(/That provider’s data retention, training policies/)
-  ).toBeVisible();
-});
+      })
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page
+      .getByRole('button', { name: 'AI Assistant', exact: true })
+      .click();
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    await expect(settings).toContainText('minimax/minimax-m3.1-flash:free');
+    await expect(
+      settings.getByText(/Free with no personal API key/)
+    ).toBeVisible();
+    await expect(
+      settings.getByText(/may retain this data or use it for training/)
+    ).toBeVisible();
+    await expect(
+      settings.getByRole('link', { name: 'OpenRouter data policies' })
+    ).toHaveAttribute(
+      'href',
+      'https://openrouter.ai/docs/guides/privacy/provider-logging'
+    );
+    await settings.getByRole('radio', { name: 'Personal token' }).click();
+    await expect(
+      settings.getByLabel('AI model', { exact: true })
+    ).toBeVisible();
+    await settings
+      .getByLabel('AI model', { exact: true })
+      .fill('another/model');
+    await expect(settings.getByLabel('AI model', { exact: true })).toHaveValue(
+      'another/model'
+    );
+    await expect(
+      settings.getByLabel('Personal API token', { exact: true })
+    ).toBeVisible();
+    await expect(
+      settings.getByText(/That provider’s data retention, training policies/)
+    ).toBeVisible();
+  }
+);
 
 test('hides profile details by default, keeps disclosure across reopen and resets it on reload', async ({
   page
@@ -186,18 +194,22 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
     name: 'Workspace actions'
   });
   const actionSlots = actions.locator(':scope > *');
-  // Signed in is the happy default: the account chip renders only when the
-  // account needs attention, so the save chip leads the row.
-  await expect(actionSlots).toHaveCount(4);
+  // The save status follows the project name in the identity island; the
+  // actions are presence and the two commands. Signed in is the happy
+  // default, so the account chip (rendered only when the account needs
+  // attention) is absent.
+  const saveStatus = topbar.locator('.topbar-identity > .save-state');
+  await expect(saveStatus).toBeVisible();
+  await expect(actions.locator('.save-state')).toHaveCount(0);
+  await expect(actionSlots).toHaveCount(3);
   await expect(topbar).not.toContainText('Signed in');
-  await expect(actionSlots.nth(0)).toHaveClass(/save-state/);
   await expect(topbar).not.toContainText('E2E user');
-  await expect(actionSlots.nth(1)).toHaveAttribute(
+  await expect(actionSlots.nth(0)).toHaveAttribute(
     'aria-label',
     'Open project sharing · Offline'
   );
-  await expect(actionSlots.nth(2)).toHaveClass(/file-menu/);
-  await expect(actionSlots.nth(3)).toHaveAttribute(
+  await expect(actionSlots.nth(1)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(2)).toHaveAttribute(
     'aria-label',
     'Open settings'
   );
@@ -211,16 +223,25 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await topbar.locator('.topbar-divider').first().click();
   await expect(fileMenu).not.toHaveAttribute('open', '');
 
-  await actions.locator('.save-state').evaluate((element) => {
+  // A longer save label grows the identity island only: the actions island
+  // keeps its place and its order.
+  const actionsBox = () =>
+    actions.evaluate((group) => {
+      const box = group.getBoundingClientRect();
+      return { left: Math.round(box.left), width: Math.round(box.width) };
+    });
+  const before = await actionsBox();
+  await saveStatus.locator('.stable-label-text').evaluate((element) => {
     element.lastChild!.textContent = 'Autosave off';
   });
+  await expect(saveStatus).toContainText('Autosave off');
+  expect(await actionsBox()).toEqual(before);
   await actions.locator('.collaboration-state').evaluate((element) => {
     element.lastChild!.textContent = 'Update required';
   });
-  await expect(actionSlots.nth(0)).toHaveClass(/save-state/);
-  await expect(actionSlots.nth(1)).toHaveClass(/collaboration-state/);
-  await expect(actionSlots.nth(2)).toHaveClass(/file-menu/);
-  await expect(actionSlots.nth(3)).toHaveAttribute(
+  await expect(actionSlots.nth(0)).toHaveClass(/collaboration-state/);
+  await expect(actionSlots.nth(1)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(2)).toHaveAttribute(
     'aria-label',
     'Open settings'
   );
@@ -235,12 +256,14 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
   await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
-  const actions = page.locator('.topbar').getByRole('group', {
+  const topbar = page.locator('.topbar');
+  const actions = topbar.getByRole('group', {
     name: 'Workspace actions'
   });
-  await expect(actions.locator(':scope > *')).toHaveCount(4);
+  await expect(actions.locator(':scope > *')).toHaveCount(3);
 
-  const saveAction = actions.locator('.save-state');
+  // The save status follows the project name; it keeps a name at every width.
+  const saveAction = topbar.locator('.topbar-identity > .save-state');
   await expect(saveAction).toHaveAttribute('aria-label', /\S/);
   await expect(saveAction).toHaveAccessibleName(/\S/);
   await expect(
@@ -254,9 +277,9 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
   ).toBeVisible();
 
   // Exercise both sides of the exact collapse point, then narrower layouts.
-  // Signed in the row carries four controls, so every direct child must own
+  // Signed in the row carries three controls, so every direct child must own
   // exactly its content width without overlapping a neighbour or escaping the
-  // bar. At 1120px and below, all four become 28px icon squares at once.
+  // bar. At 1120px and below, all three become 28px icon squares at once.
   for (const width of [1121, 1120, 982, 600]) {
     await page.setViewportSize({ width, height: 800 });
     await expect
@@ -298,119 +321,123 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
   }
 });
 
-test('opens new projects blank with the assistant collapsed', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await stubApi(page, { assistantEnabled: true });
-  await createProject(page, 'First Blank Part');
+test(
+  'opens new projects blank with the assistant collapsed',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page, { assistantEnabled: true });
+    await createProject(page, 'First Blank Part');
 
-  const workspace = page.locator('.workspace');
-  await expect(page.locator('.viewer-notice')).toHaveCount(0);
-  await expect(page.getByText('No geometry yet')).toHaveCount(0);
-  await expect(page.locator('.assistant-panel')).toHaveCount(0);
-  await expect(page.locator('.command-bar')).toBeVisible();
-  await expect(workspace).not.toHaveClass(/with-assistant/);
+    const workspace = page.locator('.workspace');
+    await expect(page.locator('.viewer-notice')).toHaveCount(0);
+    await expect(page.getByText('No geometry yet')).toHaveCount(0);
+    await expect(page.locator('.assistant-panel')).toHaveCount(0);
+    await expect(page.locator('.command-bar')).toBeVisible();
+    await expect(workspace).not.toHaveClass(/with-assistant/);
 
-  await openAssistant(page);
-  await expect(workspace).toHaveClass(/with-assistant/);
+    await openAssistant(page);
+    await expect(workspace).toHaveClass(/with-assistant/);
 
-  await page.getByTitle('Back to projects').click();
-  await expect(
-    page.getByRole('button', { name: 'New project' })
-  ).toBeVisible();
-  await page.getByLabel('Project name').fill('Second Blank Part');
-  await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByTitle('Back to projects').click();
+    await expect(
+      page.getByRole('button', { name: 'New project' })
+    ).toBeVisible();
+    await page.getByLabel('Project name').fill('Second Blank Part');
+    await page.getByRole('button', { name: 'New project' }).click();
 
-  await expect(page.locator('.assistant-panel')).toHaveCount(0);
-  await expect(page.locator('.command-bar')).toBeVisible();
-  await expect(workspace).not.toHaveClass(/with-assistant/);
-  await expect(page.locator('.viewer-notice')).toHaveCount(0);
-});
-
-test('keeps every workspace surface inside a narrow viewport', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await stubApi(page, { assistantEnabled: true });
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Narrow Part');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await openAssistant(page);
-
-  const selectors = [
-    '.topbar',
-    '.workspace',
-    '.workspace-column',
-    // Nothing docks at a phone width: the one panel that shows is in the lane.
-    '.panel-lane-float',
-    '.viewer-area',
-    '.assistant-panel',
-    // The readout draws only in a sketch; the scale bar holds the corner.
-    '.viewport-scale-indicator',
-    '.command-bar',
-    '.instrument-rail'
-  ];
-  // What has to hold is where these surfaces come to rest. The assistant
-  // opens with a 200 ms rise from `translateY(8px)`, so measure once that
-  // has landed.
-  await waitForSurfacesToSettle(page, selectors);
-  for (const selector of selectors) {
-    const bounds = await page.locator(selector).boundingBox();
-    expect(bounds, `${selector} should be laid out`).not.toBeNull();
-    expect(
-      bounds!.x,
-      `${selector} should not start offscreen`
-    ).toBeGreaterThanOrEqual(0);
-    expect(
-      bounds!.x + bounds!.width,
-      `${selector} should not end offscreen`
-    ).toBeLessThanOrEqual(390.5);
+    await expect(page.locator('.assistant-panel')).toHaveCount(0);
+    await expect(page.locator('.command-bar')).toBeVisible();
+    await expect(workspace).not.toHaveClass(/with-assistant/);
+    await expect(page.locator('.viewer-notice')).toHaveCount(0);
   }
+);
 
-  // The column floats over the viewport at every width; on a phone it must
-  // still fit, leaving canvas beside it.
-  const sidebarBounds = await page.locator('.workspace-column').boundingBox();
-  const viewerBounds = await page.locator('.viewer-area').boundingBox();
-  expect(sidebarBounds!.x + sidebarBounds!.width).toBeLessThan(
-    viewerBounds!.x + viewerBounds!.width - 100
-  );
-  // The bottom chrome is the scale bar in the corner above the search bar
-  // (the readout draws only in a sketch); on a phone they must not overlap.
-  const rulerBounds = await page
-    .locator('.viewport-scale-indicator')
-    .boundingBox();
-  const barBounds = await page.locator('.command-bar').boundingBox();
-  expect(rulerBounds!.y + rulerBounds!.height).toBeLessThanOrEqual(
-    barBounds!.y + 0.5
-  );
-  await expect(page.locator('.viewer-rail-stack')).toBeVisible();
+test(
+  'keeps every workspace surface inside a narrow viewport',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await stubApi(page, { assistantEnabled: true });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Narrow Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await openAssistant(page);
 
-  // The three top islands keep to themselves: with equal-width flanks the
-  // actions ran into the mode switch at this width.
-  const islands = await page
-    .locator('.topbar > .topbar-island')
-    .evaluateAll((elements) =>
-      elements.map((element) => {
-        const bounds = element.getBoundingClientRect();
-        return { left: bounds.left, right: bounds.right };
-      })
+    const selectors = [
+      '.topbar',
+      '.workspace',
+      '.workspace-column',
+      // Nothing docks at a phone width: the one panel that shows is in the lane.
+      '.panel-lane-float',
+      '.viewer-area',
+      '.assistant-panel',
+      // The readout draws only in a sketch; the scale bar holds the corner.
+      '.viewport-scale-indicator',
+      '.command-bar',
+      '.instrument-rail'
+    ];
+    // What has to hold is where these surfaces come to rest. The assistant
+    // opens with a 200 ms rise from `translateY(8px)`, so measure once that
+    // has landed.
+    await waitForSurfacesToSettle(page, selectors);
+    for (const selector of selectors) {
+      const bounds = await page.locator(selector).boundingBox();
+      expect(bounds, `${selector} should be laid out`).not.toBeNull();
+      expect(
+        bounds!.x,
+        `${selector} should not start offscreen`
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        bounds!.x + bounds!.width,
+        `${selector} should not end offscreen`
+      ).toBeLessThanOrEqual(390.5);
+    }
+
+    // The column floats over the viewport at every width; on a phone it must
+    // still fit, leaving canvas beside it.
+    const sidebarBounds = await page.locator('.workspace-column').boundingBox();
+    const viewerBounds = await page.locator('.viewer-area').boundingBox();
+    expect(sidebarBounds!.x + sidebarBounds!.width).toBeLessThan(
+      viewerBounds!.x + viewerBounds!.width - 100
     );
-  expect(islands).toHaveLength(3);
-  for (let index = 1; index < islands.length; index += 1) {
-    expect(islands[index]!.left).toBeGreaterThanOrEqual(
-      islands[index - 1]!.right - 0.5
+    // The bottom chrome is the scale bar in the corner above the search bar
+    // (the readout draws only in a sketch); on a phone they must not overlap.
+    const rulerBounds = await page
+      .locator('.viewport-scale-indicator')
+      .boundingBox();
+    const barBounds = await page.locator('.command-bar').boundingBox();
+    expect(rulerBounds!.y + rulerBounds!.height).toBeLessThanOrEqual(
+      barBounds!.y + 0.5
     );
+    await expect(page.locator('.viewer-rail-stack')).toBeVisible();
+
+    // The three top islands keep to themselves: with equal-width flanks the
+    // actions ran into the mode switch at this width.
+    const islands = await page
+      .locator('.topbar > .topbar-island')
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          const bounds = element.getBoundingClientRect();
+          return { left: bounds.left, right: bounds.right };
+        })
+      );
+    expect(islands).toHaveLength(3);
+    for (let index = 1; index < islands.length; index += 1) {
+      expect(islands[index]!.left).toBeGreaterThanOrEqual(
+        islands[index - 1]!.right - 0.5
+      );
+    }
+
+    const overflowingTopbarChildren = await page.locator('.topbar').evaluate(
+      (topbar) =>
+        [...topbar.children].filter((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.left < -0.5 || bounds.right > window.innerWidth + 0.5;
+        }).length
+    );
+    expect(overflowingTopbarChildren).toBe(0);
   }
-
-  const overflowingTopbarChildren = await page.locator('.topbar').evaluate(
-    (topbar) =>
-      [...topbar.children].filter((element) => {
-        const bounds = element.getBoundingClientRect();
-        return bounds.left < -0.5 || bounds.right > window.innerWidth + 0.5;
-      }).length
-  );
-  expect(overflowingTopbarChildren).toBe(0);
-});
+);
 
 test('refuses an invalid project name instead of working locally', async ({
   page
@@ -518,39 +545,41 @@ function pageGround(page: Page) {
   return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 }
 
-test('theme setting repaints the chrome and follows the system preference', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await stubApi(page);
-  await page.goto('/');
-  // The root carries the setting; the stylesheet resolves 'system'.
-  const root = page.locator('html');
-  await expect(root).toHaveAttribute('data-theme', 'system');
-  expect(await pageGround(page)).toBe(DARK_GROUND);
+test(
+  'theme setting repaints the chrome and follows the system preference',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await stubApi(page);
+    await page.goto('/');
+    // The root carries the setting; the stylesheet resolves 'system'.
+    const root = page.locator('html');
+    await expect(root).toHaveAttribute('data-theme', 'system');
+    expect(await pageGround(page)).toBe(DARK_GROUND);
 
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Appearance', exact: true }).click();
-  const theme = page.getByRole('radiogroup', { name: 'Theme' });
-  await theme.getByRole('radio', { name: 'Light' }).check();
-  await expect(root).toHaveAttribute('data-theme', 'light');
-  // The tokens really repaint — the page ground leaves the dark ramp.
-  expect(await pageGround(page)).toBe(LIGHT_GROUND);
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+    const theme = page.getByRole('radiogroup', { name: 'Theme' });
+    await theme.getByRole('radio', { name: 'Light' }).check();
+    await expect(root).toHaveAttribute('data-theme', 'light');
+    // The tokens really repaint — the page ground leaves the dark ramp.
+    expect(await pageGround(page)).toBe(LIGHT_GROUND);
 
-  // 'system' tracks a live OS appearance change without a reload.
-  await theme.getByRole('radio', { name: 'System' }).check();
-  await expect(root).toHaveAttribute('data-theme', 'system');
-  expect(await pageGround(page)).toBe(DARK_GROUND);
-  await page.emulateMedia({ colorScheme: 'light' });
-  expect(await pageGround(page)).toBe(LIGHT_GROUND);
+    // 'system' tracks a live OS appearance change without a reload.
+    await theme.getByRole('radio', { name: 'System' }).check();
+    await expect(root).toHaveAttribute('data-theme', 'system');
+    expect(await pageGround(page)).toBe(DARK_GROUND);
+    await page.emulateMedia({ colorScheme: 'light' });
+    expect(await pageGround(page)).toBe(LIGHT_GROUND);
 
-  // The choice persists across a reload from device storage, and an
-  // explicit choice ignores the OS.
-  await theme.getByRole('radio', { name: 'Dark' }).check();
-  await page.reload();
-  await expect(root).toHaveAttribute('data-theme', 'dark');
-  expect(await pageGround(page)).toBe(DARK_GROUND);
-});
+    // The choice persists across a reload from device storage, and an
+    // explicit choice ignores the OS.
+    await theme.getByRole('radio', { name: 'Dark' }).check();
+    await page.reload();
+    await expect(root).toHaveAttribute('data-theme', 'dark');
+    expect(await pageGround(page)).toBe(DARK_GROUND);
+  }
+);
 
 test('System follows a light OS on the start screen and in the workspace alike', async ({
   page
@@ -759,9 +788,9 @@ test('launcher semantics, empty states, and demo cards hold at mobile width', as
   await expect(
     page.getByText('Nothing archived.', { exact: false })
   ).toBeVisible();
-  await expect(page.getByText('No projects match', { exact: false })).toHaveCount(
-    0
-  );
+  await expect(
+    page.getByText('No projects match', { exact: false })
+  ).toHaveCount(0);
 
   const widths = await page.evaluate(() => {
     const body = document.querySelector<HTMLElement>('.start-body');
@@ -895,9 +924,7 @@ test('settings swallow workspace shortcuts instead of editing behind them', asyn
   await expect(page.getByRole('region', { name: 'Box operation' })).toHaveCount(
     0
   );
-  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(
-    0
-  );
+  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(0);
 });
 
 test('a direct mode hides the assistant without ending the conversation', async ({
@@ -1083,52 +1110,55 @@ for (const tier of ['free', 'premium'] as const) {
   });
 }
 
-test('optional Glimpse analytics require a new opt-in and withdraw immediately', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await stubApi(page);
-  await page.route('**/api/glimpse/usage', (route) =>
-    route.fulfill({ status: 204 })
-  );
-  const requests: unknown[] = [];
-  page.on('request', (request) => {
-    if (request.url().endsWith('/api/glimpse/usage'))
-      requests.push(request.postDataJSON());
-  });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  await page
-    .getByRole('button', { name: 'Privacy & data', exact: true })
-    .click();
-  const consent = page.getByRole('checkbox', {
-    name: 'Optional usage analytics',
-    exact: true
-  });
-  const row = page.locator('.setting-row').filter({ has: consent });
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 1000 });
-    const copy = await row.locator('.setting-copy').boundingBox();
-    const control = await row.locator('.setting-control').boundingBox();
-    if (!copy || !control) throw new Error('Analytics setting is not visible');
-    expect(copy.width).toBeGreaterThan(200);
-    expect(
-      control.x >= copy.x + copy.width - 1 ||
-        control.y >= copy.y + copy.height - 1
-    ).toBe(true);
+test(
+  'optional Glimpse analytics require a new opt-in and withdraw immediately',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.route('**/api/glimpse/usage', (route) =>
+      route.fulfill({ status: 204 })
+    );
+    const requests: unknown[] = [];
+    page.on('request', (request) => {
+      if (request.url().endsWith('/api/glimpse/usage'))
+        requests.push(request.postDataJSON());
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page
+      .getByRole('button', { name: 'Privacy & data', exact: true })
+      .click();
+    const consent = page.getByRole('checkbox', {
+      name: 'Optional usage analytics',
+      exact: true
+    });
+    const row = page.locator('.setting-row').filter({ has: consent });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const copy = await row.locator('.setting-copy').boundingBox();
+      const control = await row.locator('.setting-control').boundingBox();
+      if (!copy || !control)
+        throw new Error('Analytics setting is not visible');
+      expect(copy.width).toBeGreaterThan(200);
+      expect(
+        control.x >= copy.x + copy.width - 1 ||
+          control.y >= copy.y + copy.height - 1
+      ).toBe(true);
+    }
+    await expect(consent).not.toBeChecked();
+    expect(requests).toEqual([]);
+    await consent.check();
+    await expect(consent).toBeChecked();
+    await page.reload();
+    await expect(consent).toBeChecked();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]).toEqual({ event: 'workspace_opened', bucket: 'none' });
+    await consent.uncheck();
+    await page.reload();
+    await expect(consent).not.toBeChecked();
+    expect(requests).toHaveLength(1);
   }
-  await expect(consent).not.toBeChecked();
-  expect(requests).toEqual([]);
-  await consent.check();
-  await expect(consent).toBeChecked();
-  await page.reload();
-  await expect(consent).toBeChecked();
-  await expect.poll(() => requests.length).toBe(1);
-  expect(requests[0]).toEqual({ event: 'workspace_opened', bucket: 'none' });
-  await consent.uncheck();
-  await page.reload();
-  await expect(consent).not.toBeChecked();
-  expect(requests).toHaveLength(1);
-});
+);
 
 for (const privacySignal of ['doNotTrack', 'globalPrivacyControl'] as const) {
   test(`analytics consent can be revoked with ${privacySignal} enabled`, async ({
@@ -1286,17 +1316,24 @@ test('cloud-off suppresses analytics while keeping the saved consent revocable',
   ).toBeNull();
 });
 
-test('cloud statistics require acknowledged consent and keep a failed withdrawal visible', async ({ page }) => {
+test('cloud statistics require acknowledged consent and keep a failed withdrawal visible', async ({
+  page
+}) => {
   await stubApi(page);
   const changes: unknown[] = [];
   let enabled = false;
   let failWithdrawal = true;
   let releaseGrant!: () => void;
-  const grantGate = new Promise<void>(resolve => { releaseGrant = resolve; });
+  const grantGate = new Promise<void>((resolve) => {
+    releaseGrant = resolve;
+  });
   const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
   await page.route('**/api/glimpse/account-consent', async (route) => {
     if (route.request().method() === 'POST') {
-      const input = route.request().postDataJSON() as { enabled: boolean; version: number };
+      const input = route.request().postDataJSON() as {
+        enabled: boolean;
+        version: number;
+      };
       changes.push(input);
       if (input.enabled) await grantGate;
       if (!input.enabled && failWithdrawal) {
@@ -1306,12 +1343,19 @@ test('cloud statistics require acknowledged consent and keep a failed withdrawal
       }
       enabled = input.enabled;
     }
-    await route.fulfill({ json: { enabled, expiresAt: enabled ? expiresAt : null } });
+    await route.fulfill({
+      json: { enabled, expiresAt: enabled ? expiresAt : null }
+    });
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Privacy & data', exact: true }).click();
-  const consent = page.getByRole('checkbox', { name: 'Cloud account statistics for 30 days', exact: true });
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
+    .click();
+  const consent = page.getByRole('checkbox', {
+    name: 'Cloud account statistics for 30 days',
+    exact: true
+  });
   const row = page.locator('.setting-row').filter({ has: consent });
   await expect(consent).toBeEnabled();
   await expect(consent).not.toBeChecked();
@@ -1323,14 +1367,20 @@ test('cloud statistics require acknowledged consent and keep a failed withdrawal
     releaseGrant();
   }
   await expect(consent).toBeChecked();
-  await expect(row).toContainText(`Enabled until ${expiresAt.slice(0, 10)} UTC.`);
+  await expect(row).toContainText(
+    `Enabled until ${expiresAt.slice(0, 10)} UTC.`
+  );
   await consent.click();
-  await expect(row).toContainText('Could not confirm this change. Refresh to check the server permission before trying again.');
+  await expect(row).toContainText(
+    'Could not confirm this change. Refresh to check the server permission before trying again.'
+  );
   await expect(consent).toBeChecked();
   await expect(consent).toBeEnabled();
   await consent.click();
   await expect(consent).not.toBeChecked();
-  await expect(row).toContainText('Withdrawn. Future cloud snapshots exclude this account.');
+  await expect(row).toContainText(
+    'Withdrawn. Future cloud snapshots exclude this account.'
+  );
   expect(changes).toEqual([
     { enabled: true, version: 2 },
     { enabled: false, version: 2 },
@@ -1338,52 +1388,72 @@ test('cloud statistics require acknowledged consent and keep a failed withdrawal
   ]);
 });
 
-test('consented diagnostics count transaction edits without sending names', async ({ page }) => {
+test('consented diagnostics count transaction edits without sending names', async ({
+  page
+}) => {
   await stubApi(page);
-  await page.addInitScript(() => localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v2'));
+  await page.addInitScript(() =>
+    localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v2')
+  );
   const requests: Array<{ event: string; bucket: string }> = [];
-  await page.route('**/api/glimpse/usage', route => {
-    requests.push(route.request().postDataJSON() as { event: string; bucket: string });
+  await page.route('**/api/glimpse/usage', (route) => {
+    requests.push(
+      route.request().postDataJSON() as { event: string; bucket: string }
+    );
     return route.fulfill({ status: 204 });
   });
   await createProject(page, 'Private diagnostic project');
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
-  const observations = (event: string) => requests.filter(row => row.event === event);
-  await expect.poll(() => observations('feature_operation')).toEqual([
-    { event: 'feature_operation', bucket: 'primitive.add' }
-  ]);
-  await expect.poll(() => observations('part_count')).toEqual([
-    { event: 'part_count', bucket: '1' }
-  ]);
-  const row = page.locator('.feature-row').filter({ has: page.locator('.feature-name', { hasText: /^Box$/ }) });
+  const observations = (event: string) =>
+    requests.filter((row) => row.event === event);
+  await expect
+    .poll(() => observations('feature_operation'))
+    .toEqual([{ event: 'feature_operation', bucket: 'primitive.add' }]);
+  await expect
+    .poll(() => observations('part_count'))
+    .toEqual([{ event: 'part_count', bucket: '1' }]);
+  const row = page
+    .locator('.feature-row')
+    .filter({ has: page.locator('.feature-name', { hasText: /^Box$/ }) });
   await row.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   const name = page.getByRole('textbox', { name: 'Rename Box', exact: true });
   await name.fill('Private renamed feature');
   await name.press('Enter');
-  await expect(page.locator('.feature-name', { hasText: /^Private renamed feature$/ })).toBeVisible();
-  await expect.poll(() => observations('feature_operation')).toEqual([
-    { event: 'feature_operation', bucket: 'primitive.add' },
-    { event: 'feature_operation', bucket: 'node.rename' }
-  ]);
-  await expect.poll(() => observations('part_count')).toEqual([
-    { event: 'part_count', bucket: '1' },
-    { event: 'part_count', bucket: '1' }
-  ]);
+  await expect(
+    page.locator('.feature-name', { hasText: /^Private renamed feature$/ })
+  ).toBeVisible();
+  await expect
+    .poll(() => observations('feature_operation'))
+    .toEqual([
+      { event: 'feature_operation', bucket: 'primitive.add' },
+      { event: 'feature_operation', bucket: 'node.rename' }
+    ]);
+  await expect
+    .poll(() => observations('part_count'))
+    .toEqual([
+      { event: 'part_count', bucket: '1' },
+      { event: 'part_count', bucket: '1' }
+    ]);
   await expect.poll(() => observations('feature_used')).toHaveLength(2);
   await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
-  await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('2_10');
+  await expect
+    .poll(() => observations('part_count').at(-1)?.bucket)
+    .toBe('2_10');
   // U09: Union runs in place: two bodies, then Done.
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await pickObjectsBody(page, 'Box 1');
   await pickObjectsBody(page, 'Cylinder 1');
   await finishInPlaceCommand(page, 'Union');
   await expectBodyCount(page, 1);
-  await expect.poll(() => observations('feature_operation').at(-1)).toEqual({
-    event: 'feature_operation', bucket: 'feature.boolean'
-  });
+  await expect
+    .poll(() => observations('feature_operation').at(-1))
+    .toEqual({
+      event: 'feature_operation',
+      bucket: 'feature.boolean'
+    });
   await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('1');
   expect(JSON.stringify(requests)).not.toContain('Private');
 });
@@ -1411,9 +1481,15 @@ test(
     await expect(page.getByLabel('AI API endpoint')).toHaveCount(0);
     await page.getByLabel('AI reasoning level').selectOption('off');
     await page.getByLabel('AI model', { exact: true }).fill('claude-opus-5-5');
-    await expect(page.getByLabel('AI reasoning level')).toHaveValue('provider-default');
-    await expect(page.getByRole('option', { name: 'Off', exact: true })).toBeDisabled();
-    await page.getByLabel('AI model', { exact: true }).fill('claude-sonnet-5-5');
+    await expect(page.getByLabel('AI reasoning level')).toHaveValue(
+      'provider-default'
+    );
+    await expect(
+      page.getByRole('option', { name: 'Off', exact: true })
+    ).toBeDisabled();
+    await page
+      .getByLabel('AI model', { exact: true })
+      .fill('claude-sonnet-5-5');
     await page.reload();
     await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
     await expect(page.getByLabel('AI provider', { exact: true })).toHaveValue(

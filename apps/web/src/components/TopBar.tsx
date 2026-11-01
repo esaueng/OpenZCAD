@@ -35,9 +35,7 @@ import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
 import {
   ACCOUNT_LABEL_RESERVE,
-  CLOUD_SAVE_LABEL_RESERVE,
   COLLABORATION_LABEL_RESERVE,
-  DEVICE_SAVE_LABEL_RESERVE,
   WORKSPACE_MODE_OPTIONS,
   saveGlyphFor,
   type SaveGlyph
@@ -400,22 +398,7 @@ export function TopBar({
       : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
-      {/* The chip keeps the width of its widest routine label, so a save,
-          sync or check never moves the island or its neighbours. The glyph
-          sits in the label slot and the pair hugs its right end: the
-          reserve's slack falls at the island's outer edge, not as a hole
-          between "Saved" and presence (topbar.css). */}
-      <StableLabel
-        reserve={
-          readinessVisible
-            ? [saveText]
-            : saveToAccount
-              ? ['Save to my account']
-              : accountState === 'signed-in'
-                ? CLOUD_SAVE_LABEL_RESERVE
-                : DEVICE_SAVE_LABEL_RESERVE
-        }
-      >
+      <StableLabel reserve={[saveText]}>
         {/* Keyed by the glyph, not the state: saving → syncing keeps the
             same ring turning, and only a change of kind pops. */}
         <span
@@ -559,6 +542,37 @@ export function TopBar({
         {encryption && projectName ? (
           <EncryptionIndicator {...encryption} />
         ) : null}
+        {/* The save status belongs to the document, so it follows its name.
+            This island is anchored at its left edge with open stage beyond
+            it, so a label change moves nothing; the actions island keeps a
+            fixed width with no status slot to reserve. */}
+        {saveChipActs ? (
+          <button
+            className={`save-state topbar-action is-${saveState}`}
+            type="button"
+            disabled={!projectName}
+            onClick={reviewRefusal ? onReviewEditFailure : onSave}
+            aria-label={saveLabel}
+            title={
+              saveToAccount && !editRefusal
+                ? 'Save this local project and its source files to your account.'
+                : saveTitle
+            }
+          >
+            {saveChipContent}
+          </button>
+        ) : (
+          // A readout, not a control: clicking "Local only" or "Saved" used
+          // to save a revision unasked. Saving is on File and the shortcut.
+          <span
+            className={`save-state topbar-action is-readout is-${saveState}`}
+            role="status"
+            aria-label={saveLabel}
+            title={`${saveTitle} Save a revision from File${saveKey ? ` or with ${platformShortcutLabel(saveKey)}` : ''}.`}
+          >
+            {saveChipContent}
+          </span>
+        )}
       </div>
       <div
         className="mode-switch topbar-island"
@@ -609,7 +623,7 @@ export function TopBar({
           role="group"
           aria-label="Workspace actions"
         >
-          {/* Signed in is the happy default and the save chip already shows
+          {/* Signed in is the happy default and the save status already shows
             cloud state, so the account chip appears only when something
             needs attention. */}
           {accountState !== 'signed-in' && (
@@ -630,33 +644,6 @@ export function TopBar({
               <StableLabel reserve={ACCOUNT_LABEL_RESERVE} align="center">
                 {accountLabel}
               </StableLabel>
-            </span>
-          )}
-          {saveChipActs ? (
-            <button
-              className={`save-state topbar-action is-${saveState}`}
-              type="button"
-              disabled={!projectName}
-              onClick={reviewRefusal ? onReviewEditFailure : onSave}
-              aria-label={saveLabel}
-              title={
-                saveToAccount && !editRefusal
-                  ? 'Save this local project and its source files to your account.'
-                  : saveTitle
-              }
-            >
-              {saveChipContent}
-            </button>
-          ) : (
-            // A readout, not a control: clicking "Local only" or "Saved" used
-            // to save a revision unasked. Saving is on File and the shortcut.
-            <span
-              className={`save-state topbar-action is-readout is-${saveState}`}
-              role="status"
-              aria-label={saveLabel}
-              title={`${saveTitle} Save a revision from File${saveKey ? ` or with ${platformShortcutLabel(saveKey)}` : ''}.`}
-            >
-              {saveChipContent}
             </span>
           )}
           {projectSharingEnabled ? (

@@ -777,23 +777,16 @@ button.save-state:focus-visible,
 }
 
 /* ── Compact row (wide screens) ──
-   The row is one strip: a status readout, presence, then the two
-   commands. Presence is a glyph with its count rather than a label padded to
-   "Unavailable"'s width, and Settings is the gear alone — both keep their
-   labels in the accessible name and tooltip, as the icon row below 1120px
-   (responsive.css) already does. */
+   The actions island holds presence and the two commands; the save status
+   ends the identity island (TopBar.tsx). Presence is a glyph with its count
+   rather than a label padded to "Unavailable"'s width, keeping its label in
+   the accessible name and tooltip as the icon row below 1120px
+   (responsive.css) does. Settings keeps its word where the bar has room. */
 @media (min-width: 1121px) {
   .topbar-actions .settings-action,
   .collaboration-state {
     min-width: 28px;
     padding: 0 6px;
-  }
-
-  .topbar-actions .settings-action {
-    width: 28px;
-    padding: 0;
-    gap: 0;
-    font-size: 0;
   }
 
   .collaboration-state > .stable-label {
@@ -828,17 +821,7 @@ button.save-state:focus-visible,
     display: none;
   }
 
-  /* The save glyph rides in the label slot (TopBar.tsx); the ghost
-     reserve gains the glyph and gap so the slot still fits the widest
-     label, and the pair aligns to the slot's right end. */
-  .save-state > .stable-label {
-    justify-items: end;
-  }
-
-  .save-state > .stable-label::after {
-    padding-left: 19px; /* 14px glyph + 5px gap */
-  }
-
+  /* The save glyph rides in the label slot with its text (TopBar.tsx). */
   .save-state > .stable-label > .stable-label-text {
     display: inline-flex;
     align-items: center;
@@ -957,5 +940,45 @@ button.save-state:focus-visible,
 
   .presence-glyph.is-joining {
     opacity: 0.5;
+  }
+}
+
+/* Between the icon row and a full desktop, Settings is the gear alone; from
+   1280px the word fits beside it without crowding the project name. */
+@media (min-width: 1121px) and (max-width: 1279px) {
+  .topbar-actions .settings-action {
+    width: 28px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+  }
+}
+
+/* The save status ends the identity island (TopBar.tsx). Wide, it is a
+   quiet label whose padding the island's gap would otherwise double; in the
+   icon row it is a bare glyph rather than a boxed square, since its room
+   comes out of the project name's. */
+@media (min-width: 1121px) {
+  .topbar-identity > .save-state {
+    margin-inline: -5px;
+  }
+
+  /* The lock is a fact about the project, so it sits close to the name
+     (10px from the units); the status then keeps its usual 14px. */
+  .topbar-identity > .encryption-menu {
+    margin-left: -7px;
+  }
+
+  .topbar-identity > .encryption-menu + .save-state {
+    margin-left: -12px;
+  }
+}
+
+@media (max-width: 1120px) {
+  .topbar-identity > .save-state {
+    width: 18px;
+    margin-left: -8px;
+    background: transparent;
+    border-color: transparent;
   }
 }

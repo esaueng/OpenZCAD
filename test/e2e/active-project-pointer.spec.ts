@@ -55,9 +55,7 @@ test('a project open keeps a reopen pointer written while it was in flight', asy
     timeout: 30_000
   });
   await expect(
-    topbar
-      .getByRole('group', { name: 'Workspace actions' })
-      .getByRole('status', { name: 'Saved' })
+    topbar.locator('.topbar-identity').getByRole('status', { name: 'Saved' })
   ).toBeVisible({ timeout: 15_000 });
   const pointer = () =>
     page.evaluate(
