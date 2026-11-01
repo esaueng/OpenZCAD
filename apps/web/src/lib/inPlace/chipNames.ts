@@ -1,3 +1,5 @@
+import { markKeypadOpener } from '../keypadReturnFocus';
+
 /**
  * Spoken names for command values whose visible label is a glyph. The chip
  * and keypad keep the compact glyph; a screen reader would otherwise read
@@ -46,13 +48,18 @@ export function commandChipName(
 export function prepareCommandChip(chip: HTMLElement, open: () => void): void {
   chip.setAttribute('role', 'button');
   chip.tabIndex = 0;
-  chip.addEventListener('click', open);
+  chip.addEventListener('click', () => {
+    markKeypadOpener(chip, false);
+    open();
+  });
   chip.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     // The workspace reads Enter (finish the command) and Space as its own
     // shortcuts; the press belongs to the chip.
     event.preventDefault();
     event.stopPropagation();
+    // Opened from the keyboard, the keypad hands focus back here on close.
+    markKeypadOpener(chip, true);
     open();
   });
 }
