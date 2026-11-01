@@ -1,6 +1,7 @@
 import { Box, DraftingCompass, Eye, SlidersHorizontal } from 'lucide-react';
 import type { WorkspaceMode } from './panelState';
 import type { WorkspaceSaveState } from './cloudProjectAutosave';
+import { WORKSPACE_SAVE_STATE_PRESENTATION } from './workspaceSaveStatePresentation';
 
 /**
  * The four workspaces, in the order they appear. Each hint doubles as the
@@ -43,11 +44,23 @@ export const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * Labels a chip cycles through in ordinary use. Each chip below reserves the
- * widest of these so a presence or account change never resizes it — and no
- * more, so the chip stays as narrow as its own cycle allows. The save label is
- * sized to its own text (see TopBar).
+ * Labels a chip cycles through in ordinary use. Each chip reserves the widest
+ * of these so a save, a sync or a presence change never resizes it — and no
+ * more, so the chip stays as narrow as its own cycle allows. The rare
+ * decision states (conflict, repair, update required) may still take extra
+ * room while they show, as they demand a look anyway.
  */
+const saveStateLabels = (states: readonly WorkspaceSaveState[]) =>
+  states.map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
+/** Signed in: the account round-trip. Signed out: device saves only. */
+export const CLOUD_SAVE_LABEL_RESERVE = [
+  ...saveStateLabels(['saving', 'syncing', 'synced', 'offline']),
+  'Checking'
+];
+export const DEVICE_SAVE_LABEL_RESERVE = [
+  ...saveStateLabels(['saving', 'local']),
+  'Checking'
+];
 // "Joining…" rather than "Connecting…": the room is joined for the opening
 // frames of every cloud project, and the longer word would either resize the
 // chip on the way in or cost the bar four characters for good.

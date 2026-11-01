@@ -828,6 +828,29 @@ button.save-state:focus-visible,
     display: none;
   }
 
+  /* The save glyph rides in the label slot (TopBar.tsx); the ghost
+     reserve gains the glyph and gap so the slot still fits the widest
+     label, and the pair aligns to the slot's right end. */
+  .save-state > .stable-label {
+    justify-items: end;
+  }
+
+  .save-state > .stable-label::after {
+    padding-left: 19px; /* 14px glyph + 5px gap */
+  }
+
+  .save-state > .stable-label > .stable-label-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  /* Room for a one-digit count whether or not anyone is live, so joining
+     a room does not widen the chip. */
+  .collaboration-state {
+    min-width: 42px;
+  }
+
   /* One size and face with the storage label, quieter in colour. */
   .save-model-readiness {
     font-size: inherit;

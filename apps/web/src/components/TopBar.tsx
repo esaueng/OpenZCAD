@@ -33,7 +33,9 @@ import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
 import {
   ACCOUNT_LABEL_RESERVE,
+  CLOUD_SAVE_LABEL_RESERVE,
   COLLABORATION_LABEL_RESERVE,
+  DEVICE_SAVE_LABEL_RESERVE,
   WORKSPACE_MODE_OPTIONS,
   saveGlyphFor,
   type SaveGlyph
@@ -370,24 +372,37 @@ export function TopBar({
       : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
-      {/* Keyed by the glyph, not the state: saving → syncing keeps the
-          same ring turning, and only a change of kind pops. */}
-      <span key={saveGlyph} className="save-state-icon" aria-hidden="true">
-        {saveGlyph === 'busy' ? (
-          <LoaderCircle className="spin" size={14} />
-        ) : saveGlyph === 'warning' ? (
-          <TriangleAlert size={14} />
-        ) : saveGlyph === 'saved' ? (
-          <Check size={14} />
-        ) : (
-          <CloudOff size={14} />
-        )}
-      </span>
-      {/* Sized to its own label: a reserve for the widest state left a gap
-          after "Saved" that no other item has. The island is anchored at
-          its right edge, so a label change moves only its left edge; the
-          presence, File and Settings targets never shift. */}
-      <StableLabel reserve={[saveText]}>{saveText}</StableLabel>
+      {/* The chip keeps the width of its widest routine label, so a save,
+          sync or check never moves the island or its neighbours. The glyph
+          sits in the label slot and the pair hugs its right end: the
+          reserve's slack falls at the island's outer edge, not as a hole
+          between "Saved" and presence (topbar.css). */}
+      <StableLabel
+        reserve={
+          readinessVisible
+            ? [saveText]
+            : saveToAccount
+              ? ['Save to my account']
+              : accountState === 'signed-in'
+                ? CLOUD_SAVE_LABEL_RESERVE
+                : DEVICE_SAVE_LABEL_RESERVE
+        }
+      >
+        {/* Keyed by the glyph, not the state: saving → syncing keeps the
+            same ring turning, and only a change of kind pops. */}
+        <span key={saveGlyph} className="save-state-icon" aria-hidden="true">
+          {saveGlyph === 'busy' ? (
+            <LoaderCircle className="spin" size={14} />
+          ) : saveGlyph === 'warning' ? (
+            <TriangleAlert size={14} />
+          ) : saveGlyph === 'saved' ? (
+            <Check size={14} />
+          ) : (
+            <CloudOff size={14} />
+          )}
+        </span>
+        {saveText}
+      </StableLabel>
       {/* Readiness is announced alongside the storage label. Preparing is
           shown by the spinner alone (the tooltip spells it out); a failed
           model stays in words, as it needs a look. */}
