@@ -181,7 +181,8 @@ export type ProjectSharingErrorCode =
   | 'MEMBER_LIMIT'
   | 'OWNER_IMMUTABLE'
   | 'SHARE_LINK_NOT_FOUND'
-  | 'SHARE_LINK_LIMIT';
+  | 'SHARE_LINK_LIMIT'
+  | 'SHARE_LINK_LABEL_UNAVAILABLE';
 
 export class ProjectSharingError extends Error {
   constructor(

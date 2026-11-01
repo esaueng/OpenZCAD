@@ -200,6 +200,70 @@ describe('share link labels (D1)', () => {
   });
 });
 
+describe('share link labels before migration 0046', () => {
+  it('creates, lists and revokes links unnamed, and refuses only a rename', async () => {
+    const document = createProjectDocument(
+      'Bracket',
+      toUserId('user_label_unmigrated')
+    );
+    const db = migratedDatabase();
+    // As a live database looks if 0046 is delayed: the column is not there.
+    db.exec('ALTER TABLE project_share_links DROP COLUMN label');
+    db.prepare(
+      `INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)`
+    ).run(
+      document.ownerUserId,
+      'owner@example.com',
+      '2026-01-01T00:00:00.000Z'
+    );
+    db.prepare(
+      `INSERT INTO projects (id, user_id, name, document_json, updated_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(
+      document.projectId,
+      document.ownerUserId,
+      document.name,
+      JSON.stringify(document),
+      '2026-01-01T00:00:00.000Z'
+    );
+    const owner = document.ownerUserId;
+    const service = new D1R2PersistenceService({ DB: sqliteD1(db) });
+    const now = Math.floor(Date.now() / 1000);
+
+    await expect(
+      service.createProjectShareLink(owner, document.projectId, {
+        shareLinkId: 'share_unmigrated',
+        mode: 'tweak',
+        tokenHash: 'hash_unmigrated',
+        createdAt: now,
+        label: 'Supplier review'
+      })
+    ).resolves.toMatchObject({ label: null });
+    await expect(
+      service.listProjectShareLinks(owner, document.projectId)
+    ).resolves.toMatchObject([
+      { shareLinkId: 'share_unmigrated', label: null }
+    ]);
+    await expect(
+      service.renameProjectShareLink(
+        owner,
+        document.projectId,
+        'share_unmigrated',
+        'Forum post'
+      )
+    ).rejects.toMatchObject({ code: 'SHARE_LINK_LABEL_UNAVAILABLE' });
+    await service.revokeProjectShareLink(
+      owner,
+      document.projectId,
+      'share_unmigrated',
+      now + 1
+    );
+    await expect(
+      service.listProjectShareLinks(owner, document.projectId)
+    ).resolves.toEqual([]);
+  });
+});
+
 describe('share link labels (routes)', () => {
   async function projectWithLink(owner: string, label?: unknown) {
     const created = await ownerRequest(owner, '/api/projects', {

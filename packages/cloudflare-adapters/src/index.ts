@@ -577,6 +577,18 @@ export const isProjectStorageFormatReady = cachedSchemaProbe(
   (row) => row?.ready === 1
 );
 
+/**
+ * Whether migration 0046's `project_share_links.label` exists. Share links
+ * must not depend on it: until it is there, links are created, listed and
+ * revoked without naming the column, every label reads null, and only a
+ * rename is refused.
+ */
+export const isShareLinkLabelReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
+   WHERE name = 'label'`,
+  (row) => row?.ready === 1
+);
+
 /** The tables migration 0032 adds, children before their group row. */
 export const E2EE_PROJECT_GROUP_TABLES = Object.freeze([
   'e2ee_key_archives',
@@ -1624,23 +1636,40 @@ export class D1R2PersistenceService implements PersistenceService {
     assertShareableProject(
       await this.requireProjectOwner(ownerUserId, projectId)
     );
+    // Before migration 0046 the link is created unnamed rather than refused.
+    const label = (await isShareLinkLabelReady(this.env.DB))
+      ? (input.label ?? null)
+      : null;
     try {
-      await this.env.DB.prepare(
-        `INSERT INTO project_share_links
-         (id, project_id, mode, token_hash, created_by_user_id, created_at,
-          label)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-        .bind(
-          input.shareLinkId,
-          projectId,
-          input.mode,
-          input.tokenHash,
-          ownerUserId,
-          input.createdAt,
-          input.label ?? null
-        )
-        .run();
+      await (
+        label === null
+          ? this.env.DB.prepare(
+              `INSERT INTO project_share_links
+             (id, project_id, mode, token_hash, created_by_user_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+            ).bind(
+              input.shareLinkId,
+              projectId,
+              input.mode,
+              input.tokenHash,
+              ownerUserId,
+              input.createdAt
+            )
+          : this.env.DB.prepare(
+              `INSERT INTO project_share_links
+             (id, project_id, mode, token_hash, created_by_user_id, created_at,
+              label)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              input.shareLinkId,
+              projectId,
+              input.mode,
+              input.tokenHash,
+              ownerUserId,
+              input.createdAt,
+              label
+            )
+      ).run();
     } catch (error) {
       if (
         error instanceof Error &&
@@ -1673,7 +1702,7 @@ export class D1R2PersistenceService implements PersistenceService {
       mode: input.mode,
       createdAt: input.createdAt,
       revokedAt: null,
-      label: input.label ?? null
+      label
     };
   }
 
@@ -1688,8 +1717,11 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     await this.requireProjectOwner(ownerUserId, projectId);
+    const label = (await isShareLinkLabelReady(this.env.DB))
+      ? 'label'
+      : 'NULL AS label';
     const rows = await this.env.DB.prepare(
-      `SELECT id, project_id, mode, created_at, label
+      `SELECT id, project_id, mode, created_at, ${label}
        FROM project_share_links
        WHERE project_id = ? AND revoked_at IS NULL
        ORDER BY created_at DESC`
@@ -1715,6 +1747,12 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     await this.requireProjectOwner(ownerUserId, projectId);
+    if (!(await isShareLinkLabelReady(this.env.DB))) {
+      throw new ProjectSharingError(
+        'SHARE_LINK_LABEL_UNAVAILABLE',
+        'Link names are not available yet. Try again in a few minutes.'
+      );
+    }
     const row = await this.env.DB.prepare(
       `UPDATE project_share_links SET label = ?
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL
@@ -1747,7 +1785,9 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     await this.requireProjectOwner(ownerUserId, projectId);
     const result = await this.env.DB.prepare(
-      `UPDATE project_share_links SET revoked_at = ?, label = NULL
+      `UPDATE project_share_links SET revoked_at = ?${
+        (await isShareLinkLabelReady(this.env.DB)) ? ', label = NULL' : ''
+      }
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL`
     )
       .bind(revokedAt, shareLinkId, projectId)
