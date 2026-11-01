@@ -13,6 +13,7 @@ import {
   findSketch,
   getLatestBodyId,
   getLatestSketchId,
+  holeBody,
   importStepBody
 } from '@openzcad/document-core';
 import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
@@ -396,6 +397,53 @@ export const slopedOperations = () => {
     }
   ];
 };
+
+/**
+ * A 40 × 30 × 8 plate drilled from its top face with two Ø6 through holes,
+ * each countersunk Ø12 × 90°, 20 apart, by the Hole feature.
+ */
+export async function countersunkPlate(adapter: ExactKernelAdapter) {
+  const base = addPrimitiveFeature(
+    createProjectDocument('Countersunk plate', toUserId('user_audit')),
+    {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 8 }
+    }
+  );
+  let bodyId = base.bodyOrder[0]!;
+  let document = base;
+  // Hole centres at y = 7.5 and 22.5 on the plate's centre line x = 20:
+  // the feature places each from the top face's area centroid, which the
+  // first hole moves, along the face's u, which runs along −y.
+  for (const y of [7.5, 22.5]) {
+    const synced = await adapter.syncDocument(document);
+    const top = synced.bodyRepresentations[bodyId]!.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        (face.geometry.normal?.z ?? 0) > 0.5
+    )!;
+    const u = top.geometry!.centroid!.y - y;
+    const drilled = holeBody(document, {
+      name: 'Hole',
+      targetBodyId: bodyId,
+      faceHash: top.hash,
+      ...(top.reference ? { faceReference: top.reference } : {}),
+      style: 'countersink',
+      diameter: 6,
+      depthMode: 'through',
+      countersinkDiameter: 12,
+      countersinkAngleDeg: 90,
+      position: { u, v: 0 },
+      positionAnchor: 'centroid'
+    });
+    document = drilled.document;
+    bodyId = drilled.bodyId;
+  }
+  const synced = await adapter.syncDocument(document);
+  expect(synced.warnings).toEqual([]);
+  return { document, bodies: synced.bodyRepresentations, bodyId };
+}
 
 /**
  * D06 slice D: a part as a history-less import. Exports `bodyId` of the

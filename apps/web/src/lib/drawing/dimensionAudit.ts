@@ -14,6 +14,7 @@ import {
   annotationBody,
   annotationModelReading,
   readCounterbore,
+  readCountersink,
   defaultDimensionDecimals,
   formatDrawingNumber,
   type AnnotationBodies
@@ -172,6 +173,8 @@ export interface BodyRequirements {
   slopes: SlopeGroup[];
   /** Holes whose every copy is counterbored alike: one callout states them. */
   counterbores: CounterboreGroup[];
+  /** Holes whose every copy is countersunk alike: one callout states them. */
+  countersinks: CountersinkGroup[];
   /**
    * Circles where a chamfer or blend meets the next face, bounding no hole
    * or boss: the feature's own size fixes them.
@@ -211,6 +214,22 @@ export interface CounterboreGroup {
     along: AuditAxis;
     opening: number;
     floor: number;
+    end: number;
+    through: boolean;
+  }[];
+}
+
+/**
+ * A hole size group whose every axis carries a cone of one chamfer group
+ * opening onto it: a countersink. Per copy, along its axis: where it opens
+ * and the hole's far end.
+ */
+export interface CountersinkGroup {
+  hole: SizeGroup;
+  chamfer: ChamferGroup;
+  instances: {
+    along: AuditAxis;
+    opening: number;
     end: number;
     through: boolean;
   }[];
@@ -863,6 +882,57 @@ function bodyRequirements(
     }
   }
 
+  // Countersunk holes: a hole size whose every axis carries a cone of one
+  // chamfer group opening onto it is one callout's, "2× Ø6 THRU, CSK Ø12 ×
+  // 90°", which states the cone instead of a chamfer dimension.
+  const countersinks: CountersinkGroup[] = [];
+  for (const hole of sizes) {
+    if (hole.blend) continue;
+    for (const chamfer of chamfers) {
+      if (chamfer.faces.length !== hole.axes.length) continue;
+      const instances: CountersinkGroup['instances'] = [];
+      const used = new Set<FaceTopology>();
+      for (const axis of hole.axes) {
+        const along = axisOf(axis.direction);
+        const holeEdge = edges.find(
+          (edge) =>
+            edge.curve?.circle &&
+            circleInGroup({ ...hole, axes: [axis] }, edge.curve.circle)
+        );
+        // The cone's outer rim: its widest circle.
+        let reading: ReturnType<typeof readCountersink> | null = null;
+        for (const cone of chamfer.faces) {
+          if (used.has(cone) || !holeEdge) continue;
+          const rim = edges
+            .filter(
+              (edge) =>
+                edge.curve?.circle &&
+                (edge.adjacentFaceHashes ?? []).includes(cone.hash)
+            )
+            .sort(
+              (a, b) => b.curve!.circle!.radius - a.curve!.circle!.radius
+            )[0];
+          if (!rim) continue;
+          const found = readCountersink(holeEdge, rim, edges, faces);
+          if (found.ok && found.cone === cone) {
+            reading = found;
+            used.add(cone);
+            break;
+          }
+        }
+        if (!along || !reading?.ok) break;
+        instances.push({
+          along,
+          opening: reading.opening[along],
+          end: reading.end[along],
+          through: reading.through
+        });
+      }
+      if (instances.length === hole.axes.length && instances.length > 0)
+        countersinks.push({ hole, chamfer, instances });
+    }
+  }
+
   // Where a revolved blend meets the next surface: closed circles that are
   // no face's position along their axis.
   for (const edge of edges) {
@@ -905,6 +975,7 @@ function bodyRequirements(
     boltCircles,
     slopes,
     counterbores,
+    countersinks,
     unmeasurable: [...unmeasurable].map(([message, count]) =>
       count > 1 ? `${count}× ${message}` : message
     )
@@ -1347,6 +1418,55 @@ export function readDimensionState(
       }
       blendStatedBy.set(group, id);
       audit.stated += 1;
+      continue;
+    }
+    if (reading.kind === 'diameter' && reading.countersink) {
+      const callout = reading.countersink;
+      const body = requirements.get(reading.bodyId);
+      const group = body?.countersinks.find(
+        (candidate) =>
+          circleInGroup(candidate.hole, reading.circle) &&
+          candidate.chamfer.faces.includes(callout.cone)
+      );
+      if (!body || !group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message: 'It calls out a countersink this check does not read.'
+        });
+        continue;
+      }
+      // The hole's size, the cone's, and a blind hole's depth per copy.
+      let states = 0;
+      if (!sizeStatedBy.has(group.hole)) {
+        sizeStatedBy.set(group.hole, id);
+        states += 1;
+      }
+      if (!chamferStatedBy.has(group.chamfer)) {
+        chamferStatedBy.set(group.chamfer, id);
+        states += 1;
+      }
+      for (const copy of group.instances) {
+        if (copy.through) continue;
+        const graph = linksFor(reading.bodyId, copy.along);
+        const index = (value: number) =>
+          body.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const a = index(copy.opening);
+        const b = index(copy.end);
+        if (a < 0 || b < 0 || graph.find(a) === graph.find(b)) continue;
+        graph.link(a, b, id);
+        states += 1;
+      }
+      if (states === 0)
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message:
+            'Other dimensions already state everything this callout does.',
+          statedBy: []
+        });
+      audit.stated += states;
       continue;
     }
     if (reading.kind === 'diameter' && reading.counterbore) {

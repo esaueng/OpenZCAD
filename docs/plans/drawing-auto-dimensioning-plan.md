@@ -360,7 +360,21 @@ it opens (and a blind hole's end to the floor), so Auto-dimension places one
 callout instead of two diameters and a floor span. Words stand in for the
 ASME depth and counterbore symbols, which the sheet's PDF font cannot print.
 
+## Countersinks and outside angles (schema v51)
+
+A hole size group whose every copy has a cone of one chamfer group coaxial
+with it, bounded by a wider rim where it opens, is countersunk. One diameter
+callout on the hole names the cone's outer rim (v51 `countersink`) and reads
+"Ø6 THRU, CSK Ø12 × 90°" (the cone's included angle), or "Ø6 × 10 DEEP" for
+a blind hole measured from where it opens. It states the hole's diameter and
+the cone in place of a chamfer dimension, and a blind hole's depth.
+
+An angle dimension can turn one ray outward (v51 `outside`): it runs from
+the vertex along its edge's extension, so a convex 135° corner reads 45° off
+the part with an extension line through the vertex. Auto-dimension offers
+the outside angle on the axis edge first and the inside one after.
+
 ## Out of scope
 
-Tolerances and GD&T, thread callouts and countersinks, surface finish,
-ordinate style before slice E, and assemblies.
+Tolerances and GD&T, thread callouts, surface finish, ordinate style before
+slice E, and assemblies.

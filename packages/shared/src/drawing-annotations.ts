@@ -36,6 +36,10 @@ import type { DrawingViewId } from './drawings';
  *
  * Schema v50 adds a counterbored hole's callout: a diameter that also names
  * the counterbore's rim, read as one "Ø THRU, CBORE Ø × depth DEEP" note.
+ *
+ * Schema v51 adds a countersunk hole's callout ("Ø THRU, CSK Ø × 90°", the
+ * cone's outer rim) and the outside angle: one ray of an angle dimension
+ * turned onto its edge's extension.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -199,6 +203,13 @@ export interface DrawingRadialDimension extends DrawingDimensionBase {
    * each time it is drawn ("2× Ø5 THRU, CBORE Ø8 × 1.5 DEEP").
    */
   counterbore?: DrawingEdgeRef;
+  /**
+   * v51: a countersunk hole's callout on a diameter. This is the
+   * countersink cone's outer rim, coaxial with `edge` and larger; the callout
+   * reads its Ø and included angle, and the hole's depth or THRU, from the
+   * model each time it is drawn ("2× Ø6 THRU, CSK Ø12 × 90°").
+   */
+  countersink?: DrawingEdgeRef;
 }
 
 /**
@@ -233,6 +244,12 @@ export interface DrawingAngleDimension extends DrawingDimensionBase {
   kind: 'angle';
   /** Two straight edges; the angle is the one between their far ends. */
   edges: [DrawingEdgeRef, DrawingEdgeRef];
+  /**
+   * v51: the outside angle. The ray of `edges[outside]` runs from the vertex
+   * along that edge's line away from it, so the dimension states the
+   * supplement (45° beside a 135° corner) on an extension line, off the part.
+   */
+  outside?: 0 | 1;
 }
 
 export interface DrawingNote extends DrawingAnnotationBase {
@@ -608,6 +625,16 @@ export function drawingAnnotationError(
       return null;
     case 'radius':
     case 'diameter':
+      if (value.countersink !== undefined) {
+        if (value.kind !== 'diameter')
+          return `${where} names a countersink, which only a diameter callout states.`;
+        if (value.counterbore !== undefined)
+          return `${where} names both a counterbore and a countersink.`;
+        if (value.face !== undefined || value.side !== undefined)
+          return `${where} names a countersink on a blend face.`;
+        const error = edgeRefError(value.countersink);
+        if (error) return fail(error);
+      }
       if (value.counterbore !== undefined) {
         if (value.kind !== 'diameter')
           return `${where} names a counterbore, which only a diameter callout states.`;
@@ -629,6 +656,12 @@ export function drawingAnnotationError(
     case 'angle':
       if (!Array.isArray(value.edges) || value.edges.length !== 2)
         return `${where} must name two edges.`;
+      if (
+        value.outside !== undefined &&
+        value.outside !== 0 &&
+        value.outside !== 1
+      )
+        return `${where} turns outward an edge it does not name.`;
       return fail(edgeRefError(value.edges[0]) ?? edgeRefError(value.edges[1]));
     case 'chamfer':
       return fail(topologyRefError(value.face, 'face'));
@@ -662,7 +695,8 @@ export function drawingAnnotationEdges(
         ? []
         : [
             annotation.edge,
-            ...(annotation.counterbore ? [annotation.counterbore] : [])
+            ...(annotation.counterbore ? [annotation.counterbore] : []),
+            ...(annotation.countersink ? [annotation.countersink] : [])
           ];
     default:
       return drawingAnnotationReferences(annotation) as DrawingEdgeRef[];
@@ -692,7 +726,8 @@ export function drawingAnnotationReferences(
         ? [annotation.face]
         : [
             annotation.edge,
-            ...(annotation.counterbore ? [annotation.counterbore] : [])
+            ...(annotation.counterbore ? [annotation.counterbore] : []),
+            ...(annotation.countersink ? [annotation.countersink] : [])
           ];
     case 'angle':
       return [...annotation.edges];
