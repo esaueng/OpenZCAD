@@ -144,7 +144,9 @@ describe('project sharing invitations', () => {
     const editor = toUserId('user_trash_editor');
     const viewer = toUserId('user_trash_viewer');
     const invited = toUserId('user_trash_invited');
-    const project = await service.createProject(owner, { name: 'Shared trash' });
+    const project = await service.createProject(owner, {
+      name: 'Shared trash'
+    });
     const projectId = project.document.projectId;
     await service.setProjectMemberRole(owner, projectId, editor, 'editor');
     await service.setProjectMemberRole(owner, projectId, viewer, 'viewer');
@@ -161,13 +163,19 @@ describe('project sharing invitations', () => {
     expect((await service.listProjects(owner)).projects).toEqual([
       expect.objectContaining({ projectId })
     ]);
-    await expect(service.requireProjectRead(owner, projectId)).resolves.toMatchObject({
+    await expect(
+      service.requireProjectRead(owner, projectId)
+    ).resolves.toMatchObject({
       role: 'owner'
     });
-    await expect(service.requireProjectRead(viewer, projectId)).rejects.toMatchObject({
+    await expect(
+      service.requireProjectRead(viewer, projectId)
+    ).rejects.toMatchObject({
       name: 'ProjectNotFoundError'
     });
-    await expect(service.requireProjectEdit(editor, projectId)).rejects.toMatchObject({
+    await expect(
+      service.requireProjectEdit(editor, projectId)
+    ).rejects.toMatchObject({
       name: 'ProjectNotFoundError'
     });
     await expect(service.loadProject(viewer, projectId)).resolves.toBeNull();
@@ -183,10 +191,14 @@ describe('project sharing invitations', () => {
     ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
 
     await service.updateProject(owner, { projectId, status: 'active' });
-    await expect(service.requireProjectEdit(editor, projectId)).resolves.toMatchObject({
+    await expect(
+      service.requireProjectEdit(editor, projectId)
+    ).resolves.toMatchObject({
       role: 'editor'
     });
-    await expect(service.requireProjectRead(viewer, projectId)).resolves.toMatchObject({
+    await expect(
+      service.requireProjectRead(viewer, projectId)
+    ).resolves.toMatchObject({
       role: 'viewer'
     });
     expect((await service.listProjects(viewer)).projects).toEqual([
@@ -201,7 +213,9 @@ describe('project sharing invitations', () => {
       )
     ).resolves.toMatchObject({ projectId, role: 'viewer' });
     await service.updateProject(owner, { projectId, status: 'archived' });
-    await expect(service.requireProjectRead(viewer, projectId)).resolves.toMatchObject({
+    await expect(
+      service.requireProjectRead(viewer, projectId)
+    ).resolves.toMatchObject({
       role: 'viewer'
     });
   });
@@ -462,7 +476,8 @@ describe('project sharing (D1 against SQLite)', () => {
         projectId: 'project_a',
         mode: 'view',
         createdAt: now,
-        revokedAt: null
+        revokedAt: null,
+        label: null
       }
     ]);
     await expect(

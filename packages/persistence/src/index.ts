@@ -207,6 +207,8 @@ export interface CreateProjectShareLinkInput {
   mode: ProjectShareLinkMode;
   tokenHash: string;
   createdAt: number;
+  /** Already normalized (normalizeShareLinkLabel); absent or null when unnamed. */
+  label?: string | null;
 }
 
 /**
@@ -529,6 +531,13 @@ export interface PersistenceService {
     shareLinkId: string,
     revokedAt: number
   ): Promise<void>;
+  /** Names an unrevoked link (label already normalized; null clears it). */
+  renameProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    label: string | null
+  ): Promise<ProjectShareLinkSummary>;
   /**
    * Resolves an unrevoked, unexpired share link and loads its project document with the
    * derived projection stripped. Unknown, revoked and expired tokens are equally null
@@ -1070,6 +1079,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       );
     this.projectShareLinks.set(input.shareLinkId, {
       ...input,
+      label: input.label ?? null,
       projectId,
       createdByUserId: ownerUserId,
       revokedAt: null
@@ -1079,7 +1089,8 @@ export class InMemoryPersistenceService implements PersistenceService {
       projectId,
       mode: input.mode,
       createdAt: input.createdAt,
-      revokedAt: null
+      revokedAt: null,
+      label: input.label ?? null
     };
   }
 
@@ -1096,8 +1107,34 @@ export class InMemoryPersistenceService implements PersistenceService {
         projectId: link.projectId,
         mode: link.mode,
         createdAt: link.createdAt,
-        revokedAt: link.revokedAt
+        revokedAt: link.revokedAt,
+        label: link.label ?? null
       }));
+  }
+
+  async renameProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    label: string | null
+  ): Promise<ProjectShareLinkSummary> {
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const link = this.projectShareLinks.get(shareLinkId);
+    if (!link || link.projectId !== projectId || link.revokedAt !== null) {
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    }
+    link.label = label;
+    return {
+      shareLinkId: link.shareLinkId,
+      projectId: link.projectId,
+      mode: link.mode,
+      createdAt: link.createdAt,
+      revokedAt: null,
+      label
+    };
   }
 
   async revokeProjectShareLink(
@@ -1115,6 +1152,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       );
     }
     link.revokedAt = revokedAt;
+    link.label = null;
     const revoked = Array.from(this.projectShareLinks.entries())
       .filter(
         ([, entry]) => entry.projectId === projectId && entry.revokedAt !== null

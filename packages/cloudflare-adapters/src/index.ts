@@ -1627,8 +1627,9 @@ export class D1R2PersistenceService implements PersistenceService {
     try {
       await this.env.DB.prepare(
         `INSERT INTO project_share_links
-         (id, project_id, mode, token_hash, created_by_user_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+         (id, project_id, mode, token_hash, created_by_user_id, created_at,
+          label)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           input.shareLinkId,
@@ -1636,7 +1637,8 @@ export class D1R2PersistenceService implements PersistenceService {
           input.mode,
           input.tokenHash,
           ownerUserId,
-          input.createdAt
+          input.createdAt,
+          input.label ?? null
         )
         .run();
     } catch (error) {
@@ -1670,7 +1672,8 @@ export class D1R2PersistenceService implements PersistenceService {
       projectId,
       mode: input.mode,
       createdAt: input.createdAt,
-      revokedAt: null
+      revokedAt: null,
+      label: input.label ?? null
     };
   }
 
@@ -1686,7 +1689,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     await this.requireProjectOwner(ownerUserId, projectId);
     const rows = await this.env.DB.prepare(
-      `SELECT id, project_id, mode, created_at
+      `SELECT id, project_id, mode, created_at, label
        FROM project_share_links
        WHERE project_id = ? AND revoked_at IS NULL
        ORDER BY created_at DESC`
@@ -1694,6 +1697,38 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(projectId)
       .all<ProjectShareLinkRow>();
     return (rows.results ?? []).map(shareLinkFromRow);
+  }
+
+  async renameProjectShareLink(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    label: string | null
+  ): Promise<ProjectShareLinkSummary> {
+    assertPlaintextWritesAllowed(this.env);
+    if (!this.env.DB) {
+      return getInMemoryPersistence().renameProjectShareLink(
+        ownerUserId,
+        projectId,
+        shareLinkId,
+        label
+      );
+    }
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const row = await this.env.DB.prepare(
+      `UPDATE project_share_links SET label = ?
+       WHERE id = ? AND project_id = ? AND revoked_at IS NULL
+       RETURNING id, project_id, mode, created_at, label`
+    )
+      .bind(label, shareLinkId, projectId)
+      .first<ProjectShareLinkRow>();
+    if (!row) {
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    }
+    return shareLinkFromRow(row);
   }
 
   async revokeProjectShareLink(
@@ -1712,7 +1747,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     await this.requireProjectOwner(ownerUserId, projectId);
     const result = await this.env.DB.prepare(
-      `UPDATE project_share_links SET revoked_at = ?
+      `UPDATE project_share_links SET revoked_at = ?, label = NULL
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL`
     )
       .bind(revokedAt, shareLinkId, projectId)
@@ -7889,6 +7924,7 @@ interface ProjectShareLinkRow {
   project_id: string;
   mode: ProjectShareLinkMode;
   created_at: number;
+  label: string | null;
 }
 
 function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
@@ -7897,7 +7933,8 @@ function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
     projectId: row.project_id,
     mode: row.mode,
     createdAt: row.created_at,
-    revokedAt: null
+    revokedAt: null,
+    label: row.label ?? null
   };
 }
 

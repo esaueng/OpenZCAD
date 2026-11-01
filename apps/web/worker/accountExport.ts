@@ -94,7 +94,7 @@ export async function exportAccountData(
     ],
     [
       'project_share_links',
-      `SELECT id, project_id, mode, created_by_user_id, created_at, revoked_at FROM project_share_links WHERE project_id IN (${owned})`,
+      `SELECT id, project_id, mode, label, created_by_user_id, created_at, revoked_at FROM project_share_links WHERE project_id IN (${owned})`,
       [session.userId]
     ],
     [
