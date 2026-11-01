@@ -54,6 +54,81 @@ async function addBox(page: Page) {
   await expectBodyCount(page, 1);
 }
 
+test('orbiting without a handle skips chip panel layout', async ({ page }) => {
+  await newProject(page, 'Viewer frame work');
+  await addBox(page);
+  await page.keyboard.press('Escape');
+  const canvas = page.locator('.viewer-host canvas').first();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /.+/);
+  await page.evaluate(() => {
+    const scope = window as typeof window & { __chipPanelScans?: number };
+    scope.__chipPanelScans = 0;
+    const query = Element.prototype.querySelectorAll;
+    Element.prototype.querySelectorAll = function (
+      this: Element,
+      selectors: string
+    ) {
+      if (selectors.includes('.stage-right > *')) scope.__chipPanelScans! += 1;
+      return query.call(this, selectors);
+    };
+  });
+  const before = Number(await canvas.getAttribute('data-e2e-frames'));
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + 120, box.y + box.height - 140);
+  await page.keyboard.down('Shift');
+  await page.mouse.down();
+  await page.mouse.move(box.x + 180, box.y + box.height - 240, { steps: 12 });
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await expect
+    .poll(async () => Number(await canvas.getAttribute('data-e2e-frames')))
+    .toBeGreaterThan(before + 3);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { __chipPanelScans: number })
+          .__chipPanelScans
+    )
+  ).toBe(0);
+});
+
+test('a stationary cube hover stays asleep after another frame is requested', async ({
+  page
+}) => {
+  await newProject(page, 'Cube hover settles');
+  await addBox(page);
+  const canvas = page.locator('.viewer-host canvas').first();
+  const face = page.locator('.orientation-cube .cube-face:visible').first();
+  // The centroid is inside the actual facet, rather than a bounding box that
+  // may cover another facet of the projected cube.
+  const point = await face.evaluate((element) => {
+    const polygon = element as SVGPolygonElement;
+    const matrix = polygon.getScreenCTM()!;
+    const points = Array.from(polygon.points);
+    const projected = new DOMPoint(
+      points.reduce((sum, p) => sum + p.x, 0) / points.length,
+      points.reduce((sum, p) => sum + p.y, 0) / points.length
+    ).matrixTransform(matrix);
+    return { x: projected.x, y: projected.y };
+  });
+  await page.mouse.move(point.x, point.y);
+  await face.dispatchEvent('pointerover');
+  await page.waitForTimeout(500);
+  // Repaint while the fill is already at its target. The previous fade
+  // stepped away from 1 again and requested redundant fade frames.
+  await canvas.evaluate((element) =>
+    element.dispatchEvent(
+      new CustomEvent('openzcad:e2e-pixel-ratio', {
+        detail: { value: devicePixelRatio }
+      })
+    )
+  );
+  await page.waitForTimeout(700);
+  const settled = await canvas.getAttribute('data-e2e-frames');
+  await page.waitForTimeout(350);
+  expect(await canvas.getAttribute('data-e2e-frames')).toBe(settled);
+});
+
 /** Holds the worker's complete-rebuild replies, so a release stays validating. */
 async function holdValidation(page: Page) {
   await page.addInitScript(() => {

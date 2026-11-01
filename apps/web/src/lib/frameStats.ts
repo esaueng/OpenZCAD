@@ -6,6 +6,8 @@ export interface FrameSample {
   at: number;
   /** CPU time spent inside `renderer.render` for this frame. */
   renderMs: number;
+  /** Entire viewer callback, including cube, labels and layout; not GPU time. */
+  cpuMs?: number;
   drawCalls: number;
   triangles: number;
 }
@@ -27,6 +29,8 @@ export interface FrameStatsSummary {
   worstFrameMs: number | null;
   /** Mean CPU time inside `renderer.render` over the window. */
   renderMs: number | null;
+  /** Mean full callback CPU time, separate from display frame intervals. */
+  cpuMs: number | null;
   drawCalls: number | null;
   triangles: number | null;
 }
@@ -145,9 +149,15 @@ export class FrameStatsMeter {
     let intervals = 0;
     let worst = 0;
     let renderSum = 0;
+    let cpuSum = 0;
+    let cpuSamples = 0;
     for (let index = 0; index < samples.length; index += 1) {
       const sample = samples[index]!;
       renderSum += sample.renderMs;
+      if (sample.cpuMs !== undefined) {
+        cpuSum += sample.cpuMs;
+        cpuSamples += 1;
+      }
       if (index === 0) continue;
       const interval = sample.at - samples[index - 1]!.at;
       if (interval > BURST_GAP_MS) continue;
@@ -162,6 +172,7 @@ export class FrameStatsMeter {
       frameMs,
       worstFrameMs: intervals > 0 ? worst : null,
       renderMs: samples.length > 0 ? renderSum / samples.length : null,
+      cpuMs: cpuSamples > 0 ? cpuSum / cpuSamples : null,
       // The last frame drawn, however long ago: a still scene still has
       // a load, and it is the one the next frame will pay.
       drawCalls: this.last?.drawCalls ?? null,
