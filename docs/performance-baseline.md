@@ -1005,3 +1005,132 @@ refusal/recovery and actual worker restart. All five local gates pass at the
 same pinned head. Linux and earlier candidate samples remain separate. Quiet-host
 and whole-worker retention acceptance remain open; the detached Text branch is
 unimplemented and unaccepted. H02 stays Partial.
+
+## Viewer frame work and diagnostics (2026-10-31, H02)
+
+The investigation started from `3ecf53b7` and compared that unchanged viewer
+with this candidate on Windows, an Intel Core i7-10750H, headed Microsoft Edge
+156.0.4314.42, ANGLE / Intel UHD
+Graphics / D3D11, a 1600 × 1000 viewport and DPR 1. The browser used the full
+production renderer, including antialiasing, studio environment and shadows.
+The supplied screenshot is a symptom reference; its exact project was not
+available. Two synthetic workloads cover a box plus cylinder (about 1.8k
+rendered triangles, nine model draw calls) and 32 cylinders arranged in a grid
+(about 53.7k triangles, 70 model draw calls). All CAD, picking and worker code
+runs normally; only the account API is stubbed.
+
+The loop used a Vite dev site, the Advanced frame-rate panel, Chromium CPU
+profiles, main-thread long tasks, and a separate browser timeline for forced
+layout. It then repeated the same hover/orbit/wheel script against production
+builds. Frame intervals include browser scheduling and presentation work;
+CPU callback time includes scene preparation, model rendering, the view cube
+and DOM labels, and is not GPU time. The baseline's full callback was measured
+by an external animation-frame wrapper; the candidate also exposes it as
+`cpuMs` on `oz:viewer.frame` and `cpu (frame)` in Advanced diagnostics.
+The existing `cpu (render)` and model draw/triangle counts keep their meanings.
+
+### Findings and implemented changes
+
+| Finding                                                        | Cause and action                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unused handle chips cost every frame                           | `updateOffsetChip` queried panel selectors and measured the stage before finding that no handle existed. Resolve the rig first and return before layout work when it has no anchor. Keep the active-handle placement and obstacle rules. Avoid rewriting already-hidden pills. In the browser regression the unchanged viewer made 14 panel scans during the orbit; the candidate must make zero.                               |
+| View cube rebuilt while its orientation was unchanged          | `projectCube` and its rounded triangle batches ran on every model frame, including hover and zoom. Retain the projection until orientation changes, then retain uploaded attributes until projection, palette, fonts, focus or eased hover changes. Ignore quaternion rounding below a cube displacement of 0.001 CSS pixels; accumulate real turns against the last drawn orientation. Viewport placement and DPR remain live. |
+| Settled cube fills stepped away from their target              | A value equal to its target took the decreasing branch. Keep it fixed, and invalidate geometry on every actual change, including the final fade step and removal. Unit coverage proves settling and invalidation; browser stationary-hover checks pass on both baseline and candidate, so this is not evidence of a reproduced permanent idle-render loop.                                                                      |
+| The diagnostic panel forced layout while measuring performance | Text updates preceded `offsetParent` reads, then Canvas font resolution forced layout even after moving those reads. Finish layout/style reads and graph drawing before changing text or idle attributes. Development timeline: 24 diagnostic-forced layouts / 221.8 ms → zero. Production timeline: 26 forced layouts / 255.2 ms → zero in the matched diagnostic-orbit capture.                                               |
+| Existing CPU timing omitted overlays                           | Report full viewer-callback CPU time after cube and labels, alongside model render time. Preserve model draw counts before the cube resets `renderer.info`. Opt-in frame marks also report `renderMs` and combined cube/label `overlayMs`.                                                                                                                                                                                      |
+
+### Production observations
+
+The table reports mean full-callback CPU milliseconds. The small workload has
+one baseline with the common full-callback wrapper and two candidate sessions;
+a second baseline session independently records the frame-interval/timeline
+comparison. The array has one session per variant. These are local samples,
+not a hardware-independent FPS promise or a statistically established p95.
+
+| Workload / interaction          | Baseline CPU ms | Candidate CPU ms | Observation                                                                              |
+| ------------------------------- | --------------: | ---------------: | ---------------------------------------------------------------------------------------- |
+| Two bodies, hover               |            4.31 |        2.79–2.80 | About 35% less callback CPU, including first-use frames.                                 |
+| Two bodies, orbit               |            2.48 |        1.83–1.96 | About 21–26% less CPU.                                                                   |
+| Two bodies, wheel zoom          |            2.45 |        1.54–1.66 | About 32–37% less CPU.                                                                   |
+| Two bodies, diagnostics + orbit |            2.39 |        1.86–1.91 | About 20–22% less callback CPU; panel timer work is separately measured by the timeline. |
+| 32 cylinders, hover             |            6.33 |             4.93 | About 22% less CPU.                                                                      |
+| 32 cylinders, orbit             |            4.47 |             3.07 | About 31% less CPU.                                                                      |
+| 32 cylinders, wheel zoom        |            4.12 |             2.90 | About 29% less CPU; display intervals remain much longer than CPU callbacks.             |
+
+With diagnostics enabled on the small scene, frame-interval p95 changes from
+33.3–33.6 to 25.1 ms and p99 from 50.0–50.1 to 33.4 ms. General tail improvement
+is not established: on the array, diagnostic-orbit p99 rises from 38.1 to
+46.4 ms, and zoom p95 stays 37.5 ms. The array's frame intervals remain far
+above its roughly 3 ms callback cost. GPU execution, compositor/browser work
+and automation scheduling have not been separated, so call this time outside
+the measured JS callback rather than a proven GPU-only bottleneck.
+
+First-hover shader setup still produces approximately 130–180 ms stalls in
+the observed runs, dominated by WebGL program queries. An experiment using
+`compileAsync` on the two reusable face-film materials did not reduce this
+stall and was removed. It does not justify shipping broader shader warmup.
+Development also shows large React work around settled-view updates that is
+absent as a long task in the corresponding production gestures. Thumbnail
+render/readback appears during the idle capture, separately from an idle
+viewer that draws zero frames. Neither observation justifies a CAD history or
+kernel-cache rewrite.
+
+### Next optimization loop
+
+1. Attribute first-hover program creation to the complete material variants
+   actually used: face films, batched visible/hidden edges and body state.
+   Test asynchronous preparation only for the measured variants. Accept it
+   only after repeated cold-start/first-hover comparisons show lower stalls
+   without moving a comparable delay into initial display, leaking programs,
+   changing shader error reporting or delaying picks. Keep the normal
+   first-use path as the fallback.
+2. Split time outside the callback on the 32-cylinder workload using supported
+   disjoint GPU timer queries and browser GPU/compositor traces. Compare
+   diagnostics off/on, shadow refreshes, grid and edge passes on the same
+   camera path. Investigate draw-call batching or compositing only when that
+   evidence identifies them; keep tessellation, exact picking and visible
+   quality unchanged.
+3. Profile a large imported part and an active face/edge drag separately.
+   Use `perf-face-drag-trace.spec.ts` for pointer → preview → accepted geometry
+   → rendered-frame timing. The current camera-only CPU gains do not claim
+   lower kernel/analysis latency or faster exact completion. Retain the last
+   valid preview and exact acceptance contracts.
+4. Qualify on the hardware/project behind the screenshot, at its actual DPR,
+   plus Chromium and Firefox. Repeat alternating baseline/candidate sessions,
+   include warm-up separately, and compare full-callback CPU, active frame
+   p95/p99, long tasks and retained GL resources. Require correctness and
+   idle sleep before accepting any absolute frame budget. WKWebView requires
+   the separately authorized Apple Silicon workflow.
+
+### Reproduction and regression coverage
+
+The maintained opt-in `test/e2e/perf-viewer.spec.ts` records idle, hover,
+orbit, wheel zoom and Advanced diagnostics + orbit, with raw frame samples,
+CPU profiles, browser/GPU identity and a screenshot. Choose a fresh output
+directory for each arm. It deliberately has no machine-specific FPS gate.
+For example, in PowerShell (with Edge installed):
+
+```powershell
+# Terminal 1: full renderer and opt-in frame marks, live source iteration.
+$env:VITE_E2E='1'; $env:OZ_PERF='1'
+pnpm dev:web --host 127.0.0.1 --port 5173 --strictPort
+
+# Terminal 2: reuse that exact server; artifacts stay outside the checkout.
+$env:PLAYWRIGHT_PORT='5173'; $env:OZ_PERF='1'
+$env:OZ_VIEWER_CHANNEL='msedge'
+$env:OZ_VIEWER_PERF_OUT=Join-Path $env:TEMP 'viewer-candidate-01'
+pnpm exec playwright test perf-viewer --workers=1 --headed
+# Repeat into a different output directory with OZ_VIEWER_BODIES='32'.
+```
+
+For production comparisons, build with the same `VITE_E2E=1` and `OZ_PERF=1`
+flags using top-level `pnpm build`, serve the output with `pnpm --filter
+@openzcad/web preview --host 127.0.0.1 --port 5174`, and set
+`PLAYWRIGHT_PORT=5174`. The performance flags retain the full renderer.
+Run the same workload after each change; use a separate DevTools Performance
+capture for layout/paint attribution so its overhead is not mixed into quiet
+frame samples. Standard regression coverage includes cube buffer reuse and
+all invalidation/settling edges, graph read/write order, full-frame versus
+render-only timing, no handle-panel scans during orbit, and stationary hover.
+Existing `viewer-steadiness.spec.ts` also covers active edge handles and
+normal-to-face navigation. Raw captures stay outside the repository.

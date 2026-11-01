@@ -93,6 +93,7 @@ export function frameStatsFields(
     low01: whole(recent.low01Fps),
     min: whole(recent.minFps),
     cpu: `${fixed(summary.renderMs, 2)} ms`,
+    cpuFrame: `${fixed(summary.cpuMs, 2)} ms`,
     worst: `${fixed(recent.worstFrameMs, 1)} ms`,
     p99: `${fixed(recent.p99FrameMs, 1)} ms`,
     hitches: String(recent.hitches),
@@ -240,6 +241,7 @@ const SUMMARY_CELLS: [field: string, label: string][] = [
 ];
 
 const DETAIL_ROWS: [field: string, label: string][] = [
+  ['cpuFrame', 'cpu (frame)'],
   ['cpu', 'cpu (render)'],
   ['worst', 'worst frame'],
   ['p99', 'p99 frame'],
@@ -305,23 +307,34 @@ export function ViewportFrameStats({
     const repaint = () => {
       const root = rootRef.current;
       if (!root) return;
+      // Read layout/style before changing text. Reading offsetParent after
+      // those writes synchronously laid out the workspace every 250 ms, so
+      // the diagnostic panel itself could introduce the hitches it reports.
+      const fpsGraph = fpsGraphRef.current;
+      const frameGraph = frameGraphRef.current;
+      const drawFps = Boolean(fpsGraph?.offsetParent);
+      const drawFrame = Boolean(frameGraph?.offsetParent);
+      if (drawFps || drawFrame) colors ??= readGraphColors(root);
       const now = performance.now();
       const summary = meter.summarize(now);
       const fields = frameStatsFields(summary, meter.recentStats());
+      // Canvas font assignment can resolve CSS and force layout too. Finish
+      // both graphs while layout is clean, then write the text fields.
+      if (colors) {
+        if (drawFps && fpsGraph)
+          drawFpsGraph(fpsGraph, meter.fpsSeries(now), colors);
+        if (drawFrame && frameGraph)
+          drawFrameGraph(frameGraph, meter.history, colors);
+      }
       for (const node of root.querySelectorAll<HTMLElement>('[data-field]')) {
         const text = fields[node.dataset.field!];
         if (text !== undefined && node.textContent !== text) {
           node.textContent = text;
         }
       }
-      root.toggleAttribute('data-idle', summary.idle);
-      const fpsGraph = fpsGraphRef.current;
-      const frameGraph = frameGraphRef.current;
-      // Folded, the graphs are not in the layout; skip drawing them.
-      if (!fpsGraph?.offsetParent && !frameGraph?.offsetParent) return;
-      colors ??= readGraphColors(root);
-      if (fpsGraph) drawFpsGraph(fpsGraph, meter.fpsSeries(now), colors);
-      if (frameGraph) drawFrameGraph(frameGraph, meter.history, colors);
+      if (root.hasAttribute('data-idle') !== summary.idle) {
+        root.toggleAttribute('data-idle', summary.idle);
+      }
     };
     repaint();
     const timer = window.setInterval(repaint, FRAME_STATS_REPAINT_MS);

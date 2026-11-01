@@ -25,7 +25,11 @@ import {
   readStagePalette,
   watchStageTheme
 } from '../lib/stagePalette';
-import { projectCube, type OrientationLink } from './viewer/orientationCube';
+import {
+  projectCube,
+  type CubeProjection,
+  type OrientationLink
+} from './viewer/orientationCube';
 import {
   OrientationCubeOverlay,
   readCubeFonts,
@@ -2873,6 +2877,7 @@ export function ModelViewer({
     let releaseCubeLink: (() => void) | null = null;
     /** The camera's axes as the cube last saw them; pushed again on attach. */
     let cubeAxes: AxisProjection | null = null;
+    let cubeProjection: CubeProjection | null = null;
     let cubeLinkFresh = false;
     /** Where the cube's box sat when this frame began, before any writes. */
     let cubeBox: CubeBox | null = null;
@@ -6947,6 +6952,71 @@ export function ModelViewer({
       if (!chip) {
         return;
       }
+      // Either rig answers the same two questions; only the label differs.
+      // In a multi-region extrude the chip rides the arrow last grabbed.
+      const regionChipRig =
+        offsetRigRef.current && offsetRigRef.current === regionRigRef.current
+          ? regionChipRigRef.current
+          : null;
+      const rig =
+        cylinderRadiusRigRef.current ??
+        regionChipRig ??
+        offsetRigRef.current ??
+        edgeRigRef.current;
+      let anchor: THREE.Vector3 | null = null;
+      let text = '';
+      if (rig) {
+        const scale =
+          (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        anchor = rig.chipAnchor(scale);
+        const rawValue = rig.value();
+        const value = Math.round(rawValue * 100) / 100;
+        if (rig.kind === 'cylinder-radius') {
+          const mode = cylinderDimensionModeRef.current;
+          const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
+          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitLabelRef.current}`;
+        } else if (rig.kind === 'edge-radius') {
+          const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
+          const label = edgeHandleRef.current?.label;
+          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitLabelRef.current}`;
+        } else {
+          // "Total" reads the whole span this face sets: a primitive's own
+          // height when it has one, else the body's reach behind the face.
+          const totalBaseline = offsetHandleRef.current?.totalBaseline;
+          const totalSense = offsetHandleRef.current?.totalSense ?? 1;
+          text = offsetChipText({
+            rawValue,
+            mode: offsetChipModeRef.current,
+            span: totalBaseline ?? offsetExtentRef.current,
+            sense: totalSense,
+            units: unitLabelRef.current
+          });
+          if (offsetPreviewInvalidRef.current) {
+            text = `⚠ ${text}`;
+          }
+        }
+      }
+      if (!anchor) {
+        chipLayoutKey = null;
+        if (!chip.hidden) chip.hidden = true;
+        if (!radiusLabelChip.hidden) radiusLabelChip.hidden = true;
+        if (offsetOwnsKeypad()) keypadAnchorRef.current?.(null);
+        if (E2E_CANVAS_HOOKS_ENABLED) {
+          delete renderer.domElement.dataset.e2eHandleX;
+          delete renderer.domElement.dataset.e2eHandleY;
+          delete renderer.domElement.dataset.e2eHandleDx;
+          delete renderer.domElement.dataset.e2eHandleDy;
+          delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
+          delete renderer.domElement.dataset.e2eOffsetChangeVisible;
+          delete renderer.domElement.dataset.e2eChipAnchorX;
+          delete renderer.domElement.dataset.e2eChipAnchorY;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldX;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldY;
+          delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
+          delete renderer.domElement.dataset.e2eChipAnchorRig;
+        }
+        return;
+      }
       // Layout reads come before this function's writes. A read after a
       // write forces a synchronous layout of the whole workspace, and a
       // dragged chip used to force several every frame. The pills' widths
@@ -7008,71 +7078,6 @@ export function ModelViewer({
           x + chipDodge.dx,
           Math.min(y + chipDodge.dy, element === chip ? chipFloor : labelFloor)
         );
-      // Either rig answers the same two questions; only the label differs.
-      // In a multi-region extrude the chip rides the arrow last grabbed.
-      const regionChipRig =
-        offsetRigRef.current && offsetRigRef.current === regionRigRef.current
-          ? regionChipRigRef.current
-          : null;
-      const rig =
-        cylinderRadiusRigRef.current ??
-        regionChipRig ??
-        offsetRigRef.current ??
-        edgeRigRef.current;
-      let anchor: THREE.Vector3 | null = null;
-      let text = '';
-      if (rig) {
-        const scale =
-          (rig.group.userData.gizmoScale as number | undefined) ?? 1;
-        anchor = rig.chipAnchor(scale);
-        const rawValue = rig.value();
-        const value = Math.round(rawValue * 100) / 100;
-        if (rig.kind === 'cylinder-radius') {
-          const mode = cylinderDimensionModeRef.current;
-          const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
-          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitLabelRef.current}`;
-        } else if (rig.kind === 'edge-radius') {
-          const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
-          const label = edgeHandleRef.current?.label;
-          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitLabelRef.current}`;
-        } else {
-          // "Total" reads the whole span this face sets: a primitive's own
-          // height when it has one, else the body's reach behind the face.
-          const totalBaseline = offsetHandleRef.current?.totalBaseline;
-          const totalSense = offsetHandleRef.current?.totalSense ?? 1;
-          text = offsetChipText({
-            rawValue,
-            mode: offsetChipModeRef.current,
-            span: totalBaseline ?? offsetExtentRef.current,
-            sense: totalSense,
-            units: unitLabelRef.current
-          });
-          if (offsetPreviewInvalidRef.current) {
-            text = `⚠ ${text}`;
-          }
-        }
-      }
-      if (!anchor) {
-        chipLayoutKey = null;
-        chip.hidden = true;
-        radiusLabelChip.hidden = true;
-        if (offsetOwnsKeypad()) keypadAnchorRef.current?.(null);
-        if (E2E_CANVAS_HOOKS_ENABLED) {
-          delete renderer.domElement.dataset.e2eHandleX;
-          delete renderer.domElement.dataset.e2eHandleY;
-          delete renderer.domElement.dataset.e2eHandleDx;
-          delete renderer.domElement.dataset.e2eHandleDy;
-          delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
-          delete renderer.domElement.dataset.e2eOffsetChangeVisible;
-          delete renderer.domElement.dataset.e2eChipAnchorX;
-          delete renderer.domElement.dataset.e2eChipAnchorY;
-          delete renderer.domElement.dataset.e2eChipAnchorWorldX;
-          delete renderer.domElement.dataset.e2eChipAnchorWorldY;
-          delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
-          delete renderer.domElement.dataset.e2eChipAnchorRig;
-        }
-        return;
-      }
       let screen = projectToScreen(
         anchor,
         context.activeCamera,
@@ -11191,7 +11196,10 @@ export function ModelViewer({
       if (
         cubeLinkFresh ||
         !cubeAxes ||
-        !orientationCamera.quaternion.equals(lastQuaternion)
+        // lookAt during zoom/pan can change quaternion bits without a
+        // visible turn. Accumulate against the last drawn orientation;
+        // this angular tolerance moves a cube vertex by under 0.001 px.
+        Math.abs(orientationCamera.quaternion.dot(lastQuaternion)) < 1 - 1e-12
       ) {
         lastQuaternion.copy(orientationCamera.quaternion);
         const inverse = orientationCamera.quaternion.clone().invert();
@@ -11204,6 +11212,7 @@ export function ModelViewer({
           y: project(new THREE.Vector3(0, 1, 0)),
           z: project(new THREE.Vector3(0, 0, 1))
         };
+        cubeProjection = projectCube(cubeAxes);
         cubeLink?.update(cubeAxes);
         cubeLinkFresh = false;
       }
@@ -11225,15 +11234,11 @@ export function ModelViewer({
         renderStarted = performance.now();
         renderer.render(scene, context.activeCamera);
       }
-      const frameStatsSink = frameStatsRef?.current;
-      if (frameStatsSink) {
-        frameStatsSink({
-          at: now,
-          renderMs: performance.now() - renderStarted,
-          drawCalls: renderer.info.render.calls,
-          triangles: renderer.info.render.triangles
-        });
-      }
+      const renderMs = performance.now() - renderStarted;
+      // The cube's renderer pass resets renderer.info. Retain the model load
+      // before it draws, while reporting CPU time after all frame work below.
+      const drawCalls = renderer.info.render.calls;
+      const triangles = renderer.info.render.triangles;
       traceFaceDrag('frame', {
         ms: performance.now() - frameStarted,
         detail: {
@@ -11274,23 +11279,11 @@ export function ModelViewer({
           })
         );
       }
-      if (import.meta.env.OZ_PERF === '1') {
-        mark('viewer.frame', {
-          frameMs:
-            lastPerfFrameAt === null
-              ? null
-              : Math.max(now - lastPerfFrameAt, 0),
-          drawCalls: renderer.info.render.calls,
-          triangles: renderer.info.render.triangles,
-          geometries: renderer.info.memory.geometries,
-          textures: renderer.info.memory.textures
-        });
-        lastPerfFrameAt = now;
-      }
       // After the frame's statistics, which describe the model's scene: the
       // cube is drawn over it, into the same canvas, as the last word.
-      if (cubeBox && cubeAxes) {
-        cubeOverlay.render(renderer, projectCube(cubeAxes), cubeBox);
+      const overlayStarted = performance.now();
+      if (cubeBox && cubeProjection) {
+        cubeOverlay.render(renderer, cubeProjection, cubeBox);
         if (e2eCanvasHooksEnabled) {
           renderer.domElement.dataset.e2eCubeOverlay = String(cubeBox.width);
         }
@@ -11349,6 +11342,30 @@ export function ModelViewer({
         context.fadeIns.size > 0;
       if (loopWasAnimating) {
         requestRender();
+      }
+      const cpuMs = performance.now() - frameStarted;
+      frameStatsRef?.current?.({
+        at: now,
+        renderMs,
+        cpuMs,
+        drawCalls,
+        triangles
+      });
+      if (import.meta.env.OZ_PERF === '1') {
+        mark('viewer.frame', {
+          frameMs:
+            lastPerfFrameAt === null
+              ? null
+              : Math.max(now - lastPerfFrameAt, 0),
+          cpuMs,
+          renderMs,
+          overlayMs: performance.now() - overlayStarted,
+          drawCalls,
+          triangles,
+          geometries: renderer.info.memory.geometries,
+          textures: renderer.info.memory.textures
+        });
+        lastPerfFrameAt = now;
       }
     }
     // The React chrome can become actionable before this passive setup owns a

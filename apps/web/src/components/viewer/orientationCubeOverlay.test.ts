@@ -60,6 +60,81 @@ function linear(hex: string) {
 }
 
 describe('OrientationCubeOverlay', () => {
+  it('reuses uploaded triangles across model frames and viewport changes', () => {
+    const overlay = new OrientationCubeOverlay(DARK_CUBE_PALETTE);
+    const { renderer, calls } = stubRenderer();
+    const projection = projectCube(FRONT);
+    const box = { left: 0, top: 0, width: 88 };
+    overlay.render(renderer, projection, box);
+    const attributes = calls[0]!.scene.children.flatMap((child) =>
+      Object.values((child as THREE.Mesh).geometry.attributes)
+    );
+    const versions = () =>
+      attributes.map((attribute) =>
+        attribute instanceof THREE.BufferAttribute
+          ? attribute.version
+          : attribute.data.version
+      );
+    const first = versions();
+    overlay.setHighlight({ hovered: null, focusVisible: null });
+    overlay.step(16, false);
+    overlay.render(renderer, projection, { ...box, left: 40, width: 100 });
+    expect(calls).toHaveLength(2);
+    expect(versions()).toEqual(first);
+
+    overlay.setHighlight({
+      hovered: { kind: 'face', index: 3 },
+      focusVisible: null
+    });
+    overlay.step(50, false);
+    overlay.render(renderer, projection, box);
+    expect(versions().every((version, i) => version > first[i]!)).toBe(true);
+    const fading = versions();
+    // The last fade frame must upload too, even when step returns false.
+    expect(overlay.step(60, false)).toBe(false);
+    overlay.render(renderer, projection, box);
+    expect(versions().every((version, i) => version > fading[i]!)).toBe(true);
+    const settled = versions();
+    overlay.step(16, false);
+    overlay.render(renderer, projection, box);
+    expect(versions()).toEqual(settled);
+    overlay.setHighlight({ hovered: null, focusVisible: null });
+    expect(overlay.step(1, true)).toBe(false);
+    overlay.render(renderer, projection, box);
+    expect(versions().every((version, i) => version > settled[i]!)).toBe(true);
+
+    const reset = versions();
+    overlay.setHighlight({
+      hovered: null,
+      focusVisible: { kind: 'face', index: 3 }
+    });
+    // Focus changes the seam immediately, before its fill animates.
+    overlay.render(renderer, projection, box);
+    expect(versions().every((version, i) => version > reset[i]!)).toBe(true);
+    const focused = versions();
+    overlay.setPalette({ ...DARK_CUBE_PALETTE, frontal: '#ffffff' });
+    overlay.render(renderer, projection, box);
+    expect(versions().every((version, i) => version > focused[i]!)).toBe(true);
+    const themed = versions();
+    const context = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(null);
+    try {
+      overlay.setFonts({
+        face: { family: 'sans-serif', weight: '500', size: 9, spacing: 0 },
+        axis: { family: 'sans-serif', weight: '500', size: 10 }
+      });
+      overlay.render(renderer, projection, box);
+      expect(versions().every((version, i) => version > themed[i]!)).toBe(true);
+    } finally {
+      context.mockRestore();
+    }
+    const lettered = versions();
+    overlay.render(renderer, projectCube(FRONT), box);
+    expect(versions().every((version, i) => version > lettered[i]!)).toBe(true);
+    overlay.dispose();
+  });
+
   it('draws over the cube box on whole device pixels and restores state', () => {
     const overlay = new OrientationCubeOverlay(DARK_CUBE_PALETTE);
     const { renderer, stub, calls, viewport } = stubRenderer();

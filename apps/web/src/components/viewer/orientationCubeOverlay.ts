@@ -454,6 +454,8 @@ export class OrientationCubeOverlay {
   private highlight: CubeHighlight = { hovered: null, focusVisible: null };
   private readonly savedViewport = new THREE.Vector4();
   private readonly drawingBuffer = new THREE.Vector2();
+  private projection: CubeProjection | null = null;
+  private dirty = true;
 
   constructor(palette: CubePalette) {
     const common = {
@@ -503,6 +505,7 @@ export class OrientationCubeOverlay {
 
   setPalette(palette: CubePalette) {
     this.palette = this.resolve(palette);
+    this.dirty = true;
   }
 
   /** Rasterises the labels again, e.g. once the web font has loaded. */
@@ -511,9 +514,15 @@ export class OrientationCubeOverlay {
     this.atlas = new LabelAtlas(fonts);
     this.textMaterial.alphaMap = this.atlas.texture;
     this.textMaterial.needsUpdate = true;
+    this.dirty = true;
   }
 
   setHighlight(highlight: CubeHighlight) {
+    const previous = this.highlight.focusVisible;
+    const next = highlight.focusVisible;
+    if (previous?.kind !== next?.kind || previous?.index !== next?.index) {
+      this.dirty = true;
+    }
     this.highlight = highlight;
   }
 
@@ -531,9 +540,14 @@ export class OrientationCubeOverlay {
     for (const [key, value] of this.hoverMix) {
       const target = targets.has(key) ? 1 : 0;
       const next =
-        target > value
-          ? Math.min(value + delta, 1)
-          : Math.max(value - delta, 0);
+        target === value
+          ? value
+          : target > value
+            ? Math.min(value + delta, 1)
+            : Math.max(value - delta, 0);
+      // Include the final step and removal: both change the drawn colour,
+      // even though neither keeps the animation loop awake.
+      if (next !== value) this.dirty = true;
       if (next === 0 && target === 0) {
         this.hoverMix.delete(key);
         continue;
@@ -630,7 +644,14 @@ export class OrientationCubeOverlay {
     box: CubeBox
   ) {
     if (!(box.width > 0)) return;
-    this.build(projection);
+    // Zoom, panning and model hover repaint the canvas without changing the
+    // cube. Keep its triangles and GL buffers until orientation or ink changes;
+    // box/DPR changes only affect the viewport and projection below.
+    if (this.dirty || this.projection !== projection) {
+      this.build(projection);
+      this.projection = projection;
+      this.dirty = false;
+    }
     const ratio = renderer.getPixelRatio();
     const scale = box.width / CUBE_SIZE;
     const extent = (CUBE_SIZE + MARGIN * 2) * scale;

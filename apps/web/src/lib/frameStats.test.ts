@@ -26,6 +26,34 @@ function frames(
 }
 
 describe('FrameStatsMeter', () => {
+  it('reports full callback CPU separately from render calls and frame intervals', () => {
+    const meter = new FrameStatsMeter();
+    meter.record({
+      at: 0,
+      renderMs: 1,
+      cpuMs: 8,
+      drawCalls: 9,
+      triangles: 32_000
+    });
+    meter.record({
+      at: 16,
+      renderMs: 3,
+      cpuMs: 12,
+      drawCalls: 9,
+      triangles: 32_000
+    });
+    // Legacy samples do not invent a full-frame CPU value.
+    meter.record({ at: 32, renderMs: 2, drawCalls: 9, triangles: 32_000 });
+    expect(meter.summarize(32)).toMatchObject({
+      cpuMs: 10,
+      renderMs: 2,
+      frameMs: 16,
+      drawCalls: 9,
+      triangles: 32_000
+    });
+    expect(meter.summarize(FRAME_WINDOW_MS + 40).cpuMs).toBeNull();
+  });
+
   it('reports the frame rate of a steady 60 Hz gesture', () => {
     const meter = new FrameStatsMeter();
     const last = frames(meter, 0, 60, 1_000 / 60);

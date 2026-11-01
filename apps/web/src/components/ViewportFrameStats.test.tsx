@@ -34,6 +34,7 @@ describe('ViewportFrameStats', () => {
       sinkRef.current!({
         at: now - (29 - index) * 20,
         renderMs: 1.25,
+        cpuMs: 4.5,
         drawCalls: 9,
         triangles: 7_900
       });
@@ -46,6 +47,7 @@ describe('ViewportFrameStats', () => {
     expect(field('average')).toBe('50');
     expect(field('low1')).toBe('50');
     expect(field('cpu')).toBe('1.25 ms');
+    expect(field('cpuFrame')).toBe('4.50 ms');
     expect(field('load')).toBe('9 · 7.9k');
     expect(field('frames')).toBe('29');
     expect(overlay).not.toHaveAttribute('data-idle');
@@ -75,6 +77,47 @@ describe('ViewportFrameStats', () => {
     ).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('finishes graph layout and font resolution before changing readout text', () => {
+    vi.useFakeTimers();
+    const readoutsDuringGraph: (string | null)[] = [];
+    const context = new Proxy(
+      {},
+      {
+        get: () => () => undefined,
+        set: (_target, key) => {
+          if (key === 'font') readoutsDuringGraph.push(field('cpu'));
+          return true;
+        }
+      }
+    ) as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      context
+    );
+    const sinkRef: MutableRefObject<FrameStatsSink | null> = { current: null };
+    render(<ViewportFrameStats sinkRef={sinkRef} />);
+    // happy-dom has no layout; make only these graphs participate in it.
+    for (const canvas of document.querySelectorAll(
+      '.viewport-frame-stats-graph'
+    )) {
+      Object.defineProperty(canvas, 'offsetParent', {
+        get: () => document.body
+      });
+    }
+    readoutsDuringGraph.length = 0;
+    sinkRef.current!({
+      at: performance.now(),
+      renderMs: 2,
+      cpuMs: 5,
+      drawCalls: 9,
+      triangles: 100
+    });
+    act(() => {
+      vi.advanceTimersByTime(FRAME_STATS_REPAINT_MS);
+    });
+    expect(readoutsDuringGraph).toEqual(['– ms']);
+    expect(field('cpu')).toBe('2.00 ms');
+  });
+
   it('closes through the overlay setting, and offers no close without it', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     const sinkRef: MutableRefObject<FrameStatsSink | null> = { current: null };
@@ -101,6 +144,7 @@ describe('ViewportFrameStats', () => {
           frameMs: null,
           worstFrameMs: null,
           renderMs: null,
+          cpuMs: null,
           drawCalls: null,
           triangles: null
         },
@@ -123,6 +167,7 @@ describe('ViewportFrameStats', () => {
       low01: '–',
       min: '–',
       cpu: '– ms',
+      cpuFrame: '– ms',
       worst: '– ms',
       p99: '– ms',
       hitches: '0',
