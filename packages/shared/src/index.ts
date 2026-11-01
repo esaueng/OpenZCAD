@@ -203,7 +203,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v49 adds D06 slice D drawing annotations: the chamfer-corner point, a
 // radius on a revolved blend face, and provenance marking a dimension read
 // from raw geometry. An older client would refuse each as malformed.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 49 as const;
+// v50 adds a counterbored hole's callout on a D06 diameter dimension (the
+// counterbore's rim). An older client would refuse it as malformed.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 50 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

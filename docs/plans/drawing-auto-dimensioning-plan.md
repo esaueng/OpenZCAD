@@ -337,7 +337,30 @@ missing and zero redundant, and that every placed dimension resolves:
 - a bracket with fillets and a slot
 - one history-less STEP import
 
+## Angles and counterbore callouts (schema v50)
+
+A planar face square to one model axis but to none of the others is a slope:
+it draws as a line, true to its angle, in the view along that axis. Its line
+needs two numbers, so it is two requirements: its angle (one per plane, so
+mirrored copies share it), stated by a D02 angle dimension between an edge
+of the slope and an edge along an axis in its plane; and one corner, where
+it meets a face square to an axis (a real edge before a virtual sharp
+through a blend, then x before y before z), as an ordinary position. Its
+other corners follow and are derived. A blend tangent to the slope and
+another plane is positioned by them (its centre and tangent lines derived).
+A compound slope, square to no axis, stays unmeasurable.
+
+A hole size group whose every copy has a larger coaxial bore opening onto it
+is counterbored: the bore's floor rim is on the hole's and the floor faces
+the opening (a stepped shaft's shoulder faces away and is not one). One
+diameter callout on the hole names the bore's rim (v50 `counterbore`) and
+reads "Ø6 THRU, CBORE Ø11 × 3 DEEP", or "Ø6 × 10 DEEP" for a blind hole,
+from the model. It states both diameters and links the bore's floor to where
+it opens (and a blind hole's end to the floor), so Auto-dimension places one
+callout instead of two diameters and a floor span. Words stand in for the
+ASME depth and counterbore symbols, which the sheet's PDF font cannot print.
+
 ## Out of scope
 
-Tolerances and GD&T, thread and hole-depth callouts, surface finish,
+Tolerances and GD&T, thread callouts and countersinks, surface finish,
 ordinate style before slice E, and assemblies.

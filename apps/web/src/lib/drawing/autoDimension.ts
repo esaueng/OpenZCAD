@@ -464,9 +464,91 @@ export function planAutoDimensions(
 
   for (const [bodyId, body] of state.bodies) {
     const { requirements, links, statedSizes } = body;
+    // Counterbored holes (v50): one callout states the hole, its bore, the
+    // bore's depth and a blind hole's, on the hole's circle face-on with the
+    // bore's rim around it. Either size already stated keeps them apart.
+    const calledOut = new Set<SizeGroup>();
+    for (const group of requirements.counterbores) {
+      if (statedSizes.has(group.hole) || statedSizes.has(group.bore)) continue;
+      const annotationId = createId();
+      const options = circleOptions(
+        measuring,
+        bodyId,
+        edgesOf,
+        group.hole,
+        refOf,
+        holding
+      ).flatMap((circle) => {
+        const hole = circle.edge.curve!.circle!;
+        // The bore's rim about this hole, nearest the viewer first.
+        const rims = edgesOf(circle.context, bodyId)
+          .filter((edge) => {
+            const rim = edge.curve?.circle;
+            return (
+              rim !== undefined &&
+              edge.displayRole !== 'seam' &&
+              circleInGroup(
+                {
+                  ...group.bore,
+                  axes: [{ point: hole.center, direction: hole.axis }]
+                },
+                rim
+              )
+            );
+          })
+          .sort(
+            (a, b) =>
+              Number(edgeVisible(circle.context, b)) -
+              Number(edgeVisible(circle.context, a))
+          );
+        for (const rim of rims) {
+          const bore = refOf(circle.context, bodyId, rim);
+          if (bore)
+            return [
+              {
+                context: circle.context,
+                visible: circle.visible,
+                annotation: {
+                  annotationId,
+                  kind: 'diameter' as const,
+                  viewId: circle.context.view.viewId,
+                  edge: circle.ref,
+                  counterbore: bore,
+                  ...(group.hole.axes.length > 1
+                    ? { count: group.hole.axes.length }
+                    : {}),
+                  placementMm: { x: 0, y: 0 }
+                }
+              }
+            ];
+        }
+        return [];
+      });
+      if (options.length === 0) continue;
+      const what = `${sizeLabel(group.hole, units)} counterbored ${sizeLabel(group.bore, units)}`;
+      plan({ bodyId, what, subject: what, ...options[0]!, options });
+      calledOut.add(group.hole);
+      calledOut.add(group.bore);
+      // Its depths are the callout's: no span asks for them again.
+      for (const copy of group.instances) {
+        const graph = links[copy.along];
+        const index = (value: number) =>
+          requirements.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const spans: [number, number][] = [[copy.opening, copy.floor]];
+        if (!copy.through) spans.push([copy.floor, copy.end]);
+        for (const [from, to] of spans) {
+          const a = index(from);
+          const b = index(to);
+          if (a >= 0 && b >= 0 && graph.find(a) !== graph.find(b))
+            graph.link(a, b, annotationId);
+        }
+      }
+    }
     // Sizes: one radius or diameter per group, on a circle seen face-on.
     for (const group of requirements.sizes) {
-      if (statedSizes.has(group)) continue;
+      if (statedSizes.has(group) || calledOut.has(group)) continue;
       const label = sizeLabel(group, units);
       // The checker already reports a group no view looks along.
       if (
@@ -786,9 +868,15 @@ function circleOptions(
     edge: EdgeTopology
   ) => DrawingEdgeRef | null,
   holding: (context: ViewContext, bodyId: string) => number
-): { context: ViewContext; ref: DrawingEdgeRef; visible: boolean }[] {
+): {
+  context: ViewContext;
+  edge: EdgeTopology;
+  ref: DrawingEdgeRef;
+  visible: boolean;
+}[] {
   const out: {
     context: ViewContext;
+    edge: EdgeTopology;
     ref: DrawingEdgeRef;
     visible: boolean;
     score: number;
@@ -815,6 +903,7 @@ function circleOptions(
       const visible = edgeVisible(context, edge);
       out.push({
         context,
+        edge,
         ref,
         visible,
         score:

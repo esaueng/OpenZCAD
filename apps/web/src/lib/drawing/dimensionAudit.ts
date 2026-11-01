@@ -13,6 +13,7 @@ import {
 import {
   annotationBody,
   annotationModelReading,
+  readCounterbore,
   defaultDimensionDecimals,
   formatDrawingNumber,
   type AnnotationBodies
@@ -169,6 +170,8 @@ export interface BodyRequirements {
   boltCircles: BoltCircle[];
   /** Sloped planes square to one axis, each stated by an angle. */
   slopes: SlopeGroup[];
+  /** Holes whose every copy is counterbored alike: one callout states them. */
+  counterbores: CounterboreGroup[];
   /**
    * Circles where a chamfer or blend meets the next face, bounding no hole
    * or boss: the feature's own size fixes them.
@@ -194,6 +197,23 @@ export interface SlopeGroup {
   /** The acute angle between the plane's line and `from`, in degrees. */
   angleDeg: number;
   faces: FaceTopology[];
+}
+
+/**
+ * A hole size group whose every axis carries a bore of one larger size
+ * opening onto it: a counterbore. Per copy, along its axis: where the bore
+ * opens, its floor, and the hole's far end.
+ */
+export interface CounterboreGroup {
+  hole: SizeGroup;
+  bore: SizeGroup;
+  instances: {
+    along: AuditAxis;
+    opening: number;
+    floor: number;
+    end: number;
+    through: boolean;
+  }[];
 }
 
 /** Like revolved blends: one radius, stated once with a count. */
@@ -806,6 +826,43 @@ function bodyRequirements(
     }
   }
 
+  // Counterbored holes: a hole size whose every axis carries a larger bore
+  // opening onto it is one callout's, "2× Ø5 THRU, CBORE Ø8 × 1.5 DEEP".
+  const counterbores: CounterboreGroup[] = [];
+  for (const hole of sizes) {
+    if (hole.blend) continue;
+    for (const bore of sizes) {
+      if (bore.blend || bore === hole || bore.radius <= hole.radius) continue;
+      if (bore.axes.length !== hole.axes.length) continue;
+      const instances: CounterboreGroup['instances'] = [];
+      for (const axis of hole.axes) {
+        const along = axisOf(axis.direction);
+        const holeEdge = edges.find(
+          (edge) =>
+            edge.curve?.circle &&
+            circleInGroup({ ...hole, axes: [axis] }, edge.curve.circle)
+        );
+        const boreEdge = edges.find(
+          (edge) =>
+            edge.curve?.circle &&
+            circleInGroup({ ...bore, axes: [axis] }, edge.curve.circle)
+        );
+        if (!along || !holeEdge || !boreEdge) break;
+        const reading = readCounterbore(holeEdge, boreEdge, edges, faces);
+        if (!reading.ok) break;
+        instances.push({
+          along,
+          opening: reading.opening[along],
+          floor: reading.floor[along],
+          end: reading.end[along],
+          through: reading.through
+        });
+      }
+      if (instances.length === hole.axes.length && instances.length > 0)
+        counterbores.push({ hole, bore, instances });
+    }
+  }
+
   // Where a revolved blend meets the next surface: closed circles that are
   // no face's position along their axis.
   for (const edge of edges) {
@@ -847,6 +904,7 @@ function bodyRequirements(
     derivedCircles,
     boltCircles,
     slopes,
+    counterbores,
     unmeasurable: [...unmeasurable].map(([message, count]) =>
       count > 1 ? `${count}× ${message}` : message
     )
@@ -1289,6 +1347,55 @@ export function readDimensionState(
       }
       blendStatedBy.set(group, id);
       audit.stated += 1;
+      continue;
+    }
+    if (reading.kind === 'diameter' && reading.counterbore) {
+      const callout = reading.counterbore;
+      const body = requirements.get(reading.bodyId);
+      const group = body?.counterbores.find(
+        (candidate) =>
+          circleInGroup(candidate.hole, reading.circle) &&
+          circleInGroup(candidate.bore, callout.bore)
+      );
+      if (!body || !group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message: 'It calls out a counterbore this check does not read.'
+        });
+        continue;
+      }
+      // Both sizes, and per copy the bore's depth and a blind hole's.
+      let states = 0;
+      for (const size of [group.hole, group.bore])
+        if (!sizeStatedBy.has(size)) {
+          sizeStatedBy.set(size, id);
+          states += 1;
+        }
+      for (const copy of group.instances) {
+        const graph = linksFor(reading.bodyId, copy.along);
+        const index = (value: number) =>
+          body.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const spans: [number, number][] = [[copy.opening, copy.floor]];
+        if (!copy.through) spans.push([copy.floor, copy.end]);
+        for (const [from, to] of spans) {
+          const a = index(from);
+          const b = index(to);
+          if (a < 0 || b < 0 || graph.find(a) === graph.find(b)) continue;
+          graph.link(a, b, id);
+          states += 1;
+        }
+      }
+      if (states === 0)
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message:
+            'Other dimensions already state everything this callout does.',
+          statedBy: []
+        });
+      audit.stated += states;
       continue;
     }
     const body = requirements.get(reading.bodyId);
