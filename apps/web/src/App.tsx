@@ -7714,7 +7714,8 @@ export function App() {
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
         exportable:
-          (body.exportableStep || body.meshReference === true) && !body.consumed,
+          (body.exportableStep || body.meshReference === true) &&
+          !body.consumed,
         hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
@@ -31287,6 +31288,7 @@ export function App() {
             doc && (
               <ProjectSharingDialog
                 projectId={doc.projectId}
+                projectName={doc.name}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName

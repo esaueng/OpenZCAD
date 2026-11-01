@@ -168,6 +168,7 @@ import {
   hashProjectInvitationToken,
   parseCreateInvitation,
   parseProjectMemberRole,
+  parseRenameShareLink,
   parseShareLinkToken,
   sendProjectInvitationEmail,
   SharingRequestError
@@ -1988,6 +1989,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       shareLinks: await persistence.listProjectShareLinks(
         userId,
         shareLinksMatch[1]!
+      )
+    });
+  }
+
+  if (request.method === 'PATCH' && shareLinkMatch) {
+    const { label } = parseRenameShareLink(await readJsonBody(request));
+    return json({
+      shareLink: await persistence.renameProjectShareLink(
+        userId,
+        shareLinkMatch[1]!,
+        shareLinkMatch[2]!,
+        label
       )
     });
   }

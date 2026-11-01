@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -100,6 +107,7 @@ function shareLinkClient(): ProjectShareLinkClient {
     mode: 'tweak' | 'view';
     createdAt: number;
     revokedAt: null;
+    label: string | null;
   }> = [];
   return {
     createProjectShareLink: vi.fn(
@@ -109,13 +117,26 @@ function shareLinkClient(): ProjectShareLinkClient {
           projectId,
           mode,
           createdAt: Math.floor(Date.now() / 1000),
-          revokedAt: null
+          revokedAt: null,
+          label: null
         };
         links.push(shareLink);
         return { shareLink, token: 'a'.repeat(43) };
       }
     ),
-    listProjectShareLinks: vi.fn(async () => [...links]),
+    listProjectShareLinks: vi.fn(async () =>
+      links.map((link) => ({ ...link }))
+    ),
+    renameProjectShareLink: vi.fn(
+      async (_projectId, shareLinkId: string, label: string | null) => {
+        const link = links.find((entry) => entry.shareLinkId === shareLinkId);
+        if (!link) {
+          throw new Error('Project share link not found.');
+        }
+        link.label = label;
+        return { ...link };
+      }
+    ),
     revokeProjectShareLink: vi.fn(async (_projectId, shareLinkId: string) => {
       const index = links.findIndex((link) => link.shareLinkId === shareLinkId);
       if (index >= 0) {
@@ -487,15 +508,10 @@ describe('ProjectSharingDialog', () => {
     expect(
       await screen.findByRole('button', { name: 'Create link' })
     ).toBeEnabled();
-    expect(screen.getByText('Anyone with the link')).toBeVisible();
+    expect(screen.getByText('Only invited people')).toBeVisible();
     expect(
       screen.getByText(
-        'Links expire 30 days after creation. Create a new link to share again.'
-      )
-    ).toBeVisible();
-    expect(
-      screen.getByText(
-        'Opens in Tweak: parameters and export, no account needed.'
+        'Opens in Tweak: parameters and export, no account needed. Links expire 30 days after creation.'
       )
     ).toBeVisible();
     expect(
@@ -520,13 +536,11 @@ describe('ProjectSharingDialog', () => {
     );
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
     expect(screen.getByText('Shown once — copy it now.')).toBeVisible();
-    expect(screen.getByText(/^Link created /)).toBeVisible();
-    expect(screen.getByText(/^Link created /)).toHaveTextContent(
-      'Expires in 30d'
-    );
-    expect(screen.getByText(/^Link created /).closest('li')).toHaveTextContent(
-      /Tweak/
-    );
+    expect(screen.getByText('Anyone with a link · 1 active')).toBeVisible();
+    const row = screen
+      .getByRole('button', { name: /^Rename Tweak link · / })
+      .closest('li');
+    expect(row).toHaveTextContent('Tweak · Expires in 30d');
 
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
@@ -545,6 +559,164 @@ describe('ProjectSharingDialog', () => {
     expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
   });
 
+  it('names a new link, renames links in place, and clears a blank name', async () => {
+    const base = createProjectDocument('Named links', owner);
+    const links = shareLinkClient();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        projectName="Bracket rev C"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={onClose}
+      />
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Share · Bracket rev C' })
+    ).toBeVisible();
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    const createdName = await screen.findByRole('textbox', {
+      name: 'New link name'
+    });
+    await waitFor(() => expect(createdName).toBeEnabled());
+    await user.type(createdName, '  Supplier   review {Enter}');
+    await waitFor(() =>
+      expect(links.renameProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'share_1',
+        'Supplier review'
+      )
+    );
+    const named = await screen.findByRole('button', {
+      name: 'Rename Supplier review'
+    });
+    expect(named.closest('li')).toHaveTextContent(
+      /Tweak · created .* · Expires in 30d/
+    );
+
+    // Clicking the name opens the field; Escape cancels only the edit.
+    await user.click(named);
+    const field = screen.getByRole('textbox', { name: 'Link name' });
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue('Supplier review');
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: 'Rename Supplier review' })
+    ).toBeVisible();
+    expect(links.renameProjectShareLink).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      screen.getByRole('button', { name: 'Rename Supplier review' })
+    );
+    await user.clear(screen.getByRole('textbox', { name: 'Link name' }));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Link name' }),
+      'Forum post'
+    );
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(
+      await screen.findByRole('button', { name: 'Rename Forum post' })
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Revoke share link Forum post' })
+    ).toBeInTheDocument();
+
+    // A blank name clears it back to the dated default.
+    await user.click(screen.getByRole('button', { name: 'Rename Forum post' }));
+    await user.clear(screen.getByRole('textbox', { name: 'Link name' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(links.renameProjectShareLink).toHaveBeenLastCalledWith(
+        base.projectId,
+        'share_1',
+        null
+      )
+    );
+    expect(
+      await screen.findByRole('button', { name: /^Rename Tweak link · / })
+    ).toBeVisible();
+  });
+
+  it('reports an invalid name without renaming', async () => {
+    const base = createProjectDocument('Long link name', owner);
+    const links = shareLinkClient();
+    await links.createProjectShareLink(base.projectId, 'tweak');
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+      />
+    );
+    await user.click(
+      await screen.findByRole('button', { name: /^Rename Tweak link · / })
+    );
+    // maxLength keeps typed names within the limit; a pasted control
+    // character is what the shared normalizer still refuses here.
+    const field = screen.getByRole('textbox', { name: 'Link name' });
+    fireEvent.change(field, { target: { value: 'bad\u0007name' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'A link name cannot contain control characters.'
+    );
+    expect(links.renameProjectShareLink).not.toHaveBeenCalled();
+  });
+
+  it('confirms removing a member in place and can cancel', async () => {
+    setPersonalInfoVisible(true);
+    const sharing = client();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_remove"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharing}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Remove member@example.com' })
+    );
+    const confirm = screen.getByRole('group', {
+      name: 'Remove member@example.com'
+    });
+    expect(confirm).toHaveTextContent(
+      'They lose access to this project right away.'
+    );
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull();
+    expect(sharing.removeMember).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole('button', { name: 'Remove member@example.com' })
+    );
+    await user.click(
+      within(
+        screen.getByRole('group', { name: 'Remove member@example.com' })
+      ).getByRole('button', { name: 'Remove' })
+    );
+    await waitFor(() =>
+      expect(sharing.removeMember).toHaveBeenCalledWith('proj_remove', member)
+    );
+  });
+
   it('labels an expired link and keeps it revocable', async () => {
     const base = createProjectDocument('Expired share link', owner);
     const links = shareLinkClient();
@@ -554,7 +726,8 @@ describe('ProjectSharingDialog', () => {
         projectId: base.projectId,
         mode: 'view',
         createdAt: 1,
-        revokedAt: null
+        revokedAt: null,
+        label: null
       }
     ]);
     const user = userEvent.setup();
@@ -569,9 +742,11 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
-    expect(await screen.findByText(/^Link created /)).toHaveTextContent(
-      'Expired'
-    );
+    expect(
+      (
+        await screen.findByRole('button', { name: /^Rename View link · / })
+      ).closest('li')
+    ).toHaveTextContent('View · Expired');
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
     );
@@ -883,8 +1058,16 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         onClose={vi.fn()}
       />
     );
+    // A disclosure behind the header's Encrypted chip, closed by default.
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+    const chip = screen.getByRole('button', { name: 'Encrypted' });
+    expect(chip).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText(code)).toBeVisible();
-    expect(screen.getByText(/compare this full code/)).toBeVisible();
+    expect(
+      screen.getByText(/compare this code with a collaborator/)
+    ).toBeVisible();
     act(() => reportKeysLocked());
     expect(screen.queryByText(code)).not.toBeInTheDocument();
     expect(screen.getByText(/Load and verify the project/)).toBeVisible();
@@ -980,17 +1163,28 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     for (const option of screen.getAllByRole('option', { name: 'Editor' })) {
       expect(option).not.toBeDisabled();
     }
-    // Removal is the owner's MLS Commit too (slice 5-5).
+    // Removal is the owner's MLS Commit too (slice 5-5), confirmed in place
+    // where its consequence is stated; Cancel takes focus, not Remove.
     await user.click(
       screen.getByRole('button', { name: 'Remove member@example.com' })
     );
+    const confirm = screen.getByRole('group', {
+      name: 'Remove member@example.com'
+    });
+    expect(confirm).toHaveTextContent(
+      /Removing someone keeps them out of every later version/
+    );
+    await waitFor(() =>
+      expect(
+        within(confirm).getByRole('button', { name: 'Cancel' })
+      ).toHaveFocus()
+    );
+    expect(encrypted.remove).not.toHaveBeenCalled();
+    await user.click(within(confirm).getByRole('button', { name: 'Remove' }));
     await waitFor(() =>
       expect(encrypted.remove).toHaveBeenCalledWith('proj_encrypted', member)
     );
     expect(sharingClient.removeMember).not.toHaveBeenCalled();
-    expect(
-      screen.getByText(/Removing someone keeps them out of every later version/)
-    ).toBeVisible();
     // The owner cannot leave.
     expect(
       screen.queryByRole('button', { name: /Leave project/ })

@@ -63,7 +63,7 @@ for (const { width, hasTouch } of [
       await expect(revoke).toHaveCSS('opacity', '1');
     }
     await revoke.click();
-    await expect(links.getByText('No links yet.')).toBeVisible({
+    await expect(links.getByText('Only invited people')).toBeVisible({
       timeout: COMMIT_BUDGET_MS
     });
     expect((await anonymousSnapshot(server, parts.token)).status).toBe(404);

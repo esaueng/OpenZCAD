@@ -4635,10 +4635,45 @@ export interface ProjectShareLinkSummary {
   /** Unix seconds; access expires at createdAt + PROJECT_SHARE_LINK_TTL_SECONDS. */
   createdAt: number;
   revokedAt: number | null;
+  /** The owner's name for the link; null when unnamed. Never sent to visitors. */
+  label: string | null;
+}
+
+/** Longest share-link label, in Unicode code points (SQLite's `length`). */
+export const PROJECT_SHARE_LINK_LABEL_MAX_LENGTH = 60;
+
+/**
+ * The stored form of an owner's share-link label: whitespace runs collapse to
+ * one space and the ends are trimmed, so an empty or blank label means
+ * unnamed (null). Throws RangeError for control characters or more than
+ * PROJECT_SHARE_LINK_LABEL_MAX_LENGTH code points after trimming.
+ */
+export function normalizeShareLinkLabel(value: string): string | null {
+  const label = value.replace(/\s+/gu, ' ').trim();
+  if (label === '') {
+    return null;
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(label)) {
+    throw new RangeError('A link name cannot contain control characters.');
+  }
+  if ([...label].length > PROJECT_SHARE_LINK_LABEL_MAX_LENGTH) {
+    throw new RangeError(
+      `A link name can be at most ${PROJECT_SHARE_LINK_LABEL_MAX_LENGTH} characters.`
+    );
+  }
+  return label;
 }
 
 export interface CreateProjectShareLinkRequest {
   mode: ProjectShareLinkMode;
+  /** Optional owner's name for the link. */
+  label?: string | null;
+}
+
+export interface UpdateProjectShareLinkRequest {
+  /** The new name; null or blank clears it. */
+  label: string | null;
 }
 
 export interface CreateProjectShareLinkResponse {

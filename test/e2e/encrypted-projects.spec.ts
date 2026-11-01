@@ -201,6 +201,8 @@ test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-s
     name: 'Project sharing',
     exact: true
   });
+  // The state code is a disclosure behind the header's Encrypted chip.
+  await sharing.getByRole('button', { name: 'Encrypted' }).click();
   await expect(sharing.getByText(fullCode, { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(sharing).toHaveCount(0);
