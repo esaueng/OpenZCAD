@@ -562,23 +562,63 @@
 }
 
 /* ── Stage bar: sheet tabs, then sync state, zoom and export ── */
+/* One row however many sheets there are: the tabs scroll sideways and the
+   actions keep the right end. It wraps only when the actions themselves
+   no longer fit beside a usable strip. */
 .drawing-stage-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 8px 16px;
 }
 
-.drawing-sheet-tabs {
+.drawing-sheet-strip {
+  flex: 1 1 240px;
   min-width: 0;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
 
+.drawing-sheet-tabs {
+  --strip-fade: 32px;
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.drawing-sheet-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* An edge that hides tabs fades out, so the row reads as "more this way". */
+.drawing-sheet-strip.has-before .drawing-sheet-tabs {
+  mask-image: linear-gradient(to right, transparent, #000 var(--strip-fade));
+}
+
+.drawing-sheet-strip.has-after .drawing-sheet-tabs {
+  mask-image: linear-gradient(to left, transparent, #000 var(--strip-fade));
+}
+
+.drawing-sheet-strip.has-before.has-after .drawing-sheet-tabs {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--strip-fade),
+    #000 calc(100% - var(--strip-fade)),
+    transparent
+  );
+}
+
 .drawing-sheet-tab {
+  flex: 0 0 auto;
+  max-width: 180px;
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -590,7 +630,14 @@
   color: var(--color-text-muted);
   font: inherit;
   font-size: var(--fs-sm);
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.drawing-sheet-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .drawing-sheet-tab:hover {
@@ -604,13 +651,89 @@
   color: var(--color-text);
 }
 
+.drawing-sheet-tab:focus-visible {
+  outline-offset: -2px;
+}
+
 .drawing-sheet-tab-paper {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
 
+.drawing-sheet-list-button {
+  flex: 0 0 auto;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.drawing-sheet-list-button:hover,
+.drawing-sheet-list-button.active {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.drawing-sheet-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.drawing-sheet-list {
+  min-width: 240px;
+  max-height: min(480px, calc(100vh - 16px));
+}
+
+/* The count stays put while a long list scrolls under it. */
+.drawing-sheet-list .context-menu-heading {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  /* The menu is a flex column: a long list would squash it otherwise. */
+  flex: 0 0 auto;
+  margin: -4px -4px 4px;
+  padding: 10px 14px 8px;
+  background: var(--color-surface);
+}
+
+.drawing-sheet-list-index {
+  min-width: 2ch;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.drawing-sheet-list-item {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 5px 8px;
+  /* Scrolled to on open, it lands clear of the sticky heading. */
+  scroll-margin-top: 40px;
+}
+
+.drawing-sheet-list-item .context-menu-detail {
+  margin-top: 1px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.drawing-sheet-list-item[aria-checked='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
 .drawing-sheet-new {
+  flex: 0 0 auto;
   width: 30px;
   height: 30px;
   display: inline-flex;

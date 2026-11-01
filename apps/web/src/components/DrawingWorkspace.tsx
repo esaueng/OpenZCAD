@@ -72,6 +72,7 @@ import {
   type ProjectDocument,
   type Vector3
 } from '@openzcad/shared';
+import { DrawingSheetTabs } from './DrawingSheetTabs';
 import { pruneProjectionCache } from '../lib/drawing/projectionCache';
 import {
   DrawingProjectionClient,
@@ -3446,42 +3447,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     >
       <div className="drawing-stage">
         <div className="drawing-stage-bar">
-          <div
-            className="drawing-sheet-tabs"
-            role="tablist"
-            aria-label="Drawing sheets"
-          >
-            {sheets.map((entry) => (
-              <button
-                key={entry.sheetId}
-                type="button"
-                role="tab"
-                aria-selected={entry.sheetId === sheet.sheetId}
-                className={`drawing-sheet-tab${entry.sheetId === sheet.sheetId ? ' active' : ''}`}
-                onClick={() => selectSheet(entry.sheetId)}
-              >
-                <span>{entry.name}</span>
-                <span className="drawing-sheet-tab-paper" aria-hidden="true">
-                  {DRAWING_PAPER_LABELS[entry.paper.size].split(' (')[0]}
-                </span>
-              </button>
-            ))}
-            <button
-              type="button"
-              className="drawing-sheet-new"
-              aria-label="New sheet"
-              onClick={createSheet}
-              disabled={!editable || props.geometryPending}
-              title={
-                editDisabledReason ??
-                (props.geometryPending
-                  ? 'Waiting for the model to finish updating.'
-                  : 'New sheet with the four standard views')
-              }
-            >
-              <Plus size={14} aria-hidden="true" />
-            </button>
-          </div>
+          <DrawingSheetTabs
+            sheets={sheets}
+            activeId={sheet.sheetId}
+            onSelect={selectSheet}
+            onCreate={createSheet}
+            createDisabled={!editable || props.geometryPending}
+            createTitle={
+              editDisabledReason ??
+              (props.geometryPending
+                ? 'Waiting for the model to finish updating.'
+                : 'New sheet with the four standard views')
+            }
+          />
           <div className="drawing-stage-actions">
             {syncLabel && (
               <span className="drawing-sync">
