@@ -98,6 +98,7 @@
   "web": [
     "src/components/FeatureHistoryPanel.test.tsx",
     "src/components/FileDropTarget.test.tsx",
+    "src/components/HistoryTimeline.test.tsx",
     "src/components/InPlaceCommandBar.test.tsx",
     "src/components/NumericKeypad.test.tsx",
     "src/components/PartThumbnail.test.tsx",
@@ -138,6 +139,7 @@
     "src/lib/libraryFolders.test.ts",
     "src/lib/libraryLayout.test.ts",
     "src/lib/livePreview.test.ts",
+    "src/lib/localHistoryAppend.test.ts",
     "src/lib/localProjectAutosave.test.ts",
     "src/lib/localProjectCopy.test.ts",
     "src/lib/localProjectStore.test.ts",

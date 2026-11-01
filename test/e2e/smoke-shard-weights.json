@@ -23,6 +23,7 @@
   "gear-height-preview.spec.ts": 47.5,
   "gear-stale-reference.spec.ts": 60,
   "gear.spec.ts": 15,
+  "history-local-append.spec.ts": 30,
   "in-place-primitives.spec.ts": 15,
   "keyboard-focus-recovery.spec.ts": 8,
   "library-folder-sync.spec.ts": 9,

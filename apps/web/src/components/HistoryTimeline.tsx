@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -8,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from 'react';
+import type { LocalHistoryAppend } from '../lib/localHistoryAppend';
 import {
   AlertTriangle,
   Axis3d,
@@ -115,6 +117,7 @@ export function findRollbackMarkerIndex(
 
 export interface HistoryTimelineProps {
   features: FeatureNode[];
+  localAppend?: LocalHistoryAppend | null;
   representations: Record<string, BodyRepresentation>;
   /** Features the current rebuild reported as failed or refused. */
   failedFeatureIds?: ReadonlySet<FeatureId>;
@@ -333,6 +336,7 @@ function holdMultiClickToRow(row: HTMLElement) {
  */
 export function HistoryTimeline({
   features,
+  localAppend = null,
   representations,
   failedFeatureIds,
   relatedFeatureIds = null,
@@ -368,6 +372,76 @@ export function HistoryTimeline({
   const listRef = useRef<HTMLDivElement>(null);
   const commitTimer = useRef<number | null>(null);
   const refocusFrame = useRef<number | null>(null);
+  const following = useRef(true);
+  const programmaticScroll = useRef(false);
+  const scrollResetFrame = useRef<number | null>(null);
+  const handledAppend = useRef<string | null>(null);
+  const latestAppendRef = useRef(localAppend);
+  latestAppendRef.current = localAppend;
+  const [pendingAppendId, setPendingAppendId] = useState<string | null>(null);
+  const pendingAppendRef = useRef(pendingAppendId);
+  pendingAppendRef.current = pendingAppendId;
+  const pendingFeature = features.find(
+    (feature) => feature.id === pendingAppendId
+  );
+
+  const markProgrammaticScroll = useCallback(() => {
+    programmaticScroll.current = true;
+    if (scrollResetFrame.current !== null)
+      cancelAnimationFrame(scrollResetFrame.current);
+    scrollResetFrame.current = requestAnimationFrame(() => {
+      scrollResetFrame.current = null;
+      programmaticScroll.current = false;
+    });
+  }, []);
+
+  const revealOperation = useCallback(
+    (id: string) => {
+      if (refocusFrame.current !== null)
+        cancelAnimationFrame(refocusFrame.current);
+      refocusFrame.current = requestAnimationFrame(() => {
+        refocusFrame.current = null;
+        const row = listRef.current?.querySelector<HTMLElement>(
+          `[data-node-id="${CSS.escape(id)}"]`
+        );
+        if (row) {
+          following.current = true;
+          markProgrammaticScroll();
+          row.scrollIntoView?.({ block: 'nearest' });
+        }
+      });
+    },
+    [markProgrammaticScroll]
+  );
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const host = list?.closest<HTMLElement>('.model-panel-body') ?? list;
+    if (!host) return;
+    const onScroll = () => {
+      if (programmaticScroll.current) return;
+      following.current =
+        host.scrollHeight - host.clientHeight - host.scrollTop <= 24;
+      if (following.current && pendingAppendRef.current)
+        setPendingAppendId(null);
+    };
+    const userInput = () => {
+      programmaticScroll.current = false;
+    };
+    const inputs = ['wheel', 'pointerdown', 'touchstart', 'keydown'] as const;
+    host.addEventListener('scroll', onScroll, { passive: true });
+    for (const input of inputs)
+      host.addEventListener(input, userInput, { passive: true });
+    return () => {
+      host.removeEventListener('scroll', onScroll);
+      for (const input of inputs) host.removeEventListener(input, userInput);
+    };
+  }, []);
+  function selectHistoryFeature(id: string) {
+    following.current = id === features.at(-1)?.id;
+    onSelectFeature(id);
+  }
+
   const featureArrivals = useArrivals(
     features.map((feature) => feature.id),
     ARRIVAL_MS
@@ -430,6 +504,8 @@ export function HistoryTimeline({
       if (refocusFrame.current !== null) {
         cancelAnimationFrame(refocusFrame.current);
       }
+      if (scrollResetFrame.current !== null)
+        cancelAnimationFrame(scrollResetFrame.current);
     },
     []
   );
@@ -458,11 +534,66 @@ export function HistoryTimeline({
     if (!selectedFeatureNodeId) {
       return;
     }
+    const append = latestAppendRef.current;
+    if (
+      append &&
+      handledAppend.current !==
+        `${append.projectId}:${append.version}:${append.nodeId}`
+    ) {
+      // Commit-time selection inference must not race the local reveal or
+      // pull a user away from older rows they are reading.
+      return;
+    }
     const row = listRef.current?.querySelector<HTMLElement>(
       `[data-node-id="${CSS.escape(selectedFeatureNodeId)}"]`
     );
-    row?.scrollIntoView?.({ block: 'nearest' });
-  }, [selectedFeatureNodeId]);
+    if (row) {
+      markProgrammaticScroll();
+      row.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [selectedFeatureNodeId, markProgrammaticScroll]);
+
+  useEffect(() => {
+    if (
+      !localAppend ||
+      (pendingAppendId &&
+        !features.some((feature) => feature.id === pendingAppendId))
+    )
+      setPendingAppendId(null);
+  }, [localAppend, features, pendingAppendId]);
+
+  useEffect(() => {
+    if (!localAppend) return;
+    const key = `${localAppend.projectId}:${localAppend.version}:${localAppend.nodeId}`;
+    if (
+      handledAppend.current === key ||
+      !features.some((feature) => feature.id === localAppend.nodeId)
+    )
+      return;
+    handledAppend.current = key;
+    if (
+      following.current &&
+      !filtering &&
+      !findOpen &&
+      renamingId === null &&
+      !draggingHandle &&
+      dragFeatureId === null
+    ) {
+      setPendingAppendId(null);
+      revealOperation(localAppend.nodeId);
+    } else {
+      setPendingAppendId(localAppend.nodeId);
+    }
+  }, [
+    localAppend,
+    features,
+    filtering,
+    findOpen,
+    renamingId,
+    draggingHandle,
+    dragFeatureId,
+    revealOperation
+  ]);
 
   // Place the line, its fill, the handle and the selection highlight against
   // the rows as laid out. One style write per render, no state round-trip.
@@ -662,7 +793,7 @@ export function HistoryTimeline({
     if (!next || next.feature.id === selectedFeatureNodeId) {
       return;
     }
-    onSelectFeature(next.feature.id);
+    selectHistoryFeature(next.feature.id);
     const focusRow = () =>
       listRef.current
         ?.querySelector<HTMLElement>(
@@ -687,29 +818,37 @@ export function HistoryTimeline({
 
   return (
     <div className="history-timeline">
+      <span className="visually-hidden" aria-live="polite" aria-atomic="true">
+        {pendingFeature
+          ? `New operation available: ${pendingFeature.name}`
+          : ''}
+      </span>
       {features.length > 0 && (
         <button
           type="button"
-          className="history-resume"
+          className="history-resume history-latest"
+          data-pending={Boolean(pendingFeature)}
+          aria-label={
+            pendingFeature
+              ? `Show new operation: ${pendingFeature.name}`
+              : undefined
+          }
+          onKeyDown={(event) => {
+            // Keep native button activation from also opening an armed
+            // viewport command's exact-value entry.
+            if (event.key === 'Enter') event.stopPropagation();
+          }}
           onClick={() => {
             onCloseFind();
             setQuery('');
             setRelatedOnly(false);
-            const id = features.at(-1)!.id;
-            if (refocusFrame.current !== null)
-              cancelAnimationFrame(refocusFrame.current);
-            refocusFrame.current = requestAnimationFrame(() => {
-              refocusFrame.current = null;
-              listRef.current
-                ?.querySelector<HTMLElement>(
-                  `[data-node-id="${CSS.escape(id)}"]`
-                )
-                ?.scrollIntoView?.({ block: 'nearest' });
-            });
+            following.current = true;
+            setPendingAppendId(null);
+            revealOperation(pendingFeature?.id ?? features.at(-1)!.id);
           }}
-          title={features.at(-1)!.name}
+          title={pendingFeature?.name ?? features.at(-1)!.name}
         >
-          Show latest operation
+          {pendingFeature ? 'Show new operation' : 'Show latest operation'}
         </button>
       )}
       {pausedCount > 0 && (
@@ -977,7 +1116,7 @@ export function HistoryTimeline({
                     // opened — whenever the row stayed under the pointer, as
                     // it does now that the card stands in its own lane.
                     if (event.detail > 1) return;
-                    onSelectFeature(feature.id);
+                    selectHistoryFeature(feature.id);
                   }}
                   // Every row used to announce the same generic kind label, so
                   // a history read aloud was a list of identical items. The
