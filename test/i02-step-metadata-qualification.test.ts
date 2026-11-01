@@ -8,7 +8,12 @@ import {
   importStepBody,
   setNodeMetadata
 } from '@openzcad/document-core';
-import { BODY_COLOR_METADATA_KEY, toUserId } from '@openzcad/shared';
+import {
+  BODY_COLOR_CHOSEN_METADATA_KEY,
+  BODY_COLOR_METADATA_KEY,
+  DEFAULT_BODY_COLOR,
+  toUserId
+} from '@openzcad/shared';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -100,36 +105,100 @@ describe('I02 STEP metadata qualification', { timeout: 30_000 }, () => {
       adapter.dispose();
     });
 
-    it('preserves exact solids but does not emit document names, colours, or assembly relations', async () => {
+    it("writes the document as the product and each body's name and colour on its solid", async () => {
       let document = addPrimitiveFeature(
         createProjectDocument('I02 export', toUserId('user_i02_export')),
         {
-          name: 'Source Name That Must Be Checked',
+          name: "Owner's Block",
           primitiveKind: 'box',
           dimensions: { width: 10, height: 10, depth: 10 }
         }
       );
-      document = setNodeMetadata(document, {
-        nodeId: Object.values(document.nodes).find(
-          (node) =>
-            node.kind === 'body' && node.bodyId === document.bodyOrder[0]
-        )!.id,
-        metadata: { [BODY_COLOR_METADATA_KEY]: '#12abef' }
+      document = addPrimitiveFeature(document, {
+        name: 'Pin',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 2, height: 30 }
       });
+      const bodyNode = (bodyId: string) =>
+        Object.values(document.nodes).find(
+          (node) => node.kind === 'body' && node.bodyId === bodyId
+        )!;
+      const [blockId, pinId] = document.bodyOrder;
+      document = setNodeMetadata(document, {
+        nodeId: bodyNode(blockId!).id,
+        metadata: {
+          [BODY_COLOR_METADATA_KEY]: '#12abef',
+          [BODY_COLOR_CHOSEN_METADATA_KEY]: true
+        }
+      });
+      const blockName = bodyNode(blockId!).name;
+      const pinName = bodyNode(pinId!).name;
 
-      const bodyId = document.bodyOrder[0]!;
-      const stepText = await adapter.exportStep(document, [bodyId]);
+      const stepText = await adapter.exportStep(document, [pinId!, blockId!], {
+        fileName: 'I02-export.step',
+        timestamp: '2026-10-31T12:00:00Z'
+      });
       const metadata = parseStepMetadata('export.step', stepText);
 
       expect(await adapter.inspectStep(stepText)).toMatchObject({
         solid: true,
-        valid: true,
-        volume: 1000
+        valid: true
       });
-      expect(metadata.products).toEqual(['remus_solid']);
-      expect(metadata.colors).toEqual([]);
-      expect(stepText).not.toContain('Source Name That Must Be Checked');
-      expect(stepText).not.toContain('COLOUR_RGB');
+      expect(stepText).toContain(
+        "FILE_NAME('I02-export.step', '2026-10-31T12:00:00Z', (''), (''), 'Remus', 'OpenZCAD', '');"
+      );
+      expect(stepText).toContain('AUTOMOTIVE_DESIGN');
+      expect(metadata.products).toEqual(['I02 export']);
+      expect(stepText).not.toContain('remus_solid');
+
+      // Resolve each named solid to its faces' surfaces, so a name or colour
+      // can only pass on the solid that really is that body.
+      const entities = new Map(
+        [...stepText.matchAll(/^(#\d+) = (.*);$/gm)].map((match) => [
+          match[1]!,
+          match[2]!
+        ])
+      );
+      const refs = (id: string) => entities.get(id)!.match(/#\d+/g) ?? [];
+      const isCylinder = (brep: string) =>
+        refs(refs(brep)[0]!).some((face) =>
+          entities.get(refs(face).at(-1)!)!.startsWith('CYLINDRICAL_SURFACE')
+        );
+      const solids = [
+        ...stepText.matchAll(
+          /^(#\d+) = MANIFOLD_SOLID_BREP\('((?:[^']|'')*)', /gm
+        )
+      ].map((match) => ({
+        id: match[1]!,
+        name: match[2]!.replaceAll("''", "'")
+      }));
+      expect(solids.map((solid) => solid.name)).toEqual([pinName, blockName]);
+      expect(solids.map((solid) => isCylinder(solid.id))).toEqual([
+        true,
+        false
+      ]);
+
+      const colourOf = (brep: string) => {
+        const [styled] = [...entities].find(
+          ([id, text]) =>
+            text.startsWith('STYLED_ITEM(') && refs(id).at(-1) === brep
+        )!;
+        let id = refs(styled)[0]!;
+        while (!entities.get(id)!.startsWith('COLOUR_RGB(')) id = refs(id)[0]!;
+        return entities
+          .get(id)!
+          .replace(/^COLOUR_RGB\('', /, '')
+          .replace(/\)$/, '')
+          .split(',')
+          .map((channel) => Math.round(Number(channel) * 255));
+      };
+      expect(colourOf(solids[1]!.id)).toEqual([0x12, 0xab, 0xef]);
+      // An unchosen body is written in the colour it is drawn in.
+      expect(colourOf(solids[0]!.id)).toEqual(
+        [1, 3, 5].map((at) =>
+          Number.parseInt(DEFAULT_BODY_COLOR.slice(at, at + 2), 16)
+        )
+      );
       expect(stepText).not.toContain('NEXT_ASSEMBLY_USAGE_OCCURRENCE');
     });
   });

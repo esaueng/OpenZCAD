@@ -46,15 +46,18 @@ disabled. Show a body in the viewport to include it in the file.
 
 ## Solid formats
 
-| Format       | Keeps                                                                                 | Drops                                                                                        |
-| ------------ | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| STEP (AP203) | Each body as its own solid, exact analytic faces, bounds, volume, closed shells, unit | Body names (every product is `remus_solid`), colours, history                                |
-| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                        | Body separation (one facet stream), exact faces, unit, names, colours                        |
-| STL (ASCII)  | Same as binary STL                                                                    | Same as binary STL; every body shares one `solid` block                                      |
-| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package   | Body separation **on reimport** (the import merges the objects), exact faces, names, colours |
-| OBJ          | Bounds, volume, a closed surface                                                      | Body separation, exact faces, unit, names, colours (no MTL)                                  |
-| PLY (binary) | Bounds, volume, a closed surface                                                      | Body separation, exact faces, unit, names, colours                                           |
-| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node              | Body separation (one merged mesh), exact faces, export unit, names, colours                  |
+| Format       | Keeps                                                                                                                                                                    | Drops                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                                      |
+| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours                        |
+| STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                                      |
+| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package                                                                                      | Body separation **on reimport** (the import merges the objects), exact faces, names, colours |
+| OBJ          | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours (no MTL)                                  |
+| PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                                           |
+| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node                                                                                                 | Body separation (one merged mesh), exact faces, export unit, names, colours                  |
+
+STEP body names and colours are in the file for other CAD to read; OpenZCAD's
+own STEP import does not yet apply them to the bodies it creates (I02).
 
 "Within the chord tolerance" means each bound lies within the chord
 deviation of the exact value. Volume never exceeds the exact value, and it

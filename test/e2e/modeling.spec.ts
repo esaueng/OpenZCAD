@@ -3040,6 +3040,9 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   expect(text).toMatch(
     /FILE_SCHEMA\(\('(AUTOMOTIVE_DESIGN|CONFIG_CONTROL_DESIGN)/
   );
+  // The header names the file it was saved as, not the writer's placeholder.
+  expect(text).toContain("FILE_NAME('E2E-Part.step', ");
+  expect(text).not.toContain('remus_solid');
   expect(text).toContain('MANIFOLD_SOLID_BREP');
   expect(text).toContain('CLOSED_SHELL');
   expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
