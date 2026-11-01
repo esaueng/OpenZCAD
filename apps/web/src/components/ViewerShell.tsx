@@ -241,7 +241,7 @@ interface ViewerShellProps {
   topologyPicksHeld?: boolean;
   offsetHandle: OffsetHandleTarget | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
-  onOffsetCommit(offset: number): boolean;
+  onOffsetCommit: ModelViewerProps['onOffsetCommit'];
   onOffsetCancel(): void;
   offsetPreviewInvalid: boolean;
   previewDeferred: boolean;
@@ -780,7 +780,9 @@ export function ViewerShell({
           if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
           setDatumDrag(null);
           setDatumGesture((gesture) => gesture + 1);
-          return onDatumOffsetDrag(value * datumHandle.sense);
+          return onDatumOffsetDrag(value * datumHandle.sense)
+            ? 'started'
+            : 'blocked';
         }}
         onOffsetCancel={() => {
           setDatumDrag(null);

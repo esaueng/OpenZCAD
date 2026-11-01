@@ -4367,3 +4367,58 @@ button.model-panel-grip[aria-expanded='true'] {
 .in-place-params-actions {
   margin-top: 8px;
 }
+
+/* Full guidance remains available by pointer, touch and keyboard. */
+.workspace-hint-help {
+  position: absolute;
+  bottom: 7px;
+  left: 50%;
+  width: min(var(--command-bar-w), 100%);
+  height: 24px;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+}
+.workspace-hint-help summary {
+  position: absolute;
+  right: 52px;
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  color: var(--color-text-subtle);
+  list-style: none;
+}
+.workspace-hint-help summary::-webkit-details-marker {
+  display: none;
+}
+.workspace-hint-help > p {
+  position: absolute;
+  right: 8px;
+  bottom: 30px;
+  pointer-events: auto;
+  width: min(360px, calc(100vw - 48px));
+  box-sizing: border-box;
+  margin: 0;
+  padding: 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.workspace.with-assistant .workspace-hint-help,
+.command-bar-lane:has(.command-bar.open) > .workspace-hint-help {
+  display: none;
+}
+.workspace-hint {
+  padding-right: 84px;
+}
+
+/* The expanded instructions stand over model panels, as the palette does. */
+.command-bar-lane:has(.workspace-hint-help[open]) {
+  z-index: var(--z-popover);
+}

@@ -99,6 +99,30 @@ afterEach(() => {
 });
 
 describe('HistoryTimeline', () => {
+  it('reveals the latest appended operation without changing the edited selection', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const { props, rerender } = renderTimeline({
+      selectedFeatureNodeId: 'node-1'
+    });
+    const scroll = vi.fn();
+    rerender(
+      <HistoryTimeline {...props} features={[...props.features, feature(5)]} />
+    );
+    row('Feature 5').scrollIntoView = scroll;
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show latest operation' })
+    );
+    frames.splice(0).forEach((frame) => frame(0));
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(props.onSelectFeature).not.toHaveBeenCalled();
+    expect(row('Feature 1')).toHaveClass('selected');
+    vi.restoreAllMocks();
+  });
+
   it('marks only the last feature before a rollback-suppressed suffix', () => {
     expect(
       findRollbackMarkerIndex([
@@ -651,9 +675,10 @@ it('flags a sketch whose linked projection lost its source edge (I01)', () => {
     brokenProjectionSketchIds: new Set(['sketch_s'])
   });
   expect(screen.getByText('broken projection')).toBeInTheDocument();
-  expect(
-    row('Feature 1').querySelector('.feature-flag.error')
-  ).toHaveAttribute('title', expect.stringMatching(/re-pick or unlink/));
+  expect(row('Feature 1').querySelector('.feature-flag.error')).toHaveAttribute(
+    'title',
+    expect.stringMatching(/re-pick or unlink/)
+  );
   // Pending geometry has no verdict yet; nothing is called broken.
   rerender(<HistoryTimeline {...props} geometryPending />);
   expect(screen.queryByText('broken projection')).not.toBeInTheDocument();

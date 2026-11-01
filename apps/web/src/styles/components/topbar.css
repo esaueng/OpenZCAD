@@ -769,3 +769,9 @@ button.save-state:focus-visible,
   font-weight: var(--fw-medium);
   line-height: 1;
 }
+
+/* Persistence and model preparation are separate facts, visible together. */
+.save-model-readiness {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}

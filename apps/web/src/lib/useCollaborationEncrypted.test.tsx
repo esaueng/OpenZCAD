@@ -514,6 +514,68 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
     unmount();
   });
 
+  it('rejoins a rejected publication with the unsent edit and a fresh lease', async () => {
+    const base = createProjectDocument(
+      'Retry publication',
+      toUserId('owner_retry')
+    );
+    const hook = await connectedOwner(base);
+    const local = withBox(base, 'Unsent box');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    codec.encode.mockRejectedValueOnce(new Error('Keys are locked.'));
+    await edit(hook.rerender, local);
+    expect(hook.result.current.failureReason).toBe('Keys are locked.');
+    expect(hook.result.current.status).toBe('rejected');
+    act(() => hook.result.current.retryConnection());
+    expect(hook.result.current.status).toBe('connecting');
+    const retry = FakeWebSocket.instances.at(-1)!;
+    expect(retry).not.toBe(hook.socket);
+    expect(hook.socket.readyState).toBe(FakeWebSocket.CLOSED);
+    act(() => retry.open());
+    retry.receive({
+      type: 'e2ee-state',
+      members: [],
+      role: 'owner',
+      lease: null,
+      keyEpoch: 0,
+      head: { plain: base }
+    });
+    await flush();
+    // No publication uses the retired lease or runs before a new grant.
+    expect(
+      retry.frames().filter((frame) => frame.type === 'e2ee-document')
+    ).toHaveLength(0);
+    retry.receive({
+      type: 'lease-granted',
+      lease: {
+        leaseId: 'retry_lease',
+        projectId: base.projectId,
+        clientId: retry.frames()[0]!.clientId!,
+        userId: base.ownerUserId,
+        expiresAt: Date.now() + 30_000
+      }
+    });
+    await flush();
+    const sent = retry
+      .frames()
+      .filter((frame) => frame.type === 'e2ee-document');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ leaseId: 'retry_lease' });
+    expect(codec.encode.mock.calls.at(-1)![0].nodes).toEqual(local.nodes);
+    // A stale reply from the old room cannot acknowledge the retry.
+    hook.socket.receive({ type: 'ack', version: local.version });
+    await flush();
+    expect(hook.result.current.roomVersion).toBe(base.version);
+    retry.receive({ type: 'ack', version: local.version });
+    await flush();
+    expect(hook.result.current.roomVersion).toBe(local.version);
+    expect(hook.result.current.status).toBe('live');
+    act(() => hook.result.current.retryConnection());
+    expect(FakeWebSocket.instances.at(-1)).toBe(retry);
+    error.mockRestore();
+    hook.unmount();
+  });
+
   it('keeps this device’s version by sealing it on the room’s', async () => {
     const base = createProjectDocument('Keep', toUserId('user_keep'));
     const { socket, rerender, result, unmount } = await connectedOwner(base);

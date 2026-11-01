@@ -88,6 +88,7 @@ describe('TopBar workspace mode help', () => {
       const { onWorkspaceMode } = renderTopBar();
       const button = screen.getByRole('button', { name: label });
       expect(button).not.toHaveAttribute('title');
+      expect(button).toHaveAttribute('aria-label', label);
       expect(button).toHaveAttribute('aria-pressed', String(mode === 'build'));
 
       fireEvent.focus(button);

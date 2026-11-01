@@ -872,6 +872,7 @@ import {
 import type {
   BodyAppearancePreview,
   FaceResizeCommit,
+  OffsetCommitOutcome,
   NormalToFaceRequest
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
@@ -3938,7 +3939,7 @@ export function App() {
       geometry.isReadyFor(managerRef.current?.document ?? null);
     if (!ready) {
       setStatus(
-        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+        'Edit not applied — the model is still preparing. Try again when it is ready.'
       );
     }
     return ready;
@@ -4144,7 +4145,10 @@ export function App() {
     version: number;
     message: string;
   } | null>(null);
-  useEffect(() => setLastDirectEditFailure(null), [doc?.projectId, doc?.version]);
+  useEffect(
+    () => setLastDirectEditFailure(null),
+    [doc?.projectId, doc?.version]
+  );
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
@@ -8039,11 +8043,16 @@ export function App() {
   // command's own preview.
   const viewerEditableBodyIds = useMemo(
     () =>
-      modelingLocked || movePreview || tool || currentGeometrySnapshot !== null
+      modelingLocked ||
+      !displayedGeometryComplete ||
+      movePreview ||
+      tool ||
+      currentGeometrySnapshot !== null
         ? EMPTY_BODY_IDS
         : directEditableBodyIds,
     [
       modelingLocked,
+      displayedGeometryComplete,
       movePreview,
       tool,
       directEditableBodyIds,
@@ -23078,6 +23087,8 @@ export function App() {
       (face) =>
         face.topologyId === target.topologyId && face.hash === target.hash
     );
+    // A cached pick must still name the exact face installed for this revision.
+    if (!pickedFace?.geometry) return null;
     const gearProfile =
       !profile && !boxProfile && doc
         ? gearHeightPreviewProfile(doc, body, pickedFace)
@@ -23444,7 +23455,8 @@ export function App() {
       // over that proxy; release still validates one exact kernel rebuild.
       cylinderRadiusPreview.clear();
     }
-    if (current.target.concavity === 'hole') queueCylinderRadiusRestCheck(radius);
+    if (current.target.concavity === 'hole')
+      queueCylinderRadiusRestCheck(radius);
   }
 
   function handleCylinderRadiusCancel() {
@@ -23499,11 +23511,13 @@ export function App() {
             reusableRadiusRestPreview.current,
             cylinderRadiusRestCheck.running?.document,
             (candidate) =>
-              candidate.radius === radius && previewSelectionIsCurrent(candidate)
+              candidate.radius === radius &&
+              previewSelectionIsCurrent(candidate)
           )
         : null;
     const candidate =
-      restReuse?.candidate ?? (exact === undefined
+      restReuse?.candidate ??
+      (exact === undefined
         ? cylinderRadiusPreview.running?.document?.radius === radius
           ? cylinderRadiusPreview.running.document
           : reusableRadiusPreview.current?.candidate
@@ -24264,6 +24278,10 @@ export function App() {
     if (interaction.mode === 'region') {
       return openRegionExtrudeKeypad('distance');
     }
+    if (!requireDisplayedGeometryComplete()) {
+      handleOffsetCancel();
+      return false;
+    }
     // Reopened in place by the chip's Total/Offset switch: a refused preview
     // stays refused (`keypad-open` would clear the failure and re-enable
     // Apply for the value the kernel just turned down).
@@ -24683,11 +24701,11 @@ export function App() {
     offset: number,
     exact?: ParamValue,
     options?: { keepingLastValid?: boolean }
-  ): boolean {
+  ): OffsetCommitOutcome {
     // The arrow rig is shared: in region mode its drag is an extrude height.
     if (interaction.mode === 'region') {
       handleRegionExtrudeCommit(offset, exact);
-      return true;
+      return 'started';
     }
     const current = interactionRef.current;
     if (
@@ -24696,10 +24714,10 @@ export function App() {
       // One edit at a time: the held handle is locked while it validates.
       current.phase === 'validating'
     ) {
-      return false;
+      return 'blocked';
     }
     if (!requireDisplayedGeometryComplete()) {
-      return false;
+      return 'blocked';
     }
     // A refused value is not committed from a failed card; the value the
     // last passing preview showed is, and validation judges it again.
@@ -24707,17 +24725,17 @@ export function App() {
       setStatus(
         current.error?.message ?? 'The current offset preview is invalid.'
       );
-      return false;
+      return 'refused';
     }
     const plan = buildOffsetEditPlan(offset, exact);
     if (!plan) {
       setStatus('Exact face measurements are unavailable for this offset.');
       dispatchInteraction({ type: 'clear' });
-      return false;
+      return 'blocked';
     }
     if (plan.preflightRejection) {
       reportPreviewFailure(plan.preflightRejection, offset);
-      return false;
+      return 'refused';
     }
     // Keep the accepted candidate's feature ids, but analysis is still absent:
     // release always asks for a full authoritative rebuild before committing.
@@ -24743,7 +24761,7 @@ export function App() {
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
     );
-    return true;
+    return 'started';
   }
 
   function reselectOffsetFace(target: FaceTarget, offset: number): boolean {
@@ -28456,38 +28474,41 @@ export function App() {
       : 'This model has no parameters · Build mode is where they are defined';
   // Measuring writes the lane in Build too: it is the command of the moment.
   const readingHints = viewMode || measuring;
-  const workspacePrompt = drawingMode
-    ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
-    : readingHints
-      ? viewModeHint
-      : tweakMode
-        ? tweakModeHint
-        : (commandPromptText(interaction) ??
-          (tool === 'sketch'
-            ? [
-                'Drag to draw',
-                keyHint(keymap, 'sketch-rectangle', 'rectangle'),
-                keyHint(keymap, 'sketch-circle', 'circle'),
-                'P polygon',
-                'Enter finishes'
-              ]
-                .filter(Boolean)
-                .join(' · ')
-            : tool
-              ? 'Enter creates · Esc cancels'
-              : selectedBodyIds.length >= 2
-                ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
-                : selectedTopology?.kind === 'face'
-                  ? faceSelectedHint
-                  : selectedTopology?.kind === 'edge'
-                    ? // Neither tool has a shortcut, so the rail is the only
-                      // route: name it the way the rail names itself.
-                      'Edge selected — Fillet or Chamfer in Feature tools'
-                    : selectedFeature
-                      ? 'Edit in the panel · Del deletes · Esc closes'
-                      : viewerBodies.length > 0
-                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                        : idleHint));
+  const workspacePrompt =
+    !displayedGeometryComplete && !drawingMode
+      ? 'Preparing model · viewing is available; editing waits until it is ready'
+      : drawingMode
+        ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+        : readingHints
+          ? viewModeHint
+          : tweakMode
+            ? tweakModeHint
+            : (commandPromptText(interaction) ??
+              (tool === 'sketch'
+                ? [
+                    'Drag to draw',
+                    keyHint(keymap, 'sketch-rectangle', 'rectangle'),
+                    keyHint(keymap, 'sketch-circle', 'circle'),
+                    'P polygon',
+                    'Enter finishes'
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : tool
+                  ? 'Enter creates · Esc cancels'
+                  : selectedBodyIds.length >= 2
+                    ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
+                    : selectedTopology?.kind === 'face'
+                      ? faceSelectedHint
+                      : selectedTopology?.kind === 'edge'
+                        ? // Neither tool has a shortcut, so the rail is the only
+                          // route: name it the way the rail names itself.
+                          'Edge selected — Fillet or Chamfer in Feature tools'
+                        : selectedFeature
+                          ? 'Edit in the panel · Del deletes · Esc closes'
+                          : viewerBodies.length > 0
+                            ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                            : idleHint));
   const openReferenceImageEntry =
     (openReferenceImageId &&
       doc?.referenceImages?.images.find(
@@ -29341,7 +29362,9 @@ export function App() {
             // the viewer only builds a manipulator when it is given a target,
             // so view mode keeps orbit, pan and picking while no gesture can
             // reach the document.
-            editableBodyIds={parameterPreview ? [] : viewerEditableBodyIds}
+            editableBodyIds={
+              parameterPreview ? EMPTY_BODY_IDS : viewerEditableBodyIds
+            }
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
@@ -29472,7 +29495,11 @@ export function App() {
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}
             viewportImageRef={viewportImageRef}
-            offsetHandle={modelingLocked ? null : offsetHandleTarget}
+            offsetHandle={
+              modelingLocked || !displayedGeometryComplete
+                ? null
+                : offsetHandleTarget
+            }
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={(value) => {
               if (interactionRef.current.mode === 'region') {
@@ -29481,7 +29508,7 @@ export function App() {
                 setStatus(
                   'Extrude preview · Enter to finish, or adjust it under Options.'
                 );
-                return true;
+                return 'started';
               }
               return handleOffsetCommit(value);
             }}
@@ -29494,7 +29521,9 @@ export function App() {
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
             cylinderRadiusHandle={
-              modelingLocked ? null : cylinderRadiusHandleTarget
+              modelingLocked || !displayedGeometryComplete
+                ? null
+                : cylinderRadiusHandleTarget
             }
             cylinderDimensionMode={cylinderDimensionMode}
             onCylinderDimensionModeChange={setCylinderDimensionMode}
@@ -29504,7 +29533,11 @@ export function App() {
             onOpenCylinderRadiusKeypad={handleOpenCylinderRadiusKeypad}
             cancelDirectManipulationRef={cancelDirectManipulationRef}
             openExactEntryRef={openExactEntryRef}
-            edgeHandle={modelingLocked ? null : edgeHandleTarget}
+            edgeHandle={
+              modelingLocked || !displayedGeometryComplete
+                ? null
+                : edgeHandleTarget
+            }
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
@@ -31199,6 +31232,12 @@ export function App() {
                         : null))
                 }
                 collaborationStatus={collaboration.status}
+                collaborationFailure={collaboration.failureReason}
+                onRetryConnection={
+                  collaboration.conflict
+                    ? undefined
+                    : collaboration.retryConnection
+                }
                 lease={collaboration.lease}
                 liveMembers={collaboration.members}
                 currentUserId={session?.userId}

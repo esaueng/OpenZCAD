@@ -26,6 +26,30 @@ const SUMMARY = {
 };
 
 describe('WorkspaceReadout', () => {
+  it('exposes the complete operation instructions independently of the clipped hint', async () => {
+    const user = userEvent.setup();
+    const prompt =
+      'Drag to offset · type an exact distance · Space faces it head-on · Escape cancels';
+    render(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+        prompt={prompt}
+      />
+    );
+    const help = screen.getByLabelText('Operation instructions');
+    const disclosure = help.closest('details')!;
+    expect(disclosure.open).toBe(false);
+    await user.click(help);
+    expect(disclosure.open).toBe(true);
+    expect(disclosure.querySelector('p')).toHaveTextContent(prompt);
+    await user.click(help);
+    expect(disclosure.open).toBe(false);
+  });
+
   it('puts the guidance over the search bar while the toast is quiet', () => {
     const { container, rerender } = render(
       <WorkspaceReadout
