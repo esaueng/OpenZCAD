@@ -111,13 +111,6 @@
   font-size: var(--fs-sm);
 }
 
-.share-page-footer {
-  margin: 24px 0 0;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
-  text-align: center;
-}
-
 @media (max-width: 480px) {
   .share-page-card {
     margin: 40px 0 auto;

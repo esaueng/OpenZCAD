@@ -102,9 +102,6 @@ export function SharePage({
           )}
         </div>
       </section>
-      <p className="share-page-footer">
-        A model shared with you through OpenZCAD
-      </p>
     </main>
   );
 }
