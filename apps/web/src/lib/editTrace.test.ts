@@ -3,8 +3,9 @@ import {
   type PerformanceMeasure
 } from 'node:perf_hooks';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type * as EditTrace from './editTrace';
 
-let trace: typeof import('./editTrace');
+let trace: typeof EditTrace;
 const phases = [
   'packed',
   'received',
