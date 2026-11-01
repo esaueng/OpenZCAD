@@ -8,6 +8,7 @@ import {
   type ThreadRequest
 } from './thread';
 import { inPlacePanelState } from './panel';
+import type { InPlaceSlots } from './tools';
 
 const evaluate = (value: ParamValue) =>
   typeof value === 'number' ? value : Number(value);
@@ -136,15 +137,17 @@ describe('in-place thread', () => {
   });
 
   it('asks for a cylinder and builds once one is picked', () => {
-    const empty = {
+    const empty: InPlaceSlots = {
       profiles: [],
-      axisId: null,
+      axis: null,
       path: [],
       guide: [],
       faces: [],
       bodies: [],
       plane: null,
-      edges: []
+      edges: [],
+      refs: [],
+      image: null
     };
     expect(threadSpec.ready(empty)).toBe(false);
     expect(threadSpec.hint(empty)).toMatch(/cylindrical face/);
