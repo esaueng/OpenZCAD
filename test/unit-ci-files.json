@@ -16,6 +16,7 @@
     "packages/document-core/src/typed-parameters.test.ts",
     "packages/io-step/src/privacy.test.ts",
     "packages/io-stl/src/binary-writer.test.ts",
+    "packages/kernel-adapter/src/edge-modifier-fallback.test.ts",
     "packages/kernel-adapter/src/exact-boolean-refusal.test.ts",
     "packages/kernel-adapter/src/exact-cancellation.test.ts",
     "packages/kernel-adapter/src/exact-imported-mesh-cache.test.ts",

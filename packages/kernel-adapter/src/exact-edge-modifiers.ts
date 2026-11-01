@@ -701,6 +701,9 @@ export function edgeModifierFailureMessage(
   // Used to aim the ladder only — see the size-bound branch below for why it
   // is never quoted.
   const cliffLimit = blendCliffLimit(reported);
+  // Set once every rung of the ladder has refused, so a later diagnosis that
+  // throws still cannot fall back to advising a smaller size.
+  let smallerSizesRefused = false;
   try {
     const accepted = acceptedEdgeModifierProbe(
       kernel,
@@ -738,6 +741,7 @@ export function edgeModifierFailureMessage(
       // 10 builds symmetrically on a 30x18x24 box and is refused at 80°.
       return `${prefix} Try a smaller ${dimension}: ${dimension} ${quoted} builds here.`;
     }
+    smallerSizesRefused = true;
     // Named before the topology causes because it explains the whole body
     // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
     // degree wedge refuses all 12 of its edges at every radius from 0.4 down
@@ -766,6 +770,13 @@ export function edgeModifierFailureMessage(
     }
   } catch {
     // Diagnosis is best-effort; fall through to the generic message.
+  }
+  if (smallerSizesRefused) {
+    // No cause was named, but the ladder proved the size is not it: telling
+    // the user to shrink the value sent them round the same refusal.
+    const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
+    const gerund = featureKind === 'fillet' ? 'rounding' : 'chamfering';
+    return `${prefix} Smaller ${sizes} were refused too, so the size is not the cause. Try ${gerund} fewer edges at once, or different edges.`;
   }
   return `${prefix} Try a smaller ${dimension}.`;
 }
