@@ -49,6 +49,7 @@ import {
   slopeLabel,
   viewEdges,
   type AuditAxis,
+  type BoltCircle,
   type ChamferGroup,
   type Position,
   type SizeGroup,
@@ -235,16 +236,6 @@ export function planAutoDimensions(
   const skipped: AutoDimensionSkip[] = state.audit.unmeasurable.map(
     (finding) => ({ ...finding })
   );
-  // v48 Ø pitch spans are the check's, and a person's, but not placed here
-  // yet.
-  for (const [bodyId, body] of state.bodies) {
-    for (const circle of body.requirements.boltCircles)
-      if (!body.statedBoltCircles.has(circle))
-        skipped.push({
-          bodyId,
-          message: `${boltLabel(circle, units)}: Auto-dimension does not place pitch diameters yet; add a Ø span between two opposite holes' centres.`
-        });
-  }
   const k = drawingPaperPerModelUnit(sheet.scale, units);
 
   const contexts: ViewContext[] = [];
@@ -806,6 +797,46 @@ export function planAutoDimensions(
       sortOptions(options, bodyId);
       plan({ bodyId, what: label, subject: label, ...options[0]!, options });
     }
+    // Bolt circles: the pitch diameter as a Ø span (v48) between two
+    // opposite holes' centres, in a view looking along the circle's axis,
+    // where the pair lines up across the page.
+    for (const circle of requirements.boltCircles) {
+      if (body.statedBoltCircles.has(circle)) continue;
+      const label = boltLabel(circle, units);
+      if (
+        state.audit.unmeasurable.some(
+          (f) => f.bodyId === bodyId && f.message.startsWith(`${label}:`)
+        )
+      )
+        continue;
+      const options = boltSpanOptions(
+        measuring,
+        bodyId,
+        circle,
+        edgesOf,
+        refOf
+      );
+      if (options.length === 0) {
+        skipped.push({
+          bodyId,
+          message:
+            circle.count % 2 === 1
+              ? `${label}: an odd count has no opposite holes to span; add its pitch diameter as a note.`
+              : `${label}: no view lines two opposite holes up across the page.`
+        });
+        continue;
+      }
+      sortOptions(options, bodyId);
+      const best = options[0]!;
+      plan({
+        bodyId,
+        what: label,
+        subject: label,
+        context: best.context,
+        visible: best.visible,
+        annotation: { ...best.annotation, annotationId: createId() }
+      });
+    }
     // Positions: each group not linked to the datum gets one dimension to it.
     for (const axis of AXES) {
       const positions = requirements.positions[axis];
@@ -1114,6 +1145,137 @@ function angleOptions(
   return out
     .filter((option) => option.reach <= nearest + ANGLE_REACH_SLACK)
     .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * The Ø spans that could state a bolt circle's pitch: per view looking along
+ * its axis, each pair of its holes opposite across its centre whose centres
+ * line up along the page's horizontal or vertical, on their face-on rims.
+ */
+function boltSpanOptions(
+  measuring: readonly ViewContext[],
+  bodyId: string,
+  circle: BoltCircle,
+  edgesOf: (context: ViewContext, bodyId: string) => readonly EdgeTopology[],
+  refOf: (
+    context: ViewContext,
+    bodyId: string,
+    edge: EdgeTopology
+  ) => DrawingEdgeRef | null
+): {
+  context: ViewContext;
+  visible: boolean;
+  annotation: DrawingAnnotation;
+}[] {
+  const out: {
+    context: ViewContext;
+    visible: boolean;
+    annotation: DrawingAnnotation;
+  }[] = [];
+  const d = circle.direction;
+  const length = Math.hypot(d.x, d.y, d.z);
+  for (const context of measuring) {
+    if (
+      context.view.section ||
+      !context.view.bodyIds.includes(bodyId as BodyId)
+    )
+      continue;
+    const frame = DRAWING_VIEW_FRAMES[context.view.orientation];
+    const facing =
+      (frame.direction.x * d.x +
+        frame.direction.y * d.y +
+        frame.direction.z * d.z) /
+      length;
+    if (Math.abs(Math.abs(facing) - 1) > 1e-6) continue;
+    // One rim per hole, nearest the viewer first.
+    const rims = new Map<
+      string,
+      {
+        edge: EdgeTopology;
+        ref: DrawingEdgeRef;
+        visible: boolean;
+        center: Vector3;
+      }
+    >();
+    for (const edge of edgesOf(context, bodyId)) {
+      const c = edge.curve?.circle;
+      if (
+        !c ||
+        edge.displayRole === 'seam' ||
+        !same(c.radius, circle.holeRadius)
+      )
+        continue;
+      const between = {
+        x: c.center.x - circle.center.x,
+        y: c.center.y - circle.center.y,
+        z: c.center.z - circle.center.z
+      };
+      const along =
+        (between.x * d.x + between.y * d.y + between.z * d.z) / length;
+      const off = Math.sqrt(
+        Math.max(
+          0,
+          between.x ** 2 + between.y ** 2 + between.z ** 2 - along * along
+        )
+      );
+      if (!same(off, circle.pitchRadius)) continue;
+      const ref = refOf(context, bodyId, edge);
+      if (!ref) continue;
+      const visible = edgeVisible(context, edge);
+      // Keyed by the hole's position across the axis.
+      const key = [
+        between.x - (along * d.x) / length,
+        between.y - (along * d.y) / length,
+        between.z - (along * d.z) / length
+      ]
+        .map((n) => Math.round(n * 1e6))
+        .join(',');
+      const known = rims.get(key);
+      if (!known || (visible && !known.visible))
+        rims.set(key, { edge, ref, visible, center: c.center });
+    }
+    const holes = [...rims.values()];
+    for (let i = 0; i < holes.length; i += 1)
+      for (let j = i + 1; j < holes.length; j += 1) {
+        const a = holes[i]!;
+        const b = holes[j]!;
+        const span = {
+          x: b.center.x - a.center.x,
+          y: b.center.y - a.center.y,
+          z: b.center.z - a.center.z
+        };
+        const across = (axis: Vector3) =>
+          Math.abs(span.x * axis.x + span.y * axis.y + span.z * axis.z);
+        const total = Math.hypot(span.x, span.y, span.z);
+        // Opposite: a diameter apart.
+        if (
+          !same(across(frame.x) ** 2 + across(frame.up) ** 2, total ** 2) ||
+          !same(total, 2 * circle.pitchRadius)
+        )
+          continue;
+        const direction = same(across(frame.x), total)
+          ? ('horizontal' as const)
+          : same(across(frame.up), total)
+            ? ('vertical' as const)
+            : null;
+        if (!direction) continue;
+        out.push({
+          context,
+          visible: a.visible && b.visible,
+          annotation: {
+            annotationId: '' as DrawingAnnotationId,
+            kind: 'linear',
+            viewId: context.view.viewId,
+            direction,
+            from: { edge: a.ref, anchor: 'center' },
+            to: { edge: b.ref, anchor: 'center' },
+            diameter: true,
+            placementMm: { x: 0, y: 0 }
+          }
+        });
+      }
+  }
+  return out;
 }
 
 /** The linear dimension that links the datum group to a target group. */
