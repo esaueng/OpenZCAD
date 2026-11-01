@@ -53,6 +53,7 @@ import {
 export { parseServerMessage } from './collaborationProtocol';
 import type { EncryptedRoomCodec } from './e2ee/encryptedRoomCodec';
 import { subscribeEncryptionState } from './e2ee/encryptionStateEvents';
+import { errorMessage } from './errors';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -98,6 +99,8 @@ interface CollaborationOptions {
 export interface CollaborationClientState {
   status: CollaborationStatus;
   failureReason?: string | null;
+  /** Rejoin a failed room using its current head and a fresh edit lease. */
+  retryConnection(): void;
   members: CollaborationMember[];
   role: ProjectAccessRole | null;
   /** The lease held by this browser client, never another member's lease. */
@@ -160,6 +163,7 @@ export function useCollaboration({
   const [roomVersion, setRoomVersion] = useState<number | null>(null);
   const [conflict, setConflict] = useState<ProjectConflict | null>(null);
   const [encryptionView, setEncryptionView] = useState(0);
+  const [connectionGeneration, setConnectionGeneration] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const documentRef = useRef(document);
   const remoteHandlerRef = useRef(onRemoteDocument);
@@ -252,6 +256,21 @@ export function useCollaboration({
     roomWanted && (statusEntry.projectId !== projectId || !statusEntry.wanted)
       ? 'connecting'
       : statusEntry.status;
+
+  const retryConnection = useCallback(() => {
+    if (
+      !roomWanted ||
+      conflictRef.current ||
+      (projectId && readUnresolvedConflict(projectId, 'room')) ||
+      (status !== 'offline' && status !== 'rejected')
+    )
+      return;
+    // Invalidate late frames immediately. The connect effect then retires the
+    // old socket, reads the room head and reacquires a lease before publishing.
+    roomEpochRef.current += 1;
+    setStatus('connecting');
+    setConnectionGeneration((generation) => generation + 1);
+  }, [roomWanted, projectId, status, setStatus]);
 
   const settleKeepMine = useCallback((error?: Error) => {
     const pending = keepMineAckRef.current;
@@ -546,7 +565,10 @@ export function useCollaboration({
         settleCheckpointDrain(
           new Error('This version cannot be shared with the room.')
         );
-        setStatus('rejected');
+        setStatus(
+          'rejected',
+          errorMessage(error, 'This version cannot be shared with the room.')
+        );
         return false;
       }
       if (codecLoad) {
@@ -718,7 +740,10 @@ export function useCollaboration({
           setStatus('read-only');
           return;
         }
-        setStatus('rejected');
+        setStatus(
+          'rejected',
+          errorMessage(error, 'This version cannot be shared with the room.')
+        );
       }
     };
 
@@ -1117,7 +1142,13 @@ export function useCollaboration({
                 );
                 if (isCurrentRoom() && socketRef.current === socket) {
                   settleCheckpointDrain(new Error(message.message));
-                  setStatus('rejected');
+                  setStatus(
+                    'rejected',
+                    errorMessage(
+                      error,
+                      'The project files could not be restored.'
+                    )
+                  );
                 }
               }
             );
@@ -1245,6 +1276,7 @@ export function useCollaboration({
       setMembers([]);
     };
   }, [
+    connectionGeneration,
     displayName,
     enabled,
     encrypted,
@@ -1456,6 +1488,7 @@ export function useCollaboration({
 
   return {
     status,
+    retryConnection,
     failureReason:
       statusEntry.projectId === projectId && status === 'rejected'
         ? (statusEntry.reason ?? null)

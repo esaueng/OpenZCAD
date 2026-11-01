@@ -214,9 +214,8 @@ export function TopBar({
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
-  // Model readiness rides on the glyph, not the label: "Saved · preparing
-  // model" shows after every edit, so reserving its width left a short
-  // "Saved" floating in a chip three times its size.
+  // A saved document can still be preparing its model. Keep the storage
+  // label and show preparation separately, rather than relying on a spinner.
   const modelPending =
     !saveToAccount && saveState === 'synced' && geometryPending;
   // The saved revision is still safe, but the proposed edit is not in it.
@@ -397,10 +396,9 @@ export function TopBar({
       >
         {saveText}
       </StableLabel>
-      {/* Live regions announce content, not a changed aria-label, so the
-          readiness stays in the content, outside the reserved width. */}
+      {/* Readiness is visible and announced alongside the storage label. */}
       {modelReadiness ? (
-        <span className="visually-hidden"> · {modelReadiness}</span>
+        <span className="save-model-readiness"> · {modelReadiness}</span>
       ) : null}
     </>
   );
@@ -541,6 +539,7 @@ export function TopBar({
                 type="button"
                 className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
                 aria-pressed={workspaceMode === mode}
+                aria-label={label}
                 disabled={disabledReason !== null}
                 title={disabledReason ?? undefined}
                 onClick={() => onWorkspaceMode(mode)}

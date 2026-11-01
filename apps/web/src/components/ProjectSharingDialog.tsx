@@ -156,6 +156,8 @@ export interface ProjectSharingDialogProps {
   onBeforeCreateShareLink?(): void | Promise<void>;
   role: ProjectAccessRole | null;
   collaborationStatus: CollaborationStatus;
+  collaborationFailure?: string | null;
+  onRetryConnection?(): void;
   lease: ProjectEditLease | null;
   liveMembers?: readonly CollaborationMember[];
   currentUserId?: UserId | null;
@@ -308,6 +310,8 @@ export function ProjectSharingDialog({
   onBeforeCreateShareLink,
   role,
   collaborationStatus,
+  collaborationFailure,
+  onRetryConnection,
   lease,
   liveMembers = [],
   currentUserId = null,
@@ -1187,6 +1191,29 @@ export function ProjectSharingDialog({
             )
           ) : null}
         </div>
+
+        {!localProject &&
+          (collaborationStatus === 'offline' ||
+            collaborationStatus === 'rejected') && (
+            <div className="sharing-share-notice" role="status">
+              <p>
+                {collaborationFailure ?? 'The live session is unavailable.'}
+              </p>
+              <p>
+                Live updates are not confirmed. Reconnecting keeps your current
+                work in this tab.
+              </p>
+              {onRetryConnection && (
+                <button
+                  type="button"
+                  className="sharing-row-action"
+                  onClick={onRetryConnection}
+                >
+                  Retry connection
+                </button>
+              )}
+            </div>
+          )}
 
         {!localProject ? (
           <footer className="sharing-footer">

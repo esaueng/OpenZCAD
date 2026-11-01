@@ -127,6 +127,31 @@ function shareLinkClient(): ProjectShareLinkClient {
 }
 
 describe('ProjectSharingDialog', () => {
+  it('shows the room refusal and offers a connection retry without publishing', async () => {
+    const retry = vi.fn();
+    const base = createProjectDocument('Room retry', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="rejected"
+        collaborationFailure="The room could not confirm this revision."
+        onRetryConnection={retry}
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText('The room could not confirm this revision.')
+    ).toBeVisible();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Retry connection' })
+    );
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   it('hydrates owner data without flashing the action status row', async () => {
     const sharingClient = client();
     vi.mocked(sharingClient.getProjectSharing).mockImplementation(

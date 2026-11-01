@@ -437,6 +437,9 @@ export interface FaceResizeCommit {
   value: number;
 }
 
+/** Whether release started validation, could not start, or retained a refusal. */
+export type OffsetCommitOutcome = 'started' | 'blocked' | 'refused';
+
 /** An armed face-offset handle: where it sits and which face it edits. */
 export interface OffsetHandleTarget {
   /** Full straight-span stretch, proven by the gear's feature ancestry. */
@@ -1017,7 +1020,7 @@ export interface ModelViewerProps {
   /** Streamed signed offset; App coalesces exact rebuilds. */
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
-  onOffsetCommit(offset: number): boolean;
+  onOffsetCommit(offset: number): OffsetCommitOutcome;
   /** Clears exact preview geometry and restores the original reference. */
   onOffsetCancel(): void;
   /** Current exact preview or release validation refused this offset. */
@@ -10597,7 +10600,15 @@ export function ModelViewer({
           // A refused release can keep the last value that built on screen,
           // still uncommitted, so its ghost stays too; a restored body
           // clears the ghost when it is installed.
-          if (!onOffsetCommitRef.current(finalOffset)) restoreOffsetBodyProxy();
+          const outcome = onOffsetCommitRef.current(finalOffset);
+          if (outcome === 'blocked') {
+            rig.setValue(completed.initialOffset);
+            clearOffsetGhost();
+            restoreOffsetBodyProxy();
+            onOffsetCancelRef.current();
+          } else if (outcome === 'refused') {
+            restoreOffsetBodyProxy();
+          }
         } else {
           clearOffsetGhost();
           restoreOffsetBodyProxy();
@@ -12916,6 +12927,8 @@ export function ModelViewer({
       offsetChipRef.current.hidden = true;
     }
     if (!offsetHandle) {
+      offsetGhostClearRef.current?.();
+      offsetBodyProxyControllerRef.current?.restore();
       context.requestRender();
       return;
     }

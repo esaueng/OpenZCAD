@@ -6,7 +6,7 @@ import {
   type ReactNode,
   type RefObject
 } from 'react';
-import { Magnet, ScrollText } from 'lucide-react';
+import { CircleHelp, Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import { usePacedStatus } from '../hooks/usePacedStatus';
@@ -265,6 +265,23 @@ export function WorkspaceReadout({
             </p>
           ) : null)}
         {searchBar}
+        {!commandRow && prompt && (
+          <details
+            className="workspace-hint-help"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && event.currentTarget.open) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.currentTarget.open = false;
+              }
+            }}
+          >
+            <summary aria-label="Operation instructions">
+              <CircleHelp size={15} aria-hidden="true" />
+            </summary>
+            <p>{prompt}</p>
+          </details>
+        )}
       </div>
       <footer
         className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}

@@ -687,6 +687,31 @@ export function HistoryTimeline({
 
   return (
     <div className="history-timeline">
+      {features.length > 0 && (
+        <button
+          type="button"
+          className="history-resume"
+          onClick={() => {
+            onCloseFind();
+            setQuery('');
+            setRelatedOnly(false);
+            const id = features.at(-1)!.id;
+            if (refocusFrame.current !== null)
+              cancelAnimationFrame(refocusFrame.current);
+            refocusFrame.current = requestAnimationFrame(() => {
+              refocusFrame.current = null;
+              listRef.current
+                ?.querySelector<HTMLElement>(
+                  `[data-node-id="${CSS.escape(id)}"]`
+                )
+                ?.scrollIntoView?.({ block: 'nearest' });
+            });
+          }}
+          title={features.at(-1)!.name}
+        >
+          Show latest operation
+        </button>
+      )}
       {pausedCount > 0 && (
         <div className="history-rollback" role="status">
           <span>
