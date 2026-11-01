@@ -857,22 +857,46 @@ button.save-state:focus-visible,
   }
 }
 
-/* The model is still preparing behind a saved revision: a dot on the
-   save glyph rather than a spinner, which read as a save in flight. */
-.save-state-icon {
-  position: relative;
+/* The model is still being built behind a saved revision: an accent cube
+   that draws itself in, holds, and fades, in place of the check. The dash
+   is the length of Box's outline (about 60.8 units in its 24-unit
+   viewBox), so one offset sweep draws every edge with no blank lead-in. */
+.save-model-glyph {
+  color: var(--color-accent);
 }
 
-.save-state-pending {
-  position: absolute;
-  top: -3px;
-  right: -2px;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--color-accent);
-  box-shadow: 0 0 0 1.5px var(--color-surface);
-  animation: save-pending-pulse 1.4s var(--ease-out) infinite;
+.save-model-glyph > * {
+  stroke-dasharray: 61;
+  stroke-dashoffset: 61;
+  animation: save-model-build 2.4s var(--ease-out) infinite;
+}
+
+/* The inner edges follow the outline, so the cube assembles in order. */
+.save-model-glyph > :nth-child(2),
+.save-model-glyph > :nth-child(3) {
+  animation-delay: 0.25s;
+}
+
+@keyframes save-model-build {
+  0% {
+    stroke-dashoffset: 61;
+    opacity: 1;
+  }
+
+  55% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+
+  85% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.25;
+  }
 }
 
 /* Presence glyphs (TopBar PresenceGlyph): faded while joining, struck
@@ -912,11 +936,12 @@ button.save-state:focus-visible,
   }
 }
 
-/* Still distinct without motion: the dot stays, the joining group stays
-   faded. */
-[data-reduced-motion='true'] .save-state-pending,
+/* Still distinct without motion: the cube stays drawn in accent, the
+   joining group stays faded. */
+[data-reduced-motion='true'] .save-model-glyph > *,
 [data-reduced-motion='true'] .presence-glyph.is-joining {
   animation: none;
+  stroke-dashoffset: 0;
 }
 
 [data-reduced-motion='true'] .presence-glyph.is-joining {
@@ -924,9 +949,10 @@ button.save-state:focus-visible,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .save-state-pending,
+  .save-model-glyph > *,
   .presence-glyph.is-joining {
     animation: none;
+    stroke-dashoffset: 0;
   }
 
   .presence-glyph.is-joining {

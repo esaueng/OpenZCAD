@@ -3,6 +3,7 @@ import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
+  Box,
   Check,
   CircleUserRound,
   CloudOff,
@@ -383,9 +384,9 @@ export function TopBar({
         : 'preparing model'
       : null;
   const readinessVisible = modelReadiness !== null && geometryFailed;
-  // The revision is saved, so the glyph says so; a pulsing dot on it marks
-  // the model still preparing. A spinner beside "Saved" read as a save
-  // still in flight.
+  // The revision is saved; the model is still being built. A cube drawing
+  // itself stands in for the check until it is ready. A spinner beside
+  // "Saved" read as a save still in flight.
   const modelPreparing = modelReadiness !== null && !geometryFailed;
   // The accessible name keeps the readiness the glyph shows, and still
   // begins with the visible label (WCAG 2.5.3).
@@ -417,8 +418,14 @@ export function TopBar({
       >
         {/* Keyed by the glyph, not the state: saving → syncing keeps the
             same ring turning, and only a change of kind pops. */}
-        <span key={saveGlyph} className="save-state-icon" aria-hidden="true">
-          {saveGlyph === 'busy' ? (
+        <span
+          key={modelPreparing ? 'model' : saveGlyph}
+          className="save-state-icon"
+          aria-hidden="true"
+        >
+          {modelPreparing ? (
+            <Box size={14} className="save-model-glyph" />
+          ) : saveGlyph === 'busy' ? (
             <LoaderCircle className="spin" size={14} />
           ) : saveGlyph === 'warning' ? (
             <TriangleAlert size={14} />
@@ -427,13 +434,12 @@ export function TopBar({
           ) : (
             <CloudOff size={14} />
           )}
-          {modelPreparing ? <i className="save-state-pending" /> : null}
         </span>
         {saveText}
       </StableLabel>
       {/* Readiness is announced alongside the storage label. Preparing is
-          shown by the glyph's dot alone (the tooltip spells it out); a
-          failed model stays in words, as it needs a look. */}
+          shown by the cube alone (the tooltip spells it out); a failed
+          model stays in words, as it needs a look. */}
       {modelReadiness ? (
         <span
           className={`save-model-readiness${readinessVisible ? '' : ' visually-hidden'}`}

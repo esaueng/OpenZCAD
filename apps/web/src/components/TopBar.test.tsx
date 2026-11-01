@@ -173,7 +173,7 @@ describe('TopBar save chip', () => {
       screen.getByRole('status', { name: 'Saved · model unavailable' })
     ).toHaveAttribute('title', expect.stringContaining('activity log'));
   });
-  it('shows no preparing dot once the model has failed', () => {
+  it('shows no preparing cube once the model has failed', () => {
     renderTopBar({
       saveState: 'synced',
       signedIn: true,
@@ -183,7 +183,7 @@ describe('TopBar save chip', () => {
     const chip = screen.getByRole('status', {
       name: 'Saved · model unavailable'
     });
-    expect(chip.querySelector('.save-state-pending')).toBeNull();
+    expect(chip.querySelector('.save-model-glyph')).toBeNull();
   });
   it('keeps its width to the short labels while the model prepares', () => {
     renderTopBar({
@@ -199,10 +199,11 @@ describe('TopBar save chip', () => {
     expect(slot?.getAttribute('data-reserve')).not.toContain('model');
     // Announced through the live region's content, not only its name.
     expect(chip).toHaveTextContent('Saved · preparing model');
-    // Saved, so no spinner: a dot on the check marks the preparing model.
+    // Saved, so no spinner: a cube stands in for the check while the
+    // model is built.
     expect(chip.querySelector('.spin')).toBeNull();
-    expect(chip.querySelector('.save-state-pending')).not.toBeNull();
-    // Shown by the dot; the words are for assistive technology only.
+    expect(chip.querySelector('.save-model-glyph')).not.toBeNull();
+    // Shown by the cube; the words are for assistive technology only.
     expect(chip.querySelector('.save-model-readiness')).toHaveClass(
       'visually-hidden'
     );
