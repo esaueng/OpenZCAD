@@ -4,6 +4,7 @@
   "cloud-sync.spec.ts": 18,
   "collaboration-lease-recovery.spec.ts": 30,
   "collaboration.spec.ts": 13,
+  "direct-edit-ownership.spec.ts": 25,
   "drawing-sections.spec.ts": 16,
   "drawings.spec.ts": 12,
   "edge-overlay-growth.spec.ts": 6,

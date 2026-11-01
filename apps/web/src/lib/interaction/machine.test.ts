@@ -11,6 +11,7 @@ import {
   interactionReducer,
   isOperationState,
   nextSketchCircleMode,
+  operationSelectionKey,
   toolCardFor,
   type FaceTarget,
   type InteractionState,
@@ -1628,5 +1629,48 @@ describe('multi-region selection', () => {
     });
     expect(fingerprints(rearmed)).toEqual([42, 43]);
     expect(rearmed).toMatchObject({ phase: 'armed', error: null });
+  });
+});
+
+describe('operationSelectionKey', () => {
+  const selectFace = (target: FaceTarget) =>
+    interactionReducer(IDLE, { type: 'select-face', target });
+
+  it('names the same operation through every phase and value', () => {
+    const armed = selectFace(face());
+    const validating = interactionReducer(armed, {
+      type: 'validation-start',
+      value: 3
+    });
+    const failed = interactionReducer(validating, {
+      type: 'validation-failed',
+      diagnostic: { message: 'No.' },
+      value: 3
+    });
+    expect(operationSelectionKey(validating)).toBe(
+      operationSelectionKey(armed)
+    );
+    expect(operationSelectionKey(failed)).toBe(operationSelectionKey(armed));
+    // The same face picked again at another point is the same operation.
+    expect(operationSelectionKey(selectFace(face({ point: [4, 5, 6] })))).toBe(
+      operationSelectionKey(armed)
+    );
+  });
+
+  it('tells another face, body, local offset or edge set apart', () => {
+    const key = operationSelectionKey(selectFace(face()));
+    for (const other of [
+      selectFace(face({ bodyId: 'body_2' })),
+      selectFace(face({ topologyId: 'face:4' })),
+      selectFace(face({ localFaceOffset: true })),
+      interactionReducer(IDLE, {
+        type: 'select-edge',
+        selection: edge(7),
+        additive: false
+      })
+    ]) {
+      expect(operationSelectionKey(other)).not.toBe(key);
+    }
+    expect(operationSelectionKey(IDLE)).toBeNull();
   });
 });

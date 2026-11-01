@@ -753,6 +753,7 @@ import {
   commandSessionFor,
   isOperationState,
   isStaleSelectionError,
+  operationSelectionKey,
   nextSketchCircleMode,
   nextSketchCurveMode,
   sketchCurveModeFor,
@@ -3569,6 +3570,34 @@ export function App() {
     startedAt: number;
   } | null>(null);
 
+  /** Whether the selection is still the one a direct edit was checked for. */
+  function directEditOwnsSelection(
+    pending: { interaction: InteractionState } | null
+  ): boolean {
+    return (
+      !pending ||
+      operationSelectionKey(pending.interaction) ===
+        operationSelectionKey(interactionRef.current)
+    );
+  }
+
+  /** The body a direct edit was made on, for a result reported elsewhere. */
+  function directEditBodyName(
+    pending: { document: ProjectDocument; interaction: InteractionState } | null
+  ): string | null {
+    const interaction = pending?.interaction;
+    const bodyId =
+      interaction?.mode === 'face'
+        ? interaction.target.bodyId
+        : interaction?.mode === 'edges'
+          ? interaction.edges[0]?.bodyId
+          : undefined;
+    return bodyId
+      ? (pending!.document.derived.bodyRepresentations[bodyId as BodyId]
+          ?.name ?? null)
+      : null;
+  }
+
   /** Appends one direct-edit outcome to the on-device log; never throws. */
   function recordDirectEditOutcome(
     outcome: DirectEditFixtureOutcome,
@@ -4721,6 +4750,17 @@ export function App() {
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
+      if (!directEditOwnsSelection(pending)) {
+        // Picked elsewhere while this was checked: the refusal is the earlier
+        // edit's. Marking the new selection failed showed it beside a value
+        // and a refusal that were never its own.
+        const name = directEditBodyName(pending);
+        setStatus(
+          name ? `${name}: ${diagnostic.message}` : diagnostic.message,
+          diagnostic.detail ? { detail: diagnostic.detail } : undefined
+        );
+        return;
+      }
       dispatchInteraction({
         type: 'validation-failed',
         diagnostic,
@@ -4751,6 +4791,9 @@ export function App() {
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       setLastValidPreview(null);
+      // Picked elsewhere while this was checked: the edit lands, and the new
+      // selection stays. Finishing on the edited face took the pick away.
+      if (!directEditOwnsSelection(pending)) return;
       setSelectedEdges([]);
       if (
         pending?.interaction.mode === 'face' &&
