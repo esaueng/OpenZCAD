@@ -4777,6 +4777,63 @@ function objectFolderOnly(entry: DocumentHistoryEntry | undefined): boolean {
 }
 
 /** Owns the canonical document, including its durable undo/redo position. */
+/**
+ * ADR-017 amendment (November 2026): a feature added while History is rolled
+ * back lands at the rollback marker, ahead of the paused tail, so resuming
+ * rebuilds it against the model it was made on rather than after every
+ * resumed step. Appended to the same edit as moves, an existing command
+ * kind, so undo removes both together and a replay or older client reorders
+ * the same way. A move the reorder rules refuse (the new feature reads
+ * something the tail made) leaves the feature where it was added.
+ */
+export function rollbackPlacementCommands(
+  previous: ProjectDocument,
+  next: ProjectDocument
+): AnyCommand[] {
+  const known = new Set(
+    listFeaturesInOrder(previous).map((feature) => feature.featureId)
+  );
+  const ordered = listFeaturesInOrder(next);
+  const firstPaused = ordered.findIndex(
+    (feature) =>
+      known.has(feature.featureId) && isFeatureRollbackSuppressed(feature)
+  );
+  if (firstPaused < 0) return [];
+  return ordered
+    .slice(firstPaused)
+    .filter(
+      (feature) =>
+        !known.has(feature.featureId) && !isFeatureSuppressed(feature)
+    )
+    .map((feature, offset) =>
+      commandFactories.moveFeature(
+        { featureId: feature.featureId, toIndex: firstPaused + offset },
+        'Place at rollback marker'
+      )
+    );
+}
+
+/** Applies each placement move the reorder rules accept, in order. */
+function applyRollbackPlacement(
+  previous: ProjectDocument,
+  next: ProjectDocument,
+  serialized: SerializedCommand[]
+): ProjectDocument {
+  let placed = next;
+  for (const move of rollbackPlacementCommands(previous, next)) {
+    try {
+      move.validate(placed);
+    } catch {
+      continue;
+    }
+    const moved = move.apply(placed);
+    if (moved === placed) continue;
+    placed = moved;
+    serialized.push(...serializedLeaves(move));
+  }
+  return placed;
+}
+
 export class CommandManager {
   constructor(
     public document: ProjectDocument,
@@ -4905,16 +4962,18 @@ export class CommandManager {
     if (next === this.document) {
       return this.document;
     }
+    const serialized = serializedLeaves(command);
+    next = applyRollbackPlacement(previous, next, serialized);
     assertDocumentTextBudget(next);
     assertNoNewTypedParameterMisuse(previous, next);
-    next.commandLog.push(...serializedLeaves(command));
+    next.commandLog.push(...serialized);
     next = appendRevision(next, command.label);
     const recorded = recordDocumentEdit(
       previous,
       next,
       command.label,
       this.actorUserId,
-      serializedLeaves(command).map(historyCommandKind)
+      serialized.map(historyCommandKind)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;
@@ -5003,6 +5062,7 @@ export class CommandManager {
     if (next === this.document) {
       return this.document;
     }
+    next = applyRollbackPlacement(previous, next, serialized);
     assertDocumentTextBudget(next);
     // Judged on the transaction's end state: a proposal may type a parameter
     // and use it in either order.

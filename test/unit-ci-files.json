@@ -89,6 +89,7 @@
     "test/remus-owned-mesh.test.ts",
     "test/remus-wasm-load-baseline.test.ts",
     "test/roadmap-evidence.test.ts",
+    "test/rollback-insertion.test.ts",
     "test/schema-admission-storage-matrix.test.ts",
     "test/security-boundary-regressions.test.ts",
     "test/security-workflow.test.ts",
