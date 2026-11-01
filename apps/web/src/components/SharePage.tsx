@@ -5,7 +5,14 @@ import { useModalFocus } from '../lib/useModalFocus';
 
 export type SharePageState =
   | { phase: 'loading' }
-  | { phase: 'error'; title: string; message: string; guidance: string };
+  | {
+      phase: 'error';
+      title: string;
+      message: string;
+      guidance: string;
+      /** A transient failure: retrying the same link can succeed. */
+      retryable: boolean;
+    };
 
 /** A share destination stays visible until it opens or the visitor leaves. */
 export function SharePage({
@@ -33,6 +40,9 @@ export function SharePage({
     heading.current?.focus();
   }, [state]);
   const loading = state.phase === 'loading';
+  // A link that is gone or malformed stays that way; only offer retry when
+  // the same link can still open, and then make it the primary action.
+  const canRetry = state.phase === 'error' && state.retryable && onRetry;
   return (
     <main ref={page} className="share-page" aria-label="Shared model">
       <header className="share-page-brand">
@@ -41,7 +51,10 @@ export function SharePage({
         <span className="share-page-label">Shared model</span>
       </header>
       <section className="share-page-card" aria-labelledby="share-page-heading">
-        <div className="share-page-icon" aria-hidden="true">
+        <div
+          className={`share-page-icon${loading ? '' : ' error'}`}
+          aria-hidden="true"
+        >
           {loading ? <Link2 size={28} /> : <Link2Off size={28} />}
         </div>
         <div role="status" aria-live="polite">
@@ -65,13 +78,17 @@ export function SharePage({
               <LoaderCircle size={16} className="spin" aria-hidden="true" />
               Opening model
             </span>
-          ) : onRetry ? (
+          ) : canRetry ? (
             <button className="primary" type="button" onClick={onRetry}>
               <RotateCw size={16} aria-hidden="true" />
               Try again
             </button>
           ) : null}
-          <button className="secondary" type="button" onClick={onBack}>
+          <button
+            className={loading || canRetry ? 'secondary' : 'primary'}
+            type="button"
+            onClick={onBack}
+          >
             Back to projects
           </button>
           {onReturnToModel && (

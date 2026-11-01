@@ -723,7 +723,7 @@ for (const status of [404, 503]) {
     });
     await expect(page.getByRole('main', { name: 'Shared model' })).toContainText(
       status === 404
-        ? 'This share link is no longer available'
+        ? 'It may have expired or been revoked'
         : 'Replacement unavailable.'
     );
     expect(new URL(page.url()).hash).toBe(`#share=${'b'.repeat(43)}`);
@@ -768,7 +768,7 @@ for (const status of [404, 503]) {
       page.getByRole('status').filter({
         hasText:
           status === 404
-            ? 'This share link is no longer available'
+            ? 'It may have expired or been revoked'
             : 'Unavailable share'
       })
     ).toBeVisible();
@@ -834,7 +834,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
         await expect(
           page
             .getByRole('status')
-            .filter({ hasText: 'This share link is no longer available' })
+            .filter({ hasText: 'It may have expired or been revoked' })
         ).toBeVisible();
       await page.getByRole('button', { name: 'Back to projects', exact: true }).click();
       try {
@@ -910,7 +910,7 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
   await expect(
     page
       .getByRole('status')
-      .filter({ hasText: 'This share link is no longer available' })
+      .filter({ hasText: 'It may have expired or been revoked' })
   ).toBeVisible();
   // Status lifetime must not erase the explanation before the user reads it.
   await page.waitForTimeout(6500);

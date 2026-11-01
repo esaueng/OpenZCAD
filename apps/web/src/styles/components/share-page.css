@@ -53,6 +53,13 @@
   color: var(--color-accent);
 }
 
+/* An unavailable link is a dead end, not an alarm: neutral, not accent. */
+.share-page-icon.error {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+}
+
 .share-page-card h1 {
   margin: 0 0 16px;
   font-size: clamp(24px, 4vw, 30px);
