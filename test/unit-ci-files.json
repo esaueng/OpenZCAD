@@ -113,6 +113,8 @@
     "src/components/TopBar.test.tsx",
     "src/components/WorkspaceLoading.test.tsx",
     "src/components/assistant/AssistantPanel.drawing.test.tsx",
+    "src/hooks/useGeometryWorker.test.tsx",
+    "src/hooks/useGeometryWorkerDemand.test.tsx",
     "src/hooks/useProjectView.test.tsx",
     "src/hooks/useScrollMemory.test.tsx",
     "src/lib/accountConflictRecovery.test.ts",

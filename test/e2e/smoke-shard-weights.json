@@ -38,6 +38,7 @@
   "sketch-modify-tools.spec.ts": 9,
   "sketch-move.spec.ts": 11,
   "sketch-transition-continuity.spec.ts": 60,
+  "staged-geometry.spec.ts": 30,
   "standalone-gear-height.spec.ts": 60,
   "start-screen-responsive.spec.ts": 3,
   "start-screen-sync-failures.spec.ts": 4,

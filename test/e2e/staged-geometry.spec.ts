@@ -1,5 +1,10 @@
 import { revealModelPanel } from './openzcad-fixtures';
 import { readFile } from 'node:fs/promises';
+import {
+  addPrimitiveFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 import {
   createPrimitiveInPlace,
@@ -29,16 +34,50 @@ async function openPrimitiveReady(page: Page, title: 'Box' | 'Cylinder') {
   ).toBeEnabled({ timeout: 30_000 });
 }
 
+/** A restored model has no validated command result to cover worker analysis. */
+async function importUnvalidatedPrimitive(
+  page: Page,
+  kind: 'box' | 'cylinder'
+) {
+  const document = addPrimitiveFeature(
+    createProjectDocument('Staged geometry', toUserId('user_staged_geometry')),
+    {
+      name: kind === 'box' ? 'Box' : 'Cylinder',
+      primitiveKind: kind,
+      dimensions:
+        kind === 'box'
+          ? { width: 20, height: 20, depth: 20 }
+          : { radius: 10, height: 20 }
+    }
+  );
+  expect(document.derived.bodyRepresentations).toEqual({});
+  await page.getByRole('button', { name: 'Import project' }).click();
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'staged-geometry.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: []
+      })
+    )
+  });
+}
+
 async function installAnalysisGate(page: Page) {
   await page.addInitScript(() => {
     const scope = window as typeof window & {
       holdAnalysis: boolean;
       heldAnalysis: number;
+      readyWhileAnalysisHeld: number;
       warningOverride: string[] | null;
       releaseAnalysis: () => void;
     };
     scope.holdAnalysis = false;
     scope.heldAnalysis = 0;
+    scope.readyWhileAnalysisHeld = 0;
     scope.warningOverride = null;
     const pending: (() => void)[] = [];
     scope.releaseAnalysis = () => {
@@ -55,8 +94,18 @@ async function installAnalysisGate(page: Page) {
         descriptor.set!.call(this, (event: MessageEvent) => {
           const result = event.data as {
             type?: string;
+            phase?: string;
+            requestId?: string;
             packet?: { state?: { analysis?: string; warnings?: string[] } };
           };
+          if (
+            scope.holdAnalysis &&
+            result.type === 'state' &&
+            result.phase === 'ready' &&
+            !result.requestId
+          ) {
+            scope.readyWhileAnalysisHeld++;
+          }
           if (
             result.type === 'projection-delta' &&
             result.packet?.state &&
@@ -225,120 +274,146 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
   ).toBeEnabled();
 });
 
-test('draws accepted geometry before analysis, then completes without reinstalling its mesh', async ({
-  page
-}) => {
-  test.setTimeout(90_000);
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text());
-  });
-  await stubApi(page);
-  await installAnalysisGate(page);
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Staged geometry');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await expectBodyCount(page, 0);
-  await openPrimitiveReady(page, 'Box');
-  await page.evaluate(() => {
-    (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
-    performance.clearMeasures('oz:edit.frame');
-    performance.clearMeasures('oz:edit.analysis-ready');
-  });
-  await finishInPlaceCommand(page, 'Box');
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        performance.getEntriesByName('oz:edit.frame').some(
-          (entry) =>
-            (
-              (entry as PerformanceMeasure).detail as {
-                analysis?: string;
-              } | null
-            )?.analysis === 'pending'
+test(
+  'draws accepted geometry before analysis, then completes without reinstalling its mesh',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await stubApi(page);
+    await installAnalysisGate(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.evaluate(() => {
+      (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
+      performance.clearMeasures('oz:edit.frame');
+      performance.clearMeasures('oz:edit.analysis-ready');
+    });
+    await importUnvalidatedPrimitive(page, 'box');
+    // The worker can finish before its completed projection reaches the UI.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { readyWhileAnalysisHeld: number })
+              .readyWhileAnalysisHeld
         )
       )
-    )
-    .toBe(true);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          performance.getEntriesByName('oz:edit.frame').some(
+            (entry) =>
+              (
+                (entry as PerformanceMeasure).detail as {
+                  analysis?: string;
+                } | null
+              )?.analysis === 'pending'
+          )
+        )
       )
-    )
-    .toBeGreaterThan(0);
-  expect(
-    await page.evaluate(
-      () => performance.getEntriesByName('oz:edit.analysis-ready').length
-    )
-  ).toBe(0);
-  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeDisabled();
-  await expect(page.getByText('Preparing model details…')).toBeVisible();
-  await expect(page.getByText('needs repair', { exact: true })).toHaveCount(0);
-  const canvas = page.locator('.viewer-host canvas');
-  const stagedFace = await canvas.evaluate(
-    (element) =>
-      new Promise<unknown>((resolve) => {
-        element.dispatchEvent(
-          new CustomEvent('openzcad:e2e-select-planar-face', {
-            detail: { normal: { x: 0, y: 0, z: 1 }, resolve }
-          })
-        );
-      })
-  );
-  // The face is drawn, so the pick reaches the workspace, which refuses it;
-  // the hook reports that no selection landed.
-  expect(stagedFace).toBeNull();
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'The model is still updating. Try that selection again when it finishes.'
-  );
-  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
-  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
-  const installs = await page.evaluate(
-    () => performance.getEntriesByName('oz:viewer.bodies').length
-  );
-  await page.screenshot({
-    path: test.info().outputPath('geometry-before-analysis.png')
-  });
-  await page.evaluate(() =>
-    (
-      window as typeof window & { releaseAnalysis: () => void }
-    ).releaseAnalysis()
-  );
-  await expectBodyCount(page, 1);
-  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
-  expect(
-    await page.evaluate(
-      () => performance.getEntriesByName('oz:viewer.bodies').length
-    )
-  ).toBe(installs);
-  // The mesh drawn before analysis stays, but the revision's acceptance is
-  // still traced once analysis is ready. Deduping on the revision alone
-  // dropped this record (visual-selection-live-preview.spec.ts:696).
-  const tracedPhases = () =>
-    page.evaluate(() =>
-      ['oz:edit.installed', 'oz:edit.frame'].flatMap((name) =>
-        performance.getEntriesByName(name).map((entry) => {
-          const detail = (entry as PerformanceMeasure).detail as {
-            version: number;
-            analysis: string;
-          };
-          return `${name}:${detail.version}:${detail.analysis}`;
-        })
+      .toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { heldAnalysis: number }).heldAnalysis
+        )
       )
+      .toBeGreaterThan(0);
+    expect(
+      await page.evaluate(
+        () => performance.getEntriesByName('oz:edit.analysis-ready').length
+      )
+    ).toBe(0);
+    expect(
+      await page.evaluate(() =>
+        performance
+          .getEntriesByName('oz:edit.frame')
+          .some(
+            (entry) =>
+              (
+                (entry as PerformanceMeasure).detail as {
+                  analysis?: string;
+                } | null
+              )?.analysis === 'ready'
+          )
+      )
+    ).toBe(false);
+    await expect(page.getByRole('button', { name: /^Fillet/ })).toBeDisabled();
+    await expect(page.getByText('Preparing model details…')).toBeVisible();
+    await expect(page.getByText('needs repair', { exact: true })).toHaveCount(
+      0
     );
-  const pendingFrame = (await tracedPhases()).find(
-    (entry) => entry.startsWith('oz:edit.frame:') && entry.endsWith(':pending')
-  );
-  expect(pendingFrame).toBeDefined();
-  const version = pendingFrame!.split(':')[2];
-  for (const phase of ['oz:edit.installed', 'oz:edit.frame']) {
-    await expect.poll(tracedPhases).toContain(`${phase}:${version}:ready`);
+    const canvas = page.locator('.viewer-host canvas');
+    const stagedFace = await canvas.evaluate(
+      (element) =>
+        new Promise<unknown>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-planar-face', {
+              detail: { normal: { x: 0, y: 0, z: 1 }, resolve }
+            })
+          );
+        })
+    );
+    // The face is drawn, so the pick reaches the workspace, which refuses it;
+    // the hook reports that no selection landed.
+    expect(stagedFace).toBeNull();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'The model is still updating. Try that selection again when it finishes.'
+    );
+    await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+    await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+    const installs = await page.evaluate(
+      () => performance.getEntriesByName('oz:viewer.bodies').length
+    );
+    await page.screenshot({
+      path: test.info().outputPath('geometry-before-analysis.png')
+    });
+    await page.evaluate(() =>
+      (
+        window as typeof window & { releaseAnalysis: () => void }
+      ).releaseAnalysis()
+    );
+    await expectBodyCount(page, 1);
+    await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+    expect(
+      await page.evaluate(
+        () => performance.getEntriesByName('oz:viewer.bodies').length
+      )
+    ).toBe(installs);
+    // The mesh drawn before analysis stays, but the revision's acceptance is
+    // still traced once analysis is ready. Deduping on the revision alone
+    // dropped this record (visual-selection-live-preview.spec.ts:696).
+    const tracedPhases = () =>
+      page.evaluate(() =>
+        ['oz:edit.installed', 'oz:edit.frame'].flatMap((name) =>
+          performance.getEntriesByName(name).map((entry) => {
+            const detail = (entry as PerformanceMeasure).detail as {
+              version: number;
+              analysis: string;
+            };
+            return `${name}:${detail.version}:${detail.analysis}`;
+          })
+        )
+      );
+    const pendingFrame = (await tracedPhases()).find(
+      (entry) =>
+        entry.startsWith('oz:edit.frame:') && entry.endsWith(':pending')
+    );
+    expect(pendingFrame).toBeDefined();
+    const version = pendingFrame!.split(':')[2];
+    for (const phase of ['oz:edit.installed', 'oz:edit.frame']) {
+      await expect.poll(tracedPhases).toContain(`${phase}:${version}:ready`);
+    }
+    expect(errors).toEqual([]);
   }
-  expect(errors).toEqual([]);
-});
+);
 
 test('an edge hook pick refused before analysis reports no selection, then lands', async ({
   page
@@ -347,14 +422,10 @@ test('an edge hook pick refused before analysis reports no selection, then lands
   await stubApi(page);
   await installAnalysisGate(page);
   await page.goto('/');
-  await page.getByLabel('Project name').fill('Staged edge pick');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await expectBodyCount(page, 0);
-  await openPrimitiveReady(page, 'Cylinder');
   await page.evaluate(() => {
     (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
   });
-  await finishInPlaceCommand(page, 'Cylinder');
+  await importUnvalidatedPrimitive(page, 'cylinder');
   await expect
     .poll(() =>
       page.evaluate(
