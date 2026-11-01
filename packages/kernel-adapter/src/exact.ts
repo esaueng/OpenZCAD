@@ -180,6 +180,7 @@ import {
 } from './exact-build-loop';
 import { suppressedPassThroughBody } from './exact-suppression';
 import { ImportedStepCache } from './exact-imported-step-cache';
+import { ImportedMeshCache } from './exact-imported-mesh-cache';
 import {
   isBuildCancelled,
   raceBuildCancellation,
@@ -888,6 +889,8 @@ export type MassPropertiesRead =
  * Oversized imports still build exactly but do not enter this optional cache.
  */
 export const MAX_IMPORTED_STEP_CACHE_BYTES = 64 * 1024 * 1024;
+/** Budget for converted imported-mesh payloads; see `ImportedMeshCache`. */
+export const MAX_IMPORTED_MESH_CACHE_BYTES = 64 * 1024 * 1024;
 
 export interface ExactKernelAdapterOptions {
   /**
@@ -911,6 +914,11 @@ export interface ExactKernelAdapterOptions {
    * caching; nothing in the app sets it.
    */
   importedStepCacheBytes?: number;
+  /**
+   * Overrides {@link MAX_IMPORTED_MESH_CACHE_BYTES}. Zero disables mesh
+   * conversion caching; nothing in the app sets it.
+   */
+  importedMeshCacheBytes?: number;
   /**
    * Overrides {@link MAX_HISTORY_CHECKPOINTS}, the maximum number of retained
    * feature prefixes (not a byte budget). Zero disables history caching.
@@ -1004,7 +1012,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {
     this.importedSteps = new ImportedStepCache(
-      options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES
+      options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES,
+      new ImportedMeshCache(
+        options.importedMeshCacheBytes ?? MAX_IMPORTED_MESH_CACHE_BYTES
+      )
     );
   }
 
