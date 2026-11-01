@@ -83,7 +83,7 @@ describe('ExportDialog', () => {
     });
     expect(screen.getByRole('radio', { name: 'STL (binary)' })).toBeChecked();
     expect(
-      screen.getByRole('radio', { name: '3MF', exact: true })
+      screen.getByRole('radio', { name: '3MF' })
     ).toBeDisabled();
     expect(
       screen.getByRole('button', { name: 'Check watertightness' })
@@ -93,7 +93,7 @@ describe('ExportDialog', () => {
     ).toBeVisible();
     await user.click(screen.getByRole('radio', { name: 'STL (ASCII)' }));
     await user.click(
-      screen.getByRole('button', { name: 'Export STL', exact: true })
+      screen.getByRole('button', { name: 'Export STL' })
     );
     expect(onExport).toHaveBeenCalledWith('stl', 0.08);
   });
