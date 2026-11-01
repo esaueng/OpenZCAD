@@ -132,6 +132,7 @@
     "src/lib/e2ee/progressiveShelf.test.ts",
     "src/lib/e2ee/signOut.test.ts",
     "src/lib/editCardLifecycle.test.ts",
+    "src/lib/editTrace.test.ts",
     "src/lib/exportScope.test.ts",
     "src/lib/featureValidation.test.ts",
     "src/lib/fieldParameterDefinitions.test.ts",

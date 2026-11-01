@@ -36,7 +36,13 @@ export function recordEditPhase(
     performance.measure(name, {
       start,
       end: performance.now(),
-      detail: { ...revision, ...metrics }
+      // Callers may pass a full document or worker result as a revision.
+      // User Timing clones detail: keep model and mesh payloads out of it.
+      detail: {
+        projectId: revision.projectId,
+        version: revision.version,
+        ...metrics
+      }
     });
   } catch {
     // Instrumentation cannot change rendering in hosts without options support.

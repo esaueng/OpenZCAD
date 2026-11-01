@@ -259,6 +259,37 @@ test(
       submitted
     );
     await expect.poll(featureCount).toBe(before + 1);
+    // Timing witnesses survive reload and a real edit without retaining the
+    // project document or a geometry worker packet in the performance buffer.
+    const timing = await page.evaluate(() =>
+      performance
+        .getEntriesByType('measure')
+        .filter((entry) => entry.name.startsWith('oz:edit.'))
+        .map((entry) => {
+          const detail = (entry as PerformanceMeasure).detail as Record<
+            string,
+            unknown
+          >;
+          return {
+            name: entry.name,
+            scalar:
+              typeof detail?.projectId === 'string' &&
+              typeof detail.version === 'number' &&
+              Object.values(detail).every(
+                (value) =>
+                  typeof value === 'number' || typeof value === 'string'
+              )
+          };
+        })
+    );
+    expect(timing.map((entry) => entry.name)).toEqual(
+      expect.arrayContaining([
+        'oz:edit.packed',
+        'oz:edit.received',
+        'oz:edit.frame'
+      ])
+    );
+    expect(timing.filter((entry) => !entry.scalar)).toEqual([]);
     await test.info().attach('first-ready-offset', {
       body: await page.screenshot({
         path: test.info().outputPath('first-ready-offset.png')
