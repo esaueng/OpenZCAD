@@ -19,6 +19,7 @@ test(
     await page.addInitScript(() => {
       const scope = window as unknown as {
         heldReloads: number;
+        holdEcho: boolean;
         releaseReload(): void;
       };
       let hold = sessionStorage.getItem('hold-reload-geometry') === 'yes';
@@ -26,11 +27,16 @@ test(
       scope.heldReloads = 0;
       scope.releaseReload = () => {
         hold = false;
+        scope.holdEcho = false;
         pending.splice(0).forEach((send) => send());
       };
       const send = Worker.prototype.postMessage;
       Worker.prototype.postMessage = function (input, transfer) {
-        if (hold && (input as { type?: string })?.type === 'sync') {
+        const message = input as { type?: string; requestId?: string };
+        if (
+          (hold || (scope.holdEcho && !message.requestId)) &&
+          message?.type === 'sync'
+        ) {
           scope.heldReloads++;
           pending.push(() =>
             send.call(this, input, transfer as StructuredSerializeOptions)
@@ -73,6 +79,55 @@ test(
       .not.toBeNull();
     // Wait for the device save before leaving the open project.
     await expect(page.locator('.save-state')).not.toHaveText('Saving');
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            new Promise<boolean>((resolve, reject) => {
+              const request = indexedDB.open('openzcad-v2');
+              request.onerror = () =>
+                reject(
+                  new Error('Could not open project database', {
+                    cause: request.error
+                  })
+                );
+              request.onsuccess = () => {
+                const db = request.result;
+                const all = db
+                  .transaction('projects', 'readonly')
+                  .objectStore('projects')
+                  .getAll();
+                all.onerror = () => {
+                  db.close();
+                  reject(
+                    new Error('Could not read saved projects', {
+                      cause: all.error
+                    })
+                  );
+                };
+                all.onsuccess = () => {
+                  db.close();
+                  resolve(
+                    all.result.some(
+                      (doc: {
+                        derived?: {
+                          bodyRepresentations?: Record<
+                            string,
+                            { mesh?: { vertices?: { length: number } } }
+                          >;
+                        };
+                      }) =>
+                        Object.values(
+                          doc.derived?.bodyRepresentations ?? {}
+                        ).some((body) => (body.mesh?.vertices?.length ?? 0) > 0)
+                    )
+                  );
+                };
+              };
+            })
+        )
+      )
+      .toBe(true);
     await page.evaluate(() =>
       sessionStorage.setItem('hold-reload-geometry', 'yes')
     );
@@ -135,6 +190,10 @@ test(
       scale: Number(element.dataset.e2eHandlePixelsPerUnit)
     }));
     const rect = (await canvas.boundingBox())!;
+    // A validated commit is ready even while its redundant worker echo waits.
+    await page.evaluate(() => {
+      (window as unknown as { holdEcho: boolean }).holdEcho = true;
+    });
     await page.mouse.move(rect.x + handle.x, rect.y + handle.y);
     await page.mouse.down();
     await page.mouse.move(
@@ -151,6 +210,35 @@ test(
     await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
     await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
       submitted
+    );
+    const committedVersion = Number(
+      (
+        await page
+          .locator('.workspace-status-summary [title]')
+          .getAttribute('title')
+      )?.match(/rev (\d+)/)?.[1]
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (version) =>
+            performance.getEntriesByName('oz:edit.frame').some((entry) => {
+              const detail = (entry as PerformanceMeasure).detail as {
+                version?: number;
+                analysis?: string;
+              } | null;
+              return (
+                detail?.version !== undefined &&
+                detail.version === version &&
+                detail.analysis === 'ready'
+              );
+            }),
+          committedVersion
+        )
+      )
+      .toBe(true);
+    await page.evaluate(() =>
+      (window as unknown as { releaseReload(): void }).releaseReload()
     );
     await select();
     await expect(page.getByTestId('direct-manipulation-value')).toHaveText(

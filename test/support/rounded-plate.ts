@@ -1,5 +1,5 @@
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type UnitSystem } from '@openzcad/shared';
 import { drillHole } from '../../packages/kernel-adapter/src/exact-cylinder-ops';
 import {
   RemusKernel,
@@ -7,6 +7,7 @@ import {
 } from '../../packages/kernel-adapter/src/remus-runtime';
 
 export interface RoundedPlateOptions {
+  units?: UnitSystem;
   /** x of an extra Ø2 through hole; 76 sits inside the +X corner rounds. */
   edgeHoleX?: number;
 }
@@ -43,7 +44,11 @@ export async function roundedPlateDocument(options: RoundedPlateOptions = {}) {
       io.exportStep(kernel.serializeSolids(new Uint32Array([solid])))
     );
     return importStepBody(
-      createProjectDocument('Rounded plate preview', toUserId('user_test')),
+      createProjectDocument(
+        'Rounded plate preview',
+        toUserId('user_test'),
+        options.units
+      ),
       {
         name: 'Rounded plate',
         sourceName: 'rounded-plate.step',

@@ -32,6 +32,110 @@ function setup(initial: string, selectInitial?: boolean) {
 }
 
 describe('numeric entry first character', () => {
+  it('treats a captured first key as a new Total, rather than the rounded prefill', () => {
+    const onPreview = vi.fn();
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Total',
+          initial: '4',
+          selectInitial: false,
+          totalBaseline: 35.00168,
+          initialOffset: 0,
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+    );
+    expect(onPreview.mock.calls[0]?.[0]).toBeCloseTo(4 - 35.00168, 8);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply total' }));
+    expect(onCommit.mock.calls[0]?.[0]).toBeCloseTo(4 - 35.00168, 8);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+  it.each([0, 2])(
+    'preserves an untouched Total prefill at offset %s without rounding the model',
+    (initialOffset) => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      render(
+        <NumericKeypad
+          request={{
+            kind: 'offset',
+            label: 'Total',
+            initial: String(35 + initialOffset),
+            totalBaseline: 35.00168,
+            initialOffset,
+            unitKind: 'length'
+          }}
+          units="mm"
+          scope={{}}
+          anchorRef={{ current: null }}
+          onPreview={vi.fn()}
+          onCommit={onCommit}
+          onCancel={onCancel}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Apply total' }));
+      if (initialOffset === 0) {
+        expect(onCancel).toHaveBeenCalledOnce();
+        expect(onCommit).not.toHaveBeenCalled();
+      } else {
+        expect(onCommit).toHaveBeenCalledWith(
+          initialOffset,
+          String(initialOffset)
+        );
+        expect(onCancel).not.toHaveBeenCalled();
+      }
+    }
+  );
+  it.each(['typing', 'units'] as const)(
+    'evaluates an explicitly edited Total after a %s round trip',
+    (method) => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      render(
+        <NumericKeypad
+          request={{
+            kind: 'offset',
+            label: 'Total',
+            initial: '35.00',
+            unitKind: 'length',
+            totalBaseline: 35.00168,
+            initialOffset: 0
+          }}
+          units="mm"
+          scope={{}}
+          anchorRef={{ current: null }}
+          onPreview={vi.fn()}
+          onCommit={onCommit}
+          onCancel={onCancel}
+        />
+      );
+      if (method === 'typing') {
+        fireEvent.change(screen.getByRole('textbox'), {
+          target: { value: '35.1' }
+        });
+        fireEvent.change(screen.getByRole('textbox'), {
+          target: { value: '35.00' }
+        });
+      } else {
+        fireEvent.click(screen.getByRole('radio', { name: 'cm' }));
+        fireEvent.click(screen.getByRole('radio', { name: 'mm' }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Apply total' }));
+      const expected = 35 - 35.00168;
+      expect(onCommit).toHaveBeenCalledWith(expected, String(expected));
+      expect(onCancel).not.toHaveBeenCalled();
+    }
+  );
   it('accepts the first rig anchor after the initial resize notification, then stays anchored on resize', () => {
     let notify = () => {};
     vi.stubGlobal(
