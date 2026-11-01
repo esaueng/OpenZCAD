@@ -543,11 +543,13 @@ export function countBlendFaces(kernel: RemusKernel, solid: number): number {
 export function selectionTouchesBlendFace(
   kernel: RemusKernel,
   solid: number,
-  selectedEdges: number[]
+  selectedEdges: number[],
+  /** Narrows which blend-shaped faces count (see `priorBlendFaceTest`). */
+  counts: (face: number) => boolean = () => true
 ): boolean {
   const blendVertices = new Set<number>();
   for (const face of kernel.getSolidFaces(solid)) {
-    if (!isBlendFace(kernel, solid, face)) {
+    if (!isBlendFace(kernel, solid, face) || !counts(face)) {
       continue;
     }
     for (const edge of kernel.getFaceEdges(face)) {

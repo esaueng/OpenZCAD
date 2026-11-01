@@ -687,7 +687,12 @@ export function edgeModifierFailureMessage(
    * has to reach the ladder, or the sentence quotes a distance proved for the
    * symmetric chamfer and refused by the one the user asked for.
    */
-  chamferAngleRadians?: number
+  chamferAngleRadians?: number,
+  /**
+   * Which blend-shaped faces of the target an earlier fillet or chamfer
+   * made (`priorBlendFaceTest`). Without it every one counts.
+   */
+  priorBlendFace?: (face: number) => boolean
 ): string {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -756,7 +761,7 @@ export function edgeModifierFailureMessage(
     if (blendReportIsVertexBlend(reported)) {
       return `${prefix} Two of these rounds would run into each other at a shared corner, which the kernel cannot blend yet — ${featureKind} the edges in smaller groups that do not meet.`;
     }
-    if (selectionTouchesBlendFace(kernel, target, selected)) {
+    if (selectionTouchesBlendFace(kernel, target, selected, priorBlendFace)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
     }
   } catch {
