@@ -3,6 +3,7 @@ import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
+  Box,
   Check,
   CircleUserRound,
   CloudOff,
@@ -15,6 +16,7 @@ import {
   Settings as SettingsIcon,
   TriangleAlert,
   Upload,
+  UserPlus,
   Users
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
@@ -144,6 +146,30 @@ interface TopBarProps {
   encryption?: EncryptionIndicatorProps | null;
 }
 
+/**
+ * One glyph per presence state, so the icon-only chip tells them apart
+ * without its tooltip: an invitation while nothing is shared, the group
+ * faded while joining and struck through while offline. Colour still marks
+ * live (green) and the states that need a look (amber), via the chip.
+ */
+function PresenceGlyph({
+  status
+}: {
+  status: CollaborationStatus | 'not-shared';
+}) {
+  if (status === 'not-shared') {
+    return <UserPlus size={14} aria-hidden="true" />;
+  }
+  return (
+    <span
+      className={`presence-glyph${status === 'connecting' ? ' is-joining' : status === 'offline' ? ' is-offline' : ''}`}
+      aria-hidden="true"
+    >
+      <Users size={14} />
+    </span>
+  );
+}
+
 export function TopBar({
   projectName,
   units,
@@ -234,10 +260,8 @@ export function TopBar({
     ? 'busy'
     : editRefusal
       ? 'warning'
-      : modelPending
-        ? geometryFailed
-          ? 'warning'
-          : 'busy'
+      : modelPending && geometryFailed
+        ? 'warning'
         : saveGlyphFor(saveState);
 
   useEffect(() => {
@@ -359,6 +383,11 @@ export function TopBar({
         ? 'model unavailable'
         : 'preparing model'
       : null;
+  const readinessVisible = modelReadiness !== null && geometryFailed;
+  // The revision is saved; the model is still being built. A cube drawing
+  // itself stands in for the check until it is ready. A spinner beside
+  // "Saved" read as a save still in flight.
+  const modelPreparing = modelReadiness !== null && !geometryFailed;
   // The accessible name keeps the readiness the glyph shows, and still
   // begins with the visible label (WCAG 2.5.3).
   const saveLabel = modelReadiness
@@ -371,34 +400,53 @@ export function TopBar({
       : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
-      {/* Keyed by the glyph, not the state: saving → syncing keeps the
-          same ring turning, and only a change of kind pops. */}
-      <span key={saveGlyph} className="save-state-icon" aria-hidden="true">
-        {saveGlyph === 'busy' ? (
-          <LoaderCircle className="spin" size={14} />
-        ) : saveGlyph === 'warning' ? (
-          <TriangleAlert size={14} />
-        ) : saveGlyph === 'saved' ? (
-          <Check size={14} />
-        ) : (
-          <CloudOff size={14} />
-        )}
-      </span>
+      {/* The chip keeps the width of its widest routine label, so a save,
+          sync or check never moves the island or its neighbours. The glyph
+          sits in the label slot and the pair hugs its right end: the
+          reserve's slack falls at the island's outer edge, not as a hole
+          between "Saved" and presence (topbar.css). */}
       <StableLabel
         reserve={
-          saveToAccount
-            ? ['Save to my account']
-            : accountState === 'signed-in'
-              ? CLOUD_SAVE_LABEL_RESERVE
-              : DEVICE_SAVE_LABEL_RESERVE
+          readinessVisible
+            ? [saveText]
+            : saveToAccount
+              ? ['Save to my account']
+              : accountState === 'signed-in'
+                ? CLOUD_SAVE_LABEL_RESERVE
+                : DEVICE_SAVE_LABEL_RESERVE
         }
-        align="center"
       >
+        {/* Keyed by the glyph, not the state: saving → syncing keeps the
+            same ring turning, and only a change of kind pops. */}
+        <span
+          key={modelPreparing ? 'model' : saveGlyph}
+          className="save-state-icon"
+          aria-hidden="true"
+        >
+          {modelPreparing ? (
+            <Box size={14} className="save-model-glyph" />
+          ) : saveGlyph === 'busy' ? (
+            <LoaderCircle className="spin" size={14} />
+          ) : saveGlyph === 'warning' ? (
+            <TriangleAlert size={14} />
+          ) : saveGlyph === 'saved' ? (
+            <Check size={14} />
+          ) : (
+            <CloudOff size={14} />
+          )}
+        </span>
         {saveText}
       </StableLabel>
-      {/* Readiness is visible and announced alongside the storage label. */}
+      {/* Readiness is announced alongside the storage label. Preparing is
+          shown by the cube alone (the tooltip spells it out); a failed
+          model stays in words, as it needs a look. */}
       {modelReadiness ? (
-        <span className="save-model-readiness"> · {modelReadiness}</span>
+        <span
+          className={`save-model-readiness${readinessVisible ? '' : ' visually-hidden'}`}
+        >
+          {' '}
+          · {modelReadiness}
+        </span>
       ) : null}
     </>
   );
@@ -634,7 +682,9 @@ export function TopBar({
               disabled={!projectName}
               onClick={session ? onOpenSharing : onSignIn}
             >
-              <Users size={13} aria-hidden="true" />
+              <PresenceGlyph
+                status={knownDeviceOnly ? 'not-shared' : collaborationStatus}
+              />
               {collaborationStatus === 'live' ? (
                 // Only drawn once the row has collapsed to icons; the label
                 // carries the count everywhere else.
