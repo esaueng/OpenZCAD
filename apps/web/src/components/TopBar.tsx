@@ -33,9 +33,7 @@ import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
 import {
   ACCOUNT_LABEL_RESERVE,
-  CLOUD_SAVE_LABEL_RESERVE,
   COLLABORATION_LABEL_RESERVE,
-  DEVICE_SAVE_LABEL_RESERVE,
   WORKSPACE_MODE_OPTIONS,
   saveGlyphFor,
   type SaveGlyph
@@ -385,22 +383,11 @@ export function TopBar({
           <CloudOff size={14} />
         )}
       </span>
-      {/* Start-aligned so the reserve's slack trails the label. While a
-          visible readiness follows it, the slack would sit mid-phrase, and
-          the chip is resizing for the readiness anyway. */}
-      <StableLabel
-        reserve={
-          readinessVisible
-            ? [saveText]
-            : saveToAccount
-              ? ['Save to my account']
-              : accountState === 'signed-in'
-                ? CLOUD_SAVE_LABEL_RESERVE
-                : DEVICE_SAVE_LABEL_RESERVE
-        }
-      >
-        {saveText}
-      </StableLabel>
+      {/* Sized to its own label: a reserve for the widest state left a gap
+          after "Saved" that no other item has. The island is anchored at
+          its right edge, so a label change moves only its left edge; the
+          presence, File and Settings targets never shift. */}
+      <StableLabel reserve={[saveText]}>{saveText}</StableLabel>
       {/* Readiness is announced alongside the storage label. Preparing is
           shown by the spinner alone (the tooltip spells it out); a failed
           model stays in words, as it needs a look. */}
