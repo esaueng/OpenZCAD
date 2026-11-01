@@ -13,7 +13,7 @@ import {
 } from '@openzcad/shared';
 import { useCollaboration } from './useCollaboration';
 
-class Socket extends EventTarget {
+export class Socket extends EventTarget {
   static readonly OPEN = 1;
   static instances: Socket[] = [];
   readyState = 0;

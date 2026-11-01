@@ -514,6 +514,255 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
     unmount();
   });
 
+  it.each([false, true])(
+    'resumes an unacknowledged edit after lease loss (encrypted=%s)',
+    async (encrypted) => {
+      const base = createProjectDocument(
+        'Lease resume',
+        toUserId('owner_lease_resume')
+      );
+      const hook = await connectedOwner(base, encrypted);
+      const local = withBox(base, 'Pending box');
+      await edit(hook.rerender, local);
+      const frameType = encrypted ? 'e2ee-document' : 'document';
+      expect(
+        hook.socket.frames().filter((frame) => frame.type === frameType)
+      ).toHaveLength(1);
+      hook.socket.receive({ type: 'lease-lost', reason: 'expired' });
+      await flush();
+      const replacement = FakeWebSocket.instances.at(-1)!;
+      const latest = withBox(local, 'Newer local box');
+      await edit(hook.rerender, latest);
+      if (replacement !== hook.socket) act(() => replacement.open());
+      replacement.receive(
+        encrypted
+          ? {
+              type: 'e2ee-state',
+              members: [],
+              role: 'owner',
+              lease: null,
+              keyEpoch: 0,
+              head: { plain: base }
+            }
+          : {
+              type: 'state',
+              members: [],
+              role: 'owner',
+              lease: null,
+              document: base
+            }
+      );
+      await flush();
+      expect(
+        replacement
+          .frames()
+          .filter(
+            (frame) =>
+              frame.type === frameType && frame.leaseId === 'lease_resumed'
+          )
+      ).toHaveLength(0);
+      replacement.receive({
+        type: 'lease-granted',
+        lease: {
+          leaseId: 'lease_resumed',
+          projectId: base.projectId,
+          clientId: replacement.frames()[0]!.clientId!,
+          userId: base.ownerUserId,
+          expiresAt: Date.now() + 30_000
+        }
+      });
+      await flush();
+      const publications = replacement
+        .frames()
+        .filter(
+          (frame) =>
+            frame.type === frameType && frame.leaseId === 'lease_resumed'
+        );
+      expect(publications).toHaveLength(1);
+      expect(publications[0]!.leaseId).toBe('lease_resumed');
+      if (encrypted)
+        expect(codec.encode.mock.calls.at(-1)![0].nodes).toEqual(latest.nodes);
+      else
+        expect(
+          (publications[0] as unknown as { document: ProjectDocument }).document
+            .nodes
+        ).toEqual(latest.nodes);
+      hook.socket.receive({ type: 'ack', version: latest.version });
+      await flush();
+      expect(hook.result.current.roomVersion).toBe(base.version);
+      replacement.receive({ type: 'ack', version: latest.version });
+      await flush();
+      expect(hook.result.current.roomVersion).toBe(latest.version);
+      expect(hook.result.current.status).toBe('live');
+      hook.unmount();
+    }
+  );
+
+  it.each(
+    [false, true].flatMap((encrypted) =>
+      (['accepted', 'divergent', 'role-changed'] as const).map((outcome) => ({
+        encrypted,
+        outcome
+      }))
+    )
+  )(
+    'preserves $outcome room state after lease loss (encrypted=$encrypted)',
+    async ({ encrypted, outcome }) => {
+      const base = createProjectDocument(
+        'Lease reconciliation',
+        toUserId('owner_lease_reconcile')
+      );
+      const hook = await connectedOwner(base, encrypted);
+      const local = withBox(base, 'Local box');
+      await edit(hook.rerender, local);
+      hook.socket.receive({
+        type: 'lease-lost',
+        reason: outcome === 'role-changed' ? 'role-changed' : 'invalid'
+      });
+      await flush();
+      if (outcome === 'role-changed') {
+        expect(FakeWebSocket.instances).toHaveLength(1);
+        expect(hook.result.current.status).toBe('read-only');
+        expect(hook.result.current.role).toBe('viewer');
+      } else {
+        const replacement = FakeWebSocket.instances.at(-1)!;
+        expect(replacement).not.toBe(hook.socket);
+        act(() => replacement.open());
+        const head =
+          outcome === 'accepted' ? local : withBox(base, 'Remote box');
+        replacement.receive(
+          encrypted
+            ? {
+                type: 'e2ee-state',
+                members: [],
+                role: 'owner',
+                lease: null,
+                keyEpoch: 0,
+                head: { plain: head }
+              }
+            : {
+                type: 'state',
+                members: [],
+                role: 'owner',
+                lease: null,
+                document: head
+              }
+        );
+        await flush();
+        replacement.receive({
+          type: 'lease-granted',
+          lease: {
+            leaseId: 'lease_reconciled',
+            projectId: base.projectId,
+            clientId: replacement.frames()[0]!.clientId!,
+            userId: base.ownerUserId,
+            expiresAt: Date.now() + 30_000
+          }
+        });
+        await flush();
+        const sent = replacement
+          .frames()
+          .filter(
+            (frame) =>
+              frame.type === 'document' || frame.type === 'e2ee-document'
+          );
+        if (outcome === 'accepted') {
+          expect(sent).toHaveLength(0);
+          expect(hook.result.current.roomVersion).toBe(local.version);
+          expect(hook.result.current.status).toBe('live');
+        } else {
+          // A divergent head is never silently adopted as our merge base.
+          // Its fenced submission must still go through the room's reply.
+          expect(sent).toHaveLength(1);
+          if (encrypted) expect(codec.encode.mock.calls.at(-1)![1]).toBeNull();
+          else
+            expect(
+              (sent[0] as unknown as { baseVersion: number | null }).baseVersion
+            ).toBeNull();
+          replacement.receive(
+            encrypted
+              ? { type: 'e2ee-conflict', latest: { plain: head } }
+              : { type: 'conflict', document: head }
+          );
+          await flush();
+          expect(hook.result.current.status).toBe('conflict');
+          expect(hook.result.current.conflict?.localDocument.nodes).toEqual(
+            local.nodes
+          );
+          expect(hook.result.current.conflict?.remoteDocument.nodes).toEqual(
+            head.nodes
+          );
+        }
+      }
+      hook.unmount();
+    }
+  );
+
+  it('drops a sealing result from the lease connection that was retired', async () => {
+    const base = createProjectDocument(
+      'Retired seal',
+      toUserId('owner_retired_seal')
+    );
+    const hook = await connectedOwner(base);
+    const local = withBox(base, 'Pending box');
+    let finish!: (
+      value: Awaited<ReturnType<EncryptedRoomCodec['encode']>>
+    ) => void;
+    codec.encode.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    await edit(hook.rerender, local);
+    hook.socket.receive({ type: 'lease-lost', reason: 'expired' });
+    await flush();
+    const replacement = FakeWebSocket.instances.at(-1)!;
+    expect(replacement).not.toBe(hook.socket);
+    act(() => replacement.open());
+    replacement.receive({
+      type: 'e2ee-state',
+      members: [],
+      role: 'owner',
+      lease: null,
+      keyEpoch: 0,
+      head: { plain: base }
+    });
+    await flush();
+    replacement.receive({
+      type: 'lease-granted',
+      lease: {
+        leaseId: 'lease_after_seal',
+        projectId: base.projectId,
+        clientId: replacement.frames()[0]!.clientId!,
+        userId: base.ownerUserId,
+        expiresAt: Date.now() + 30_000
+      }
+    });
+    await flush();
+    finish({
+      kind: 'sealed',
+      version: local.version,
+      submission: {
+        envelope: 'old-envelope',
+        signature: 'old-signature',
+        wrappedVersionKey: 'old-wrapped-key',
+        signerDeviceId: 'device_laptop'
+      }
+    });
+    await flush();
+    expect(
+      hook.socket.frames().filter((frame) => frame.type === 'e2ee-document')
+    ).toHaveLength(0);
+    const sent = replacement
+      .frames()
+      .filter((frame) => frame.type === 'e2ee-document');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.leaseId).toBe('lease_after_seal');
+    expect(sent[0]!.version?.envelope).not.toBe('old-envelope');
+    hook.unmount();
+  });
+
   it('rejoins a rejected publication with the unsent edit and a fresh lease', async () => {
     const base = createProjectDocument(
       'Retry publication',

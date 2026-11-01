@@ -257,6 +257,13 @@ export function useCollaboration({
       ? 'connecting'
       : statusEntry.status;
 
+  const restartConnection = useCallback(() => {
+    // Fence asynchronous sends and replies before passive socket cleanup.
+    roomEpochRef.current += 1;
+    setStatus('connecting');
+    setConnectionGeneration((generation) => generation + 1);
+  }, [setStatus]);
+
   const retryConnection = useCallback(() => {
     if (
       !roomWanted ||
@@ -265,12 +272,8 @@ export function useCollaboration({
       (status !== 'offline' && status !== 'rejected')
     )
       return;
-    // Invalidate late frames immediately. The connect effect then retires the
-    // old socket, reads the room head and reacquires a lease before publishing.
-    roomEpochRef.current += 1;
-    setStatus('connecting');
-    setConnectionGeneration((generation) => generation + 1);
-  }, [roomWanted, projectId, status, setStatus]);
+    restartConnection();
+  }, [roomWanted, projectId, status, restartConnection]);
 
   const settleKeepMine = useCallback((error?: Error) => {
     const pending = keepMineAckRef.current;
@@ -985,6 +988,9 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'lease-lost') {
+          const checkpointPending = Boolean(
+            checkpointRef.current || checkpointAckRef.current
+          );
           settleCheckpointDrain(new Error('The edit lease was lost.'));
           checkpointRef.current?.abort(new Error('The edit lease was lost.'));
           settleKeepMine(
@@ -1007,10 +1013,26 @@ export function useCollaboration({
             roleRef.current !== 'viewer' &&
             socket.readyState === WebSocket.OPEN
           ) {
-            setStatus('connecting');
-            socket.send(
-              JSON.stringify({ type: 'lease-acquire', clientId: id })
-            );
+            if (
+              checkpointPending ||
+              conflictRef.current ||
+              readUnresolvedConflict(projectId, 'room')
+            ) {
+              // Named saves can still receive their owned durable receipt;
+              // explicit conflict decisions must also survive lease renewal.
+              setStatus(
+                conflictRef.current || readUnresolvedConflict(projectId, 'room')
+                  ? 'conflict'
+                  : 'connecting'
+              );
+              socket.send(
+                JSON.stringify({ type: 'lease-acquire', clientId: id })
+              );
+            } else {
+              // The previous write may have committed without its ack. Read the
+              // room head on a new connection before retrying the current edit.
+              restartConnection();
+            }
           }
           return;
         }
@@ -1277,6 +1299,7 @@ export function useCollaboration({
     };
   }, [
     connectionGeneration,
+    restartConnection,
     displayName,
     enabled,
     encrypted,
