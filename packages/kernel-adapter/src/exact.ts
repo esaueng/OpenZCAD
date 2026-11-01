@@ -265,6 +265,11 @@ import {
   heldDisplayTessellation
 } from './display-tessellation';
 import {
+  displayOnlyBlendSalt,
+  displayOnlyBlendsSupported,
+  withDisplayOnlyBlends
+} from './display-only-blends';
+import {
   MAX_HISTORY_CHECKPOINTS,
   MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES,
   MAX_HISTORY_REPLAY_WORK,
@@ -1512,7 +1517,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal,
     yieldControl?: () => Promise<void> | void,
-    deferTerminalFaceLineage = false
+    deferTerminalFaceLineage = false,
+    displayOnlyBlends = false
   ): Promise<{
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -1600,9 +1606,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ) +
             (feature.featureId === deferredDirectEditFeatureId
               ? '|display-output'
-              : '')
+              : '') +
+            displayOnlyBlendSalt(feature, displayOnlyBlends)
         )
       : [];
+    // A display-only build salts its blending features' digests so that a
+    // checked build never restores what it stores, but it may restore what a
+    // checked build stored: checked geometry is good for display too.
+    const checkedDigests = displayOnlyBlends
+      ? digests.map((digest, index) => {
+          const salt = displayOnlyBlendSalt(features[index]!, true);
+          return salt ? digest.slice(0, -salt.length) : digest;
+        })
+      : digests;
     // A request that may skip a boolean's probe can still restore a
     // checkpoint where the probe ran: it adds lineage to the same geometry.
     // Previews and exports pass no demand, so without this every switch back
@@ -1623,7 +1639,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 historyFeatureDigest(document, feature, index, scope, []) +
                 (feature.featureId === deferredDirectEditFeatureId
                   ? '|display-output'
-                  : '')
+                  : '') +
+                displayOnlyBlendSalt(feature, displayOnlyBlends)
             )
           : [];
     const probePrefix: [string, boolean][] = [];
@@ -1711,7 +1728,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           entry.digests.some(
             (digest, offset) =>
               digest !== digests[from + offset] &&
-              digest !== probedDigests[from + offset]
+              digest !== probedDigests[from + offset] &&
+              digest !== checkedDigests[from + offset]
           )
         ) {
           break;
@@ -2066,7 +2084,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     try {
       build = await buildDocumentHistoryCooperatively(
         {
-          run: (work) => withSyncReadMemo(readMemo, work),
+          run: (work) =>
+            withDisplayOnlyBlends(activeKernel, displayOnlyBlends, () =>
+              withSyncReadMemo(readMemo, work)
+            ),
           checkpoint: () =>
             yieldControl
               ? Promise.resolve(yieldControl())
@@ -2924,7 +2945,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         lineageDemand,
         cancellation,
         yieldControl,
-        geometryOnly && deferTopology
+        geometryOnly && deferTopology,
+        geometryOnly && displayOnlyBlendsSupported(RemusKernel)
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
