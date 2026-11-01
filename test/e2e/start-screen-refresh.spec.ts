@@ -201,10 +201,10 @@ for (const layout of ['grid', 'list']) {
       await page.goto('/');
       await expect(page.locator('.start-tile-project')).toHaveCount(3);
       const positions = () =>
-        page.locator('.start-shelf-group').evaluateAll((headings) =>
-          headings.map((heading) => ({
-            x: heading.getBoundingClientRect().x,
-            y: heading.getBoundingClientRect().y
+        page.locator('.start-body > .start-tile-grid').evaluateAll((grids) =>
+          grids.map((grid) => ({
+            x: grid.getBoundingClientRect().x,
+            y: grid.getBoundingClientRect().y
           }))
         );
       const before = await positions();

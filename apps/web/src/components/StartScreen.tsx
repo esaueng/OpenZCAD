@@ -601,9 +601,8 @@ export function StartScreen({
     observer.observe(body);
     return () => observer.disconnect();
   }, []);
-  // Once the shelf scrolls, its line fades the cards out beneath it; a group
-  // label stuck under the line draws that fade itself. Flags, not React
-  // state: a scroll must not re-render the whole library.
+  // Once the shelf scrolls, its line fades the cards out beneath it. A flag,
+  // not React state: a scroll must not re-render the whole library.
   useEffect(() => {
     const screen = screenRef.current;
     if (!screen) return;
@@ -618,18 +617,7 @@ export function StartScreen({
       const body = screen.querySelector<HTMLElement>('.start-body');
       const section = body?.closest('.start-section');
       if (!body || !section) return;
-      const scrolled = body.scrollTop > 0;
-      const top = body.getBoundingClientRect().top;
-      let stuck = false;
-      for (const label of body.querySelectorAll<HTMLElement>(
-        ':scope > .start-shelf-group'
-      )) {
-        const on = scrolled && label.getBoundingClientRect().top <= top + 0.5;
-        flag(label, 'data-stuck', on);
-        stuck ||= on;
-      }
-      flag(section, 'data-scrolled', scrolled);
-      flag(section, 'data-label-stuck', stuck);
+      flag(section, 'data-scrolled', body.scrollTop > 0);
     };
     update();
     screen.addEventListener('scroll', update, { capture: true, passive: true });
@@ -2991,12 +2979,6 @@ export function StartScreen({
                 )}
                 {loadingGroups.map((group) => (
                   <Fragment key={group.label ?? 'all'}>
-                    {group.label && group.label !== 'Pinned' && (
-                      <h3 className="start-shelf-group" aria-hidden="true">
-                        {group.label}
-                        <span>…</span>
-                      </h3>
-                    )}
                     <div
                       className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
                       aria-hidden="true"
@@ -3069,24 +3051,6 @@ export function StartScreen({
                   // An empty group only shows as a drop target mid-drag.
                   group.items.length === 0 && !reorder.draggingId ? null : (
                     <Fragment key={group.label ?? 'all'}>
-                      {/* Pinned goes unlabelled, as inside a folder: the
-                          cards' own pins mark it. */}
-                      {group.label && group.group !== 'pinned' && (
-                        <h3 className="start-shelf-group">
-                          {group.label}
-                          {/* Projects, not tiles, like the filter counts. */}
-                          <span>
-                            {group.items.reduce(
-                              (count, item) =>
-                                count +
-                                (item.folder
-                                  ? folderMembers(item.folder).length
-                                  : 1),
-                              0
-                            )}
-                          </span>
-                        </h3>
-                      )}
                       <div
                         className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
                         data-tile-group={canReorder ? group.group : undefined}

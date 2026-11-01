@@ -324,11 +324,9 @@ test.describe('with a pinned part', () => {
         page.getByRole('button', { name: `Unpin ${name}`, exact: true })
       ).toBeAttached();
     }
-    // With every project pinned, Projects is still there to drag one back into.
-    // (Its heading and drop target appear only mid-drag.)
-    await expect(
-      page.locator('.start-shelf-group', { hasText: /^Projects/ })
-    ).toHaveCount(0);
+    // With every project pinned, the unpinned group is still there to drag
+    // one back into; its drop target appears only mid-drag.
+    await expect(page.locator('[data-tile-group="parts"]')).toHaveCount(0);
     await dragCard(page, names[0]!, names[2]!);
     const partsZone = page.locator('[data-tile-group="parts"]');
     await expect(partsZone).toContainText('Drop here to unpin');

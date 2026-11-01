@@ -541,11 +541,11 @@ describe('StartScreen library discovery', () => {
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(2);
+      // Pinned and the rest as two unlabelled grids, as when loaded.
       expect(
-        [...container.querySelectorAll('.start-shelf-group')].map(
-          (el) => el.textContent
-        )
-      ).toEqual(['Projects…']);
+        container.querySelectorAll('.start-body > .start-tile-grid')
+      ).toHaveLength(2);
+      expect(container.querySelector('.start-shelf-group')).toBeNull();
       localStorage.removeItem(key);
     }
   );
@@ -622,10 +622,9 @@ describe('StartScreen library discovery', () => {
         busy: true
       });
       expect(
-        [...container.querySelectorAll('.start-shelf-group')].map(
-          (heading) => heading.textContent
-        )
-      ).toEqual(['Projects…']);
+        container.querySelectorAll('.start-body > .start-tile-grid')
+      ).toHaveLength(2);
+      expect(container.querySelector('.start-shelf-group')).toBeNull();
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(3);
@@ -1254,9 +1253,9 @@ describe('StartScreen shelf filters, order and layout', () => {
     // Cards still drag under a sort: a drop saves the order as shown, moved,
     // and switches to Custom order (start-tile-reorder e2e).
     expect(reorderableCards()).toBeGreaterThan(0);
-    expect(document.querySelector('.start-shelf-group')).toHaveTextContent(
-      /^Projects/
-    );
+    expect(
+      document.querySelectorAll('.start-body > .start-tile-grid')
+    ).toHaveLength(2);
   });
 
   it('groups pinned parts by their flag, not their place in the listing', () => {
@@ -1887,16 +1886,12 @@ describe('StartScreen sidebar and shelf edge', () => {
     { ...localProject, projectId: toProjectId('loose'), name: 'Loose part' }
   ];
 
-  it('heads the pinned cards with no label, as inside a folder', () => {
-    // The cards' own pins mark the group; only the rest is labelled.
+  it('groups pinned cards first with no labels, as inside a folder', () => {
+    // The cards' own pins mark the group.
     const { container } = renderStartScreen({ projects: pinnedAndLoose() });
     const body = container.querySelector('.start-body')!;
     expect(body.querySelectorAll(':scope > .start-tile-grid')).toHaveLength(2);
-    expect(
-      [...body.querySelectorAll('.start-shelf-group')].map(
-        (heading) => heading.textContent
-      )
-    ).toEqual(['Projects1']);
+    expect(body.querySelector('h3')).toBeNull();
   });
 
   it('counts projects, not tiles, in the Pinned tab and group labels', () => {
@@ -1932,11 +1927,6 @@ describe('StartScreen sidebar and shelf edge', () => {
       name: /^Pinned/
     });
     expect(pinnedFilter).toHaveTextContent('Pinned3');
-    expect(
-      [...container.querySelectorAll('.start-shelf-group')].map(
-        (heading) => heading.textContent
-      )
-    ).toEqual(['Projects1']);
 
     fireEvent.click(pinnedFilter);
     expect(
@@ -1957,25 +1947,19 @@ describe('StartScreen sidebar and shelf edge', () => {
     expect(screen.getByRole('tab', { name: 'Archive 0' })).toBeInTheDocument();
   });
 
-  it('flags a scrolled shelf and the group label stuck under its line', () => {
+  it('flags a scrolled shelf', () => {
     const { container } = renderStartScreen({ projects: pinnedAndLoose() });
     const body = container.querySelector<HTMLElement>('.start-body')!;
     const section = container.querySelector('.start-section')!;
-    const [projectsLabel] = container.querySelectorAll('.start-shelf-group');
     expect(section).not.toHaveAttribute('data-scrolled');
 
     body.scrollTop = 40;
     fireEvent.scroll(body);
     expect(section).toHaveAttribute('data-scrolled');
-    // happy-dom lays nothing out, so every label reads as at the top.
-    expect(projectsLabel).toHaveAttribute('data-stuck');
-    expect(section).toHaveAttribute('data-label-stuck');
 
     body.scrollTop = 0;
     fireEvent.scroll(body);
     expect(section).not.toHaveAttribute('data-scrolled');
-    expect(projectsLabel).not.toHaveAttribute('data-stuck');
-    expect(section).not.toHaveAttribute('data-label-stuck');
   });
 
   it('shortens Import beside New project but keeps its full name', () => {

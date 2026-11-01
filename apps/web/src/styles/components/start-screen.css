@@ -955,9 +955,8 @@
   }
 
   /* Once the shelf scrolls, cards fade out under the line instead of being
-     sliced off on a hard edge. A stuck group label draws its own fade (it
-     sits under the line), so this one only shows on a shelf with no
-     labels. Both flags are set from the shelf's scroll position. */
+     sliced off on a hard edge. The flag is set from the shelf's scroll
+     position. */
   .start-toolbar::after {
     content: '';
     position: absolute;
@@ -971,7 +970,7 @@
     pointer-events: none;
   }
 
-  .start-section[data-scrolled]:not([data-label-stuck]) .start-toolbar::after {
+  .start-section[data-scrolled] .start-toolbar::after {
     opacity: 1;
   }
 }
@@ -1063,60 +1062,6 @@
 .start-layout-button[aria-pressed='true'] {
   color: var(--color-text);
   background: var(--color-surface-2);
-}
-
-/* Pinned parts head the shelf as their own labelled group. On a wide
-   window each label sticks under the shelf line while its group scrolls
-   past, so the edge always says which group the cards belong to. */
-.start-shelf-group {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  margin: 0;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-regular);
-}
-
-@media (min-width: 901px) {
-  .start-shelf-group {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    /* Fills the body's row gap above it, so a card scrolling under the
-       label never shows between it and the line. */
-    margin-top: calc(-1 * var(--sp-3));
-    padding-top: var(--sp-3);
-    background: var(--color-bg);
-  }
-
-  .start-body > .start-shelf-group:first-child {
-    margin-top: 0;
-    padding-top: 0;
-  }
-
-  .start-shelf-group::after {
-    content: '';
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    height: var(--start-edge-fade);
-    background: linear-gradient(var(--color-bg), transparent);
-    opacity: 0;
-    transition: opacity var(--dur-fast) var(--ease-out);
-    pointer-events: none;
-  }
-
-  .start-shelf-group[data-stuck]::after {
-    opacity: 1;
-  }
-}
-
-.start-shelf-group span {
-  min-width: 3ch;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
 }
 
 .start-toolbar-title {
