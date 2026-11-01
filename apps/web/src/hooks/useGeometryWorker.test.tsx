@@ -37,6 +37,42 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it('waits for the accepted live projection even when the worker already reports ready', () => {
+    installWorker();
+    const document = createProjectDocument('Restored model', toUserId('user'));
+    const manager = { document } as CommandManager;
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => manager,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    act(() => {
+      result.current.sync(document);
+      worker.emit({
+        type: 'state',
+        phase: 'ready',
+        projectId: document.projectId,
+        version: document.version,
+        stale: false
+      });
+    });
+    expect(result.current.state.phase).toBe('ready');
+    expect(result.current.isReadyFor(document)).toBe(false);
+    act(() =>
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        derived: document.derived
+      })
+    );
+    expect(result.current.isReadyFor(document)).toBe(true);
+  });
+
   it('cancels the live broadcast on close and rebuilds if the same project is reopened', () => {
     installWorker();
     const document = createProjectDocument(
@@ -632,7 +668,7 @@ describe('useGeometryWorker', () => {
     installWorker();
     const document = createProjectDocument('Worker state', toUserId('user'));
     const host = {
-      manager: () => null,
+      manager: () => ({ document }) as CommandManager,
       onDerived: vi.fn(),
       onError: vi.fn()
     };
@@ -641,6 +677,7 @@ describe('useGeometryWorker', () => {
 
     expect(result.current.isReadyFor(document)).toBe(false);
     act(() => {
+      result.current.sync(document);
       worker.emit({
         type: 'state',
         phase: 'rebuilding',
@@ -661,6 +698,16 @@ describe('useGeometryWorker', () => {
         stale: false
       });
     });
+    expect(result.current.isReadyFor(document)).toBe(false);
+    act(() =>
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        derived: document.derived
+      })
+    );
     expect(result.current.isReadyFor(document)).toBe(true);
     expect(result.current.isReadyFor({ ...document, version: 2 })).toBe(false);
     act(() => result.current.invalidate());
@@ -673,13 +720,21 @@ describe('useGeometryWorker', () => {
     const document = createProjectDocument('Live state', toUserId('user'));
     const { result } = renderHook(() =>
       useGeometryWorker({
-        manager: () => null,
+        manager: () => ({ document }) as CommandManager,
         onDerived: vi.fn(),
         onError: vi.fn()
       })
     );
     const worker = FakeWorker.instances[0]!;
     act(() => {
+      result.current.sync(document);
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        derived: document.derived
+      });
       worker.emit({
         type: 'state',
         phase: 'ready',
@@ -1161,7 +1216,7 @@ describe('useGeometryWorker', () => {
         const onError = vi.fn();
         const { result } = renderHook(() =>
           useGeometryWorker({
-            manager: () => null,
+            manager: () => ({ document }) as CommandManager,
             onDerived: vi.fn(),
             onError
           })
@@ -1183,6 +1238,13 @@ describe('useGeometryWorker', () => {
         expect(FakeWorker.instances).toHaveLength(1);
         expect(onError).not.toHaveBeenCalled();
         act(() => {
+          worker.emit({
+            type: 'sync',
+            ok: true,
+            projectId: document.projectId,
+            version: document.version,
+            derived: document.derived
+          });
           worker.emit({
             type: 'state',
             phase: 'ready',
