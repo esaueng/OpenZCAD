@@ -166,7 +166,7 @@ export async function ownerWithShareLink(
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
   const dialog = alice.getByRole('dialog', { name: 'Project sharing' });
   const links = dialog.getByRole('region', { name: 'Encrypted share links' });
-  await expect(links.getByText('No links yet.')).toBeVisible({
+  await expect(links.getByText('Only invited people')).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link2 } from 'lucide-react';
+import { Globe } from 'lucide-react';
 import { StableLabel } from './StableLabel';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
 import { shareLinkCreationProblem } from '../lib/projectShareLink';
@@ -361,21 +361,34 @@ export function EncryptedShareLinks({
 
   return (
     <section
-      className="sharing-section sharing-link"
+      className="sharing-section sharing-access-section"
       aria-label="Encrypted share links"
     >
-      <div className="sharing-link-head">
-        <Link2 size={16} aria-hidden="true" />
-        <div className="sharing-link-text">
-          <span className="sharing-link-title">Anyone with the link</span>
-          <span className="sharing-tag">
-            Opens the current model, read-only. The link carries its own key:
-            OpenZCAD’s servers cannot open what it shows.
+      <h3 className="sharing-section-label">General access</h3>
+      <div className="sharing-access">
+        <span className="sharing-access-icon" aria-hidden="true">
+          <Globe size={13} />
+        </span>
+        <span className="sharing-access-text">
+          <span className="sharing-access-title">
+            {state === null
+              ? 'Anyone with a link'
+              : links.length > 0
+                ? `Anyone with a link · ${links.length} ${
+                    links.every((row) => row.status === 'active')
+                      ? 'active'
+                      : 'listed'
+                  }`
+                : 'Only invited people'}
           </span>
-        </div>
+          <span className="sharing-access-detail">
+            View only. The key is in the link, so OpenZCAD’s servers can’t read
+            the model.
+          </span>
+        </span>
         <button
           type="button"
-          className="primary sharing-share-create"
+          className={links.length > 0 ? 'secondary' : 'primary'}
           disabled={disabled || state?.needsConfirmation}
           onClick={() =>
             void run('create', async () => {
@@ -555,22 +568,21 @@ export function EncryptedShareLinks({
       ) : null}
 
       {links.length > 0 ? (
-        <ul
-          className="sharing-list sharing-share-list"
-          aria-label="Active share links"
-        >
+        <ul className="sharing-list" aria-label="Active share links">
           {links.map((row) => (
             <li key={row.shareId}>
-              <span className="sharing-share-row-text">
-                <span>{MODE_LABEL[row.mode]}</span>
-                <span className="sharing-tag" data-status={row.status}>
+              <span className="sharing-row-text">
+                <span className="sharing-member-id">
+                  {MODE_LABEL[row.mode]} link
+                </span>
+                <span className="sharing-row-detail" data-status={row.status}>
                   {expiryText(row)}
                 </span>
               </span>
               {row.url ? (
                 <button
                   type="button"
-                  className="sharing-row-action"
+                  className="sharing-row-copy"
                   disabled={busy !== null || row.status !== 'active'}
                   aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
                   onClick={() => void copy(row.url!, row.shareId)}
@@ -597,8 +609,6 @@ export function EncryptedShareLinks({
             </li>
           ))}
         </ul>
-      ) : state ? (
-        <p className="sharing-empty">No links yet.</p>
       ) : null}
     </section>
   );
