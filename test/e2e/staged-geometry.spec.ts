@@ -333,16 +333,14 @@ test(
     ).toBe(0);
     expect(
       await page.evaluate(() =>
-        performance
-          .getEntriesByName('oz:edit.frame')
-          .some(
-            (entry) =>
-              (
-                (entry as PerformanceMeasure).detail as {
-                  analysis?: string;
-                } | null
-              )?.analysis === 'ready'
-          )
+        performance.getEntriesByName('oz:edit.frame').some(
+          (entry) =>
+            (
+              (entry as PerformanceMeasure).detail as {
+                analysis?: string;
+              } | null
+            )?.analysis === 'ready'
+        )
       )
     ).toBe(false);
     await expect(page.getByRole('button', { name: /^Fillet/ })).toBeDisabled();
