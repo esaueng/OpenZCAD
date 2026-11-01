@@ -4,6 +4,7 @@
  * and the user-facing failure message. Kernel-mutating, but stateless.
  */
 import type { FaceEvolutionPayloadV1, RemusKernel } from './remus-runtime';
+import { displayOnlyBlendsActive } from './display-only-blends';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import {
@@ -353,6 +354,9 @@ export function applyEdgeModifier(
     // generous radius-2r tube plus one radius-2r ball per selected edge. This
     // scales as volume, allows concave as well as convex blends, and rejects
     // topology duplication that bounds and relaxed validation cannot see.
+    // A display-only build (a drag frame) skips this measurement, as the
+    // kernel skips its own; the checked rebuild at rest and on release runs
+    // it. See `display-only-blends`.
     const neighbourhoodRadius =
       Math.max(size, variableRadius?.endRadius ?? 0) * 2;
     const selectedLength = selected.reduce(
@@ -362,14 +366,16 @@ export function applyEdgeModifier(
     const volumeEnvelope =
       Math.PI * neighbourhoodRadius ** 2 * selectedLength +
       selected.length * ((4 / 3) * Math.PI * neighbourhoodRadius ** 3);
-    const targetVolume = kernel.volume(target, MEASUREMENT_DEFLECTION);
-    const modifiedVolume = kernel.volume(modified, MEASUREMENT_DEFLECTION);
-    const volumeTolerance = Math.max(1, Math.abs(targetVolume)) * 1e-6;
-    if (
-      Math.abs(modifiedVolume - targetVolume) >
-      volumeEnvelope + volumeTolerance
-    ) {
-      return null;
+    if (!displayOnlyBlendsActive()) {
+      const targetVolume = kernel.volume(target, MEASUREMENT_DEFLECTION);
+      const modifiedVolume = kernel.volume(modified, MEASUREMENT_DEFLECTION);
+      const volumeTolerance = Math.max(1, Math.abs(targetVolume)) * 1e-6;
+      if (
+        Math.abs(modifiedVolume - targetVolume) >
+        volumeEnvelope + volumeTolerance
+      ) {
+        return null;
+      }
     }
 
     // A fillet that came back as a chamfer is not a fillet. Remus used to

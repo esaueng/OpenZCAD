@@ -3,8 +3,14 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { mixedSeamFixture } from './fixtures/mixed-seam';
+import { displayOnlyBlendsSupported } from '../packages/kernel-adapter/src/display-only-blends';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 describe('mixed cylinder seam fillet', { timeout: 120_000 }, () => {
+  it('adopts the touching-feature kernel together with its display-only preview switch', () => {
+    expect(displayOnlyBlendsSupported(RemusKernel)).toBe(true);
+  });
+
   it('builds all three selected edges as one undoable feature in every selection order', async () => {
     const adapter = await createExactKernelAdapter();
     try {
