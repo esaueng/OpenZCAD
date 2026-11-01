@@ -108,21 +108,32 @@ describe('D06 Auto-dimension: the corpus', () => {
     expectClearLayout(after, views, bodies);
   });
 
-  it('leaves a bolt circle pitch to the report and dimensions the rest', async () => {
+  it('states a bolt circle by a Ø span between two opposite holes', async () => {
     const { bodies, bodyId } = await buildPart(adapter, flangeOperations());
-    const { plan, audit, after, views } = autoDimension(
+    const { before, plan, audit, after, views } = autoDimension(
       sheetOf(bodyId),
       bodies
     );
-    // Since v48 a Ø span between opposite holes states the pitch; the
-    // generator leaves that one to the person and says so.
-    expect(audit).toMatchObject({ redundant: [] });
-    expect(audit.missing.map((entry) => entry.message)).toEqual([
+    expect(before.missing.map((entry) => entry.message)).toContain(
       'Ø20 pitch diameter of the 4× Ø3 bolt circle.'
+    );
+    // Since v48 a Ø span between opposite holes' centres states the pitch.
+    const pitch = plan.annotations.filter(
+      (annotation): annotation is DrawingLinearDimension =>
+        annotation.kind === 'linear' && annotation.diameter === true
+    );
+    expect(pitch).toHaveLength(1);
+    expect([pitch[0]!.from.anchor, pitch[0]!.to.anchor]).toEqual([
+      'center',
+      'center'
     ]);
-    expect(plan.skipped.map((entry) => entry.message)).toEqual([
-      "Ø20 pitch diameter of the 4× Ø3 bolt circle: Auto-dimension does not place pitch diameters yet; add a Ø span between two opposite holes' centres."
-    ]);
+    const view = views.find((v) => v.view.viewId === pitch[0]!.viewId)!.view;
+    expect(
+      resolveDrawingAnnotation(pitch[0]!, view, bodies, 'mm')
+    ).toMatchObject({ ok: true, resolved: { label: 'Ø20' } });
+    expect(plan.skipped).toEqual([]);
+    expect(audit).toMatchObject({ missing: [], redundant: [], unchecked: [] });
+    expect(audit.stated).toBe(audit.required);
     expectClearLayout(after, views, bodies);
   });
 
