@@ -476,6 +476,25 @@ describe('HistoryTimeline', () => {
     );
   });
 
+  it('holds the reorder grip while an exact operation is running', () => {
+    const { props, rerender } = renderTimeline({ reorderBusy: true });
+    const grip = screen.getByRole('button', {
+      name: 'Reorder Feature 2. Use the arrow keys to move it.'
+    });
+    // Repeated presses during a rebuild used to be refused one by one and
+    // could leave an order nobody chose; now none goes out, and focus stays.
+    grip.focus();
+    fireEvent.keyDown(grip, { key: 'ArrowDown' });
+    fireEvent.keyDown(grip, { key: 'ArrowDown' });
+    expect(props.onReorderFeature).not.toHaveBeenCalled();
+    expect(grip).toHaveAttribute('aria-disabled', 'true');
+    expect(grip).not.toBeDisabled();
+    expect(grip).toHaveFocus();
+    rerender(<HistoryTimeline {...props} reorderBusy={false} />);
+    fireEvent.keyDown(grip, { key: 'ArrowDown' });
+    expect(props.onReorderFeature).toHaveBeenCalledWith('feature-2', 2);
+  });
+
   it('drops a pending keyboard commit when a row is reordered', () => {
     vi.useFakeTimers();
     const { props } = renderTimeline();

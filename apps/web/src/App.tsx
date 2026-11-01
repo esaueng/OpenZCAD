@@ -1579,6 +1579,7 @@ import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
+  VALIDATED_FEATURE_BUSY_STATUS,
   type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
@@ -3072,9 +3073,12 @@ export function App() {
    * out. (The lock's `busy` still gates the editor surfaces above.)
    */
   const [geometryBusy, setGeometryBusy] = useState(false);
+  /** Whether a validated exact operation holds the commit lock. */
+  const [validatedBusy, setValidatedBusy] = useState(false);
   const handleValidatedBusy = useCallback((next: boolean) => {
     setBusy(next);
     setGeometryBusy(next);
+    setValidatedBusy(next);
   }, []);
   /**
    * The import the progress card is reporting, or null for none. The card
@@ -25766,9 +25770,12 @@ export function App() {
       geometryReady: (document) => geometry.isReadyFor(document)
     });
     if (plan.kind === 'direct') executeCommand(command);
+    // A refused reorder is a notice, not a status line: the status line
+    // expires while the History row still sits where it was, and the user
+    // pressing the arrow again needs to know why nothing moved.
     if (plan.kind === 'pending')
-      setStatus(
-        'Exact geometry is still rebuilding. Reorder once it finishes.'
+      announce(
+        `${label} not applied. Exact geometry is still rebuilding; reorder once it finishes.`
       );
     if (plan.kind !== 'validate') return;
     let failed = '';
@@ -25776,24 +25783,31 @@ export function App() {
       featureAttribution && featureAttribution.derived === base?.derived
         ? featureAttribution.featureWarnings
         : undefined;
-    void validatedFeature.runTransaction([command], {
-      label,
-      // Compared with the current model in `reorderRefusal`, so a failure the
-      // design already has does not block the move.
-      targets: [],
-      validateDerived: (derived) => {
-        const refusal =
-          base &&
-          reorderRefusal(base, derived, featureId, toIndex, attribution);
-        if (!refusal) return;
-        failed = `: ${refusal.featureName} would not rebuild`;
-        throw refusal;
-      },
-      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
-      successMessage: commandOutcomeMessage(label),
-      onFailure: (message) =>
-        announce(`${label} not applied${failed}. ${message}`)
-    });
+    void validatedFeature
+      .runTransaction([command], {
+        label,
+        // Compared with the current model in `reorderRefusal`, so a failure the
+        // design already has does not block the move.
+        targets: [],
+        validateDerived: (derived) => {
+          const refusal =
+            base &&
+            reorderRefusal(base, derived, featureId, toIndex, attribution);
+          if (!refusal) return;
+          failed = `: ${refusal.featureName} would not rebuild`;
+          throw refusal;
+        },
+        validatingMessage: `Checking features after ${name ?? 'the move'}…`,
+        successMessage: commandOutcomeMessage(label),
+        onFailure: (message) =>
+          announce(`${label} not applied${failed}. ${message}`)
+      })
+      .then((outcome) => {
+        // `busy` goes to the host's feature-form sink, and History has no
+        // form open, so it is said here instead.
+        if (outcome === 'busy')
+          announce(`${label} not applied. ${VALIDATED_FEATURE_BUSY_STATUS}`);
+      });
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
@@ -29039,6 +29053,7 @@ export function App() {
       }
       exposedParameterNames={exposedParameterNames}
       onReorderFeature={handleReorderFeature}
+      reorderBusy={validatedBusy}
       onRestoreCheckpoint={(checkpoint) =>
         void handleRestoreSaveState(checkpoint)
       }
