@@ -559,3 +559,28 @@ describe('numeric keypad focus handback', () => {
     chip.remove();
   });
 });
+
+describe('numeric keypad names', () => {
+  it('names a glyph-labelled value in words', () => {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'command',
+          label: '⌀',
+          initial: '6',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={() => undefined}
+        onCommit={() => undefined}
+        onCancel={() => undefined}
+      />
+    );
+    expect(screen.getByRole('dialog', { name: 'Diameter value' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Diameter' })).toHaveValue('6');
+    // The keypad still shows the compact glyph.
+    expect(screen.getByText('⌀')).toBeTruthy();
+  });
+});

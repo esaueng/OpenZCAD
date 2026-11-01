@@ -326,6 +326,47 @@ describe('InPlaceCommandBar', () => {
     expect(onValue).toHaveBeenCalledWith('x', { x: 0, y: 0 });
   });
 
+  it('names glyph-labelled values in words, keeping the glyph on screen', () => {
+    const { unmount } = render(
+      <InPlaceCommandBar
+        title="Hole"
+        hint="Click a flat face"
+        canFinish
+        values={[
+          { id: 'diameter', label: '⌀', text: '6 mm' },
+          { id: 'counterboreDiameter', label: 'Counterbore ⌀', text: '10.8 mm' }
+        ]}
+        onValue={vi.fn()}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Diameter' }).textContent).toBe(
+      '6 mm'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Counterbore diameter' })
+    ).toBeTruthy();
+    // The glyph stays visible beside the value.
+    expect(screen.getByText('⌀')).toBeTruthy();
+    unmount();
+
+    render(
+      <InPlaceCommandBar
+        title="Fillet"
+        hint="Drag the radius"
+        canFinish
+        values={[
+          { id: 'radius', label: 'R', text: '2', value: 2, step: 0.5, min: 0 }
+        ]}
+        onValueCommit={vi.fn(() => true)}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('2');
+  });
+
   it('types a value in place, with its own unit beside it', () => {
     const onValueCommit = vi.fn((_id: string, text: string) => text !== 'x');
     const onCancel = vi.fn();

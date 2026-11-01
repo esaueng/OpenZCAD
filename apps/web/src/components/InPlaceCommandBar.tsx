@@ -11,6 +11,7 @@ import {
 import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
+import { spokenValueName } from '../lib/inPlace/chipNames';
 
 /**
  * The only chrome an in-place command has: its name, the one-line step it
@@ -498,14 +499,15 @@ function KeypadValueRow({
 }) {
   return (
     <div className="in-place-option in-place-param-row">
-      <span className="in-place-option-label" id={`in-place-value-${value.id}`}>
+      <span className="in-place-option-label" aria-hidden="true">
         {value.label}
       </span>
       <button
         type="button"
         className="in-place-option-choice in-place-option-value"
         disabled={locked}
-        aria-labelledby={`in-place-value-${value.id}`}
+        // The visible label may be a glyph ("⌀", "R"); the name is in words.
+        aria-label={spokenValueName(value.label)}
         onClick={(event) => {
           const box = event.currentTarget.getBoundingClientRect();
           // Exact entry takes over from Options. Leaving its flyout
@@ -691,7 +693,7 @@ function ValueField({
         inputMode="decimal"
         spellCheck={false}
         autoComplete="off"
-        aria-label={label}
+        aria-label={spokenValueName(label)}
         aria-invalid={refused || undefined}
         value={shown}
         disabled={locked}
