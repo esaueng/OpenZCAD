@@ -103,3 +103,22 @@ their existing behavior. Command replay still reconstructs stored suppression
 states, including older states with broken dependents; the interactive
 preflight does not rewrite those states or their references. No exactness,
 reference-resolution or kernel-refusal rule changes.
+
+## Amendment (November 2026): a feature added while rolled back lands at the marker
+
+Every feature-creating mutation appends to `featureOrder`, so a feature added
+while History was rolled back landed after the paused tail. The rolled-back
+model looked right, because the tail builds nothing, but the marker vanished
+from the timeline and resuming rebuilt the new feature after every resumed
+step: a different model from the one it was made on.
+
+`CommandManager.execute` and `runTransaction` now follow any edit that adds
+an unsuppressed feature behind a `rollbackSuppressed` feature with one
+`feature.reorder` per added feature, moving it to the first paused position in
+the order it was added. The moves join the same recorded edit, so one undo
+removes the feature and its placement, and replay and older clients reproduce
+the order from the command log without learning anything new. Each move runs
+the normal reorder validation; one it refuses (the new feature reads something
+only the tail produces) leaves that feature at the end, as before. Edits made
+with nothing rolled back are unchanged, and Duplicate keeps refusing a step
+inside the paused tail.
