@@ -1262,3 +1262,95 @@ quality reduction:
 5. Repeat on target GPUs and display/DPR settings before setting an absolute FPS
    gate. Preserve on-demand idle sleep and report CPU, GPU and frame intervals
    separately. H02's broader geometry/cache acceptance remains Partial.
+
+## Cold shader diagnostics and orbit tails (2026-11-01, H02)
+
+This pass uses `7f6391ab` as its comparison point: the preceding highlight,
+ruler and guidance fixes are already present. Headed Edge 156, Intel UHD/D3D11,
+1600x1000 CSS pixels and DPR 1 were kept in both arms. The preserved baseline
+bundle and the candidate used full rendering, identical GLSL and exact meshes.
+Both submitted 261–262 draws and 214,550–214,552 rendered triangles during orbit.
+These are local measurements, with two alternating final baseline/candidate
+pairs and additional isolated cold-start repeats.
+
+### Causes and implementation
+
+1. Three's first-use diagnostic path synchronously queried the program log and
+   both shader logs even after asynchronous linking completed successfully.
+   Several individual log queries blocked for tens of milliseconds. Three
+   remains at 0.186.1 through `pnpm.patchedDependencies`; the patch covers the
+   browser ESM entry and corresponding source. Clean links avoid individual
+   shader-log queries; failed links and nonempty program warnings retain their
+   detailed shader logs. The CommonJS bundle is unchanged.
+2. The six known highlight preparation passes also avoid successful-program
+   warning-log round trips unless a caller explicitly enables
+   `renderer.debug.checkShaderWarnings`. Link status and full failure diagnostics
+   remain enabled. That optional preference is restored after each pass, including
+   failures. Normal model/environment warning handling remains unchanged. The
+   existing D3D11 X4122 warning appeared in every final capture in both arms.
+3. The frame-rate panel replaced its numeric Text nodes every 250 ms. Keeping
+   those nodes and changing character data avoids structural invalidation of
+   ancestor selectors. The readouts and accessible values continue to update.
+4. An occasional remaining spike came from a status toast disappearing:
+   `--lane-status` changed on the whole viewer and restyled about 13,000 elements.
+   Only the action toast and refusal lane consume it, so its declarations now
+   live on those consumers. Browser checks preserve offsets for running status,
+   activity, commands, combined notices and settled undo messages, while model
+   rows no longer inherit that changing height.
+
+The shader query change follows the failure-first approach in the
+[KHR parallel compilation guidance](https://registry.khronos.org/webgl/extensions/KHR_parallel_shader_compile/).
+It does not change shader source or successful rendering. Successful individual
+shader logs with an empty program log are no longer gathered eagerly; detailed
+failed-program diagnostics, custom error callbacks and program warnings have
+focused regression coverage. A real deliberately invalid highlight shader also
+still reports its compiler error and offending source in the dev site.
+
+### Final matched measurements
+
+Quiet runs used no CPU profiler, timeline capture or GPU timer queries. Each
+orbit starts on unobstructed canvas and asserts that the camera actually moved.
+Each gesture contains the same 180 input moves; long-task counts are per gesture
+and use the browser's 50 ms threshold, distinct from the HUD's 25 ms hitch count.
+
+| Measurement | Baseline A → candidate A | Baseline B → candidate B |
+| --- | ---: | ---: |
+| Largest cold highlight reflection task | 127.1 → 14.4 ms | 39.9 → 0.8 ms |
+| Entire highlight preparation span, including async waits | 702.4 → 524.5 ms | 900.4 → 308.1 ms |
+| Diagnostics-orbit mean frame interval | 22.0 → 17.3 ms | 19.5 → 19.5 ms |
+| Diagnostics-orbit p99 | 66.7 → 54.0 ms | 67.2 → 50.0 ms |
+| Diagnostics-orbit worst frame interval | 116.6 → 75.0 ms | 91.5 → 58.5 ms |
+| Diagnostics-orbit browser long tasks | 35 → 2 | 28 → 1 |
+| Ordinary orbit mean frame interval | 17.5 → 16.7 ms | 17.1 → 16.6 ms |
+| Ordinary orbit p99 | 37.7 → 41.9 ms | 42.3 → 37.7 ms |
+
+All four final captures had zero page/console errors. Separate paired cold-start
+checks measured largest tasks of 37.9 → 1.2 ms and 41.9 → 8.1 ms. Ordinary orbit
+tails remain variable; one repeat regresses, and zoom means also vary. These
+results establish the cold-highlight and diagnostic-spike improvements, not a
+universal FPS multiplier or stall-free startup. Initial environment/model shader
+compilation remains outside the improved highlight-preparation path.
+
+Attribution traces separated the causes: stable readout nodes reduced periodic
+style work from 1,657.6 to 232.9 ms and layout from 895.1 to 266.9 ms across a
+diagnostics-orbit phase. A later notice-scope trace reduced the largest style
+update from 99.6 to 53.2 ms and its largest restyled set from 13,095 to 2,166
+elements. Traces have overhead and are not the quiet acceptance numbers above.
+GPU-fence and layout-containment experiments did not deliver a consistent
+production improvement and were left out.
+
+### Reproduction and remaining work
+
+The maintained `perf-viewer.spec.ts` now retains startup shader calls, includes
+slow program-parameter queries with their parameter IDs, waits for preparation
+completion, and checks orbit targeting and camera movement. Set
+`OZ_VIEWER_CPU_PROFILE=0` with the existing `OZ_PERF=1`, `OZ_VIEWER_BODIES=128`
+and external `OZ_VIEWER_PERF_OUT` settings for quiet runs; leave profiling enabled
+for attribution. Use fresh output directories and alternate baseline/candidate.
+
+Keep the next pass focused on the remaining first environment/model draw and
+ordinary-orbit outliers. Separate shader work, GPU/compositor waits, one-time
+notice transitions and sustained gesture frames before choosing a fix. Repeat
+on other GPUs/DPR settings and imported assemblies, and measure refused direct
+edits before extending the variable-scope change to other notice heights. H02's
+broader geometry/cache acceptance remains Partial.

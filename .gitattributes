@@ -23,6 +23,10 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# Unified patch context has leading spaces before upstream tabs and space-only
+# blank lines. Preserve that format when checking the generated patch data.
+patches/*.patch whitespace=-blank-at-eol,-space-before-tab,-blank-at-eof
+
 # Binary assets — never normalize or diff as text.
 *.ttf  binary
 *.png  binary

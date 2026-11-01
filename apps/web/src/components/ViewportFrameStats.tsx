@@ -329,7 +329,13 @@ export function ViewportFrameStats({
       for (const node of root.querySelectorAll<HTMLElement>('[data-field]')) {
         const text = fields[node.dataset.field!];
         if (text !== undefined && node.textContent !== text) {
-          node.textContent = text;
+          // Changing character data keeps structural selectors clean. Replacing
+          // the Text node with textContent invalidates ancestor :has() rules.
+          if (node.childNodes.length === 1 && node.firstChild?.nodeType === 3) {
+            node.firstChild.nodeValue = text;
+          } else {
+            node.textContent = text;
+          }
         }
       }
       if (root.hasAttribute('data-idle') !== summary.idle) {

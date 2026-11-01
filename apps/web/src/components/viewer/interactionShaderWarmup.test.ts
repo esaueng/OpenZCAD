@@ -27,7 +27,11 @@ function fixture() {
     )
   ];
   const edges = [new THREE.Mesh(), new THREE.Mesh()];
+  const debug: { checkShaderErrors: boolean; checkShaderWarnings?: boolean } = {
+    checkShaderErrors: true
+  };
   const renderer = {
+    debug,
     compileAsync: vi.fn().mockResolvedValue(undefined),
     render: vi.fn(),
     autoClear: true,
@@ -54,6 +58,10 @@ describe('InteractionShaderWarmup', () => {
     f.warmup.schedule(f.camera, f.faces, f.edges);
     expect(f.renderer.compileAsync).not.toHaveBeenCalled();
     f.renderer.render.mockImplementation((scene: THREE.Scene) => {
+      expect(f.renderer.debug).toEqual({
+        checkShaderErrors: true,
+        checkShaderWarnings: false
+      });
       expect(f.renderer.autoClear).toBe(false);
       expect(f.renderer.shadowMap).toMatchObject({
         autoUpdate: false,
@@ -93,6 +101,7 @@ describe('InteractionShaderWarmup', () => {
     await vi.runAllTimersAsync();
     expect(f.renderer.compileAsync).toHaveBeenCalledOnce();
     expect(f.renderer.render).toHaveBeenCalledTimes(6);
+    expect(f.renderer.debug).toEqual({ checkShaderErrors: true });
     expect(f.renderer.autoClear).toBe(true);
     expect(f.renderer.shadowMap).toEqual({
       autoUpdate: true,
@@ -168,6 +177,7 @@ describe('InteractionShaderWarmup', () => {
     f.warmup.schedule(f.camera, f.faces, f.edges);
     await vi.runAllTimersAsync();
     expect(f.renderer.autoClear).toBe(true);
+    expect(f.renderer.debug).toEqual({ checkShaderErrors: true });
     expect(f.renderer.shadowMap).toEqual({
       autoUpdate: true,
       needsUpdate: true
@@ -190,5 +200,19 @@ describe('InteractionShaderWarmup', () => {
       autoUpdate: true,
       needsUpdate: true
     });
+  });
+  it('preserves an explicitly enabled verbose warning preference', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.renderer.debug.checkShaderWarnings = true;
+    f.renderer.render.mockImplementation(() => {
+      expect(f.renderer.debug.checkShaderWarnings).toBe(true);
+      expect(f.renderer.debug.checkShaderErrors).toBe(true);
+    });
+    f.warmup.schedule(f.camera, f.faces, f.edges);
+    await vi.runAllTimersAsync();
+    expect(f.renderer.render).toHaveBeenCalledTimes(6);
+    expect(f.renderer.debug.checkShaderWarnings).toBe(true);
+    f.warmup.dispose();
   });
 });

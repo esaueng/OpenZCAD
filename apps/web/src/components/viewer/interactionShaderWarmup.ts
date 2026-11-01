@@ -129,6 +129,16 @@ export class InteractionShaderWarmup {
         const autoClear = renderer.autoClear;
         const shadowAutoUpdate = renderer.shadowMap.autoUpdate;
         const shadowNeedsUpdate = renderer.shadowMap.needsUpdate;
+        const debug = renderer.debug as typeof renderer.debug & {
+          checkShaderWarnings?: boolean | undefined;
+        };
+        const hadWarningSetting = Object.hasOwn(debug, 'checkShaderWarnings');
+        const checkShaderWarnings = debug.checkShaderWarnings;
+        // These known highlight programs need link-failure checks, not a
+        // synchronous successful-program log round trip. The pinned Three
+        // patch always retains full failure diagnostics. An explicit verbose
+        // preference still wins, and normal model/environment logs are intact.
+        debug.checkShaderWarnings ??= false;
         renderer.autoClear = false;
         renderer.shadowMap.autoUpdate = false;
         renderer.shadowMap.needsUpdate = false;
@@ -141,6 +151,9 @@ export class InteractionShaderWarmup {
           renderer.autoClear = autoClear;
           renderer.shadowMap.autoUpdate = shadowAutoUpdate;
           renderer.shadowMap.needsUpdate = shadowNeedsUpdate;
+          if (hadWarningSetting)
+            debug.checkShaderWarnings = checkShaderWarnings;
+          else delete debug.checkShaderWarnings;
         }
       }
       mark('viewer.interactionShaders:ready');

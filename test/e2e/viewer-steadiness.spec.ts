@@ -169,6 +169,40 @@ test('first hover reuses prepared highlight shaders after a body rebuild', async
   });
 });
 
+test('failed highlight shaders still report their compiler diagnostics', async ({
+  page
+}) => {
+  await enableFullRender(page);
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await page.addInitScript(() => {
+    const source = WebGL2RenderingContext.prototype.shaderSource;
+    let injected = false;
+    WebGL2RenderingContext.prototype.shaderSource = function (shader, code) {
+      if (
+        !injected &&
+        this.canvas instanceof HTMLCanvasElement &&
+        this.canvas.closest('.viewer-host') &&
+        performance.getEntriesByName('oz:viewer.interactionShaders:begin')
+          .length > 0
+      ) {
+        injected = true;
+        code += '\n__oz_shader_diagnostics_failure__\n';
+      }
+      source.call(this, shader, code);
+    };
+  });
+  await newProject(page, 'Shader failure diagnostics');
+  await addBox(page);
+  await expect.poll(() => errors.join('\n')).toContain('Shader Error');
+  await expect
+    .poll(() => errors.join('\n'))
+    .toContain('__oz_shader_diagnostics_failure__');
+  await expectBodyCount(page, 1);
+});
+
 test('the activity lane yields the prompt placeholder to guidance only while no pill is present', async ({
   page
 }) => {
@@ -199,6 +233,103 @@ test('the activity lane yields the prompt placeholder to guidance only while no 
       .evaluate((element) => element.remove());
   }
   await expect.poll(color).toBe('rgba(0, 0, 0, 0)');
+});
+
+test('notice offsets stay local without inheriting through model rows', async ({
+  page
+}) => {
+  await newProject(page, 'Notice offsets');
+  await addBox(page);
+  await page.keyboard.press('Escape');
+  const states = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('.viewer-area')!;
+    const originals = [
+      ...root.querySelectorAll<HTMLElement>('.workspace-toast')
+    ].map((node) => ({ node, className: node.className }));
+    for (const { node } of originals) node.classList.add('hidden');
+    const status = document.createElement('div');
+    status.className = 'workspace-toast hidden';
+    const action = document.createElement('div');
+    action.className = 'toast closing';
+    const refusal = document.createElement('div');
+    refusal.className = 'selection-refusal-lane';
+    const activity = document.createElement('div');
+    activity.className = 'activity-lane';
+    const pill = document.createElement('div');
+    pill.className = 'activity-pill';
+    activity.append(pill);
+    const command = document.createElement('div');
+    command.className = 'in-place-command';
+    // Read final offsets of these synthetic notices, without transition interpolation.
+    for (const node of [action, refusal]) {
+      node.style.transition = 'none';
+      node.style.animation = 'none';
+    }
+    const read = () => ({
+      action: parseFloat(getComputedStyle(action).bottom),
+      refusal: parseFloat(getComputedStyle(refusal).bottom),
+      row: getComputedStyle(root.querySelector('.body-row')!).getPropertyValue(
+        '--lane-status'
+      )
+    });
+    try {
+      root.append(status, action, refusal);
+      const base = read();
+      status.className = 'workspace-toast running';
+      const running = read();
+      root.append(activity);
+      const active = read();
+      activity.remove();
+      status.className = 'workspace-toast hidden';
+      root.append(command);
+      const commandHeight =
+        parseFloat(
+          getComputedStyle(command).getPropertyValue('--in-place-command-h')
+        ) || 38;
+      const inCommand = read();
+      status.className = 'workspace-toast running';
+      const commandAndStatus = read();
+      command.remove();
+      status.className = 'workspace-toast ready';
+      action.className = 'toast';
+      const settled = read();
+      return {
+        base,
+        running,
+        active,
+        commandHeight,
+        inCommand,
+        commandAndStatus,
+        settled
+      };
+    } finally {
+      for (const node of [status, action, refusal, activity, command])
+        node.remove();
+      for (const { node, className } of originals) node.className = className;
+    }
+  });
+  for (const key of ['action', 'refusal'] as const) {
+    expect(states.running[key] - states.base[key]).toBeCloseTo(40, 0);
+    expect(states.active[key] - states.base[key]).toBeCloseTo(70, 0);
+    expect(states.inCommand[key] - states.base[key]).toBeCloseTo(
+      states.commandHeight + 10,
+      0
+    );
+    expect(states.commandAndStatus[key] - states.base[key]).toBeCloseTo(
+      states.commandHeight + 50,
+      0
+    );
+    expect(states.settled[key]).toBeCloseTo(states.base[key], 0);
+  }
+  for (const state of [
+    states.base,
+    states.running,
+    states.active,
+    states.inCommand,
+    states.commandAndStatus,
+    states.settled
+  ])
+    expect(state.row).toBe('');
 });
 
 test('orbiting without a handle skips chip panel layout', async ({ page }) => {

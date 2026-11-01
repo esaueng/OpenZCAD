@@ -21,6 +21,7 @@ interface ShaderCall {
   operation: string;
   at: number;
   ms: number;
+  parameter: number | null;
 }
 declare global {
   interface Window {
@@ -59,6 +60,7 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
   test.skip(browserName !== 'chromium', 'CPU profiles require Chromium CDP.');
   test.setTimeout(180_000);
   const folder = output!;
+  const profiling = process.env.OZ_VIEWER_CPU_PROFILE !== '0';
   mkdirSync(folder, { recursive: true });
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -74,7 +76,8 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
     for (const operation of [
       'linkProgram',
       'getProgramInfoLog',
-      'getShaderInfoLog'
+      'getShaderInfoLog',
+      'getProgramParameter'
     ] as const) {
       const original = prototype[operation];
       Object.defineProperty(prototype, operation, {
@@ -89,7 +92,12 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
             this.canvas.closest('.viewer-host') &&
             (ms > 0.3 || operation === 'linkProgram')
           )
-            window.__ozViewerShaderCalls!.push({ operation, at, ms });
+            window.__ozViewerShaderCalls!.push({
+              operation,
+              at,
+              ms,
+              parameter: typeof args[1] === 'number' ? args[1] : null
+            });
           return result;
         }
       });
@@ -149,7 +157,13 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
   await page.keyboard.press('Escape');
   const canvas = page.locator('.viewer-host canvas').first();
   await expect(canvas).toBeVisible();
-  await page.waitForTimeout(1500);
+  await page.waitForFunction(
+    () =>
+      performance.getEntriesByName('oz:viewer.interactionShaders').length > 0,
+    undefined,
+    { timeout: 30_000 }
+  );
+  await page.waitForTimeout(500);
   const client = await page.context().newCDPSession(page);
   const browser = await client.send('Browser.getVersion');
   const gpu = await canvas.evaluate((element) => {
@@ -168,6 +182,9 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
       .filter((entry) => entry.name.startsWith('oz:viewer.'))
       .map((entry) => ({ name: entry.name, ms: entry.duration }))
   );
+  const startupShaderCalls = await page.evaluate(
+    () => window.__ozViewerShaderCalls ?? []
+  );
   const results: {
     name: string;
     intervals: ReturnType<typeof stats>;
@@ -180,10 +197,14 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
       performance.clearMarks('oz:viewer.frame');
       window.__ozViewerShaderCalls = [];
     });
-    await client.send('Profiler.enable');
-    await client.send('Profiler.start');
+    if (profiling) {
+      await client.send('Profiler.enable');
+      await client.send('Profiler.start');
+    }
     await action();
-    const { profile } = await client.send('Profiler.stop');
+    const profile = profiling
+      ? (await client.send('Profiler.stop')).profile
+      : null;
     const frames = await page.evaluate(() =>
       performance.getEntriesByName('oz:viewer.frame').map(
         (entry) =>
@@ -221,18 +242,51 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
     );
   }
   const box = (await canvas.boundingBox())!;
+  const readCamera = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<{ position: number[] }>((resolve) =>
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-input-state', {
+              detail: {
+                resolve: (state: { camera: { position: number[] } }) =>
+                  resolve(state.camera)
+              }
+            })
+          )
+        )
+    );
   const orbit = async () => {
-    await page.mouse.move(box.x + 150, box.y + box.height - 180);
+    const origin = {
+      x: box.x + box.width * 0.42,
+      y: box.y + box.height * 0.78
+    };
+    expect(
+      await page.evaluate(
+        (point) =>
+          document.elementFromPoint(point.x, point.y) ===
+          document.querySelector('.viewer-host canvas'),
+        origin
+      )
+    ).toBe(true);
+    const before = await readCamera();
+    await page.mouse.move(origin.x, origin.y);
     await page.keyboard.down('Shift');
     await page.mouse.down();
     for (let index = 0; index < 180; index++)
       await page.mouse.move(
-        box.x + 150 + 150 * Math.sin(index * 0.035),
-        box.y + box.height - 180 - 100 * Math.sin(index * 0.06)
+        origin.x + 150 * Math.sin(index * 0.035),
+        origin.y - 100 * Math.sin(index * 0.06)
       );
     await page.mouse.up();
     await page.keyboard.up('Shift');
     await page.waitForTimeout(700);
+    const after = await readCamera();
+    expect(
+      Math.hypot(
+        ...after.position.map((value, axis) => value - before.position[axis]!)
+      )
+    ).toBeGreaterThan(0.1);
   };
   await record('idle', () => page.waitForTimeout(3000));
   await record('hover', async () => {
@@ -266,7 +320,17 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
   writeFileSync(
     join(folder, 'summary.json'),
     JSON.stringify(
-      { browser, gpu, count, errors, warnings, startup, results },
+      {
+        browser,
+        gpu,
+        count,
+        profiling,
+        errors,
+        warnings,
+        startup,
+        startupShaderCalls,
+        results
+      },
       null,
       2
     )
