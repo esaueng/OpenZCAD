@@ -176,6 +176,35 @@ describe('direct pick details', () => {
     );
     expect(screen.getByText('Unavailable for mesh reference')).toBeVisible();
   });
+  it('states the unit a unitless mesh import was read in', () => {
+    const document = {
+      projectId: 'project_units',
+      nodes: {
+        feature_mesh: {
+          kind: 'feature',
+          bodyId: body.bodyId,
+          data: {
+            featureKind: 'imported-mesh',
+            artifactId: 'artifact_mesh',
+            sourceName: 'bracket.stl',
+            triangleCount: 12,
+            assumedUnits: 'mm'
+          }
+        }
+      }
+    } as unknown as ComponentProps<typeof BodyStats>['document'];
+    render(
+      <BodyStats
+        body={{ ...body, meshReference: true, volume: 0 }}
+        units="mm"
+        document={document}
+      />
+    );
+    expect(screen.getByText('file units')).toBeVisible();
+    expect(
+      screen.getByText('Millimeters (the file stated none)')
+    ).toBeVisible();
+  });
   it('identifies committed measurements when a form has unapplied values', () => {
     render(<BodyStats body={body} units="mm" lastApplied />);
     expect(screen.getByText('Measurements (last applied)')).toBeVisible();
