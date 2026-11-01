@@ -29354,6 +29354,15 @@ export function App() {
             }
             pickListEnabled={appSettings.experiments.directManipulation}
             frameRateOverlay={appSettings.experiments.frameRateOverlay}
+            onCloseFrameRateOverlay={() =>
+              handleAppSettingsChange({
+                ...appSettingsRef.current,
+                experiments: {
+                  ...appSettingsRef.current.experiments,
+                  frameRateOverlay: false
+                }
+              })
+            }
             settings={viewerSettings}
             fitSignal={fitSignal}
             autoFrame={autoFrame}

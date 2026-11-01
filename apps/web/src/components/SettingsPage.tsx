@@ -2593,7 +2593,7 @@ export function SettingsPage({
               <Group title="Diagnostics">
                 <SettingRow
                   title="Frame rate overlay"
-                  hint="Frames per second, frame time, render CPU time and draw load in the viewport’s top-left corner."
+                  hint="A movable panel over the viewport: FPS over time, 1% and 0.1% lows, frame times and draw load."
                 >
                   <Toggle
                     checked={settings.experiments.frameRateOverlay}

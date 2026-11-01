@@ -116,45 +116,179 @@
   white-space: nowrap;
 }
 
-/* Settings → Advanced → Frame rate overlay. Drawn on the stage like the
-   scale rule, so it reads the stage ink and never takes a pointer. Below
-   the floating top bar and clear of a panel docked on the left. */
+/* Settings → Advanced → Frame rate overlay. A translucent panel floating
+   over the stage: it starts below the top bar, right of the tool rail and
+   any panel docked on the left, and its top row drags it anywhere inside
+   the viewer (the component then pins left/top inline). One step over the
+   floating columns, which share its stacking context and come later in the
+   DOM, so a panel dragged onto the rail is never hidden behind it. */
 .viewport-frame-stats {
   position: absolute;
   top: var(--stage-top, 10px);
-  left: calc(var(--island-gap, 10px) + var(--left-dock-w, 0px));
-  z-index: var(--z-viewer-overlay);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--color-viewport-bg) 82%, transparent);
+  left: calc(
+    var(--island-gap, 10px) * 2 + var(--rail-w, 40px) + var(--left-dock-w, 0px)
+  );
+  z-index: calc(var(--z-inspector-float) + 1);
+  width: 272px;
+  padding-bottom: 6px;
+  border: 1px solid color-mix(in srgb, var(--color-stage-ink) 10%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-viewport-bg) 62%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--color-stage-ink-muted);
   font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  line-height: 1.25;
+  line-height: 1.3;
   white-space: nowrap;
-  pointer-events: none;
   user-select: none;
+}
+
+.viewport-frame-stats[data-collapsed] {
+  padding-bottom: 0;
+}
+
+.viewport-frame-stats-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px 5px 3px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.viewport-frame-stats-head:active {
+  cursor: grabbing;
+}
+
+.viewport-frame-stats-grip {
+  flex: none;
+  opacity: 0.45;
+}
+
+.viewport-frame-stats:hover .viewport-frame-stats-grip {
+  opacity: 0.9;
 }
 
 .viewport-frame-stats-rate {
   color: var(--color-stage-ink);
-  font-size: 13px;
+  font-size: 20px;
   font-weight: var(--fw-medium);
+  line-height: 1;
 }
 
 .viewport-frame-stats[data-idle] .viewport-frame-stats-rate {
   color: var(--color-stage-ink-muted);
+  font-size: 14px;
+}
+
+.viewport-frame-stats[data-idle] .viewport-frame-stats-unit {
+  display: none;
+}
+
+/* Green while the viewer draws, grey at rest. */
+.viewport-frame-stats-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+
+.viewport-frame-stats[data-idle] .viewport-frame-stats-dot {
+  background: var(--color-stage-ink-muted);
+  opacity: 0.6;
+}
+
+.viewport-frame-stats-frame {
+  margin-left: auto;
+}
+
+/* Collapse and close stay out of the way until the panel is hovered or
+   one of them takes keyboard focus. */
+.viewport-frame-stats-button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-stage-ink-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.viewport-frame-stats:hover .viewport-frame-stats-button,
+.viewport-frame-stats-button:focus-visible {
+  opacity: 1;
+}
+
+.viewport-frame-stats-button:hover {
+  background: color-mix(in srgb, var(--color-stage-ink) 10%, transparent);
+  color: var(--color-stage-ink);
+}
+
+@media (hover: none) {
+  .viewport-frame-stats-button {
+    opacity: 1;
+  }
+}
+
+.viewport-frame-stats-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 6px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-stage-ink) 6%, transparent);
+}
+
+.viewport-frame-stats-cell {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--color-viewport-bg) 70%, transparent);
+}
+
+.viewport-frame-stats-value {
+  color: var(--color-stage-ink);
+  font-size: 12px;
+}
+
+.viewport-frame-stats-caption {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 6px 2px;
 }
 
 .viewer-shell canvas.viewport-frame-stats-graph {
   display: block;
-  width: 90px !important;
-  height: 24px !important;
-  margin-top: 2px;
+  width: 260px !important;
+  margin: 0 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-stage-ink) 4%, transparent);
+}
+
+.viewport-frame-stats-rows {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 5px 6px 0;
+}
+
+.viewport-frame-stats-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.viewport-frame-stats-row dd {
+  margin: 0;
+  color: var(--color-stage-ink);
 }
 
 /* Top-right orientation widget. The utility rail used to stack beneath it;
