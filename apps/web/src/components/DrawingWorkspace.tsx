@@ -1127,8 +1127,8 @@ function AutoDimensionPreview(props: {
             className="drawing-audit-list"
             aria-label="Dimensions Auto-dimension leaves for you"
           >
-            {left.map((finding) => (
-              <li key={finding.message}>{finding.message}</li>
+            {left.map((finding, index) => (
+              <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
             ))}
           </ul>
         </>
@@ -1247,8 +1247,8 @@ function DimensionCheck(props: {
                 className="drawing-audit-list"
                 aria-label="Missing dimensions"
               >
-                {audit.missing.map((finding) => (
-                  <li key={finding.message}>{finding.message}</li>
+                {audit.missing.map((finding, index) => (
+                  <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
                 ))}
               </ul>
             </>
@@ -1274,8 +1274,8 @@ function DimensionCheck(props: {
                 className="drawing-audit-list"
                 aria-label="Requirements no dimension can state yet"
               >
-                {audit.unmeasurable.map((finding) => (
-                  <li key={finding.message}>{finding.message}</li>
+                {audit.unmeasurable.map((finding, index) => (
+                  <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
                 ))}
               </ul>
             </>

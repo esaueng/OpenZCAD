@@ -1,5 +1,6 @@
 import {
   DRAWING_VIEW_FRAMES,
+  type BodyId,
   type BoundingBox,
   type DrawingAnnotationId,
   type DrawingSheet,
@@ -16,6 +17,7 @@ import {
   formatDrawingNumber,
   type AnnotationBodies
 } from './annotations';
+import { edgeRefFor } from './annotationPicking';
 import {
   chamferCorner,
   chamferEnds,
@@ -432,13 +434,41 @@ function bodyRequirements(
       const fixedBy = new Set(
         tangentPlanes.map((plane) => axisOf(plane.geometry!.normal!))
       );
+      // Tangent to two planes that are not parallel (a sloped one counts),
+      // the axis is fixed across the section: none of its positions, nor
+      // where it meets those planes, needs a dimension of its own.
+      const pinned = tangentPlanes.some((p, i) =>
+        tangentPlanes
+          .slice(i + 1)
+          .some(
+            (q) =>
+              Math.abs(dot(p.geometry!.normal!, q.geometry!.normal!)) < 1 - 1e-6
+          )
+      );
+      const label = `the R${format(geometry.radius, units)} blend`;
+      if (pinned)
+        for (const plane of tangentPlanes) {
+          const normal = plane.geometry!.normal!;
+          const side = Math.sign(
+            dot(normal, geometry.axisStart) - plane.geometry!.planeOffset!
+          );
+          for (const axis of AXES)
+            if (axis !== along)
+              addPosition(derived[axis], {
+                value:
+                  geometry.axisStart[axis] -
+                  side * geometry.radius * normal[axis],
+                label
+              });
+        }
       for (const axis of AXES) {
         if (axis === along) continue;
         const value = geometry.axisStart[axis];
-        if (fixedBy.has(axis)) {
+        if (pinned && !fixedBy.has(axis)) {
+          addPosition(derived[axis], { value, label });
+        } else if (fixedBy.has(axis)) {
           // Where the blend meets the face it rounds, and its axis: both
           // follow from the face and the radius.
-          const label = `the R${format(geometry.radius, units)} blend`;
           for (const side of [-1, 1])
             addPosition(derived[axis], {
               value: value + side * geometry.radius,
@@ -754,12 +784,18 @@ function anchoringViews(
   bodyId: string,
   bodies: AnnotationBodies,
   axis: AuditAxis,
-  value: number
+  value: number,
+  /** False: any edge, nameable by a dimension or not. */
+  named = true
 ): DrawingView[] {
   const at = AXES.indexOf(axis);
   return viewsAlong(sheet, bodyId, axis).filter((view) =>
     viewEdges(bodies, view, bodyId).some((edge) => {
-      if (edge.displayRole === 'seam') return false;
+      if (
+        edge.displayRole === 'seam' ||
+        (named && !nameable(bodies, view, bodyId, edge))
+      )
+        return false;
       const circle = edge.curve?.circle;
       if (circle) {
         if (!same(circle.center[axis], value)) return false;
@@ -774,6 +810,33 @@ function anchoringViews(
         !closed && (same(p[at]!, value) || same(p[p.length - 3 + at]!, value))
       );
     })
+  );
+}
+
+const hashCounts = new WeakMap<readonly EdgeTopology[], Map<number, number>>();
+
+/**
+ * Whether a dimension can name `edge`, as a pick or Auto-dimension would:
+ * an edge whose hash another edge shares (a mirrored or patterned copy)
+ * resolves only when its lineage reference tells them apart.
+ */
+function nameable(
+  bodies: AnnotationBodies,
+  view: DrawingView,
+  bodyId: string,
+  edge: EdgeTopology
+): boolean {
+  const edges = viewEdges(bodies, view, bodyId);
+  let counts = hashCounts.get(edges);
+  if (!counts) {
+    counts = new Map();
+    for (const other of edges)
+      counts.set(other.hash, (counts.get(other.hash) ?? 0) + 1);
+    hashCounts.set(edges, counts);
+  }
+  return (
+    counts.get(edge.hash) === 1 ||
+    edgeRefFor(bodies, bodyId as BodyId, edge, view) !== null
   );
 }
 
@@ -1215,13 +1278,16 @@ export function readDimensionState(
         seen.add(root);
         const message = `${axis.toUpperCase()}: nothing locates ${position.label} from ${order[0]!.position.label}.`;
         const targetViews = groupViews(root);
-        if (datumViews.size > 0 && targetViews.size > 0) {
+        // Auto-dimension links a group to the datum within one view, so
+        // only a view marking both makes it one a dimension can state.
+        const shared = [...targetViews].filter((view) => datumViews.has(view));
+        if (shared.length > 0) {
           // Only a section marks it: say where it can be stated.
-          const sections = [...targetViews].filter((view) => view.section);
+          const sections = shared.filter((view) => view.section);
           audit.missing.push({
             bodyId,
             message:
-              sections.length === targetViews.size
+              sections.length === shared.length
                 ? `${message.slice(0, -1)}, which only section ${sections.map((view) => `${view.section!.label}-${view.section!.label}`).join(' or ')} shows.`
                 : message
           });
@@ -1232,9 +1298,21 @@ export function readDimensionState(
           message:
             viewsAlong(sheet, bodyId, axis).length === 0
               ? `${message.slice(0, -1)}: add a view that shows ${axis.toUpperCase()}.`
-              : approximate.length > 0
-                ? `${message.slice(0, -1)}: no edge or rim marks it in a view yet, and section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot be dimensioned.`
-                : `${message.slice(0, -1)}: no edge or rim marks it in a view yet.`
+              : datumViews.size > 0 && targetViews.size > 0
+                ? `${message.slice(0, -1)}: no one view marks both with an edge a dimension can name.`
+                : position.mark === undefined &&
+                    anchoringViews(
+                      sheet,
+                      bodyId,
+                      bodies,
+                      axis,
+                      position.value,
+                      false
+                    ).length > 0
+                  ? `${message.slice(0, -1)}: every edge that marks it shares its identity with another edge, so no dimension can name it.`
+                  : approximate.length > 0
+                    ? `${message.slice(0, -1)}: no edge or rim marks it in a view yet, and section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot be dimensioned.`
+                    : `${message.slice(0, -1)}: no edge or rim marks it in a view yet.`
         });
       }
     }

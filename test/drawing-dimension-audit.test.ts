@@ -18,6 +18,7 @@ import {
   plateOperations,
   roundedOperations,
   sheetOf,
+  slopedOperations,
   stepOperations,
   topId
 } from './helpers/drawing-dimension-fixtures';
@@ -578,5 +579,49 @@ describe('D06 dimension audit: blends', () => {
       })
     ]);
     expect(messages(audit.missing)).not.toContain('R5 blend radius.');
+  });
+
+  it('derives a blend tangent to a sloped face and another, asking no position of it', async () => {
+    const { bodies, bodyId, body } = await build(slopedOperations());
+    const before = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
+    // Its centre's height (10) followed from the slope and the right face:
+    // asking for it gave the hammer holder's 32.76 and 43.24.
+    expect(messages(before.missing)).toEqual([
+      'R5 blend radius.',
+      'X: nothing locates the face at x = 30 from the face at x = 0.',
+      expect.stringMatching(/^Y: nothing locates the face at y = /),
+      'Z: nothing locates the face at z = 20 from the face at z = 0.'
+    ]);
+    expect(messages(before.unmeasurable)).toEqual([
+      'A sloped face, which needs an angle this check does not read yet.'
+    ]);
+    const nearY = body.bbox.min.y;
+    const bottom = lineEdge(
+      body,
+      (a, b) =>
+        near(a[2]!, 0) &&
+        near(b[2]!, 0) &&
+        near(a[1]!, nearY) &&
+        near(b[1]!, nearY)
+    );
+    const audit = auditDrawingDimensions(
+      sheetOf(bodyId, [
+        linear(
+          id('centre'),
+          frontId,
+          'vertical',
+          refOf(bodyId, bottom),
+          'first',
+          refOf(bodyId, circleEdge(body, 5, { y: nearY })),
+          'center'
+        )
+      ]),
+      bodies,
+      'mm'
+    );
+    expect(audit.redundant).toEqual([
+      expect.objectContaining({ annotationId: id('centre'), reason: 'derived' })
+    ]);
+    expect(audit.required).toBe(before.required);
   });
 });
