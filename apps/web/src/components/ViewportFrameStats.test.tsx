@@ -77,6 +77,55 @@ describe('ViewportFrameStats', () => {
     ).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('keeps numeric text nodes stable while the live values change', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    const sinkRef: MutableRefObject<FrameStatsSink | null> = { current: null };
+    render(<ViewportFrameStats sinkRef={sinkRef} />);
+    const overlay = screen.getByRole('status', { name: 'Frame rate' });
+    const cpu = overlay.querySelector('[data-field="cpu"]')!;
+    const rate = overlay.querySelector('[data-field="rate"]')!;
+    const cpuText = cpu.firstChild;
+    const rateText = rate.firstChild;
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) =>
+      mutations.push(...records)
+    );
+    observer.observe(overlay, {
+      subtree: true,
+      childList: true,
+      characterData: true
+    });
+    sinkRef.current!({
+      at: performance.now(),
+      renderMs: 2,
+      cpuMs: 5,
+      drawCalls: 9,
+      triangles: 100
+    });
+    sinkRef.current!({
+      at: performance.now() + 16,
+      renderMs: 2,
+      cpuMs: 5,
+      drawCalls: 9,
+      triangles: 100
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(FRAME_STATS_REPAINT_MS);
+    });
+    expect(field('cpu')).toBe('2.00 ms');
+    expect(field('rate')).not.toBe('idle');
+    expect(cpu.firstChild).toBe(cpuText);
+    expect(rate.firstChild).toBe(rateText);
+    expect(mutations.some((record) => record.type === 'characterData')).toBe(
+      true
+    );
+    expect(mutations.filter((record) => record.type === 'childList')).toEqual(
+      []
+    );
+    observer.disconnect();
+  });
+
   it('finishes graph layout and font resolution before changing readout text', () => {
     vi.useFakeTimers();
     const readoutsDuringGraph: (string | null)[] = [];

@@ -1,0 +1,60 @@
+diff --git a/build/three.module.js b/build/three.module.js
+index c52087acfabae80efabb8cc05e3a1d96e35a1426..a3a3c81d15fb931c5616c20979032f54d7f28193 100644
+--- a/build/three.module.js
++++ b/build/three.module.js
+@@ -7024,9 +7024,13 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
+ 		// check for link errors
+ 		if ( renderer.debug.checkShaderErrors ) {
+ 
+-			const programInfoLog = gl.getProgramInfoLog( program ) || '';
+-			const vertexShaderInfoLog = gl.getShaderInfoLog( glVertexShader ) || '';
+-			const fragmentShaderInfoLog = gl.getShaderInfoLog( glFragmentShader ) || '';
++			const linked = gl.getProgramParameter( program, gl.LINK_STATUS );
++			const programInfoLog = ( linked === false || renderer.debug.checkShaderWarnings !== false ) ? ( gl.getProgramInfoLog( program ) || '' ) : '';
++			// Individual shader logs can stall even after a parallel link completes.
++			// Preserve full failure/warning diagnostics; clean links need no shader logs.
++			const readShaderLogs = linked === false || programInfoLog.trim() !== '';
++			const vertexShaderInfoLog = readShaderLogs ? ( gl.getShaderInfoLog( glVertexShader ) || '' ) : '';
++			const fragmentShaderInfoLog = readShaderLogs ? ( gl.getShaderInfoLog( glFragmentShader ) || '' ) : '';
+ 
+ 			const programLog = programInfoLog.trim();
+ 			const vertexLog = vertexShaderInfoLog.trim();
+@@ -7035,7 +7039,7 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
+ 			let runnable = true;
+ 			let haveDiagnostics = true;
+ 
+-			if ( gl.getProgramParameter( program, gl.LINK_STATUS ) === false ) {
++			if ( linked === false ) {
+ 
+ 				runnable = false;
+ 
+diff --git a/src/renderers/webgl/WebGLProgram.js b/src/renderers/webgl/WebGLProgram.js
+index 3bddcdcb9072bac6737de465d5982811b121223c..ed08afe836501872d4ee2ac05d6ec6ddb97d6828 100644
+--- a/src/renderers/webgl/WebGLProgram.js
++++ b/src/renderers/webgl/WebGLProgram.js
+@@ -865,9 +865,13 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
+ 		// check for link errors
+ 		if ( renderer.debug.checkShaderErrors ) {
+ 
+-			const programInfoLog = gl.getProgramInfoLog( program ) || '';
+-			const vertexShaderInfoLog = gl.getShaderInfoLog( glVertexShader ) || '';
+-			const fragmentShaderInfoLog = gl.getShaderInfoLog( glFragmentShader ) || '';
++			const linked = gl.getProgramParameter( program, gl.LINK_STATUS );
++			const programInfoLog = ( linked === false || renderer.debug.checkShaderWarnings !== false ) ? ( gl.getProgramInfoLog( program ) || '' ) : '';
++			// Individual shader logs can stall even after a parallel link completes.
++			// Preserve full failure/warning diagnostics; clean links need no shader logs.
++			const readShaderLogs = linked === false || programInfoLog.trim() !== '';
++			const vertexShaderInfoLog = readShaderLogs ? ( gl.getShaderInfoLog( glVertexShader ) || '' ) : '';
++			const fragmentShaderInfoLog = readShaderLogs ? ( gl.getShaderInfoLog( glFragmentShader ) || '' ) : '';
+ 
+ 			const programLog = programInfoLog.trim();
+ 			const vertexLog = vertexShaderInfoLog.trim();
+@@ -876,7 +880,7 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
+ 			let runnable = true;
+ 			let haveDiagnostics = true;
+ 
+-			if ( gl.getProgramParameter( program, gl.LINK_STATUS ) === false ) {
++			if ( linked === false ) {
+ 
+ 				runnable = false;
+ 

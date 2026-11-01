@@ -4,7 +4,10 @@ import {
   test,
   expect,
   stubApi,
-  expectBodyCount
+  expectBodyCount,
+  enableFullRender,
+  locateEdge,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 /**
@@ -18,6 +21,11 @@ declare global {
   interface Window {
     __handleLog?: { t: number; value: string | null }[];
     __holdFinal?: { hold: boolean; held: number; release(): void };
+    __highlightShaderWork?: {
+      links: number;
+      initializations: number;
+      warmDraws: number;
+    };
   }
 }
 
@@ -53,6 +61,276 @@ async function addBox(page: Page) {
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 }
+
+test('first hover reuses prepared highlight shaders after a body rebuild', async ({
+  page
+}) => {
+  await enableFullRender(page);
+  await page.addInitScript(() => {
+    const counts = (window.__highlightShaderWork = {
+      links: 0,
+      initializations: 0,
+      warmDraws: 0
+    });
+    const prototype = WebGL2RenderingContext.prototype;
+    for (const name of [
+      'linkProgram',
+      'getProgramInfoLog',
+      'drawArrays',
+      'drawElements',
+      'drawArraysInstanced',
+      'drawElementsInstanced',
+      'clear',
+      'clearBufferiv',
+      'clearBufferuiv',
+      'clearBufferfv',
+      'clearBufferfi'
+    ] as const) {
+      const original = prototype[name];
+      Object.defineProperty(prototype, name, {
+        configurable: true,
+        writable: true,
+        value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
+          if (
+            this.canvas instanceof HTMLCanvasElement &&
+            this.canvas.closest('.viewer-host')
+          ) {
+            if (name === 'linkProgram') counts.links++;
+            else if (name === 'getProgramInfoLog') counts.initializations++;
+            else if (
+              performance.getEntriesByName(
+                'oz:viewer.interactionShaderReflection:start'
+              ).length
+            )
+              counts.warmDraws++;
+          }
+          return Reflect.apply(original, this, args) as unknown;
+        }
+      });
+    }
+  });
+  await newProject(page, 'Prepared hover shaders');
+  await addBox(page);
+  await page.waitForFunction(
+    () =>
+      performance.getEntriesByName('oz:viewer.interactionShaders:ready')
+        .length > 0
+  );
+  // A new exact result replaces edge materials. The warm-up owners must keep
+  // their programs alive independently of that first body's material lifetime.
+  await createPrimitiveInPlace(page, 'cylinder', { at: { x: 30 } });
+  await expectBodyCount(page, 2);
+  await page.keyboard.press('Escape');
+  const canvas = page.locator('.viewer-host canvas').first();
+  const before = await page.evaluate(() => ({
+    ...window.__highlightShaderWork!
+  }));
+  const box = (await canvas.boundingBox())!;
+  let sawFace = false;
+  for (let row = 0; row < 5 && !sawFace; row++) {
+    for (let column = 0; column < 7 && !sawFace; column++) {
+      await page.mouse.move(
+        box.x + box.width * (0.25 + column / 12),
+        box.y + box.height * (0.3 + row / 12)
+      );
+      sawFace = await canvas.evaluate(
+        (element) =>
+          new Promise<boolean>((resolve) => {
+            requestAnimationFrame(() =>
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-hover-face-state', {
+                  detail: {
+                    resolve: (state: {
+                      slots: { visible: boolean; triangleCount: number }[];
+                    }) =>
+                      resolve(
+                        state.slots.some(
+                          (slot) => slot.visible && slot.triangleCount > 0
+                        )
+                      )
+                  }
+                })
+              )
+            );
+          })
+      );
+    }
+  }
+  expect(sawFace).toBe(true);
+  const edge = await locateEdge(page);
+  const frames = Number(await canvas.getAttribute('data-e2e-frames'));
+  await page.mouse.move(edge.x, edge.y);
+  await expect
+    .poll(async () => Number(await canvas.getAttribute('data-e2e-frames')))
+    .toBeGreaterThan(frames + 2);
+  expect(await page.evaluate(() => window.__highlightShaderWork)).toEqual({
+    ...before,
+    warmDraws: 0
+  });
+});
+
+test('failed highlight shaders still report their compiler diagnostics', async ({
+  page
+}) => {
+  await enableFullRender(page);
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await page.addInitScript(() => {
+    const source = WebGL2RenderingContext.prototype.shaderSource;
+    let injected = false;
+    WebGL2RenderingContext.prototype.shaderSource = function (shader, code) {
+      if (
+        !injected &&
+        this.canvas instanceof HTMLCanvasElement &&
+        this.canvas.closest('.viewer-host') &&
+        performance.getEntriesByName('oz:viewer.interactionShaders:begin')
+          .length > 0
+      ) {
+        injected = true;
+        code += '\n__oz_shader_diagnostics_failure__\n';
+      }
+      source.call(this, shader, code);
+    };
+  });
+  await newProject(page, 'Shader failure diagnostics');
+  await addBox(page);
+  await expect.poll(() => errors.join('\n')).toContain('Shader Error');
+  await expect
+    .poll(() => errors.join('\n'))
+    .toContain('__oz_shader_diagnostics_failure__');
+  await expectBodyCount(page, 1);
+});
+
+test('the activity lane yields the prompt placeholder to guidance only while no pill is present', async ({
+  page
+}) => {
+  await newProject(page, 'Prompt lane styling');
+  await addBox(page);
+  await page.keyboard.press('Escape');
+  const input = page.locator('.command-bar-input').first();
+  await input.blur();
+  await expect(page.locator('.workspace-hint')).toBeVisible({
+    timeout: 15_000
+  });
+  const color = () =>
+    input.evaluate(
+      (element) => getComputedStyle(element, '::placeholder').color
+    );
+  await expect.poll(color).toBe('rgba(0, 0, 0, 0)');
+  await page.evaluate(() => {
+    const pill = document.createElement('div');
+    pill.className = 'activity-pill';
+    document.querySelector('.activity-lane')!.append(pill);
+  });
+  try {
+    await expect.poll(color).not.toBe('rgba(0, 0, 0, 0)');
+    await expect(page.locator('.workspace-hint')).toBeHidden();
+  } finally {
+    await page
+      .locator('.activity-lane > .activity-pill')
+      .evaluate((element) => element.remove());
+  }
+  await expect.poll(color).toBe('rgba(0, 0, 0, 0)');
+});
+
+test('notice offsets stay local without inheriting through model rows', async ({
+  page
+}) => {
+  await newProject(page, 'Notice offsets');
+  await addBox(page);
+  await page.keyboard.press('Escape');
+  const states = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('.viewer-area')!;
+    const originals = [
+      ...root.querySelectorAll<HTMLElement>('.workspace-toast')
+    ].map((node) => ({ node, className: node.className }));
+    for (const { node } of originals) node.classList.add('hidden');
+    const status = document.createElement('div');
+    status.className = 'workspace-toast hidden';
+    const action = document.createElement('div');
+    action.className = 'toast closing';
+    const refusal = document.createElement('div');
+    refusal.className = 'selection-refusal-lane';
+    const activity = document.createElement('div');
+    activity.className = 'activity-lane';
+    const pill = document.createElement('div');
+    pill.className = 'activity-pill';
+    activity.append(pill);
+    const command = document.createElement('div');
+    command.className = 'in-place-command';
+    // Read final offsets of these synthetic notices, without transition interpolation.
+    for (const node of [action, refusal]) {
+      node.style.transition = 'none';
+      node.style.animation = 'none';
+    }
+    const read = () => ({
+      action: parseFloat(getComputedStyle(action).bottom),
+      refusal: parseFloat(getComputedStyle(refusal).bottom),
+      row: getComputedStyle(root.querySelector('.body-row')!).getPropertyValue(
+        '--lane-status'
+      )
+    });
+    try {
+      root.append(status, action, refusal);
+      const base = read();
+      status.className = 'workspace-toast running';
+      const running = read();
+      root.append(activity);
+      const active = read();
+      activity.remove();
+      status.className = 'workspace-toast hidden';
+      root.append(command);
+      const commandHeight =
+        parseFloat(
+          getComputedStyle(command).getPropertyValue('--in-place-command-h')
+        ) || 38;
+      const inCommand = read();
+      status.className = 'workspace-toast running';
+      const commandAndStatus = read();
+      command.remove();
+      status.className = 'workspace-toast ready';
+      action.className = 'toast';
+      const settled = read();
+      return {
+        base,
+        running,
+        active,
+        commandHeight,
+        inCommand,
+        commandAndStatus,
+        settled
+      };
+    } finally {
+      for (const node of [status, action, refusal, activity, command])
+        node.remove();
+      for (const { node, className } of originals) node.className = className;
+    }
+  });
+  for (const key of ['action', 'refusal'] as const) {
+    expect(states.running[key] - states.base[key]).toBeCloseTo(40, 0);
+    expect(states.active[key] - states.base[key]).toBeCloseTo(70, 0);
+    expect(states.inCommand[key] - states.base[key]).toBeCloseTo(
+      states.commandHeight + 10,
+      0
+    );
+    expect(states.commandAndStatus[key] - states.base[key]).toBeCloseTo(
+      states.commandHeight + 50,
+      0
+    );
+    expect(states.settled[key]).toBeCloseTo(states.base[key], 0);
+  }
+  for (const state of [
+    states.base,
+    states.running,
+    states.active,
+    states.inCommand,
+    states.commandAndStatus,
+    states.settled
+  ])
+    expect(state.row).toBe('');
+});
 
 test('orbiting without a handle skips chip panel layout', async ({ page }) => {
   await newProject(page, 'Viewer frame work');
@@ -193,6 +471,12 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
     return direction.map((value) => value / length);
   };
   const faceOn = (pose: CameraState) => Math.abs(viewDirection(pose)[2]!);
+  // The pick hook resolves before React commits its selection. Let the
+  // initial framing and picked-face state settle before the shortcut.
+  await expect(
+    page.getByRole('group', { name: 'Picked', exact: true })
+  ).toBeVisible();
+  await waitForStillViewport(page);
   await page.keyboard.press('Space');
   // The glide ends looking straight down the face normal.
   await expect
@@ -211,18 +495,10 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
   await page.mouse.move(fromX + 30, fromY - 180, { steps: 12 });
   await page.mouse.up();
   await page.keyboard.up('Shift');
-  // Let the orbit's damping settle before taking the reference pose.
-  let turned = await camera(canvas);
-  await expect
-    .poll(async () => {
-      const next = await camera(canvas);
-      const moved = Math.hypot(
-        ...next.position.map((value, axis) => value - turned.position[axis]!)
-      );
-      turned = next;
-      return moved;
-    })
-    .toBeLessThan(1e-6);
+  // Consecutive reads may see the same RAF while damping still runs.
+  // Require a full quiet window before taking the reference pose.
+  await waitForStillViewport(page);
+  const turned = await camera(canvas);
   // Turned well away from looking straight down the face normal.
   expect(faceOn(turned)).toBeLessThan(0.99);
 
@@ -231,7 +507,7 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
   await page.getByRole('button', { name: 'Hide body Box 1' }).click();
   await page.getByRole('button', { name: 'Show body Box 1' }).click();
   await expectBodyCount(page, 1);
-  await page.waitForTimeout(1000);
+  await waitForStillViewport(page);
   const after = await camera(canvas);
   // Not glided back to the face: still looking the way it was turned (a
   // re-frame may nudge the distance, not the direction).

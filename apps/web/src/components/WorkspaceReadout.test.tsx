@@ -78,6 +78,7 @@ describe('WorkspaceReadout', () => {
       container.querySelector('.command-bar-lane')
     );
     expect(hint?.nextElementSibling).toBe(bar);
+    expect(hint?.parentElement).toHaveClass('has-guidance');
     // A live message takes the guidance's place.
     rerender(
       <WorkspaceReadout
@@ -90,6 +91,9 @@ describe('WorkspaceReadout', () => {
       />
     );
     expect(container.querySelector('.workspace-hint')).toBeNull();
+    expect(container.querySelector('.command-bar-lane')).not.toHaveClass(
+      'has-guidance'
+    );
   });
 
   it('leads the guidance with the pick, which outlasts a live message', () => {
@@ -121,6 +125,7 @@ describe('WorkspaceReadout', () => {
     const shown = container.querySelector('.workspace-hint');
     expect(shown).toHaveTextContent('Bracket · Top face');
     expect(shown).not.toHaveTextContent('Click a body, face, or edge');
+    expect(shown?.parentElement).toHaveClass('has-guidance');
   });
 
   it('shows the live status as a toast that opens the activity log', async () => {

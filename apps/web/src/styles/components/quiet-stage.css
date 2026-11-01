@@ -1059,10 +1059,12 @@
   display: none;
 }
 
-/* While the guidance shows, the placeholder makes way for it. */
+/* While the guidance shows, the placeholder makes way for it. Keep the
+   activity query on its own lane and take guidance state from the readout;
+   querying the viewer made HUD text invalidate the entire viewer subtree. */
 :where(.workspace:not(.with-assistant))
-  .viewer-area:not(:has(.activity-pill))
-  .command-bar-lane:has(> .workspace-hint)
+  .activity-lane:not(:has(> .activity-pill))
+  ~ .command-bar-lane.has-guidance
   .command-bar:not(.open)
   .command-bar-input::placeholder {
   color: transparent;
@@ -1100,20 +1102,24 @@
   --notice-end: var(--lane-right);
 }
 
-.viewer-area {
+/* Only these notices consume the status height. Keeping it on the viewer
+   made a toast appearing/disappearing restyle every object/history row. */
+.viewer-area :is(.toast, .selection-refusal-lane) {
   --lane-status: 0px;
 }
 
 /* The status row holds a 28px toast or the 58px activity pill. The hint
    reads inside the bar and takes no row. */
-.viewer-area:has(.workspace-toast:not(.hidden)) {
+.viewer-area:has(.workspace-toast:not(.hidden))
+  :is(.toast, .selection-refusal-lane) {
   --lane-status: 40px;
 }
 
 /* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap.
    The lane in the selector matches the specificity of the two rules above,
    which stay in the DOM while the pill is up; source order then wins. */
-.viewer-area:has(.activity-lane > .activity-pill) {
+.viewer-area:has(.activity-lane > .activity-pill)
+  :is(.toast, .selection-refusal-lane) {
   --lane-status: 70px;
 }
 
@@ -1128,7 +1134,8 @@
    news of its own and keeps its row under the toast. */
 .viewer-area:has(.toast:not(.closing)):has(
     .workspace-toast.ready:not(.hidden)
-  ):not(:has(.activity-pill)) {
+  ):not(:has(.activity-pill))
+  :is(.toast, .selection-refusal-lane) {
   --lane-status: 0px;
 }
 
@@ -3898,7 +3905,9 @@ button.model-panel-grip[aria-expanded='true'] {
    on, and Cancel / Done. Fields never appear here; inputs are picked in the
    model and numbers ride their handles. The row is taller than the hint, so
    it claims its own lane height. */
-:where(.workspace:not(.with-assistant)) .viewer-area:has(.in-place-command) {
+:where(.workspace:not(.with-assistant))
+  .viewer-area:has(.in-place-command)
+  :is(.toast, .selection-refusal-lane) {
   --lane-status: calc(var(--in-place-command-h, 38px) + 10px);
 }
 
@@ -3910,7 +3919,8 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 :where(.workspace:not(.with-assistant))
-  .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden)) {
+  .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden))
+  :is(.toast, .selection-refusal-lane) {
   --lane-status: calc(var(--in-place-command-h, 38px) + 50px);
 }
 
