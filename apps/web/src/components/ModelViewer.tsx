@@ -1,4 +1,5 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
+import { nameCommandChip, prepareCommandChip } from '../lib/inPlace/chipNames';
 import type { FrameStatsSink } from '../lib/frameStats';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
@@ -752,6 +753,11 @@ export type CommandHandleView = (
   max?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
   format(value: number): string;
+  /**
+   * The chip's accessible name for a value, in words: "Radius 12 mm".
+   * Without it the chip is named by its visible text.
+   */
+  describe?(value: number): string;
 };
 
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
@@ -4290,8 +4296,10 @@ export function ModelViewer({
           (handle) => handle.valueId === valueId
         );
         if (!view) continue;
-        const text = view.format(entry.rig ? entry.rig.value() : view.value);
+        const shownValue = entry.rig ? entry.rig.value() : view.value;
+        const text = view.format(shownValue);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        nameCommandChip(entry.chip, view.describe?.(shownValue));
         entry.chip.hidden = false;
       }
       const chipWidths = new Map(
@@ -4394,6 +4402,7 @@ export function ModelViewer({
             : { dx: 0, dy: 0 };
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        nameCommandChip(entry.chip, view.describe?.(value));
         shown.push({
           valueId,
           entry,
@@ -13805,7 +13814,7 @@ export function ModelViewer({
       const chip = makeChip();
       chip.dataset.testid = `command-handle-${handle.valueId}`;
       const valueId = handle.valueId;
-      chip.addEventListener('click', () => {
+      const openKeypad = () => {
         const entry = commandRigsRef.current.get(valueId);
         const view = commandHandlesRef.current.find(
           (candidate) => candidate.valueId === valueId
@@ -13813,7 +13822,8 @@ export function ModelViewer({
         const value = entry?.rig ? entry.rig.value() : view?.value;
         if (value !== undefined)
           onOpenCommandKeypadRef.current?.(valueId, value);
-      });
+      };
+      prepareCommandChip(chip, openKeypad);
       rigs.set(handle.valueId, {
         key: handle.key,
         rig,
