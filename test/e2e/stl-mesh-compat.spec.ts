@@ -74,7 +74,7 @@ for (const fixture of cases) {
           .getByRole('button', { name: 'Export STL', exact: true })
           .click();
         const downloaded = await pending;
-        const bytes = readFileSync((await downloaded.path())!);
+        const bytes = readFileSync(await downloaded.path());
         expect(
           parseStl(
             bytes.buffer.slice(
