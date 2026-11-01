@@ -41,6 +41,8 @@ import {
   type NativeVertexPointEvidence
 } from './remus-native-vertices';
 import { healPipelineSolid, requireValidSolid } from './kernel-validation';
+import { MeshConversionError } from './imported-mesh';
+import { transformReferenceMesh } from './mesh-reference';
 
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
@@ -245,6 +247,13 @@ export function copyShapeWithVerifiedLineage(
   matrix: Float64Array,
   allowUniformScale = false
 ): ExactShape {
+  if (shape.referenceMesh) {
+    return {
+      ...shape,
+      solids: [],
+      referenceMesh: transformReferenceMesh(shape.referenceMesh, matrix)
+    };
+  }
   const solids: number[] = [];
   if (!shape.lineage) {
     return {
@@ -320,15 +329,42 @@ export function projectRemusLineageDiagnostic(
  * select, mirror, shell and offset it like any other body.
  *
  * The repair is topological only: the measured volume and bounds must survive
- * it unchanged. If they do not, or the mesh cannot be sewn at all, the import
- * fails by name instead of publishing a body whose geometry silently drifted.
+ * it unchanged. Strict preflight refuses a repair that changes them. A
+ * document builder may opt into keeping the original facets with an advisory
+ * instead, so a readable STL remains available without altered geometry.
  */
-export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
-  const imported = kernel.deserializeSolid(
-    remusTranslators().importStl(new TextEncoder().encode(stlText))
-  );
+export function importMeshSolid(
+  kernel: RemusKernel,
+  stlText: string,
+  onMeshReference?: (message: string) => void
+): number {
+  let serialized: Uint8Array;
+  try {
+    serialized = remusTranslators().importStl(
+      new TextEncoder().encode(stlText)
+    );
+  } catch (error) {
+    throw new MeshConversionError(
+      error instanceof Error ? error.message : 'Mesh conversion failed.',
+      { cause: error }
+    );
+  }
+  const imported = kernel.deserializeSolid(serialized);
   const faces = kernel.getSolidFaces(imported);
+  // A document may keep renderable source facets even when they cannot form
+  // a modelable shell. File translators still use the strict default during
+  // preflight; the feature builder opts in and attributes an advisory.
+  const keepReference = (reason: string): number => {
+    onMeshReference!(
+      'Kept the original mesh as a reference; solid modeling may be unavailable.\n' +
+        reason
+    );
+    return imported;
+  };
   if (faces.length < 2) {
+    if (faces.length === 1 && onMeshReference) {
+      return keepReference('A single triangle cannot form a closed solid.');
+    }
     throw new Error(
       'An imported mesh needs at least two triangles to form a body.'
     );
@@ -342,18 +378,21 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
     bounds[5]! - bounds[2]!
   );
 
-  let repaired: number;
+  let sewn: number;
   try {
-    const sewn = kernel.sewFaces(faces, scale * MESH_SEW_TOLERANCE_RATIO);
-    repaired = unifySewnMesh(kernel, sewn);
+    sewn = sewImportedMesh(kernel, imported, faces, scale);
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : 'unknown kernel error';
+    if (onMeshReference) return keepReference(detail);
     throw new Error(
       `This mesh could not be sewn into a shell the kernel can model with: ${detail}`,
       { cause: error }
     );
   }
+  // An unreadable heal payload is an adapter error, not a sewing refusal.
+  // Keep its existing fail-closed behavior rather than masking it as a mesh.
+  const repaired = unifySewnMesh(kernel, sewn);
 
   const repairedBounds = Array.from(kernel.boundingBox(repaired));
   const repairedVolume = kernel.volume(repaired, MEASUREMENT_DEFLECTION);
@@ -367,11 +406,47 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
     Math.abs(repairedVolume - volume) >
       Math.max(linearTolerance ** 3, Math.abs(volume) * 1e-6)
   ) {
+    if (onMeshReference) {
+      return keepReference(
+        'Sewing changed the mesh size; the source was kept.'
+      );
+    }
     throw new Error(
       'Sewing this mesh changed its size, so the import was refused rather than publishing altered geometry.'
     );
   }
   return repaired;
+}
+
+/**
+ * Preserve the established sew for successful imports. When it refuses, cap
+ * one retry below the shortest source edge: a large STL can contain tiny but
+ * valid facets, and a bounds-only tolerance collapses their endpoints. There
+ * is deliberately no absolute floor tied to the document's length unit.
+ */
+function sewImportedMesh(
+  kernel: RemusKernel,
+  imported: number,
+  faces: Uint32Array,
+  scale: number
+): number {
+  const tolerance = scale * MESH_SEW_TOLERANCE_RATIO;
+  try {
+    return kernel.sewFaces(faces, tolerance);
+  } catch (error) {
+    let shortest = Infinity;
+    for (const edge of kernel.getSolidEdges(imported)) {
+      const length = kernel.edgeLength(edge);
+      if (length > 0 && Number.isFinite(length)) {
+        shortest = Math.min(shortest, length);
+      }
+    }
+    const retryTolerance = shortest / 4;
+    if (retryTolerance > 0 && retryTolerance < tolerance) {
+      return kernel.sewFaces(faces, retryTolerance);
+    }
+    throw error;
+  }
 }
 
 /**

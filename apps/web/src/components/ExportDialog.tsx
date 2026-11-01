@@ -32,6 +32,7 @@ const FORMAT_LABELS: Record<MeshExportDialogFormat, string> = {
 export interface ExportDialogBody {
   bodyId: string;
   name: string;
+  meshReference?: boolean;
 }
 
 /**
@@ -192,7 +193,12 @@ export function ExportDialog({
   // down while the dialog is open, so nothing else would take the key.
   useModalFocus(dialogRef, { autoFocus: true });
 
-  const [format, setFormat] = useState<MeshExportDialogFormat>('3mf');
+  const [chosenFormat, setFormat] = useState<MeshExportDialogFormat>('3mf');
+  const stlOnly = bodies.some((body) => body.meshReference);
+  const format =
+    stlOnly && chosenFormat !== 'stl' && chosenFormat !== 'stl-binary'
+      ? 'stl-binary'
+      : chosenFormat;
   const [preset, setPreset] = useState<QualityPresetId>('standard');
   const [customDeflection, setCustomDeflection] = useState('0.05');
   const [angle, setAngle] = useState<AngleOption>(20);
@@ -349,6 +355,12 @@ export function ExportDialog({
         </p>
         <fieldset className="export-dialog-group">
           <legend>Format</legend>
+          {stlOnly && (
+            <p>
+              This selection includes mesh references. Export their original
+              facets as STL.
+            </p>
+          )}
           {FORMAT_OPTIONS.map((option) => (
             <label key={option.format} className="export-dialog-option">
               {/* Named by the format alone, with the hint as its description,
@@ -361,6 +373,11 @@ export function ExportDialog({
                 aria-label={option.label}
                 aria-describedby={`export-format-hint-${option.format}`}
                 checked={format === option.format}
+                disabled={
+                  stlOnly &&
+                  option.format !== 'stl' &&
+                  option.format !== 'stl-binary'
+                }
                 onChange={() => setFormat(option.format)}
               />
               <span aria-hidden="true">{option.label}</span>
@@ -462,7 +479,7 @@ export function ExportDialog({
             <button
               type="button"
               className="secondary"
-              disabled={deflection === null || bodies.length === 0}
+              disabled={stlOnly || deflection === null || bodies.length === 0}
               aria-disabled={phase !== 'idle' ? true : undefined}
               // Named outright: the visible words sit in a width-reserving
               // grid beside an icon slot, and a reader that did not descend
@@ -490,6 +507,12 @@ export function ExportDialog({
               </StableLabel>
             </button>
           </header>
+          {stlOnly && (
+            <p>
+              Printability checking requires a CAD shell and is unavailable for
+              mesh references.
+            </p>
+          )}
           {report && !staleReport ? (
             <p className="export-dialog-measure" role="status">
               {`${report.result.triangleCount.toLocaleString('en-US')} ${report.result.triangleCount === 1 ? 'triangle' : 'triangles'} · measured deviation ${formatDeviation(report.result.maxDeviation)} mm of ${report.deflection} mm allowed${report.result.sampled ? ' (sampled)' : ''}`}

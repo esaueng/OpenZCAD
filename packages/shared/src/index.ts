@@ -2904,6 +2904,8 @@ export interface BodyRepresentation {
    */
   importedStepDeclaredSolidCount?: number;
   volume: number;
+  /** Display-only source facets. `volume` is a compatibility placeholder. */
+  meshReference?: true;
   bbox: BoundingBox;
   /**
    * Absent when the kernel could not integrate this solid — it raises on a

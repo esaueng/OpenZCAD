@@ -15,7 +15,11 @@ import { healPipelineSolid, unifyFacesReport } from './kernel-validation';
  */
 
 /** The 2 x 3 x 4 box, `offsets.length` times along x, as outward triangles. */
-function boxSoup(offsets: readonly number[], dropTriangles = 0): string {
+function boxSoup(
+  offsets: readonly number[],
+  dropTriangles = 0,
+  scale: readonly [number, number, number] = [1, 1, 1]
+): string {
   const corners = [
     [0, 0, 0],
     [2, 0, 0],
@@ -44,7 +48,9 @@ function boxSoup(offsets: readonly number[], dropTriangles = 0): string {
   const indices: number[] = [];
   for (const dx of offsets) {
     const base = vertices.length / 3;
-    for (const [x, y, z] of corners) vertices.push(x + dx, y, z);
+    for (const [x, y, z] of corners) {
+      vertices.push((x + dx) * scale[0], y * scale[1], z * scale[2]);
+    }
     for (const [a, b, c] of triangles) {
       indices.push(a + base, b + base, c + base);
     }
@@ -70,6 +76,81 @@ afterEach(() => {
 });
 
 describe('importMeshSolid face unification', () => {
+  it.each([1, 1 / 25.4])(
+    'sews tiny edges without changing bounds or volume at document scale %s',
+    (unitScale) => {
+      const kernel = new RemusKernel();
+      try {
+        // A 170 mm prism with 15 nm edges, like a tessellated
+        // part containing sliver facets. Bounds-only sewing collapses them.
+        const thickness = 1.52587890625e-5;
+        const sew = vi.spyOn(kernel, 'sewFaces');
+        const solid = importMeshSolid(
+          kernel,
+          boxSoup([0], 0, [
+            85 * unitScale,
+            unitScale,
+            (thickness / 4) * unitScale
+          ])
+        );
+        expect(sew).toHaveBeenCalledTimes(2);
+        expect(sew.mock.calls[1]![1]).toBeLessThan(thickness * unitScale);
+        expect(Array.from(kernel.boundingBox(solid))).toEqual([
+          0,
+          0,
+          0,
+          170 * unitScale,
+          3 * unitScale,
+          thickness * unitScale
+        ]);
+        expect(kernel.volume(solid, 0.08) / unitScale ** 3).toBeCloseTo(
+          170 * 3 * thickness,
+          10
+        );
+        expect(JSON.parse(kernel.validateSolidDetailed(solid)).errorCount).toBe(
+          0
+        );
+      } finally {
+        kernel.free();
+      }
+    }
+  );
+
+  it('keeps source facets when shell sewing is unavailable, with an advisory', () => {
+    const kernel = new RemusKernel();
+    try {
+      // A renderable soup must survive a sew refusal, including future
+      // kernel refusals we do not recognize by an English message.
+      vi.spyOn(kernel, 'sewFaces').mockImplementation(() => {
+        throw new Error('sewing unavailable');
+      });
+      const advisory = vi.fn();
+      const solid = importMeshSolid(kernel, boxSoup([0]), advisory);
+      expect(kernel.getSolidFaces(solid).length).toBe(12);
+      expect(kernel.volume(solid, 0.08)).toBeCloseTo(24, 9);
+      expect(advisory).toHaveBeenCalledWith(
+        expect.stringContaining('reference')
+      );
+      expect(advisory).toHaveBeenCalledWith(
+        expect.stringContaining('sewing unavailable')
+      );
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it('does not mask an unreadable heal result as a mesh reference', () => {
+    const kernel = new RemusKernel();
+    try {
+      vi.spyOn(kernel, 'runHealPipeline').mockReturnValue({ unexpected: true });
+      const advisory = vi.fn();
+      expect(() => importMeshSolid(kernel, boxSoup([0]), advisory)).toThrow();
+      expect(advisory).not.toHaveBeenCalled();
+    } finally {
+      kernel.free();
+    }
+  });
+
   it('adopts an accepted unify: a triangulated box comes back as six faces', () => {
     const kernel = new RemusKernel();
     const spies = spyOnMeshUnify();

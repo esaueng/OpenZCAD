@@ -40,7 +40,7 @@ export interface ProjectDiagnosticBundle {
       name: string;
       source: string;
       faceCount: number;
-      volume: number;
+      volume: number | null;
       consumed: boolean;
       exportableStep: boolean;
       bbox: {
@@ -149,7 +149,7 @@ export function createProjectDiagnosticBundle(
         name: body.name,
         source: body.source,
         faceCount: body.faceCount,
-        volume: body.volume,
+        volume: body.meshReference ? null : body.volume,
         consumed: body.consumed,
         exportableStep: body.exportableStep,
         bbox: structuredClone(body.bbox)

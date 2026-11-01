@@ -8,6 +8,7 @@ import {
 } from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
+import { projectReferenceMesh } from './mesh-reference';
 import {
   drawingTessellationOfShape,
   MAX_DRAWING_TESSELLATION_BYTES,
@@ -62,7 +63,11 @@ import {
   rigidImportedSource
 } from '@openzcad/document-core';
 import { writeDxf, type DxfEntity } from '@openzcad/io-dxf';
-import { writeAsciiStl } from '@openzcad/io-stl';
+import {
+  writeAsciiStl,
+  writeBinaryStl,
+  type StlExportMesh
+} from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import { sketchDxfEntities, SketchDxfExportError } from './exact-sketch-dxf';
 import { assertSketchProjectionsValid } from './exact-sketch-projection-failures';
@@ -2980,6 +2985,32 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
         const feature = features.get(body.featureId);
         const consumed = build.consumed.has(bodyId);
+        if (shape.referenceMesh) {
+          const display = projectReferenceMesh(shape.referenceMesh);
+          const representation: BodyRepresentation = {
+            bodyId,
+            name: body.name,
+            source: feature?.featureKind ?? 'imported-mesh',
+            ...display,
+            faceCount: 0,
+            color: bodyDisplayColor(body.metadata, feature?.featureKind),
+            opacity: bodyOpacityFromMetadata(
+              body.metadata?.[BODY_OPACITY_METADATA_KEY]
+            ),
+            exportableStep: false,
+            volume: 0,
+            meshReference: true,
+            consumed,
+            topology: { faces: [], edges: [] }
+          };
+          geometryRepresentations[bodyId] = representation;
+          finishBodies.push(async () => {
+            bodyRepresentations[bodyId] = representation;
+          });
+          measurementDone();
+          await scheduling.checkpoint();
+          continue;
+        }
         // K0.6 import taxonomy. Both warnings describe the imported FILE, so
         // they are driven by what the import measured rather than by the
         // body's state after later features edited it.
@@ -3669,6 +3700,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (!shape) {
           throw new Error(`Body ${bodyId} has no exact geometry.`);
         }
+        if (shape.referenceMesh) {
+          throw new Error(
+            'A mesh reference has no exact solid to export. Export it as STL instead.'
+          );
+        }
         return { bodyId, solids: shape.solids };
       })
       .filter(({ solids }) => solids.length > 0);
@@ -4081,6 +4117,59 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
   }
 
+  /** Keep reference facets out of B-rep writers, including mixed selections. */
+  private referenceExportMeshes(
+    kernel: RemusKernel,
+    build: ExactBuildResult,
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    units: UnitSystem,
+    deflection: number,
+    angular: number | null = null
+  ): StlExportMesh[] | null {
+    const hidden = getParameterHiddenBodyIds(document);
+    const selected = bodyIds.filter(
+      (id) => !hidden.has(id) && !build.consumed.has(id)
+    );
+    if (!selected.some((id) => build.shapes.get(id)?.referenceMesh))
+      return null;
+    const scale = exportLengthScale(document.units, units);
+    return selected.flatMap((id) => {
+      const shape = build.shapes.get(id);
+      if (!shape) throw new Error(`Body ${id} has no geometry to export.`);
+      if (shape.referenceMesh) {
+        return [
+          {
+            name: id,
+            vertices: shape.referenceMesh.vertices.map(
+              (value) => value * scale
+            ),
+            indices: shape.referenceMesh.indices
+          }
+        ];
+      }
+      return shape.solids.map((solid) => {
+        const mesh = kernel.tessellateSolidGroupedBinary(
+          solid,
+          deflection / scale,
+          angular ?? undefined
+        );
+        try {
+          return {
+            name: id,
+            vertices: Float64Array.from(
+              mesh.positions,
+              (value) => value * scale
+            ),
+            indices: mesh.indices.slice()
+          };
+        } finally {
+          mesh.free();
+        }
+      });
+    });
+  }
+
   async exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -4093,6 +4182,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const unitDeflection = deflection / UNIT_TO_MM[units];
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
+      const referenceMeshes = this.referenceExportMeshes(
+        kernel,
+        build,
+        document,
+        bodyIds,
+        units,
+        unitDeflection,
+        angular
+      );
+      if (referenceMeshes)
+        return writeAsciiStl(document.name, referenceMeshes, {
+          preserveDegenerate: true
+        });
       const scaled = this.exportSolidsFor(
         kernel,
         build,
@@ -4163,6 +4265,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const unitDeflection = deflection / UNIT_TO_MM[units];
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
+      const meshes =
+        format === 'stl-binary'
+          ? this.referenceExportMeshes(
+              kernel,
+              build,
+              document,
+              bodyIds,
+              units,
+              unitDeflection,
+              angular
+            )
+          : null;
+      if (meshes && format === 'stl-binary') return writeBinaryStl(meshes);
       const scaled = this.exportSolidsFor(
         kernel,
         build,

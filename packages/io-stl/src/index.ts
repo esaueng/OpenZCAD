@@ -111,7 +111,10 @@ const COORDINATE_PREFIX = String.raw`[-+]?(?:\d|\.\d|nan|inf)`;
 const COORDINATE_LIKE = new RegExp(`^${COORDINATE_PREFIX}`, 'i');
 const SNIFFED_COORDINATE = String.raw`\s+${COORDINATE_PREFIX}\S*`;
 /** `vertex` followed by three coordinate-like tokens, in either letter case. */
-const SNIFFED_VERTEX = new RegExp(`vertex${SNIFFED_COORDINATE.repeat(3)}`, 'gi');
+const SNIFFED_VERTEX = new RegExp(
+  `vertex${SNIFFED_COORDINATE.repeat(3)}`,
+  'gi'
+);
 
 /**
  * Whether the text holds a `vertex` statement: the keyword, in either letter
@@ -416,7 +419,9 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   }
 
   const bytes = new Uint8Array(buffer);
-  const head = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 512)));
+  const head = new TextDecoder().decode(
+    bytes.subarray(0, Math.min(bytes.length, 512))
+  );
   if (head.trimStart().toLowerCase().startsWith('solid')) {
     const text = new TextDecoder().decode(bytes);
     // A complete binary payload was already handled, regardless of its
@@ -480,8 +485,13 @@ function facetNormal(
 }
 
 /** Writes an ASCII STL with per-facet normals computed from the geometry. */
-export function writeAsciiStl(solidName: string, meshes: StlExportMesh[]): string {
-  const safeName = solidName.replace(/\s+/g, '_').replace(/[^\w.-]/g, '') || 'openzcad';
+export function writeAsciiStl(
+  solidName: string,
+  meshes: StlExportMesh[],
+  options: { preserveDegenerate?: boolean } = {}
+): string {
+  const safeName =
+    solidName.replace(/\s+/g, '_').replace(/[^\w.-]/g, '') || 'openzcad';
   const lines: string[] = [`solid ${safeName}`];
   for (const mesh of meshes) {
     const vertexCount = Math.floor(mesh.vertices.length / 3);
@@ -507,7 +517,8 @@ export function writeAsciiStl(solidName: string, meshes: StlExportMesh[]): strin
       // A shared-edge tessellation can contain a collapsed seam facet. It
       // carries no area or volume and makes the emitted STL non-manifold, so
       // omit only the exact zero-area case; no welding tolerance is involved.
-      if (nx === 0 && ny === 0 && nz === 0) continue;
+      if (!options.preserveDegenerate && nx === 0 && ny === 0 && nz === 0)
+        continue;
       lines.push(
         `  facet normal ${nx} ${ny} ${nz}`,
         '    outer loop',
@@ -521,4 +532,59 @@ export function writeAsciiStl(solidName: string, meshes: StlExportMesh[]): strin
   }
   lines.push(`endsolid ${safeName}`, '');
   return lines.join('\n');
+}
+
+/** Binary STL from validated source facets, including non-manifold meshes. */
+export function writeBinaryStl(
+  meshes: StlExportMesh[]
+): Uint8Array<ArrayBuffer> {
+  const triangleCount = meshes.reduce(
+    (count, mesh) => count + Math.floor(mesh.indices.length / 3),
+    0
+  );
+  const bytes = new Uint8Array(84 + triangleCount * 50);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(80, triangleCount, true);
+  let offset = 84;
+  for (const mesh of meshes) {
+    const vertexCount = Math.floor(mesh.vertices.length / 3);
+    for (let i = 0; i + 2 < mesh.indices.length; i += 3) {
+      const triangle = [
+        mesh.indices[i]!,
+        mesh.indices[i + 1]!,
+        mesh.indices[i + 2]!
+      ];
+      for (const index of triangle) {
+        if (!Number.isInteger(index) || index < 0 || index >= vertexCount) {
+          throw new StlWriteError(
+            `Mesh "${mesh.name}" references an invalid vertex.`
+          );
+        }
+      }
+      const normal = facetNormal(
+        mesh.vertices,
+        triangle[0]!,
+        triangle[1]!,
+        triangle[2]!
+      );
+      for (const value of [
+        ...normal,
+        ...triangle.flatMap((index) => [
+          mesh.vertices[index * 3]!,
+          mesh.vertices[index * 3 + 1]!,
+          mesh.vertices[index * 3 + 2]!
+        ])
+      ]) {
+        if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value))) {
+          throw new StlWriteError(
+            'Mesh coordinates exceed the binary STL range.'
+          );
+        }
+        view.setFloat32(offset, value, true);
+        offset += 4;
+      }
+      offset += 2;
+    }
+  }
+  return bytes;
 }

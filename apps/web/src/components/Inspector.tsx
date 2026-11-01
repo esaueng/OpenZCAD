@@ -420,12 +420,14 @@ export function BodyStats({
     if (!massOpen || body.massProperties) return;
     let active = true;
     const controller = new AbortController();
-    if (!document || !workerRef.current) {
+    if (body.meshReference || !document || !workerRef.current) {
       setQuery({
         document,
         body,
         status: 'unavailable',
-        message: 'Mass properties are unavailable for this document.'
+        message: body.meshReference
+          ? 'Mass properties are unavailable for a mesh reference.'
+          : 'Mass properties are unavailable for this document.'
       });
       return;
     }
@@ -480,7 +482,9 @@ export function BodyStats({
   // kernel's own volume field, which the shared type deliberately withholds
   // as the less accurate of the two.
   const massKgValue =
-    densityKgPerM3 === null ? null : massKg(body.volume, units, densityKgPerM3);
+    densityKgPerM3 === null || body.meshReference
+      ? null
+      : massKg(body.volume, units, densityKgPerM3);
   const massUnit =
     massKgValue === null ? null : displayMassUnit(massKgValue, units);
   const inertiaUnit =
@@ -568,7 +572,14 @@ export function BodyStats({
         <div className="kv-grid">
           <b>volume</b>
           <span>
-            {formatMeasuredQuantity(body.volume)} {unitLabel('volume', units)}
+            {body.meshReference ? (
+              'Unavailable for mesh reference'
+            ) : (
+              <>
+                {formatMeasuredQuantity(body.volume)}{' '}
+                {unitLabel('volume', units)}
+              </>
+            )}
           </span>
           <b>size</b>
           <span>

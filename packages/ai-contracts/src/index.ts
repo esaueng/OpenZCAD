@@ -761,7 +761,8 @@ export interface CadDocumentDigest {
     /** True when a later feature consumed this body; do not target it. */
     consumed: boolean;
     sourceFeatureKind?: string;
-    volume: number;
+    /** Null for a display-only mesh reference with no solid volume. */
+    volume: number | null;
     bbox: {
       min: { x: number; y: number; z: number };
       max: { x: number; y: number; z: number };
@@ -1303,7 +1304,7 @@ export function createCadDocumentDigest(
               name: body.name,
               consumed: body.consumed,
               sourceFeatureKind: body.source,
-              volume: round(body.volume),
+              volume: body.meshReference ? null : round(body.volume),
               bbox: {
                 min: {
                   x: round(body.bbox.min.x),

@@ -167,6 +167,15 @@ function makeProps(
 }
 
 describe('direct pick details', () => {
+  it('labels solid volume unavailable for a display-only mesh reference', () => {
+    render(
+      <BodyStats
+        body={{ ...body, meshReference: true, volume: 0 }}
+        units="mm"
+      />
+    );
+    expect(screen.getByText('Unavailable for mesh reference')).toBeVisible();
+  });
   it('identifies committed measurements when a form has unapplied values', () => {
     render(<BodyStats body={body} units="mm" lastApplied />);
     expect(screen.getByText('Measurements (last applied)')).toBeVisible();

@@ -76,6 +76,27 @@ function exportOptions() {
 }
 
 describe('ExportDialog', () => {
+  it('offers STL export for references and explains unavailable CAD checks', async () => {
+    const user = userEvent.setup();
+    const { onExport } = renderDialog({
+      bodies: [{ bodyId: 'mesh', name: 'Mesh reference', meshReference: true }]
+    });
+    expect(screen.getByRole('radio', { name: 'STL (binary)' })).toBeChecked();
+    expect(
+      screen.getByRole('radio', { name: '3MF', exact: true })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Check watertightness' })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/Printability checking requires a CAD shell/)
+    ).toBeVisible();
+    await user.click(screen.getByRole('radio', { name: 'STL (ASCII)' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Export STL', exact: true })
+    );
+    expect(onExport).toHaveBeenCalledWith('stl', 0.08);
+  });
   it('reports the visible scope and refuses an empty export', () => {
     const dialog = renderDialog({
       scopeLabel: 'visible bodies (1, 1 hidden left out)',
