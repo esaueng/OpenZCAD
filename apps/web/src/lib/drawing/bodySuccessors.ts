@@ -23,6 +23,7 @@ export function drawingBodyReplacements(
       case 'fillet':
       case 'chamfer':
       case 'hole':
+      case 'thread':
       case 'shell':
       case 'solid-offset':
       case 'draft': {

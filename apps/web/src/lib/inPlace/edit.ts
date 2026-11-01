@@ -20,11 +20,13 @@ import {
   type SketchId,
   type SketchProfileReference,
   type SketchSectionReference,
+  type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
 import { featureHistory, featureResultBodyIds } from '../featureHistory';
 import { holePositionAxes } from '../holePositionAxes';
 import type { RevolveAxisCandidate } from './revolve';
+import { threadEditOptions } from './thread';
 import {
   IN_PLACE_TOOL_SPECS,
   type BodyPick,
@@ -51,6 +53,8 @@ import {
 
 /** What the command needs to resolve a stored feature against the model. */
 export interface InPlaceEditContext {
+  /** The document's length unit, which ISO sizes convert from. */
+  units?: UnitSystem;
   evaluate(value: ParamValue): number | null;
   /** A stored region reference, found in its sketch, or null. */
   profile(
@@ -167,6 +171,7 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     case 'sweep':
     case 'helical-sweep':
     case 'hole':
+    case 'thread':
     case 'shell':
     case 'thicken':
     case 'solid-offset':
@@ -506,6 +511,31 @@ export function inPlaceEditSeed(
       } else {
         missing.push('plane');
       }
+      break;
+    }
+    case 'thread': {
+      const face = ctx.face(
+        data.targetBodyId,
+        data.faceHash,
+        data.faceReference
+      );
+      if (face) seed.slots.faces.push(face);
+      else missing.push('face');
+      Object.assign(
+        seed.options,
+        threadEditOptions(data, ctx.evaluate, ctx.units ?? 'mm')
+      );
+      value('majorDiameter', data.majorDiameter);
+      value('pitch', data.pitch);
+      value('depth', data.depth);
+      value('crestWidth', data.crestWidth);
+      value('upperFlankAngleDeg', data.upperFlankAngleDeg);
+      value('lowerFlankAngleDeg', data.lowerFlankAngleDeg);
+      value('clearance', data.clearance);
+      value('starts', data.starts);
+      value('length', data.length);
+      value('offset', data.offset);
+      value('phaseDeg', data.phaseDeg);
       break;
     }
     case 'shell':
@@ -998,6 +1028,36 @@ export function inPlaceFeatureUpdate(
         featureId,
         name,
         data: { featureKind: 'gear', ...request.gear },
+        ...(clear.length > 0 ? { clearData: [...clear] } : {})
+      };
+    }
+    case 'thread': {
+      if (saved.featureKind !== 'thread') return null;
+      // Optional fields the edit no longer sets go back to the face or their
+      // defaults; a face picked again without a reference drops the old one.
+      const optional = [
+        'faceReference',
+        'majorDiameter',
+        'pitch',
+        'depth',
+        'crestWidth',
+        'upperFlankAngleDeg',
+        'lowerFlankAngleDeg',
+        'clearance',
+        'starts',
+        'hand',
+        'length',
+        'offset',
+        'anchor',
+        'phaseDeg'
+      ] as const;
+      const clear = optional.filter(
+        (key) => saved[key] !== undefined && request.thread[key] === undefined
+      );
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'thread', ...request.thread },
         ...(clear.length > 0 ? { clearData: [...clear] } : {})
       };
     }

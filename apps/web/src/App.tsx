@@ -9603,6 +9603,7 @@ export function App() {
   /** The in-place command and seed for a stored feature, from `current`. */
   function inPlaceEditSeedFor(current: ProjectDocument, feature: FeatureNode) {
     return inPlaceEditSeed(feature, {
+      units: current.units,
       evaluate: (value) =>
         evalParamValue(value, parameterScope.scope, current.units),
       profile: (sketchId, reference) => {
@@ -21051,6 +21052,9 @@ export function App() {
           ...(request.gear.targetBodyId === undefined ? { bodyName } : {}),
           ...request.gear
         });
+      case 'thread':
+        // The threaded body keeps the name of the body it replaces.
+        return commandFactories.threadBody({ name, ...request.thread });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation
         // run in place is validated and stored exactly as the card's was.

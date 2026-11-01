@@ -56,9 +56,11 @@ import {
   type PlacementPick
 } from './primitives';
 import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
+import { threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
 
 export type { RefPick } from './datums';
+export type { ThreadRequest } from './thread';
 export type { ImagePlacement, ImageSlot } from './image';
 
 /**
@@ -79,6 +81,7 @@ export type InPlaceToolId =
   | 'hole'
   | 'gear'
   | 'gear-teeth'
+  | 'thread'
   | 'shell'
   | 'thicken'
   | 'solid-offset'
@@ -108,6 +111,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'hole',
   'gear',
   'gear-teeth',
+  'thread',
   'shell',
   'thicken',
   'solid-offset',
@@ -472,6 +476,11 @@ export type InPlaceRequest =
       /** An M14 gear, as the feature stores it. */
       tool: 'gear';
       gear: GearRequest;
+    }
+  | {
+      /** A schema v52 thread, as the feature stores it. */
+      tool: 'thread';
+      thread: ThreadRequest;
     }
   | {
       /** A primitive and its placement, as the card's Create built them. */
@@ -4818,6 +4827,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   hole,
   gear,
   'gear-teeth': gearTeeth,
+  thread: threadSpec,
   shell,
   thicken,
   'solid-offset': solidOffset,

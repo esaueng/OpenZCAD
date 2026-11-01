@@ -184,6 +184,7 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   split: 'Split',
   hole: 'Hole',
   gear: 'Gear',
+  thread: 'Thread',
   shell: 'Shell',
   'solid-offset': 'Solid offset',
   draft: 'Draft',

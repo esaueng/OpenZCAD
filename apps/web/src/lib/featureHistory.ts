@@ -134,6 +134,9 @@ export function featureHistory(document: ProjectDocument) {
       case 'gear':
         if (data.targetBodyId !== undefined) body(data.targetBodyId);
         break;
+      case 'thread':
+        body(data.targetBodyId);
+        break;
       case 'primitive':
       case 'imported-mesh':
       case 'imported-step':

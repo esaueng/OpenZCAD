@@ -158,6 +158,8 @@ import {
   type HoleInput,
   gearBody,
   type GearInput,
+  threadBody,
+  type ThreadInput,
   type ImportedMeshInput,
   type ImportedStepInput,
   importMeshBody,
@@ -315,6 +317,7 @@ export type CommandKind =
   | 'feature.datum-axis'
   | 'feature.hole'
   | 'feature.gear'
+  | 'feature.thread'
   | 'feature.shell'
   | 'feature.solid-offset'
   | 'feature.draft'
@@ -389,6 +392,7 @@ export type AnyCommand =
   | CommandDefinition<SweepInput>
   | CommandDefinition<HelicalSweepInput>
   | CommandDefinition<GearInput>
+  | CommandDefinition<ThreadInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<MirrorInput>
@@ -1059,6 +1063,105 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   }
 }
 
+/** Schema v52: the most thread starts the kernel's thread generator builds. */
+const MAX_THREAD_STARTS = 16;
+/** Schema v52: the steepest flank the kernel's thread generator builds. */
+const MAX_THREAD_FLANK_DEG = 75;
+
+/**
+ * Structural checks for a thread feature. Whether the form fits the picked
+ * face (a boss too small, a root reaching the axis, a span past the face) is
+ * the kernel's call and surfaces as its typed refusal at rebuild.
+ */
+function validateThreadInput(
+  document: ProjectDocument,
+  input: ThreadInput
+): void {
+  validateBodyTarget(document, input.targetBodyId);
+  if (typeof input.faceHash !== 'number') {
+    throw new Error('A thread needs a cylindrical face.');
+  }
+  const value = (label: string, param: ParamValue | undefined) =>
+    param === undefined
+      ? undefined
+      : resolvedModelingValue(document, `thread ${label}`, param);
+  const positive = (label: string, param: ParamValue | undefined) => {
+    const resolved = value(label, param);
+    if (resolved !== undefined && !(resolved > 0)) {
+      throw new Error(`Thread ${label} must resolve to a positive value.`);
+    }
+    return resolved;
+  };
+  const nonNegative = (label: string, param: ParamValue | undefined) => {
+    const resolved = value(label, param);
+    if (resolved !== undefined && !(resolved >= 0)) {
+      throw new Error(`Thread ${label} must not be negative.`);
+    }
+    return resolved;
+  };
+  positive('major diameter', input.majorDiameter);
+  const pitch = positive('pitch', input.pitch);
+  positive('length', input.length);
+  nonNegative('offset', input.offset);
+  nonNegative('clearance', input.clearance);
+  value('phase', input.phaseDeg);
+  const starts = value('starts', input.starts);
+  if (
+    starts !== undefined &&
+    !(Number.isInteger(starts) && starts >= 1 && starts <= MAX_THREAD_STARTS)
+  ) {
+    throw new Error(
+      `Thread starts must be a whole number from 1 to ${MAX_THREAD_STARTS}.`
+    );
+  }
+  const custom = [
+    ['depth', input.depth],
+    ['crest width', input.crestWidth],
+    ['upper flank angle', input.upperFlankAngleDeg],
+    ['lower flank angle', input.lowerFlankAngleDeg]
+  ] as const;
+  if (input.profile !== 'custom') {
+    for (const [label, present] of custom) {
+      if (present !== undefined) {
+        throw new Error(
+          `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
+        );
+      }
+    }
+    return;
+  }
+  if (pitch === undefined) {
+    throw new Error('A custom thread profile needs a pitch.');
+  }
+  for (const [label, present] of custom) {
+    if (present === undefined) {
+      throw new Error(`A custom thread profile needs its ${label}.`);
+    }
+  }
+  const depth = positive('depth', input.depth)!;
+  const crest = nonNegative('crest width', input.crestWidth)!;
+  const angles = [
+    value('upper flank angle', input.upperFlankAngleDeg)!,
+    value('lower flank angle', input.lowerFlankAngleDeg)!
+  ];
+  for (const angle of angles) {
+    if (!(angle >= 0 && angle <= MAX_THREAD_FLANK_DEG)) {
+      throw new Error(
+        `Thread flank angles must be from 0° to ${MAX_THREAD_FLANK_DEG}°.`
+      );
+    }
+  }
+  const flanks = angles.reduce(
+    (sum, angle) => sum + depth * Math.tan((angle * Math.PI) / 180),
+    0
+  );
+  if (crest + flanks > pitch * (1 + 1e-9)) {
+    throw new Error(
+      'The crest and flanks take more than the pitch, leaving no root. Use a smaller depth, crest or flank angle, or a larger pitch.'
+    );
+  }
+}
+
 /** M14: the most teeth the kernel's gear generator builds. */
 const MAX_GEAR_TEETH = 1000;
 /** M14: the steepest helix angle the kernel's gear generator builds. */
@@ -1691,6 +1794,11 @@ function validateModelingFeatureUpdate(
       validateGearInput(preview, { name: feature.name, ...gear });
       break;
     }
+    case 'thread': {
+      const { featureKind: _kind, ...thread } = feature.data;
+      validateThreadInput(preview, { name: feature.name, ...thread });
+      break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -2248,6 +2356,16 @@ export const commandFactories = {
       withIds,
       (document) => gearBody(document, withIds).document,
       (document) => validateGearInput(document, withIds)
+    );
+  },
+  threadBody(payload: ThreadInput): CommandDefinition<ThreadInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.thread',
+      'Add thread',
+      withIds,
+      (document) => threadBody(document, withIds).document,
+      (document) => validateThreadInput(document, withIds)
     );
   },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
@@ -3262,6 +3380,7 @@ class LocalBodyScope {
         case 'chamfer':
         case 'pattern':
         case 'hole':
+        case 'thread':
           this.consumed.set(data.targetBodyId, consumedByHistory);
           break;
         case 'gear':
@@ -5281,6 +5400,9 @@ export function replayCommands(
         break;
       case 'feature.gear':
         next = gearBody(next, command.payload as GearInput).document;
+        break;
+      case 'feature.thread':
+        next = threadBody(next, command.payload as ThreadInput).document;
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;
