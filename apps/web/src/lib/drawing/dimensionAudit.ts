@@ -117,6 +117,11 @@ const sub = (a: Vector3, b: Vector3): Vector3 => ({
   z: a.z - b.z
 });
 const length = (a: Vector3) => Math.hypot(a.x, a.y, a.z);
+const scaleVector = (a: Vector3, k: number): Vector3 => ({
+  x: a.x * k,
+  y: a.y * k,
+  z: a.z * k
+});
 
 /** Same length within the kernel's relative tolerance. */
 export function same(a: number, b: number): boolean {
@@ -162,6 +167,8 @@ export interface BodyRequirements {
   /** Revolved blends (tori) of one radius, stated once with a count. */
   blends: BlendGroup[];
   boltCircles: BoltCircle[];
+  /** Sloped planes square to one axis, each stated by an angle. */
+  slopes: SlopeGroup[];
   /**
    * Circles where a chamfer or blend meets the next face, bounding no hole
    * or boss: the feature's own size fixes them.
@@ -169,6 +176,24 @@ export interface BodyRequirements {
   derivedCircles: { center: Vector3; axis: Vector3; radius: number }[];
   /** Requirements no dimension can state yet, already worded. */
   unmeasurable: string[];
+}
+
+/**
+ * Faces in one sloped plane square to a model axis (mirrored copies of a
+ * slope share it): one angle states them all.
+ */
+export interface SlopeGroup {
+  /** Unit normal, signed so its first non-zero component is positive. */
+  normal: Vector3;
+  /** normal · x = offset on the plane. */
+  offset: number;
+  /** The axis the plane runs along: the view along it sees its angle. */
+  along: AuditAxis;
+  /** The axis its angle is read from in labels. */
+  from: AuditAxis;
+  /** The acute angle between the plane's line and `from`, in degrees. */
+  angleDeg: number;
+  faces: FaceTopology[];
 }
 
 /** Like revolved blends: one radius, stated once with a count. */
@@ -369,6 +394,7 @@ function bodyRequirements(
     }
   };
 
+  const slopeFaces: { face: FaceTopology; along: AuditAxis }[] = [];
   for (const face of faces) {
     const geometry = face.geometry;
     if (!geometry) {
@@ -382,9 +408,15 @@ function bodyRequirements(
       if (!normal || geometry.planeOffset === undefined) {
         note('a face the kernel published no exact surface for');
       } else if (!along) {
-        note(
-          'a sloped face, which needs an angle this check does not read yet'
-        );
+        // A slope square to one model axis draws as a line, true to its
+        // angle, in the view along that axis; any other is compound.
+        const parallel = AXES.filter((axis) => Math.abs(normal[axis]) <= 1e-9);
+        if (parallel.length === 1)
+          slopeFaces.push({ face, along: parallel[0]! });
+        else
+          note(
+            'a compound sloped face, which needs angles this check does not read yet'
+          );
       } else {
         const value = geometry.planeOffset * normal[along];
         addPosition(positions[along], {
@@ -523,6 +555,137 @@ function bodyRequirements(
         `a ${geometry.surfaceType} face, which this check does not read yet`
       );
     }
+  }
+
+  // Slopes: one angle per plane (mirrored copies share it), and one corner
+  // to locate it from. A slope's line needs two numbers; its angle is one,
+  // so where it meets one face square to an axis is the other, and where it
+  // meets any other follows. A real corner (an edge) is preferred to a
+  // virtual sharp through a blend, then x before y before z.
+  const slopes: SlopeGroup[] = [];
+  for (const { face, along } of slopeFaces) {
+    const g = face.geometry!;
+    const unit = scaleVector(g.normal!, 1 / length(g.normal!));
+    let offset = g.planeOffset! / length(g.normal!);
+    // One sign per plane, so a face and its mirror image group.
+    const lead = AXES.find((axis) => Math.abs(unit[axis]) > 1e-9)!;
+    const sign = unit[lead] < 0 ? -1 : 1;
+    const normal = scaleVector(unit, sign);
+    offset *= sign;
+    let group = slopes.find(
+      (known) =>
+        known.along === along &&
+        length(sub(known.normal, normal)) <= 1e-9 &&
+        same(known.offset, offset)
+    );
+    if (!group) {
+      const [p, q] = AXES.filter((axis) => axis !== along) as [
+        AuditAxis,
+        AuditAxis
+      ];
+      group = {
+        normal,
+        offset,
+        along,
+        from: p,
+        // The line runs along (−n_q, n_p) in (p, q): its angle from p.
+        angleDeg:
+          (Math.atan2(Math.abs(normal[p]), Math.abs(normal[q])) * 180) /
+          Math.PI,
+        faces: []
+      };
+      slopes.push(group);
+    }
+    group.faces.push(face);
+  }
+  for (const group of slopes) {
+    const label = slopeLabel(group, units);
+    const corners: {
+      axis: AuditAxis;
+      value: number;
+      mark?: VirtualMark;
+    }[] = [];
+    const corner = (
+      slope: FaceTopology,
+      plane: FaceTopology,
+      virtual: boolean
+    ) => {
+      const n = plane.geometry?.normal;
+      const a = n ? axisOf(n) : null;
+      if (
+        !n ||
+        !a ||
+        a === group.along ||
+        plane.geometry!.planeOffset === undefined
+      )
+        return;
+      const at = plane.geometry!.planeOffset * n[a];
+      const b = AXES.find((axis) => axis !== a && axis !== group.along)!;
+      if (Math.abs(group.normal[b]) <= 1e-9) return;
+      const value = (group.offset - group.normal[a] * at) / group.normal[b];
+      if (corners.some((known) => known.axis === b && same(known.value, value)))
+        return;
+      corners.push({
+        axis: b,
+        value,
+        ...(virtual
+          ? {
+              mark: {
+                kind: 'sharp' as const,
+                faces: [slope, plane] as [FaceTopology, FaceTopology]
+              }
+            }
+          : {})
+      });
+    };
+    for (const face of group.faces)
+      for (const hash of neighbours.get(face.hash) ?? []) {
+        const other = byHash.get(hash);
+        const og = other?.geometry;
+        if (!other || !og) continue;
+        const type = og.surfaceType.toLowerCase();
+        if (type.includes('plane')) corner(face, other, false);
+        else if (
+          type.includes('cylind') &&
+          og.radius !== undefined &&
+          og.axisStart &&
+          og.axisEnd &&
+          axisOf(sub(og.axisEnd, og.axisStart)) === group.along &&
+          tangentTo(face, og.axisStart, UNIT[group.along], og.radius)
+        )
+          // Rounded into its neighbour: the virtual sharp with the plane
+          // the blend also touches.
+          for (const next of neighbours.get(other.hash) ?? []) {
+            const plane = byHash.get(next);
+            if (
+              plane &&
+              plane !== face &&
+              tangentTo(plane, og.axisStart, UNIT[group.along], og.radius)
+            )
+              corner(face, plane, true);
+          }
+      }
+    corners.sort(
+      (p, q) =>
+        Number(p.mark !== undefined) - Number(q.mark !== undefined) ||
+        AXES.indexOf(p.axis) - AXES.indexOf(q.axis) ||
+        p.value - q.value
+    );
+    const [first, ...rest] = corners;
+    if (!first) {
+      note(`${label}: it meets no face square to an axis to locate it from`);
+      continue;
+    }
+    addPosition(positions[first.axis], {
+      value: first.value,
+      label: `the corner of the ${label} at ${first.axis} = ${format(first.value, units)}`,
+      ...(first.mark ? { mark: first.mark } : {})
+    });
+    for (const other of rest)
+      addPosition(derived[other.axis], {
+        value: other.value,
+        label: `where the ${label} meets the next face`
+      });
   }
 
   // Chamfers by size and angle. An end chamfer's size is its own; a step
@@ -683,6 +846,7 @@ function bodyRequirements(
     blends,
     derivedCircles,
     boltCircles,
+    slopes,
     unmeasurable: [...unmeasurable].map(([message, count]) =>
       count > 1 ? `${count}× ${message}` : message
     )
@@ -857,6 +1021,7 @@ export interface DimensionState {
       statedChamfers: ReadonlySet<ChamferGroup>;
       statedBlends: ReadonlySet<BlendGroup>;
       statedBoltCircles: ReadonlySet<BoltCircle>;
+      statedSlopes: ReadonlySet<SlopeGroup>;
     }
   >;
 }
@@ -914,6 +1079,7 @@ export function readDimensionState(
   const chamferStatedBy = new Map<ChamferGroup, DrawingAnnotationId>();
   const blendStatedBy = new Map<BlendGroup, DrawingAnnotationId>();
   const boltStatedBy = new Map<BoltCircle, DrawingAnnotationId>();
+  const slopeStatedBy = new Map<SlopeGroup, DrawingAnnotationId>();
 
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
   for (const annotation of sheet.annotations ?? []) {
@@ -928,10 +1094,7 @@ export function readDimensionState(
     if (!reading) {
       audit.unchecked.push({
         annotationId: id,
-        message:
-          annotation.kind === 'angle'
-            ? 'Angles are not checked yet.'
-            : 'It does not measure anything in the current model.'
+        message: 'It does not measure anything in the current model.'
       });
       continue;
     }
@@ -1047,6 +1210,59 @@ export function readDimensionState(
         continue;
       }
       graph.link(a, b, id);
+      audit.stated += 1;
+      continue;
+    }
+    if (reading.kind === 'angle') {
+      const [fromBody, toBody] = reading.bodyIds;
+      const body = requirements.get(fromBody);
+      const slopeOf = (edge: EdgeTopology) =>
+        body?.slopes.find((group) =>
+          group.faces.some((face) =>
+            (edge.adjacentFaceHashes ?? []).includes(face.hash)
+          )
+        );
+      const direction = (edge: EdgeTopology) => {
+        const p = edge.points;
+        return axisOf({
+          x: p[p.length - 3]! - p[0]!,
+          y: p[p.length - 2]! - p[1]!,
+          z: p[p.length - 1]! - p[2]!
+        });
+      };
+      const [a, b] = reading.edges;
+      const slopes = [slopeOf(a), slopeOf(b)];
+      // One edge on the slope, the other along an axis in its plane.
+      const index = slopes.findIndex(
+        (group, i) =>
+          group !== undefined &&
+          (() => {
+            const other = direction(reading.edges[1 - i]!);
+            return other !== null && other !== group.along;
+          })()
+      );
+      const group = index < 0 ? undefined : slopes[index];
+      if (!body || fromBody !== toBody || !group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message:
+            slopes[0] && slopes[1]
+              ? 'It measures between two sloped faces, which is not checked yet.'
+              : 'It measures an angle no sloped face needs.'
+        });
+        continue;
+      }
+      const earlier = slopeStatedBy.get(group);
+      if (earlier) {
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message: `Another dimension already states this ${slopeLabel(group, units)}.`,
+          statedBy: [earlier]
+        });
+        continue;
+      }
+      slopeStatedBy.set(group, id);
       audit.stated += 1;
       continue;
     }
@@ -1210,6 +1426,24 @@ export function readDimensionState(
           message: `${label}: add a view that sees it side-on.`
         });
     }
+    for (const group of body.slopes) {
+      audit.required += 1;
+      if (slopeStatedBy.has(group)) continue;
+      // Seen true to its angle only along the axis it runs along.
+      const seen = sheet.views.some(
+        (view) =>
+          view.bodyIds.includes(bodyId as never) &&
+          view.orientation !== 'iso' &&
+          faceOn(view, UNIT[group.along])
+      );
+      const label = slopeLabel(group, units);
+      if (seen) audit.missing.push({ bodyId, message: `${label}.` });
+      else
+        audit.unmeasurable.push({
+          bodyId,
+          message: `${label}: add a view that looks along ${group.along.toUpperCase()}.`
+        });
+    }
     for (const circle of body.boltCircles) {
       audit.required += 1;
       if (boltStatedBy.has(circle)) continue;
@@ -1329,7 +1563,8 @@ export function readDimensionState(
       statedSizes: new Set(sizeStatedBy.keys()),
       statedChamfers: new Set(chamferStatedBy.keys()),
       statedBlends: new Set(blendStatedBy.keys()),
-      statedBoltCircles: new Set(boltStatedBy.keys())
+      statedBoltCircles: new Set(boltStatedBy.keys()),
+      statedSlopes: new Set(slopeStatedBy.keys())
     });
   return { audit, bodies: state };
 }
@@ -1375,6 +1610,10 @@ function diameterAcross(
         label: (units) => boltLabel(circle, units)
       };
   return null;
+}
+
+export function slopeLabel(group: SlopeGroup, units: UnitSystem): string {
+  return `${formatDrawingNumber(group.angleDeg, defaultDimensionDecimals('angle', units))}° slope to ${group.from.toUpperCase()}`;
 }
 
 export function chamferLabel(group: ChamferGroup, units: UnitSystem): string {

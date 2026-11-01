@@ -46,10 +46,12 @@ import {
   readDimensionState,
   same,
   sizeLabel,
+  slopeLabel,
   viewEdges,
   type AuditAxis,
   type Position,
-  type SizeGroup
+  type SizeGroup,
+  type SlopeGroup
 } from './dimensionAudit';
 import { readChamfer } from './surfaceSharps';
 import {
@@ -208,6 +210,14 @@ const INSIDE_SPACING_MM = 4;
 /** How far an inside dimension's text and line keep off drawn lines, in mm. */
 const INSIDE_DRAWING_MM = 2.5;
 const INSIDE_ROOM_MM = 6;
+/**
+ * How much farther than the nearest an angle's edges may meet the slope
+ * and still be offered, in model units: copies of one corner at the
+ * slope's other end, never an edge across the part.
+ */
+const ANGLE_REACH_SLACK = 1e-6;
+/** Arc radii an angle dimension tries from its vertex, nearest first, in mm. */
+const ANGLE_RADII_MM = [10, 14, 18, 24, 30, 38] as const;
 /** Leader lengths past the feature tried before leaving the view, in mm. */
 const NEAR_REACH_MM = [5, 8, 12] as const;
 
@@ -583,6 +593,46 @@ export function planAutoDimensions(
       sortOptions(options, bodyId);
       plan({ bodyId, what: label, subject: label, ...options[0]!, options });
     }
+    // Slopes: one angle per plane, in a view along it, between an edge of
+    // the slope and the axis-aligned edge it meets (through a blend, at the
+    // virtual sharp the two lines make).
+    for (const group of requirements.slopes) {
+      if (body.statedSlopes.has(group)) continue;
+      const label = slopeLabel(group, units);
+      if (
+        state.audit.unmeasurable.some(
+          (f) => f.bodyId === bodyId && f.message.startsWith(`${label}:`)
+        )
+      )
+        continue;
+      const annotationId = createId();
+      const options = angleOptions(
+        measuring,
+        bodyId,
+        group,
+        edgesOf,
+        refOf
+      ).map((option) => ({
+        context: option.context,
+        visible: option.visible,
+        annotation: {
+          annotationId,
+          kind: 'angle' as const,
+          viewId: option.context.view.viewId,
+          edges: option.edges,
+          placementMm: { x: 0, y: 0 }
+        }
+      }));
+      if (options.length === 0) {
+        skipped.push({
+          bodyId,
+          message: `${label}: no view along it shows an edge of it and an edge along an axis that can be told apart from others.`
+        });
+        continue;
+      }
+      sortOptions(options, bodyId);
+      plan({ bodyId, what: label, subject: label, ...options[0]!, options });
+    }
     // Positions: each group not linked to the datum gets one dimension to it.
     for (const axis of AXES) {
       const positions = requirements.positions[axis];
@@ -776,6 +826,114 @@ function circleOptions(
   }
   // Stable: equals keep the sheet's view order and the kernel's edge order.
   return out.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * The angle dimensions that could state `group`, best first: in each view
+ * looking along the slope, an edge of it paired with the straight edge
+ * along a model axis whose line meets it nearest its own end, both
+ * visible before either hidden.
+ */
+function angleOptions(
+  measuring: readonly ViewContext[],
+  bodyId: string,
+  group: SlopeGroup,
+  edgesOf: (context: ViewContext, bodyId: string) => readonly EdgeTopology[],
+  refOf: (
+    context: ViewContext,
+    bodyId: string,
+    edge: EdgeTopology
+  ) => DrawingEdgeRef | null
+): {
+  context: ViewContext;
+  edges: [DrawingEdgeRef, DrawingEdgeRef];
+  visible: boolean;
+}[] {
+  const out: {
+    context: ViewContext;
+    edges: [DrawingEdgeRef, DrawingEdgeRef];
+    visible: boolean;
+    reach: number;
+    score: number;
+  }[] = [];
+  const at = AXES.indexOf(group.along);
+  const ends = (edge: EdgeTopology): [Vector3, Vector3] => {
+    const p = edge.points;
+    const n = p.length;
+    return [
+      { x: p[0]!, y: p[1]!, z: p[2]! },
+      { x: p[n - 3]!, y: p[n - 2]!, z: p[n - 1]! }
+    ];
+  };
+  /** Straight, and square to the slope's axis: drawn true in the view. */
+  const inPlane = (edge: EdgeTopology) =>
+    edge.displayRole !== 'seam' &&
+    !edge.curve?.circle &&
+    edge.points.length >= 6 &&
+    same(edge.points[at]!, edge.points[edge.points.length - 3 + at]!);
+  const faces = new Set(group.faces.map((face) => face.hash));
+  for (const context of measuring) {
+    if (
+      context.view.section ||
+      !context.view.bodyIds.includes(bodyId as BodyId) ||
+      axisOf(DRAWING_VIEW_FRAMES[context.view.orientation].direction) !==
+        group.along
+    )
+      continue;
+    const edges = edgesOf(context, bodyId).filter(inPlane);
+    const slopeEdges = edges.filter((edge) =>
+      (edge.adjacentFaceHashes ?? []).some((hash) => faces.has(hash))
+    );
+    const axisEdges = edges.filter((edge) => {
+      const [a, b] = ends(edge);
+      const axis = axisOf({ x: b.x - a.x, y: b.y - a.y, z: b.z - a.z });
+      return axis !== null && axis !== group.along;
+    });
+    for (const slope of slopeEdges) {
+      const slopeRef = refOf(context, bodyId, slope);
+      if (!slopeRef) continue;
+      const [s0, s1] = ends(slope);
+      const d: Vector3 = { x: s1.x - s0.x, y: s1.y - s0.y, z: s1.z - s0.z };
+      for (const other of axisEdges) {
+        // Lying in the same plane square to the slope's axis.
+        if (!same(other.points[at]!, slope.points[at]!)) continue;
+        const [o0, o1] = ends(other);
+        const e: Vector3 = { x: o1.x - o0.x, y: o1.y - o0.y, z: o1.z - o0.z };
+        // Where the two lines meet, in the plane of the view.
+        const [p, q] = AXES.filter((axis) => axis !== group.along) as [
+          AuditAxis,
+          AuditAxis
+        ];
+        const cross = d[p] * e[q] - d[q] * e[p];
+        if (Math.abs(cross) < 1e-12) continue;
+        const t = ((o0[p] - s0[p]) * e[q] - (o0[q] - s0[q]) * e[p]) / cross;
+        const meet = { [p]: s0[p] + t * d[p], [q]: s0[q] + t * d[q] } as Record<
+          AuditAxis,
+          number
+        >;
+        const gap = (point: Vector3) =>
+          Math.hypot(point[p] - meet[p], point[q] - meet[q]);
+        const reach = Math.min(gap(s0), gap(s1)) + Math.min(gap(o0), gap(o1));
+        const otherRef = refOf(context, bodyId, other);
+        if (!otherRef) continue;
+        const visible =
+          edgeVisible(context, slope) && edgeVisible(context, other);
+        out.push({
+          context,
+          edges: [slopeRef, otherRef],
+          visible,
+          reach,
+          score: (visible ? 1e6 : 0) - reach
+        });
+      }
+    }
+  }
+  // Only edges that meet the slope (at its corner, or through a blend at
+  // the virtual sharp): any farther pairs lines that cross off the part.
+  const nearest = Math.min(...out.map((option) => option.reach));
+  return out
+    .filter((option) => option.reach <= nearest + ANGLE_REACH_SLACK)
+    .sort((a, b) => b.score - a.score);
 }
 
 /** The linear dimension that links the datum group to a target group. */
@@ -1634,57 +1792,99 @@ function placeAll(
     return null;
   };
 
-  for (const { entry, a, b, horizontal } of linears) {
-    const box = entry.context.box;
-    const middle = horizontal
-      ? (a[1] + b[1]) / 2 >= box.y + box.height / 2
-      : (a[0] + b[0]) / 2 >= box.x + box.width / 2;
-    // Beside the feature it locates, inside the view, when it ends on one;
-    // then out past the outline, the side nearer the points it measures
-    // first.
-    let done = false;
-    const inside = placeInside(entry, a, b, horizontal);
-    if (inside) {
-      accept(entry, inside.annotation, inside.print);
-      done = true;
-    }
-    for (const far of done ? [] : [middle, !middle]) {
-      for (let row = 0; !done; row += 1) {
-        const offset = FIRST_ROW_MM + row * ROW_PITCH_MM;
-        const page: XY = horizontal
-          ? [
-              (a[0] + b[0]) / 2,
-              far ? box.y + box.height + offset : box.y - offset
-            ]
-          : [
-              far ? box.x + box.width + offset : box.x - offset,
-              (a[1] + b[1]) / 2
-            ];
-        if (
-          page[0] < bounds.minX ||
-          page[0] > bounds.maxX ||
-          page[1] < bounds.minY ||
-          page[1] > bounds.maxY
-        )
-          break;
-        const annotation = placedAt(entry, page);
-        const laid = layoutOf(entry, annotation);
-        if (!laid) break;
-        if (fits(laid.print, entry.context, true)) {
-          accept(entry, annotation, laid.print);
-          done = true;
-        }
+  const placeLinears = () => {
+    for (const { entry, a, b, horizontal } of linears) {
+      const box = entry.context.box;
+      const middle = horizontal
+        ? (a[1] + b[1]) / 2 >= box.y + box.height / 2
+        : (a[0] + b[0]) / 2 >= box.x + box.width / 2;
+      // Beside the feature it locates, inside the view, when it ends on one;
+      // then out past the outline, the side nearer the points it measures
+      // first.
+      let done = false;
+      const inside = placeInside(entry, a, b, horizontal);
+      if (inside) {
+        accept(entry, inside.annotation, inside.print);
+        done = true;
       }
-      if (done) break;
+      for (const far of done ? [] : [middle, !middle]) {
+        for (let row = 0; !done; row += 1) {
+          const offset = FIRST_ROW_MM + row * ROW_PITCH_MM;
+          const page: XY = horizontal
+            ? [
+                (a[0] + b[0]) / 2,
+                far ? box.y + box.height + offset : box.y - offset
+              ]
+            : [
+                far ? box.x + box.width + offset : box.x - offset,
+                (a[1] + b[1]) / 2
+              ];
+          if (
+            page[0] < bounds.minX ||
+            page[0] > bounds.maxX ||
+            page[1] < bounds.minY ||
+            page[1] > bounds.maxY
+          )
+            break;
+          const annotation = placedAt(entry, page);
+          const laid = layoutOf(entry, annotation);
+          if (!laid) break;
+          if (fits(laid.print, entry.context, true)) {
+            accept(entry, annotation, laid.print);
+            done = true;
+          }
+        }
+        if (done) break;
+      }
+      if (!done) unplaced.push(entry);
     }
-    if (!done) unplaced.push(entry);
-  }
+  };
 
   /**
    * A radius, diameter or chamfer's best placement: text out of its view on
    * a leader that clears everything (`clear`), else anywhere it fits. A
    * chamfer's leader starts at the middle of one of its drawn sides.
    */
+  /**
+   * An angle's arc, at the radius from its vertex that first fits clear of
+   * the drawing (its text lies on the arc's middle), else the nearest that
+   * fits at all.
+   */
+  const placeAngle = (
+    entry: Planned,
+    resolved: Extract<ResolvedAnnotation, { kind: 'angle' }>
+  ): {
+    annotation: DrawingAnnotation;
+    print: Footprint;
+    clear: boolean;
+  } | null => {
+    const vertex = entry.context.toPage(...resolved.vertex);
+    // Within both edges first, so the arc ends on them and needs no
+    // extension lines; then out past the shorter.
+    const shortest = Math.min(
+      ...resolved.rays.map(([, far]) => {
+        const p = entry.context.toPage(...far);
+        return Math.hypot(p[0] - vertex[0], p[1] - vertex[1]);
+      })
+    );
+    const radii = [
+      ...[0.5, 0.75].map((share) => share * shortest).filter((r) => r >= 6),
+      ...ANGLE_RADII_MM
+    ];
+    let fallback: { annotation: DrawingAnnotation; print: Footprint } | null =
+      null;
+    for (const air of [true, false])
+      for (const radius of radii) {
+        const annotation = placedAt(entry, [vertex[0] + radius, vertex[1]]);
+        const laid = layoutOf(entry, annotation);
+        if (!laid || !fits(laid.print, entry.context, false, air)) continue;
+        if (clearOfDrawing(laid.print, entry.context))
+          return { annotation, print: laid.print, clear: true };
+        fallback ??= { annotation, print: laid.print };
+      }
+    return fallback && { ...fallback, clear: false };
+  };
+
   const placeRadial = (
     entry: Planned
   ): {
@@ -1696,6 +1896,7 @@ function placeAll(
     if (!first) return null;
     const resolved = first.resolved;
     const toPage = entry.context.toPage;
+    if (resolved.kind === 'angle') return placeAngle(entry, resolved);
     const origins: { c: XY; r: number; aim?: XY }[] = [];
     if (resolved.kind === 'radius' || resolved.kind === 'diameter') {
       const c = toPage(...resolved.center);
@@ -1776,28 +1977,40 @@ function placeAll(
       }
     return fallback && { ...fallback, clear: false };
   };
-  // Then each radius or diameter: the first of its circles that takes a
-  // clear leader, or else the best one where it fits at all.
-  for (const entry of planned) {
-    if (entry.annotation.kind === 'linear') continue;
-    let pick: {
-      entry: Planned;
-      annotation: DrawingAnnotation;
-      print: Footprint;
-    } | null = null;
-    for (const option of entry.options ?? [entry]) {
-      const candidate = { ...entry, ...option };
-      const placed = placeRadial(candidate);
-      if (!placed) continue;
-      if (placed.clear) {
-        pick = { entry: candidate, ...placed };
-        break;
+  // Each radius, diameter, chamfer or angle: the first of its options that
+  // takes a clear placement, or else the best one where it fits at all.
+  const placeOthers = (angles: boolean) => {
+    for (const entry of planned) {
+      if (
+        entry.annotation.kind === 'linear' ||
+        (entry.annotation.kind === 'angle') !== angles
+      )
+        continue;
+      let pick: {
+        entry: Planned;
+        annotation: DrawingAnnotation;
+        print: Footprint;
+      } | null = null;
+      for (const option of entry.options ?? [entry]) {
+        const candidate = { ...entry, ...option };
+        const placed = placeRadial(candidate);
+        if (!placed) continue;
+        if (placed.clear) {
+          pick = { entry: candidate, ...placed };
+          break;
+        }
+        pick ??= { entry: candidate, ...placed };
       }
-      pick ??= { entry: candidate, ...placed };
+      if (pick) accept(pick.entry, pick.annotation, pick.print);
+      else unplaced.push(entry);
     }
-    if (pick) accept(pick.entry, pick.annotation, pick.print);
-    else unplaced.push(entry);
-  }
+  };
+  // Angles first: an arc has one vertex and few radii to try, where a span
+  // has rows and open space to move into. Then spans, shortest first, then
+  // leaders, which go wherever is left.
+  placeOthers(true);
+  placeLinears();
+  placeOthers(false);
   // Back in the order they were planned: sizes, then positions by axis.
   const rank = new Map(
     planned.map((entry, index) => [entry.annotation.annotationId, index])

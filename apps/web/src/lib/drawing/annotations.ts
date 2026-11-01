@@ -1028,6 +1028,13 @@ export type AnnotationModelReading =
       bodyId: string;
       face: FaceTopology;
       radius: number;
+    }
+  | {
+      /** The angle between two straight edges in a view, in degrees. */
+      kind: 'angle';
+      bodyIds: [string, string];
+      edges: [EdgeTopology, EdgeTopology];
+      value: number;
     };
 
 /** The body a dimension point belongs to. */
@@ -1043,10 +1050,21 @@ export function annotationModelReading(
   bodies: AnnotationBodies,
   units: UnitSystem
 ): AnnotationModelReading | null {
-  if (!view || annotation.kind === 'note' || annotation.kind === 'angle')
-    return null;
+  if (!view || annotation.kind === 'note') return null;
   const resolution = resolveDrawingAnnotation(annotation, view, bodies, units);
   if (!resolution.ok) return null;
+  if (annotation.kind === 'angle') {
+    if (resolution.resolved.kind !== 'angle') return null;
+    const found = annotation.edges.map((ref) => lookupEdge(ref, view, bodies));
+    const [a, b] = found;
+    if (!a?.ok || !b?.ok) return null;
+    return {
+      kind: 'angle',
+      bodyIds: [annotation.edges[0].bodyId, annotation.edges[1].bodyId],
+      edges: [a.edge, b.edge],
+      value: resolution.resolved.value
+    };
+  }
   const frame = DRAWING_VIEW_FRAMES[view.orientation];
   if (annotation.kind === 'linear') {
     const [along, across] =
