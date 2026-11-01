@@ -5,6 +5,7 @@ import { commandFactories } from '@openzcad/command-system';
 import {
   blendPreviewSelectionKey,
   canReuseBlendPreview,
+  geometryPreviewSelectionKey,
   newBlendValidationTarget
 } from './blendPreview';
 import type { InteractionState } from './machine';
@@ -119,6 +120,39 @@ describe('exact blend preview reuse', () => {
         2
       )
     ).toBe(false);
+  });
+});
+
+describe('geometry preview selection key', () => {
+  it('keys a blend drag by its blend selection, so an edge drag can show one', () => {
+    expect(geometryPreviewSelectionKey(selection)).toBe(
+      blendPreviewSelectionKey(selection)
+    );
+  });
+
+  it('keys a face drag by the dragged face and nothing else by default', () => {
+    const offset: Extract<InteractionState, { mode: 'face' }> = {
+      mode: 'face',
+      op: 'offset-face',
+      phase: 'dragging',
+      lastValue: null,
+      error: null,
+      target: {
+        bodyId: 'body_1',
+        topologyId: 'face:2',
+        surfaceType: 'planar',
+        point: [0, 0, 0],
+        normal: [0, 0, 1]
+      }
+    };
+    expect(geometryPreviewSelectionKey(offset)).toBe(
+      'offset-face:body_1:face:2:false'
+    );
+    expect(geometryPreviewSelectionKey({ mode: 'idle' })).toBeNull();
+    // A blend preview never stands in for a face drag, or the reverse.
+    expect(geometryPreviewSelectionKey(offset)).not.toBe(
+      geometryPreviewSelectionKey(selection)
+    );
   });
 });
 

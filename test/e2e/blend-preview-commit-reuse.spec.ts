@@ -87,6 +87,15 @@ test('commits the exact previewed fillet with the same feature IDs and no second
   await expect(keypad).toBeVisible();
   await keypad.getByRole('textbox').fill('2');
   await expect.poll(readBlendRadius, { timeout: 60_000 }).toBeCloseTo(2, 5);
+  // Drag frames rebuild geometry only; the complete rebuild a release
+  // commits from runs once the value rests.
+  await expect
+    .poll(
+      async () =>
+        (await syncs()).filter((entry) => entry.requestId !== null).length,
+      { timeout: 30_000 }
+    )
+    .toBeGreaterThan(0);
   const before = await syncs();
   const preview = before.filter((entry) => entry.requestId !== null);
   expect(preview.length).toBeGreaterThan(0);

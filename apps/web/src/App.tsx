@@ -1567,6 +1567,7 @@ import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
   canReuseBlendPreview,
+  geometryPreviewSelectionKey,
   newBlendValidationTarget
 } from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
@@ -1819,6 +1820,8 @@ const PANEL_PENDING_DELAY_MS = 400;
 const TOOLS_WAITING_DELAY_MS = 400;
 /** How long a hole's radius handle rests before the kernel checks the size. */
 const CYLINDER_RADIUS_REST_MS = 250;
+/** How long a fillet or chamfer handle rests before its complete rebuild. */
+const EDGE_BLEND_REST_MS = 250;
 /**
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
@@ -6946,11 +6949,15 @@ export function App() {
     faceGeometryPreview &&
     faceGeometryPreview.baseProjectId === doc?.projectId &&
     faceGeometryPreview.baseVersion === doc?.version &&
-    interaction.mode === 'face' &&
-    faceGeometryPreview.selectionKey ===
-      `${interaction.op}:${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
+    faceGeometryPreview.selectionKey === geometryPreviewSelectionKey(interaction)
       ? faceGeometryPreview
       : null;
+  // A face drag's preview stands in for the picked face, so the panels and
+  // edge picks wait for it. A blend drag's picks are the edges it rounds:
+  // they stay shown, as they did while blend frames were complete rebuilds.
+  const geometryPreviewHoldsPicks =
+    currentFaceGeometryPreview !== null &&
+    blendPreviewSelectionKey(interaction) === null;
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   const { autoFrame, recordLocalCommit, clearAutoFrame } = useLocalAutoFrame(
@@ -10363,7 +10370,7 @@ export function App() {
     cancelDirectManipulationRef.current?.();
     if (liveInteraction.mode !== 'idle') {
       cylinderRadiusPreview.clear();
-      edgePreview.clear();
+      clearEdgePreview();
       dispatchInteraction({ type: 'clear' });
       setKeypad(null);
     }
@@ -10565,7 +10572,7 @@ export function App() {
       }
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
-      edgePreview.clear();
+      clearEdgePreview();
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
       closeFeaturePanel();
@@ -18008,7 +18015,7 @@ export function App() {
     (interaction.mode === 'face' && interaction.op === 'edit-fillet');
   useEffect(() => {
     if (!edgePreviewInteraction) {
-      edgePreview.clear();
+      clearEdgePreview();
       setLastValidPreview(null);
     }
   }, [edgePreviewInteraction]);
@@ -23706,94 +23713,125 @@ export function App() {
    * absent: it used to give up for the rest of the gesture after one slow
    * frame, which also swallowed every later value — including the oversize
    * radius whose refusal the card was waiting to show.
+   *
+   * Drag frames rebuild geometry only. A complete rebuild also proves every
+   * planar face-pair distance for later edits, which was two thirds of each
+   * frame on a seam fillet (155 ms against 50); `edgeRestCheck` runs that
+   * once the hand rests, and a release commits from it.
    */
   const reusableEdgePreview = useRef<{
     candidate: EdgePreviewCandidate;
     derived: ProjectDocument['derived'];
   } | null>(null);
+  /** The size the edge handle holds right now; see `cylinderRadiusHandValue`. */
+  const edgeHandValue = useRef<number | null>(null);
+  const edgeBlendExact = {
+    build: (size: number): EdgePreviewCandidate | null => {
+      const base = managerRef.current?.document;
+      const command = base ? buildEdgeModifierCommand(size, base) : null;
+      if (!command || !base) {
+        return null;
+      }
+      const current = interactionRef.current;
+      const selectionKey = blendPreviewSelectionKey(current);
+      if (selectionKey === null) return null;
+      // Removing a fillet consumes its body on purpose; only a blend that
+      // is meant to produce a body is judged on producing one.
+      let target: AffectedFeatureTarget | null = null;
+      if (current.mode === 'face' && current.op === 'edit-fillet') {
+        target = editFilletPreviewTarget(base, current.target.filletFeatureId);
+      } else if (current.mode === 'edges') {
+        target = newBlendValidationTarget(command);
+      }
+      return {
+        command,
+        selectionKey,
+        document: command.apply(base),
+        size,
+        label: command.label,
+        judge: target !== null && size > 1e-9,
+        ...(target ? { target } : {}),
+        baseProjectId: base.projectId,
+        baseVersion: base.version
+      };
+    },
+    isCurrent: (candidate: EdgePreviewCandidate) =>
+      canReuseBlendPreview(
+        candidate,
+        managerRef.current?.document,
+        interactionRef.current,
+        candidate.size
+      ),
+    acceptValue: (size: number) => {
+      const current = interactionRef.current;
+      return (
+        Number.isFinite(size) &&
+        (current.mode === 'face' && current.op === 'edit-fillet'
+          ? size >= 0
+          : size > 0)
+      );
+    }
+  };
+  function edgePreviewRejection(
+    candidate: EdgePreviewCandidate,
+    derived: GeometryReadyState | ProjectDocument['derived']
+  ): CommandDiagnostic | null {
+    if (!candidate.judge || !candidate.target) return null;
+    return offsetPreviewRejection({
+      label: candidate.label,
+      bodyId: candidate.target.resultBodyId,
+      validationTargets: [candidate.target],
+      derived,
+      documentMoved: !previewBaseIsCurrent(candidate)
+    });
+  }
   const edgePreview = useRef(
-    new LivePreview<EdgePreviewCandidate, OffsetPreviewResult>({
-      build: (size) => {
-        const base = managerRef.current?.document;
-        const command = base ? buildEdgeModifierCommand(size, base) : null;
-        if (!command || !base) {
-          return null;
-        }
-        const current = interactionRef.current;
-        const selectionKey = blendPreviewSelectionKey(current);
-        if (selectionKey === null) return null;
-        // Removing a fillet consumes its body on purpose; only a blend that
-        // is meant to produce a body is judged on producing one.
-        let target: AffectedFeatureTarget | null = null;
-        if (current.mode === 'face' && current.op === 'edit-fillet') {
-          target = editFilletPreviewTarget(
-            base,
-            current.target.filletFeatureId
-          );
-        } else if (current.mode === 'edges') {
-          target = newBlendValidationTarget(command);
-        }
-        return {
-          command,
-          selectionKey,
-          document: command.apply(base),
-          size,
-          label: command.label,
-          judge: target !== null && size > 1e-9,
-          ...(target ? { target } : {}),
-          baseProjectId: base.projectId,
-          baseVersion: base.version
-        };
-      },
-      derive: async (candidate) => {
-        const derived = await previewRebuilds.start(candidate, () =>
-          geometry.syncOnce(candidate.document)
+    new LivePreview<
+      EdgePreviewCandidate,
+      { geometry: GeometryReadyState; rejection: CommandDiagnostic | null }
+    >({
+      ...edgeBlendExact,
+      derive: async (candidate, signal) => {
+        const geometryReady = await geometry.previewGeometry(
+          candidate.document,
+          { signal }
         );
-        if (!candidate.judge || !candidate.target) {
-          return { derived, rejection: null };
-        }
-        const live = managerRef.current;
-        const documentMoved =
-          !live ||
-          live.document.projectId !== candidate.baseProjectId ||
-          live.document.version !== candidate.baseVersion;
-        const rejection = offsetPreviewRejection({
-          label: candidate.label,
-          bodyId: candidate.target.resultBodyId,
-          validationTargets: [candidate.target],
-          derived,
-          documentMoved
-        });
-        return { derived, rejection };
+        return {
+          geometry: geometryReady,
+          rejection: edgePreviewRejection(candidate, geometryReady)
+        };
       },
       publish: (preview) => {
         if (!preview) {
-          reusableEdgePreview.current = null;
           setPreviewDoc(null);
+          setFaceGeometryPreview(null);
           setPreviewBlendFaces([]);
           return;
         }
         if (preview.derived.rejection) {
-          reusableEdgePreview.current = null;
+          // A complete rebuild of a refused size would only refuse it again.
+          if (preview.document.size === edgeHandValue.current) {
+            stopEdgeRestCheck();
+          }
           reportPreviewFailure(
             preview.derived.rejection.message,
             preview.document.size
           );
           return;
         }
-        reusableEdgePreview.current = {
-          candidate: preview.document,
-          derived: preview.derived.derived
-        };
-        setPreviewDoc({
-          ...preview.document.document,
-          derived: preview.derived.derived
+        setPreviewDoc(null);
+        setFaceGeometryPreview({
+          document: preview.document.document,
+          baseProjectId: preview.document.baseProjectId,
+          baseVersion: preview.document.baseVersion,
+          selectionKey: preview.document.selectionKey,
+          geometry: preview.derived.geometry
         });
         const current = interactionRef.current;
         const base = managerRef.current?.document;
         setPreviewBlendFaces(
           current.mode === 'edges' && current.op === 'fillet' && base
-            ? newBlendFaceSelections(base, preview.derived.derived)
+            ? newBlendFaceSelections(base, preview.derived.geometry)
             : []
         );
         setLastValidPreview(preview.document.size);
@@ -23801,26 +23839,9 @@ export function App() {
         setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
       onFailure: ({ error, value }) => {
-        reusableEdgePreview.current = null;
         reportPreviewFailure(
           errorMessage(error, 'Exact blend preview failed.'),
           value
-        );
-      },
-      isCurrent: (candidate) =>
-        canReuseBlendPreview(
-          candidate,
-          managerRef.current?.document,
-          interactionRef.current,
-          candidate.size
-        ),
-      acceptValue: (size) => {
-        const current = interactionRef.current;
-        return (
-          Number.isFinite(size) &&
-          (current.mode === 'face' && current.op === 'edit-fillet'
-            ? size >= 0
-            : size > 0)
         );
       },
       continueAfterSlow: true,
@@ -23830,6 +23851,85 @@ export function App() {
       onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
+  /**
+   * Once the edge handle rests, rebuild its size completely off screen: the
+   * verdict a release would give, reported while the hand still holds that
+   * size, and the rebuild the release then commits from.
+   */
+  const edgeRestCheck = useRef(
+    new LivePreview<EdgePreviewCandidate, OffsetPreviewResult>({
+      ...edgeBlendExact,
+      derive: async (candidate) => {
+        const derived = await previewRebuilds.start(candidate, () =>
+          geometry.syncOnce(candidate.document)
+        );
+        return { derived, rejection: edgePreviewRejection(candidate, derived) };
+      },
+      publish: (preview) => {
+        if (!preview || preview.derived.rejection) {
+          reusableEdgePreview.current = null;
+          if (
+            preview?.derived.rejection &&
+            preview.document.size === edgeHandValue.current
+          ) {
+            reportPreviewFailure(
+              preview.derived.rejection.message,
+              preview.document.size
+            );
+          }
+          return;
+        }
+        reusableEdgePreview.current = {
+          candidate: preview.document,
+          derived: preview.derived.derived
+        };
+      },
+      onFailure: ({ error, value }) => {
+        reusableEdgePreview.current = null;
+        if (value !== edgeHandValue.current) return;
+        reportPreviewFailure(
+          errorMessage(error, 'Exact blend preview failed.'),
+          value
+        );
+      },
+      ...GEOMETRY_PREVIEW_SCHEDULING
+    })
+  ).current;
+  const edgeRestTimer = useRef<number | null>(null);
+  function stopEdgeRestCheck() {
+    if (edgeRestTimer.current !== null) {
+      window.clearTimeout(edgeRestTimer.current);
+      edgeRestTimer.current = null;
+    }
+    edgeRestCheck.stop();
+  }
+  function queueEdgeRestCheck(size: number) {
+    edgeRestTimer.current = window.setTimeout(() => {
+      edgeRestTimer.current = null;
+      if (edgeHandValue.current !== size) return;
+      // The worker runs one job at a time: let the drag frame land first.
+      if (edgePreview.running) queueEdgeRestCheck(size);
+      else edgeRestCheck.request(size);
+    }, EDGE_BLEND_REST_MS);
+  }
+  /** A new size from the edge handle or its keypad. */
+  function requestEdgePreview(size: number) {
+    edgeHandValue.current = size;
+    stopEdgeRestCheck();
+    reusableEdgePreview.current = null;
+    if (edgePreview.request(size)) queueEdgeRestCheck(size);
+  }
+  /** Ends the drag's work; what is on screen stays until `clearEdgePreview`. */
+  function stopEdgePreview() {
+    stopEdgeRestCheck();
+    edgePreview.stop();
+  }
+  function clearEdgePreview() {
+    edgeHandValue.current = null;
+    stopEdgeRestCheck();
+    reusableEdgePreview.current = null;
+    edgePreview.clear();
+  }
 
   /** The fillet feature an edit-fillet preview is judged by, if it is live. */
   function editFilletPreviewTarget(
@@ -23991,7 +24091,7 @@ export function App() {
       exact === undefined
         ? previewRebuilds.reusable(
             reusableEdgePreview.current,
-            edgePreview.running?.document,
+            edgeRestCheck.running?.document,
             (candidate) =>
               canReuseBlendPreview(
                 candidate,
@@ -24009,13 +24109,13 @@ export function App() {
       !('targetBodyId' in command.payload) ||
       !('edgeHashes' in command.payload)
     ) {
-      edgePreview.clear();
+      clearEdgePreview();
       return;
     }
     // The blend on screen stays while it is checked; the commit or the
     // refusal takes it down. Clearing it here showed the sharp edges for the
     // whole validation whenever the release outran its preview.
-    edgePreview.stop();
+    stopEdgePreview();
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
@@ -24030,7 +24130,7 @@ export function App() {
       `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
       rounded,
       () => {
-        edgePreview.clear();
+        clearEdgePreview();
         if (op === 'fillet') {
           pendingBlendRearmRef.current = {
             bodyId: resultBodyId,
@@ -24047,7 +24147,7 @@ export function App() {
           }
         : undefined
     ).then((committed) => {
-      if (!committed) edgePreview.clear();
+      if (!committed) clearEdgePreview();
     });
   }
 
@@ -24074,7 +24174,7 @@ export function App() {
   }
 
   function handleEdgeCancel() {
-    edgePreview.clear();
+    clearEdgePreview();
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
     // late preview too — the same latch the offset cancel already releases.
     setPreviewDeferred(false);
@@ -24123,7 +24223,7 @@ export function App() {
     if (target.hash === undefined || blends.length === 0) {
       return;
     }
-    edgePreview.stop();
+    stopEdgePreview();
     void executeValidatedDirectEdit(
       commandFactories.directEditBody({
         name: 'Remove All Imported Blends',
@@ -24138,7 +24238,7 @@ export function App() {
       bodyId,
       `Removed ${blends.length} imported ${blends.length === 1 ? 'blend' : 'blends'}.`,
       0,
-      () => edgePreview.clear()
+      () => clearEdgePreview()
     );
   }
 
@@ -24176,7 +24276,7 @@ export function App() {
       exact === undefined
         ? previewRebuilds.reusable(
             reusableEdgePreview.current,
-            edgePreview.running?.document,
+            edgeRestCheck.running?.document,
             (candidate) => canReuseBlendPreview(candidate, base, current, size)
           )
         : null;
@@ -24186,7 +24286,7 @@ export function App() {
       return;
     }
     // As for a new blend: the preview stays until the commit or a refusal.
-    edgePreview.stop();
+    stopEdgePreview();
     const removing = size <= 1e-9;
     const sourceFace = base.derived.bodyRepresentations[
       current.target.bodyId as BodyId
@@ -24221,9 +24321,9 @@ export function App() {
         : `Set ${feature?.name ?? 'imported blend'} radius to R ${formatNumber(size)} ${base.units}.`,
       size,
       removing
-        ? () => edgePreview.clear()
+        ? () => clearEdgePreview()
         : () => {
-            edgePreview.clear();
+            clearEdgePreview();
             const committed = managerRef.current?.document;
             const faces =
               committed?.derived.bodyRepresentations[
@@ -24341,7 +24441,7 @@ export function App() {
           }
         : undefined
     ).then((committed) => {
-      if (!committed) edgePreview.clear();
+      if (!committed) clearEdgePreview();
     });
   }
 
@@ -24531,6 +24631,13 @@ export function App() {
       cylinderRadiusRestTimer.current = null;
     }
     cylinderRadiusHandValue.current = null;
+    edgeRestCheck.clear();
+    if (edgeRestTimer.current !== null) {
+      window.clearTimeout(edgeRestTimer.current);
+      edgeRestTimer.current = null;
+    }
+    edgeHandValue.current = null;
+    reusableEdgePreview.current = null;
     edgePreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
@@ -24545,7 +24652,8 @@ export function App() {
     offsetPreview,
     cylinderRadiusPreview,
     cylinderRadiusRestCheck,
-    edgePreview
+    edgePreview,
+    edgeRestCheck
   ]);
 
   // A preview must never outlive the command that made it. Whatever returns
@@ -24689,7 +24797,7 @@ export function App() {
       interaction.mode === 'edges' &&
       (action === 'fillet' || action === 'chamfer')
     ) {
-      edgePreview.clear();
+      clearEdgePreview();
       dispatchInteraction({ type: 'set-edge-op', op: action });
     }
   }
@@ -29448,7 +29556,7 @@ export function App() {
             selectedEdges={
               parameterPreview ||
               currentGeometrySnapshot ||
-              currentFaceGeometryPreview
+              geometryPreviewHoldsPicks
                 ? []
                 : selectedEdges
             }
@@ -29649,7 +29757,7 @@ export function App() {
                 ? null
                 : edgeHandleTarget
             }
-            onEdgeRadiusPreview={(size) => edgePreview.request(size)}
+            onEdgeRadiusPreview={(size) => requestEdgePreview(size)}
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
@@ -30115,7 +30223,7 @@ export function App() {
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);
                         } else if (keypad.kind === 'edge') {
-                          edgePreview.request(value);
+                          requestEdgePreview(value);
                         } else {
                           handleOffsetPreview(value);
                         }
@@ -30527,17 +30635,17 @@ export function App() {
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
                 selectedBody={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
+                  currentGeometrySnapshot || geometryPreviewHoldsPicks
                     ? null
                     : selectedBody
                 }
                 selectedTopology={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
+                  currentGeometrySnapshot || geometryPreviewHoldsPicks
                     ? null
                     : renderedSelectedTopology
                 }
                 selectedEdges={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
+                  currentGeometrySnapshot || geometryPreviewHoldsPicks
                     ? []
                     : selectedEdges
                 }
