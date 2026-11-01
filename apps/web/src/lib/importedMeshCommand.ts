@@ -63,7 +63,10 @@ export function meshInDocumentUnits(
  * out of an STL.
  */
 export function importedMeshCommand(
-  mesh: Pick<MillimetreMesh, 'name' | 'triangleCount'>,
+  mesh: Pick<MillimetreMesh, 'name' | 'triangleCount'> & {
+    /** The unit a file that stated none was read in, recorded on the feature. */
+    assumedUnits?: UnitSystem;
+  },
   payload: ImportedMeshPayloadForm,
   artifactId: string,
   ids?: BodyFeatureIds
@@ -76,6 +79,7 @@ export function importedMeshCommand(
     ...('meshPayloadRef' in payload
       ? { meshPayloadRef: payload.meshPayloadRef }
       : { vertices: payload.vertices, indices: payload.indices }),
+    ...(mesh.assumedUnits ? { assumedUnits: mesh.assumedUnits } : {}),
     ids
   });
 }

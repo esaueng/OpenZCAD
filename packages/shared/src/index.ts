@@ -207,7 +207,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // counterbore's rim). An older client would refuse it as malformed.
 // v51 adds a countersunk hole's callout and the outside angle on D06
 // drawing dimensions. An older client would refuse either as malformed.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 51 as const;
+// v52 records the unit an imported mesh was read in when its file stated
+// none (`assumedUnits`). An older client would drop it on its next save.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 52 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2126,6 +2128,15 @@ export type FeatureData =
        * from accepting this document and silently omitting its imported body.
        */
       meshPayloadRef?: ImportedSourceReference;
+      /**
+       * v52: the unit this mesh's numbers were read in, for a file that
+       * stated none (STL, OBJ, PLY), as chosen at import or settled by the
+       * unitless-import preference. The vertices are already converted to
+       * document units, so this changes no geometry; it records the one
+       * assumption a 25.4x mistake hides behind. Absent for files that
+       * declare their unit and for imports saved before v52.
+       */
+      assumedUnits?: UnitSystem;
     }
   | {
       featureKind: 'imported-step';
