@@ -12,7 +12,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { parseStl } from '@openzcad/io-stl';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { coincidentBoxSoup } from './support/mesh-import-fixtures';
 
 const user = toUserId('user_mesh_reference');
@@ -53,7 +53,7 @@ describe('STL mesh references', { timeout: 60_000 }, () => {
     const reopened = await createExactKernelAdapter();
     try {
       const state = await reopened.syncDocument(
-        JSON.parse(JSON.stringify(document))
+        JSON.parse(JSON.stringify(document)) as ProjectDocument
       );
       expect(state.bodyRepresentations[bodyId]!.mesh.vertices[0]).toBe(0);
       expect(state.bodyRepresentations[bodyId]!.mesh.indices).toHaveLength(72);
@@ -137,12 +137,10 @@ describe('STL mesh references', { timeout: 60_000 }, () => {
       targetBodyIds: mixed.bodyOrder
     });
     const state = await adapter.syncDocument(cut.document);
-    expect(state.featureWarnings).toContainEqual(
-      expect.objectContaining({
-        kind: 'build-failed',
-        message: expect.stringContaining('mesh reference')
-      })
+    const refusal = state.featureWarnings?.find(
+      (warning) => warning.kind === 'build-failed'
     );
+    expect(refusal?.message).toContain('mesh reference');
     expect(state.bodyRepresentations[bodyId]!.consumed).toBe(false);
     expect(state.bodyRepresentations[mixed.bodyOrder[1]!]!.consumed).toBe(
       false

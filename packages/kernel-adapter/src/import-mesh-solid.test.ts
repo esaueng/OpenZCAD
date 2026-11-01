@@ -107,9 +107,7 @@ describe('importMeshSolid face unification', () => {
           170 * 3 * thickness,
           10
         );
-        expect(JSON.parse(kernel.validateSolidDetailed(solid)).errorCount).toBe(
-          0
-        );
+        expect(kernel.validateSolid(solid)).toBe(0);
       } finally {
         kernel.free();
       }
