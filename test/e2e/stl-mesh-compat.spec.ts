@@ -89,6 +89,12 @@ for (const fixture of cases) {
       await expectBodyCount(page, 0);
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expectBodyCount(page, 1);
+      // Reload only once the redone state is saved on this device, as a
+      // person closing the tab would; otherwise the reload can race the
+      // write and reopen the undone document.
+      await expect(page.locator('.save-state')).toHaveClass(
+        /\bis-(?:local|local-source|synced)(?:\s|$)/
+      );
       await page.reload();
       await expectBodyCount(page, 1);
       await expect(
