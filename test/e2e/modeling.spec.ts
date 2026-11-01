@@ -2778,6 +2778,11 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   // Only the two artifact-archive uploads (import and export) may fail, and
   // only because the preview host has no /api/uploads. Anything else is a
   // real console error and this stays an equality assertion so it shows up.
+  // The export's upload starts after the download it archives, so wait for
+  // its 404 rather than counting the instant the file has been read.
+  await expect
+    .poll(() => consoleErrors.filter((message) => message.includes('404')))
+    .toHaveLength(2);
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
