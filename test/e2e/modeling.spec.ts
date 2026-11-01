@@ -2754,7 +2754,7 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click();
+  await expect(fileMenu).not.toHaveAttribute('open');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
@@ -3028,7 +3028,8 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click(); // collapse; it overlays the sidebar
+  // Export STEP closes the menu, which otherwise overlays the sidebar.
+  await expect(fileMenu).not.toHaveAttribute('open');
   expect(download.suggestedFilename()).toBe('E2E-Part.step');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];

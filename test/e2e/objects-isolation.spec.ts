@@ -207,7 +207,7 @@ for (const viewport of [
       192,
       68
     );
-    await menu.locator('summary').click();
+    await expect(menu).not.toHaveAttribute('open');
     await promptField(page).fill('isolate');
     await page.getByRole('option', { name: /Exit isolation/ }).click();
     await expect(objects.locator('.hidden-body')).toHaveCount(2);
