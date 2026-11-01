@@ -185,6 +185,7 @@ export function useCollaboration({
   const leaseIdRef = useRef<string | null>(null);
   const leaseRef = useRef<ProjectEditLease | null>(null);
   const conflictRef = useRef<ProjectConflict | null>(null);
+  const unconfirmedLeaseWorkRef = useRef(false);
   const keepMinePendingRef = useRef(false);
   // A project can be left and reopened, or rejoined by another account. Its
   // ID alone cannot identify the room that owns an asynchronous confirmation.
@@ -243,6 +244,9 @@ export function useCollaboration({
       checkpointRef.current?.abort(new Error(ROOM_CHANGED_MESSAGE));
     };
   }, [displayName, enabled, encrypted, encryptionView, projectId, userId]);
+  useLayoutEffect(() => {
+    unconfirmedLeaseWorkRef.current = false;
+  }, [projectId, userId]);
   const roomWanted = Boolean(enabled && projectId && userId && displayName);
   const stampRef = useRef({ projectId, wanted: roomWanted });
   stampRef.current = { projectId, wanted: roomWanted };
@@ -257,6 +261,13 @@ export function useCollaboration({
       ? 'connecting'
       : statusEntry.status;
 
+  const restartConnection = useCallback(() => {
+    // Fence asynchronous sends and replies before passive socket cleanup.
+    roomEpochRef.current += 1;
+    setStatus('connecting');
+    setConnectionGeneration((generation) => generation + 1);
+  }, [setStatus]);
+
   const retryConnection = useCallback(() => {
     if (
       !roomWanted ||
@@ -265,12 +276,8 @@ export function useCollaboration({
       (status !== 'offline' && status !== 'rejected')
     )
       return;
-    // Invalidate late frames immediately. The connect effect then retires the
-    // old socket, reads the room head and reacquires a lease before publishing.
-    roomEpochRef.current += 1;
-    setStatus('connecting');
-    setConnectionGeneration((generation) => generation + 1);
-  }, [roomWanted, projectId, status, setStatus]);
+    restartConnection();
+  }, [roomWanted, projectId, status, restartConnection]);
 
   const settleKeepMine = useCallback((error?: Error) => {
     const pending = keepMineAckRef.current;
@@ -302,6 +309,7 @@ export function useCollaboration({
       }
       // Matching geometry alone is insufficient: distinct checkpoints/history
       // are user work too. The remote must retain every local history entry.
+      unconfirmedLeaseWorkRef.current = false;
       clearUnresolvedConflict(local.projectId, 'room');
       conflictRef.current = null;
       setConflict(null);
@@ -903,7 +911,12 @@ export function useCollaboration({
             // unchanged observer looks like unsent work on every broadcast.
             // Content/lineage proves adoption safe; a genuinely divergent
             // offline edit still waits for the room's fenced submission.
-            const retained = retainConflict(message.document);
+            // A downgraded reconnect must not replace a known unconfirmed
+            // edit with the older room head merely because it now reads only.
+            const retained = retainConflict(
+              message.document,
+              message.role === 'viewer' && unconfirmedLeaseWorkRef.current
+            );
             const local = documentRef.current;
             const canAdopt =
               message.role === 'viewer' ||
@@ -985,6 +998,9 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'lease-lost') {
+          const checkpointPending = Boolean(
+            checkpointRef.current || checkpointAckRef.current
+          );
           settleCheckpointDrain(new Error('The edit lease was lost.'));
           checkpointRef.current?.abort(new Error('The edit lease was lost.'));
           settleKeepMine(
@@ -1007,10 +1023,32 @@ export function useCollaboration({
             roleRef.current !== 'viewer' &&
             socket.readyState === WebSocket.OPEN
           ) {
-            setStatus('connecting');
-            socket.send(
-              JSON.stringify({ type: 'lease-acquire', clientId: id })
-            );
+            if (
+              checkpointPending ||
+              conflictRef.current ||
+              readUnresolvedConflict(projectId, 'room')
+            ) {
+              // Named saves can still receive their owned durable receipt;
+              // explicit conflict decisions must also survive lease renewal.
+              setStatus(
+                conflictRef.current || readUnresolvedConflict(projectId, 'room')
+                  ? 'conflict'
+                  : 'connecting'
+              );
+              socket.send(
+                JSON.stringify({ type: 'lease-acquire', clientId: id })
+              );
+            } else {
+              // The previous write may have committed without its ack. Read the
+              // room head on a new connection before retrying the current edit.
+              if (
+                pendingDocument ||
+                (documentRef.current &&
+                  documentRef.current.version !== lastSentVersionRef.current)
+              )
+                unconfirmedLeaseWorkRef.current = true;
+              restartConnection();
+            }
           }
           return;
         }
@@ -1277,6 +1315,7 @@ export function useCollaboration({
     };
   }, [
     connectionGeneration,
+    restartConnection,
     displayName,
     enabled,
     encrypted,

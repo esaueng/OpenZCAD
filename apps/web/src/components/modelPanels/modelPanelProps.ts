@@ -1,3 +1,4 @@
+import type { LocalHistoryAppend } from '../../lib/localHistoryAppend';
 import type { ReactNode } from 'react';
 import type {
   BodyId,
@@ -24,6 +25,7 @@ export interface ModelPanelSource {
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
   features: FeatureNode[];
+  localAppend?: LocalHistoryAppend | null;
   representations: Record<string, BodyRepresentation>;
   failedFeatureIds?: ReadonlySet<FeatureId>;
   relatedFeatureIds?: ReadonlySet<FeatureId> | null;

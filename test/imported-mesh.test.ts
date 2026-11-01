@@ -198,7 +198,9 @@ describe('imported meshes on the exact kernel', { timeout: 30_000 }, () => {
     const far = boxMesh(2, 3, 4);
     const vertices = [
       ...near.vertices,
-      ...far.vertices.map((value, index) => (index % 3 === 0 ? value + 10 : value))
+      ...far.vertices.map((value, index) =>
+        index % 3 === 0 ? value + 10 : value
+      )
     ];
     const indices = [
       ...near.indices,
@@ -333,9 +335,9 @@ describe('imported meshes on the exact kernel', { timeout: 30_000 }, () => {
     expect(derived.warnings[0]).toContain('is an imported mesh');
   });
 
-  it('names a mesh it cannot turn into a body instead of failing blankly', async () => {
-    const { document } = importMeshBody(
-      createProjectDocument('Broken mesh', user),
+  it('imports a single triangle as a reference with advisory attribution', async () => {
+    const { document, bodyId } = importMeshBody(
+      createProjectDocument('Triangle mesh', user),
       {
         name: 'Single facet',
         artifactId: 'artifact_facet',
@@ -347,9 +349,17 @@ describe('imported meshes on the exact kernel', { timeout: 30_000 }, () => {
     );
     const derived = await adapter.syncDocument(document);
     expect(derived.warnings).toEqual([
-      'Feature "Single facet": An imported mesh needs at least two triangles to form a body.'
+      expect.stringContaining('Kept the original mesh as a reference')
     ]);
-    expect(Object.keys(derived.bodyRepresentations)).toHaveLength(0);
+    expect(derived.featureWarnings).toEqual([
+      expect.objectContaining({ kind: 'advisory' })
+    ]);
+    const representation = derived.bodyRepresentations[bodyId]!;
+    expect(representation.mesh.indices).toHaveLength(3);
+    expect(representation.bbox).toEqual({
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 1, y: 1, z: 0 }
+    });
   });
 });
 

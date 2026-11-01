@@ -792,30 +792,22 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       expect(body.volume).toBeCloseTo(plateVolume(THIN_PLATE_MM), 9);
     });
 
-    it('refuses the same plate for a metre document, because the rebuild would', async () => {
-      // First the measurement the refusal has to match: the very triangles a
-      // metre document would store do not come back as a body.
-      const millimetres = await importMeshFile(
+    it('imports tiny plate edges at metre document scale without collapsing them', async () => {
+      const mesh = await importMeshFile(
         'obj',
         thinPlateObj(THIN_PLATE_MM),
-        'mm'
+        'm'
       );
-      const asStored = await rebuiltBody(adapter, 'thin plate m', {
-        ...millimetres,
-        vertices: millimetres.vertices.map((value) => value * METRE_SCALE)
+      const body = await rebuiltBody(adapter, 'thin plate m', {
+        ...mesh,
+        vertices: mesh.vertices.map((value) => value * METRE_SCALE)
       });
-      expect(asStored.volume).toBeUndefined();
-      expect(asStored.warnings).toEqual([
-        expect.stringContaining('merges both ends of a boundary edge')
-      ]);
-
-      // So the import must say so while it is still a file, rather than
-      // reporting twelve triangles and leaving a feature with no body.
-      await expect(
-        importMeshFile('obj', thinPlateObj(THIN_PLATE_MM), 'm')
-      ).rejects.toThrow(
-        /^This OBJ file could not be imported as a body: .*merges both ends of a boundary edge/
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(
+        plateVolume(THIN_PLATE_MM) * METRE_SCALE ** 3,
+        18
       );
+      expect(body.bbox!.max.z).toBeCloseTo(THIN_PLATE_MM * METRE_SCALE, 15);
     });
 
     it('still imports a plate a metre document can hold', async () => {
@@ -843,17 +835,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     });
   });
 
-  /**
-   * STL keeps its own parser, and the README says so.
-   *
-   * Every kernel-read format puts its triangles through the rebuild before
-   * returning them; the STL path parses in JS on the main thread and does
-   * not. That is a real carve-out, and the only honest options were to close
-   * it or to state it — routing STL through this path is a behaviour change
-   * on the one mesh path with e2e coverage, so it is stated. These cases hold
-   * the public claim and the behaviour to each other: extend the check to STL
-   * and the second one fails, asking for the README sentence back.
-   */
+  /** STL accepts renderable source facets without requiring a CAD shell. */
   describe('the STL carve-out', () => {
     const readmeMeshBullet = (): string => {
       const readme = readFileSync(
@@ -867,7 +849,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       return bullet!;
     };
 
-    it('imports a soup the sew refuses, and reports it only at rebuild', async () => {
+    it('keeps non-manifold STL facets as a displayable reference', async () => {
       const soup = coincidentBoxSoup();
       const parsed = parseStl(
         new TextEncoder().encode(
@@ -880,9 +862,13 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       expect(parsed.triangleCount).toBe(FIXTURE_BOX_TRIANGLES * 2);
 
       const body = await rebuiltBody(adapter, 'coincident stl', parsed);
-      expect(body.volume).toBeUndefined();
+      expect(body.volume).toBe(0);
+      expect(body.bbox).toEqual({
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 2, y: 3, z: 4 }
+      });
       expect(body.warnings).toEqual([
-        expect.stringContaining('non-manifold mesh edge')
+        expect.stringContaining('Imported as a mesh reference')
       ]);
     });
 
@@ -903,8 +889,8 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       // The claim has to be scoped to the formats that carry it...
       expect(bullet).toContain('for every format but STL');
       // ...and the exception has to say what actually happens instead.
-      expect(bullet).toContain('reports the kernel');
-      expect(bullet).toContain('when the body is rebuilt');
+      expect(bullet).toContain('mesh reference');
+      expect(bullet).toContain('solid volume');
       // The check's scale is part of the public claim too.
       expect(bullet).toContain("at the open document's units");
     });

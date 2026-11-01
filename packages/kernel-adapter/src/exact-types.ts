@@ -24,6 +24,8 @@ import type { RemusNativeVertexState } from './remus-native-vertices';
 export interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
+  /** Source facets when a readable mesh cannot be represented as a B-rep. */
+  referenceMesh?: { vertices: Float64Array; indices: Uint32Array };
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */
   lineage?: RemusLineageState;
   /** Grid-only construction evidence; native handles stay inside the build. */

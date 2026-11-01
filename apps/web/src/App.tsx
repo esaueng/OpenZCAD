@@ -1,4 +1,9 @@
 import {
+  localHistoryAppend,
+  retainLocalHistoryAppend,
+  type LocalHistoryAppend
+} from './lib/localHistoryAppend';
+import {
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
@@ -748,6 +753,7 @@ import {
   commandSessionFor,
   isOperationState,
   isStaleSelectionError,
+  operationSelectionKey,
   nextSketchCircleMode,
   nextSketchCurveMode,
   sketchCurveModeFor,
@@ -2693,6 +2699,8 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  const [latestLocalAppend, setLatestLocalAppend] =
+    useState<LocalHistoryAppend | null>(null);
   // Exact solved geometry is a read view; commands and persistence keep doc.
   const sketchReadDocument = doc ? resolvedSketchDocument(doc) : null;
   // Held here, not in the panels: a move between the dock and the phone lane
@@ -3561,6 +3569,34 @@ export function App() {
     value: number;
     startedAt: number;
   } | null>(null);
+
+  /** Whether the selection is still the one a direct edit was checked for. */
+  function directEditOwnsSelection(
+    pending: { interaction: InteractionState } | null
+  ): boolean {
+    return (
+      !pending ||
+      operationSelectionKey(pending.interaction) ===
+        operationSelectionKey(interactionRef.current)
+    );
+  }
+
+  /** The body a direct edit was made on, for a result reported elsewhere. */
+  function directEditBodyName(
+    pending: { document: ProjectDocument; interaction: InteractionState } | null
+  ): string | null {
+    const interaction = pending?.interaction;
+    const bodyId =
+      interaction?.mode === 'face'
+        ? interaction.target.bodyId
+        : interaction?.mode === 'edges'
+          ? interaction.edges[0]?.bodyId
+          : undefined;
+    return bodyId
+      ? (pending!.document.derived.bodyRepresentations[bodyId as BodyId]
+          ?.name ?? null)
+      : null;
+  }
 
   /** Appends one direct-edit outcome to the on-device log; never throws. */
   function recordDirectEditOutcome(
@@ -4714,6 +4750,17 @@ export function App() {
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
+      if (!directEditOwnsSelection(pending)) {
+        // Picked elsewhere while this was checked: the refusal is the earlier
+        // edit's. Marking the new selection failed showed it beside a value
+        // and a refusal that were never its own.
+        const name = directEditBodyName(pending);
+        setStatus(
+          name ? `${name}: ${diagnostic.message}` : diagnostic.message,
+          diagnostic.detail ? { detail: diagnostic.detail } : undefined
+        );
+        return;
+      }
       dispatchInteraction({
         type: 'validation-failed',
         diagnostic,
@@ -4744,6 +4791,9 @@ export function App() {
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
       setLastValidPreview(null);
+      // Picked elsewhere while this was checked: the edit lands, and the new
+      // selection stays. Finishing on the edited face took the pick away.
+      if (!directEditOwnsSelection(pending)) return;
       setSelectedEdges([]);
       if (
         pending?.interaction.mode === 'face' &&
@@ -7658,7 +7708,8 @@ export function App() {
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
-        exportable: body.exportableStep && !body.consumed,
+        exportable:
+          (body.exportableStep || body.meshReference === true) && !body.consumed,
         hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
@@ -8477,6 +8528,9 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    setLatestLocalAppend((append) =>
+      retainLocalHistoryAppend(append, normalized)
+    );
     // A replacement can share the project and version of the document a
     // commit completed (an adopted conflict copy) without sharing its model.
     forgetCompleteCommit();
@@ -8717,7 +8771,8 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
-      const before = managerRef.current.document.derived.bodyRepresentations;
+      const beforeDocument = managerRef.current.document;
+      const before = beforeDocument.derived.bodyRepresentations;
       let next = managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
@@ -8738,6 +8793,8 @@ export function App() {
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
+      const appended = localHistoryAppend(beforeDocument, next);
+      if (appended) setLatestLocalAppend(appended);
       setDoc(next);
       if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
@@ -8778,7 +8835,8 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
-      const before = managerRef.current.document.derived.bodyRepresentations;
+      const beforeDocument = managerRef.current.document;
+      const before = beforeDocument.derived.bodyRepresentations;
       let next = managerRef.current.runTransaction(label, commands);
       // A batch of sheet edits leaves the model alone, as one does alone.
       if (commands.every(isDrawingCommand)) geometry.retainReadyGeometry(next);
@@ -8789,6 +8847,8 @@ export function App() {
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
+      const appended = localHistoryAppend(beforeDocument, next);
+      if (appended) setLatestLocalAppend(appended);
       setDoc(next);
       if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
@@ -28865,6 +28925,11 @@ export function App() {
       geometryPendingShown={panelGeometryPendingShown}
       relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
+      localAppend={
+        latestLocalAppend?.projectId === doc?.projectId
+          ? latestLocalAppend
+          : null
+      }
       selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
@@ -31420,7 +31485,9 @@ export function App() {
                 }
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
-                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
+                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId,
+                  meshReference:
+                    doc.derived.bodyRepresentations[bodyId]?.meshReference
                 }))}
                 revision={doc.version}
                 onClose={() => setMeshExportOpen(false)}

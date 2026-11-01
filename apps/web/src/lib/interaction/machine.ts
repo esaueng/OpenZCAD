@@ -488,6 +488,37 @@ export function isOperationState(
 }
 
 /**
+ * What an operation acts on, independent of its phase or value: the same key
+ * means the same face, edges or regions under the same command. A result that
+ * arrives after the selection moved on belongs to the key it was asked for,
+ * not to whatever is selected when it lands.
+ */
+export function operationSelectionKey(state: InteractionState): string | null {
+  switch (state.mode) {
+    case 'face':
+      return JSON.stringify([
+        state.mode,
+        state.op,
+        state.target.bodyId,
+        state.target.topologyId,
+        Boolean(state.target.localFaceOffset)
+      ]);
+    case 'edges':
+      return JSON.stringify([state.mode, state.op, state.edges]);
+    case 'region':
+      return JSON.stringify([
+        state.mode,
+        state.targets.map((target) => [
+          target.sketchId,
+          target.regionFingerprint
+        ])
+      ]);
+    default:
+      return null;
+  }
+}
+
+/**
  * The text card's draft while the text tool is composing, else null. A draft
  * only means something under the text tool: leaving it by any route (a rail
  * tool, a constraint, a selection) ends the composition.

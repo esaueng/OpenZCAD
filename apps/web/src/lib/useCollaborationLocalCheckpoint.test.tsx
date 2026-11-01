@@ -7,7 +7,12 @@ import {
   importMeshBody
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
-import { setup, box, rejectedSave } from './collaborationCheckpointTestHarness';
+import {
+  Socket,
+  setup,
+  box,
+  rejectedSave
+} from './collaborationCheckpointTestHarness';
 import { listLocalSaveStateIds, loadLocalSaveState } from './localProjectStore';
 
 async function privateSnapshot(projectId: string) {
@@ -117,9 +122,20 @@ it.each([
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500);
       });
-      if (mode === 'lease reacquisition')
-        act(() =>
-          hook.socket.receive({
+      if (mode === 'lease reacquisition') {
+        const replacement = Socket.instances.at(-1)!;
+        expect(replacement).not.toBe(hook.socket);
+        act(() => {
+          replacement.readyState = Socket.OPEN;
+          replacement.dispatchEvent(new Event('open'));
+          replacement.receive({
+            type: 'state',
+            members: [],
+            document: clicked,
+            role: 'editor',
+            lease: null
+          });
+          replacement.receive({
             type: 'lease-granted',
             lease: {
               projectId: clicked.projectId,
@@ -130,11 +146,13 @@ it.each([
               userId: toUserId('member'),
               expiresAt: Date.now() + 60_000
             }
-          })
-        );
+          });
+        });
+      }
     }
     const wireDocuments = [
-      ...hook.socket.sent
+      ...Socket.instances
+        .flatMap((socket) => socket.sent)
         .filter((frame) => frame.type === 'document')
         .map((frame) => frame.document!),
       ...requests

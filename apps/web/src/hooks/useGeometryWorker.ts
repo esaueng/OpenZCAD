@@ -1018,8 +1018,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   return {
     state,
     isReadyFor(document) {
+      // A worker status reports its own progress, not receipt of its result.
+      // Until the live projection is accepted, the displayed model may still
+      // contain cached or staged geometry even when a ready status arrives.
+      const completed = readyDocument.current;
       return Boolean(
         document &&
+        completed &&
+        readyDerived.current &&
+        completed.projectId === document.projectId &&
+        completed.version === document.version &&
         state.phase === 'ready' &&
         !state.stale &&
         state.projectId === document.projectId &&
