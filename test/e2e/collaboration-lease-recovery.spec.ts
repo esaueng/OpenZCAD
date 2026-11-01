@@ -8,11 +8,13 @@ import {
   stubApi
 } from './openzcad-fixtures';
 
-for (const accepted of [false, true]) {
+for (const outcome of ['unconfirmed', 'accepted', 'read-only'] as const) {
   test(
-    `lease recovery reconciles an ${accepted ? 'accepted' : 'unconfirmed'} edit without reload`,
+    `lease recovery reconciles ${outcome} work without reload`,
     { tag: '@ci-smoke' },
     async ({ page }) => {
+      const accepted = outcome === 'accepted';
+      const viewer = outcome === 'read-only';
       const errors: string[] = [];
       page.on('pageerror', (error) => errors.push(error.message));
       page.on('console', (message) => {
@@ -93,7 +95,8 @@ for (const accepted of [false, true]) {
       const offerHead = async (
         index: number,
         head: ProjectDocument,
-        leaseId: string
+        leaseId: string,
+        role: 'editor' | 'viewer' = 'editor'
       ) => {
         await expect
           .poll(() =>
@@ -106,7 +109,7 @@ for (const accepted of [false, true]) {
           )
           .toBe(1);
         await page.evaluate(
-          ({ index, head, leaseId }) => {
+          ({ index, head, leaseId, role }) => {
             const socket = (
               window as unknown as { __leaseSockets: WebSocket[] }
             ).__leaseSockets[index]!;
@@ -115,7 +118,7 @@ for (const accepted of [false, true]) {
                 type: 'state',
                 members: [],
                 document: head,
-                role: 'editor',
+                role,
                 lease: null
               },
               {
@@ -130,12 +133,14 @@ for (const accepted of [false, true]) {
                   expiresAt: Date.now() + 60_000
                 }
               }
-            ])
+            ]) {
+              if (role === 'viewer' && frame.type === 'lease-granted') continue;
               socket.dispatchEvent(
                 new MessageEvent('message', { data: JSON.stringify(frame) })
               );
+            }
           },
-          { index, head, leaseId }
+          { index, head, leaseId, role }
         );
       };
       const publications = (index: number) =>
@@ -189,8 +194,27 @@ for (const accepted of [false, true]) {
           )
         )
         .toBe(2);
-      await offerHead(1, accepted ? submitted : document, 'lease_after');
-      if (accepted) {
+      await offerHead(
+        1,
+        accepted ? submitted : document,
+        'lease_after',
+        viewer ? 'viewer' : 'editor'
+      );
+      if (viewer) {
+        expect(await publications(1)).toHaveLength(0);
+        await expect(
+          page.getByRole('button', { name: /Open project sharing/ })
+        ).toContainText('Conflict');
+        await expect(
+          page.getByRole('heading', { name: 'Choose a version to keep' })
+        ).toBeVisible();
+        await page
+          .getByRole('button', { name: 'Decide later', exact: true })
+          .click();
+        await expect(
+          page.getByRole('button', { name: 'Build', exact: true })
+        ).toBeDisabled();
+      } else if (accepted) {
         expect(await publications(1)).toHaveLength(0);
       } else {
         await expect.poll(async () => (await publications(1)).length).toBe(1);
@@ -223,22 +247,34 @@ for (const accepted of [false, true]) {
           retried.document.version
         );
       }
-      await expect(
-        page.getByRole('status', { name: 'Saved', exact: true })
-      ).toBeVisible();
+      if (!viewer) {
+        await expect(
+          page.getByRole('status', { name: 'Saved', exact: true })
+        ).toBeVisible();
+      } else {
+        await expect(
+          page.getByRole('status', { name: 'Saved', exact: true })
+        ).toBeHidden();
+      }
       await expect(
         page.getByRole('button', { name: /Open project sharing/ })
       ).not.toContainText('Unavailable');
-      await expect(
-        page.locator('.feature-row-main').filter({ hasText: /^Box/ })
-      ).toHaveCount(1);
+      if (viewer) {
+        // Read-only mode hides the editing history panel. Its canonical
+        // feature count still proves the unconfirmed operation was retained.
+        await expect(
+          page.locator('.workspace-status-summary [title]')
+        ).toHaveAttribute('title', / · 1 feature · /);
+      } else {
+        await expect(
+          page.locator('.feature-row-main').filter({ hasText: /^Box/ })
+        ).toHaveCount(1);
+      }
       await expectBodyCount(page, 1);
       expect(accountWrites).toBe(0);
       expect(errors).toEqual([]);
       await page.screenshot({
-        path: test
-          .info()
-          .outputPath(`lease-${accepted ? 'accepted' : 'resent'}.png`)
+        path: test.info().outputPath(`lease-${outcome}.png`)
       });
     }
   );

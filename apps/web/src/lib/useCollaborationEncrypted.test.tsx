@@ -698,6 +698,60 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
     }
   );
 
+  it.each([false, true])(
+    'keeps an unconfirmed local edit when rejoining as a viewer (encrypted=%s)',
+    async (encrypted) => {
+      const base = createProjectDocument(
+        'Read-only recovery',
+        toUserId('owner_viewer_recovery')
+      );
+      const hook = await connectedOwner(base, encrypted);
+      const local = withBox(base, 'Unconfirmed box');
+      await edit(hook.rerender, local);
+      hook.socket.receive({ type: 'lease-lost', reason: 'expired' });
+      await flush();
+      const replacement = FakeWebSocket.instances.at(-1)!;
+      act(() => replacement.open());
+      replacement.receive(
+        encrypted
+          ? {
+              type: 'e2ee-state',
+              members: [],
+              role: 'viewer',
+              lease: null,
+              keyEpoch: 0,
+              head: { plain: base }
+            }
+          : {
+              type: 'state',
+              members: [],
+              role: 'viewer',
+              lease: null,
+              document: base
+            }
+      );
+      await flush();
+      expect(hook.onRemoteDocument).not.toHaveBeenCalled();
+      expect(hook.result.current.role).toBe('viewer');
+      expect(hook.result.current.status).toBe('conflict');
+      expect(hook.result.current.conflict?.localDocument.nodes).toEqual(
+        local.nodes
+      );
+      expect(hook.result.current.conflict?.remoteDocument.nodes).toEqual(
+        base.nodes
+      );
+      expect(
+        replacement
+          .frames()
+          .filter(
+            (frame) =>
+              frame.type === 'document' || frame.type === 'e2ee-document'
+          )
+      ).toHaveLength(0);
+      hook.unmount();
+    }
+  );
+
   it('drops a sealing result from the lease connection that was retired', async () => {
     const base = createProjectDocument(
       'Retired seal',

@@ -10,7 +10,9 @@ before socket cleanup, so delayed acknowledgements and encrypted sealing results
 cannot act for the replacement connection.
 
 Named saves with owned receipts retain their existing settlement path, explicit
-conflict decisions remain visible, and role revocation remains read-only. An
+conflict decisions remain visible, and role revocation remains read-only. If a fresh handshake downgrades the tab
+to viewer, unconfirmed local work is retained in conflict recovery instead of
+being replaced by an older room head. An
 accepted-but-unacknowledged edit is recognized from the new room head without a
 second publication. Divergent histories still pass through the room's fenced
 conflict response rather than being adopted as the acknowledged base.

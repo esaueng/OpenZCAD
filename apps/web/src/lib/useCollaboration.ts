@@ -185,6 +185,7 @@ export function useCollaboration({
   const leaseIdRef = useRef<string | null>(null);
   const leaseRef = useRef<ProjectEditLease | null>(null);
   const conflictRef = useRef<ProjectConflict | null>(null);
+  const unconfirmedLeaseWorkRef = useRef(false);
   const keepMinePendingRef = useRef(false);
   // A project can be left and reopened, or rejoined by another account. Its
   // ID alone cannot identify the room that owns an asynchronous confirmation.
@@ -243,6 +244,9 @@ export function useCollaboration({
       checkpointRef.current?.abort(new Error(ROOM_CHANGED_MESSAGE));
     };
   }, [displayName, enabled, encrypted, encryptionView, projectId, userId]);
+  useLayoutEffect(() => {
+    unconfirmedLeaseWorkRef.current = false;
+  }, [projectId, userId]);
   const roomWanted = Boolean(enabled && projectId && userId && displayName);
   const stampRef = useRef({ projectId, wanted: roomWanted });
   stampRef.current = { projectId, wanted: roomWanted };
@@ -305,6 +309,7 @@ export function useCollaboration({
       }
       // Matching geometry alone is insufficient: distinct checkpoints/history
       // are user work too. The remote must retain every local history entry.
+      unconfirmedLeaseWorkRef.current = false;
       clearUnresolvedConflict(local.projectId, 'room');
       conflictRef.current = null;
       setConflict(null);
@@ -906,7 +911,12 @@ export function useCollaboration({
             // unchanged observer looks like unsent work on every broadcast.
             // Content/lineage proves adoption safe; a genuinely divergent
             // offline edit still waits for the room's fenced submission.
-            const retained = retainConflict(message.document);
+            // A downgraded reconnect must not replace a known unconfirmed
+            // edit with the older room head merely because it now reads only.
+            const retained = retainConflict(
+              message.document,
+              message.role === 'viewer' && unconfirmedLeaseWorkRef.current
+            );
             const local = documentRef.current;
             const canAdopt =
               message.role === 'viewer' ||
@@ -1031,6 +1041,12 @@ export function useCollaboration({
             } else {
               // The previous write may have committed without its ack. Read the
               // room head on a new connection before retrying the current edit.
+              if (
+                pendingDocument ||
+                (documentRef.current &&
+                  documentRef.current.version !== lastSentVersionRef.current)
+              )
+                unconfirmedLeaseWorkRef.current = true;
               restartConnection();
             }
           }
