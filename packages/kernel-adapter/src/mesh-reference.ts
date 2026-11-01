@@ -3,11 +3,44 @@ import type { ExactShape } from './exact-types';
 
 type ReferenceMesh = NonNullable<ExactShape['referenceMesh']>;
 
-/** Own display buffers; retain the Float64 source for replay and export. */
+interface ReferenceDisplay {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  bbox: BoundingBox;
+}
+
+/**
+ * Display projections by source mesh. Reference meshes are immutable (the
+ * history cache and the imported-mesh cache share them across rebuilds), so
+ * one projection serves every sync of the same object, and it goes when the
+ * mesh does.
+ */
+const projections = new WeakMap<ReferenceMesh, ReferenceDisplay>();
+
+/**
+ * Own display buffers; retain the Float64 source for replay and export.
+ *
+ * A derived state is caller-owned and may be mutated or transferred, so
+ * every call returns fresh buffers; a repeat call copies the kept
+ * projection instead of narrowing and scanning the source again.
+ */
 export function projectReferenceMesh(source: ReferenceMesh): {
   mesh: MeshGeometry;
   bbox: BoundingBox;
 } {
+  const kept = projections.get(source) ?? project(source);
+  projections.set(source, kept);
+  return {
+    mesh: {
+      kind: 'mesh',
+      vertices: kept.vertices.slice(),
+      indices: kept.indices.slice()
+    },
+    bbox: { min: { ...kept.bbox.min }, max: { ...kept.bbox.max } }
+  };
+}
+
+function project(source: ReferenceMesh): ReferenceDisplay {
   const vertices = Float32Array.from(source.vertices);
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
@@ -20,7 +53,8 @@ export function projectReferenceMesh(source: ReferenceMesh): {
     max[axis] = Math.max(max[axis]!, source.vertices[i]!);
   }
   return {
-    mesh: { kind: 'mesh', vertices, indices: source.indices.slice() },
+    vertices,
+    indices: source.indices.slice(),
     bbox: {
       min: { x: min[0]!, y: min[1]!, z: min[2]! },
       max: { x: max[0]!, y: max[1]!, z: max[2]! }

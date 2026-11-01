@@ -26,6 +26,7 @@
     "packages/kernel-adapter/src/kernel-refusal.test.ts",
     "packages/kernel-adapter/src/kernel-step-import.test.ts",
     "packages/kernel-adapter/src/kernel-validation.test.ts",
+    "packages/kernel-adapter/src/mesh-reference.test.ts",
     "packages/kernel-adapter/src/remus-modeling-operations.test.ts",
     "packages/kernel-adapter/src/remus-native-vertices.test.ts",
     "packages/kernel-adapter/src/remus-runtime.test.ts",

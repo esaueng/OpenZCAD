@@ -279,7 +279,13 @@ function buildImportedMeshFeature(
     const advise = (message: string) =>
       raiseFeatureWarning(result, feature, message, 'advisory');
     let shape: ExactShape;
-    if (cached?.kind === 'solid') {
+    if (cached?.kind === 'reference') {
+      shape = { solids: [], referenceMesh: cached.mesh };
+      advise(
+        'Imported as a mesh reference. Solid modeling and solid volume are unavailable.\n' +
+          cached.message
+      );
+    } else if (cached?.kind === 'solid') {
       const [solid] = kernel.deserializeSolids(cached.document);
       if (solid === undefined) {
         throw new Error('A cached imported mesh restored no solid.');
@@ -291,57 +297,55 @@ function buildImportedMeshFeature(
       // orientation, so the document's triangle soup goes back through
       // it rather than being re-derived here — embedded or referenced alike.
       const triangles = importedMeshTriangles(data, importSources);
-      let refusal = cached?.kind === 'reference' ? cached.message : undefined;
+      // Validate persisted data before entering the conversion fallback.
+      const stl = importedMeshStl({
+        sourceName: data.sourceName,
+        triangleCount: data.triangleCount,
+        ...triangles
+      });
+      const advisories: string[] = [];
+      let refusal: string | undefined;
       let solid: number | undefined;
-      if (refusal === undefined) {
-        // Validate persisted data before entering the conversion fallback.
-        const stl = importedMeshStl({
-          sourceName: data.sourceName,
-          triangleCount: data.triangleCount,
-          ...triangles
+      try {
+        solid = importMeshSolid(kernel, stl, (message) => {
+          advisories.push(message);
+          advise(message);
         });
-        const advisories: string[] = [];
-        try {
-          solid = importMeshSolid(kernel, stl, (message) => {
-            advisories.push(message);
-            advise(message);
-          });
-        } catch (error) {
-          if (
-            !(error instanceof MeshConversionError) ||
-            data.triangleCount === 0
-          ) {
-            throw error;
-          }
-          refusal = error.message;
+      } catch (error) {
+        if (
+          !(error instanceof MeshConversionError) ||
+          data.triangleCount === 0
+        ) {
+          throw error;
         }
-        if (cacheKey) {
-          meshes?.store(
-            cacheKey,
-            solid === undefined
-              ? { kind: 'reference', message: refusal ?? '' }
-              : {
-                  kind: 'solid',
-                  document: kernel.serializeSolids(Uint32Array.of(solid)),
-                  advisories
-                }
-          );
-        }
+        refusal = error.message;
       }
       if (solid !== undefined) {
         shape = { solids: [solid] };
+        if (cacheKey) {
+          meshes?.store(cacheKey, {
+            kind: 'solid',
+            document: kernel.serializeSolids(Uint32Array.of(solid)),
+            advisories
+          });
+        }
       } else {
-        shape = {
-          solids: [],
-          referenceMesh: {
-            vertices: Float64Array.from(triangles.vertices),
-            indices: Uint32Array.from(triangles.indices)
-          }
+        const mesh = {
+          vertices: Float64Array.from(triangles.vertices),
+          indices: Uint32Array.from(triangles.indices)
         };
+        shape = { solids: [], referenceMesh: mesh };
         advise(
           'Imported as a mesh reference. Solid modeling and solid volume are unavailable.\n' +
             (refusal ?? '')
         );
+        if (cacheKey) {
+          meshes?.store(cacheKey, {
+            kind: 'reference',
+            message: refusal ?? '',
+            mesh
+          });
+        }
       }
     }
     result.meshBodies.add(feature.bodyId);
