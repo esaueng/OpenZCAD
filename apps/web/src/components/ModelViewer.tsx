@@ -36,6 +36,7 @@ import {
   type CubeBox
 } from './viewer/orientationCubeOverlay';
 import { mark, measure, timed } from '../lib/perf';
+import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
 import { recordEditPhase } from '../lib/editTrace';
@@ -2786,6 +2787,10 @@ export function ModelViewer({
       : null;
     scene.environment = environment;
     scene.environmentIntensity = 0.4;
+    const interactionShaderWarmup = new InteractionShaderWarmup(
+      renderer,
+      scene
+    );
 
     const labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(host.clientWidth, host.clientHeight);
@@ -10914,9 +10919,15 @@ export function ModelViewer({
      * sleep sees the whole idle gap on the clock, which is not animation time.
      */
     let loopWasAnimating = false;
+    const resetAnimationContinuity = () => {
+      loopWasAnimating = false;
+    };
+    document.addEventListener('visibilitychange', resetAnimationContinuity);
     function animate(now: number) {
       animationFrame = null;
       const frameStarted = performance.now();
+      const continuous =
+        loopWasAnimating && document.visibilityState !== 'hidden';
       // The view cube's widget can remount with the chrome; follow whichever
       // link is current, and push it the camera at once so its hit layer is
       // not waiting for the next turn.
@@ -11235,6 +11246,16 @@ export function ModelViewer({
         renderer.render(scene, context.activeCamera);
       }
       const renderMs = performance.now() - renderStarted;
+      if (!interactionShaderWarmup.isScheduled) {
+        const warmupEdges = context.edgeOverlaysByBodyId.values().next().value;
+        if (warmupEdges) {
+          interactionShaderWarmup.schedule(
+            context.activeCamera,
+            [selection.hoverFaceMesh, selection.hoverHiddenFaceMesh],
+            [warmupEdges.hoverEdges, warmupEdges.hoverHiddenEdges]
+          );
+        }
+      }
       // The cube's renderer pass resets renderer.info. Retain the model load
       // before it draws, while reporting CPU time after all frame work below.
       const drawCalls = renderer.info.render.calls;
@@ -11348,11 +11369,13 @@ export function ModelViewer({
         at: now,
         renderMs,
         cpuMs,
+        continuous,
         drawCalls,
         triangles
       });
       if (import.meta.env.OZ_PERF === '1') {
         mark('viewer.frame', {
+          continuous,
           frameMs:
             lastPerfFrameAt === null
               ? null
@@ -11382,6 +11405,11 @@ export function ModelViewer({
     performance.measure?.('oz:viewer.init', 'oz:viewer.init:begin');
 
     return () => {
+      interactionShaderWarmup.dispose();
+      document.removeEventListener(
+        'visibilitychange',
+        resetAnimationContinuity
+      );
       if (animationFrame !== null) {
         window.cancelAnimationFrame(animationFrame);
       }

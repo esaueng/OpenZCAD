@@ -114,6 +114,7 @@ import {
 } from './kernel-step-import';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
+import { priorBlendFaceTest } from './exact-prior-blend';
 import { separatePlanarEmboss } from './planar-emboss';
 import {
   piercedBodyTool,
@@ -2395,7 +2396,16 @@ function buildEdgeModifierFeature(
         size,
         result.partialRevolveBodies.has(data.targetBodyId),
         reportedRefusal,
-        chamferAngleRadians
+        chamferAngleRadians,
+        priorBlendFaceTest(
+          document,
+          feature.featureId,
+          // The lineage is keyed by the stored solid's handles, which
+          // describe `target` only when it was not collapsed from several.
+          storedTarget.solids.length === 1 && storedTarget.solids[0] === target
+            ? storedTarget.lineage
+            : undefined
+        )
       )
     );
   }

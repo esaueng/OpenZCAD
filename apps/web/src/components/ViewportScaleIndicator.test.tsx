@@ -14,6 +14,67 @@ describe('ViewportScaleIndicator', () => {
   });
 
   for (const upright of [true, false]) {
+    it(`keeps unchanged label nodes and bitmap dimensions while the ${upright ? 'upright' : 'lying'} rule changes length`, () => {
+      vi.spyOn(window, 'matchMedia').mockReturnValue({
+        matches: upright,
+        addEventListener() {},
+        removeEventListener() {}
+      } as unknown as MediaQueryList);
+      const clearRect = vi.fn();
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+        setTransform() {},
+        clearRect,
+        beginPath() {},
+        moveTo() {},
+        lineTo() {},
+        stroke() {}
+      } as unknown as CanvasRenderingContext2D);
+      const sinkRef: MutableRefObject<ViewportScaleSink | null> = {
+        current: null
+      };
+      render(<ViewportScaleIndicator scaleSinkRef={sinkRef} units="mm" />);
+      act(() => sinkRef.current?.({ value: 10, widthPx: 120.1 }));
+      const root = screen.getByTestId('viewport-scale-indicator');
+      const canvas = screen.getByTestId<HTMLCanvasElement>(
+        'viewport-scale-rule'
+      );
+      const value = root.querySelector('output')!;
+      const text = value.firstChild;
+      const observer = new MutationObserver(() => undefined);
+      observer.observe(root, {
+        attributes: true,
+        childList: true,
+        subtree: true
+      });
+      clearRect.mockClear();
+      act(() => sinkRef.current?.({ value: 10, widthPx: 120.2 }));
+      const mutations = observer.takeRecords();
+      observer.disconnect();
+      expect(value.firstChild).toBe(text);
+      expect(
+        mutations.filter((mutation) => mutation.type === 'childList')
+      ).toEqual([]);
+      expect(mutations.filter((mutation) => mutation.target === root)).toEqual(
+        []
+      );
+      expect(
+        mutations.filter((mutation) =>
+          ['width', 'height'].includes(mutation.attributeName ?? '')
+        )
+      ).toEqual([]);
+      expect(clearRect).toHaveBeenLastCalledWith(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+      act(() => sinkRef.current?.({ value: 20, widthPx: 140 }));
+      expect(value).toHaveTextContent('20 mm');
+      expect(root).toHaveAccessibleName(
+        'Viewport scale at the model center plane: 20 mm'
+      );
+    });
+
     it(`draws the rule ${upright ? 'upright beside the rail' : 'lying along the foot on a phone'}`, () => {
       vi.spyOn(window, 'matchMedia').mockImplementation(
         (query: string) =>

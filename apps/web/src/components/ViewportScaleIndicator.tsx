@@ -66,13 +66,17 @@ function drawRule(
   canvas.style.setProperty('--viewport-scale-length', `${cssWidth}px`);
   const along = Math.max(1, Math.round(cssWidth * pixelRatio));
   const across = Math.round(BAR_HEIGHT_PX * pixelRatio);
-  canvas.width = upright ? across : along;
-  canvas.height = upright ? along : across;
+  const width = upright ? across : along;
+  const height = upright ? along : across;
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
 
   const context = canvas.getContext('2d');
   if (!context) {
     return;
   }
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, canvas.width, canvas.height);
   // Upright: the lying rule's x runs up the canvas (its start at the foot,
   // like a measured height) and its y runs left to right, mirrored so the
   // baseline is on the left.
@@ -81,7 +85,6 @@ function drawRule(
   } else {
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   }
-  context.clearRect(0, 0, cssWidth, BAR_HEIGHT_PX);
 
   const left = 1;
   const right = Math.max(cssWidth - 1, left);
@@ -153,7 +156,7 @@ export function ViewportScaleIndicator({
       if (!root || !canvas || !value) {
         return;
       }
-      root.hidden = scale === null;
+      if (root.hidden !== (scale === null)) root.hidden = scale === null;
       if (!scale) {
         lastRenderedRef.current = null;
         return;
@@ -173,12 +176,15 @@ export function ViewportScaleIndicator({
 
       colorsRef.current ??= readRuleColors(canvas);
       drawRule(canvas, scale.widthPx, colorsRef.current, upright);
-      value.value = label;
-      value.textContent = label;
-      root.setAttribute(
-        'aria-label',
-        `Viewport scale at the model center plane: ${label}`
-      );
+      // Replacing even identical output text invalidates ancestor :has()
+      // selectors across the workspace on every zoom frame. Only the rule's
+      // pixel length changes between steps of the model-space scale.
+      if (value.value !== label) value.value = label;
+      if (value.textContent !== label) value.textContent = label;
+      const accessibleLabel = `Viewport scale at the model center plane: ${label}`;
+      if (root.getAttribute('aria-label') !== accessibleLabel) {
+        root.setAttribute('aria-label', accessibleLabel);
+      }
       lastRenderedRef.current = { ...scale, units };
     };
 

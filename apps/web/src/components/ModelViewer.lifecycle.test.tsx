@@ -11,6 +11,7 @@ import { StrictMode, createElement } from 'react';
 import { act, render } from '@testing-library/react';
 import type * as Three from 'three';
 import type { ModelViewerProps } from './ModelViewer';
+import type { FrameSample } from '../lib/frameStats';
 
 /**
  * The viewer's mount/unmount lifecycle, with the real ModelViewer mounted in
@@ -297,6 +298,57 @@ afterEach(() => {
 });
 
 describe('ModelViewer lifecycle', () => {
+  it('breaks frame continuity across browser visibility pauses and resumes it during animation', () => {
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let next = 0;
+    const request = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        callbacks.set(++next, callback);
+        return next;
+      });
+    const cancel = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        callbacks.delete(id);
+      });
+    const visibility = vi
+      .spyOn(document, 'visibilityState', 'get')
+      .mockReturnValue('visible');
+    const samples: FrameSample[] = [];
+    const props = idleProps();
+    props.viewRequest = { view: 'top', nonce: 1 };
+    props.frameStatsRef = { current: (sample) => samples.push(sample) };
+    const view = render(createElement(ModelViewer, props));
+    let at = performance.now();
+    const step = () => {
+      const entry = callbacks.entries().next().value;
+      expect(entry).toBeDefined();
+      callbacks.delete(entry![0]);
+      act(() => entry![1]((at += 16)));
+    };
+    try {
+      step();
+      step();
+      expect(samples.at(-1)?.continuous).toBe(true);
+      visibility.mockReturnValue('hidden');
+      document.dispatchEvent(new Event('visibilitychange'));
+      step();
+      expect(samples.at(-1)?.continuous).toBe(false);
+      visibility.mockReturnValue('visible');
+      document.dispatchEvent(new Event('visibilitychange'));
+      step();
+      expect(samples.at(-1)?.continuous).toBe(false);
+      step();
+      expect(samples.at(-1)?.continuous).toBe(true);
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      cancel.mockRestore();
+      visibility.mockRestore();
+    }
+  });
+
   it('leaves no key listener behind on the document for a retired viewer', () => {
     // OrbitControls removed its capture keydown listener from the canvas's
     // root node as that read at teardown — after React had detached the

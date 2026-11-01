@@ -382,6 +382,7 @@ import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
+import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
@@ -16904,12 +16905,21 @@ export function App() {
       return null;
     }
     if (remap && target) {
-      return (
-        onInput ??
-        (selection.hash !== undefined
-          ? { bodyId: target, hash: selection.hash, topologyId: '' }
-          : null)
+      const remapped = remappedBlendEdge(
+        onInput,
+        target,
+        selection.hash,
+        representations[target]?.topology !== undefined
       );
+      if (remapped === 'reshaped') {
+        if (editing) {
+          setStatus(
+            `${editing.name} reshaped that edge, so it cannot be matched to the body ${editing.name} rounds · only edges its rounds do not touch can be added here.`
+          );
+        }
+        return null;
+      }
+      return remapped;
     }
     // A new blend's preview shows the rounded body under its own new id: a
     // click on it names the held input's edge by its fingerprint, which an
