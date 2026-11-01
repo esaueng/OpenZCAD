@@ -1037,7 +1037,7 @@ describe('DrawingWorkspace', () => {
     const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
     try {
       const base = createProjectDocument('Bracket', toUserId('test'));
-      render(
+      const workspace = (
         <DrawingWorkspace
           document={{
             ...base,
@@ -1053,6 +1053,7 @@ describe('DrawingWorkspace', () => {
           onStatus={vi.fn()}
         />
       );
+      const firstMount = render(workspace);
       const settled = (name: string) =>
         waitFor(() =>
           expect(
@@ -1065,7 +1066,19 @@ describe('DrawingWorkspace', () => {
       await settled('Sheet 1');
       await userEvent.click(within(tabs).getByRole('tab', { name: 'Sheet 2' }));
       await settled('Sheet 2');
-      await userEvent.click(within(tabs).getByRole('tab', { name: 'Sheet 1' }));
+      expect(screen.getByLabelText('Sheet bodies')).toHaveTextContent(
+        'Small cube'
+      );
+      expect(screen.getByText(/keeps its saved bodies/)).toBeVisible();
+      firstMount.unmount();
+      render(workspace);
+      await settled('Sheet 2');
+      const reopenedTabs = screen.getByRole('tablist', {
+        name: 'Drawing sheets'
+      });
+      await userEvent.click(
+        within(reopenedTabs).getByRole('tab', { name: 'Sheet 1' })
+      );
       await settled('Sheet 1');
       // One request per sheet: going back to the first reuses its views.
       expect(project).toHaveBeenCalledTimes(2);
@@ -1073,6 +1086,61 @@ describe('DrawingWorkspace', () => {
       project.mockRestore();
     }
   });
+
+  it.each([false, true])(
+    'opens the isolated body sheet without requesting the reference mesh (cold: %s)',
+    async (cold) => {
+      const otherId = 'body_finished' as BodyId;
+      const bodies = {
+        [bodyId]: { ...cube(), name: 'STL reference' },
+        [otherId]: { ...cube(4), bodyId: otherId, name: 'Finished part' }
+      };
+      const first = starter(drawingSourceFingerprint(bodies, [bodyId])!);
+      const second = createStarterSheet({
+        name: 'Finished drawing',
+        bodyIds: [otherId],
+        bodies,
+        units: 'mm',
+        paper: { size: 'A3', orientation: 'landscape' },
+        projectionAngle: 'first',
+        fingerprint: drawingSourceFingerprint(bodies, [otherId])!
+      });
+      const requestTessellation = vi.fn(displayTessellation(bodies));
+      const document = {
+        ...createProjectDocument('Isolated part', toUserId('test')),
+        bodyOrder: [bodyId, otherId],
+        drawings: { sheets: [first, second] }
+      };
+      const workspace = (pending: boolean) => (
+        <DrawingWorkspace
+          document={document}
+          bodies={pending ? {} : bodies}
+          geometryPending={pending}
+          defaultBodyIds={pending ? [] : [otherId]}
+          requestTessellation={requestTessellation}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const rendered = render(workspace(cold));
+      if (cold) {
+        expect(requestTessellation).not.toHaveBeenCalled();
+        rendered.rerender(workspace(false));
+      }
+      await waitFor(() => expect(requestTessellation).toHaveBeenCalledTimes(1));
+      expect(requestTessellation.mock.calls[0]![1]).toEqual([otherId]);
+      expect(
+        screen.getByRole('tab', { name: 'Finished drawing' })
+      ).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByLabelText('Sheet bodies')).toHaveTextContent(
+        'Finished part'
+      );
+      expect(first.views.every((view) => view.bodyIds[0] === bodyId)).toBe(
+        true
+      );
+    }
+  );
 
   it('offers the large-model scales, so a fitted 1:500 can be picked again', () => {
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [

@@ -3637,22 +3637,27 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    */
   private withExportBuild<T>(
     document: ProjectDocument,
-    operate: (kernel: RemusKernel, build: ExactBuildResult) => T
+    operate: (kernel: RemusKernel, build: ExactBuildResult) => T,
+    lineageDemand?: readonly BodyId[]
   ): Promise<T> {
     return this.runHistoryJob(() =>
-      this.withOwnedExportBuild(document, operate)
+      this.withOwnedExportBuild(document, operate, lineageDemand)
     );
   }
 
   private async withOwnedExportBuild<T>(
     document: ProjectDocument,
-    operate: (kernel: RemusKernel, build: ExactBuildResult) => T
+    operate: (kernel: RemusKernel, build: ExactBuildResult) => T,
+    lineageDemand?: readonly BodyId[]
   ): Promise<T> {
     const { sources, pinned } = await this.prefetchImportSources(document);
     const { kernel, build } = await this.buildWithHistoryCache(
       document,
       sources,
-      pinned
+      pinned,
+      undefined,
+      undefined,
+      lineageDemand
     );
     try {
       return operate(kernel, build);
@@ -4342,19 +4347,26 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<Record<BodyId, DrawingBodyTessellation>> {
-    return this.withExportBuild(document, (kernel, build) => {
-      const hidden = getParameterHiddenBodyIds(document);
-      const result: Record<BodyId, DrawingBodyTessellation> = {};
-      // One budget for the whole request: many modest bodies add up too.
-      const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
-      for (const bodyId of bodyIds) {
-        const shape = build.shapes.get(bodyId);
-        if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
-          throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
-        result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
-      }
-      return result;
-    });
+    // Projection reads geometry, not boolean evolution metadata. Match the
+    // idle viewport's demand so opening Draw does not upgrade its build to
+    // eager probes (and replay an expensive imported model).
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const result: Record<BodyId, DrawingBodyTessellation> = {};
+        // One budget for the whole request: many modest bodies add up too.
+        const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
+        for (const bodyId of bodyIds) {
+          const shape = build.shapes.get(bodyId);
+          if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
+            throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
+          result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
+        }
+        return result;
+      },
+      []
+    );
   }
 
   drawingSection(
@@ -4362,42 +4374,46 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     plane: DrawingSectionPlane
   ): Promise<Record<BodyId, DrawingSectionBody>> {
-    return this.withExportBuild(document, (kernel, build) => {
-      const hidden = getParameterHiddenBodyIds(document);
-      const result: Record<BodyId, DrawingSectionBody> = {};
-      const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
-      let cut = false;
-      for (const bodyId of bodyIds) {
-        const shape = build.shapes.get(bodyId);
-        if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
-          throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
-        const body = drawingSectionOfShape(kernel, shape, plane, budget);
-        if (body?.cut) cut = true;
-        result[bodyId] = body
-          ? {
-              vertices: body.vertices,
-              indices: body.indices,
-              faces: body.faces,
-              edges: body.edges,
-              cutFaces: body.cutFaces,
-              edgeTopology: body.edgeTopology,
-              ...(body.approximate ? { approximate: body.approximate } : {})
-            }
-          : {
-              vertices: new Float32Array(),
-              indices: new Uint32Array(),
-              faces: [],
-              edges: [],
-              cutFaces: [],
-              edgeTopology: []
-            };
-      }
-      if (!cut)
-        throw new DrawingSectionError(
-          'The section line does not cut any body in this view.'
-        );
-      return result;
-    });
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const result: Record<BodyId, DrawingSectionBody> = {};
+        const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
+        let cut = false;
+        for (const bodyId of bodyIds) {
+          const shape = build.shapes.get(bodyId);
+          if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
+            throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
+          const body = drawingSectionOfShape(kernel, shape, plane, budget);
+          if (body?.cut) cut = true;
+          result[bodyId] = body
+            ? {
+                vertices: body.vertices,
+                indices: body.indices,
+                faces: body.faces,
+                edges: body.edges,
+                cutFaces: body.cutFaces,
+                edgeTopology: body.edgeTopology,
+                ...(body.approximate ? { approximate: body.approximate } : {})
+              }
+            : {
+                vertices: new Float32Array(),
+                indices: new Uint32Array(),
+                faces: [],
+                edges: [],
+                cutFaces: [],
+                edgeTopology: []
+              };
+        }
+        if (!cut)
+          throw new DrawingSectionError(
+            'The section line does not cut any body in this view.'
+          );
+        return result;
+      },
+      []
+    );
   }
 
   async meshQuality(
