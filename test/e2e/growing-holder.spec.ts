@@ -250,7 +250,7 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click();
+  await expect(fileMenu).not.toHaveAttribute('open');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);
