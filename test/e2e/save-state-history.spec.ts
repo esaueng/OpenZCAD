@@ -66,26 +66,30 @@ async function projectSavedWithOneBodyThenTwo(page: Page, name: string) {
   await expectBodyCount(page, 2);
 }
 
-test('restores a save state and undoes the restore', { tag: '@ci-smoke' }, async ({ page }) => {
-  await projectSavedWithOneBodyThenTwo(page, 'Restore Part');
+test(
+  'restores a save state and undoes the restore',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await projectSavedWithOneBodyThenTwo(page, 'Restore Part');
 
-  const savedRow = revisionRow(page, 'Manual save');
-  await savedRow.hover();
-  await savedRow.getByRole('button', { name: 'Restore Manual save' }).click();
+    const savedRow = revisionRow(page, 'Manual save');
+    await savedRow.hover();
+    await savedRow.getByRole('button', { name: 'Restore Manual save' }).click();
 
-  // The cylinder added after the save is gone; the box that was there when it
-  // was taken is not. That pair is the whole meaning of restoring a save.
-  await expectBodyCount(page, 1);
-  await expect(page.getByRole('contentinfo')).toContainText('Restored');
+    // The cylinder added after the save is gone; the box that was there when it
+    // was taken is not. That pair is the whole meaning of restoring a save.
+    await expectBodyCount(page, 1);
+    await expect(page.getByRole('contentinfo')).toContainText('Restored');
 
-  // The state being left is itself a save point, written before anything was
-  // replaced — the way back when the undo stack is gone.
-  await expect(revisionRow(page, 'Before restore')).toBeVisible();
-  await expect(revisionRow(page, 'Restored')).toBeVisible();
+    // The state being left is itself a save point, written before anything was
+    // replaced — the way back when the undo stack is gone.
+    await expect(revisionRow(page, 'Before restore')).toBeVisible();
+    await expect(revisionRow(page, 'Restored')).toBeVisible();
 
-  await page.keyboard.press('ControlOrMeta+z');
-  await expectBodyCount(page, 2);
-});
+    await page.keyboard.press('ControlOrMeta+z');
+    await expectBodyCount(page, 2);
+  }
+);
 
 test('a restored project reopens restored', async ({ page }) => {
   await projectSavedWithOneBodyThenTwo(page, 'Durable Restore Part');
@@ -103,32 +107,34 @@ test('a restored project reopens restored', async ({ page }) => {
   await expect(revisionRow(page, 'Before restore')).toBeVisible();
 });
 
-test('branches a save state into its own project, leaving the original alone', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await projectSavedWithOneBodyThenTwo(page, 'Branch Source');
+test(
+  'branches a save state into its own project, leaving the original alone',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await projectSavedWithOneBodyThenTwo(page, 'Branch Source');
 
-  const savedRow = revisionRow(page, 'Manual save');
-  await savedRow.hover();
-  await savedRow
-    .getByRole('button', { name: 'Branch Manual save into a new project' })
-    .click();
+    const savedRow = revisionRow(page, 'Manual save');
+    await savedRow.hover();
+    await savedRow
+      .getByRole('button', { name: 'Branch Manual save into a new project' })
+      .click();
 
-  await expect(page.getByRole('contentinfo')).toContainText('Branched');
-  // Branching copies; the project it was taken from keeps both its bodies.
-  await expectBodyCount(page, 2);
+    await expect(page.getByRole('contentinfo')).toContainText('Branched');
+    // Branching copies; the project it was taken from keeps both its bodies.
+    await expectBodyCount(page, 2);
 
-  await page.getByTitle('Back to projects').click();
-  const branch = page.locator('.start-tile-open', {
-    hasText: 'Branch Source (copy)'
-  });
-  await expect(branch).toBeVisible();
+    await page.getByTitle('Back to projects').click();
+    const branch = page.locator('.start-tile-open', {
+      hasText: 'Branch Source (copy)'
+    });
+    await expect(branch).toBeVisible();
 
-  await branch.click();
-  // The branch starts from the save that was picked, not from where the
-  // source project had got to by the time it was picked.
-  await expectBodyCount(page, 1);
-});
+    await branch.click();
+    // The branch starts from the save that was picked, not from where the
+    // source project had got to by the time it was picked.
+    await expectBodyCount(page, 1);
+  }
+);
 
 test('offers no action for a save state whose model is not stored', async ({
   page
@@ -339,13 +345,14 @@ test('the top-bar status chips only report, and saving lives on File', async ({
   await expectSaveSettled(page);
   await expect(revisions(page)).toHaveCount(1);
 
-  const actions = page
-    .locator('.topbar')
-    .getByRole('group', { name: 'Workspace actions' });
-  await expect(actions.getByRole('button', { name: 'Local only' })).toHaveCount(
-    0
-  );
-  const chip = actions.getByRole('status', { name: 'Local only' });
+  const topbar = page.locator('.topbar');
+  const actions = topbar.getByRole('group', { name: 'Workspace actions' });
+  // The save status follows the project name in the identity island.
+  const identity = topbar.locator('.topbar-identity');
+  await expect(
+    identity.getByRole('button', { name: 'Local only' })
+  ).toHaveCount(0);
+  const chip = identity.getByRole('status', { name: 'Local only' });
   await expect(chip).toHaveAttribute('title', /Save a revision from File/);
   await chip.click();
 

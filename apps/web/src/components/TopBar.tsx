@@ -3,6 +3,7 @@ import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
+  Box,
   Check,
   CircleUserRound,
   CloudOff,
@@ -15,6 +16,7 @@ import {
   Settings as SettingsIcon,
   TriangleAlert,
   Upload,
+  UserPlus,
   Users
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
@@ -33,9 +35,7 @@ import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
 import {
   ACCOUNT_LABEL_RESERVE,
-  CLOUD_SAVE_LABEL_RESERVE,
   COLLABORATION_LABEL_RESERVE,
-  DEVICE_SAVE_LABEL_RESERVE,
   WORKSPACE_MODE_OPTIONS,
   saveGlyphFor,
   type SaveGlyph
@@ -144,6 +144,30 @@ interface TopBarProps {
   encryption?: EncryptionIndicatorProps | null;
 }
 
+/**
+ * One glyph per presence state, so the icon-only chip tells them apart
+ * without its tooltip: an invitation while nothing is shared, the group
+ * faded while joining and struck through while offline. Colour still marks
+ * live (green) and the states that need a look (amber), via the chip.
+ */
+function PresenceGlyph({
+  status
+}: {
+  status: CollaborationStatus | 'not-shared';
+}) {
+  if (status === 'not-shared') {
+    return <UserPlus size={14} aria-hidden="true" />;
+  }
+  return (
+    <span
+      className={`presence-glyph${status === 'connecting' ? ' is-joining' : status === 'offline' ? ' is-offline' : ''}`}
+      aria-hidden="true"
+    >
+      <Users size={14} />
+    </span>
+  );
+}
+
 export function TopBar({
   projectName,
   units,
@@ -234,10 +258,8 @@ export function TopBar({
     ? 'busy'
     : editRefusal
       ? 'warning'
-      : modelPending
-        ? geometryFailed
-          ? 'warning'
-          : 'busy'
+      : modelPending && geometryFailed
+        ? 'warning'
         : saveGlyphFor(saveState);
 
   useEffect(() => {
@@ -359,6 +381,11 @@ export function TopBar({
         ? 'model unavailable'
         : 'preparing model'
       : null;
+  const readinessVisible = modelReadiness !== null && geometryFailed;
+  // The revision is saved; the model is still being built. A cube drawing
+  // itself stands in for the check until it is ready. A spinner beside
+  // "Saved" read as a save still in flight.
+  const modelPreparing = modelReadiness !== null && !geometryFailed;
   // The accessible name keeps the readiness the glyph shows, and still
   // begins with the visible label (WCAG 2.5.3).
   const saveLabel = modelReadiness
@@ -371,34 +398,38 @@ export function TopBar({
       : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
-      {/* Keyed by the glyph, not the state: saving → syncing keeps the
-          same ring turning, and only a change of kind pops. */}
-      <span key={saveGlyph} className="save-state-icon" aria-hidden="true">
-        {saveGlyph === 'busy' ? (
-          <LoaderCircle className="spin" size={14} />
-        ) : saveGlyph === 'warning' ? (
-          <TriangleAlert size={14} />
-        ) : saveGlyph === 'saved' ? (
-          <Check size={14} />
-        ) : (
-          <CloudOff size={14} />
-        )}
-      </span>
-      <StableLabel
-        reserve={
-          saveToAccount
-            ? ['Save to my account']
-            : accountState === 'signed-in'
-              ? CLOUD_SAVE_LABEL_RESERVE
-              : DEVICE_SAVE_LABEL_RESERVE
-        }
-        align="center"
-      >
+      <StableLabel reserve={[saveText]}>
+        {/* Keyed by the glyph, not the state: saving → syncing keeps the
+            same ring turning, and only a change of kind pops. */}
+        <span
+          key={modelPreparing ? 'model' : saveGlyph}
+          className="save-state-icon"
+          aria-hidden="true"
+        >
+          {modelPreparing ? (
+            <Box size={14} className="save-model-glyph" />
+          ) : saveGlyph === 'busy' ? (
+            <LoaderCircle className="spin" size={14} />
+          ) : saveGlyph === 'warning' ? (
+            <TriangleAlert size={14} />
+          ) : saveGlyph === 'saved' ? (
+            <Check size={14} />
+          ) : (
+            <CloudOff size={14} />
+          )}
+        </span>
         {saveText}
       </StableLabel>
-      {/* Readiness is visible and announced alongside the storage label. */}
+      {/* Readiness is announced alongside the storage label. Preparing is
+          shown by the cube alone (the tooltip spells it out); a failed
+          model stays in words, as it needs a look. */}
       {modelReadiness ? (
-        <span className="save-model-readiness"> · {modelReadiness}</span>
+        <span
+          className={`save-model-readiness${readinessVisible ? '' : ' visually-hidden'}`}
+        >
+          {' '}
+          · {modelReadiness}
+        </span>
       ) : null}
     </>
   );
@@ -511,6 +542,37 @@ export function TopBar({
         {encryption && projectName ? (
           <EncryptionIndicator {...encryption} />
         ) : null}
+        {/* The save status belongs to the document, so it follows its name.
+            This island is anchored at its left edge with open stage beyond
+            it, so a label change moves nothing; the actions island keeps a
+            fixed width with no status slot to reserve. */}
+        {saveChipActs ? (
+          <button
+            className={`save-state topbar-action is-${saveState}`}
+            type="button"
+            disabled={!projectName}
+            onClick={reviewRefusal ? onReviewEditFailure : onSave}
+            aria-label={saveLabel}
+            title={
+              saveToAccount && !editRefusal
+                ? 'Save this local project and its source files to your account.'
+                : saveTitle
+            }
+          >
+            {saveChipContent}
+          </button>
+        ) : (
+          // A readout, not a control: clicking "Local only" or "Saved" used
+          // to save a revision unasked. Saving is on File and the shortcut.
+          <span
+            className={`save-state topbar-action is-readout is-${saveState}`}
+            role="status"
+            aria-label={saveLabel}
+            title={`${saveTitle} Save a revision from File${saveKey ? ` or with ${platformShortcutLabel(saveKey)}` : ''}.`}
+          >
+            {saveChipContent}
+          </span>
+        )}
       </div>
       <div
         className="mode-switch topbar-island"
@@ -561,7 +623,7 @@ export function TopBar({
           role="group"
           aria-label="Workspace actions"
         >
-          {/* Signed in is the happy default and the save chip already shows
+          {/* Signed in is the happy default and the save status already shows
             cloud state, so the account chip appears only when something
             needs attention. */}
           {accountState !== 'signed-in' && (
@@ -582,33 +644,6 @@ export function TopBar({
               <StableLabel reserve={ACCOUNT_LABEL_RESERVE} align="center">
                 {accountLabel}
               </StableLabel>
-            </span>
-          )}
-          {saveChipActs ? (
-            <button
-              className={`save-state topbar-action is-${saveState}`}
-              type="button"
-              disabled={!projectName}
-              onClick={reviewRefusal ? onReviewEditFailure : onSave}
-              aria-label={saveLabel}
-              title={
-                saveToAccount && !editRefusal
-                  ? 'Save this local project and its source files to your account.'
-                  : saveTitle
-              }
-            >
-              {saveChipContent}
-            </button>
-          ) : (
-            // A readout, not a control: clicking "Local only" or "Saved" used
-            // to save a revision unasked. Saving is on File and the shortcut.
-            <span
-              className={`save-state topbar-action is-readout is-${saveState}`}
-              role="status"
-              aria-label={saveLabel}
-              title={`${saveTitle} Save a revision from File${saveKey ? ` or with ${platformShortcutLabel(saveKey)}` : ''}.`}
-            >
-              {saveChipContent}
             </span>
           )}
           {projectSharingEnabled ? (
@@ -634,7 +669,9 @@ export function TopBar({
               disabled={!projectName}
               onClick={session ? onOpenSharing : onSignIn}
             >
-              <Users size={13} aria-hidden="true" />
+              <PresenceGlyph
+                status={knownDeviceOnly ? 'not-shared' : collaborationStatus}
+              />
               {collaborationStatus === 'live' ? (
                 // Only drawn once the row has collapsed to icons; the label
                 // carries the count everywhere else.

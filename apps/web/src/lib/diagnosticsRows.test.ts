@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FeatureWarning } from '@openzcad/shared';
-import { presentedDiagnostics } from './diagnosticsRows';
+import { presentedDiagnostics, shownFeatureWarnings } from './diagnosticsRows';
 
 const featureId = 'feat_1' as FeatureWarning['featureId'];
 
@@ -13,6 +13,34 @@ describe('presented diagnostics', () => {
         [{ featureId, featureName: 'Boss', message, kind: 'suppressed' }]
       )
     ).toEqual([]);
+  });
+
+  it('still drops suppressed features once the committed state strips their attribution', () => {
+    // A committed document's derived state carries `warnings` but not
+    // `featureWarnings`; the session's attribution record holds those.
+    const message = 'Feature "Boss": Suppressed; skipped during exact rebuild.';
+    const committed = { warnings: [message] };
+    const attribution = {
+      derived: committed,
+      featureWarnings: [
+        {
+          featureId,
+          featureName: 'Boss',
+          message,
+          kind: 'suppressed' as const
+        }
+      ]
+    };
+    expect(
+      presentedDiagnostics(
+        committed.warnings,
+        shownFeatureWarnings(committed, attribution)
+      )
+    ).toEqual([]);
+    // A record taken from other derived state does not describe this one.
+    expect(
+      shownFeatureWarnings({ warnings: [message] }, attribution)
+    ).toBeUndefined();
   });
 
   it('names the feature and says what a missing target means', () => {

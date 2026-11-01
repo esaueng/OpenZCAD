@@ -775,3 +775,210 @@ button.save-state:focus-visible,
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
 }
+
+/* ── Compact row (wide screens) ──
+   The actions island holds presence and the two commands; the save status
+   ends the identity island (TopBar.tsx). Presence is a glyph with its count
+   rather than a label padded to "Unavailable"'s width, keeping its label in
+   the accessible name and tooltip as the icon row below 1120px
+   (responsive.css) does. Settings keeps its word where the bar has room. */
+@media (min-width: 1121px) {
+  .topbar-actions .settings-action,
+  .collaboration-state {
+    min-width: 28px;
+    padding: 0 6px;
+  }
+
+  .collaboration-state > .stable-label {
+    display: none;
+  }
+
+  .collaboration-state > .live-badge {
+    display: inline;
+    position: static;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    color: inherit;
+    background: none;
+    box-shadow: none;
+    font-family: var(--font-ui);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* No divider: status and commands differ by colour already, and one even
+     gap reads as a single strip. */
+  .topbar-actions {
+    gap: 4px;
+  }
+
+  .topbar-actions .file-menu {
+    margin-left: 0;
+  }
+
+  .topbar-actions .file-menu::before {
+    display: none;
+  }
+
+  /* The save glyph rides in the label slot with its text (TopBar.tsx). */
+  .save-state > .stable-label > .stable-label-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  /* Room for a one-digit count whether or not anyone is live, so joining
+     a room does not widen the chip. */
+  .collaboration-state {
+    min-width: 42px;
+  }
+
+  /* One size and face with the storage label, quieter in colour. */
+  .save-model-readiness {
+    font-size: inherit;
+  }
+}
+
+/* The model is still being built behind a saved revision: an accent cube
+   that draws itself in, holds, and fades, in place of the check. The dash
+   is the length of Box's outline (about 60.8 units in its 24-unit
+   viewBox), so one offset sweep draws every edge with no blank lead-in. */
+.save-model-glyph {
+  color: var(--color-accent);
+}
+
+.save-model-glyph > * {
+  stroke-dasharray: 61;
+  stroke-dashoffset: 61;
+  animation: save-model-build 2.4s var(--ease-out) infinite;
+}
+
+/* The inner edges follow the outline, so the cube assembles in order. */
+.save-model-glyph > :nth-child(2),
+.save-model-glyph > :nth-child(3) {
+  animation-delay: 0.25s;
+}
+
+@keyframes save-model-build {
+  0% {
+    stroke-dashoffset: 61;
+    opacity: 1;
+  }
+
+  55% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+
+  85% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.25;
+  }
+}
+
+/* Presence glyphs (TopBar PresenceGlyph): faded while joining, struck
+   through while offline. */
+.presence-glyph {
+  position: relative;
+  display: inline-flex;
+}
+
+.presence-glyph.is-joining {
+  animation: save-pending-pulse 1.4s var(--ease-out) infinite;
+}
+
+.presence-glyph.is-offline::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 50%;
+  width: 1.5px;
+  border-radius: 1px;
+  background: currentcolor;
+  /* A surface-coloured edge cuts the strokes it crosses, so the slash
+     reads as a slash rather than a scribble. */
+  box-shadow: 0 0 0 1.5px var(--color-surface);
+  transform: translateX(-50%) rotate(-45deg);
+}
+
+@keyframes save-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Still distinct without motion: the cube stays drawn in accent, the
+   joining group stays faded. */
+[data-reduced-motion='true'] .save-model-glyph > *,
+[data-reduced-motion='true'] .presence-glyph.is-joining {
+  animation: none;
+  stroke-dashoffset: 0;
+}
+
+[data-reduced-motion='true'] .presence-glyph.is-joining {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-model-glyph > *,
+  .presence-glyph.is-joining {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .presence-glyph.is-joining {
+    opacity: 0.5;
+  }
+}
+
+/* Between the icon row and a full desktop, Settings is the gear alone; from
+   1280px the word fits beside it without crowding the project name. */
+@media (min-width: 1121px) and (max-width: 1279px) {
+  .topbar-actions .settings-action {
+    width: 28px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+  }
+}
+
+/* The save status ends the identity island (TopBar.tsx). Wide, it is a
+   quiet label whose padding the island's gap would otherwise double; in the
+   icon row it is a bare glyph rather than a boxed square, since its room
+   comes out of the project name's. */
+@media (min-width: 1121px) {
+  .topbar-identity > .save-state {
+    margin-inline: -5px;
+  }
+
+  /* The lock is a fact about the project, so it sits close to the name
+     (10px from the units); the status then keeps its usual 14px. */
+  .topbar-identity > .encryption-menu {
+    margin-left: -7px;
+  }
+
+  .topbar-identity > .encryption-menu + .save-state {
+    margin-left: -12px;
+  }
+}
+
+@media (max-width: 1120px) {
+  .topbar-identity > .save-state {
+    width: 18px;
+    margin-left: -8px;
+    background: transparent;
+    border-color: transparent;
+  }
+}

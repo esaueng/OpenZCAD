@@ -126,6 +126,14 @@ describe('TopBar workspace mode help', () => {
 });
 
 describe('TopBar save chip', () => {
+  it('follows the project name instead of leading the action row', () => {
+    renderTopBar({ saveState: 'synced', signedIn: true });
+    const chip = screen.getByRole('status', { name: 'Saved' });
+    expect(chip.closest('.topbar-identity')).not.toBeNull();
+    expect(
+      screen.getByRole('group', { name: 'Workspace actions' })
+    ).not.toContainElement(chip);
+  });
   it.each(['synced', 'local'] as const)(
     'shows an uncommitted edit being checked instead of %s',
     (saveState) => {
@@ -173,6 +181,18 @@ describe('TopBar save chip', () => {
       screen.getByRole('status', { name: 'Saved · model unavailable' })
     ).toHaveAttribute('title', expect.stringContaining('activity log'));
   });
+  it('shows no preparing cube once the model has failed', () => {
+    renderTopBar({
+      saveState: 'synced',
+      signedIn: true,
+      geometryPending: true,
+      geometryFailed: true
+    });
+    const chip = screen.getByRole('status', {
+      name: 'Saved · model unavailable'
+    });
+    expect(chip.querySelector('.save-model-glyph')).toBeNull();
+  });
   it('keeps its width to the short labels while the model prepares', () => {
     renderTopBar({
       saveState: 'synced',
@@ -187,7 +207,14 @@ describe('TopBar save chip', () => {
     expect(slot?.getAttribute('data-reserve')).not.toContain('model');
     // Announced through the live region's content, not only its name.
     expect(chip).toHaveTextContent('Saved · preparing model');
-    expect(chip.querySelector('.spin')).not.toBeNull();
+    // Saved, so no spinner: a cube stands in for the check while the
+    // model is built.
+    expect(chip.querySelector('.spin')).toBeNull();
+    expect(chip.querySelector('.save-model-glyph')).not.toBeNull();
+    // Shown by the cube; the words are for assistive technology only.
+    expect(chip.querySelector('.save-model-readiness')).toHaveClass(
+      'visually-hidden'
+    );
   });
   it('is a readout that saves nothing when clicked', () => {
     const { onSave } = renderTopBar({ saveState: 'local' });
@@ -262,6 +289,28 @@ describe('TopBar save chip', () => {
 });
 
 describe('TopBar sharing chip', () => {
+  it.each([
+    [{ collaborationStatus: 'connecting' as const }, 'Joining…', 'is-joining'],
+    [{ collaborationStatus: 'offline' as const }, 'Offline', 'is-offline']
+  ])('draws a distinct presence glyph for %o', (options, label, modifier) => {
+    renderTopBar({ signedIn: true, ...options });
+    const chip = screen.getByRole('button', {
+      name: `Open project sharing · ${label}`
+    });
+    expect(chip.querySelector('.presence-glyph')).toHaveClass(modifier);
+  });
+  it('draws an invitation glyph for a project that is not shared', () => {
+    renderTopBar({
+      signedIn: true,
+      saveToAccount: true,
+      knownDeviceOnly: true
+    });
+    const chip = screen.getByRole('button', {
+      name: 'Open project sharing · Not shared'
+    });
+    expect(chip.querySelector('.presence-glyph')).toBeNull();
+    expect(chip.querySelector('.lucide-user-plus')).not.toBeNull();
+  });
   it('describes a room refusal without claiming the project is unshared', () => {
     renderTopBar({
       signedIn: true,
