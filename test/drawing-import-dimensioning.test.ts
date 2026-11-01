@@ -326,12 +326,11 @@ describe('Counterbored hole callouts (schema v50)', () => {
     ).toHaveLength(1);
     // Without the callout, both heights get a span; with it, the second
     // closes a chain through its depth.
+    // The same diameter without its counterbore: a plain Ø6.
+    const diameter: DrawingAnnotation = { ...callout };
+    if (diameter.kind === 'diameter') delete diameter.counterbore;
     const plain = autoDimension(
-      sheetOf(
-        bodyId,
-        [{ ...callout, counterbore: undefined }],
-        ['top', 'front']
-      ),
+      sheetOf(bodyId, [diameter], ['top', 'front']),
       bodies
     );
     const heights = plain.plan.annotations.filter(
