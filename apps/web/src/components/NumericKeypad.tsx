@@ -25,6 +25,7 @@ import {
   keypadReturnTarget,
   returnKeypadFocus
 } from '../lib/keypadReturnFocus';
+import { spokenValueName } from '../lib/inPlace/chipNames';
 
 export interface KeypadRequest {
   /** U09: which in-place command value a `command` entry edits. */
@@ -472,7 +473,8 @@ export function NumericKeypad({
       className="numeric-keypad"
       data-state={commitDisabled ? 'warning' : 'ready'}
       role="dialog"
-      aria-label={`${label} value`}
+      // The visible label may be a glyph ("⌀", "R"); the names are in words.
+      aria-label={`${spokenValueName(label)} value`}
       // The viewport must never see keypad gestures as picks or orbits.
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
@@ -498,7 +500,7 @@ export function NumericKeypad({
         <input
           ref={inputRef}
           className="keypad-value"
-          aria-label={label}
+          aria-label={spokenValueName(label)}
           value={value}
           aria-invalid={commitDisabled || !evaluation.ok}
           spellCheck={false}
