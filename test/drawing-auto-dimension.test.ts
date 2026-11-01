@@ -1,11 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  drawingPaperPerModelUnit,
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingLinearDimension
 } from '@openzcad/shared';
-import { resolveDrawingAnnotation } from '../apps/web/src/lib/drawing/annotations';
+import {
+  annotationAnchor,
+  layoutAnnotation,
+  resolveDrawingAnnotation
+} from '../apps/web/src/lib/drawing/annotations';
 import { planAutoDimensions } from '../apps/web/src/lib/drawing/autoDimension';
 import {
   viewPageBox,
@@ -271,6 +276,65 @@ describe('D06 Auto-dimension: rules', () => {
       expect.stringMatching(/^Y: .*add a view that shows Y\.$/)
     ]);
     expect(audit.missing).toEqual([]);
+  });
+
+  it('locates a hole inside its view, beside it, and keeps overall sizes outside', async () => {
+    const { bodies, bodyId } = await buildPart(adapter, plateOperations());
+    const { plan, after, views, audit } = autoDimension(
+      sheetOf(bodyId),
+      bodies
+    );
+    expect(audit).toMatchObject({ missing: [], redundant: [] });
+    const k = drawingPaperPerModelUnit(after.scale, 'mm');
+    const placed = plan.annotations.flatMap((annotation) => {
+      if (annotation.kind !== 'linear') return [];
+      const entry = views.find((v) => v.view.viewId === annotation.viewId)!;
+      const toPage = viewPageTransform(
+        entry.view,
+        entry.projection.bounds!,
+        after,
+        'mm'
+      );
+      const outline = viewPageBox(
+        entry.view,
+        entry.projection.bounds!,
+        after,
+        'mm'
+      );
+      const resolution = resolveDrawingAnnotation(
+        annotation,
+        entry.view,
+        bodies,
+        'mm'
+      );
+      if (!resolution.ok || resolution.resolved.kind !== 'linear') return [];
+      const { box } = layoutAnnotation(
+        resolution.resolved,
+        toPage,
+        k,
+        annotationAnchor(annotation, entry.view)
+      );
+      const ends = [resolution.resolved.from, resolution.resolved.to].map(
+        (point) => toPage(...point)
+      );
+      const axis = annotation.direction === 'horizontal' ? 0 : 1;
+      const [lo, hi] =
+        axis === 0
+          ? [outline.x, outline.x + outline.width]
+          : [outline.y, outline.y + outline.height];
+      const onOutline = (p: [number, number]) =>
+        Math.abs(p[axis] - lo) < 0.01 || Math.abs(p[axis] - hi) < 0.01;
+      const inside =
+        box.x >= outline.x &&
+        box.y >= outline.y &&
+        box.x + box.width <= outline.x + outline.width &&
+        box.y + box.height <= outline.y + outline.height;
+      return [{ overall: ends.every(onOutline), inside }];
+    });
+    // The 40 and 20 envelope outside; a hole's position beside the hole.
+    expect(placed.filter((p) => p.overall).every((p) => !p.inside)).toBe(true);
+    expect(placed.some((p) => !p.overall && p.inside)).toBe(true);
+    expectClearLayout(after, views, bodies);
   });
 
   it('stacks spans shortest nearest the part', async () => {
