@@ -109,6 +109,8 @@ export type GeometryWorkerRequest =
       sketchId?: SketchId;
       /** 'svg' only: false paints a white background behind the curves. */
       transparent?: boolean;
+      /** 'step' only: the name the file is saved under, for its header. */
+      fileName?: string;
     }
   | {
       /**
@@ -993,11 +995,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
       const text =
         request.format === 'step'
-          ? await exact.exportStep(
-              document,
-              request.bodyIds,
-              request.units ? { units: request.units } : {}
-            )
+          ? await exact.exportStep(document, request.bodyIds, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.fileName ? { fileName: request.fileName } : {})
+            })
           : await exact.exportStl(
               document,
               request.bodyIds,

@@ -16418,6 +16418,7 @@ export function App() {
       produce: async (options) => {
         const result = await geometry.exportModel('step', doc, exportBodyIds, {
           ...options,
+          fileName,
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units

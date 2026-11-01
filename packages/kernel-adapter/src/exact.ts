@@ -227,6 +227,14 @@ import {
   type ExportUnitOptions,
   type MeshExportTolerances
 } from './export-units';
+import {
+  finishStepExport,
+  stepTimestamp,
+  stepWriterOptions,
+  type StepExportMetadata,
+  type StepExportOptions
+} from './step-export-metadata';
+export { type StepExportOptions } from './step-export-metadata';
 export {
   DEFAULT_MESH_ANGULAR_TOLERANCE,
   type ExportUnitOptions,
@@ -667,14 +675,16 @@ export interface ExactKernelAdapter {
   /** Restores exact history for an older derived-cache hit without measuring meshes. */
   prepareMassPropertiesForDocument(document: ProjectDocument): Promise<number>;
   /**
-   * STEP of the given bodies, in millimetres unless `options.units` names
-   * another unit — then the geometry is scaled to it and the file's length
-   * unit says so.
+   * STEP (AP214) of the given bodies, in millimetres unless `options.units`
+   * names another unit — then the geometry is scaled to it and the file's
+   * length unit says so. The product is the document, each solid carries its
+   * body's name and display colour, and the header names `options.fileName`
+   * (the document name otherwise) and `options.timestamp` (now otherwise).
    */
   exportStep(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    options?: ExportUnitOptions
+    options?: StepExportOptions
   ): Promise<string>;
   /**
    * DXF R12 outline of one PLANAR face, in millimetres (or `options.units`)
@@ -3629,30 +3639,51 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     exportUnits: UnitSystem = 'mm'
   ): number[] {
+    return this.exportBodySolidsFor(
+      kernel,
+      build,
+      document,
+      bodyIds,
+      exportUnits
+    ).flatMap(({ solids }) => solids);
+  }
+
+  /** The export solids grouped by the body they belong to, in body order. */
+  private exportBodySolidsFor(
+    kernel: RemusKernel,
+    build: ExactBuildResult,
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    exportUnits: UnitSystem = 'mm'
+  ): { bodyId: BodyId; solids: number[] }[] {
     const hidden = getParameterHiddenBodyIds(document);
     // Consumed operands keep their retained shapes in the build, but they are
     // superseded bodies — exporting one would ship a dead body as if it were
     // the model. Skip them exactly like parameter-hidden bodies, so a stale
     // caller list degrades to "nothing left to export" instead of a silent
     // wrong file.
-    const solids = bodyIds
+    const bodies = bodyIds
       .filter((id) => !hidden.has(id) && !build.consumed.has(id))
-      .flatMap((bodyId) => {
+      .map((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
           throw new Error(`Body ${bodyId} has no exact geometry.`);
         }
-        return shape.solids;
-      });
-    if (solids.length === 0) {
+        return { bodyId, solids: shape.solids };
+      })
+      .filter(({ solids }) => solids.length > 0);
+    if (bodies.length === 0) {
       throw new Error('Select at least one body to export.');
     }
     const scale = exportLengthScale(document.units, exportUnits);
     return scale === 1
-      ? solids
-      : solids.map((solid) =>
-          kernel.copyAndTransformSolid(solid, uniformScaleMatrix(scale))
-        );
+      ? bodies
+      : bodies.map(({ bodyId, solids }) => ({
+          bodyId,
+          solids: solids.map((solid) =>
+            kernel.copyAndTransformSolid(solid, uniformScaleMatrix(scale))
+          )
+        }));
   }
 
   /**
@@ -3686,27 +3717,60 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async exportStep(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    options: ExportUnitOptions = {}
+    options: StepExportOptions = {}
   ): Promise<string> {
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
-      const exportSolids = this.exportSolidsFor(
+      const bodies = this.exportBodySolidsFor(
         kernel,
         build,
         document,
         bodyIds,
         units
       );
+      const bodyNodes = new Map(
+        listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
+      );
+      const featureKinds = new Map(
+        listNodesByKind(document, 'feature').map((feature) => [
+          feature.featureId,
+          feature.featureKind
+        ])
+      );
+      const metadata: StepExportMetadata = {
+        productName: document.name,
+        fileName: options.fileName ?? `${document.name}.step`,
+        timestamp: options.timestamp ?? stepTimestamp(new Date()),
+        solids: bodies.flatMap(({ bodyId, solids }) => {
+          const body = bodyNodes.get(bodyId);
+          const label = {
+            name: body?.name ?? '',
+            color: bodyDisplayColor(
+              body?.metadata,
+              body ? featureKinds.get(body.featureId) : undefined
+            )
+          };
+          return solids.map(() => label);
+        })
+      };
       // Never fuse: a boolean union changes the geometry (overlaps merge,
       // coincident faces weld). Every root of the arena document becomes its
       // own MANIFOLD_SOLID_BREP inside one shape representation, so the
       // bodies stay distinct through a round trip.
-      return declareStepLengthUnit(
-        decodeText(
-          io.exportStep(kernel.serializeSolids(new Uint32Array(exportSolids)))
+      return finishStepExport(
+        declareStepLengthUnit(
+          decodeText(
+            io.exportStepWithOptions(
+              kernel.serializeSolids(
+                new Uint32Array(bodies.flatMap(({ solids }) => solids))
+              ),
+              stepWriterOptions(metadata)
+            )
+          ),
+          units
         ),
-        units
+        metadata
       );
     });
   }

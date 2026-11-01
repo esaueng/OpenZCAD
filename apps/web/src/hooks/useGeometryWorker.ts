@@ -208,6 +208,8 @@ export interface GeometryWorkerApi {
       sketchId?: SketchId;
       /** 'svg' only: false paints a white background behind the curves. */
       transparent?: boolean;
+      /** 'step' only: the name the file is saved under, for its header. */
+      fileName?: string;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -1175,6 +1177,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             : {}),
           ...(options?.transparent !== undefined
             ? { transparent: options.transparent }
+            : {}),
+          ...(options?.fileName !== undefined
+            ? { fileName: options.fileName }
             : {})
         });
       });

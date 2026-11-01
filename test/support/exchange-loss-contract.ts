@@ -60,20 +60,20 @@ const MESH_DROPS = {
 export const EXCHANGE_LOSS_CONTRACT = {
   step: {
     kind: 'solid',
-    label: 'STEP (AP203)',
+    label: 'STEP (AP214)',
     keeps: [
       'body-count',
       'bounds',
       'volume',
       'watertight',
       'exact-faces',
-      'declared-units'
+      'declared-units',
+      'body-names',
+      'body-colors'
     ],
-    drops: ['body-names', 'body-colors', 'history'],
+    drops: ['history'],
     units: 'declared',
     notes: {
-      'body-names': 'Every product is written as remus_solid.',
-      'body-colors': 'No presentation styling is written.',
       history:
         'The reimport is one imported solid per body; features, sketches and parameters are not transferred.'
     }

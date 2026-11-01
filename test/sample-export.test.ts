@@ -127,7 +127,11 @@ describe('walkthrough bracket sample', { timeout: 30_000 }, () => {
     // Plate 60x8x30 plus the centered boss outside its footprint, minus the
     // coaxial drill through both.
     expect(bracket.volume).toBeGreaterThan(60 * 8 * 30);
-    const text = await adapter.exportStep(manager.document, [bracketBody]);
+    // A fixed header time stamp keeps the committed sample reproducible.
+    const text = await adapter.exportStep(manager.document, [bracketBody], {
+      fileName: 'parametric-bracket.step',
+      timestamp: '2026-01-01T00:00:00Z'
+    });
     expect(text).toContain('MANIFOLD_SOLID_BREP');
     // The exported file must reimport as one closed solid of the same size.
     const reimported = await adapter.inspectStep(text);
