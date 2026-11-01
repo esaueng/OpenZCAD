@@ -23,7 +23,9 @@ import {
 
 /**
  * Face-offset drag latency probe: pointer input to the WebGL frame that shows
- * the exact preview geometry, measured stage by stage. Measurement, not a CI
+ * the preview geometry, measured stage by stage. Exact and proxy frames are
+ * reported separately; release requires an accepted revision and ready frame.
+ * Measurement, not a CI
  * gate. Run deliberately:
  *
  *   OZ_PERF=1 pnpm exec playwright test perf-face-drag-trace --workers=1
@@ -167,6 +169,14 @@ async function traceDrag(
   reach *= REACH_SCALE;
   const box = (await canvas.boundingBox())!;
   const start = { x: box.x + handle.x, y: box.y + handle.y };
+  const revision = async () => {
+    const title = await page
+      .locator('.workspace-status-summary [title]')
+      .getAttribute('title');
+    return Number(title?.match(/rev (\d+)/)?.[1]);
+  };
+  const before = await revision();
+  expect(Number.isFinite(before)).toBe(true);
   await canvas.evaluate((element) =>
     element.addEventListener(
       'pointerdown',
@@ -239,6 +249,13 @@ async function traceDrag(
     },
     { start, handle, reach, moves: MOVES, interval: MOVE_INTERVAL_MS }
   );
+  // DOM-dispatched moves do not move the browser's physical cursor. Release
+  // from the final sample, or pointerup sees zero travel and cancels the edit.
+  await page.keyboard.down('Shift');
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * (reach / 3),
+    start.y + handle.dy * handle.pixelsPerUnit * (reach / 3)
+  );
   // Let the last requested value reach the screen before releasing.
   await page.waitForFunction(
     () => {
@@ -268,6 +285,37 @@ async function traceDrag(
     undefined,
     { timeout: 120_000 }
   );
+  const releaseAt = await page.evaluate(() => performance.now());
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  // Disappearance of "Checking" can race its first render. Require an
+  // accepted revision and an installed frame, including for proxy previews.
+  await expect.poll(revision, { timeout: 120_000 }).toBeGreaterThan(before);
+  // A commit may reuse the exact preview already installed. Its authoritative
+  // revision still records a ready frame through editTrace, without a mesh swap.
+  const readyFrame = await page.waitForFunction(
+    ({ before, releaseAt }) => {
+      const entry = performance
+        .getEntriesByName('oz:edit.frame')
+        .find((entry) => {
+          const detail = (entry as PerformanceMeasure).detail as {
+            version?: number;
+            analysis?: string;
+          } | null;
+          return (
+            detail?.version !== undefined &&
+            detail.version > before &&
+            detail.analysis === 'ready' &&
+            entry.startTime + entry.duration > releaseAt
+          );
+        });
+      return entry ? entry.startTime + entry.duration : undefined;
+    },
+    { before, releaseAt },
+    { timeout: 120_000 }
+  );
+  const committedFrameAt = await readyFrame.jsonValue();
+  await readyFrame.dispose();
   const fileName = test.info().title.replace(/\W+/g, '-');
   if (profiler) {
     const { profile } = await profiler.send('Profiler.stop');
@@ -289,33 +337,47 @@ async function traceDrag(
       JSON.stringify({ traceEvents: timelineEvents })
     );
   }
-  const releaseAt = await page.evaluate(() => performance.now());
-  await page.mouse.up();
-  await expect(
-    page.getByText('Checking geometry…', { exact: true })
-  ).toHaveCount(0, { timeout: 120_000 });
-  return page.evaluate((releaseAt) => {
-    const scope = window as typeof window & {
-      __ozFaceDragTrace: FaceDragTraceEvent[];
-      __ozLongTasks: { t: number; ms: number }[];
-      __ozReactCommits?: number;
-    };
-    const trace = scope.__ozFaceDragTrace;
-    scope.__ozFaceDragTrace = undefined as never;
-    const gl = document.createElement('canvas').getContext('webgl2');
-    const info = gl?.getExtension('WEBGL_debug_renderer_info');
-    return {
-      gpu: info ? String(gl!.getParameter(info.UNMASKED_RENDERER_WEBGL)) : null,
-      devicePixelRatio: window.devicePixelRatio,
-      trace,
-      releaseAt,
-      releasedAt: performance.now(),
-      reactCommits: scope.__ozReactCommits ?? null,
-      longTasks: scope.__ozLongTasks.filter(
-        (task) => task.t >= (trace[0]?.t ?? 0)
-      )
-    };
-  }, releaseAt);
+  return page.evaluate(
+    ({ releaseAt, committedFrameAt }) => {
+      const scope = window as typeof window & {
+        __ozFaceDragTrace: FaceDragTraceEvent[];
+        __ozLongTasks: { t: number; ms: number }[];
+        __ozReactCommits?: number;
+      };
+      const trace = scope.__ozFaceDragTrace;
+      scope.__ozFaceDragTrace = undefined as never;
+      const gl = document.createElement('canvas').getContext('webgl2');
+      const info = gl?.getExtension('WEBGL_debug_renderer_info');
+      return {
+        gpu: info
+          ? String(gl!.getParameter(info.UNMASKED_RENDERER_WEBGL))
+          : null,
+        devicePixelRatio: window.devicePixelRatio,
+        trace,
+        proxyFrameLatenciesMs: performance
+          .getEntriesByName('oz:offset-face.proxy-frame')
+          .filter(
+            (entry) =>
+              entry.startTime >= (trace[0]?.t ?? 0) &&
+              entry.startTime <= releaseAt
+          )
+          .map((entry) => {
+            const detail = (entry as PerformanceMark).detail as {
+              latencyMs?: number;
+            } | null;
+            return detail?.latencyMs ?? NaN;
+          }),
+        releaseAt,
+        committedFrameAt,
+        releasedAt: performance.now(),
+        reactCommits: scope.__ozReactCommits ?? null,
+        longTasks: scope.__ozLongTasks.filter(
+          (task) => task.t >= (trace[0]?.t ?? 0)
+        )
+      };
+    },
+    { releaseAt, committedFrameAt }
+  );
 }
 
 function record(
@@ -324,7 +386,9 @@ function record(
   result: Awaited<ReturnType<typeof traceDrag>>
 ): FaceDragTraceSummary {
   const summary = summarizeFaceDragTrace(result.trace, {
-    releaseAt: result.releaseAt
+    releaseAt: result.releaseAt,
+    committedFrameAt: result.committedFrameAt,
+    proxyFrameLatenciesMs: result.proxyFrameLatenciesMs
   });
   const line = {
     label,
@@ -367,7 +431,11 @@ test('traces a chamfered cylinder top-cap drag', async ({ page }) => {
     { features: 2, faces: 5 },
     await traceDrag(page, canvas, handle, 12)
   );
-  expect(summary.presentedFrames).toBeGreaterThan(0);
+  // The active profile may have a disposable proxy instead of exact streaming.
+  // Both need a real visual frame and a separately validated commit.
+  if (summary.requests > 0) expect(summary.presentedFrames).toBeGreaterThan(0);
+  else expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+  expect(summary.releaseToFrameMs).not.toBeNull();
 });
 
 test('traces a rounded box top-face drag', async ({ page }) => {
@@ -390,6 +458,8 @@ test('traces a rounded box top-face drag', async ({ page }) => {
     await traceDrag(page, canvas, handle, 12)
   );
   expect(summary.pointerEvents).toBeGreaterThan(0);
+  expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+  expect(summary.releaseToFrameMs).not.toBeNull();
 });
 
 test('traces a native hammer-holder arm drag', async ({ page }) => {
@@ -404,7 +474,11 @@ test('traces a native hammer-holder arm drag', async ({ page }) => {
     { features: secondArm.document.featureOrder.length },
     await traceDrag(page, canvas, handle, 6)
   );
-  expect(summary.presentedFrames).toBeGreaterThan(0);
+  // The active profile may have a disposable proxy instead of exact streaming.
+  // Both need a real visual frame and a separately validated commit.
+  if (summary.requests > 0) expect(summary.presentedFrames).toBeGreaterThan(0);
+  else expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+  expect(summary.releaseToFrameMs).not.toBeNull();
 });
 
 test('traces an imported filleted plate face drag', async ({ page }) => {
@@ -427,7 +501,11 @@ test('traces an imported filleted plate face drag', async ({ page }) => {
     { features: document.featureOrder.length },
     await traceDrag(page, canvas, handle, 3)
   );
-  expect(summary.presentedFrames).toBeGreaterThan(0);
+  // The active profile may have a disposable proxy instead of exact streaming.
+  // Both need a real visual frame and a separately validated commit.
+  if (summary.requests > 0) expect(summary.presentedFrames).toBeGreaterThan(0);
+  else expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+  expect(summary.releaseToFrameMs).not.toBeNull();
 });
 
 test('traces an imported hammer-holder face drag', async ({ page }) => {
@@ -450,5 +528,9 @@ test('traces an imported hammer-holder face drag', async ({ page }) => {
     { features: document.featureOrder.length, faces: 160 },
     await traceDrag(page, canvas, handle, -4)
   );
-  expect(summary.presentedFrames).toBeGreaterThan(0);
+  // The active profile may have a disposable proxy instead of exact streaming.
+  // Both need a real visual frame and a separately validated commit.
+  if (summary.requests > 0) expect(summary.presentedFrames).toBeGreaterThan(0);
+  else expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+  expect(summary.releaseToFrameMs).not.toBeNull();
 });

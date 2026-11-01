@@ -14,6 +14,9 @@ export interface FaceDragTraceSummary {
   replies: number;
   refusals: number;
   presentedFrames: number;
+  /** Disposable client-side previews; never counted as exact geometry. */
+  proxyPresentedFrames: number;
+  pointerToProxyFrameMs: Distribution;
   /** First pointer value applied to the first frame showing exact geometry. */
   firstGeometryMs: number | null;
   /**
@@ -44,7 +47,7 @@ export interface FaceDragTraceSummary {
     installMs: Distribution;
     installedToFrameMs: Distribution;
   };
-  /** Release to the first frame installed after it (validated commit). */
+  /** Release to the authoritative ready frame, when supplied by editTrace. */
   releaseToFrameMs: number | null;
 }
 
@@ -74,7 +77,11 @@ const sameValue = (a: number | undefined, b: number | undefined) =>
  */
 export function summarizeFaceDragTrace(
   events: readonly FaceDragTraceEvent[],
-  options: { releaseAt?: number } = {}
+  options: {
+    releaseAt?: number;
+    committedFrameAt?: number;
+    proxyFrameLatenciesMs?: readonly number[];
+  } = {}
 ): FaceDragTraceSummary {
   const trace = [...events].sort((a, b) => a.t - b.t);
   const releaseAt = options.releaseAt ?? Number.POSITIVE_INFINITY;
@@ -180,6 +187,13 @@ export function summarizeFaceDragTrace(
   const releaseFrame = afterRelease
     ? presentedFrames.find((event) => event.t >= afterRelease.t)
     : undefined;
+  // A validated commit can reuse an already presented preview. A changed-mesh
+  // frame then never arrives; use the revision's authoritative ready frame.
+  // Keep the original install-based estimate for historical trace files.
+  const committedFrameAt = options.committedFrameAt ?? releaseFrame?.t;
+  const proxyLatencies = (options.proxyFrameLatenciesMs ?? []).filter(
+    (latency) => Number.isFinite(latency) && latency >= 0
+  );
 
   const detail = (key: string) =>
     replies
@@ -191,6 +205,8 @@ export function summarizeFaceDragTrace(
     replies: replies.length,
     refusals: during.filter((event) => event.kind === 'refusal').length,
     presentedFrames: presented.length,
+    proxyPresentedFrames: proxyLatencies.length,
+    pointerToProxyFrameMs: distribution(proxyLatencies),
     firstGeometryMs:
       presented[0] && dragStart !== undefined
         ? Math.round((presented[0].frameAt - dragStart) * 10) / 10
@@ -234,8 +250,11 @@ export function summarizeFaceDragTrace(
       installedToFrameMs: distribution(installedToFrame)
     },
     releaseToFrameMs:
-      releaseFrame && Number.isFinite(releaseAt)
-        ? Math.round((releaseFrame.t - releaseAt) * 10) / 10
+      committedFrameAt !== undefined &&
+      Number.isFinite(releaseAt) &&
+      Number.isFinite(committedFrameAt) &&
+      committedFrameAt >= releaseAt
+        ? Math.round((committedFrameAt - releaseAt) * 10) / 10
         : null
   };
 }

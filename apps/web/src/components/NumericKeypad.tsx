@@ -48,6 +48,8 @@ export interface KeypadRequest {
   dimensionMode?: DimensionMode;
   /** Total extent whose entered value normalizes to a signed offset. */
   totalBaseline?: number;
+  /** Signed offset before a measured Total was rounded for its prefill. */
+  initialOffset?: number;
   /** -1 when the handle's drag subtracts from that total; default +1. */
   totalSense?: 1 | -1;
   /**
@@ -235,6 +237,7 @@ export function NumericKeypad({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectInitial = useRef(request.selectInitial ?? true);
   const initialPreviewed = useRef(false);
+  const untouchedPrefill = useRef(request.selectInitial !== false);
   const evaluation = evaluateKeypadInput(
     value,
     entryUnit,
@@ -242,10 +245,21 @@ export function NumericKeypad({
     scope,
     dimensionMode
   );
+  const unchangedTotal = (raw: string, unit: KeypadUnit) =>
+    request.kind === 'offset' &&
+    request.totalBaseline !== undefined &&
+    request.initialOffset !== undefined &&
+    untouchedPrefill.current &&
+    raw === request.initial &&
+    unit === units;
+  const normalize = (evaluated: number, raw: string, unit: KeypadUnit) =>
+    unchangedTotal(raw, unit)
+      ? request.initialOffset!
+      : offsetFromTotal(evaluated, request);
   const normalizedValue =
     evaluation.value === undefined
       ? undefined
-      : offsetFromTotal(evaluation.value, request);
+      : normalize(evaluation.value, value, entryUnit);
   const normalizedRaw =
     evaluation.normalizedRaw === undefined
       ? undefined
@@ -398,6 +412,7 @@ export function NumericKeypad({
   useEffect(() => () => onEntryError?.(null), [onEntryError]);
 
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
+    if (next !== value) untouchedPrefill.current = false;
     const typedMode = dimensionModeForInput(next, scope);
     const nextMode = typedMode ?? requestedMode;
     if (typedMode && typedMode !== dimensionMode) {
@@ -407,7 +422,7 @@ export function NumericKeypad({
     setValue(next);
     const result = evaluateKeypadInput(next, entryUnit, units, scope, nextMode);
     if (result.ok && result.value !== undefined) {
-      const previewed = offsetFromTotal(result.value, request);
+      const previewed = normalize(result.value, next, entryUnit);
       if (
         result.isExpression &&
         request.totalBaseline === undefined &&
@@ -429,7 +444,8 @@ export function NumericKeypad({
       normalizedValue !== undefined &&
       normalizedRaw !== undefined
     ) {
-      onCommit(normalizedValue, normalizedRaw);
+      if (unchangedTotal(value, entryUnit) && normalizedValue === 0) onCancel();
+      else onCommit(normalizedValue, normalizedRaw);
     }
   };
 
@@ -544,6 +560,7 @@ export function NumericKeypad({
               // Unit chips only rescale plain numbers, not expressions.
               disabled={evaluation.isExpression}
               onClick={() => {
+                if (unit !== entryUnit) untouchedPrefill.current = false;
                 setEntryUnit(unit);
                 const result = evaluateKeypadInput(
                   value,
@@ -553,7 +570,7 @@ export function NumericKeypad({
                   dimensionMode
                 );
                 if (result.ok && result.value !== undefined) {
-                  onPreview(offsetFromTotal(result.value, request));
+                  onPreview(normalize(result.value, value, unit));
                 }
               }}
             >

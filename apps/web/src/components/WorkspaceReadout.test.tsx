@@ -38,6 +38,7 @@ describe('WorkspaceReadout', () => {
         onToggleLog={vi.fn()}
         {...SUMMARY}
         prompt={prompt}
+        instructionDetails="Total can change when a hole lies behind the picked point."
       />
     );
     const help = screen.getByLabelText('Operation instructions');
@@ -46,6 +47,10 @@ describe('WorkspaceReadout', () => {
     await user.click(help);
     expect(disclosure.open).toBe(true);
     expect(disclosure.querySelector('p')).toHaveTextContent(prompt);
+    expect(disclosure.querySelector('p')).toHaveTextContent('Total can change');
+    expect(document.querySelector('.workspace-hint')).not.toHaveTextContent(
+      'Total can change'
+    );
     await user.click(help);
     expect(disclosure.open).toBe(false);
   });

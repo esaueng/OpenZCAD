@@ -97,11 +97,18 @@ export function PanelFrame({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const onNaturalHeight = dock?.onNaturalHeight;
+  const reportNaturalHeight = useRef(onNaturalHeight);
+  reportNaturalHeight.current = onNaturalHeight;
+  const measuresNaturalHeight = Boolean(onNaturalHeight);
+  // Without ResizeObserver retain the render-driven fallback. In browsers
+  // with it, a fresh callback alone must not force synchronous layout again.
+  const fallbackMeasure =
+    typeof ResizeObserver === 'undefined' ? onNaturalHeight : null;
   useLayoutEffect(() => {
     const section = sectionRef.current;
     const body = bodyRef.current;
     const content = contentRef.current;
-    if (!onNaturalHeight || !section || !body || !content) return;
+    if (!measuresNaturalHeight || !section || !body || !content) return;
     const measure = () => {
       // The frame as drawn, less the body's box, plus the body's padding and
       // its content at its own height: what the panel takes with room to
@@ -115,7 +122,7 @@ export function PanelFrame({
         body.getBoundingClientRect().height +
         padding +
         content.getBoundingClientRect().height;
-      if (natural > 0) onNaturalHeight(Math.ceil(natural));
+      if (natural > 0) reportNaturalHeight.current?.(Math.ceil(natural));
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
@@ -126,7 +133,13 @@ export function PanelFrame({
       if (child !== body) observer.observe(child);
     }
     return () => observer.disconnect();
-  }, [onNaturalHeight]);
+  }, [
+    id,
+    controls.placement,
+    controls.compact,
+    measuresNaturalHeight,
+    fallbackMeasure
+  ]);
   return (
     <section
       ref={sectionRef}

@@ -24298,7 +24298,9 @@ export function App() {
             )
           : '',
       unitKind: 'length',
-      ...(totalBaseline === undefined ? {} : { totalBaseline, totalSense })
+      ...(totalBaseline === undefined
+        ? {}
+        : { totalBaseline, totalSense, initialOffset: currentOffset })
     });
     return true;
   }
@@ -29293,11 +29295,11 @@ export function App() {
             geometryTrace={
               !previewDoc &&
               !currentFaceGeometryPreview &&
-              (currentGeometrySnapshot || exactGeometryReady)
+              (currentGeometrySnapshot || displayedGeometryComplete)
                 ? {
                     projectId: doc.projectId,
                     version: doc.version,
-                    analysis: currentGeometrySnapshot ? 'pending' : 'ready'
+                    analysis: displayedGeometryComplete ? 'ready' : 'pending'
                   }
                 : undefined
             }
@@ -30756,6 +30758,13 @@ export function App() {
             logOpen={activityLogOpen}
             onToggleLog={() => setActivityLogOpen((open) => !open)}
             prompt={workspacePrompt}
+            instructionDetails={
+              displayedGeometryComplete && offsetHandleTarget
+                ? offsetHandleTarget.totalBaseline === undefined
+                  ? 'Total measures material behind the picked point using the displayed mesh. Holes or a different pick location can change it. Offset shows only the signed distance of this edit.'
+                  : 'Total shows the feature dimension. Offset shows only the signed distance of this edit.'
+                : null
+            }
             pick={
               railPick ? (
                 <SelectionReadout

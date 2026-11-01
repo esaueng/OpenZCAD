@@ -16,6 +16,7 @@
   "extrude-through-all.spec.ts": 8,
   "face-drag-continuity.spec.ts": 12,
   "face-offset-continuity.spec.ts": 30,
+  "face-offset-total.spec.ts": 60,
   "feature-history.spec.ts": 21,
   "gear-face-width.spec.ts": 30,
   "gear-height-preview.spec.ts": 47.5,

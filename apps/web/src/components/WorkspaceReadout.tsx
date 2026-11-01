@@ -52,6 +52,8 @@ interface WorkspaceReadoutProps {
    * selection dock carry it visually now; it stays here for assistive tech.
    */
   prompt: string | null;
+  /** Additional measurement guidance, exposed with the full instructions. */
+  instructionDetails?: string | null;
   /**
    * What is picked: its name and key measurement, read at the head of the
    * bar's guidance line. It stays while a status message has the toast,
@@ -104,6 +106,7 @@ export function WorkspaceReadout({
   logOpen,
   onToggleLog,
   prompt,
+  instructionDetails = null,
   pick = null,
   commandRow = null,
   projectName,
@@ -279,7 +282,16 @@ export function WorkspaceReadout({
             <summary aria-label="Operation instructions">
               <CircleHelp size={15} aria-hidden="true" />
             </summary>
-            <p>{prompt}</p>
+            <p>
+              {prompt}
+              {instructionDetails && (
+                <>
+                  <br />
+                  <br />
+                  {instructionDetails}
+                </>
+              )}
+            </p>
           </details>
         )}
       </div>

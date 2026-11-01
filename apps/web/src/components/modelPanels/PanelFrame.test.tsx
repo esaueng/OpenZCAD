@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -104,6 +104,63 @@ describe('PanelFrame in a dock', () => {
 });
 
 describe('PanelFrame hugging its content', () => {
+  it('keeps the observer across callback changes and measures real content resizes', () => {
+    let notify = () => {};
+    const disconnect = vi.fn();
+    const observe = vi.fn();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          notify = callback;
+        }
+        observe = observe;
+        disconnect = disconnect;
+      }
+    );
+    let contentHeight = 120;
+    const rect = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element) {
+        return {
+          height: this.classList.contains('model-panel-content')
+            ? contentHeight
+            : this.classList.contains('model-panel-body')
+              ? 360
+              : 400
+        } as DOMRect;
+      });
+    try {
+      const first = vi.fn();
+      const second = vi.fn();
+      const panel = (callback: (height: number) => void) => (
+        <PanelFrame
+          id="history"
+          count={2}
+          controls={frame(dockControls({ onNaturalHeight: callback }))}
+        >
+          <p>Rows</p>
+        </PanelFrame>
+      );
+      const view = render(panel(first));
+      expect(first).toHaveBeenLastCalledWith(160);
+      rect.mockClear();
+      observe.mockClear();
+      view.rerender(panel(second));
+      expect(rect).not.toHaveBeenCalled();
+      expect(disconnect).not.toHaveBeenCalled();
+      expect(observe).not.toHaveBeenCalled();
+      contentHeight = 180;
+      act(() => notify());
+      expect(second).toHaveBeenLastCalledWith(220);
+      expect(first).toHaveBeenCalledTimes(1);
+      view.unmount();
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally {
+      rect.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
   it('reports the frame and the content at its own height', () => {
     const heights: Record<string, number> = {
       'model-panel': 400,

@@ -12,6 +12,47 @@ const at = (
 ): FaceDragTraceEvent => ({ t, kind, ...fields });
 
 describe('face-drag trace summary', () => {
+  it('reports proxy frames separately from exact geometry and the accepted commit', () => {
+    const summary = summarizeFaceDragTrace(
+      [at(0, 'pointer', { value: 1 }), at(8, 'frame')],
+      {
+        releaseAt: 10,
+        committedFrameAt: 25,
+        proxyFrameLatenciesMs: [8, 9, NaN, -1]
+      }
+    );
+    expect(summary.proxyPresentedFrames).toBe(2);
+    expect(summary.pointerToProxyFrameMs.max).toBe(9);
+    expect(summary.presentedFrames).toBe(0);
+    expect(summary.pointerToPresentedMs.n).toBe(0);
+    expect(summary.releaseToFrameMs).toBe(15);
+  });
+
+  it('uses the accepted ready frame when a commit reuses its exact preview', () => {
+    const trace = [
+      at(10, 'install', { detail: { renderChanged: 1 } }),
+      at(12, 'frame', { detail: { presented: 1 } }),
+      at(25, 'install', { detail: { renderChanged: 0 } }),
+      at(30, 'frame')
+    ];
+    expect(
+      summarizeFaceDragTrace(trace, { releaseAt: 20 }).releaseToFrameMs
+    ).toBeNull();
+    expect(
+      summarizeFaceDragTrace(trace, { releaseAt: 20, committedFrameAt: 30 })
+        .releaseToFrameMs
+    ).toBe(10);
+    // A later unrelated geometry installation must not replace that witness.
+    trace.push(
+      at(40, 'install', { detail: { renderChanged: 1 } }),
+      at(50, 'frame', { detail: { presented: 1 } })
+    );
+    expect(
+      summarizeFaceDragTrace(trace, { releaseAt: 20, committedFrameAt: 30 })
+        .releaseToFrameMs
+    ).toBe(10);
+  });
+
   it('measures each pointer event to the frame that first shows it or a later value', () => {
     const summary = summarizeFaceDragTrace(
       [
