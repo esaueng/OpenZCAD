@@ -541,9 +541,12 @@ describe('StartScreen library discovery', () => {
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(2);
-      // Pinned and the rest as two unlabelled grids, as when loaded.
+      // Pinned and the rest as two unlabelled placeholder grids, as when
+      // loaded.
       expect(
-        container.querySelectorAll('.start-body > .start-tile-grid')
+        container.querySelectorAll(
+          '.start-body > .start-tile-grid[aria-hidden="true"]'
+        )
       ).toHaveLength(2);
       expect(container.querySelector('.start-shelf-group')).toBeNull();
       localStorage.removeItem(key);
@@ -622,7 +625,9 @@ describe('StartScreen library discovery', () => {
         busy: true
       });
       expect(
-        container.querySelectorAll('.start-body > .start-tile-grid')
+        container.querySelectorAll(
+          '.start-body > .start-tile-grid[aria-hidden="true"]'
+        )
       ).toHaveLength(2);
       expect(container.querySelector('.start-shelf-group')).toBeNull();
       expect(
