@@ -149,7 +149,7 @@ test(
     await expect(
       page
         .getByRole('status')
-        .filter({ hasText: 'This share link is no longer available' })
+        .filter({ hasText: 'It may have expired or been revoked' })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await expect(
       page.getByRole('button', { name: 'Make a copy', exact: true })
