@@ -143,7 +143,10 @@ import {
   exactIntersectWithCancellation,
   throwIfBuildCancelled
 } from './exact-cancellation';
-import { meshBooleanUnsupportedError } from './imported-mesh';
+import {
+  meshBooleanUnsupportedError,
+  MeshConversionError
+} from './imported-mesh';
 import {
   importedMeshStl,
   importedMeshTriangles
@@ -267,17 +270,41 @@ function buildImportedMeshFeature(
     // The kernel's own STL importer owns vertex welding and shell
     // orientation, so the document's triangle soup goes back through
     // it rather than being re-derived here — embedded or referenced alike.
-    const solid = importMeshSolid(
-      kernel,
-      importedMeshStl({
-        sourceName: data.sourceName,
-        triangleCount: data.triangleCount,
-        ...importedMeshTriangles(data, importSources)
-      })
-    );
+    const triangles = importedMeshTriangles(data, importSources);
+    // Validate persisted data before entering the conversion fallback.
+    const stl = importedMeshStl({
+      sourceName: data.sourceName,
+      triangleCount: data.triangleCount,
+      ...triangles
+    });
+    let shape: ExactShape;
+    try {
+      const solid = importMeshSolid(kernel, stl, (message) =>
+        raiseFeatureWarning(result, feature, message, 'advisory')
+      );
+      shape = { solids: [solid] };
+    } catch (error) {
+      if (!(error instanceof MeshConversionError) || data.triangleCount === 0) {
+        throw error;
+      }
+      shape = {
+        solids: [],
+        referenceMesh: {
+          vertices: Float64Array.from(triangles.vertices),
+          indices: Uint32Array.from(triangles.indices)
+        }
+      };
+      raiseFeatureWarning(
+        result,
+        feature,
+        'Imported as a mesh reference. Solid modeling and solid volume are unavailable.\n' +
+          error.message,
+        'advisory'
+      );
+    }
     result.meshBodies.add(feature.bodyId);
     result.shapes.set(feature.bodyId, {
-      solids: [solid],
+      ...shape,
       lineage: remusHashOnlyLineage(
         'imported-mesh',
         'Imported meshes carry no feature provenance; every facet is source-file data.'
@@ -3302,6 +3329,19 @@ export function buildFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode
 ): void {
+  const data = feature.data;
+  const targets = [
+    ...('targetBodyId' in data && data.targetBodyId ? [data.targetBodyId] : []),
+    ...('targetBodyIds' in data ? data.targetBodyIds : [])
+  ];
+  if (
+    data.featureKind !== 'transform' &&
+    targets.some((id) => ctx.result.shapes.get(id)?.referenceMesh)
+  ) {
+    throw new Error(
+      'This body is a mesh reference. Solid modeling requires a sewable mesh or an exact body.'
+    );
+  }
   switch (feature.data.featureKind) {
     case 'sketch':
       buildSketchFeature(ctx, feature, feature.data);

@@ -77,11 +77,11 @@ interface MeshPlacement {
  * That rebuild is run at the scale the document will store, which is why
  * `documentUnits` is required rather than assumed. The sew tolerance the
  * rebuild uses is derived from the numbers it is handed, so the same triangles
- * checked in millimetres and stored in metres are two different questions: a
- * 0.0002 mm plate sews cleanly as millimetres and collapses as metres —
- * measured on the pin — which is exactly the success-then-no-body this check
- * exists to close. The returned vertices are still millimetres; only the check
- * is scaled, as the commit will scale them.
+ * checked in millimetres and stored in metres can be different questions.
+ * Sewing now retries below the shortest edge, but the translator still has
+ * its own geometric tolerance, so the check must use the stored scale. The
+ * returned vertices are still millimetres; only the check is scaled, as the
+ * commit will scale them.
  */
 export async function importMeshFile(
   format: MeshImportFormat,

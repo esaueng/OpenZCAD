@@ -1,5 +1,8 @@
 import type { FeatureNode } from '@openzcad/shared';
 
+/** A readable triangle mesh that the file translator cannot make a B-rep. */
+export class MeshConversionError extends Error {}
+
 // Keep the existing mesh handoff exports while the Worker build places its
 // payload helpers in a separate chunk behind the exact adapter's lazy load.
 export {

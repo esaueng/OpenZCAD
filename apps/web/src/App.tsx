@@ -7665,7 +7665,8 @@ export function App() {
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
-        exportable: body.exportableStep && !body.consumed,
+        exportable:
+          (body.exportableStep || body.meshReference === true) && !body.consumed,
         hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
@@ -31441,7 +31442,9 @@ export function App() {
                 }
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
-                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
+                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId,
+                  meshReference:
+                    doc.derived.bodyRepresentations[bodyId]?.meshReference
                 }))}
                 revision={doc.version}
                 onClose={() => setMeshExportOpen(false)}

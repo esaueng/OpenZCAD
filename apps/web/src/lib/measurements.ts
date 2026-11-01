@@ -372,6 +372,8 @@ export function measurementSelectionFailure(
   >
 ): string | null {
   if (selection.kind === 'body') {
+    if (body.meshReference)
+      return 'Solid volume is unavailable for a mesh reference.';
     return null;
   }
   const found =
@@ -925,6 +927,7 @@ export function createSmartMeasurement(
     visible: true
   };
   if (selection.kind === 'body') {
+    if (body.meshReference) return null;
     const components = vector(
       body.bbox.max.x - body.bbox.min.x,
       body.bbox.max.y - body.bbox.min.y,
