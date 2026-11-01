@@ -154,6 +154,12 @@ export interface HistoryTimelineProps {
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onResumeHistory(): void;
   onReorderFeature(featureId: FeatureId, toIndex: number): void;
+  /**
+   * An exact operation is still running. A reorder started now would be
+   * refused as busy, and repeated arrow presses would leave an order nobody
+   * chose, so the grips hold still until it finishes.
+   */
+  reorderBusy?: boolean;
   /** Renames a feature in place. Without it the row offers no rename. */
   onRenameFeature?(featureId: FeatureId, name: string): void;
 }
@@ -358,6 +364,7 @@ export function HistoryTimeline({
   onRollbackAfterFeature,
   onResumeHistory,
   onReorderFeature,
+  reorderBusy = false,
   onRenameFeature
 }: HistoryTimelineProps) {
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
@@ -1017,7 +1024,7 @@ export function HistoryTimeline({
                 );
               }}
               onDrop={(event) => {
-                if (filtering || !dragFeatureId) {
+                if (filtering || reorderBusy || !dragFeatureId) {
                   return;
                 }
                 event.preventDefault();
@@ -1035,10 +1042,16 @@ export function HistoryTimeline({
                 // step could jump past an invisible one: reorder only the
                 // whole history.
                 title={
-                  filtering ? 'Clear the filter to reorder' : 'Drag to reorder'
+                  filtering
+                    ? 'Clear the filter to reorder'
+                    : reorderBusy
+                      ? 'Reorder once the current rebuild finishes'
+                      : 'Drag to reorder'
                 }
                 disabled={filtering}
-                draggable={!filtering}
+                // Not `disabled`: that would drop keyboard focus mid-press.
+                aria-disabled={reorderBusy || undefined}
+                draggable={!filtering && !reorderBusy}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = 'move';
                   event.dataTransfer.setData('text/plain', feature.featureId);
@@ -1067,6 +1080,9 @@ export function HistoryTimeline({
                   }
                   event.preventDefault();
                   event.stopPropagation();
+                  if (reorderBusy) {
+                    return;
+                  }
                   // Clamped so the ends of the list are a no-op rather than
                   // a move to -1 or past the end. The command layer refuses
                   // those too, but a keypress that cannot do anything should
