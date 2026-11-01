@@ -962,6 +962,16 @@ button.save-state:focus-visible,
   .topbar-identity > .save-state {
     margin-inline: -5px;
   }
+
+  /* The lock is a fact about the project, so it sits close to the name
+     (10px from the units); the status then keeps its usual 14px. */
+  .topbar-identity > .encryption-menu {
+    margin-left: -7px;
+  }
+
+  .topbar-identity > .encryption-menu + .save-state {
+    margin-left: -12px;
+  }
 }
 
 @media (max-width: 1120px) {
