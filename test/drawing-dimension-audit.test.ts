@@ -586,15 +586,17 @@ describe('D06 dimension audit: blends', () => {
     const before = auditDrawingDimensions(sheetOf(bodyId), bodies, 'mm');
     // Its centre's height (10) followed from the slope and the right face:
     // asking for it gave the hammer holder's 32.76 and 43.24.
+    // The slope itself needs its angle and one corner: where it meets the
+    // top face z = 20, at x = 22.07. Its end at the blend follows.
     expect(messages(before.missing)).toEqual([
       'R5 blend radius.',
+      '45° slope to X.',
+      'X: nothing locates the corner of the 45° slope to X at x = 22.07 from the face at x = 0.',
       'X: nothing locates the face at x = 30 from the face at x = 0.',
       expect.stringMatching(/^Y: nothing locates the face at y = /),
       'Z: nothing locates the face at z = 20 from the face at z = 0.'
     ]);
-    expect(messages(before.unmeasurable)).toEqual([
-      'A sloped face, which needs an angle this check does not read yet.'
-    ]);
+    expect(before.unmeasurable).toEqual([]);
     const nearY = body.bbox.min.y;
     const bottom = lineEdge(
       body,

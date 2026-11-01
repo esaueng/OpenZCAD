@@ -25,6 +25,7 @@ import {
   plateOperations,
   roundedOperations,
   sheetOf,
+  slopedOperations,
   stepOperations
 } from './helpers/drawing-dimension-fixtures';
 import {
@@ -132,6 +133,39 @@ describe('D06 Auto-dimension: the corpus', () => {
     expect(kinds(plan.annotations)).toContain('radius');
     expect(audit).toMatchObject({ missing: [], redundant: [] });
     expect(audit.unchecked).toEqual([]);
+    expectClearLayout(after, views, bodies);
+  });
+
+  it('states a slope by its angle and one corner, and derives the rest', async () => {
+    const { bodies, bodyId } = await buildPart(adapter, slopedOperations());
+    const { before, plan, audit, after, views } = autoDimension(
+      sheetOf(bodyId),
+      bodies
+    );
+    expect(before.missing.map((entry) => entry.message)).toContain(
+      '45° slope to X.'
+    );
+    expect(kinds(plan.annotations)).toContain('angle');
+    const angle = plan.annotations.find((a) => a.kind === 'angle')!;
+    expect(angle.viewId).toBe(frontId);
+    const resolved = resolveDrawingAnnotation(
+      angle,
+      views.find((v) => v.view.viewId === frontId)!.view,
+      bodies,
+      'mm'
+    );
+    // Its edges meet at the slope's corner with the top face: 135° inside.
+    expect(resolved.ok && resolved.resolved.kind).toBe('angle');
+    if (resolved.ok && resolved.resolved.kind === 'angle')
+      expect(resolved.resolved.value).toBeCloseTo(135, 6);
+    expect(plan.skipped).toEqual([]);
+    expect(audit).toMatchObject({
+      missing: [],
+      redundant: [],
+      unmeasurable: [],
+      unchecked: []
+    });
+    expect(audit.stated).toBe(audit.required);
     expectClearLayout(after, views, bodies);
   });
 

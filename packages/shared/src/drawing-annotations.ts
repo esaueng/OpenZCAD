@@ -33,6 +33,9 @@ import type { DrawingViewId } from './drawings';
  * dimension point; a radius on a revolved blend's face seen side-on; and
  * provenance marking a dimension placed from raw geometry rather than a
  * recognized feature.
+ *
+ * Schema v50 adds a counterbored hole's callout: a diameter that also names
+ * the counterbore's rim, read as one "Ø THRU, CBORE Ø × depth DEEP" note.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -189,6 +192,13 @@ export interface DrawingRadialDimension extends DrawingDimensionBase {
   edge: DrawingEdgeRef;
   /** v48: how many like features this states, shown "4×". */
   count?: number;
+  /**
+   * v50: a counterbored hole's callout on a diameter. This is the
+   * counterbore's rim, coaxial with `edge` and larger; the callout reads the
+   * counterbore's Ø and depth, and the hole's depth or THRU, from the model
+   * each time it is drawn ("2× Ø5 THRU, CBORE Ø8 × 1.5 DEEP").
+   */
+  counterbore?: DrawingEdgeRef;
 }
 
 /**
@@ -598,6 +608,14 @@ export function drawingAnnotationError(
       return null;
     case 'radius':
     case 'diameter':
+      if (value.counterbore !== undefined) {
+        if (value.kind !== 'diameter')
+          return `${where} names a counterbore, which only a diameter callout states.`;
+        if (value.face !== undefined || value.side !== undefined)
+          return `${where} names a counterbore on a blend face.`;
+        const error = edgeRefError(value.counterbore);
+        if (error) return fail(error);
+      }
       if (value.face !== undefined || value.side !== undefined) {
         if (value.kind !== 'radius')
           return `${where} is a diameter of a blend face, which only a radius states.`;
@@ -640,7 +658,12 @@ export function drawingAnnotationEdges(
       return [];
     case 'radius':
     case 'diameter':
-      return 'face' in annotation ? [] : [annotation.edge];
+      return 'face' in annotation
+        ? []
+        : [
+            annotation.edge,
+            ...(annotation.counterbore ? [annotation.counterbore] : [])
+          ];
     default:
       return drawingAnnotationReferences(annotation) as DrawingEdgeRef[];
   }
@@ -665,7 +688,12 @@ export function drawingAnnotationReferences(
       ];
     case 'radius':
     case 'diameter':
-      return 'face' in annotation ? [annotation.face] : [annotation.edge];
+      return 'face' in annotation
+        ? [annotation.face]
+        : [
+            annotation.edge,
+            ...(annotation.counterbore ? [annotation.counterbore] : [])
+          ];
     case 'angle':
       return [...annotation.edges];
     case 'chamfer':

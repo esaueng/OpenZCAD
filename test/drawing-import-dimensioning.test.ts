@@ -250,15 +250,15 @@ describe('D06 slice D: prismatic imports', () => {
       'Z: nothing locates the face at z = 5 from the face at z = 0.',
       'Z: nothing locates the face at z = 8 from the face at z = 0.'
     ]);
+    // v50: one callout states both diameters and the counterbore's depth,
+    // so no span to its floor (z = 5) is placed.
     expect(labels(after, plan.annotations, bodies)).toEqual([
-      '2× Ø6',
-      '2× Ø11',
+      '2× Ø6 THRU, CBORE Ø11 × 3 DEEP',
       '10',
       '30',
       '40',
       '15',
       '30',
-      '5',
       '8'
     ]);
     expect(audit).toMatchObject({
@@ -299,6 +299,54 @@ describe('D06 slice D: prismatic imports', () => {
         (annotation) => annotation.provenance?.basis !== undefined
       )
     ).toEqual([]);
+  });
+});
+
+describe('Counterbored hole callouts (schema v50)', () => {
+  it('states both diameters and the bore depth, and calls a span to its floor repeated', async () => {
+    const { document, bodyId: sourceId } = counterboredPlateDocument();
+    const { bodies, bodyId } = await importAsStep(adapter, document, sourceId);
+    const sheet = sheetOf(bodyId, [], ['top', 'front']);
+    const first = autoDimension(sheet, bodies);
+    const callout = first.plan.annotations.find(
+      (annotation) =>
+        annotation.kind === 'diameter' && annotation.counterbore !== undefined
+    )!;
+    expect(callout).toBeDefined();
+    // The callout alone states the three requirements it covers; the bore's
+    // floor and the top it opens from then need one span to z = 0, not two.
+    const alone = auditDrawingDimensions(
+      { ...sheet, annotations: [callout] },
+      bodies,
+      'mm'
+    );
+    expect(alone.stated).toBe(3);
+    expect(
+      alone.missing.filter((entry) => entry.message.startsWith('Z:'))
+    ).toHaveLength(1);
+    // Without the callout, both heights get a span; with it, the second
+    // closes a chain through its depth.
+    // The same diameter without its counterbore: a plain Ø6.
+    const diameter: DrawingAnnotation = { ...callout };
+    if (diameter.kind === 'diameter') delete diameter.counterbore;
+    const plain = autoDimension(
+      sheetOf(bodyId, [diameter], ['top', 'front']),
+      bodies
+    );
+    const heights = plain.plan.annotations.filter(
+      (annotation) =>
+        annotation.kind === 'linear' &&
+        annotation.provenance?.requirement.startsWith('Z:')
+    );
+    expect(heights).toHaveLength(2);
+    const twice = auditDrawingDimensions(
+      { ...sheet, annotations: [callout, ...heights] },
+      bodies,
+      'mm'
+    );
+    expect(twice.redundant.map((entry) => entry.reason)).toEqual([
+      'closed-chain'
+    ]);
   });
 });
 
@@ -378,6 +426,32 @@ describe('D06 slice D: schema v49 annotations', () => {
     expect(
       error({ ...base, kind: 'diameter', face: face(14), side: 'high' })
     ).toBe('It is a diameter of a blend face, which only a radius states.');
+    // v50: a counterbore belongs to a diameter callout on an edge.
+    const edge = { bodyId: 'body_a', hash: 21 };
+    expect(
+      error({
+        ...base,
+        kind: 'diameter',
+        edge,
+        counterbore: { ...edge, hash: 22 }
+      })
+    ).toBeNull();
+    expect(
+      error({
+        ...base,
+        kind: 'radius',
+        edge,
+        counterbore: { ...edge, hash: 22 }
+      })
+    ).toBe('It names a counterbore, which only a diameter callout states.');
+    expect(
+      error({
+        ...base,
+        kind: 'diameter',
+        edge,
+        counterbore: { bodyId: 'body_a' }
+      })
+    ).not.toBeNull();
     expect(
       error({
         ...base,

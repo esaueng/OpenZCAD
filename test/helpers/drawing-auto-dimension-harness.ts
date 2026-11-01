@@ -163,12 +163,22 @@ export function expectClearLayout(
         ).toBe(false);
       }
     }
-    return { id: annotation.annotationId, print };
+    return {
+      id: annotation.annotationId,
+      print,
+      leader: annotation.kind !== 'linear' && annotation.kind !== 'angle'
+    };
   });
   for (let i = 0; i < prints.length; i += 1)
     for (let j = i + 1; j < prints.length; j += 1)
       expect(
-        footprintClash(prints[i]!.print, prints[j]!.print),
+        // A leader may cross another dimension's extension line where it
+        // must, as on any drawing; never a dimension line or leader.
+        footprintClash(
+          prints[i]!.print,
+          prints[j]!.print,
+          prints[i]!.leader || prints[j]!.leader
+        ),
         `${prints[i]!.id} × ${prints[j]!.id}`
       ).toBeNull();
 }
