@@ -1,5 +1,6 @@
 import {
   DRAWING_VIEW_FRAMES,
+  DRAWING_VIEW_LABELS,
   MAX_DRAWING_ANNOTATIONS,
   createDrawingAnnotationId,
   drawingPaperMm,
@@ -142,6 +143,8 @@ interface ViewContext {
   visibleRuns: { points: XY[]; min: XY; max: XY }[];
   /** How far a drawn line may lie from its edge, in model units. */
   tolerance: number;
+  /** Every line the view draws, silhouettes and hidden lines too, on the paper. */
+  drawn: [XY, XY][];
 }
 
 /** A dimension chosen but not yet placed. */
@@ -185,6 +188,8 @@ const FIRST_ROW_MM = 10;
 const ROW_PITCH_MM = 8;
 /** A radius or diameter's text clears its view by this much, in mm. */
 const LEADER_CLEAR_MM = 6;
+/** Leader lengths past the feature tried before leaving the view, in mm. */
+const NEAR_REACH_MM = [5, 8, 12] as const;
 
 const AXES: readonly AuditAxis[] = ['x', 'y', 'z'];
 
@@ -232,7 +237,11 @@ export function planAutoDimensions(
         }
         return { points, min, max };
       }),
-      tolerance: drawnCoincidence(bodies, view.bodyIds, k)
+      tolerance: drawnCoincidence(bodies, view.bodyIds, k),
+      drawn: pageSegments(
+        [...projection.visible, ...projection.hidden],
+        viewPageTransform(view, projection.bounds, sheet, units)
+      )
     });
   }
   // Views that measure true size: every principal view and section, never
@@ -912,6 +921,91 @@ function edgeVisible(context: ViewContext, edge: EdgeTopology): boolean {
 // ---------------------------------------------------------------------------
 // Placement
 
+function pageSegments(
+  runs: readonly ArrayLike<number>[],
+  toPage: (u: number, v: number) => XY
+): [XY, XY][] {
+  const out: [XY, XY][] = [];
+  for (const run of runs) {
+    let previous: XY | null = null;
+    for (let i = 0; i + 1 < run.length; i += 2) {
+      const point = toPage(run[i]!, run[i + 1]!);
+      if (previous) out.push([previous, point]);
+      previous = point;
+    }
+  }
+  return out;
+}
+
+/** How far text keeps off the drawing, and a leader's crossing off its foot, in mm. */
+const DRAWING_CLEAR_MM = 0.8;
+
+/**
+ * Whether a footprint inside its view stays off the drawing: its text
+ * touches no drawn line, and its leader or dimension line crosses one only
+ * at its own foot (the arrow on the feature, or a centre). Extension lines
+ * may cross the part, as they do from a hole's centre.
+ */
+function clearOfDrawing(print: Footprint, context: ViewContext): boolean {
+  const text = rectOf(print.box, DRAWING_CLEAR_MM);
+  const reach: Rect = { ...text };
+  for (const line of print.measuring)
+    for (const [x, y] of line) {
+      reach.minX = Math.min(reach.minX, x);
+      reach.minY = Math.min(reach.minY, y);
+      reach.maxX = Math.max(reach.maxX, x);
+      reach.maxY = Math.max(reach.maxY, y);
+    }
+  for (const segment of context.drawn) {
+    const [[ax, ay], [bx, by]] = segment;
+    if (
+      Math.max(ax, bx) < reach.minX ||
+      Math.min(ax, bx) > reach.maxX ||
+      Math.max(ay, by) < reach.minY ||
+      Math.min(ay, by) > reach.maxY
+    )
+      continue;
+    if (segmentHitsRect(segment, text)) return false;
+    for (const line of print.measuring) {
+      const at = crossing(line, segment) ?? touching(line, segment);
+      if (
+        at &&
+        !print.feet.some(
+          (foot) =>
+            Math.hypot(foot[0] - at[0], foot[1] - at[1]) <= DRAWING_CLEAR_MM
+        )
+      )
+        return false;
+    }
+  }
+  return true;
+}
+
+/** Where `line` ends on `segment` (a crossing `crossing` leaves out), or null. */
+function touching(line: [XY, XY], segment: [XY, XY]): XY | null {
+  for (const end of line)
+    if (distanceToSegment(end, segment[0], segment[1]) <= 1e-6) return end;
+  return null;
+}
+
+/**
+ * The editor's view name under each outside view (left aligned, below its
+ * outline), at the size it shows at 100 %: never on the sheet's exports,
+ * but a dimension over it reads badly while editing.
+ */
+const VIEW_LABEL_GAP_MM = 3;
+const VIEW_LABEL_SIZE_MM = 4;
+function viewLabelRect(view: DrawingView, box: AnnotationBox): Rect | null {
+  if (view.section) return null;
+  const name = DRAWING_VIEW_LABELS[view.orientation];
+  return {
+    minX: box.x - 0.5,
+    maxX: box.x + 0.62 * VIEW_LABEL_SIZE_MM * name.length + 0.5,
+    minY: box.y - VIEW_LABEL_GAP_MM - VIEW_LABEL_SIZE_MM - 1.2,
+    maxY: box.y - VIEW_LABEL_GAP_MM + 0.5
+  };
+}
+
 interface Rect {
   minX: number;
   minY: number;
@@ -1102,6 +1196,10 @@ function placeAll(
     maxY: paper.height - SHEET_MARGIN_MM
   };
   const title = rectOf(titleBlockBox(sheet));
+  const labels = contexts.flatMap((context) => {
+    const rect = viewLabelRect(context.view, context.box);
+    return rect ? [rect] : [];
+  });
   const byView = new Map(
     contexts.map((context) => [context.view.viewId, context])
   );
@@ -1151,6 +1249,8 @@ function placeAll(
         )
           return false;
     if (print.lines.some((line) => segmentHitsRect(line, title))) return false;
+    // Text only: the names are the editor's, and a line under one is fine.
+    if (labels.some((label) => rectsOverlap(box, label))) return false;
     for (const context of contexts) {
       const outline = rectOf(context.box, 1);
       if (context === own) {
@@ -1343,21 +1443,28 @@ function placeAll(
           (u[0] * outward[0]! + u[1] * outward[1]!)
       );
       if (aim) directions.unshift(aim);
+      // Near the feature first, as a draftsman would: a short leader into
+      // open space in or beside the view, its text off every drawn line.
+      // Only then out past the view's outline, farther each step.
       const reaches = (u: XY) => [
-        r + 5,
+        ...NEAR_REACH_MM.map((extra) => r + extra),
         ...[0, 8, 18, 30].map((extra) => exit(c, u) + LEADER_CLEAR_MM + extra)
       ];
-      for (let step = 0; step < 5; step += 1)
+      const steps = NEAR_REACH_MM.length + 4;
+      for (let step = 0; step < steps; step += 1)
         for (const u of directions) {
           const reach = reaches(u)[step]!;
           if (reach < r + 3) continue;
+          const near = step < NEAR_REACH_MM.length;
+          if (!near && reach < r + NEAR_REACH_MM.at(-1)!) continue;
           const annotation = placedAt(entry, [
             c[0] + u[0] * reach,
             c[1] + u[1] * reach
           ]);
           const laid = layoutOf(entry, annotation);
           if (!laid || !fits(laid.print, entry.context, false)) continue;
-          if (!rectsOverlap(rectOf(laid.print.box), outline))
+          const inside = rectsOverlap(rectOf(laid.print.box), outline);
+          if (!inside || clearOfDrawing(laid.print, entry.context))
             return { annotation, print: laid.print, clear: true };
           fallback ??= { annotation, print: laid.print };
         }
