@@ -541,11 +541,14 @@ describe('StartScreen library discovery', () => {
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(2);
+      // Pinned and the rest as two unlabelled placeholder grids, as when
+      // loaded.
       expect(
-        [...container.querySelectorAll('.start-shelf-group')].map(
-          (el) => el.textContent
+        container.querySelectorAll(
+          '.start-body > .start-tile-grid[aria-hidden="true"]'
         )
-      ).toEqual(['Pinned…', 'Projects…']);
+      ).toHaveLength(2);
+      expect(container.querySelector('.start-shelf-group')).toBeNull();
       localStorage.removeItem(key);
     }
   );
@@ -622,10 +625,11 @@ describe('StartScreen library discovery', () => {
         busy: true
       });
       expect(
-        [...container.querySelectorAll('.start-shelf-group')].map(
-          (heading) => heading.textContent
+        container.querySelectorAll(
+          '.start-body > .start-tile-grid[aria-hidden="true"]'
         )
-      ).toEqual(['Pinned…', 'Projects…']);
+      ).toHaveLength(2);
+      expect(container.querySelector('.start-shelf-group')).toBeNull();
       expect(
         container.querySelectorAll('.start-tile-placeholder')
       ).toHaveLength(3);
@@ -1254,7 +1258,9 @@ describe('StartScreen shelf filters, order and layout', () => {
     // Cards still drag under a sort: a drop saves the order as shown, moved,
     // and switches to Custom order (start-tile-reorder e2e).
     expect(reorderableCards()).toBeGreaterThan(0);
-    expect(screen.getByRole('heading', { name: /Pinned/ })).toBeVisible();
+    expect(
+      document.querySelectorAll('.start-body > .start-tile-grid')
+    ).toHaveLength(2);
   });
 
   it('groups pinned parts by their flag, not their place in the listing', () => {
@@ -1266,8 +1272,9 @@ describe('StartScreen shelf filters, order and layout', () => {
         ...projects
       ]
     });
-    const pinned = screen.getByRole('heading', { name: /Pinned/ })
-      .nextElementSibling as HTMLElement;
+    const pinned = document.querySelector<HTMLElement>(
+      '.start-body .start-tile-grid'
+    )!;
     expect(
       Array.from(pinned.querySelectorAll('.start-tile-name')).map(
         (element) => element.textContent
@@ -1884,16 +1891,12 @@ describe('StartScreen sidebar and shelf edge', () => {
     { ...localProject, projectId: toProjectId('loose'), name: 'Loose part' }
   ];
 
-  it('quiets the pins inside the labelled Pinned group only', () => {
-    // The group's label already says its cards are pinned; a permanent pin
-    // badge on each repeated it.
+  it('groups pinned cards first with no labels, as inside a folder', () => {
+    // The cards' own pins mark the group.
     const { container } = renderStartScreen({ projects: pinnedAndLoose() });
-    const grids = [
-      ...container.querySelectorAll('.start-body .start-tile-grid')
-    ];
-    expect(grids).toHaveLength(2);
-    expect(grids[0]).toHaveClass('is-pinned-group');
-    expect(grids[1]).not.toHaveClass('is-pinned-group');
+    const body = container.querySelector('.start-body')!;
+    expect(body.querySelectorAll(':scope > .start-tile-grid')).toHaveLength(2);
+    expect(body.querySelector('h3')).toBeNull();
   });
 
   it('counts projects, not tiles, in the Pinned tab and group labels', () => {
@@ -1929,11 +1932,6 @@ describe('StartScreen sidebar and shelf edge', () => {
       name: /^Pinned/
     });
     expect(pinnedFilter).toHaveTextContent('Pinned3');
-    expect(
-      [...container.querySelectorAll('.start-shelf-group')].map(
-        (heading) => heading.textContent
-      )
-    ).toEqual(['Pinned3', 'Projects1']);
 
     fireEvent.click(pinnedFilter);
     expect(
@@ -1954,25 +1952,19 @@ describe('StartScreen sidebar and shelf edge', () => {
     expect(screen.getByRole('tab', { name: 'Archive 0' })).toBeInTheDocument();
   });
 
-  it('flags a scrolled shelf and the group label stuck under its line', () => {
+  it('flags a scrolled shelf', () => {
     const { container } = renderStartScreen({ projects: pinnedAndLoose() });
     const body = container.querySelector<HTMLElement>('.start-body')!;
     const section = container.querySelector('.start-section')!;
-    const [pinnedLabel] = container.querySelectorAll('.start-shelf-group');
     expect(section).not.toHaveAttribute('data-scrolled');
 
     body.scrollTop = 40;
     fireEvent.scroll(body);
     expect(section).toHaveAttribute('data-scrolled');
-    // happy-dom lays nothing out, so every label reads as at the top.
-    expect(pinnedLabel).toHaveAttribute('data-stuck');
-    expect(section).toHaveAttribute('data-label-stuck');
 
     body.scrollTop = 0;
     fireEvent.scroll(body);
     expect(section).not.toHaveAttribute('data-scrolled');
-    expect(pinnedLabel).not.toHaveAttribute('data-stuck');
-    expect(section).not.toHaveAttribute('data-label-stuck');
   });
 
   it('shortens Import beside New project but keeps its full name', () => {

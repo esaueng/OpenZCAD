@@ -131,19 +131,11 @@ describe('start screen column and shelf edge', () => {
     expect(panel).toMatch(/border-right:/);
   });
 
-  it('sticks group labels under the line on a wide window', () => {
+  it('fades cards out under the line once the shelf scrolls', () => {
     // 31 Oct 2026: cards were sliced off on a hard edge under the tabs.
-    const wide = [...css.matchAll(/@media\s*\(min-width:\s*901px\)\s*\{/g)]
-      .map((match) => css.slice(match.index))
-      .find((rest) =>
-        /\.start-shelf-group\s*\{[^}]*position:\s*sticky/.test(
-          rest.slice(0, 2000)
-        )
-      );
-    expect(wide).toBeDefined();
-    expect(rule(css, '.start-shelf-group[data-stuck]::after')).toMatch(
-      /opacity:\s*1/
-    );
+    expect(
+      rule(css, '.start-section[data-scrolled] .start-toolbar::after')
+    ).toMatch(/opacity:\s*1/);
   });
 });
 

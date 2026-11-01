@@ -22,6 +22,25 @@ async function cardOrder(page: Page) {
   return page.locator('.start-tile-name').allTextContents();
 }
 
+/** Where the shelf title line's first word is drawn, and in what type. */
+async function leadingTitle(page: Page) {
+  const lead = page
+    .locator('.start-toolbar-title')
+    .locator('.start-crumb, h2')
+    .first();
+  return lead.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const style = getComputedStyle(element);
+    return {
+      text: element.textContent,
+      left: Math.round(range.getBoundingClientRect().left),
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight
+    };
+  });
+}
+
 /**
  * Presses on a card's preview and drags it to another card's far side, the
  * side it would land on: a card's middle is where a hold makes a folder.
@@ -102,10 +121,18 @@ test(
       .poll(() => cardOrder(page))
       .toEqual(['Reorder pair', names[1]]);
 
+    const rootTitle = await leadingTitle(page);
     await page
       .getByRole('button', { name: 'Open folder Reorder pair, 2 projects' })
       .click();
     await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);
+    // Opening a folder only appends to the title line: the way back out reads
+    // as the same Projects heading, in the same place and type.
+    const folderTitle = await leadingTitle(page);
+    expect(folderTitle.text).toBe(rootTitle.text);
+    expect(Math.abs(folderTitle.left - rootTitle.left)).toBeLessThanOrEqual(1);
+    expect(folderTitle.fontSize).toBe(rootTitle.fontSize);
+    expect(folderTitle.fontWeight).toBe(rootTitle.fontWeight);
     // The folder outlives a reload: it is kept on this device.
     await page.reload();
     await expect.poll(() => cardOrder(page)).toEqual([names[2], names[0]]);
@@ -203,7 +230,9 @@ test.describe('with a pinned part', () => {
       route.fulfill({ json: { projects: pinned } })
     );
     await page.reload();
-    await expect(page.getByRole('heading', { name: /^Pinned/ })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: `Unpin ${names[0]}`, exact: true })
+    ).toBeVisible();
   });
 
   test('pins a part dropped onto a pinned one', async ({ page }) => {
@@ -295,11 +324,9 @@ test.describe('with a pinned part', () => {
         page.getByRole('button', { name: `Unpin ${name}`, exact: true })
       ).toBeAttached();
     }
-    // With every project pinned, Projects is still there to drag one back into.
-    // (Its heading and drop target appear only mid-drag.)
-    await expect(
-      page.locator('.start-shelf-group', { hasText: /^Projects/ })
-    ).toHaveCount(0);
+    // With every project pinned, the unpinned group is still there to drag
+    // one back into; its drop target appears only mid-drag.
+    await expect(page.locator('[data-tile-group="parts"]')).toHaveCount(0);
     await dragCard(page, names[0]!, names[2]!);
     const partsZone = page.locator('[data-tile-group="parts"]');
     await expect(partsZone).toContainText('Drop here to unpin');
