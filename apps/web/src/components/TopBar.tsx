@@ -359,6 +359,7 @@ export function TopBar({
         ? 'model unavailable'
         : 'preparing model'
       : null;
+  const readinessVisible = modelReadiness !== null && geometryFailed;
   // The accessible name keeps the readiness the glyph shows, and still
   // begins with the visible label (WCAG 2.5.3).
   const saveLabel = modelReadiness
@@ -384,12 +385,12 @@ export function TopBar({
           <CloudOff size={14} />
         )}
       </span>
-      {/* Start-aligned so the reserve's slack trails the label. While the
-          readiness follows it, the slack would sit mid-phrase, and the
-          chip is resizing for the readiness anyway. */}
+      {/* Start-aligned so the reserve's slack trails the label. While a
+          visible readiness follows it, the slack would sit mid-phrase, and
+          the chip is resizing for the readiness anyway. */}
       <StableLabel
         reserve={
-          modelReadiness
+          readinessVisible
             ? [saveText]
             : saveToAccount
               ? ['Save to my account']
@@ -400,9 +401,16 @@ export function TopBar({
       >
         {saveText}
       </StableLabel>
-      {/* Readiness is visible and announced alongside the storage label. */}
+      {/* Readiness is announced alongside the storage label. Preparing is
+          shown by the spinner alone (the tooltip spells it out); a failed
+          model stays in words, as it needs a look. */}
       {modelReadiness ? (
-        <span className="save-model-readiness"> · {modelReadiness}</span>
+        <span
+          className={`save-model-readiness${readinessVisible ? '' : ' visually-hidden'}`}
+        >
+          {' '}
+          · {modelReadiness}
+        </span>
       ) : null}
     </>
   );

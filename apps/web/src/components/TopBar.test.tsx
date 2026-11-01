@@ -188,6 +188,10 @@ describe('TopBar save chip', () => {
     // Announced through the live region's content, not only its name.
     expect(chip).toHaveTextContent('Saved · preparing model');
     expect(chip.querySelector('.spin')).not.toBeNull();
+    // Shown by the spinner; the words are for assistive technology only.
+    expect(chip.querySelector('.save-model-readiness')).toHaveClass(
+      'visually-hidden'
+    );
   });
   it('is a readout that saves nothing when clicked', () => {
     const { onSave } = renderTopBar({ saveState: 'local' });
