@@ -42,7 +42,12 @@ import {
   type RevolveRigPlacement
 } from './revolve';
 import type { ModelingOperationFormState } from '../modelingOperations';
-import { holePositionAxes, holePositionFromPick } from '../holePositionAxes';
+import {
+  holePositionAxes,
+  holePositionFieldOrder,
+  holePositionFromPick,
+  holePositionLabels
+} from '../holePositionAxes';
 import { PRIMITIVE_ANCHORS, PRIMITIVE_FIELDS } from '../primitivePlacement';
 import {
   GROUND_FRAME,
@@ -2823,14 +2828,20 @@ const hole: InPlaceToolSpec = {
     if (typed) {
       // Its U and V across the hole, clear of the step's chips.
       const reach = Math.max((values.diameter ?? 6) * 1.5, 1e-3);
-      for (const [valueId, side] of [
-        ['positionU', -1],
-        ['positionV', 1]
-      ] as const) {
+      // Each chip names the world axis its field runs along: on a top face
+      // U runs along −Y, which a bare "U" leaves the reader to guess.
+      const labels = holePositionLabels(face.normal);
+      const placement = {
+        u: ['positionU', -1, labels.u],
+        v: ['positionV', 1, labels.v]
+      } as const;
+      for (const field of holePositionFieldOrder(face.normal)) {
+        const [valueId, side, label] = placement[field];
         handles.push({
           valueId,
           kind: 'chip',
           key: `${faceKey(face)}:${valueId}`,
+          label,
           params: {
             anchor: {
               x: entry.x + axes.u.x * reach * side,

@@ -1282,6 +1282,24 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(spread).toBeCloseTo(8);
   });
 
+  it('a typed hole names the world axis each position chip runs along', () => {
+    const handles = IN_PLACE_TOOL_SPECS.hole.handles(
+      { ...EMPTY, faces: [TOP] },
+      { diameter: 4, positionU: 0, positionV: 0 },
+      CTX,
+      { place: 'typed' }
+    );
+    // On a top face U runs along −Y and V along +X; X is listed first.
+    expect(
+      handles
+        .filter((handle) => handle.valueId.startsWith('position'))
+        .map((handle) => [handle.valueId, handle.label])
+    ).toEqual([
+      ['positionV', 'V · along +X'],
+      ['positionU', 'U · along −Y']
+    ]);
+  });
+
   it('draft hinges on the body base by default, or the top, the click, the origin', () => {
     const ctx: InPlaceContext = {
       ...CTX,
