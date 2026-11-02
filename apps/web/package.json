@@ -35,12 +35,12 @@
     "@openzcad/persistence": "workspace:*",
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
-    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/api": "^2.12.4",
     "fflate": "0.8.3",
-    "lucide-react": "^1.49.0",
-    "pdfjs-dist": "^6.2.108",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "lucide-react": "^1.64.0",
+    "pdfjs-dist": "^6.4.299",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "three": "^0.186.1"
   },
   "devDependencies": {

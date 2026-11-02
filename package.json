@@ -62,7 +62,7 @@
     "eslint": "^10.13.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "occt-wasm": "5.4.1",
+    "occt-wasm": "5.8.1",
     "prettier": "^3.9.10",
     "turbo": "^2.11.10",
     "typescript": "^6.0.3",

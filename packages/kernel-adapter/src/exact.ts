@@ -180,6 +180,7 @@ import {
 } from './exact-build-loop';
 import { suppressedPassThroughBody } from './exact-suppression';
 import { ImportedStepCache } from './exact-imported-step-cache';
+import { ImportedMeshCache } from './exact-imported-mesh-cache';
 import {
   isBuildCancelled,
   raceBuildCancellation,
@@ -263,6 +264,11 @@ import {
   displayTessellationForExtents,
   heldDisplayTessellation
 } from './display-tessellation';
+import {
+  displayOnlyBlendSalt,
+  displayOnlyBlendsSupported,
+  withDisplayOnlyBlends
+} from './display-only-blends';
 import {
   MAX_HISTORY_CHECKPOINTS,
   MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES,
@@ -888,6 +894,8 @@ export type MassPropertiesRead =
  * Oversized imports still build exactly but do not enter this optional cache.
  */
 export const MAX_IMPORTED_STEP_CACHE_BYTES = 64 * 1024 * 1024;
+/** Budget for converted imported-mesh payloads; see `ImportedMeshCache`. */
+export const MAX_IMPORTED_MESH_CACHE_BYTES = 64 * 1024 * 1024;
 
 export interface ExactKernelAdapterOptions {
   /**
@@ -911,6 +919,11 @@ export interface ExactKernelAdapterOptions {
    * caching; nothing in the app sets it.
    */
   importedStepCacheBytes?: number;
+  /**
+   * Overrides {@link MAX_IMPORTED_MESH_CACHE_BYTES}. Zero disables mesh
+   * conversion caching; nothing in the app sets it.
+   */
+  importedMeshCacheBytes?: number;
   /**
    * Overrides {@link MAX_HISTORY_CHECKPOINTS}, the maximum number of retained
    * feature prefixes (not a byte budget). Zero disables history caching.
@@ -1004,7 +1017,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {
     this.importedSteps = new ImportedStepCache(
-      options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES
+      options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES,
+      new ImportedMeshCache(
+        options.importedMeshCacheBytes ?? MAX_IMPORTED_MESH_CACHE_BYTES
+      )
     );
   }
 
@@ -1501,7 +1517,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal,
     yieldControl?: () => Promise<void> | void,
-    deferTerminalFaceLineage = false
+    deferTerminalFaceLineage = false,
+    displayOnlyBlends = false
   ): Promise<{
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -1589,9 +1606,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ) +
             (feature.featureId === deferredDirectEditFeatureId
               ? '|display-output'
-              : '')
+              : '') +
+            displayOnlyBlendSalt(feature, displayOnlyBlends)
         )
       : [];
+    // A display-only build salts its blending features' digests so that a
+    // checked build never restores what it stores, but it may restore what a
+    // checked build stored: checked geometry is good for display too.
+    const checkedDigests = displayOnlyBlends
+      ? digests.map((digest, index) => {
+          const salt = displayOnlyBlendSalt(features[index]!, true);
+          return salt ? digest.slice(0, -salt.length) : digest;
+        })
+      : digests;
     // A request that may skip a boolean's probe can still restore a
     // checkpoint where the probe ran: it adds lineage to the same geometry.
     // Previews and exports pass no demand, so without this every switch back
@@ -1612,7 +1639,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 historyFeatureDigest(document, feature, index, scope, []) +
                 (feature.featureId === deferredDirectEditFeatureId
                   ? '|display-output'
-                  : '')
+                  : '') +
+                displayOnlyBlendSalt(feature, displayOnlyBlends)
             )
           : [];
     const probePrefix: [string, boolean][] = [];
@@ -1700,7 +1728,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           entry.digests.some(
             (digest, offset) =>
               digest !== digests[from + offset] &&
-              digest !== probedDigests[from + offset]
+              digest !== probedDigests[from + offset] &&
+              digest !== checkedDigests[from + offset]
           )
         ) {
           break;
@@ -2055,7 +2084,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     try {
       build = await buildDocumentHistoryCooperatively(
         {
-          run: (work) => withSyncReadMemo(readMemo, work),
+          run: (work) =>
+            withDisplayOnlyBlends(activeKernel, displayOnlyBlends, () =>
+              withSyncReadMemo(readMemo, work)
+            ),
           checkpoint: () =>
             yieldControl
               ? Promise.resolve(yieldControl())
@@ -2913,7 +2945,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         lineageDemand,
         cancellation,
         yieldControl,
-        geometryOnly && deferTopology
+        geometryOnly && deferTopology,
+        geometryOnly && displayOnlyBlendsSupported(RemusKernel)
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -3626,22 +3659,27 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    */
   private withExportBuild<T>(
     document: ProjectDocument,
-    operate: (kernel: RemusKernel, build: ExactBuildResult) => T
+    operate: (kernel: RemusKernel, build: ExactBuildResult) => T,
+    lineageDemand?: readonly BodyId[]
   ): Promise<T> {
     return this.runHistoryJob(() =>
-      this.withOwnedExportBuild(document, operate)
+      this.withOwnedExportBuild(document, operate, lineageDemand)
     );
   }
 
   private async withOwnedExportBuild<T>(
     document: ProjectDocument,
-    operate: (kernel: RemusKernel, build: ExactBuildResult) => T
+    operate: (kernel: RemusKernel, build: ExactBuildResult) => T,
+    lineageDemand?: readonly BodyId[]
   ): Promise<T> {
     const { sources, pinned } = await this.prefetchImportSources(document);
     const { kernel, build } = await this.buildWithHistoryCache(
       document,
       sources,
-      pinned
+      pinned,
+      undefined,
+      undefined,
+      lineageDemand
     );
     try {
       return operate(kernel, build);
@@ -4331,19 +4369,26 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<Record<BodyId, DrawingBodyTessellation>> {
-    return this.withExportBuild(document, (kernel, build) => {
-      const hidden = getParameterHiddenBodyIds(document);
-      const result: Record<BodyId, DrawingBodyTessellation> = {};
-      // One budget for the whole request: many modest bodies add up too.
-      const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
-      for (const bodyId of bodyIds) {
-        const shape = build.shapes.get(bodyId);
-        if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
-          throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
-        result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
-      }
-      return result;
-    });
+    // Projection reads geometry, not boolean evolution metadata. Match the
+    // idle viewport's demand so opening Draw does not upgrade its build to
+    // eager probes (and replay an expensive imported model).
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const result: Record<BodyId, DrawingBodyTessellation> = {};
+        // One budget for the whole request: many modest bodies add up too.
+        const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
+        for (const bodyId of bodyIds) {
+          const shape = build.shapes.get(bodyId);
+          if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
+            throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
+          result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
+        }
+        return result;
+      },
+      []
+    );
   }
 
   drawingSection(
@@ -4351,42 +4396,46 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     plane: DrawingSectionPlane
   ): Promise<Record<BodyId, DrawingSectionBody>> {
-    return this.withExportBuild(document, (kernel, build) => {
-      const hidden = getParameterHiddenBodyIds(document);
-      const result: Record<BodyId, DrawingSectionBody> = {};
-      const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
-      let cut = false;
-      for (const bodyId of bodyIds) {
-        const shape = build.shapes.get(bodyId);
-        if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
-          throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
-        const body = drawingSectionOfShape(kernel, shape, plane, budget);
-        if (body?.cut) cut = true;
-        result[bodyId] = body
-          ? {
-              vertices: body.vertices,
-              indices: body.indices,
-              faces: body.faces,
-              edges: body.edges,
-              cutFaces: body.cutFaces,
-              edgeTopology: body.edgeTopology,
-              ...(body.approximate ? { approximate: body.approximate } : {})
-            }
-          : {
-              vertices: new Float32Array(),
-              indices: new Uint32Array(),
-              faces: [],
-              edges: [],
-              cutFaces: [],
-              edgeTopology: []
-            };
-      }
-      if (!cut)
-        throw new DrawingSectionError(
-          'The section line does not cut any body in this view.'
-        );
-      return result;
-    });
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const result: Record<BodyId, DrawingSectionBody> = {};
+        const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
+        let cut = false;
+        for (const bodyId of bodyIds) {
+          const shape = build.shapes.get(bodyId);
+          if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
+            throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
+          const body = drawingSectionOfShape(kernel, shape, plane, budget);
+          if (body?.cut) cut = true;
+          result[bodyId] = body
+            ? {
+                vertices: body.vertices,
+                indices: body.indices,
+                faces: body.faces,
+                edges: body.edges,
+                cutFaces: body.cutFaces,
+                edgeTopology: body.edgeTopology,
+                ...(body.approximate ? { approximate: body.approximate } : {})
+              }
+            : {
+                vertices: new Float32Array(),
+                indices: new Uint32Array(),
+                faces: [],
+                edges: [],
+                cutFaces: [],
+                edgeTopology: []
+              };
+        }
+        if (!cut)
+          throw new DrawingSectionError(
+            'The section line does not cut any body in this view.'
+          );
+        return result;
+      },
+      []
+    );
   }
 
   async meshQuality(

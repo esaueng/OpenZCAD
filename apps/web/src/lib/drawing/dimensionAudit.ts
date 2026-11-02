@@ -1,5 +1,6 @@
 import {
   DRAWING_VIEW_FRAMES,
+  type BodyId,
   type BoundingBox,
   type DrawingAnnotationId,
   type DrawingSheet,
@@ -12,10 +13,13 @@ import {
 import {
   annotationBody,
   annotationModelReading,
+  readCounterbore,
+  readCountersink,
   defaultDimensionDecimals,
   formatDrawingNumber,
   type AnnotationBodies
 } from './annotations';
+import { edgeRefFor } from './annotationPicking';
 import {
   chamferCorner,
   chamferEnds,
@@ -115,6 +119,11 @@ const sub = (a: Vector3, b: Vector3): Vector3 => ({
   z: a.z - b.z
 });
 const length = (a: Vector3) => Math.hypot(a.x, a.y, a.z);
+const scaleVector = (a: Vector3, k: number): Vector3 => ({
+  x: a.x * k,
+  y: a.y * k,
+  z: a.z * k
+});
 
 /** Same length within the kernel's relative tolerance. */
 export function same(a: number, b: number): boolean {
@@ -160,6 +169,12 @@ export interface BodyRequirements {
   /** Revolved blends (tori) of one radius, stated once with a count. */
   blends: BlendGroup[];
   boltCircles: BoltCircle[];
+  /** Sloped planes square to one axis, each stated by an angle. */
+  slopes: SlopeGroup[];
+  /** Holes whose every copy is counterbored alike: one callout states them. */
+  counterbores: CounterboreGroup[];
+  /** Holes whose every copy is countersunk alike: one callout states them. */
+  countersinks: CountersinkGroup[];
   /**
    * Circles where a chamfer or blend meets the next face, bounding no hole
    * or boss: the feature's own size fixes them.
@@ -167,6 +182,57 @@ export interface BodyRequirements {
   derivedCircles: { center: Vector3; axis: Vector3; radius: number }[];
   /** Requirements no dimension can state yet, already worded. */
   unmeasurable: string[];
+}
+
+/**
+ * Faces in one sloped plane square to a model axis (mirrored copies of a
+ * slope share it): one angle states them all.
+ */
+export interface SlopeGroup {
+  /** Unit normal, signed so its first non-zero component is positive. */
+  normal: Vector3;
+  /** normal · x = offset on the plane. */
+  offset: number;
+  /** The axis the plane runs along: the view along it sees its angle. */
+  along: AuditAxis;
+  /** The axis its angle is read from in labels. */
+  from: AuditAxis;
+  /** The acute angle between the plane's line and `from`, in degrees. */
+  angleDeg: number;
+  faces: FaceTopology[];
+}
+
+/**
+ * A hole size group whose every axis carries a bore of one larger size
+ * opening onto it: a counterbore. Per copy, along its axis: where the bore
+ * opens, its floor, and the hole's far end.
+ */
+export interface CounterboreGroup {
+  hole: SizeGroup;
+  bore: SizeGroup;
+  instances: {
+    along: AuditAxis;
+    opening: number;
+    floor: number;
+    end: number;
+    through: boolean;
+  }[];
+}
+
+/**
+ * A hole size group whose every axis carries a cone of one chamfer group
+ * opening onto it: a countersink. Per copy, along its axis: where it opens
+ * and the hole's far end.
+ */
+export interface CountersinkGroup {
+  hole: SizeGroup;
+  chamfer: ChamferGroup;
+  instances: {
+    along: AuditAxis;
+    opening: number;
+    end: number;
+    through: boolean;
+  }[];
 }
 
 /** Like revolved blends: one radius, stated once with a count. */
@@ -367,6 +433,7 @@ function bodyRequirements(
     }
   };
 
+  const slopeFaces: { face: FaceTopology; along: AuditAxis }[] = [];
   for (const face of faces) {
     const geometry = face.geometry;
     if (!geometry) {
@@ -380,9 +447,15 @@ function bodyRequirements(
       if (!normal || geometry.planeOffset === undefined) {
         note('a face the kernel published no exact surface for');
       } else if (!along) {
-        note(
-          'a sloped face, which needs an angle this check does not read yet'
-        );
+        // A slope square to one model axis draws as a line, true to its
+        // angle, in the view along that axis; any other is compound.
+        const parallel = AXES.filter((axis) => Math.abs(normal[axis]) <= 1e-9);
+        if (parallel.length === 1)
+          slopeFaces.push({ face, along: parallel[0]! });
+        else
+          note(
+            'a compound sloped face, which needs angles this check does not read yet'
+          );
       } else {
         const value = geometry.planeOffset * normal[along];
         addPosition(positions[along], {
@@ -432,13 +505,41 @@ function bodyRequirements(
       const fixedBy = new Set(
         tangentPlanes.map((plane) => axisOf(plane.geometry!.normal!))
       );
+      // Tangent to two planes that are not parallel (a sloped one counts),
+      // the axis is fixed across the section: none of its positions, nor
+      // where it meets those planes, needs a dimension of its own.
+      const pinned = tangentPlanes.some((p, i) =>
+        tangentPlanes
+          .slice(i + 1)
+          .some(
+            (q) =>
+              Math.abs(dot(p.geometry!.normal!, q.geometry!.normal!)) < 1 - 1e-6
+          )
+      );
+      const label = `the R${format(geometry.radius, units)} blend`;
+      if (pinned)
+        for (const plane of tangentPlanes) {
+          const normal = plane.geometry!.normal!;
+          const side = Math.sign(
+            dot(normal, geometry.axisStart) - plane.geometry!.planeOffset!
+          );
+          for (const axis of AXES)
+            if (axis !== along)
+              addPosition(derived[axis], {
+                value:
+                  geometry.axisStart[axis] -
+                  side * geometry.radius * normal[axis],
+                label
+              });
+        }
       for (const axis of AXES) {
         if (axis === along) continue;
         const value = geometry.axisStart[axis];
-        if (fixedBy.has(axis)) {
+        if (pinned && !fixedBy.has(axis)) {
+          addPosition(derived[axis], { value, label });
+        } else if (fixedBy.has(axis)) {
           // Where the blend meets the face it rounds, and its axis: both
           // follow from the face and the radius.
-          const label = `the R${format(geometry.radius, units)} blend`;
           for (const side of [-1, 1])
             addPosition(derived[axis], {
               value: value + side * geometry.radius,
@@ -493,6 +594,137 @@ function bodyRequirements(
         `a ${geometry.surfaceType} face, which this check does not read yet`
       );
     }
+  }
+
+  // Slopes: one angle per plane (mirrored copies share it), and one corner
+  // to locate it from. A slope's line needs two numbers; its angle is one,
+  // so where it meets one face square to an axis is the other, and where it
+  // meets any other follows. A real corner (an edge) is preferred to a
+  // virtual sharp through a blend, then x before y before z.
+  const slopes: SlopeGroup[] = [];
+  for (const { face, along } of slopeFaces) {
+    const g = face.geometry!;
+    const unit = scaleVector(g.normal!, 1 / length(g.normal!));
+    let offset = g.planeOffset! / length(g.normal!);
+    // One sign per plane, so a face and its mirror image group.
+    const lead = AXES.find((axis) => Math.abs(unit[axis]) > 1e-9)!;
+    const sign = unit[lead] < 0 ? -1 : 1;
+    const normal = scaleVector(unit, sign);
+    offset *= sign;
+    let group = slopes.find(
+      (known) =>
+        known.along === along &&
+        length(sub(known.normal, normal)) <= 1e-9 &&
+        same(known.offset, offset)
+    );
+    if (!group) {
+      const [p, q] = AXES.filter((axis) => axis !== along) as [
+        AuditAxis,
+        AuditAxis
+      ];
+      group = {
+        normal,
+        offset,
+        along,
+        from: p,
+        // The line runs along (−n_q, n_p) in (p, q): its angle from p.
+        angleDeg:
+          (Math.atan2(Math.abs(normal[p]), Math.abs(normal[q])) * 180) /
+          Math.PI,
+        faces: []
+      };
+      slopes.push(group);
+    }
+    group.faces.push(face);
+  }
+  for (const group of slopes) {
+    const label = slopeLabel(group, units);
+    const corners: {
+      axis: AuditAxis;
+      value: number;
+      mark?: VirtualMark;
+    }[] = [];
+    const corner = (
+      slope: FaceTopology,
+      plane: FaceTopology,
+      virtual: boolean
+    ) => {
+      const n = plane.geometry?.normal;
+      const a = n ? axisOf(n) : null;
+      if (
+        !n ||
+        !a ||
+        a === group.along ||
+        plane.geometry!.planeOffset === undefined
+      )
+        return;
+      const at = plane.geometry!.planeOffset * n[a];
+      const b = AXES.find((axis) => axis !== a && axis !== group.along)!;
+      if (Math.abs(group.normal[b]) <= 1e-9) return;
+      const value = (group.offset - group.normal[a] * at) / group.normal[b];
+      if (corners.some((known) => known.axis === b && same(known.value, value)))
+        return;
+      corners.push({
+        axis: b,
+        value,
+        ...(virtual
+          ? {
+              mark: {
+                kind: 'sharp' as const,
+                faces: [slope, plane] as [FaceTopology, FaceTopology]
+              }
+            }
+          : {})
+      });
+    };
+    for (const face of group.faces)
+      for (const hash of neighbours.get(face.hash) ?? []) {
+        const other = byHash.get(hash);
+        const og = other?.geometry;
+        if (!other || !og) continue;
+        const type = og.surfaceType.toLowerCase();
+        if (type.includes('plane')) corner(face, other, false);
+        else if (
+          type.includes('cylind') &&
+          og.radius !== undefined &&
+          og.axisStart &&
+          og.axisEnd &&
+          axisOf(sub(og.axisEnd, og.axisStart)) === group.along &&
+          tangentTo(face, og.axisStart, UNIT[group.along], og.radius)
+        )
+          // Rounded into its neighbour: the virtual sharp with the plane
+          // the blend also touches.
+          for (const next of neighbours.get(other.hash) ?? []) {
+            const plane = byHash.get(next);
+            if (
+              plane &&
+              plane !== face &&
+              tangentTo(plane, og.axisStart, UNIT[group.along], og.radius)
+            )
+              corner(face, plane, true);
+          }
+      }
+    corners.sort(
+      (p, q) =>
+        Number(p.mark !== undefined) - Number(q.mark !== undefined) ||
+        AXES.indexOf(p.axis) - AXES.indexOf(q.axis) ||
+        p.value - q.value
+    );
+    const [first, ...rest] = corners;
+    if (!first) {
+      note(`${label}: it meets no face square to an axis to locate it from`);
+      continue;
+    }
+    addPosition(positions[first.axis], {
+      value: first.value,
+      label: `the corner of the ${label} at ${first.axis} = ${format(first.value, units)}`,
+      ...(first.mark ? { mark: first.mark } : {})
+    });
+    for (const other of rest)
+      addPosition(derived[other.axis], {
+        value: other.value,
+        label: `where the ${label} meets the next face`
+      });
   }
 
   // Chamfers by size and angle. An end chamfer's size is its own; a step
@@ -613,6 +845,94 @@ function bodyRequirements(
     }
   }
 
+  // Counterbored holes: a hole size whose every axis carries a larger bore
+  // opening onto it is one callout's, "2× Ø5 THRU, CBORE Ø8 × 1.5 DEEP".
+  const counterbores: CounterboreGroup[] = [];
+  for (const hole of sizes) {
+    if (hole.blend) continue;
+    for (const bore of sizes) {
+      if (bore.blend || bore === hole || bore.radius <= hole.radius) continue;
+      if (bore.axes.length !== hole.axes.length) continue;
+      const instances: CounterboreGroup['instances'] = [];
+      for (const axis of hole.axes) {
+        const along = axisOf(axis.direction);
+        const holeEdge = edges.find(
+          (edge) =>
+            edge.curve?.circle &&
+            circleInGroup({ ...hole, axes: [axis] }, edge.curve.circle)
+        );
+        const boreEdge = edges.find(
+          (edge) =>
+            edge.curve?.circle &&
+            circleInGroup({ ...bore, axes: [axis] }, edge.curve.circle)
+        );
+        if (!along || !holeEdge || !boreEdge) break;
+        const reading = readCounterbore(holeEdge, boreEdge, edges, faces);
+        if (!reading.ok) break;
+        instances.push({
+          along,
+          opening: reading.opening[along],
+          floor: reading.floor[along],
+          end: reading.end[along],
+          through: reading.through
+        });
+      }
+      if (instances.length === hole.axes.length && instances.length > 0)
+        counterbores.push({ hole, bore, instances });
+    }
+  }
+
+  // Countersunk holes: a hole size whose every axis carries a cone of one
+  // chamfer group opening onto it is one callout's, "2× Ø6 THRU, CSK Ø12 ×
+  // 90°", which states the cone instead of a chamfer dimension.
+  const countersinks: CountersinkGroup[] = [];
+  for (const hole of sizes) {
+    if (hole.blend) continue;
+    for (const chamfer of chamfers) {
+      if (chamfer.faces.length !== hole.axes.length) continue;
+      const instances: CountersinkGroup['instances'] = [];
+      const used = new Set<FaceTopology>();
+      for (const axis of hole.axes) {
+        const along = axisOf(axis.direction);
+        const holeEdge = edges.find(
+          (edge) =>
+            edge.curve?.circle &&
+            circleInGroup({ ...hole, axes: [axis] }, edge.curve.circle)
+        );
+        // The cone's outer rim: its widest circle.
+        let reading: ReturnType<typeof readCountersink> | null = null;
+        for (const cone of chamfer.faces) {
+          if (used.has(cone) || !holeEdge) continue;
+          const rim = edges
+            .filter(
+              (edge) =>
+                edge.curve?.circle &&
+                (edge.adjacentFaceHashes ?? []).includes(cone.hash)
+            )
+            .sort(
+              (a, b) => b.curve!.circle!.radius - a.curve!.circle!.radius
+            )[0];
+          if (!rim) continue;
+          const found = readCountersink(holeEdge, rim, edges, faces);
+          if (found.ok && found.cone === cone) {
+            reading = found;
+            used.add(cone);
+            break;
+          }
+        }
+        if (!along || !reading?.ok) break;
+        instances.push({
+          along,
+          opening: reading.opening[along],
+          end: reading.end[along],
+          through: reading.through
+        });
+      }
+      if (instances.length === hole.axes.length && instances.length > 0)
+        countersinks.push({ hole, chamfer, instances });
+    }
+  }
+
   // Where a revolved blend meets the next surface: closed circles that are
   // no face's position along their axis.
   for (const edge of edges) {
@@ -653,6 +973,9 @@ function bodyRequirements(
     blends,
     derivedCircles,
     boltCircles,
+    slopes,
+    counterbores,
+    countersinks,
     unmeasurable: [...unmeasurable].map(([message, count]) =>
       count > 1 ? `${count}× ${message}` : message
     )
@@ -754,12 +1077,18 @@ function anchoringViews(
   bodyId: string,
   bodies: AnnotationBodies,
   axis: AuditAxis,
-  value: number
+  value: number,
+  /** False: any edge, nameable by a dimension or not. */
+  named = true
 ): DrawingView[] {
   const at = AXES.indexOf(axis);
   return viewsAlong(sheet, bodyId, axis).filter((view) =>
     viewEdges(bodies, view, bodyId).some((edge) => {
-      if (edge.displayRole === 'seam') return false;
+      if (
+        edge.displayRole === 'seam' ||
+        (named && !nameable(bodies, view, bodyId, edge))
+      )
+        return false;
       const circle = edge.curve?.circle;
       if (circle) {
         if (!same(circle.center[axis], value)) return false;
@@ -774,6 +1103,33 @@ function anchoringViews(
         !closed && (same(p[at]!, value) || same(p[p.length - 3 + at]!, value))
       );
     })
+  );
+}
+
+const hashCounts = new WeakMap<readonly EdgeTopology[], Map<number, number>>();
+
+/**
+ * Whether a dimension can name `edge`, as a pick or Auto-dimension would:
+ * an edge whose hash another edge shares (a mirrored or patterned copy)
+ * resolves only when its lineage reference tells them apart.
+ */
+function nameable(
+  bodies: AnnotationBodies,
+  view: DrawingView,
+  bodyId: string,
+  edge: EdgeTopology
+): boolean {
+  const edges = viewEdges(bodies, view, bodyId);
+  let counts = hashCounts.get(edges);
+  if (!counts) {
+    counts = new Map();
+    for (const other of edges)
+      counts.set(other.hash, (counts.get(other.hash) ?? 0) + 1);
+    hashCounts.set(edges, counts);
+  }
+  return (
+    counts.get(edge.hash) === 1 ||
+    edgeRefFor(bodies, bodyId as BodyId, edge, view) !== null
   );
 }
 
@@ -794,6 +1150,7 @@ export interface DimensionState {
       statedChamfers: ReadonlySet<ChamferGroup>;
       statedBlends: ReadonlySet<BlendGroup>;
       statedBoltCircles: ReadonlySet<BoltCircle>;
+      statedSlopes: ReadonlySet<SlopeGroup>;
     }
   >;
 }
@@ -851,6 +1208,7 @@ export function readDimensionState(
   const chamferStatedBy = new Map<ChamferGroup, DrawingAnnotationId>();
   const blendStatedBy = new Map<BlendGroup, DrawingAnnotationId>();
   const boltStatedBy = new Map<BoltCircle, DrawingAnnotationId>();
+  const slopeStatedBy = new Map<SlopeGroup, DrawingAnnotationId>();
 
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
   for (const annotation of sheet.annotations ?? []) {
@@ -865,10 +1223,7 @@ export function readDimensionState(
     if (!reading) {
       audit.unchecked.push({
         annotationId: id,
-        message:
-          annotation.kind === 'angle'
-            ? 'Angles are not checked yet.'
-            : 'It does not measure anything in the current model.'
+        message: 'It does not measure anything in the current model.'
       });
       continue;
     }
@@ -987,6 +1342,59 @@ export function readDimensionState(
       audit.stated += 1;
       continue;
     }
+    if (reading.kind === 'angle') {
+      const [fromBody, toBody] = reading.bodyIds;
+      const body = requirements.get(fromBody);
+      const slopeOf = (edge: EdgeTopology) =>
+        body?.slopes.find((group) =>
+          group.faces.some((face) =>
+            (edge.adjacentFaceHashes ?? []).includes(face.hash)
+          )
+        );
+      const direction = (edge: EdgeTopology) => {
+        const p = edge.points;
+        return axisOf({
+          x: p[p.length - 3]! - p[0]!,
+          y: p[p.length - 2]! - p[1]!,
+          z: p[p.length - 1]! - p[2]!
+        });
+      };
+      const [a, b] = reading.edges;
+      const slopes = [slopeOf(a), slopeOf(b)];
+      // One edge on the slope, the other along an axis in its plane.
+      const index = slopes.findIndex(
+        (group, i) =>
+          group !== undefined &&
+          (() => {
+            const other = direction(reading.edges[1 - i]!);
+            return other !== null && other !== group.along;
+          })()
+      );
+      const group = index < 0 ? undefined : slopes[index];
+      if (!body || fromBody !== toBody || !group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message:
+            slopes[0] && slopes[1]
+              ? 'It measures between two sloped faces, which is not checked yet.'
+              : 'It measures an angle no sloped face needs.'
+        });
+        continue;
+      }
+      const earlier = slopeStatedBy.get(group);
+      if (earlier) {
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message: `Another dimension already states this ${slopeLabel(group, units)}.`,
+          statedBy: [earlier]
+        });
+        continue;
+      }
+      slopeStatedBy.set(group, id);
+      audit.stated += 1;
+      continue;
+    }
     if (reading.kind === 'blend-radius') {
       const group = requirements
         .get(reading.bodyId)
@@ -1010,6 +1418,104 @@ export function readDimensionState(
       }
       blendStatedBy.set(group, id);
       audit.stated += 1;
+      continue;
+    }
+    if (reading.kind === 'diameter' && reading.countersink) {
+      const callout = reading.countersink;
+      const body = requirements.get(reading.bodyId);
+      const group = body?.countersinks.find(
+        (candidate) =>
+          circleInGroup(candidate.hole, reading.circle) &&
+          candidate.chamfer.faces.includes(callout.cone)
+      );
+      if (!body || !group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message: 'It calls out a countersink this check does not read.'
+        });
+        continue;
+      }
+      // The hole's size, the cone's, and a blind hole's depth per copy.
+      let states = 0;
+      if (!sizeStatedBy.has(group.hole)) {
+        sizeStatedBy.set(group.hole, id);
+        states += 1;
+      }
+      if (!chamferStatedBy.has(group.chamfer)) {
+        chamferStatedBy.set(group.chamfer, id);
+        states += 1;
+      }
+      for (const copy of group.instances) {
+        if (copy.through) continue;
+        const graph = linksFor(reading.bodyId, copy.along);
+        const index = (value: number) =>
+          body.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const a = index(copy.opening);
+        const b = index(copy.end);
+        if (a < 0 || b < 0 || graph.find(a) === graph.find(b)) continue;
+        graph.link(a, b, id);
+        states += 1;
+      }
+      if (states === 0)
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message:
+            'Other dimensions already state everything this callout does.',
+          statedBy: []
+        });
+      audit.stated += states;
+      continue;
+    }
+    if (reading.kind === 'diameter' && reading.counterbore) {
+      const callout = reading.counterbore;
+      const body = requirements.get(reading.bodyId);
+      const group = body?.counterbores.find(
+        (candidate) =>
+          circleInGroup(candidate.hole, reading.circle) &&
+          circleInGroup(candidate.bore, callout.bore)
+      );
+      if (!body || !group) {
+        audit.unchecked.push({
+          annotationId: id,
+          message: 'It calls out a counterbore this check does not read.'
+        });
+        continue;
+      }
+      // Both sizes, and per copy the bore's depth and a blind hole's.
+      let states = 0;
+      for (const size of [group.hole, group.bore])
+        if (!sizeStatedBy.has(size)) {
+          sizeStatedBy.set(size, id);
+          states += 1;
+        }
+      for (const copy of group.instances) {
+        const graph = linksFor(reading.bodyId, copy.along);
+        const index = (value: number) =>
+          body.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const spans: [number, number][] = [[copy.opening, copy.floor]];
+        if (!copy.through) spans.push([copy.floor, copy.end]);
+        for (const [from, to] of spans) {
+          const a = index(from);
+          const b = index(to);
+          if (a < 0 || b < 0 || graph.find(a) === graph.find(b)) continue;
+          graph.link(a, b, id);
+          states += 1;
+        }
+      }
+      if (states === 0)
+        audit.redundant.push({
+          annotationId: id,
+          reason: 'duplicate-size',
+          message:
+            'Other dimensions already state everything this callout does.',
+          statedBy: []
+        });
+      audit.stated += states;
       continue;
     }
     const body = requirements.get(reading.bodyId);
@@ -1147,6 +1653,24 @@ export function readDimensionState(
           message: `${label}: add a view that sees it side-on.`
         });
     }
+    for (const group of body.slopes) {
+      audit.required += 1;
+      if (slopeStatedBy.has(group)) continue;
+      // Seen true to its angle only along the axis it runs along.
+      const seen = sheet.views.some(
+        (view) =>
+          view.bodyIds.includes(bodyId as never) &&
+          view.orientation !== 'iso' &&
+          faceOn(view, UNIT[group.along])
+      );
+      const label = slopeLabel(group, units);
+      if (seen) audit.missing.push({ bodyId, message: `${label}.` });
+      else
+        audit.unmeasurable.push({
+          bodyId,
+          message: `${label}: add a view that looks along ${group.along.toUpperCase()}.`
+        });
+    }
     for (const circle of body.boltCircles) {
       audit.required += 1;
       if (boltStatedBy.has(circle)) continue;
@@ -1215,13 +1739,16 @@ export function readDimensionState(
         seen.add(root);
         const message = `${axis.toUpperCase()}: nothing locates ${position.label} from ${order[0]!.position.label}.`;
         const targetViews = groupViews(root);
-        if (datumViews.size > 0 && targetViews.size > 0) {
+        // Auto-dimension links a group to the datum within one view, so
+        // only a view marking both makes it one a dimension can state.
+        const shared = [...targetViews].filter((view) => datumViews.has(view));
+        if (shared.length > 0) {
           // Only a section marks it: say where it can be stated.
-          const sections = [...targetViews].filter((view) => view.section);
+          const sections = shared.filter((view) => view.section);
           audit.missing.push({
             bodyId,
             message:
-              sections.length === targetViews.size
+              sections.length === shared.length
                 ? `${message.slice(0, -1)}, which only section ${sections.map((view) => `${view.section!.label}-${view.section!.label}`).join(' or ')} shows.`
                 : message
           });
@@ -1232,9 +1759,21 @@ export function readDimensionState(
           message:
             viewsAlong(sheet, bodyId, axis).length === 0
               ? `${message.slice(0, -1)}: add a view that shows ${axis.toUpperCase()}.`
-              : approximate.length > 0
-                ? `${message.slice(0, -1)}: no edge or rim marks it in a view yet, and section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot be dimensioned.`
-                : `${message.slice(0, -1)}: no edge or rim marks it in a view yet.`
+              : datumViews.size > 0 && targetViews.size > 0
+                ? `${message.slice(0, -1)}: no one view marks both with an edge a dimension can name.`
+                : position.mark === undefined &&
+                    anchoringViews(
+                      sheet,
+                      bodyId,
+                      bodies,
+                      axis,
+                      position.value,
+                      false
+                    ).length > 0
+                  ? `${message.slice(0, -1)}: every edge that marks it shares its identity with another edge, so no dimension can name it.`
+                  : approximate.length > 0
+                    ? `${message.slice(0, -1)}: no edge or rim marks it in a view yet, and section ${approximate.join(' and ')} was cut from the tessellation, so its edges cannot be dimensioned.`
+                    : `${message.slice(0, -1)}: no edge or rim marks it in a view yet.`
         });
       }
     }
@@ -1251,7 +1790,8 @@ export function readDimensionState(
       statedSizes: new Set(sizeStatedBy.keys()),
       statedChamfers: new Set(chamferStatedBy.keys()),
       statedBlends: new Set(blendStatedBy.keys()),
-      statedBoltCircles: new Set(boltStatedBy.keys())
+      statedBoltCircles: new Set(boltStatedBy.keys()),
+      statedSlopes: new Set(slopeStatedBy.keys())
     });
   return { audit, bodies: state };
 }
@@ -1297,6 +1837,10 @@ function diameterAcross(
         label: (units) => boltLabel(circle, units)
       };
   return null;
+}
+
+export function slopeLabel(group: SlopeGroup, units: UnitSystem): string {
+  return `${formatDrawingNumber(group.angleDeg, defaultDimensionDecimals('angle', units))}° slope to ${group.from.toUpperCase()}`;
 }
 
 export function chamferLabel(group: ChamferGroup, units: UnitSystem): string {

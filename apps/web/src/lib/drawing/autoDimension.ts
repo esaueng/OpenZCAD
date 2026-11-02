@@ -1,5 +1,6 @@
 import {
   DRAWING_VIEW_FRAMES,
+  DRAWING_VIEW_LABELS,
   MAX_DRAWING_ANNOTATIONS,
   createDrawingAnnotationId,
   drawingPaperMm,
@@ -45,10 +46,14 @@ import {
   readDimensionState,
   same,
   sizeLabel,
+  slopeLabel,
   viewEdges,
   type AuditAxis,
+  type BoltCircle,
+  type ChamferGroup,
   type Position,
-  type SizeGroup
+  type SizeGroup,
+  type SlopeGroup
 } from './dimensionAudit';
 import { readChamfer } from './surfaceSharps';
 import {
@@ -142,6 +147,8 @@ interface ViewContext {
   visibleRuns: { points: XY[]; min: XY; max: XY }[];
   /** How far a drawn line may lie from its edge, in model units. */
   tolerance: number;
+  /** Every line the view draws, silhouettes and hidden lines too, on the paper. */
+  drawn: [XY, XY][];
 }
 
 /** A dimension chosen but not yet placed. */
@@ -185,6 +192,36 @@ const FIRST_ROW_MM = 10;
 const ROW_PITCH_MM = 8;
 /** A radius or diameter's text clears its view by this much, in mm. */
 const LEADER_CLEAR_MM = 6;
+/**
+ * Inside placement: how far a span's end must lie within its view to count
+ * as a feature there, the step between dimension-line offsets tried and how
+ * many each way, and how close a dimension line may run beside a drawn
+ * one, in mm.
+ */
+const INSIDE_EDGE_MM = 1;
+const INSIDE_PITCH_MM = 1;
+const HUG_MM = 3;
+/** A span shorter than this keeps its dimension outside the view, in mm. */
+const INSIDE_MIN_SPAN_MM = 8;
+/**
+ * How far an inside dimension's line and text keep from other dimensions'
+ * lines and text at least, and the open space beyond which more counts no
+ * further, in mm.
+ */
+const INSIDE_SPACING_MM = 4;
+/** How far an inside dimension's text and line keep off drawn lines, in mm. */
+const INSIDE_DRAWING_MM = 2.5;
+const INSIDE_ROOM_MM = 6;
+/**
+ * How much farther than the nearest an angle's edges may meet the slope
+ * and still be offered, in model units: copies of one corner at the
+ * slope's other end, never an edge across the part.
+ */
+const ANGLE_REACH_SLACK = 1e-6;
+/** Arc radii an angle dimension tries from its vertex, nearest first, in mm. */
+const ANGLE_RADII_MM = [10, 14, 18, 24, 30, 38] as const;
+/** Leader lengths past the feature tried before leaving the view, in mm. */
+const NEAR_REACH_MM = [5, 8, 12] as const;
 
 const AXES: readonly AuditAxis[] = ['x', 'y', 'z'];
 
@@ -199,16 +236,6 @@ export function planAutoDimensions(
   const skipped: AutoDimensionSkip[] = state.audit.unmeasurable.map(
     (finding) => ({ ...finding })
   );
-  // v48 Ø pitch spans are the check's, and a person's, but not placed here
-  // yet.
-  for (const [bodyId, body] of state.bodies) {
-    for (const circle of body.requirements.boltCircles)
-      if (!body.statedBoltCircles.has(circle))
-        skipped.push({
-          bodyId,
-          message: `${boltLabel(circle, units)}: Auto-dimension does not place pitch diameters yet; add a Ø span between two opposite holes' centres.`
-        });
-  }
   const k = drawingPaperPerModelUnit(sheet.scale, units);
 
   const contexts: ViewContext[] = [];
@@ -232,7 +259,11 @@ export function planAutoDimensions(
         }
         return { points, min, max };
       }),
-      tolerance: drawnCoincidence(bodies, view.bodyIds, k)
+      tolerance: drawnCoincidence(bodies, view.bodyIds, k),
+      drawn: pageSegments(
+        [...projection.visible, ...projection.hidden],
+        viewPageTransform(view, projection.bounds, sheet, units)
+      )
     });
   }
   // Views that measure true size: every principal view and section, never
@@ -425,9 +456,175 @@ export function planAutoDimensions(
 
   for (const [bodyId, body] of state.bodies) {
     const { requirements, links, statedSizes } = body;
+    // Counterbored holes (v50): one callout states the hole, its bore, the
+    // bore's depth and a blind hole's, on the hole's circle face-on with the
+    // bore's rim around it. Either size already stated keeps them apart.
+    const calledOut = new Set<SizeGroup>();
+    for (const group of requirements.counterbores) {
+      if (statedSizes.has(group.hole) || statedSizes.has(group.bore)) continue;
+      const annotationId = createId();
+      const options = circleOptions(
+        measuring,
+        bodyId,
+        edgesOf,
+        group.hole,
+        refOf,
+        holding
+      ).flatMap((circle) => {
+        const hole = circle.edge.curve!.circle!;
+        // The bore's rim about this hole, nearest the viewer first.
+        const rims = edgesOf(circle.context, bodyId)
+          .filter((edge) => {
+            const rim = edge.curve?.circle;
+            return (
+              rim !== undefined &&
+              edge.displayRole !== 'seam' &&
+              circleInGroup(
+                {
+                  ...group.bore,
+                  axes: [{ point: hole.center, direction: hole.axis }]
+                },
+                rim
+              )
+            );
+          })
+          .sort(
+            (a, b) =>
+              Number(edgeVisible(circle.context, b)) -
+              Number(edgeVisible(circle.context, a))
+          );
+        for (const rim of rims) {
+          const bore = refOf(circle.context, bodyId, rim);
+          if (bore)
+            return [
+              {
+                context: circle.context,
+                visible: circle.visible,
+                annotation: {
+                  annotationId,
+                  kind: 'diameter' as const,
+                  viewId: circle.context.view.viewId,
+                  edge: circle.ref,
+                  counterbore: bore,
+                  ...(group.hole.axes.length > 1
+                    ? { count: group.hole.axes.length }
+                    : {}),
+                  placementMm: { x: 0, y: 0 }
+                }
+              }
+            ];
+        }
+        return [];
+      });
+      if (options.length === 0) continue;
+      const what = `${sizeLabel(group.hole, units)} counterbored ${sizeLabel(group.bore, units)}`;
+      plan({ bodyId, what, subject: what, ...options[0]!, options });
+      calledOut.add(group.hole);
+      calledOut.add(group.bore);
+      // Its depths are the callout's: no span asks for them again.
+      for (const copy of group.instances) {
+        const graph = links[copy.along];
+        const index = (value: number) =>
+          requirements.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const spans: [number, number][] = [[copy.opening, copy.floor]];
+        if (!copy.through) spans.push([copy.floor, copy.end]);
+        for (const [from, to] of spans) {
+          const a = index(from);
+          const b = index(to);
+          if (a >= 0 && b >= 0 && graph.find(a) !== graph.find(b))
+            graph.link(a, b, annotationId);
+        }
+      }
+    }
+    // Countersunk holes (v51): one callout states the hole and its cone,
+    // and a blind hole's depth, on the hole's circle with the cone's outer
+    // rim around it. Either already stated keeps them apart.
+    const calledOutChamfers = new Set<ChamferGroup>();
+    for (const group of requirements.countersinks) {
+      if (statedSizes.has(group.hole) || body.statedChamfers.has(group.chamfer))
+        continue;
+      const annotationId = createId();
+      const cones = new Set(group.chamfer.faces.map((face) => face.hash));
+      const options = circleOptions(
+        measuring,
+        bodyId,
+        edgesOf,
+        group.hole,
+        refOf,
+        holding
+      ).flatMap((circle) => {
+        const hole = circle.edge.curve!.circle!;
+        // The widest circle of a cone of the group about this hole.
+        const rims = edgesOf(circle.context, bodyId)
+          .filter((edge) => {
+            const rim = edge.curve?.circle;
+            return (
+              rim !== undefined &&
+              edge.displayRole !== 'seam' &&
+              (edge.adjacentFaceHashes ?? []).some((hash) => cones.has(hash)) &&
+              circleInGroup(
+                {
+                  radius: rim.radius,
+                  blend: false,
+                  axes: [{ point: hole.center, direction: hole.axis }]
+                },
+                rim
+              ) &&
+              rim.radius > hole.radius
+            );
+          })
+          .sort(
+            (a, b) =>
+              b.curve!.circle!.radius - a.curve!.circle!.radius ||
+              Number(edgeVisible(circle.context, b)) -
+                Number(edgeVisible(circle.context, a))
+          );
+        for (const rim of rims) {
+          const ref = refOf(circle.context, bodyId, rim);
+          if (ref)
+            return [
+              {
+                context: circle.context,
+                visible: circle.visible,
+                annotation: {
+                  annotationId,
+                  kind: 'diameter' as const,
+                  viewId: circle.context.view.viewId,
+                  edge: circle.ref,
+                  countersink: ref,
+                  ...(group.hole.axes.length > 1
+                    ? { count: group.hole.axes.length }
+                    : {}),
+                  placementMm: { x: 0, y: 0 }
+                }
+              }
+            ];
+        }
+        return [];
+      });
+      if (options.length === 0) continue;
+      const what = `${sizeLabel(group.hole, units)} countersunk`;
+      plan({ bodyId, what, subject: what, ...options[0]!, options });
+      calledOut.add(group.hole);
+      calledOutChamfers.add(group.chamfer);
+      for (const copy of group.instances) {
+        if (copy.through) continue;
+        const graph = links[copy.along];
+        const index = (value: number) =>
+          requirements.positions[copy.along].findIndex((known) =>
+            same(known.value, value)
+          );
+        const a = index(copy.opening);
+        const b = index(copy.end);
+        if (a >= 0 && b >= 0 && graph.find(a) !== graph.find(b))
+          graph.link(a, b, annotationId);
+      }
+    }
     // Sizes: one radius or diameter per group, on a circle seen face-on.
     for (const group of requirements.sizes) {
-      if (statedSizes.has(group)) continue;
+      if (statedSizes.has(group) || calledOut.has(group)) continue;
       const label = sizeLabel(group, units);
       // The checker already reports a group no view looks along.
       if (
@@ -471,7 +668,8 @@ export function planAutoDimensions(
     const bodyEdges = bodies[bodyId]?.topology?.edges ?? [];
     const bodyFaces = bodies[bodyId]?.topology?.faces ?? [];
     for (const group of requirements.chamfers) {
-      if (body.statedChamfers.has(group)) continue;
+      if (body.statedChamfers.has(group) || calledOutChamfers.has(group))
+        continue;
       const label = chamferLabel(group, units);
       if (
         state.audit.unmeasurable.some(
@@ -553,6 +751,91 @@ export function planAutoDimensions(
       }
       sortOptions(options, bodyId);
       plan({ bodyId, what: label, subject: label, ...options[0]!, options });
+    }
+    // Slopes: one angle per plane, in a view along it, between an edge of
+    // the slope and the axis-aligned edge it meets (through a blend, at the
+    // virtual sharp the two lines make).
+    for (const group of requirements.slopes) {
+      if (body.statedSlopes.has(group)) continue;
+      const label = slopeLabel(group, units);
+      if (
+        state.audit.unmeasurable.some(
+          (f) => f.bodyId === bodyId && f.message.startsWith(`${label}:`)
+        )
+      )
+        continue;
+      const annotationId = createId();
+      const options = angleOptions(
+        measuring,
+        bodyId,
+        group,
+        edgesOf,
+        refOf
+      ).flatMap((option) =>
+        // The outside angle first (v51): the axis edge's ray turned onto its
+        // extension, so a 135° corner reads 45° off the part; then inside.
+        ([1, undefined] as const).map((outside) => ({
+          context: option.context,
+          visible: option.visible,
+          annotation: {
+            annotationId,
+            kind: 'angle' as const,
+            viewId: option.context.view.viewId,
+            edges: option.edges,
+            ...(outside !== undefined ? { outside } : {}),
+            placementMm: { x: 0, y: 0 }
+          }
+        }))
+      );
+      if (options.length === 0) {
+        skipped.push({
+          bodyId,
+          message: `${label}: no view along it shows an edge of it and an edge along an axis that can be told apart from others.`
+        });
+        continue;
+      }
+      sortOptions(options, bodyId);
+      plan({ bodyId, what: label, subject: label, ...options[0]!, options });
+    }
+    // Bolt circles: the pitch diameter as a Ø span (v48) between two
+    // opposite holes' centres, in a view looking along the circle's axis,
+    // where the pair lines up across the page.
+    for (const circle of requirements.boltCircles) {
+      if (body.statedBoltCircles.has(circle)) continue;
+      const label = boltLabel(circle, units);
+      if (
+        state.audit.unmeasurable.some(
+          (f) => f.bodyId === bodyId && f.message.startsWith(`${label}:`)
+        )
+      )
+        continue;
+      const options = boltSpanOptions(
+        measuring,
+        bodyId,
+        circle,
+        edgesOf,
+        refOf
+      );
+      if (options.length === 0) {
+        skipped.push({
+          bodyId,
+          message:
+            circle.count % 2 === 1
+              ? `${label}: an odd count has no opposite holes to span; add its pitch diameter as a note.`
+              : `${label}: no view lines two opposite holes up across the page.`
+        });
+        continue;
+      }
+      sortOptions(options, bodyId);
+      const best = options[0]!;
+      plan({
+        bodyId,
+        what: label,
+        subject: label,
+        context: best.context,
+        visible: best.visible,
+        annotation: { ...best.annotation, annotationId: createId() }
+      });
     }
     // Positions: each group not linked to the datum gets one dimension to it.
     for (const axis of AXES) {
@@ -707,9 +990,15 @@ function circleOptions(
     edge: EdgeTopology
   ) => DrawingEdgeRef | null,
   holding: (context: ViewContext, bodyId: string) => number
-): { context: ViewContext; ref: DrawingEdgeRef; visible: boolean }[] {
+): {
+  context: ViewContext;
+  edge: EdgeTopology;
+  ref: DrawingEdgeRef;
+  visible: boolean;
+}[] {
   const out: {
     context: ViewContext;
+    edge: EdgeTopology;
     ref: DrawingEdgeRef;
     visible: boolean;
     score: number;
@@ -736,6 +1025,7 @@ function circleOptions(
       const visible = edgeVisible(context, edge);
       out.push({
         context,
+        edge,
         ref,
         visible,
         score:
@@ -747,6 +1037,245 @@ function circleOptions(
   }
   // Stable: equals keep the sheet's view order and the kernel's edge order.
   return out.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * The angle dimensions that could state `group`, best first: in each view
+ * looking along the slope, an edge of it paired with the straight edge
+ * along a model axis whose line meets it nearest its own end, both
+ * visible before either hidden.
+ */
+function angleOptions(
+  measuring: readonly ViewContext[],
+  bodyId: string,
+  group: SlopeGroup,
+  edgesOf: (context: ViewContext, bodyId: string) => readonly EdgeTopology[],
+  refOf: (
+    context: ViewContext,
+    bodyId: string,
+    edge: EdgeTopology
+  ) => DrawingEdgeRef | null
+): {
+  context: ViewContext;
+  edges: [DrawingEdgeRef, DrawingEdgeRef];
+  visible: boolean;
+}[] {
+  const out: {
+    context: ViewContext;
+    edges: [DrawingEdgeRef, DrawingEdgeRef];
+    visible: boolean;
+    reach: number;
+    score: number;
+  }[] = [];
+  const at = AXES.indexOf(group.along);
+  const ends = (edge: EdgeTopology): [Vector3, Vector3] => {
+    const p = edge.points;
+    const n = p.length;
+    return [
+      { x: p[0]!, y: p[1]!, z: p[2]! },
+      { x: p[n - 3]!, y: p[n - 2]!, z: p[n - 1]! }
+    ];
+  };
+  /** Straight, and square to the slope's axis: drawn true in the view. */
+  const inPlane = (edge: EdgeTopology) =>
+    edge.displayRole !== 'seam' &&
+    !edge.curve?.circle &&
+    edge.points.length >= 6 &&
+    same(edge.points[at]!, edge.points[edge.points.length - 3 + at]!);
+  const faces = new Set(group.faces.map((face) => face.hash));
+  for (const context of measuring) {
+    if (
+      context.view.section ||
+      !context.view.bodyIds.includes(bodyId as BodyId) ||
+      axisOf(DRAWING_VIEW_FRAMES[context.view.orientation].direction) !==
+        group.along
+    )
+      continue;
+    const edges = edgesOf(context, bodyId).filter(inPlane);
+    const slopeEdges = edges.filter((edge) =>
+      (edge.adjacentFaceHashes ?? []).some((hash) => faces.has(hash))
+    );
+    const axisEdges = edges.filter((edge) => {
+      const [a, b] = ends(edge);
+      const axis = axisOf({ x: b.x - a.x, y: b.y - a.y, z: b.z - a.z });
+      return axis !== null && axis !== group.along;
+    });
+    for (const slope of slopeEdges) {
+      const slopeRef = refOf(context, bodyId, slope);
+      if (!slopeRef) continue;
+      const [s0, s1] = ends(slope);
+      const d: Vector3 = { x: s1.x - s0.x, y: s1.y - s0.y, z: s1.z - s0.z };
+      for (const other of axisEdges) {
+        // Lying in the same plane square to the slope's axis.
+        if (!same(other.points[at]!, slope.points[at]!)) continue;
+        const [o0, o1] = ends(other);
+        const e: Vector3 = { x: o1.x - o0.x, y: o1.y - o0.y, z: o1.z - o0.z };
+        // Where the two lines meet, in the plane of the view.
+        const [p, q] = AXES.filter((axis) => axis !== group.along) as [
+          AuditAxis,
+          AuditAxis
+        ];
+        const cross = d[p] * e[q] - d[q] * e[p];
+        if (Math.abs(cross) < 1e-12) continue;
+        const t = ((o0[p] - s0[p]) * e[q] - (o0[q] - s0[q]) * e[p]) / cross;
+        const meet = { [p]: s0[p] + t * d[p], [q]: s0[q] + t * d[q] } as Record<
+          AuditAxis,
+          number
+        >;
+        const gap = (point: Vector3) =>
+          Math.hypot(point[p] - meet[p], point[q] - meet[q]);
+        const reach = Math.min(gap(s0), gap(s1)) + Math.min(gap(o0), gap(o1));
+        const otherRef = refOf(context, bodyId, other);
+        if (!otherRef) continue;
+        const visible =
+          edgeVisible(context, slope) && edgeVisible(context, other);
+        out.push({
+          context,
+          edges: [slopeRef, otherRef],
+          visible,
+          reach,
+          score: (visible ? 1e6 : 0) - reach
+        });
+      }
+    }
+  }
+  // Only edges that meet the slope (at its corner, or through a blend at
+  // the virtual sharp): any farther pairs lines that cross off the part.
+  const nearest = Math.min(...out.map((option) => option.reach));
+  return out
+    .filter((option) => option.reach <= nearest + ANGLE_REACH_SLACK)
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * The Ø spans that could state a bolt circle's pitch: per view looking along
+ * its axis, each pair of its holes opposite across its centre whose centres
+ * line up along the page's horizontal or vertical, on their face-on rims.
+ */
+function boltSpanOptions(
+  measuring: readonly ViewContext[],
+  bodyId: string,
+  circle: BoltCircle,
+  edgesOf: (context: ViewContext, bodyId: string) => readonly EdgeTopology[],
+  refOf: (
+    context: ViewContext,
+    bodyId: string,
+    edge: EdgeTopology
+  ) => DrawingEdgeRef | null
+): {
+  context: ViewContext;
+  visible: boolean;
+  annotation: DrawingAnnotation;
+}[] {
+  const out: {
+    context: ViewContext;
+    visible: boolean;
+    annotation: DrawingAnnotation;
+  }[] = [];
+  const d = circle.direction;
+  const length = Math.hypot(d.x, d.y, d.z);
+  for (const context of measuring) {
+    if (
+      context.view.section ||
+      !context.view.bodyIds.includes(bodyId as BodyId)
+    )
+      continue;
+    const frame = DRAWING_VIEW_FRAMES[context.view.orientation];
+    const facing =
+      (frame.direction.x * d.x +
+        frame.direction.y * d.y +
+        frame.direction.z * d.z) /
+      length;
+    if (Math.abs(Math.abs(facing) - 1) > 1e-6) continue;
+    // One rim per hole, nearest the viewer first.
+    const rims = new Map<
+      string,
+      {
+        edge: EdgeTopology;
+        ref: DrawingEdgeRef;
+        visible: boolean;
+        center: Vector3;
+      }
+    >();
+    for (const edge of edgesOf(context, bodyId)) {
+      const c = edge.curve?.circle;
+      if (
+        !c ||
+        edge.displayRole === 'seam' ||
+        !same(c.radius, circle.holeRadius)
+      )
+        continue;
+      const between = {
+        x: c.center.x - circle.center.x,
+        y: c.center.y - circle.center.y,
+        z: c.center.z - circle.center.z
+      };
+      const along =
+        (between.x * d.x + between.y * d.y + between.z * d.z) / length;
+      const off = Math.sqrt(
+        Math.max(
+          0,
+          between.x ** 2 + between.y ** 2 + between.z ** 2 - along * along
+        )
+      );
+      if (!same(off, circle.pitchRadius)) continue;
+      const ref = refOf(context, bodyId, edge);
+      if (!ref) continue;
+      const visible = edgeVisible(context, edge);
+      // Keyed by the hole's position across the axis.
+      const key = [
+        between.x - (along * d.x) / length,
+        between.y - (along * d.y) / length,
+        between.z - (along * d.z) / length
+      ]
+        .map((n) => Math.round(n * 1e6))
+        .join(',');
+      const known = rims.get(key);
+      if (!known || (visible && !known.visible))
+        rims.set(key, { edge, ref, visible, center: c.center });
+    }
+    const holes = [...rims.values()];
+    for (let i = 0; i < holes.length; i += 1)
+      for (let j = i + 1; j < holes.length; j += 1) {
+        const a = holes[i]!;
+        const b = holes[j]!;
+        const span = {
+          x: b.center.x - a.center.x,
+          y: b.center.y - a.center.y,
+          z: b.center.z - a.center.z
+        };
+        const across = (axis: Vector3) =>
+          Math.abs(span.x * axis.x + span.y * axis.y + span.z * axis.z);
+        const total = Math.hypot(span.x, span.y, span.z);
+        // Opposite: a diameter apart.
+        if (
+          !same(across(frame.x) ** 2 + across(frame.up) ** 2, total ** 2) ||
+          !same(total, 2 * circle.pitchRadius)
+        )
+          continue;
+        const direction = same(across(frame.x), total)
+          ? ('horizontal' as const)
+          : same(across(frame.up), total)
+            ? ('vertical' as const)
+            : null;
+        if (!direction) continue;
+        out.push({
+          context,
+          visible: a.visible && b.visible,
+          annotation: {
+            annotationId: '' as DrawingAnnotationId,
+            kind: 'linear',
+            viewId: context.view.viewId,
+            direction,
+            from: { edge: a.ref, anchor: 'center' },
+            to: { edge: b.ref, anchor: 'center' },
+            diameter: true,
+            placementMm: { x: 0, y: 0 }
+          }
+        });
+      }
+  }
+  return out;
 }
 
 /** The linear dimension that links the datum group to a target group. */
@@ -912,6 +1441,260 @@ function edgeVisible(context: ViewContext, edge: EdgeTopology): boolean {
 // ---------------------------------------------------------------------------
 // Placement
 
+function pageSegments(
+  runs: readonly ArrayLike<number>[],
+  toPage: (u: number, v: number) => XY
+): [XY, XY][] {
+  const out: [XY, XY][] = [];
+  for (const run of runs) {
+    let previous: XY | null = null;
+    for (let i = 0; i + 1 < run.length; i += 2) {
+      const point = toPage(run[i]!, run[i + 1]!);
+      if (previous) out.push([previous, point]);
+      previous = point;
+    }
+  }
+  return out;
+}
+
+/** How far placed text keeps off other text and dimension lines, in mm. */
+const TEXT_AIR_MM = 1;
+
+/** How far text keeps off the drawing, and a leader's crossing off its foot, in mm. */
+const DRAWING_CLEAR_MM = 0.8;
+
+/**
+ * Whether a footprint inside its view stays off the drawing: its text
+ * touches no drawn line, and its leader or dimension line crosses one only
+ * at its own foot (the arrow on the feature, or a centre). Extension lines
+ * may cross the part, as they do from a hole's centre.
+ */
+function clearOfDrawing(print: Footprint, context: ViewContext): boolean {
+  const text = rectOf(print.box, DRAWING_CLEAR_MM);
+  const reach: Rect = { ...text };
+  for (const line of print.measuring)
+    for (const [x, y] of line) {
+      reach.minX = Math.min(reach.minX, x);
+      reach.minY = Math.min(reach.minY, y);
+      reach.maxX = Math.max(reach.maxX, x);
+      reach.maxY = Math.max(reach.maxY, y);
+    }
+  for (const segment of context.drawn) {
+    const [[ax, ay], [bx, by]] = segment;
+    if (
+      Math.max(ax, bx) < reach.minX ||
+      Math.min(ax, bx) > reach.maxX ||
+      Math.max(ay, by) < reach.minY ||
+      Math.min(ay, by) > reach.maxY
+    )
+      continue;
+    if (segmentHitsRect(segment, text)) return false;
+    for (const line of print.measuring) {
+      const at = crossing(line, segment) ?? touching(line, segment);
+      if (
+        at &&
+        !print.feet.some(
+          (foot) =>
+            Math.hypot(foot[0] - at[0], foot[1] - at[1]) <= DRAWING_CLEAR_MM
+        )
+      )
+        return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Whether a dimension line runs alongside a drawn line closer than
+ * {@link HUG_MM}, where it would read as part of the outline.
+ */
+function huggingDrawing(print: Footprint, context: ViewContext): boolean {
+  for (const line of print.measuring) {
+    const [p, q] = line;
+    const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    if (length < 1e-9) continue;
+    const unit: XY = [(q[0] - p[0]) / length, (q[1] - p[1]) / length];
+    for (const [r, t] of context.drawn) {
+      const dx = t[0] - r[0];
+      const dy = t[1] - r[1];
+      const other = Math.hypot(dx, dy);
+      if (other < 1e-9 || Math.abs(unit[0] * dy - unit[1] * dx) > 0.05 * other)
+        continue;
+      const off = Math.abs((r[0] - p[0]) * unit[1] - (r[1] - p[1]) * unit[0]);
+      if (off >= HUG_MM) continue;
+      const s0 = (r[0] - p[0]) * unit[0] + (r[1] - p[1]) * unit[1];
+      const s1 = (t[0] - p[0]) * unit[0] + (t[1] - p[1]) * unit[1];
+      if (
+        Math.min(length, Math.max(s0, s1)) - Math.max(0, Math.min(s0, s1)) >
+        0.5
+      )
+        return true;
+    }
+  }
+  return false;
+}
+
+/** Within about 30° of each other. */
+function nearlyParallel([p, q]: [XY, XY], [r, s]: [XY, XY]): boolean {
+  const a: XY = [q[0] - p[0], q[1] - p[1]];
+  const b: XY = [s[0] - r[0], s[1] - r[1]];
+  const scale = Math.hypot(...a) * Math.hypot(...b);
+  return scale > 1e-12 && Math.abs(a[0] * b[1] - a[1] * b[0]) <= 0.5 * scale;
+}
+
+function segmentDistance([p, q]: [XY, XY], [r, s]: [XY, XY]): number {
+  if (crossing([p, q], [r, s])) return 0;
+  return Math.min(
+    distanceToSegment(p, r, s),
+    distanceToSegment(q, r, s),
+    distanceToSegment(r, p, q),
+    distanceToSegment(s, p, q)
+  );
+}
+
+/** Distance from a segment to a rectangle (0 when it enters it). */
+function rectDistance(line: [XY, XY], rect: Rect): number {
+  if (segmentHitsRect(line, rect)) return 0;
+  const corners: XY[] = [
+    [rect.minX, rect.minY],
+    [rect.maxX, rect.minY],
+    [rect.maxX, rect.maxY],
+    [rect.minX, rect.maxY]
+  ];
+  return Math.min(
+    ...corners.map((corner, i) =>
+      segmentDistance(line, [corner, corners[(i + 1) % 4]!])
+    )
+  );
+}
+
+/**
+ * The open space round a dimension placed inside its view: the least
+ * distance from its dimension line (away from its arrows) and its text to
+ * a drawn line, and, apart, to another dimension's lines or text.
+ */
+function openness(
+  print: Footprint,
+  context: ViewContext,
+  others: readonly Footprint[]
+): { drawing: number; dimensions: number } {
+  const text = rectOf(print.box);
+  // Its dimension line short of the arrows, which sit on the features.
+  const trimmed = [...print.measuring].flatMap(([p, q]): [XY, XY][] => {
+    const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    const cut = 1.5;
+    if (length <= 2 * cut) return [];
+    const u: XY = [(q[0] - p[0]) / length, (q[1] - p[1]) / length];
+    return [
+      [
+        [p[0] + u[0] * cut, p[1] + u[1] * cut],
+        [q[0] - u[0] * cut, q[1] - u[1] * cut]
+      ]
+    ];
+  });
+  let drawing = Infinity;
+  for (const segment of context.drawn) {
+    drawing = Math.min(drawing, rectDistance(segment, text));
+    // Lines across it end it at its features; only those beside it crowd it.
+    for (const line of trimmed)
+      if (nearlyParallel(line, segment))
+        drawing = Math.min(drawing, segmentDistance(line, segment));
+    if (drawing <= 0) return { drawing: 0, dimensions: 0 };
+  }
+  let dimensions = Infinity;
+  for (const other of others) {
+    const box = rectOf(other.box);
+    for (const line of trimmed)
+      dimensions = Math.min(dimensions, rectDistance(line, box));
+    for (const line of other.lines) {
+      dimensions = Math.min(dimensions, rectDistance(line, text));
+      if (other.measuring.has(line))
+        for (const mine of trimmed)
+          dimensions = Math.min(dimensions, segmentDistance(mine, line));
+    }
+  }
+  return { drawing, dimensions };
+}
+
+/**
+ * A footprint less the parts of its extension lines that lie along a line
+ * the view draws (one run out along the face it measures): drawn over the
+ * outline they add no mark of their own, so they block nothing the outline
+ * itself would not.
+ */
+export function withoutCoincidentExtensions(
+  print: Footprint,
+  drawn: readonly [XY, XY][]
+): Footprint {
+  let changed = false;
+  const lines: [XY, XY][] = [];
+  for (const line of print.lines) {
+    if (print.measuring.has(line)) {
+      lines.push(line);
+      continue;
+    }
+    const pieces = uncovered(line, drawn);
+    if (pieces.length !== 1 || pieces[0] !== line) changed = true;
+    lines.push(...pieces);
+  }
+  return changed ? { ...print, lines } : print;
+}
+
+/** The parts of `line` no drawn segment runs along (within 0.2 mm). */
+function uncovered(line: [XY, XY], drawn: readonly [XY, XY][]): [XY, XY][] {
+  const [p, q] = line;
+  const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+  if (length < 1e-9) return [line];
+  const unit: XY = [(q[0] - p[0]) / length, (q[1] - p[1]) / length];
+  const covered: [number, number][] = [];
+  for (const [r, t] of drawn) {
+    const off = (point: XY) =>
+      Math.abs((point[0] - p[0]) * unit[1] - (point[1] - p[1]) * unit[0]);
+    if (off(r) > 0.2 || off(t) > 0.2) continue;
+    const along = (point: XY) =>
+      (point[0] - p[0]) * unit[0] + (point[1] - p[1]) * unit[1];
+    const lo = Math.max(0, Math.min(along(r), along(t)));
+    const hi = Math.min(length, Math.max(along(r), along(t)));
+    if (hi - lo > 1e-6) covered.push([lo, hi]);
+  }
+  if (covered.length === 0) return [line];
+  covered.sort((x, y) => x[0] - y[0]);
+  const at = (d: number): XY => [p[0] + unit[0] * d, p[1] + unit[1] * d];
+  const out: [XY, XY][] = [];
+  let from = 0;
+  for (const [lo, hi] of covered) {
+    if (lo - from > 0.5) out.push([at(from), at(lo)]);
+    from = Math.max(from, hi);
+  }
+  if (length - from > 0.5) out.push([at(from), at(length)]);
+  return out;
+}
+
+/** Where `line` ends on `segment` (a crossing `crossing` leaves out), or null. */
+function touching(line: [XY, XY], segment: [XY, XY]): XY | null {
+  for (const end of line)
+    if (distanceToSegment(end, segment[0], segment[1]) <= 1e-6) return end;
+  return null;
+}
+
+/**
+ * The editor's view name under each outside view (left aligned, below its
+ * outline), at the size it shows at 100 %: never on the sheet's exports,
+ * but a dimension over it reads badly while editing.
+ */
+const VIEW_LABEL_GAP_MM = 3;
+const VIEW_LABEL_SIZE_MM = 4;
+function viewLabelRect(view: DrawingView, box: AnnotationBox): Rect | null {
+  if (view.section) return null;
+  const name = DRAWING_VIEW_LABELS[view.orientation];
+  return {
+    minX: box.x - 0.5,
+    maxX: box.x + 0.62 * VIEW_LABEL_SIZE_MM * name.length + 0.5,
+    minY: box.y - VIEW_LABEL_GAP_MM - VIEW_LABEL_SIZE_MM - 1.2,
+    maxY: box.y - VIEW_LABEL_GAP_MM + 0.5
+  };
+}
+
 interface Rect {
   minX: number;
   minY: number;
@@ -1052,13 +1835,16 @@ function runAlong([p, q]: [XY, XY], [r, s]: [XY, XY]): boolean {
 
 /**
  * How two footprints clash: text over text, a line through text, a
- * dimension line or leader running along another line, or lines crossing
- * anywhere but at a dimension's foot (where a shared baseline extension
- * line meets the dimensions stacked on it). Null when clear.
+ * dimension line or leader running along another line, or a dimension line
+ * or leader crossed anywhere but at a dimension's foot (where a shared
+ * baseline extension line meets the dimensions stacked on it). Extension
+ * lines crossing each other is no clash. Null when clear.
  */
 export function footprintClash(
   a: Footprint,
-  b: Footprint
+  b: Footprint,
+  /** Let a dimension line or leader cross an extension line, as a last resort. */
+  crossExtensions = false
 ): 'text' | 'line-through-text' | 'crossing' | 'collinear' | null {
   const boxA = rectOf(a.box);
   const boxB = rectOf(b.box);
@@ -1071,8 +1857,13 @@ export function footprintClash(
   const feet = [...a.feet, ...b.feet];
   for (const la of a.lines)
     for (const lb of b.lines) {
-      if ((a.measuring.has(la) || b.measuring.has(lb)) && runAlong(la, lb))
-        return 'collinear';
+      const measures = a.measuring.has(la) || b.measuring.has(lb);
+      if (measures && runAlong(la, lb)) return 'collinear';
+      // Extension lines may cross each other, as on any drawing; a
+      // dimension line or leader is never crossed.
+      if (!measures) continue;
+      if (crossExtensions && !(a.measuring.has(la) && b.measuring.has(lb)))
+        continue;
       const at = crossing(la, lb);
       if (
         at &&
@@ -1102,6 +1893,10 @@ function placeAll(
     maxY: paper.height - SHEET_MARGIN_MM
   };
   const title = rectOf(titleBlockBox(sheet));
+  const labels = contexts.flatMap((context) => {
+    const rect = viewLabelRect(context.view, context.box);
+    return rect ? [rect] : [];
+  });
   const byView = new Map(
     contexts.map((context) => [context.view.viewId, context])
   );
@@ -1128,8 +1923,13 @@ function placeAll(
       k,
       annotationAnchor(annotation, context?.view)
     );
+    const print = annotationFootprint(
+      layout,
+      resolution.resolved,
+      context?.toPage ?? null
+    );
     taken.push(
-      annotationFootprint(layout, resolution.resolved, context?.toPage ?? null)
+      context ? withoutCoincidentExtensions(print, context.drawn) : print
     );
   }
 
@@ -1137,7 +1937,8 @@ function placeAll(
   const fits = (
     print: Footprint,
     own: ViewContext,
-    linear: boolean
+    linear: boolean,
+    air = true
   ): boolean => {
     const box = rectOf(print.box);
     if (!rectInside(box, bounds) || rectsOverlap(box, title)) return false;
@@ -1151,6 +1952,8 @@ function placeAll(
         )
           return false;
     if (print.lines.some((line) => segmentHitsRect(line, title))) return false;
+    // Text only: the names are the editor's, and a line under one is fine.
+    if (labels.some((label) => rectsOverlap(box, label))) return false;
     for (const context of contexts) {
       const outline = rectOf(context.box, 1);
       if (context === own) {
@@ -1163,7 +1966,18 @@ function placeAll(
       )
         return false;
     }
-    return taken.every((other) => footprintClash(print, other) === null);
+    // Text keeps a little air from other text and dimension lines, not
+    // merely off them (extension lines may pass close).
+    const margin = rectOf(print.box, TEXT_AIR_MM);
+    return taken.every(
+      (other) =>
+        footprintClash(print, other, !air) === null &&
+        (!air ||
+          (!rectsOverlap(margin, rectOf(other.box)) &&
+            ![...other.measuring].some((line) =>
+              segmentHitsRect(line, margin)
+            )))
+    );
   };
 
   const round = (value: number) => Math.round(value * 10) / 10;
@@ -1205,7 +2019,7 @@ function placeAll(
     annotation: DrawingAnnotation,
     print: Footprint
   ) => {
-    taken.push(print);
+    taken.push(withoutCoincidentExtensions(print, entry.context.drawn));
     annotations.push({ ...entry, annotation });
   };
 
@@ -1239,50 +2053,180 @@ function placeAll(
       order.get(p.entry.context)! - order.get(q.entry.context)! ||
       p.span - q.span
   );
-  for (const { entry, a, b, horizontal } of linears) {
+  /**
+   * A linear dimension placed inside its view, as a draftsman dimensions a
+   * hole or an inner face where it is: only a span that ends inside the
+   * view along the axis it measures (an overall size stays outside), with
+   * its dimension line through open space off every drawn line but at its
+   * own arrows, and its text off the drawing. Line offsets nearest the
+   * feature are tried first, the text mid-span and then past either end.
+   */
+  const placeInside = (
+    entry: Planned,
+    a: XY,
+    b: XY,
+    horizontal: boolean
+  ): { annotation: DrawingAnnotation; print: Footprint } | null => {
+    if (entry.context.view.section) return null;
     const box = entry.context.box;
-    const middle = horizontal
-      ? (a[1] + b[1]) / 2 >= box.y + box.height / 2
-      : (a[0] + b[0]) / 2 >= box.x + box.width / 2;
-    // The side nearer the points it measures first, then the other.
-    let done = false;
-    for (const far of [middle, !middle]) {
-      for (let row = 0; !done; row += 1) {
-        const offset = FIRST_ROW_MM + row * ROW_PITCH_MM;
-        const page: XY = horizontal
-          ? [
-              (a[0] + b[0]) / 2,
-              far ? box.y + box.height + offset : box.y - offset
-            ]
-          : [
-              far ? box.x + box.width + offset : box.x - offset,
-              (a[1] + b[1]) / 2
-            ];
-        if (
-          page[0] < bounds.minX ||
-          page[0] > bounds.maxX ||
-          page[1] < bounds.minY ||
-          page[1] > bounds.maxY
-        )
-          break;
+    const along = horizontal ? 0 : 1;
+    const across = horizontal ? 1 : 0;
+    const lo = horizontal ? box.x : box.y;
+    const hi = lo + (horizontal ? box.width : box.height);
+    const interior = (p: XY) =>
+      p[along] > lo + INSIDE_EDGE_MM && p[along] < hi - INSIDE_EDGE_MM;
+    if (!interior(a) && !interior(b)) return null;
+    const low = Math.min(a[along], b[along]);
+    const high = Math.max(a[along], b[along]);
+    // Too short to carry its text and arrows between features: outside.
+    if (high - low < INSIDE_MIN_SPAN_MM) return null;
+    const crossLo = horizontal ? box.y : box.x;
+    const crossHi = crossLo + (horizontal ? box.height : box.width);
+    const feature = interior(b) ? b : a;
+    const texts = [
+      (low + high) / 2,
+      ...[4, 7].flatMap((gap) => [low - gap, high + gap])
+    ];
+    // Every offset across the view; the most open space wins, then the
+    // nearest the feature, then text mid-span.
+    let best: {
+      annotation: DrawingAnnotation;
+      print: Footprint;
+      score: number;
+    } | null = null;
+    for (
+      let at = crossLo + INSIDE_EDGE_MM;
+      at < crossHi - INSIDE_EDGE_MM;
+      at += INSIDE_PITCH_MM
+    )
+      texts.forEach((text, index) => {
+        const page: XY = horizontal ? [text, at] : [at, text];
         const annotation = placedAt(entry, page);
         const laid = layoutOf(entry, annotation);
-        if (!laid) break;
-        if (fits(laid.print, entry.context, true)) {
-          accept(entry, annotation, laid.print);
-          done = true;
-        }
-      }
-      if (done) break;
+        if (!laid) return;
+        if (
+          // Inside means its text too: never hung out past the outline.
+          !rectInside(rectOf(laid.print.box), rectOf(box)) ||
+          !fits(laid.print, entry.context, false) ||
+          !clearOfDrawing(laid.print, entry.context) ||
+          huggingDrawing(laid.print, entry.context)
+        )
+          return;
+        const { drawing, dimensions } = openness(
+          laid.print,
+          entry.context,
+          taken
+        );
+        if (drawing < INSIDE_DRAWING_MM || dimensions < INSIDE_SPACING_MM)
+          return;
+        const room = Math.min(drawing, dimensions);
+        const score =
+          10 * Math.min(room, INSIDE_ROOM_MM) -
+          Math.abs(at - feature[across]) / 4 -
+          (index === 0 ? 0 : 6);
+        if (!best || score > best.score)
+          best = { annotation, print: laid.print, score };
+      });
+    if (best) {
+      const { annotation, print } = best;
+      return { annotation, print };
     }
-    if (!done) unplaced.push(entry);
-  }
+    return null;
+  };
+
+  const placeLinears = () => {
+    for (const { entry, a, b, horizontal } of linears) {
+      const box = entry.context.box;
+      const middle = horizontal
+        ? (a[1] + b[1]) / 2 >= box.y + box.height / 2
+        : (a[0] + b[0]) / 2 >= box.x + box.width / 2;
+      // Beside the feature it locates, inside the view, when it ends on one;
+      // then out past the outline, the side nearer the points it measures
+      // first.
+      let done = false;
+      const inside = placeInside(entry, a, b, horizontal);
+      if (inside) {
+        accept(entry, inside.annotation, inside.print);
+        done = true;
+      }
+      for (const far of done ? [] : [middle, !middle]) {
+        for (let row = 0; !done; row += 1) {
+          const offset = FIRST_ROW_MM + row * ROW_PITCH_MM;
+          const page: XY = horizontal
+            ? [
+                (a[0] + b[0]) / 2,
+                far ? box.y + box.height + offset : box.y - offset
+              ]
+            : [
+                far ? box.x + box.width + offset : box.x - offset,
+                (a[1] + b[1]) / 2
+              ];
+          if (
+            page[0] < bounds.minX ||
+            page[0] > bounds.maxX ||
+            page[1] < bounds.minY ||
+            page[1] > bounds.maxY
+          )
+            break;
+          const annotation = placedAt(entry, page);
+          const laid = layoutOf(entry, annotation);
+          if (!laid) break;
+          if (fits(laid.print, entry.context, true)) {
+            accept(entry, annotation, laid.print);
+            done = true;
+          }
+        }
+        if (done) break;
+      }
+      if (!done) unplaced.push(entry);
+    }
+  };
 
   /**
    * A radius, diameter or chamfer's best placement: text out of its view on
    * a leader that clears everything (`clear`), else anywhere it fits. A
    * chamfer's leader starts at the middle of one of its drawn sides.
    */
+  /**
+   * An angle's arc, at the radius from its vertex that first fits clear of
+   * the drawing (its text lies on the arc's middle), else the nearest that
+   * fits at all.
+   */
+  const placeAngle = (
+    entry: Planned,
+    resolved: Extract<ResolvedAnnotation, { kind: 'angle' }>
+  ): {
+    annotation: DrawingAnnotation;
+    print: Footprint;
+    clear: boolean;
+  } | null => {
+    const vertex = entry.context.toPage(...resolved.vertex);
+    // Within both edges first, so the arc ends on them and needs no
+    // extension lines; then out past the shorter.
+    const shortest = Math.min(
+      ...resolved.rays.map(([, far]) => {
+        const p = entry.context.toPage(...far);
+        return Math.hypot(p[0] - vertex[0], p[1] - vertex[1]);
+      })
+    );
+    const radii = [
+      ...[0.5, 0.75].map((share) => share * shortest).filter((r) => r >= 6),
+      ...ANGLE_RADII_MM
+    ];
+    let fallback: { annotation: DrawingAnnotation; print: Footprint } | null =
+      null;
+    for (const air of [true, false])
+      for (const radius of radii) {
+        const annotation = placedAt(entry, [vertex[0] + radius, vertex[1]]);
+        const laid = layoutOf(entry, annotation);
+        if (!laid || !fits(laid.print, entry.context, false, air)) continue;
+        if (clearOfDrawing(laid.print, entry.context))
+          return { annotation, print: laid.print, clear: true };
+        fallback ??= { annotation, print: laid.print };
+      }
+    return fallback && { ...fallback, clear: false };
+  };
+
   const placeRadial = (
     entry: Planned
   ): {
@@ -1294,6 +2238,7 @@ function placeAll(
     if (!first) return null;
     const resolved = first.resolved;
     const toPage = entry.context.toPage;
+    if (resolved.kind === 'angle') return placeAngle(entry, resolved);
     const origins: { c: XY; r: number; aim?: XY }[] = [];
     if (resolved.kind === 'radius' || resolved.kind === 'diameter') {
       const c = toPage(...resolved.center);
@@ -1328,64 +2273,86 @@ function placeAll(
     };
     let fallback: { annotation: DrawingAnnotation; print: Footprint } | null =
       null;
-    for (const { c, r, aim } of origins) {
-      const outward =
-        Math.hypot(c[0] - centre[0], c[1] - centre[1]) > 1e-6
-          ? [c[0] - centre[0], c[1] - centre[1]]
-          : [1, 1];
-      const directions: XY[] = Array.from({ length: 8 }, (_, index) => {
-        const angle = Math.PI / 4 + (index * Math.PI) / 4;
-        return [Math.cos(angle), Math.sin(angle)] as XY;
-      }).sort(
-        (u, v) =>
-          v[0] * outward[0]! +
-          v[1] * outward[1]! -
-          (u[0] * outward[0]! + u[1] * outward[1]!)
-      );
-      if (aim) directions.unshift(aim);
-      const reaches = (u: XY) => [
-        r + 5,
-        ...[0, 8, 18, 30].map((extra) => exit(c, u) + LEADER_CLEAR_MM + extra)
-      ];
-      for (let step = 0; step < 5; step += 1)
-        for (const u of directions) {
-          const reach = reaches(u)[step]!;
-          if (reach < r + 3) continue;
-          const annotation = placedAt(entry, [
-            c[0] + u[0] * reach,
-            c[1] + u[1] * reach
-          ]);
-          const laid = layoutOf(entry, annotation);
-          if (!laid || !fits(laid.print, entry.context, false)) continue;
-          if (!rectsOverlap(rectOf(laid.print.box), outline))
-            return { annotation, print: laid.print, clear: true };
-          fallback ??= { annotation, print: laid.print };
-        }
-    }
+    // With air round its text first; boxed in by dimensions, without it
+    // and with its leader free to cross an extension line.
+    for (const air of [true, false])
+      for (const { c, r, aim } of origins) {
+        const outward =
+          Math.hypot(c[0] - centre[0], c[1] - centre[1]) > 1e-6
+            ? [c[0] - centre[0], c[1] - centre[1]]
+            : [1, 1];
+        const directions: XY[] = Array.from({ length: 16 }, (_, index) => {
+          const angle = Math.PI / 4 + (index * Math.PI) / 8;
+          return [Math.cos(angle), Math.sin(angle)] as XY;
+        }).sort(
+          (u, v) =>
+            v[0] * outward[0]! +
+            v[1] * outward[1]! -
+            (u[0] * outward[0]! + u[1] * outward[1]!)
+        );
+        if (aim) directions.unshift(aim);
+        // Near the feature first, as a draftsman would: a short leader into
+        // open space in or beside the view, its text off every drawn line.
+        // Only then out past the view's outline, farther each step.
+        const reaches = (u: XY) => [
+          ...NEAR_REACH_MM.map((extra) => r + extra),
+          ...[0, 8, 18, 30].map((extra) => exit(c, u) + LEADER_CLEAR_MM + extra)
+        ];
+        const steps = NEAR_REACH_MM.length + 4;
+        for (let step = 0; step < steps; step += 1)
+          for (const u of directions) {
+            const reach = reaches(u)[step]!;
+            if (reach < r + 3) continue;
+            const near = step < NEAR_REACH_MM.length;
+            if (!near && reach < r + NEAR_REACH_MM.at(-1)!) continue;
+            const annotation = placedAt(entry, [
+              c[0] + u[0] * reach,
+              c[1] + u[1] * reach
+            ]);
+            const laid = layoutOf(entry, annotation);
+            if (!laid || !fits(laid.print, entry.context, false, air)) continue;
+            const inside = rectsOverlap(rectOf(laid.print.box), outline);
+            if (!inside || clearOfDrawing(laid.print, entry.context))
+              return { annotation, print: laid.print, clear: true };
+            fallback ??= { annotation, print: laid.print };
+          }
+      }
     return fallback && { ...fallback, clear: false };
   };
-  // Then each radius or diameter: the first of its circles that takes a
-  // clear leader, or else the best one where it fits at all.
-  for (const entry of planned) {
-    if (entry.annotation.kind === 'linear') continue;
-    let pick: {
-      entry: Planned;
-      annotation: DrawingAnnotation;
-      print: Footprint;
-    } | null = null;
-    for (const option of entry.options ?? [entry]) {
-      const candidate = { ...entry, ...option };
-      const placed = placeRadial(candidate);
-      if (!placed) continue;
-      if (placed.clear) {
-        pick = { entry: candidate, ...placed };
-        break;
+  // Each radius, diameter, chamfer or angle: the first of its options that
+  // takes a clear placement, or else the best one where it fits at all.
+  const placeOthers = (angles: boolean) => {
+    for (const entry of planned) {
+      if (
+        entry.annotation.kind === 'linear' ||
+        (entry.annotation.kind === 'angle') !== angles
+      )
+        continue;
+      let pick: {
+        entry: Planned;
+        annotation: DrawingAnnotation;
+        print: Footprint;
+      } | null = null;
+      for (const option of entry.options ?? [entry]) {
+        const candidate = { ...entry, ...option };
+        const placed = placeRadial(candidate);
+        if (!placed) continue;
+        if (placed.clear) {
+          pick = { entry: candidate, ...placed };
+          break;
+        }
+        pick ??= { entry: candidate, ...placed };
       }
-      pick ??= { entry: candidate, ...placed };
+      if (pick) accept(pick.entry, pick.annotation, pick.print);
+      else unplaced.push(entry);
     }
-    if (pick) accept(pick.entry, pick.annotation, pick.print);
-    else unplaced.push(entry);
-  }
+  };
+  // Angles first: an arc has one vertex and few radii to try, where a span
+  // has rows and open space to move into. Then spans, shortest first, then
+  // leaders, which go wherever is left.
+  placeOthers(true);
+  placeLinears();
+  placeOthers(false);
   // Back in the order they were planned: sizes, then positions by axis.
   const rank = new Map(
     planned.map((entry, index) => [entry.annotation.annotationId, index])

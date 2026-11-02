@@ -221,6 +221,56 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
     adapter.dispose();
   });
 
+  it('draws the idle model without upgrading its boolean probe or replaying it on return', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const caching = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    const fresh = await createExactKernelAdapter();
+    const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
+    try {
+      const { document, bodyId } = fusedPlateDocument();
+      await caching.syncDocument(
+        document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
+      spy.mockClear();
+      const drawn = await caching.drawingTessellation(document, [bodyId]);
+      expect(spy).not.toHaveBeenCalled();
+      await caching.drawingSection(document, [bodyId], {
+        normal: { x: 0, y: 0, z: 1 },
+        depth: 5
+      });
+      expect(spy).not.toHaveBeenCalled();
+      await caching.syncDocument(
+        document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
+      expect(spy).not.toHaveBeenCalled();
+      expect(events.at(-1)).toMatchObject({ restored: 3, replayed: 0 });
+      // Lineage demand changes metadata, never the canonical drawing.
+      await fresh.syncDocument(document);
+      expect(drawn).toEqual(
+        await fresh.drawingTessellation(document, [bodyId])
+      );
+      spy.mockClear();
+      await caching.syncDocument(document, undefined, undefined, undefined, {
+        lineageDemand: [bodyId]
+      });
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      caching.dispose();
+      fresh.dispose();
+    }
+  });
+
   it('probes a demanded terminal boolean; undemanded still skips', async () => {
     const { document, bodyId } = fusedPlateDocument();
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');

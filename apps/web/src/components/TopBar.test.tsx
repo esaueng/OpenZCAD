@@ -33,6 +33,7 @@ function renderTopBar(
     onSignIn: vi.fn(),
     onImportFiles: vi.fn(),
     onOpenMeshExport: vi.fn(),
+    onExportStep: vi.fn(),
     onRenameProject: vi.fn(),
     onReviewEditFailure: vi.fn(),
     onWorkspaceMode: vi.fn()
@@ -68,7 +69,6 @@ function renderTopBar(
       canRenameProject
       buildModeDisabledReason={options.buildModeDisabledReason ?? null}
       tweakModeDisabledReason={null}
-      onExportStep={vi.fn()}
       onArchiveLocalSources={vi.fn()}
       onExportDiagnostics={vi.fn()}
       onExportInteractionLog={vi.fn()}
@@ -474,6 +474,18 @@ describe('TopBar File menu', () => {
     mesh.focus();
     fireEvent.click(mesh);
     expect(onOpenMeshExport).toHaveBeenCalledOnce();
+    expect(fileMenu().open).toBe(false);
+    expect(summary).toHaveFocus();
+  });
+
+  it('closes before a STEP export so its progress is not hidden behind it', () => {
+    const { onExportStep } = renderTopBar({ canExport: true });
+    const summary = fileMenu().querySelector('summary')!;
+    fileMenu().open = true;
+    const step = screen.getByRole('button', { name: /^Export STEP/ });
+    step.focus();
+    fireEvent.click(step);
+    expect(onExportStep).toHaveBeenCalledOnce();
     expect(fileMenu().open).toBe(false);
     expect(summary).toHaveFocus();
   });

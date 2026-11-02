@@ -23,9 +23,16 @@ export type {
 export interface ProjectShareLinkClient {
   createProjectShareLink(
     projectId: string,
-    mode: ProjectShareLinkMode
+    mode: ProjectShareLinkMode,
+    label?: string | null
   ): Promise<CreateProjectShareLinkResponse>;
   listProjectShareLinks(projectId: string): Promise<ProjectShareLinkSummary[]>;
+  /** Names a link for its owner; null or blank clears the name. */
+  renameProjectShareLink(
+    projectId: string,
+    shareLinkId: string,
+    label: string | null
+  ): Promise<ProjectShareLinkSummary>;
   revokeProjectShareLink(projectId: string, shareLinkId: string): Promise<void>;
   /** Anonymous fetch by token; unknown, revoked and expired links resolve to null. */
   fetchSharedProject(token: string): Promise<SharedProjectResponse | null>;
@@ -90,14 +97,14 @@ export function createProjectShareLinkClient(
   fetcher: typeof fetch = desktopFetch
 ): ProjectShareLinkClient {
   return {
-    async createProjectShareLink(projectId, mode) {
+    async createProjectShareLink(projectId, mode, label = null) {
       const response = await fetcher(
         `/api/projects/${routePart(projectId, 'Project ID')}/share-links`,
         {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode })
+          body: JSON.stringify(label === null ? { mode } : { mode, label })
         }
       );
       if (!response.ok) {
@@ -115,6 +122,27 @@ export function createProjectShareLinkClient(
       }
       const payload = (await response.json()) as ListProjectShareLinksResponse;
       return payload.shareLinks;
+    },
+    async renameProjectShareLink(projectId, shareLinkId, label) {
+      const response = await fetcher(
+        `/api/projects/${routePart(projectId, 'Project ID')}/share-links/${routePart(
+          shareLinkId,
+          'Share link ID'
+        )}`,
+        {
+          method: 'PATCH',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ label })
+        }
+      );
+      if (!response.ok) {
+        throw await responseError(response);
+      }
+      const payload = (await response.json()) as {
+        shareLink: ProjectShareLinkSummary;
+      };
+      return payload.shareLink;
     },
     async revokeProjectShareLink(projectId, shareLinkId) {
       const response = await fetcher(

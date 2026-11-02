@@ -203,7 +203,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v49 adds D06 slice D drawing annotations: the chamfer-corner point, a
 // radius on a revolved blend face, and provenance marking a dimension read
 // from raw geometry. An older client would refuse each as malformed.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 49 as const;
+// v50 adds a counterbored hole's callout on a D06 diameter dimension (the
+// counterbore's rim). An older client would refuse it as malformed.
+// v51 adds a countersunk hole's callout and the outside angle on D06
+// drawing dimensions. An older client would refuse either as malformed.
+// v52 records the unit an imported mesh was read in when its file stated
+// none (`assumedUnits`). An older client would drop it on its next save.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 52 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2122,6 +2128,15 @@ export type FeatureData =
        * from accepting this document and silently omitting its imported body.
        */
       meshPayloadRef?: ImportedSourceReference;
+      /**
+       * v52: the unit this mesh's numbers were read in, for a file that
+       * stated none (STL, OBJ, PLY), as chosen at import or settled by the
+       * unitless-import preference. The vertices are already converted to
+       * document units, so this changes no geometry; it records the one
+       * assumption a 25.4x mistake hides behind. Absent for files that
+       * declare their unit and for imports saved before v52.
+       */
+      assumedUnits?: UnitSystem;
     }
   | {
       featureKind: 'imported-step';
@@ -4635,10 +4650,45 @@ export interface ProjectShareLinkSummary {
   /** Unix seconds; access expires at createdAt + PROJECT_SHARE_LINK_TTL_SECONDS. */
   createdAt: number;
   revokedAt: number | null;
+  /** The owner's name for the link; null when unnamed. Never sent to visitors. */
+  label: string | null;
+}
+
+/** Longest share-link label, in Unicode code points (SQLite's `length`). */
+export const PROJECT_SHARE_LINK_LABEL_MAX_LENGTH = 60;
+
+/**
+ * The stored form of an owner's share-link label: whitespace runs collapse to
+ * one space and the ends are trimmed, so an empty or blank label means
+ * unnamed (null). Throws RangeError for control characters or more than
+ * PROJECT_SHARE_LINK_LABEL_MAX_LENGTH code points after trimming.
+ */
+export function normalizeShareLinkLabel(value: string): string | null {
+  const label = value.replace(/\s+/gu, ' ').trim();
+  if (label === '') {
+    return null;
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(label)) {
+    throw new RangeError('A link name cannot contain control characters.');
+  }
+  if ([...label].length > PROJECT_SHARE_LINK_LABEL_MAX_LENGTH) {
+    throw new RangeError(
+      `A link name can be at most ${PROJECT_SHARE_LINK_LABEL_MAX_LENGTH} characters.`
+    );
+  }
+  return label;
 }
 
 export interface CreateProjectShareLinkRequest {
   mode: ProjectShareLinkMode;
+  /** Optional owner's name for the link. */
+  label?: string | null;
+}
+
+export interface UpdateProjectShareLinkRequest {
+  /** The new name; null or blank clears it. */
+  label: string | null;
 }
 
 export interface CreateProjectShareLinkResponse {

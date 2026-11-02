@@ -665,6 +665,8 @@ export interface ImportedMeshInput {
    * store. This is also what the `import.mesh` command log entry carries.
    */
   meshPayloadRef?: ImportedSourceReference;
+  /** The unit a file that stated none was read in (v52); see the feature. */
+  assumedUnits?: UnitSystem;
   ids?: BodyFeatureIds;
 }
 
@@ -3824,7 +3826,8 @@ export function importMeshBody(
       triangleCount: input.triangleCount,
       ...(input.meshPayloadRef
         ? { meshPayloadRef: { ...input.meshPayloadRef } }
-        : { vertices: input.vertices!, indices: input.indices! })
+        : { vertices: input.vertices!, indices: input.indices! }),
+      ...(input.assumedUnits ? { assumedUnits: input.assumedUnits } : {})
     }
   };
 
@@ -4695,7 +4698,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'triangleCount',
     'vertices',
     'indices',
-    'meshPayloadRef'
+    'meshPayloadRef',
+    'assumedUnits'
   ]
 };
 

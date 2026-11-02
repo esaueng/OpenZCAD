@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useLayoutEffect } from 'react';
 import { NumericKeypad, type KeypadRequest } from './NumericKeypad';
+import { prepareCommandChip } from '../lib/inPlace/chipNames';
 
 function setup(initial: string, selectInitial?: boolean) {
   const onPreview = vi.fn();
@@ -507,5 +508,79 @@ describe('an entry that does not evaluate', () => {
     fireEvent.change(input, { target: { value: '10+' } });
     view.unmount();
     expect(onEntryError).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe('numeric keypad focus handback', () => {
+  function chipAndKeypad(keyboard: boolean) {
+    const chip = document.createElement('div');
+    chip.textContent = '⌀ 6 mm';
+    document.body.appendChild(chip);
+    const open = vi.fn();
+    prepareCommandChip(chip, open);
+    chip.focus();
+    if (keyboard) fireEvent.keyDown(chip, { key: 'Enter' });
+    else fireEvent.click(chip);
+    expect(open).toHaveBeenCalledOnce();
+    const view = render(
+      <NumericKeypad
+        request={{
+          kind: 'command',
+          commandValueId: 'diameter',
+          label: '⌀',
+          initial: '6',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={() => undefined}
+        onCommit={() => undefined}
+        onCancel={() => undefined}
+      />
+    );
+    return { chip, view };
+  }
+
+  it('hands focus back to a chip that opened it from the keyboard', async () => {
+    const { chip, view } = chipAndKeypad(true);
+    expect(screen.getByRole('textbox')).toHaveFocus();
+    view.unmount();
+    await Promise.resolve();
+    expect(chip).toHaveFocus();
+    chip.remove();
+  });
+
+  it('leaves focus alone after a pointer opening, so Enter still finishes', async () => {
+    const { chip, view } = chipAndKeypad(false);
+    view.unmount();
+    await Promise.resolve();
+    expect(chip).not.toHaveFocus();
+    chip.remove();
+  });
+});
+
+describe('numeric keypad names', () => {
+  it('names a glyph-labelled value in words', () => {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'command',
+          label: '⌀',
+          initial: '6',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={() => undefined}
+        onCommit={() => undefined}
+        onCancel={() => undefined}
+      />
+    );
+    expect(screen.getByRole('dialog', { name: 'Diameter value' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Diameter' })).toHaveValue('6');
+    // The keypad still shows the compact glyph.
+    expect(screen.getByText('⌀')).toBeTruthy();
   });
 });

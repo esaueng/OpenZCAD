@@ -327,12 +327,23 @@ export function TopBar({
 
   /**
    * Export mesh… opens a dialog, and the menu stayed open underneath it,
-   * still showing when the dialog closed. Items that act in place (a STEP
-   * download, the stored-file list) keep the menu open as before.
+   * still showing when the dialog closed. Items that act in place (the
+   * stored-file list) keep the menu open as before.
    */
   function openMeshExportFromMenu() {
     closeFileMenuForDialog();
     onOpenMeshExport();
+  }
+
+  /**
+   * A STEP export runs in the background and reports its progress and result
+   * in the activity pill and status line. With the menu left open over them
+   * the click looked like it had done nothing, so the menu closes first and
+   * the File button keeps focus, as it does for a dialog.
+   */
+  function exportStepFromMenu() {
+    closeFileMenuForDialog();
+    onExportStep();
   }
 
   function openImageExportFromMenu() {
@@ -803,7 +814,7 @@ export function TopBar({
                 className="topbar-menu-item"
                 disabled={!canExport}
                 title={exportTitle('STEP')}
-                onClick={onExportStep}
+                onClick={exportStepFromMenu}
               >
                 <Download size={13} aria-hidden="true" />
                 <span>Export STEP</span>

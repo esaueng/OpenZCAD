@@ -2754,7 +2754,7 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click();
+  await expect(fileMenu).not.toHaveAttribute('open');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
@@ -2778,6 +2778,11 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   // Only the two artifact-archive uploads (import and export) may fail, and
   // only because the preview host has no /api/uploads. Anything else is a
   // real console error and this stays an equality assertion so it shows up.
+  // The export's upload starts after the download it archives, so wait for
+  // its 404 rather than counting the instant the file has been read.
+  await expect
+    .poll(() => consoleErrors.filter((message) => message.includes('404')))
+    .toHaveLength(2);
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
@@ -3028,7 +3033,8 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click(); // collapse; it overlays the sidebar
+  // Export STEP closes the menu, which otherwise overlays the sidebar.
+  await expect(fileMenu).not.toHaveAttribute('open');
   expect(download.suggestedFilename()).toBe('E2E-Part.step');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];

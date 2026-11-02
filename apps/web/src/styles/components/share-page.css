@@ -33,32 +33,45 @@
 }
 
 .share-page-card {
-  width: min(100%, 560px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(100%, 440px);
   margin: auto;
-  padding: clamp(24px, 5vw, 44px);
+  padding: 40px clamp(24px, 6vw, 40px) 36px;
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
+  box-shadow: var(--shadow-2);
+  text-align: center;
 }
 
 .share-page-icon {
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 56px;
-  margin-bottom: 28px;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 20px;
   border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-lg);
+  border-radius: 50%;
   background: var(--color-accent-dim);
   color: var(--color-accent);
 }
 
+/* An unavailable link is a dead end, not an alarm: neutral, not accent. */
+.share-page-icon.error {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+}
+
 .share-page-card h1 {
-  margin: 0 0 16px;
-  font-size: clamp(24px, 4vw, 30px);
-  font-weight: var(--fw-medium);
-  line-height: 1.2;
-  letter-spacing: -0.025em;
+  margin: 0 0 8px;
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
 }
 
 /* The heading receives screen-reader focus on navigation; it is not a control. */
@@ -68,47 +81,36 @@
 
 .share-page-message,
 .share-page-guidance {
-  margin: 0;
-  font-size: var(--fs-base);
-  line-height: 1.6;
+  max-width: 38ch;
+  margin: 0 auto;
+  line-height: 1.55;
   overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
 
 .share-page-message {
   color: var(--color-text-muted);
+  font-size: var(--fs-md);
 }
 
 .share-page-guidance {
-  margin-top: 16px;
-  color: var(--color-text-muted);
+  margin-top: 12px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-base);
 }
 
 .share-page-actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-top: 32px;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 28px;
 }
 
 .share-page-actions button {
   min-height: 44px;
   padding: 10px 16px;
-}
-
-.share-page-progress {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--color-text-muted);
-  font-size: var(--fs-sm);
-}
-
-.share-page-footer {
-  margin: 24px 0 0;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
-  text-align: center;
 }
 
 @media (max-width: 480px) {

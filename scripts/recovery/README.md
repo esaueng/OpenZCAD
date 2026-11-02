@@ -7,7 +7,7 @@ an E2EE account whose user recovery key and devices have all been lost.
 Prerequisites: Linux, Python 3.10+, GnuPG 2.2+, a private `/dev/shm` tmpfs,
 disabled or encrypted disk swap, and enough free RAM for verified readback.
 No Python packages are required. The current implementation supports migrations
-0001 through 0045, including the intentional 0035 gap, SQL exports up to 512 MiB,
+0001 through 0046, including the intentional 0035 gap, SQL exports up to 512 MiB,
 snapshots up to 4 GiB and individual stored objects up to 100 MiB in both backup
 and restore (logical gzip content may be up to 2 GiB). Object metadata is bounded
 to 64 MiB before sealing and again during authenticated extraction. It refuses

@@ -5,6 +5,7 @@ import type {
   ProjectShareLinkMode,
   UserId
 } from '@openzcad/shared';
+import { normalizeShareLinkLabel } from '@openzcad/shared';
 import type { PersistenceService } from '@openzcad/persistence';
 import { normalizeEmail } from './auth';
 
@@ -278,7 +279,9 @@ export async function createInvitation(
   return { invitation, token };
 }
 
-export function parseProjectShareLinkMode(value: unknown): ProjectShareLinkMode {
+export function parseProjectShareLinkMode(
+  value: unknown
+): ProjectShareLinkMode {
   if (value !== 'tweak' && value !== 'view') {
     throw new SharingRequestError(
       400,
@@ -289,10 +292,50 @@ export function parseProjectShareLinkMode(value: unknown): ProjectShareLinkMode 
   return value;
 }
 
+/** An optional owner's label: absent, null and blank all mean unnamed. */
+export function parseShareLinkLabel(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_LABEL_INVALID',
+      'A link name must be text.'
+    );
+  }
+  try {
+    return normalizeShareLinkLabel(value);
+  } catch (error) {
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_LABEL_INVALID',
+      error instanceof RangeError ? error.message : 'A link name is invalid.'
+    );
+  }
+}
+
 export function parseCreateShareLink(value: unknown): {
   mode: ProjectShareLinkMode;
+  label: string | null;
 } {
-  return { mode: parseProjectShareLinkMode(asRecord(value).mode) };
+  const record = asRecord(value);
+  return {
+    mode: parseProjectShareLinkMode(record.mode),
+    label: parseShareLinkLabel(record.label)
+  };
+}
+
+export function parseRenameShareLink(value: unknown): { label: string | null } {
+  const record = asRecord(value);
+  if (!('label' in record)) {
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_LABEL_INVALID',
+      'A rename needs a label (null clears it).'
+    );
+  }
+  return { label: parseShareLinkLabel(record.label) };
 }
 
 /**
@@ -324,7 +367,8 @@ export async function createShareLink(
       shareLinkId: `share_${crypto.randomUUID()}`,
       mode: request.mode,
       tokenHash: await hashProjectInvitationToken(token),
-      createdAt: now
+      createdAt: now,
+      label: request.label
     }
   );
   return { shareLink, token };
