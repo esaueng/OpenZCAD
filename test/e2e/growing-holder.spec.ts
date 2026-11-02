@@ -45,7 +45,7 @@ async function importHolder(
   if (accountReady)
     await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles(fixture(file));
   await expect(page.locator('.feature-row').first()).toBeVisible({
     timeout: 60_000

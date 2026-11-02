@@ -993,7 +993,7 @@ for (const uploadAvailable of [true, false]) {
     // The original import cannot archive, but its canonical payload is durable
     // on this browser. Recovery must later carry these exact bytes to account.
     await page
-      .getByLabel(/^Import FreeCAD, STEP or /)
+      .getByLabel(/^Import STEP or /)
       .setInputFiles('samples/simple-block.stl');
     await expectBodyCount(page, 1);
     await expect

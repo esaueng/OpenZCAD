@@ -137,7 +137,7 @@ export async function ownerWithShareLink(
   await alice.getByLabel('Project name').fill(PROJECT_NAME);
   await alice.getByRole('button', { name: 'New project' }).click();
   if (content === 'step') {
-    await alice.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+    await alice.getByLabel(/^Import STEP or /).setInputFiles({
       name: 'secret-cube.step',
       mimeType: 'application/step',
       buffer: STEP

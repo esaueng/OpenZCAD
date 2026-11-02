@@ -9,18 +9,15 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type BodyId } from '@openzcad/shared';
-import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
-describe('transform copies across exact kernels', () => {
+describe('transform copies with the Remus kernel', () => {
   let remus: ExactKernelAdapter;
-  let occt: OcctStepKernelAdapter;
+
   beforeAll(async () => {
     remus = await createExactKernelAdapter();
-    occt = await OcctStepKernelAdapter.create();
   });
   afterAll(() => {
     remus.dispose();
-    occt.dispose();
   });
 
   it.each([
@@ -47,7 +44,7 @@ describe('transform copies across exact kernels', () => {
         scale,
         pivot: { x: '1 cm', y: '5 mm', z: '0.5 cm' }
       });
-      for (const adapter of [remus, occt]) {
+      for (const adapter of [remus]) {
         const derived = await adapter.syncDocument(copied.document);
         expect(derived.warnings).toEqual([]);
         expect(derived.exportableBodyIds).toEqual([sourceId, copied.bodyId]);

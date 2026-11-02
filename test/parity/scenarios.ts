@@ -258,20 +258,10 @@ export const PARITY_SCENARIOS: ParityScenario[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * Modeling operations layered on top of an IMPORTED body.
- *
- * These are separate from `PARITY_SCENARIOS` on purpose. They are measured on
- * Remus and OCCT *directly*, side by side, which is the only way the delta
- * they exist to record is visible at all — and running two WASM kernels per
- * scenario does not belong in the fast pool. Before Z3 an `imported-step`
- * feature rerouted the whole production adapter to OpenCascade; that is no
- * longer true, so these scenarios are now the measurement of what the app
- * actually does, against the kernel it no longer uses.
- *
- * Every scenario carries a `nominalVolumeMm3` computed from the design intent
- * by hand, not read from a kernel. That is deliberate: when the two kernels
- * disagree, "which one is wrong" is otherwise unanswerable, and a corpus that
- * can only say "they differ" is much less useful to the lane it feeds.
+ * Modeling operations layered on an imported body, measured through Remus.
+ * These slower import/rebuild/roundtrip cases stay in the serial corpus.
+ * Every scenario carries a hand-derived nominalVolumeMm3 and an explained
+ * nominalRtol independent of the kernel's measured result.
  */
 export interface ImportModelingScenario {
   key: string;

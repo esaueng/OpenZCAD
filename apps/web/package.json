@@ -26,7 +26,6 @@
     "@openzcad/crypto": "workspace:*",
     "@openzcad/document-core": "workspace:*",
     "@openzcad/geometry": "workspace:*",
-    "@openzcad/io-freecad": "workspace:*",
     "@openzcad/io-shapr": "workspace:*",
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",

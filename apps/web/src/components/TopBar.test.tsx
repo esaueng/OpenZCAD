@@ -392,9 +392,13 @@ describe('TopBar File menu', () => {
     // A focusable button now, not a label around a display:none input.
     expect(item.tabIndex).toBe(0);
     const input = screen.getByLabelText<HTMLInputElement>(
-      'Import FreeCAD, STEP or a mesh file…'
+      'Import STEP or a mesh file…'
     );
     expect(input).toHaveAttribute('type', 'file');
+    expect(input).toHaveAttribute(
+      'accept',
+      '.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf'
+    );
     const pick = vi.spyOn(input, 'click');
     fireEvent.click(item);
     expect(pick).toHaveBeenCalledOnce();

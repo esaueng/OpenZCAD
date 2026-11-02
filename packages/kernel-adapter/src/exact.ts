@@ -4797,17 +4797,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 }
 
-/**
- * Remus builds every document, imported STEP included.
- *
- * Until Z3 a document carrying an `imported-step` feature rerouted WHOLE to
- * OpenCascade, so an import and everything modelled on top of it were built by
- * a second kernel. That reroute is gone and Z5 removed the second kernel from
- * this package: there is one kernel, one code path, and `kind` is a constant.
- * The OpenCascade adapter survives only as the parity corpus's reference
- * implementation, in `test/parity/occt-reference/`, and nothing in the shipped
- * app can reach it.
- */
 /** Features whose builders parse a file through the translator module. */
 function documentNeedsTranslators(document: ProjectDocument): boolean {
   return listNodesByKind(document, 'feature').some(

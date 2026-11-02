@@ -13,7 +13,7 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 
 ![OpenZCAD Build workspace with the Mounting Bracket demo, the Objects panel docked left and the Parameters panel docked right](docs/design/readme-mounting-bracket.png)
 
-*Current Build workspace in the default Essentials panel layout, captured 20 October 2026 from the built-in demos running locally.*
+_Current Build workspace in the default Essentials panel layout, captured 20 October 2026 from the built-in demos running locally._
 
 ## Highlights
 
@@ -23,9 +23,9 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 
 **A viewport-first workspace.** Floating controls leave the model at the centre: a compact tool rail on the left, view and inspection instruments on the right, and command search along the bottom. **Objects**, **History**, **Parameters**, **Revisions**, and **Diagnostics** are independent model panels with buttons on the right-hand rail. A rail press opens a panel unpinned beside the rail; **Pin** docks it and **Close** remembers where it was. Drag a panel's header, or its rail icon, to stack it in a column at either screen edge, start a new column, or float it as a movable, resizable window over the model — a slot preview shows where it will land — and its **Move** menu does the same from the keyboard. **View options** on the rail picks a layout preset (**Essentials**, the default, docks Objects left and Parameters right) and holds **Hide all panels** (`Ctrl/Cmd+\`), **Lock layout**, **Compact rows**, and the panel width. The layout is remembered per device; on a stage 720 px wide or less, panels open one at a time instead of docking. Objects lists bodies and sketches with selection and visibility controls. **Build** exposes the full modeling tools, **Tweak** focuses on parameters and export, and **View** presents the model for inspection. `Ctrl/Cmd+K` opens command search; `Ctrl/Cmd+,` opens Settings over the workspace. The optional [AI assistant](#ai-assistant-experimental) shares the bottom prompt and proposes changes for review before you apply them.
 
-**One kernel, one topology language.** Remus builds every document, imported STEP included. OpenCascade is absent from the modeling adapter; it is used by the non-shipping parity reference and by the separately loaded FreeCAD import converter. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Verified primitive, sweep, transform, boolean, blend, and pattern lineage can survive upstream edits within supported subsets. Where complete evolution is not proved, references remain hash-only; ambiguous or unsupported resolution fails closed.
+**One kernel, one topology language.** Remus builds every document, imported STEP included. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Verified primitive, sweep, transform, boolean, blend, and pattern lineage can survive upstream edits within supported subsets. Where complete evolution is not proved, references remain hash-only; ambiguous or unsupported resolution fails closed.
 
-**Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded exact recognizer includes blind-hole, counterbore, countersink, boss, pocket, and taper detectors; the live imported-body pass publishes non-overlapping revolution proofs, including counterbores with a conical entry chamfer. Auto-parameterize coordinates the three hole families; the other proof families remain read-only. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL, 3MF, OBJ, glTF binary and PLY imports become mesh bodies. Additional migration paths import [FreeCAD saved solids](docs/freecad-import.md) and a [Shapr3D project paired with its STEP export](docs/shapr-import.md), with explicit limits on recovered history. All geometry and exports run in browser workers.
+**Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded exact recognizer includes blind-hole, counterbore, countersink, boss, pocket, and taper detectors; the live imported-body pass publishes non-overlapping revolution proofs, including counterbores with a conical entry chamfer. Auto-parameterize coordinates the three hole families; the other proof families remain read-only. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL, 3MF, OBJ, glTF binary and PLY imports become mesh bodies. A migration path imports a [Shapr3D project paired with its STEP export](docs/shapr-import.md), with explicit limits on recovered history. All geometry and exports run in browser workers.
 
 **Local-first, optionally cloud.** IndexedDB autosave works with no account, and **File → Export project** writes a complete `.openzcad` backup at any time (see [Project backups](#project-backups)). When local and cloud copies diverge, OpenZCAD preserves both and asks which one to keep instead of guessing from versions or timestamps. Optional passwordless profiles unlock cloud projects, synced settings, project shelves that pin, reorder, archive, and recycle across devices, and live per-project collaboration with owner/editor/viewer roles and per-browser edit leases shared by one editing account. Owners can mint revocable share links that let anyone open the model, adjust its parameters, and export without an account. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. Account settings show storage in use and can erase account data on request. The checked-in beta configuration enables sharing and lease enforcement for authenticated accounts; the local development configuration keeps them off.
 
@@ -34,14 +34,14 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
   <img src="docs/design/readme-heat-sink.png" width="49%" alt="Heat Sink in View mode — extruded base and parametric fin field" />
 </p>
 
-*Pipe Flange in Tweak mode (left) and Heat Sink in View mode (right).*
+_Pipe Flange in Tweak mode (left) and Heat Sink in View mode (right)._
 
 <p align="center">
   <img src="docs/design/readme-panels-floating-window.png" width="49%" alt="Build workspace with History and Revisions stacked in a floating window over the model, beside the docked Objects and Parameters panels" />
   <img src="docs/design/readme-panels-view-options.png" width="49%" alt="The View options menu open on the panel rail, listing the layout presets with Essentials checked, the Hide all, Lock and Compact settings, and the panel width" />
 </p>
 
-*Model panels: History and Revisions stacked in a floating window (left), and the View options menu (right).*
+_Model panels: History and Revisions stacked in a floating window (left), and the View options menu (right)._
 
 ## Roadmap
 
@@ -116,7 +116,7 @@ Boundaries that hold everywhere:
 
 - The browser document/history model is the source of truth; meshes are disposable projections.
 - Geometry and exports run in the browser worker, never in the Cloudflare Worker.
-- Topology fingerprints are content-addressed and stable across rebuilds — checked in `test/kernel-seam.test.ts`, and against the OpenCascade reference in bulk by the parity corpus — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OpenCascade scheme are rejected with a re-select diagnostic rather than reinterpreted.
+- Topology fingerprints are content-addressed and stable across rebuilds — checked in `test/kernel-seam.test.ts`, and against recorded baselines in bulk by the geometry corpus — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OpenCascade scheme are rejected with a re-select diagnostic rather than reinterpreted.
 - Schema-v1 through schema-v19 documents migrate to schema v20 on load. Schema v14 preserves bounded undo/redo history; schema v15 adds on/off parameters that control body visibility and export inclusion. Schema v16 marks the orientation of newly authored Front sketches; saved unmarked sketches retain their original basis. Schema v17 supports mesh payload references; embedded meshes stay embedded on load, and older clients must update before opening v17 documents. Schema v18 adds the symmetric, point-on-curve and lock sketch relations; older clients must update before opening v18 documents. Schema v19 adds offset and mid datum planes, which sketches, Split and Mirror can reference; older clients must update before opening v19 documents. Schema v20 adds the through-all extrude cut; older clients must update before opening v20 documents.
 
 See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
@@ -133,7 +133,7 @@ pnpm typecheck        # TypeScript
 pnpm lint             # ESLint
 pnpm test             # unit and integration tests (Vitest)
 pnpm test:web         # web app tests
-pnpm test:parity-corpus  # serial Remus parity corpus vs the OpenCascade reference
+pnpm test:parity-corpus  # serial Remus corpus against recorded baselines and analytic expectations
 pnpm test:e2e         # Playwright end-to-end suite
 pnpm test:coverage    # unit tests with coverage
 pnpm build            # production web/worker bundle + bundle-size check
@@ -179,7 +179,7 @@ Interaction and startup performance are measured, not guessed — see [docs/perf
 OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
-The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The kernel-adapter manifest pins the Remus WASM packages to immutable source commits, and `pnpm-lock.yaml` records their resolved dependencies for reproducible installs. The Remus update workflow proposes pin updates through pull requests. Ordinary modeling loads only Remus. FreeCAD import separately loads an OpenCascade-based BREP-to-STEP converter on demand; that converter is not part of the modeling adapter. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
+The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The kernel-adapter manifest pins the Remus WASM packages to immutable source commits, and `pnpm-lock.yaml` records their resolved dependencies for reproducible installs. The Remus update workflow proposes pin updates through pull requests. All geometry workflows use Remus. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
 
 ## Deploying to Cloudflare
 
