@@ -83,8 +83,18 @@ export function presentedBoundsCenter(
   roots: readonly (THREE.Object3D | null | undefined)[],
   target: THREE.Vector3
 ): THREE.Vector3 | null {
-  presentedBox.makeEmpty();
+  presentedBounds(roots, presentedBox);
+  return presentedBox.isEmpty() ? null : presentedBox.getCenter(target);
+}
+
+/** Visible model bounds shared by camera clipping and the scale indicator. */
+export function presentedBounds(
+  roots: readonly (THREE.Object3D | null | undefined)[],
+  target: THREE.Box3
+): THREE.Box3 {
+  target.makeEmpty();
   for (const root of roots) {
+    root?.updateWorldMatrix(true, false);
     root?.traverseVisible((object) => {
       object.updateWorldMatrix(false, false);
       const geometry = (object as Partial<THREE.Mesh>).geometry;
@@ -97,12 +107,12 @@ export function presentedBoundsCenter(
       if (!geometry.boundingBox || geometry.boundingBox.isEmpty()) {
         return;
       }
-      presentedBox.union(
+      target.union(
         meshBox.copy(geometry.boundingBox).applyMatrix4(object.matrixWorld)
       );
     });
   }
-  return presentedBox.isEmpty() ? null : presentedBox.getCenter(target);
+  return target;
 }
 
 /** Formats a nice scale value without adding noisy floating-point digits. */
