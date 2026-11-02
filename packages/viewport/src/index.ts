@@ -15,6 +15,7 @@ export * from './render/scene';
 export * from './render/semantics';
 export * from './render/selectionTint';
 export * from './render/edgeOverlay';
+export { applyCoplanarBodyDepthSlots } from './render/coplanarBodies';
 
 // Camera: the controller that owns cameras/controls/projection/glides,
 // plus standard view poses and screen-space projection math.
