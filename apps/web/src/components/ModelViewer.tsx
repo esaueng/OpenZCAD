@@ -153,6 +153,7 @@ import {
   applyStagePalette,
   createGradientBackdrop,
   createObjectForBody,
+  applyCoplanarBodyDepthSlots,
   updateObjectForBody,
   updateBodyMaterialOpacity,
   sameBodyProjection,
@@ -12368,6 +12369,7 @@ export function ModelViewer({
         displayModeRef.current,
         xrayRef.current
       );
+      applyCoplanarBodyDepthSlots(bodies, context.objectsByBodyId);
     }
     context.moveCopyPreview.refreshAppearance(
       displayModeRef.current,

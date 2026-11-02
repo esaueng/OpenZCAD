@@ -12,6 +12,7 @@ import type {
 } from '@openzcad/shared';
 import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
+import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -327,6 +328,10 @@ function geometryFromMesh(
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geometry.setAttribute(
+    COPLANAR_DEPTH_ATTRIBUTE,
+    new THREE.BufferAttribute(new Float32Array(groupCount), 1)
+  );
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   if (completeTopology) {
     const outline = new Float32Array(boundarySlots.length * 6);
@@ -617,33 +622,35 @@ export function createBodyMaterial(body: GeometryBodyRepresentation) {
   // Every exact result replaces the body's object, and the old one is
   // disposed before the new one draws: without this each commit, undo or
   // redo relinked the body shader from scratch.
-  return keepProgram(
-    new THREE.MeshPhongMaterial({
-      color: body.color,
-      shininess: 38,
-      specular: '#667487',
-      transparent: translucent,
-      opacity,
-      // Translucent walls must not write depth or back faces and interior
-      // features hidden behind them would be culled instead of showing through.
-      depthWrite: !translucent,
-      stencilWrite: !translucent,
-      stencilRef: OPAQUE_BODY_STENCIL,
-      stencilWriteMask: OPAQUE_BODY_STENCIL,
-      stencilZPass: THREE.ReplaceStencilOp,
-      // Push only the disposable face rasterization back by the smallest
-      // practical depth-buffer bias. GL line materials ignore polygonOffset;
-      // keeping the bias on the faces lets depth-tested edge/sketch overlays
-      // sit stably on their exact model plane without moving authoritative
-      // geometry.
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-      // Exact kernels emit consistently oriented closed faces. Keep culling on
-      // so an orientation regression remains visible instead of being hidden by
-      // a double-sided material.
-      side: THREE.FrontSide
-    })
+  return withCoplanarDepth(
+    keepProgram(
+      new THREE.MeshPhongMaterial({
+        color: body.color,
+        shininess: 38,
+        specular: '#667487',
+        transparent: translucent,
+        opacity,
+        // Translucent walls must not write depth or back faces and interior
+        // features hidden behind them would be culled instead of showing through.
+        depthWrite: !translucent,
+        stencilWrite: !translucent,
+        stencilRef: OPAQUE_BODY_STENCIL,
+        stencilWriteMask: OPAQUE_BODY_STENCIL,
+        stencilZPass: THREE.ReplaceStencilOp,
+        // Push only the disposable face rasterization back by the smallest
+        // practical depth-buffer bias. GL line materials ignore polygonOffset;
+        // keeping the bias on the faces lets depth-tested edge/sketch overlays
+        // sit stably on their exact model plane without moving authoritative
+        // geometry.
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+        // Exact kernels emit consistently oriented closed faces. Keep culling on
+        // so an orientation regression remains visible instead of being hidden by
+        // a double-sided material.
+        side: THREE.FrontSide
+      })
+    )
   );
 }
 
