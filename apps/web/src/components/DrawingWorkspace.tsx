@@ -2151,6 +2151,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const brokenCount = sheetReady
     ? [...resolutions.values()].filter((entry) => !entry.ok).length
     : 0;
+  // Section references and note leaders cannot be judged until their views
+  // finish drawing. A proposal preview must never delete saved annotations.
+  const canDeleteBroken =
+    editable &&
+    sheetReady &&
+    !props.geometryPending &&
+    drawnViews.length === sheet?.views.length &&
+    props.previewAnnotations?.sheetId !== sheet?.sheetId;
   // Dimensions measure a view's geometry; a note on the paper needs none,
   // so a ready sheet with no views still takes one.
   const canAnnotate = sheetReady && editable && (sheet?.views.length ?? 0) > 0;
@@ -3140,6 +3148,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     )
       setSelectedAnnotationId(null);
   };
+  const deleteBrokenAnnotations = () => {
+    if (!sheet || !canDeleteBroken) return;
+    const broken = (sheet.annotations ?? []).filter(
+      (annotation) => resolutions.get(annotation.annotationId)?.ok === false
+    );
+    if (broken.length === 0) return;
+    if (
+      run(
+        composeCommands(
+          'Delete broken annotations',
+          broken.map((annotation) =>
+            commandFactories.deleteDrawingAnnotation({
+              sheetId: sheet.sheetId,
+              annotationId: annotation.annotationId
+            })
+          )
+        )
+      )
+    ) {
+      if (broken.some((entry) => entry.annotationId === selectedAnnotationId))
+        setSelectedAnnotationId(null);
+      props.onStatus(
+        `Deleted ${broken.length} broken ${broken.length === 1 ? 'annotation' : 'annotations'}. Undo to restore.`
+      );
+    }
+  };
   const moveAnnotation = (
     annotation: DrawingAnnotation,
     placementMm: { x: number; y: number }
@@ -3657,6 +3691,20 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ) : exportBlocked ? (
           <div className="drawing-banner is-blocked" role="status">
             <span>{exportReason}</span>
+            {brokenCount > 0 && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canDeleteBroken}
+                title={
+                  editDisabledReason ??
+                  'Delete all broken dimensions and notes on this sheet. Undo restores them together.'
+                }
+                onClick={deleteBrokenAnnotations}
+              >
+                <Trash2 size={13} aria-hidden="true" /> Delete all broken
+              </button>
+            )}
           </div>
         ) : null}
         <div className="drawing-canvas-area">
