@@ -914,7 +914,7 @@
     top: 6px;
     left: 6px;
     width: 168px;
-    max-height: 44%;
+    max-height: 44vh;
   }
 
   /* Narrow enough that the dock and the parts rail cannot both own the width:
