@@ -1,5 +1,22 @@
 import type { Download, Locator, Page } from '@playwright/test';
 import {
+  addPrimitiveFeature,
+  booleanBodies,
+  createProjectDocument,
+  setParameter
+} from '@openzcad/document-core';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  toUserId,
+  type DrawingAnnotation,
+  type DrawingAnnotationId
+} from '@openzcad/shared';
+import {
+  createStarterSheet,
+  drawingSourceFingerprint
+} from '../../apps/web/src/lib/drawing/sheetSources';
+import { resolveDrawingAnnotation } from '../../apps/web/src/lib/drawing/annotations';
+import {
   createPrimitiveInPlace,
   test,
   expect,
@@ -45,6 +62,181 @@ async function frontViewBox(canvas: Locator) {
     centreY: box.y + box.height / 2
   };
 }
+
+test(
+  'cleans up broken dimensions after editing a union, with one-step undo and reopen',
+  { tag: '@ci-smoke' },
+  async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    let document = setParameter(
+      createProjectDocument('Dimension cleanup', toUserId('test')),
+      {
+        name: 'width',
+        expression: '20'
+      }
+    );
+    for (const [name, width, height] of [
+      ['Base', 'width', 10],
+      ['Upright', 10, 20]
+    ] as const)
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width, height, depth: 10 }
+      });
+    const union = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [...document.bodyOrder]
+    });
+    document = union.document;
+    const adapter = await createExactKernelAdapter();
+    try {
+      const before = (await adapter.syncDocument(document)).bodyRepresentations;
+      const sheet = createStarterSheet({
+        name: 'Sheet 1',
+        bodyIds: [union.bodyId],
+        bodies: before,
+        units: 'mm',
+        paper: { size: 'A3', orientation: 'landscape' },
+        projectionAngle: 'first',
+        fingerprint: drawingSourceFingerprint(before, [union.bodyId])!
+      });
+      const front = sheet.views.find((view) => view.orientation === 'front')!;
+      // Saved union edges use their unique geometry hash. A size edit replaces
+      // some of those edges; it must not silently measure a different one.
+      const candidates: DrawingAnnotation[] = before[
+        union.bodyId
+      ]!.topology!.edges.flatMap((edge, index) =>
+        (['horizontal', 'vertical'] as const).map((direction) => ({
+          kind: 'linear' as const,
+          annotationId: `dann_${direction}${index}` as DrawingAnnotationId,
+          viewId: front.viewId,
+          direction,
+          from: {
+            edge: { bodyId: union.bodyId, hash: edge.hash },
+            anchor: 'first' as const
+          },
+          to: {
+            edge: { bodyId: union.bodyId, hash: edge.hash },
+            anchor: 'second' as const
+          },
+          placementMm: { x: 0, y: -20 }
+        }))
+      ).filter(
+        (annotation) =>
+          resolveDrawingAnnotation(annotation, front, before, 'mm').ok
+      );
+      document = setParameter(document, { name: 'width', expression: '30' });
+      const after = (await adapter.syncDocument(document)).bodyRepresentations;
+      const broken = candidates
+        .filter(
+          (annotation) =>
+            !resolveDrawingAnnotation(annotation, front, after, 'mm').ok
+        )
+        .slice(0, 2);
+      const healthy = candidates.find(
+        (annotation) =>
+          resolveDrawingAnnotation(annotation, front, after, 'mm').ok
+      )!;
+      expect(broken).toHaveLength(2);
+      expect(healthy).toBeTruthy();
+      sheet.annotations = [
+        ...broken,
+        healthy,
+        {
+          kind: 'note',
+          annotationId: 'dann_note' as DrawingAnnotationId,
+          text: 'Keep this note',
+          placementMm: { x: 25, y: 250 }
+        }
+      ];
+      document.drawings = { sheets: [sheet] };
+    } finally {
+      adapter.dispose();
+    }
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Cleanup fixture');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
+    await page.getByLabel('Import project backup').setInputFiles({
+      name: 'dimensions.openzcad',
+      mimeType: 'application/json',
+      buffer: Buffer.from(
+        JSON.stringify({
+          format: 'openzcad-project',
+          version: 1,
+          document,
+          files: []
+        })
+      )
+    });
+    await expect(
+      page.getByRole('button', { name: 'Rename project' })
+    ).toContainText('Dimension cleanup');
+    await mode(page, 'Draw').click();
+    const drawings = page.getByRole('region', { name: 'Drawings' });
+    await drawings.getByRole('button', { name: 'Update', exact: true }).click();
+    const cleanup = drawings.getByRole('button', { name: 'Delete all broken' });
+    await expect(cleanup).toBeEnabled({ timeout: 30_000 });
+    const annotations = drawings.getByRole('listbox', {
+      name: 'Annotations on this sheet'
+    });
+    await expect(
+      annotations.getByRole('option', { name: /\(broken\)/ })
+    ).toHaveCount(2);
+    await expect(annotations.getByRole('option')).toHaveCount(4);
+    await expect(
+      drawings.getByRole('button', { name: 'Export PDF' })
+    ).toBeDisabled();
+    const beforeScreenshot = testInfo.outputPath('broken-dimensions.png');
+    await page.screenshot({ path: beforeScreenshot });
+    await testInfo.attach('broken-dimensions', {
+      path: beforeScreenshot,
+      contentType: 'image/png'
+    });
+    await cleanup.click();
+    await expect(annotations.getByRole('option')).toHaveCount(2);
+    await expect(annotations).toContainText('Keep this note');
+    await expect(cleanup).toHaveCount(0);
+    await expect(
+      drawings.getByRole('button', { name: 'Export PDF' })
+    ).toBeEnabled();
+    const afterScreenshot = testInfo.outputPath('after-cleanup.png');
+    await page.screenshot({ path: afterScreenshot });
+    await testInfo.attach('after-cleanup', {
+      path: afterScreenshot,
+      contentType: 'image/png'
+    });
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(
+      annotations.getByRole('option', { name: /\(broken\)/ })
+    ).toHaveCount(2);
+    await expect(annotations.getByRole('option')).toHaveCount(4);
+    await cleanup.click();
+    await expect(annotations.getByRole('option')).toHaveCount(2);
+    await expect(page.locator('.save-state')).toHaveClass(
+      /is-(synced|local)\b/
+    );
+    await page.reload();
+    await expect(annotations.getByRole('option')).toHaveCount(2, {
+      timeout: 30_000
+    });
+    await expect(annotations).toContainText('Keep this note');
+    await expect(cleanup).toHaveCount(0);
+    await expect(
+      drawings.getByRole('button', { name: 'Export PDF' })
+    ).toBeEnabled();
+    expect(errors).toEqual([]);
+  }
+);
 
 test('dimensions a drawing view from the model and follows its Update', async ({
   page

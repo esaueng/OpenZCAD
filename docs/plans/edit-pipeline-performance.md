@@ -30,9 +30,11 @@ OZ_PERF=1 OZ_FACE_DRAG_PROJECT=/external/model.openzcad \
 `OFFSET_PERF_FRONTEND=1` separately measures display-preview recognition and mesh
 travel hints. `OFFSET_PERF_KERNEL_PHASES=1` records bounded kernel phases and
 cache diagnostics; keep it off for quiet comparisons. The browser probe can
-write a diagnostic CPU profile with `OZ_PERF_FACE_CPU_PROFILE` and a preview
-screenshot with `OZ_PERF_FACE_SCREENSHOT`. These outputs and the input remain
-external. The pointer probe currently accepts native backups without archived
+write a diagnostic CPU profile with `OZ_PERF_FACE_CPU_PROFILE`; select
+`preview` (default), `release` (Apply), or `undo` with
+`OZ_PERF_FACE_CPU_PROFILE_ACTION`. Keep profiling runs separate from timing
+comparisons. `OZ_PERF_FACE_SCREENSHOT` captures the preview. These outputs and
+the input remain external. The pointer probe accepts native backups without archived
 source files; use the full backup importer for histories with external sources.
 For a single-body native-kernel reproduction, `OFFSET_PERF_ARENA_OUT` writes
 the exact solid arena and an adjacent JSON file with the captured display
@@ -50,12 +52,42 @@ parity and Undo passing. These samples are preliminary, not a qualified 2×
 operation improvement. Curved-face tessellation remains the largest measured
 kernel cost. Rendering accuracy, exact acceptance and package pins are unchanged.
 
+The [repeated Windows/Edge qualification](../qa/2026-11-02/complex-fillet-offset-performance.md)
+records the integrated app and boundary-block kernel candidate: 2.30× faster
+continuous exact dragging and 2.24× faster typed exact preview on this part and
+device. Apply and Undo remain separate, with slower/variable Undo disclosed.
+The report retains earlier samples, all phase ranges, byte-parity evidence and
+the distinction between a development overlay and a released package.
+
 ### Paired kernel/browser development
 
 Build Remus on a host that can execute the pinned Rust toolchain and its build
 scripts (`cargo xtask wasm-build`). A working Linux environment requires no
 changes to Windows application-control policy. Both packages must be built
 together because their arena format is paired.
+
+The qualification host uses a working WSL 2 Ubuntu environment. Keep
+the Remus source and Cargo target directories on the Linux filesystem; a Linux
+clone also avoids Windows build-script execution restrictions. The tested
+toolchain is Rust 1.96.0 with `wasm32-unknown-unknown`, rustfmt and Clippy,
+wasm-pack 0.15.1, wasm-bindgen-cli 0.2.126 and Node 22.22.1. Install the native
+compiler/linker prerequisites, run `npm ci` for the project hooks, and bootstrap
+the shared Git privacy guard under the Linux agent account before committing.
+After dependency installation, audit the hook chain and verify it:
+
+```bash
+git-privacy-guard audit --root . --fix
+git-privacy-guard verify --repo .
+cargo xtask wasm-build
+```
+
+This builds both packages and runs their runtime and installed-tarball consumer
+checks. The installed local `remus-wasm-build [source-directory]` helper invokes
+the same paired build; its default source is the Linux development clone.
+For a Windows-hosted browser build, copy both generated package directories
+into the matching external Remus checkout and retain their hashes and build
+log. Do not replace the application's immutable dependency or edit its checksum
+manifest to point at development binaries.
 
 Set **both** `REMUS_WASM_PKG` and `REMUS_WASM_IO_PKG` to the two package
 directories before starting the web development server or building the browser

@@ -95,6 +95,7 @@
   "parameter-curation.spec.ts": 4,
   "parameter-lineage-repair.spec.ts": 23,
   "parameter-validation.spec.ts": 17,
+  "parts-list-scroll.spec.ts": 9.7,
   "perf-cad-edit.spec.ts": 0,
   "perf-face-drag-trace.spec.ts": 0,
   "perf-face-drag.spec.ts": 0,

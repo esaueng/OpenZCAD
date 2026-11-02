@@ -121,7 +121,8 @@ import {
   chooseRotateSnapStep,
   chooseViewportScale,
   scaleBarAnchor,
-  presentedBoundsCenter,
+  presentedBounds,
+  updateCameraClipping,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
@@ -6468,6 +6469,8 @@ export function ModelViewer({
 
     const scaleBarForward = new THREE.Vector3();
     const scaleBarModelCenter = new THREE.Vector3();
+    const scaleBarModelBounds = new THREE.Box3();
+    const clippingBounds = new THREE.Box3();
     /** World units spanned by one screen pixel at the given point. */
     function worldPerPixelAt(point: THREE.Vector3): number {
       const height = Math.max(canvasHeight(), 1);
@@ -11200,6 +11203,16 @@ export function ModelViewer({
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.
       updateCommandChips();
+      // Read the current presentation after every preview has posed its meshes.
+      // Reuse the body's bounds for the scale bar, then include sketches in the
+      // camera range without letting grids, axes or HUD decorations set it.
+      presentedBounds(
+        [bodyGroup, parameterPreviewController.current?.group],
+        scaleBarModelBounds
+      );
+      presentedBounds([sketchGroup, regionGroup], clippingBounds);
+      clippingBounds.union(scaleBarModelBounds);
+      updateCameraClipping(context.activeCamera, clippingBounds);
       scaleIndicatorRef.current?.(
         chooseViewportScale(
           worldPerPixelAt(
@@ -11208,10 +11221,9 @@ export function ModelViewer({
               cameraRig.activeCamera.getWorldDirection(scaleBarForward),
               // What is drawn this frame, previews included, so a Move or
               // parameter preview does not leave the bar to jump at commit.
-              presentedBoundsCenter(
-                [bodyGroup, parameterPreviewController.current?.group],
-                scaleBarModelCenter
-              ),
+              scaleBarModelBounds.isEmpty()
+                ? null
+                : scaleBarModelBounds.getCenter(scaleBarModelCenter),
               cameraRig.controls.target
             )
           )

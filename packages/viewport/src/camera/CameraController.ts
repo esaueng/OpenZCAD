@@ -159,7 +159,10 @@ export interface CameraControllerOptions {
   host: HTMLElement;
   /** The element OrbitControls binds its pointer listeners to. */
   domElement: HTMLElement;
-  /** Boundary containing the canvas and any viewport chrome layered over it. */
+  /**
+   * Boundary containing the canvas and any viewport chrome layered over it.
+   * Descendants marked `data-viewport-wheel-ignore` keep their own wheel input.
+   */
   wheelElement?: HTMLElement;
   /** Invalidates the viewport so the render loop draws another frame. */
   requestRender(): void;
@@ -316,6 +319,16 @@ export class CameraController {
 
   /** Queues zoom packets while preserving the existing trackpad-pan path. */
   private handleWheel = (event: WheelEvent) => {
+    // This capture listener runs before a panel's own handlers. Leave its
+    // wheel input alone, including at scroll limits, before learning a device
+    // or cancelling the browser's native scrolling.
+    if (
+      event.target &&
+      event.target instanceof Element &&
+      event.target.closest('[data-viewport-wheel-ignore]')
+    ) {
+      return;
+    }
     const { intent, learned } = this.wheelGesture.classify(
       {
         deltaX: event.deltaX,

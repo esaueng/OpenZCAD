@@ -8,7 +8,12 @@ import {
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   createProjectDocument
@@ -166,6 +171,9 @@ function setup(
     exactFaces?: boolean;
     editDisabledReason?: string | null;
     geometryPending?: boolean;
+    previewAnnotations?: Parameters<
+      typeof DrawingWorkspace
+    >[0]['previewAnnotations'];
   } = {}
 ) {
   const base = createProjectDocument('Bracket', toUserId('test'));
@@ -182,6 +190,7 @@ function setup(
       document={document}
       bodies={bodies}
       geometryPending={options.geometryPending ?? false}
+      previewAnnotations={options.previewAnnotations}
       defaultBodyIds={[bodyId]}
       requestTessellation={displayTessellation(bodies)}
       editDisabledReason={options.editDisabledReason ?? null}
@@ -1530,6 +1539,154 @@ describe('DrawingWorkspace', () => {
         screen.getByRole<HTMLButtonElement>('button', { name: 'Horizontal' })
           .disabled
       ).toBe(true);
+    });
+
+    it('deletes only broken annotations on this sheet, with one undo, redo and replay', async () => {
+      const sheet = dimensioned(999);
+      const broken = sheet.annotations![0]!;
+      const healthy: DrawingAnnotation = {
+        ...dimensioned().annotations![0]!,
+        viewId: sheet.views[0]!.viewId,
+        annotationId: 'dann_healthy' as DrawingAnnotationId
+      };
+      const note: DrawingAnnotation = {
+        kind: 'note',
+        annotationId: 'dann_note' as DrawingAnnotationId,
+        placementMm: { x: 20, y: 20 },
+        text: 'Keep this note'
+      };
+      sheet.annotations = [
+        broken,
+        healthy,
+        note,
+        {
+          ...note,
+          annotationId: 'dann_leader' as DrawingAnnotationId,
+          viewId: sheet.views[0]!.viewId,
+          leader: { bodyId, hash: 999 }
+        }
+      ];
+      const other = dimensioned(999);
+      other.name = 'Sheet 2';
+      other.annotations![0]!.annotationId = 'dann_other' as DrawingAnnotationId;
+      const initial: ProjectDocument = {
+        ...createProjectDocument('Bracket', toUserId('test')),
+        bodyOrder: [bodyId],
+        drawings: { sheets: [sheet, other] }
+      };
+      const manager = new CommandManager(initial);
+      const bodies = { [bodyId]: cube() };
+      const onCommand = vi.fn((command: AnyCommand) => {
+        manager.execute(command);
+        return true;
+      });
+      const workspace = () => (
+        <DrawingWorkspace
+          document={manager.document}
+          bodies={bodies}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation(bodies)}
+          editDisabledReason={null}
+          onCommand={onCommand}
+          onStatus={vi.fn()}
+        />
+      );
+      const { rerender } = render(workspace());
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      await waitFor(() => expect(cleanup).toBeEnabled());
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension 10' })
+      );
+      await userEvent.click(cleanup);
+      expect(onCommand).toHaveBeenCalledTimes(1);
+      expect(manager.document.drawings!.sheets[0]!.annotations).toEqual([
+        healthy,
+        note
+      ]);
+      expect(manager.document.drawings!.sheets[1]).toEqual(other);
+      expect(manager.undoIsDrawingOnly).toBe(true);
+      const deleted = manager.document;
+      expect(replayCommands(initial, deleted.commandLog).drawings).toEqual(
+        deleted.drawings
+      );
+      rerender(workspace());
+      expect(
+        screen.queryByRole('button', { name: 'Delete all broken' })
+      ).toBeNull();
+      expect(screen.getByRole('button', { name: 'Export PDF' })).toBeEnabled();
+      expect(
+        screen.getByRole('option', { name: 'Horizontal dimension 10' })
+      ).toHaveAttribute('aria-selected', 'true');
+      manager.undo();
+      rerender(workspace());
+      expect(manager.document.drawings).toEqual(initial.drawings);
+      expect(
+        screen.getByRole('button', { name: 'Delete all broken' })
+      ).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
+      manager.redo();
+      rerender(workspace());
+      expect(manager.document.drawings).toEqual(deleted.drawings);
+      expect(screen.getByRole('button', { name: 'Export PDF' })).toBeEnabled();
+    });
+
+    it('removes the last broken annotation without leaving an empty list', async () => {
+      const sheet = dimensioned(999);
+      const { onCommand } = setup({ sheet });
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      await waitFor(() => expect(cleanup).toBeEnabled());
+      await userEvent.click(cleanup);
+      const doc = {
+        ...createProjectDocument('Bracket', toUserId('test')),
+        drawings: { sheets: [sheet] }
+      };
+      const next = onCommand.mock.calls[0]![0].apply(doc);
+      expect(next.drawings!.sheets[0]!.annotations).toBeUndefined();
+    });
+
+    it('disables cleanup for read-only drawings', async () => {
+      const { onCommand } = setup({
+        sheet: dimensioned(999),
+        editDisabledReason: 'This shared project is read-only'
+      });
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      expect(cleanup).toBeDisabled();
+      await userEvent.click(cleanup);
+      expect(onCommand).not.toHaveBeenCalled();
+    });
+
+    it('waits for projections before deleting unresolved section references or leaders', async () => {
+      const project = vi
+        .spyOn(DrawingProjectionClient.prototype, 'project')
+        .mockImplementation(() => new Promise(() => {}));
+      try {
+        const { onCommand } = setup({ sheet: dimensioned(999) });
+        const cleanup = screen.getByRole('button', {
+          name: 'Delete all broken'
+        });
+        expect(cleanup).toBeDisabled();
+        await userEvent.click(cleanup);
+        expect(onCommand).not.toHaveBeenCalled();
+      } finally {
+        project.mockRestore();
+      }
+    });
+
+    it('does not delete saved annotations based on a proposal preview', async () => {
+      const sheet = dimensioned();
+      const preview = dimensioned(999).annotations!.map((annotation) => ({
+        ...annotation,
+        viewId: sheet.views[0]!.viewId
+      }));
+      const { onCommand } = setup({
+        sheet,
+        previewAnnotations: { sheetId: sheet.sheetId, annotations: preview }
+      });
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      expect(cleanup).toBeDisabled();
+      await userEvent.click(cleanup);
+      expect(onCommand).not.toHaveBeenCalled();
     });
 
     it("ends a tool when another sheet takes the active one's place", async () => {

@@ -20,6 +20,7 @@ export { applyCoplanarBodyDepthSlots } from './render/coplanarBodies';
 // Camera: the controller that owns cameras/controls/projection/glides,
 // plus standard view poses and screen-space projection math.
 export * from './camera/CameraController';
+export * from './camera/depthRange';
 export * from './camera/scale';
 export * from './camera/stageFrame';
 export * from './camera/views';
