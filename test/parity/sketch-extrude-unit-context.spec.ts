@@ -17,18 +17,15 @@ import {
   type SketchObjectData,
   type UnitSystem
 } from '@openzcad/shared';
-import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
-describe('sketch/extrude unit context across exact kernels', () => {
+describe('sketch/extrude unit context with the Remus kernel', () => {
   let remus: ExactKernelAdapter;
-  let occt: OcctStepKernelAdapter;
+
   beforeAll(async () => {
     remus = await createExactKernelAdapter();
-    occt = await OcctStepKernelAdapter.create();
   });
   afterAll(() => {
     remus.dispose();
-    occt.dispose();
   });
 
   it.each([
@@ -74,7 +71,7 @@ describe('sketch/extrude unit context across exact kernels', () => {
           ...(profiles ? { profiles } : {})
         }).document;
         const bodyId = getLatestBodyId(document)!;
-        for (const adapter of [remus, occt]) {
+        for (const adapter of [remus]) {
           const derived = await adapter.syncDocument(document);
           const body = derived.bodyRepresentations[bodyId]!;
           expect(derived.warnings).toEqual([]);

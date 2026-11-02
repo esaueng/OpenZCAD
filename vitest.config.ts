@@ -12,7 +12,6 @@ const WORKSPACE_PACKAGES = [
   'viewport',
   'io-step',
   'io-shapr',
-  'io-freecad',
   'io-stl',
   'persistence',
   'cloudflare-adapters',
@@ -46,7 +45,7 @@ const remusOverlay = {
 export default defineConfig({
   test: {
     environment: 'node',
-    // Exact-kernel suites instantiate large OCCT/Remus WASM modules. Keep
+    // Exact-kernel suites instantiate large Remus WASM modules. Keep
     // file-level parallelism bounded. The qualified kernel's refusal probes
     // are CPU-heavy; four simultaneous suites caused both the unchanged
     // sequential-fillet and unrelated glyph-audit deadlines to fail in CI.

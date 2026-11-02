@@ -68,7 +68,7 @@ test('imports a DXF as an extrudable sketch, converting its units', async ({
   await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'slot.dxf',
     mimeType: 'image/vnd.dxf',
     buffer: Buffer.from(SLOT_DXF)

@@ -52,25 +52,6 @@ describe('asset miss fallback', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('turns a missing FreeCAD worker into the same uncacheable 404', async () => {
-    const response = await worker.fetch(
-      new Request('https://app.example/assets/freecadImportWorker-gone.js'),
-      {
-        ASSETS: {
-          fetch: async () =>
-            new Response('Not found', {
-              status: 404,
-              headers: {
-                'cache-control': 'public, max-age=31536000, immutable'
-              }
-            })
-        }
-      }
-    );
-    expect(response.status).toBe(404);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-  });
-
   it.each(['/api/definitely-not-a-route', '/healthz'])(
     'leaves %s to the Worker routes without reading the binding',
     async (path) => {

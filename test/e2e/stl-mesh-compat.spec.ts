@@ -48,7 +48,7 @@ for (const fixture of cases) {
         route.fulfill({ json: null })
       );
       await createProject(page, fixture.name);
-      await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+      await page.getByLabel(/^Import STEP or /).setInputFiles({
         name: 'mesh.stl',
         mimeType: 'model/stl',
         buffer: Buffer.from(
@@ -119,7 +119,7 @@ test('private STL imports through the browser file picker', async ({
   await seedUnitlessImportUnits(page);
   await page.route('**/api/session', (route) => route.fulfill({ json: null }));
   await createProject(page, 'STL qualification');
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'private.stl',
     mimeType: 'model/stl',
     buffer: readFileSync(process.env.OZ_PRIVATE_STL!)

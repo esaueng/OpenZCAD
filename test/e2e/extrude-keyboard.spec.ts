@@ -71,7 +71,7 @@ for (const moveKeyboard of [false, true]) {
       page.locator('.feature-row-main', { hasText: 'Profile' })
     ).toBeVisible();
     await page
-      .getByLabel(/^Import FreeCAD, STEP or /)
+      .getByLabel(/^Import STEP or /)
       .setInputFiles('samples/simple-block.stl');
     await expect.poll(() => archiving).toBe(true);
     await page.keyboard.press('e');

@@ -2,7 +2,7 @@
  * Vitest project for the STEP + geometry parity corpus.
  *
  * The corpus is a SEPARATE run from the root suite on purpose. Every corpus
- * file is imported through two WASM kernels, re-exported, and re-imported;
+ * file is imported through Remus, re-exported, and re-imported;
  * that is seconds of geometry per file, and the root suite already had to
  * bound its worker count once to stop kernel startup from becoming unrelated
  * five-second timeouts. Sharing a pool with the fast suites repeats that.
@@ -48,16 +48,12 @@ export default defineConfig({
   test: {
     root: fileURLToPath(REPO_ROOT),
     environment: 'node',
-    include: [
-      'test/parity/**/*.spec.ts',
-      'packages/io-freecad/src/conversion.spec.ts'
-    ],
+    include: ['test/parity/**/*.spec.ts'],
     setupFiles: ['test/setup.ts'],
-    // One worker: two kernel WASM instances per file is already the memory
-    // ceiling worth spending, and the corpus is measurement, not throughput.
+    // Keep the geometry corpus serial: it is measurement, not throughput.
     maxWorkers: 1,
     fileParallelism: false,
-    // Import + re-export + re-import of the 841 KB bracket sample through OCCT
+    // Import + re-export + re-import of the 841 KB bracket sample
     // is several seconds; the whole corpus is measured in one `beforeAll`.
     testTimeout: 120_000,
     hookTimeout: 900_000

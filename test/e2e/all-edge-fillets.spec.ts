@@ -189,7 +189,7 @@ for (const radius of [1, 10]) {
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     await page.getByLabel('Project name').fill('Concave bracket');
     await page.getByRole('button', { name: 'New project' }).click();
-    await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+    await page.getByLabel(/^Import STEP or /).setInputFiles({
       name: 'bracket.step',
       mimeType: 'application/step',
       buffer: Buffer.from(bytes)
