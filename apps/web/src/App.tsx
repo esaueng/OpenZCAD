@@ -60,10 +60,6 @@ import type {
 } from '@openzcad/shared';
 import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
-import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
-import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
-import { gearHeightPreviewProfile } from './lib/interaction/gearHeightPreviewProfile';
-import { stepPreviewProfile } from './lib/interaction/stepPreviewProfile';
 import {
   parameterMinimums,
   parameterInputError,
@@ -714,8 +710,7 @@ import {
 import {
   primitiveBoxFaceAncestor,
   primitiveCylinderRadiusAncestor,
-  primitiveCylinderScale,
-  primitiveCylinderHeightAncestor
+  primitiveCylinderScale
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
 import {
@@ -777,7 +772,6 @@ import type {
   SketchOffsetPick
 } from './lib/sketch/edits';
 import {
-  faceOffsetBaseline,
   planFaceOffset,
   withFaceTravelHint
 } from './lib/interaction/faceOffsetPlan';
@@ -805,6 +799,7 @@ import {
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
+import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
@@ -23055,106 +23050,13 @@ export function App() {
     };
   }, [interaction]);
 
-  const offsetHandleTarget = useMemo(() => {
-    // Validation keeps the handle, locked where it was let go: retiring it
-    // there and building a new one after the commit faded the arrow out and
-    // back in around every release.
-    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
-      return null;
-    }
-    const target = interaction.target;
-    if (target.surfaceType !== 'planar') {
-      return null;
-    }
-    const total =
-      doc && target.hash !== undefined && !target.localFaceOffset
-        ? faceOffsetBaseline(
-            doc,
-            target.bodyId as BodyId,
-            { reference: target.reference },
-            target.hash
-          )
-        : undefined;
-    const profile =
-      doc &&
-      target.hash !== undefined &&
-      primitiveCylinderHeightAncestor(
-        doc,
-        target.bodyId as BodyId,
-        target.reference,
-        target.hash
-      )
-        ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
-        : null;
-    const boxProfile =
-      doc &&
-      !target.localFaceOffset &&
-      target.hash !== undefined &&
-      primitiveBoxFaceAncestor(
-        doc,
-        target.bodyId as BodyId,
-        target.reference,
-        target.hash
-      )
-        ? boxPreviewProfile(representations[target.bodyId as BodyId], {
-            x: target.normal[0],
-            y: target.normal[1],
-            z: target.normal[2]
-          })
-        : null;
-    const body = representations[target.bodyId as BodyId];
-    const pickedFace = body?.topology?.faces.find(
-      (face) =>
-        face.topologyId === target.topologyId && face.hash === target.hash
-    );
-    // A cached pick must still name the exact face installed for this revision.
-    if (!pickedFace?.geometry) return null;
-    const gearProfile =
-      !profile && !boxProfile && doc
-        ? gearHeightPreviewProfile(doc, body, pickedFace)
-        : null;
-    const terminalProfile =
-      !profile && !boxProfile && !gearProfile
-        ? capPreviewProfile(body, pickedFace)
-        : null;
-    const linearProfile = boxProfile ?? terminalProfile;
-    // Any other planar face: move it with its blends and stretch the walls
-    // they meet, when that is what the exact move would do.
-    const stepProfile =
-      !profile && !linearProfile && !gearProfile && !E2E_EXACT_FACE_DRAG
-        ? stepPreviewProfile(body, pickedFace)
-        : null;
-    return {
-      ...(gearProfile ? { gearHeightProfilePreview: gearProfile } : {}),
-      ...(linearProfile ? { linearProfilePreview: linearProfile } : {}),
-      ...(stepProfile ? { stepProfilePreview: stepProfile } : {}),
-      ...(profile ? { profilePreview: profile } : {}),
-      bodyId: target.bodyId,
-      topologyId: target.topologyId,
-      point: {
-        x: target.point[0],
-        y: target.point[1],
-        z: target.point[2]
-      },
-      normal: {
-        x: target.normal[0],
-        y: target.normal[1],
-        z: target.normal[2]
-      },
-      initialValue:
-        renderedOffsetPreview ??
-        offsetPreviewValueRef.current ??
-        interaction.lastValue ??
-        0,
-      ...(total === undefined
-        ? {}
-        : { totalBaseline: total.total, totalSense: total.sense }),
-      ...(interaction.phase === 'validating' ? { locked: true } : {}),
-      // Keypad entry: typed values drive the handle, its ghost and the
-      // preview; landing exact frames must not rebuild them under the hand.
-      ...(interaction.phase === 'exact-entry' ? { entry: true } : {})
-    };
-  }, [doc, interaction, renderedOffsetPreview, representations]);
+  const offsetHandleTarget = useOffsetFaceHandle(
+    doc,
+    representations,
+    interaction,
+    renderedOffsetPreview ?? offsetPreviewValueRef.current,
+    E2E_EXACT_FACE_DRAG
+  );
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     // Validation keeps the handle, locked where it was let go, as the offset

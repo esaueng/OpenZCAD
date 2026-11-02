@@ -105,13 +105,14 @@ export function historyCheckpointIndices(
 /**
  * A sync's checkpoint positions: the stable ones before `tail`, then `tail`.
  *
- * A complete sync's tail is its last feature, and a face-drag preview's is
- * the feature right before the dragged edit, whose own digest changes on
- * every tick. Appending a feature, or starting a drag, then restores the
+ * A complete sync's tail is its last feature, except that a terminal face
+ * offset keeps its source in complete builds and previews alike. The edit's
+ * own digest changes on every tick. Appending a feature, or starting a drag,
+ * then restores the
  * previous sync's tail and replays only what follows it, however sparse the
  * stable positions are. Every other body keeps its handles, so its
  * measurement is reused and a prepared face move can engage. The commit
- * after a drag restores the drag's tail the same way.
+ * after a drag restores the drag's tail without replacing the checked source.
  *
  * A schedule already at `limit` gives up its latest position before the
  * tail, so the count stays within the limit. A tail that later syncs no

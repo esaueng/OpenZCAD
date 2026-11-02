@@ -1571,15 +1571,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyKernel !== null &&
       this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK;
     if (recycled) this.invalidateHistoryCache();
-    const stableCheckpointIndices = historyCheckpointIndices(
-      features.length,
-      this.maxHistoryCheckpoints
-    );
-    // A drag's tail is the edit's source; a complete sync's is its last
-    // feature. See `tailCheckpointIndices`.
+    // An offset's checked source must survive Apply too. Replacing its sparse
+    // checkpoint with the result makes the next preview replay unchanged
+    // blends display-only, then replay them checked again on release.
+    const terminalOffset =
+      terminal?.data.featureKind === 'direct-edit' &&
+      terminal.data.operation.kind === 'offset-face';
     const checkpointIndices = tailCheckpointIndices(
-      stableCheckpointIndices,
-      features.length - (deferredDirectEditFeatureId ? 2 : 1),
+      historyCheckpointIndices(features.length, this.maxHistoryCheckpoints),
+      features.length - (terminalOffset ? 2 : 1),
       this.maxHistoryCheckpoints
     );
     const checkpointIndexSet = new Set(checkpointIndices);

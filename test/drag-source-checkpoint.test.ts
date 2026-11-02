@@ -176,6 +176,20 @@ async function dragScenario(options: {
       meshed: tessellations.count() - tessellationsBefore
     };
     expect(kernel().checkpointCount()).toBeLessThanOrEqual(limit);
+    // Apply must retain the same checked source. Otherwise the next value
+    // replays the extrusion (or an expensive shoulder fillet in a real part)
+    // once for display and again for the complete commit.
+    const beforeNextPreview = extrusions.count();
+    const nextPreview = await adapter.previewGeometry(offsetBy(1.5), {
+      deferTopology: true
+    });
+    expect(nextPreview.warnings).toEqual([]);
+    const nextPreviewReplays = extrusions.count() - beforeNextPreview;
+    const beforeNextCommit = extrusions.count();
+    const nextComplete = await adapter.syncDocument(offsetBy(1.5));
+    expect(nextComplete.warnings).toEqual([]);
+    const nextCommitReplays = extrusions.count() - beforeNextCommit;
+    expect(kernel().checkpointCount()).toBeLessThanOrEqual(limit);
     const fresh = await createExactKernelAdapter({ historyCheckpointLimit: 0 });
     try {
       const expected = await fresh.syncDocument(committed);
@@ -195,7 +209,7 @@ async function dragScenario(options: {
     } finally {
       fresh.dispose();
     }
-    return { rebuiltExtrusions, commit };
+    return { rebuiltExtrusions, commit, nextPreviewReplays, nextCommitReplays };
   } finally {
     extrusions.restore();
     tessellations.restore();
@@ -204,10 +218,13 @@ async function dragScenario(options: {
 }
 
 it('a drag and its commit after a complete sync rebuild nothing but the edit', async () => {
-  const { rebuiltExtrusions, commit } = await dragScenario({});
+  const { rebuiltExtrusions, commit, nextPreviewReplays, nextCommitReplays } =
+    await dragScenario({});
   // The base sync's last-feature checkpoint is the drag's source.
   expect(rebuiltExtrusions).toEqual([0, 0, 0, 0]);
   expect(commit.rebuiltExtrusions).toBe(0);
+  expect(nextPreviewReplays).toBe(0);
+  expect(nextCommitReplays).toBe(0);
   // Only the edited extrusion is measured; the 19 boxes keep theirs.
   expect(commit.meshed).toBe(1);
   expect(commit.event).toMatchObject({
@@ -229,10 +246,10 @@ it('a drag checkpoints its source when no checkpoint covers it', async () => {
 });
 
 it('drag previews keep the drag checkpoint within a tight checkpoint limit', async () => {
-  const { rebuiltExtrusions, commit } = await dragScenario({
-    historyCheckpointLimit: 2,
-    displaced: true
-  });
+  const { rebuiltExtrusions, commit, nextPreviewReplays, nextCommitReplays } =
+    await dragScenario({ historyCheckpointLimit: 2, displaced: true });
   expect(rebuiltExtrusions).toEqual([1, 0, 0, 0]);
   expect(commit.rebuiltExtrusions).toBe(0);
+  expect(nextPreviewReplays).toBe(0);
+  expect(nextCommitReplays).toBe(0);
 });
