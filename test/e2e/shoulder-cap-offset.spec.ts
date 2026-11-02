@@ -10,19 +10,21 @@ import {
   expect,
   stubApi,
   MODEL_ONLY,
-  clickWorldPoint
+  clickWorldPoint,
+  setSelectionFilter
 } from './openzcad-fixtures';
 
 async function importShoulder(
   page: Page,
-  dimensions?: { height: number; capHeight: number }
+  dimensions?: { height: number; capHeight: number },
+  filletShoulder = true
 ) {
   await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.addInitScript(() => {
     (window as unknown as { __ozFullRender: boolean }).__ozFullRender = true;
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
-  const source = await shoulderCapStep(dimensions);
+  const source = await shoulderCapStep(dimensions, filletShoulder);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Synthetic shoulder and cap');
   await page.getByRole('button', { name: 'New project' }).click();
@@ -137,16 +139,44 @@ async function verifyExport(
 }
 
 test(
-  'independent shoulder and cap offsets reach the joined rim from the taller source',
+  'R5 fillet and independent shoulder and cap offsets reach the joined rim',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(240_000);
-    await importShoulder(page, { height: 26, capHeight: 35 });
-    await offsetTo(page, 26, 19.1, 2);
+    await importShoulder(page, { height: 26, capHeight: 35 }, false);
+    await setSelectionFilter(page, 'Edge');
+    await clickWorldPoint(page, [6 * Math.SQRT1_2, 6 * Math.SQRT1_2, 26]);
+    await page.keyboard.down('Shift');
+    try {
+      for (const point of [
+        [6, 0, 13],
+        [18, 0, 26],
+        [0, 6, 13],
+        [0, 13, 26]
+      ] as [number, number, number][]) {
+        await clickWorldPoint(page, point);
+      }
+    } finally {
+      await page.keyboard.up('Shift');
+    }
+    await expect(page.getByRole('contentinfo')).toContainText(
+      '5 edges selected'
+    );
+    await expect(
+      page.getByRole('region', { name: 'Fillet operation' })
+    ).toBeVisible();
+    await page.getByTestId('direct-manipulation-value').click();
+    const keypad = page.getByRole('dialog', { name: 'Radius value' });
+    await keypad.getByRole('textbox').fill('5');
+    await keypad.getByRole('button', { name: 'Apply radius' }).click();
+    await featureCount(page, 2);
+    await verifyExport(page, 26, 16, 35);
+    await setSelectionFilter(page, 'Face');
+    await offsetTo(page, 26, 19.1, 3);
     await verifyExport(page, 19.1, 16, 35);
-    await offsetTo(page, 35, 28.5, 3, [0, 0, 35]);
+    await offsetTo(page, 35, 28.5, 4, [0, 0, 35]);
     await verifyExport(page, 19.1, 16);
-    await offsetTo(page, 19.1, 24.1, 4);
+    await offsetTo(page, 19.1, 24.1, 5);
     await verifyExport(page, 24.1, 19);
     await expect(page.getByRole('contentinfo')).toContainText('warnings1');
   }

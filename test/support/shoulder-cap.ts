@@ -8,7 +8,8 @@ export async function shoulderCapStep(
   dimensions: { height: number; capHeight: number } = {
     height: 19.1,
     capHeight: 28.5
-  }
+  },
+  filletShoulder = true
 ): Promise<Uint8Array> {
   const kernel = new RemusKernel();
   try {
@@ -27,6 +28,10 @@ export async function shoulderCapStep(
     );
     if (cap === undefined) throw new Error('Synthetic cap plane is absent.');
     solid = kernel.fillet(solid, kernel.getFaceEdges(cap), 1.8);
+    if (!filletShoulder) {
+      const io = await loadRemusTranslators();
+      return io.exportStep(kernel.serializeSolids(Uint32Array.of(solid)));
+    }
     const near = (a: number, b: number) => Math.abs(a - b) < 1e-7;
     const shoulderEdges = Array.from(kernel.getSolidEdges(solid)).filter(
       (edge) => {

@@ -37,8 +37,9 @@ the approximation during preview, commit and replay.
 
 `test/e2e/shoulder-cap-offset.spec.ts` builds a public primitive fixture and
 uses the viewport picker to select the shoulder, because two upward planes
-make a normal-only test selector ambiguous. It covers independent shoulder
-and cap moves from a taller source, contact onset, joining, further movement,
+make a normal-only test selector ambiguous. It creates the R5 fillet through
+five actual viewport edge picks, then covers independent shoulder and cap
+moves from a taller source, contact onset, joining, further movement,
 separation, rejoining, undo/redo, durable reload and a held drag through both
 directions. Every committed state exports STEP and is reimported to verify
 one body, the expected 16/19-face topology, the moved
