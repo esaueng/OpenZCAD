@@ -30,6 +30,7 @@
   "library-folder-sync.spec.ts": 9,
   "library-reload-stability.spec.ts": 5,
   "measure.spec.ts": 7,
+  "mixed-seam-fillet.spec.ts": 8,
   "modeling.spec.ts": 136,
   "panel-suspension.spec.ts": 13,
   "progressive-loading.spec.ts": 10,
