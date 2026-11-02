@@ -554,10 +554,24 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
   const profiler = process.env.OZ_PERF_FACE_CPU_PROFILE
     ? await page.context().newCDPSession(page)
     : undefined;
-  if (profiler) {
+  const profileAction =
+    process.env.OZ_PERF_FACE_CPU_PROFILE_ACTION ?? 'preview';
+  if (profiler) expect(['preview', 'release', 'undo']).toContain(profileAction);
+  const startProfile = async (action: string) => {
+    if (!profiler || profileAction !== action) return;
     await profiler.send('Profiler.enable');
     await profiler.send('Profiler.start');
-  }
+  };
+  const stopProfile = async (action: string) => {
+    if (!profiler || profileAction !== action) return;
+    const { profile } = await profiler.send('Profiler.stop');
+    writeFileSync(
+      process.env.OZ_PERF_FACE_CPU_PROFILE!,
+      JSON.stringify(profile)
+    );
+    await profiler.detach();
+  };
+  await startProfile('preview');
   await arm(editor.getByRole('textbox'), 'input', 'preview', featureCount);
   await editor.getByRole('textbox').fill(String(offset));
   await expect
@@ -572,14 +586,7 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
       { timeout: 180_000 }
     )
     .toBe(true);
-  if (profiler) {
-    const { profile } = await profiler.send('Profiler.stop');
-    writeFileSync(
-      process.env.OZ_PERF_FACE_CPU_PROFILE!,
-      JSON.stringify(profile)
-    );
-    await profiler.detach();
-  }
+  await stopProfile('preview');
   if (process.env.OZ_PERF_FACE_SCREENSHOT)
     await page.screenshot({ path: process.env.OZ_PERF_FACE_SCREENSHOT });
   await expect(page.locator('.feature-row')).toHaveCount(featureCount);
@@ -590,6 +597,7 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
     'release',
     featureCount + 1
   );
+  await startProfile('release');
   await editor.getByRole('button', { name: 'Apply offset' }).click();
   await expect
     .poll(
@@ -603,6 +611,7 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
       { timeout: 180_000 }
     )
     .toBe(true);
+  await stopProfile('release');
   const geometry = await page.evaluate(() => {
     const probe = window.__ozFaceDragPerf;
     const preview = probe.actions.find(
@@ -638,6 +647,7 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
     'undo',
     featureCount
   );
+  await startProfile('undo');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect
     .poll(
@@ -651,6 +661,7 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
       { timeout: 180_000 }
     )
     .toBe(true);
+  await stopProfile('undo');
   const restored = await page.evaluate(() => {
     const probe = window.__ozFaceDragPerf;
     return {
