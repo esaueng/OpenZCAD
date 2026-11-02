@@ -89,7 +89,7 @@ test('read-only imported mesh details keep History visible', async ({
   await page.route('**/api/session', (route) => route.fulfill({ json: null }));
   await createProject(page, 'Read-only feature details');
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles('samples/simple-block.stl');
   await page
     .getByRole('dialog', { name: 'Units for simple-block.stl' })

@@ -59,7 +59,7 @@ for (const signedOut of [true, false]) {
     });
     await page.goto('/');
     await create(page, 'STL completed');
-    await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(fixture);
+    await page.getByLabel(/^Import STEP or /).setInputFiles(fixture);
     await expectBodyCount(page, 1);
     await expect(page.locator('.feature-row')).toHaveCount(1);
     // The regression was a completed, durable mesh with an orphaned active
@@ -94,7 +94,7 @@ test('cancels an STL archive without committing and clears its job before switch
   const archive = await holdArchive(page);
   await page.goto('/');
   await create(page, 'STL cancelled');
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(fixture);
+  await page.getByLabel(/^Import STEP or /).setInputFiles(fixture);
   await expect.poll(archive.reached).toBe(true);
   const pill = page.getByRole('region', { name: 'File import', exact: true });
   await expect(pill).toContainText('Archiving a copy');
@@ -126,7 +126,7 @@ test('settles an STL import that finishes after its project was replaced', async
   const archive = await holdArchive(page);
   await page.goto('/');
   await create(page, 'STL origin');
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(fixture);
+  await page.getByLabel(/^Import STEP or /).setInputFiles(fixture);
   await expect.poll(archive.reached).toBe(true);
   await nextProject(page, 'STL destination');
   archive.release();
@@ -149,7 +149,7 @@ test('settles an STL parse refusal and releases the geometry reservation', async
   await seedUnitlessImportUnits(page);
   await page.goto('/');
   await create(page, 'STL refused');
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'empty.stl',
     mimeType: 'model/stl',
     buffer: Buffer.from('solid empty\nendsolid empty\n')
@@ -287,7 +287,7 @@ for (const originalCleanup of [false, true]) {
     });
     await page.goto('/');
     await create(page, 'STL cleanup failure');
-    await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(fixture);
+    await page.getByLabel(/^Import STEP or /).setInputFiles(fixture);
     await expect.poll(() => metadataReached).toBe(true);
     // Cancel before the selected archive's metadata acknowledgement.
     expect(finalized).toEqual(

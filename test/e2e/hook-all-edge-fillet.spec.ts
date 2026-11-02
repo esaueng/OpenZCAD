@@ -67,7 +67,7 @@ async function importHookBase(
 ) {
   await page.getByLabel('Project name').fill(projectName);
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'hook-base.step',
     mimeType: 'model/step',
     buffer: Buffer.from(baseBytes)
@@ -328,7 +328,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   await page.getByRole('button', { name: 'OpenZCAD Beta' }).click();
   await page.getByLabel('Project name').fill('Hook STEP Reimport');
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'hook-filleted.step',
     mimeType: 'model/step',
     buffer: Buffer.from(stepText, 'utf8')

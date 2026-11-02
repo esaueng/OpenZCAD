@@ -14,3 +14,5 @@ policy/asset/CI-selection checks, 56 import-menu tests and two Chromium import
 regressions pass. All 22 STEP and seven import-modeling Remus baseline records
 are unchanged. Full local suites retain main's reproduced assertion failures
 and encounter local worker errors; exact-head hosted checks remain required.
+The STEP fillet/export and STL import/measurement browser smoke flows also pass
+locally after updating every import-control selector to the supported formats.

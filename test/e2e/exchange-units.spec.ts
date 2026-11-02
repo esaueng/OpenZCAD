@@ -44,7 +44,7 @@ test('a unitless STL asks for its unit and lands at the size the answer makes', 
   await stubApi(page);
   await createProject(page, 'Unitless import');
 
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(STL);
+  await page.getByLabel(/^Import STEP or /).setInputFiles(STL);
   const prompt = page.getByRole('dialog', {
     name: 'Units for simple-block.stl'
   });
@@ -67,7 +67,7 @@ test('a unitless STL asks for its unit and lands at the size the answer makes', 
   await expectBodyCount(page, 0);
 
   // Inches, remembered: the body is 25.4 times the file's numbers.
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(STL);
+  await page.getByLabel(/^Import STEP or /).setInputFiles(STL);
   await prompt.getByRole('radio', { name: 'Inches' }).check();
   await prompt
     .getByRole('checkbox', { name: /Always read unitless files/ })
@@ -82,7 +82,7 @@ test('a unitless STL asks for its unit and lands at the size the answer makes', 
   await expect(page.locator('.panel-body')).toContainText('508 × 508 × 0');
 
   // Remembered: the next unitless file is read the same way without asking.
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(STL);
+  await page.getByLabel(/^Import STEP or /).setInputFiles(STL);
   await expectBodyCount(page, 2);
   await expect(prompt).toHaveCount(0);
 });

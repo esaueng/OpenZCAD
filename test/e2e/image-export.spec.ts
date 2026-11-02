@@ -118,7 +118,7 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
   const viewport = page.getByRole('region', { name: '3D viewport' });
   await expect(viewport).toBeVisible();
 
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'slot.dxf',
     mimeType: 'image/vnd.dxf',
     buffer: Buffer.from(SLOT_DXF)
@@ -246,7 +246,7 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
 
   // A History selection outside sketch editing must choose that sketch,
   // rather than silently downloading the first sketch again.
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'second-slot.dxf',
     mimeType: 'image/vnd.dxf',
     buffer: Buffer.from(SLOT_DXF.replace('40\r\n0.1', '40\r\n0.2'))
