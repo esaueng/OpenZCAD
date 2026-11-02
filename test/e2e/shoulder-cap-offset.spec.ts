@@ -13,13 +13,16 @@ import {
   clickWorldPoint
 } from './openzcad-fixtures';
 
-async function importShoulder(page: Page) {
+async function importShoulder(
+  page: Page,
+  dimensions?: { height: number; capHeight: number }
+) {
   await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.addInitScript(() => {
     (window as unknown as { __ozFullRender: boolean }).__ozFullRender = true;
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
-  const source = await shoulderCapStep();
+  const source = await shoulderCapStep(dimensions);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Synthetic shoulder and cap');
   await page.getByRole('button', { name: 'New project' }).click();
@@ -43,7 +46,11 @@ async function featureCount(page: Page, count: number) {
   ).toBeVisible({ timeout: 60_000 });
 }
 
-async function selectShoulder(page: Page, height: number) {
+async function selectPlane(
+  page: Page,
+  height: number,
+  point: [number, number, number] = [20, 14, height]
+) {
   const chip = page.getByTestId('direct-manipulation-value');
   await page.keyboard.press('Escape');
   // There are two upward planes. The normal-only test selector cannot
@@ -51,7 +58,7 @@ async function selectShoulder(page: Page, height: number) {
   await expect
     .poll(
       async () => {
-        await clickWorldPoint(page, [20, 14, height]);
+        await clickWorldPoint(page, point);
         return chip.isVisible();
       },
       { timeout: 30_000 }
@@ -67,9 +74,10 @@ async function offsetTo(
   page: Page,
   from: number,
   height: number,
-  count: number
+  count: number,
+  point?: [number, number, number]
 ) {
-  const chip = await selectShoulder(page, from);
+  const chip = await selectPlane(page, from, point);
   await chip.click();
   const pad = page.getByRole('dialog', { name: 'Total value' });
   await pad.getByRole('textbox').fill(String(height));
@@ -84,7 +92,12 @@ async function offsetTo(
   await featureCount(page, count);
 }
 
-async function verifyExport(page: Page, height: number, faces: number) {
+async function verifyExport(
+  page: Page,
+  height: number,
+  faces: number,
+  capHeight = 28.5
+) {
   const menu = page.locator('details.file-menu');
   await menu.locator('summary').click();
   const step = menu.getByRole('button', { name: /Export STEP/ });
@@ -104,7 +117,7 @@ async function verifyExport(page: Page, height: number, faces: number) {
     expect(kernel.validateSolid(roots[0]!)).toBe(0);
     const solidFaces = Array.from(kernel.getSolidFaces(roots[0]!));
     expect(solidFaces.length).toBe(faces);
-    for (const expected of [height, 28.5]) {
+    for (const expected of [height, capHeight]) {
       expect(
         solidFaces.some(
           (face) =>
@@ -122,6 +135,22 @@ async function verifyExport(page: Page, height: number, faces: number) {
   }
   await menu.locator('summary').click();
 }
+
+test(
+  'independent shoulder and cap offsets reach the joined rim from the taller source',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(240_000);
+    await importShoulder(page, { height: 26, capHeight: 35 });
+    await offsetTo(page, 26, 19.1, 2);
+    await verifyExport(page, 19.1, 16, 35);
+    await offsetTo(page, 35, 28.5, 3, [0, 0, 35]);
+    await verifyExport(page, 19.1, 16);
+    await offsetTo(page, 19.1, 24.1, 4);
+    await verifyExport(page, 24.1, 19);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings1');
+  }
+);
 
 test(
   'shoulder joins, separates, rejoins, undoes, redoes and reloads',
@@ -199,7 +228,7 @@ test(
   async ({ page }) => {
     test.setTimeout(240_000);
     await importShoulder(page);
-    const chip = await selectShoulder(page, 19.1);
+    const chip = await selectPlane(page, 19.1);
     const canvas = page.locator('.viewer-host canvas');
     const handle = await canvas.evaluate((element) => {
       const data = (element as HTMLElement).dataset;

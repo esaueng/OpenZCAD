@@ -36,9 +36,9 @@ the approximation during preview, commit and replay.
 
 `test/e2e/shoulder-cap-offset.spec.ts` builds a public primitive fixture and
 uses the viewport picker to select the shoulder, because two upward planes
-make a normal-only test selector ambiguous. It covers contact onset, joining,
-further movement, separation, rejoining, undo/redo, durable reload and a held
-drag through both directions. Every committed state exports STEP and is
+make a normal-only test selector ambiguous. It covers independent shoulder and cap moves from a taller source, contact
+onset, joining, further movement, separation, rejoining, undo/redo, durable
+reload and a held drag through both directions. Every committed state exports STEP and is
 reimported to verify one body, the expected 16/19-face topology, the moved
 shoulder height and unchanged cap height. Warning counts and the actual
 approximation advisory are checked after reload. This coverage needs the
@@ -50,12 +50,14 @@ including attempts that exhausted the quadrature work cap before refusing.
 The kernel preflights that unchanged cap, recognizes complete natural NURBS
 domains from boundary authority, and uses a closed-form boundary integral for
 the translation's volume-direction guard. It does not seed measured-volume
-caches or relax solid validation. Exploratory local traces showed repeated
-pre-contact kernel work around 24–33 ms and cold cap reconstruction around
-590–750 ms under concurrent test load. These are diagnostic observations,
-not quiet-host H02 timing acceptance or a smooth-frame guarantee. Cold joining
-still costs more than translation, and target-device responsiveness remains
-open.
+caches or relax solid validation. One functional trace of kernel candidate
+`425438a3` recorded initial translation calls at 197–214 ms, later translations
+at 20–29 ms, and rim reconstruction at 432–499 ms. Worker queueing was at most
+0.1 ms; the first following presented frame arrived 160–847 ms after its
+request. All 17 published candidates succeeded. This is a single diagnostic
+trace without a matched baseline or quiet-host qualification, not H02 timing
+acceptance or a smooth-frame guarantee. Cold joining still costs more than
+translation, and target-device responsiveness remains open.
 
 The reconstructed corners and trim contours are approximate. Local comparison
 against the supplied target found matching physical bounds and valid closed

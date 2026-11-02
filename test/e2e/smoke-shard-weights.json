@@ -39,7 +39,7 @@
   "reload-face-offset.spec.ts": 60,
   "save-state-history.spec.ts": 13,
   "settings.spec.ts": 8,
-  "shoulder-cap-offset.spec.ts": 180,
+  "shoulder-cap-offset.spec.ts": 300,
   "sketch-modify-tools.spec.ts": 9,
   "sketch-move.spec.ts": 11,
   "sketch-transition-continuity.spec.ts": 60,

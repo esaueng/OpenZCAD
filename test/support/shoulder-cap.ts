@@ -4,11 +4,15 @@ import {
 } from '../../packages/kernel-adapter/src/remus-runtime';
 
 /** A public 32 × 20 tab, R6 boss, R5 shoulder and R1.8 fixed cap. */
-export async function shoulderCapStep(): Promise<Uint8Array> {
+export async function shoulderCapStep(
+  dimensions: { height: number; capHeight: number } = {
+    height: 19.1,
+    capHeight: 28.5
+  }
+): Promise<Uint8Array> {
   const kernel = new RemusKernel();
   try {
-    const height = 19.1;
-    const capHeight = 28.5;
+    const { height, capHeight } = dimensions;
     const bossRadius = 6;
     const box = kernel.makeBox(32, 20, height);
     const boss = kernel.makeCylinder(bossRadius, capHeight);
