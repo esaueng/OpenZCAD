@@ -88,7 +88,7 @@ describe('demo bracket base-plate top face offset', () => {
       const candidate = plan(offset);
       expect(candidate?.kind).toBe('direct-edit');
       expect(
-        (candidate as { travelHint?: string }).travelHint
+        (candidate as { travelHint?: () => string | undefined }).travelHint?.()
       ).toBeUndefined();
       const derived = await build(offset);
       expect(derived.warnings).toEqual([]);
@@ -103,13 +103,17 @@ describe('demo bracket base-plate top face offset', () => {
   it('adds an approximate inward distance after the exact collision refusal', async () => {
     const candidate = plan(-10);
     expect(candidate?.kind).toBe('direct-edit');
-    const hint = (candidate as { travelHint?: string }).travelHint;
+    const hint = (
+      candidate as { travelHint?: () => string | undefined }
+    ).travelHint?.();
     expect(hint).toBe(
       'The display mesh suggests about 8 mm of material behind this face.'
     );
     const warnings = (await build(-10)).warnings;
     expect(warnings.join('\n')).toMatch(/swept face reaches nonadjacent face/);
-    const exact = plainRefusal(warnings[0]!.replace(/^Feature "[^"]+":\s*/, ''));
+    const exact = plainRefusal(
+      warnings[0]!.replace(/^Feature "[^"]+":\s*/, '')
+    );
     expect(withFaceTravelHint(exact.message, hint)).toBe(
       `${exact.message}\n${hint}`
     );
@@ -118,7 +122,9 @@ describe('demo bracket base-plate top face offset', () => {
   it('adds an approximate outward distance after the exact collision refusal', async () => {
     const candidate = plan(10);
     expect(candidate?.kind).toBe('direct-edit');
-    const hint = (candidate as { travelHint?: string }).travelHint;
+    const hint = (
+      candidate as { travelHint?: () => string | undefined }
+    ).travelHint?.();
     expect(hint).toBe(
       'The display mesh suggests another part of the body about 6 mm in front of this face.'
     );
@@ -139,7 +145,9 @@ describe('demo bracket base-plate top face offset', () => {
   it('never refuses an offset just inside a limit that the kernel builds', async () => {
     for (const offset of [5.9, -7.9]) {
       expect(
-        (plan(offset) as { travelHint?: string }).travelHint
+        (
+          plan(offset) as { travelHint?: () => string | undefined }
+        ).travelHint?.()
       ).toBeUndefined();
       expect((await build(offset)).warnings).toEqual([]);
     }
@@ -149,7 +157,7 @@ describe('demo bracket base-plate top face offset', () => {
     );
     // Just past it, the mesh suggests a distance; the kernel still decides.
     expect(
-      (plan(-8.1) as { travelHint?: string }).travelHint
+      (plan(-8.1) as { travelHint?: () => string | undefined }).travelHint?.()
     ).toBe(
       'The display mesh suggests about 8 mm of material behind this face.'
     );
@@ -157,7 +165,8 @@ describe('demo bracket base-plate top face offset', () => {
 
   it('keeps an exact build available when the display mesh suggests a false obstacle', async () => {
     const withMeshArtifact = structuredClone(bracket);
-    const representation = withMeshArtifact.derived.bodyRepresentations[bodyId]!;
+    const representation =
+      withMeshArtifact.derived.bodyRepresentations[bodyId]!;
     const mesh = representation.mesh;
     const first = mesh.indices[top.triangleStart * 3]!;
     const second = mesh.indices[top.triangleStart * 3 + 1]!;
@@ -210,12 +219,13 @@ describe('demo bracket base-plate top face offset', () => {
       offset: 5
     });
     expect(candidate?.kind).toBe('direct-edit');
-    expect((candidate as { travelHint?: string }).travelHint).toContain(
-      'about 1 mm'
+    expect(
+      (candidate as { travelHint?: () => string | undefined }).travelHint?.()
+    ).toContain('about 1 mm');
+    const document = new CommandManager(withMeshArtifact).runTransaction(
+      'Offset',
+      [candidate!.command]
     );
-    const document = new CommandManager(withMeshArtifact).runTransaction('Offset', [
-      candidate!.command
-    ]);
     expect((await adapter.syncDocument(document)).warnings).toEqual([]);
   }, 60_000);
 });

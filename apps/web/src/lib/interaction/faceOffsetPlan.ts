@@ -65,7 +65,7 @@ export type FaceOffsetPlan =
       kind: 'direct-edit';
       command: AnyCommand;
       /** Mesh estimate shown only after the exact kernel refuses the move. */
-      travelHint?: string;
+      travelHint?: () => string | undefined;
     };
 
 /** What the handle's "Total" readout adds the drag to, and in which sense. */
@@ -262,12 +262,17 @@ function faceTravelHint(
 }
 
 /** Add the mesh estimate only to an exact nonadjacent-face refusal. */
-export function withFaceTravelHint(message: string, hint?: string): string {
-  return hint &&
-    message ===
-      'The face would run into another part of the body before it got that far.'
-    ? `${message}\n${hint}`
-    : message;
+export function withFaceTravelHint(
+  message: string,
+  hint?: string | (() => string | undefined)
+): string {
+  if (
+    message !==
+    'The face would run into another part of the body before it got that far.'
+  )
+    return message;
+  const estimate = typeof hint === 'function' ? hint() : hint;
+  return estimate ? `${message}\n${estimate}` : message;
 }
 
 /** Pure. Null when the face is not an exact plane or the offset is a no-op. */
@@ -451,10 +456,9 @@ export function planFaceOffset(
     return null;
   }
 
-  const travelHint = faceTravelHint(document, bodyId, face, offset);
   return {
     kind: 'direct-edit',
-    ...(travelHint ? { travelHint } : {}),
+    travelHint: () => faceTravelHint(document, bodyId, face, offset),
     command: commandFactories.directEditBody({
       name: DIRECT_EDIT_NAME,
       targetBodyId: bodyId,

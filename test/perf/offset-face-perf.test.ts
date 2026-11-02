@@ -17,10 +17,13 @@
  *
  * Environment:
  *
- *   OFFSET_PERF_STEP      STEP file to import. Required; the test skips without it.
+ *   OFFSET_PERF_STEP      STEP file to import, or use OFFSET_PERF_PROJECT.
+ *   OFFSET_PERF_PROJECT   Native .openzcad history, kept outside the repository.
+ *   OFFSET_PERF_NORMAL    Face normal as JSON (default [1,0,0]).
+ *   OFFSET_PERF_FRONTEND=1 Also measure preview recognition and refusal hints.
  *   OFFSET_PERF_DISTANCE  Offset in document units (default -6).
- *   OFFSET_PERF_AREA      Offset the +X planar face whose area is nearest this;
- *                         default is the largest +X planar face.
+ *   OFFSET_PERF_AREA      Offset the matching planar face nearest this area;
+ *                         default is the largest face along the normal.
  *   OFFSET_PERF_TRACE=1   Attribute traced kernel calls to their callers.
  *   OFFSET_PERF_KERNEL_PHASES=1  Drain opt-in kernel substage timings.
  *   OFFSET_PERF_PREVIEW=1 Time geometry-only previews where supported; legacy
@@ -48,6 +51,8 @@
  *   OFFSET_PERF_SAMPLES  Alternating warm edits (default 0). A fresh exact
  *                         rebuild checks the final sample outside timed work.
  *   OFFSET_PERF_OUT      Optional JSONL timing output.
+ *   OFFSET_PERF_ARENA_OUT Optional exact arena + meshing parameters for a
+ *                         single-body native-kernel reproduction (external).
  *   REMUS_WASM_PKG, REMUS_WASM_IO_PKG
  *                         Run against a local Remus build instead of the
  *                         pinned packages (the `vitest.config.ts` overlay).
@@ -75,7 +80,9 @@ import { expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  normalizeDocument,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import { sanitizeStepHeaderPrivacy } from '@openzcad/io-step';
 import {
@@ -93,8 +100,14 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import { RemusKernel } from '../../packages/kernel-adapter/src/remus-runtime';
 import { planFaceOffset } from '../../apps/web/src/lib/interaction/faceOffsetPlan';
+import { stepPreviewProfile } from '../../apps/web/src/lib/interaction/stepPreviewProfile';
+import { planarFaceTravel } from '../../apps/web/src/lib/interaction/planarFaceTravel';
 
 const stepPath = process.env.OFFSET_PERF_STEP;
+const projectPath = process.env.OFFSET_PERF_PROJECT;
+const normal = JSON.parse(
+  process.env.OFFSET_PERF_NORMAL ?? '[1,0,0]'
+) as number[];
 const offset = Number(process.env.OFFSET_PERF_DISTANCE ?? -6);
 const targetArea =
   process.env.OFFSET_PERF_AREA === undefined
@@ -150,6 +163,9 @@ const callerTotals = new Map<string, Tally>();
 const callRuns: CallRun[] = [];
 /** The adapter kernel that last restored or took a history checkpoint. */
 let adapterKernel: RemusKernel | undefined;
+let lastDisplayMesh:
+  | { kernel: RemusKernel; solid: number; deflection: number; angular?: number }
+  | undefined;
 /** Set while the harness itself queries the kernel, so it goes untallied. */
 let untallied = false;
 
@@ -243,6 +259,17 @@ function instrumentKernel(): () => void {
         if (name === 'restore' || name === 'checkpoint') {
           adapterKernel = this as RemusKernel;
         }
+        if (
+          process.env.OFFSET_PERF_ARENA_OUT &&
+          name === 'tessellateSolidGroupedBinary'
+        ) {
+          lastDisplayMesh = {
+            kernel: this as RemusKernel,
+            solid: args[0] as number,
+            deflection: args[1] as number,
+            angular: args[2] as number | undefined
+          };
+        }
         const start = performance.now();
         try {
           return original.apply(this, args);
@@ -265,6 +292,7 @@ function instrumentKernel(): () => void {
     phaseProbe?.free();
     phaseProbe = undefined;
     adapterKernel = undefined;
+    lastDisplayMesh = undefined;
   };
 }
 
@@ -326,6 +354,13 @@ function report(
         geometryReadyMs,
         kernelMs: kernel,
         jsMs: wall - kernel,
+        phases: phaseProbe?.drainPerformanceTrace
+          ? (JSON.parse(phaseProbe.drainPerformanceTrace()) as unknown)
+          : undefined,
+        caches:
+          kernelPhases && adapterKernel
+            ? (JSON.parse(adapterKernel.cacheMemoryStats()) as unknown)
+            : undefined,
         warnings: derived.warnings,
         bodies: Object.values(derived.bodyRepresentations).map((body) => ({
           volume: 'volume' in body ? body.volume : null,
@@ -532,13 +567,19 @@ function dragDistance(index: number): number {
   return offset - 0.2 * (phase <= 10 ? phase : 20 - phase);
 }
 
-/** The +X planar face nearest `area` in area, else the largest. */
+/** The requested planar face nearest `area` in area, else the largest. */
 function pickFace(faces: readonly FaceTopology[]): FaceTopology | undefined {
   const candidates = faces
     .filter(
       (face) =>
         face.geometry?.surfaceType === 'plane' &&
-        (face.geometry.normal?.x ?? 0) > 0.99
+        normal.length === 3 &&
+        [
+          face.geometry.normal?.x ?? 0,
+          face.geometry.normal?.y ?? 0,
+          face.geometry.normal?.z ?? 0
+        ].reduce((sum, component, axis) => sum + component * normal[axis]!, 0) >
+          0.99
     )
     .map((face) => ({ face, area: face.geometry?.area ?? 0 }));
   candidates.sort((a, b) =>
@@ -547,7 +588,7 @@ function pickFace(faces: readonly FaceTopology[]): FaceTopology | undefined {
       : Math.abs(a.area - targetArea) - Math.abs(b.area - targetArea)
   );
   for (const { face, area } of candidates.slice(0, 5)) {
-    console.log(`+X plane face ${face.topologyId} area ${area.toFixed(3)}`);
+    console.log(`plane face ${face.topologyId} area ${area.toFixed(3)}`);
   }
   return candidates[0]?.face;
 }
@@ -577,8 +618,8 @@ it('records SDK calls made by the selected exact adapter', async () => {
   }
 });
 
-it.skipIf(!stepPath)(
-  'times one offset-face direct edit on an imported STEP body',
+it.skipIf(!stepPath && !projectPath)(
+  'times one offset-face direct edit on a STEP body or project history',
   async () => {
     const restoreKernel = instrumentKernel();
     let adapter: ExactKernelAdapter | undefined;
@@ -598,18 +639,29 @@ it.skipIf(!stepPath)(
       }
       const manager = new CommandManager(initial);
       const sourceName = 'offset-perf.step';
-      manager.execute(
-        commandFactories.importStep({
-          name: 'Offset perf source',
-          artifactId: 'offset_perf_source',
-          sourceName,
-          stepText: sanitizeStepHeaderPrivacy(
-            readFileSync(stepPath!, 'utf8'),
-            sourceName
+      if (stepPath)
+        manager.execute(
+          commandFactories.importStep({
+            name: 'Offset perf source',
+            artifactId: 'offset_perf_source',
+            sourceName,
+            stepText: sanitizeStepHeaderPrivacy(
+              readFileSync(stepPath, 'utf8'),
+              sourceName
+            )
+          })
+        );
+      const imported = projectPath
+        ? withoutDerivedProjection(
+            normalizeDocument(
+              (
+                JSON.parse(readFileSync(projectPath, 'utf8')) as {
+                  document: ProjectDocument;
+                }
+              ).document
+            )
           )
-        })
-      );
-      const imported = manager.document;
+        : manager.document;
 
       const derived0 = await timedSync(
         adapter,
@@ -618,6 +670,19 @@ it.skipIf(!stepPath)(
         stages
       );
       expect(derived0.warnings).toEqual([]);
+      if (process.env.OFFSET_PERF_ARENA_OUT) {
+        expect(derived0.exportableBodyIds).toHaveLength(1);
+        expect(lastDisplayMesh).toBeDefined();
+        const { kernel, solid, deflection, angular } = lastDisplayMesh!;
+        writeFileSync(
+          process.env.OFFSET_PERF_ARENA_OUT,
+          kernel.serializeSolids(new Uint32Array([solid]))
+        );
+        writeFileSync(
+          `${process.env.OFFSET_PERF_ARENA_OUT}.json`,
+          JSON.stringify({ deflection, angular, normal, targetArea })
+        );
+      }
       // The edited body is the one the import added, not a background box.
       const background = new Set<BodyId>(initial.bodyOrder);
       const bodyId = derived0.exportableBodyIds.find(
@@ -635,6 +700,28 @@ it.skipIf(!stepPath)(
 
       const face = pickFace(faces);
       expect(face).toBeDefined();
+      if (process.env.OFFSET_PERF_FRONTEND === '1') {
+        const frontend = [];
+        for (let sample = 0; sample < 5; sample++) {
+          const start = performance.now();
+          const profile = stepPreviewProfile(body0, face);
+          const profileMs = performance.now() - start;
+          const travelStart = performance.now();
+          const travel = planarFaceTravel({ ...body0 }, face!);
+          frontend.push({
+            sample,
+            profileMs,
+            accepted: profile !== null,
+            travelMs: performance.now() - travelStart,
+            travel
+          });
+        }
+        if (process.env.OFFSET_PERF_OUT)
+          appendFileSync(
+            process.env.OFFSET_PERF_OUT,
+            `${JSON.stringify({ frontend })}\n`
+          );
+      }
       const base: ProjectDocument = { ...imported, derived: derived0 };
       const planAt = (distance: number) =>
         planFaceOffset({

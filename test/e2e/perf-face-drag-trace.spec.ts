@@ -67,7 +67,11 @@ interface Handle {
   pixelsPerUnit: number;
 }
 
-async function openDocument(page: Page, document: ProjectDocument) {
+async function openDocument(
+  page: Page,
+  document: ProjectDocument,
+  timeout = 5_000
+) {
   await page.getByLabel('Import project backup').setInputFiles({
     name: 'face-drag.openzcad',
     mimeType: 'application/json',
@@ -80,6 +84,9 @@ async function openDocument(page: Page, document: ProjectDocument) {
       })
     )
   });
+  await expect(
+    page.getByRole('group', { name: 'Workspace status' })
+  ).toBeVisible({ timeout });
   await expectBodyCount(page, 1);
 }
 
@@ -413,6 +420,43 @@ function record(
 }
 
 test.setTimeout(Number(process.env.OZ_FACE_DRAG_TIMEOUT_MS ?? 600_000));
+
+test('traces a supplied project face drag', async ({ page }) => {
+  const projectPath = process.env.OZ_FACE_DRAG_PROJECT;
+  test.skip(
+    !projectPath,
+    'Set OZ_FACE_DRAG_PROJECT to a private project backup.'
+  );
+  await startPage(page, false);
+  const backup = JSON.parse(readFileSync(projectPath!, 'utf8')) as {
+    document: ProjectDocument;
+    files: unknown[];
+    sources?: unknown[];
+  };
+  // This probe replays native histories. Referenced imports need the full
+  // backup importer rather than silently dropping their source payloads.
+  expect(backup.files).toHaveLength(0);
+  expect(backup.sources ?? []).toHaveLength(0);
+  await openDocument(page, backup.document, 180_000);
+  const { canvas, handle } = await armPlanarFace(page, { x: 0, y: 0, z: 1 });
+  const summary = record(
+    'supplied native project',
+    {
+      features: backup.document.featureOrder.length
+    },
+    await traceDrag(
+      page,
+      canvas,
+      handle,
+      Number(process.env.OZ_FACE_DRAG_DISTANCE ?? 3)
+    )
+  );
+  expect(summary.pointerEvents).toBeGreaterThan(0);
+  expect(
+    summary.presentedFrames + summary.proxyPresentedFrames
+  ).toBeGreaterThan(0);
+  expect(summary.releaseToFrameMs).not.toBeNull();
+});
 
 test('traces a chamfered cylinder top-cap drag', async ({ page }) => {
   await startPage(page);

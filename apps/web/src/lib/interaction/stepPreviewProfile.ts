@@ -93,7 +93,10 @@ export function stepPreviewProfile(
     }
     return known;
   };
+  const depths = new Map<FaceInfo, { low: number; high: number }>();
   const depthOf = (info: FaceInfo) => {
+    const known = depths.get(info);
+    if (known) return known;
     let low = Infinity,
       high = -Infinity;
     for (const index of info.vertices) {
@@ -101,7 +104,9 @@ export function stepPreviewProfile(
       if (s < low) low = s;
       if (s > high) high = s;
     }
-    return { low, high };
+    const depth = { low, high };
+    depths.set(info, depth);
+    return depth;
   };
   // The blends on the face's own edges set how deep the region may reach;
   // corner blends between them stay inside that band. A blend deeper than it

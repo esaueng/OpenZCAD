@@ -5726,7 +5726,9 @@ export function ModelViewer({
       }
       const detail = (
         event as CustomEvent<{
+          includeBodies?: boolean;
           resolve?: (value: {
+            bodies?: readonly GeometryBodyRepresentation[];
             offsetWorldObjects: string[];
             sectionCaps: {
               triangles: number;
@@ -5876,6 +5878,9 @@ export function ModelViewer({
         offsetWorldObjects,
         sectionCaps,
         exactSections,
+        ...(detail.includeBodies
+          ? { bodies: context.renderedBodies ?? [] }
+          : {}),
         bodyFaces,
         bodyEdges: lineStates(bodyGroup),
         sketchLines: lineStates(regionGroup)
