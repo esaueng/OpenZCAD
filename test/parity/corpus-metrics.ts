@@ -1,36 +1,8 @@
 /**
- * What the parity corpus measures, and how.
- *
- * Every corpus file is pushed through both kernel adapters as a real
- * `import.step` document — the same path the app uses — and reduced to one
- * flat, diffable record. Nothing here asserts; the record IS the product, and
- * the suite compares records to baselines and to each other.
- *
- * The metric set is chosen so a kernel engineer can act on a delta without
- * reopening the file:
- *
- *   - `warnings` is the FULL list, not a count. The warning text is the
- *     import taxonomy K0.6 has to reproduce, and a count hides which one
- *     changed.
- *   - `faceCount` / `edgeCount` are the mesh-fallback tell (a tessellated
- *     boolean multiplies them) and the seam-representation tell (OCCT reports
- *     a closed cylinder's seam edge, Remus does not).
- *   - `surfaceTypes` catches the case counts cannot: same face count, cylinder
- *     replaced by B-spline.
- *   - `faceHashDigest` / `edgeHashDigest` fold the topology witness sets into
- *     one value per body. Hash sets are the identity substrate every feature
- *     reference is resolved against, so a digest change means stored edge
- *     picks would move even when every count matches.
- *   - `witnessedFaces` / `lineageNames` are K0.6's acceptance surface. The
- *     original premise — that OCCT already published schema-v5 references on
- *     imported bodies and Remus had to catch up — was measured and found
- *     false: neither kernel published any. K0.6 built it on BOTH adapters
- *     against one shared rule, so these metrics now answer the question the Z3
- *     flip actually turns on: does a face pick stored on an imported body carry
- *     the same identity on either kernel.
- *   - `roundTrip` re-exports and re-imports through the SAME kernel. It is the
- *     only metric that catches writer defects — Remus's `write_solid`
- *     dropping inner shells is invisible until the file comes back.
+ * Measure real Remus import.step documents and imported-body edits against
+ * recorded baselines: full warnings, body and topology counts, physical volume,
+ * surface types, witness/lineage digests, import validation and STEP roundtrips.
+ * Re-export and reimport also expose writer defects such as lost cavities.
  */
 
 import { CommandManager, commandFactories } from '@openzcad/command-system';
@@ -45,7 +17,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 
-/** Minimal surface both kernel adapters satisfy; keeps the corpus kernel-blind. */
+/** Minimal adapter surface needed by the geometry measurements. */
 export interface MeasurableAdapter {
   readonly kind: string;
   syncDocument(document: ProjectDocument): Promise<DerivedState>;

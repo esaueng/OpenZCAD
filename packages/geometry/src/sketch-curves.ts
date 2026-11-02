@@ -10,7 +10,7 @@ import { geometryTolerance } from './tolerance';
  * sketch objects.
  *
  * Every consumer — region analysis, the viewport, the exact kernel builder,
- * the OCCT parity reference and the DXF/SVG exporters — derives its curve
+ * and the DXF/SVG exporters — derives its curve
  * from the functions here, so a spline is interpolated once, by one
  * algorithm, and the profile the viewport fills is the face the kernel
  * builds. The kernel never interpolates: it receives the control points and

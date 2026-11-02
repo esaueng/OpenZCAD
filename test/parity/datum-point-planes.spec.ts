@@ -20,13 +20,10 @@ import {
   type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
-import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
 /**
- * R01 three-point and parallel-at-point planes resolve the same frame in the
- * Remus build and the OCCT parity reference: typed points, and vertices
- * re-found through each kernel's own edge lineage. Each consumer's geometry
- * is compared against the analytic expectation in both kernels.
+ * Three-point and parallel-at-point planes resolve typed points and vertices
+ * through Remus lineage. Consumers must match the analytic expectation.
  */
 
 const quantum = (value: number) =>
@@ -66,16 +63,14 @@ function vertexOf(
   };
 }
 
-describe('three-point and parallel datum planes across exact kernels', () => {
+describe('three-point and parallel datum planes with the Remus kernel', () => {
   let remus: ExactKernelAdapter;
-  let occt: OcctStepKernelAdapter;
+
   beforeAll(async () => {
     remus = await createExactKernelAdapter();
-    occt = await OcctStepKernelAdapter.create();
   });
   afterAll(() => {
     remus.dispose();
-    occt.dispose();
   });
 
   function block(): { document: ProjectDocument; bodyId: BodyId } {
@@ -116,7 +111,7 @@ describe('three-point and parallel datum planes across exact kernels', () => {
       sketchId: sketched.sketchId,
       distance: 5
     });
-    for (const adapter of [remus, occt]) {
+    for (const adapter of [remus]) {
       const built = await adapter.syncDocument(padded.document);
       expect(built.warnings).toEqual([]);
       const pad = built.bodyRepresentations[padded.bodyId]!;
@@ -143,7 +138,7 @@ describe('three-point and parallel datum planes across exact kernels', () => {
       targetBodyId: bodyId,
       plane: datum(planed.featureId)
     });
-    for (const adapter of [remus, occt]) {
+    for (const adapter of [remus]) {
       const built = await adapter.syncDocument(mirrored.document);
       expect(built.warnings).toEqual([]);
       const copy = built.bodyRepresentations[mirrored.bodyId]!;
@@ -176,7 +171,7 @@ describe('three-point and parallel datum planes across exact kernels', () => {
       sketchId: sketched.sketchId,
       distance: 5
     });
-    for (const adapter of [remus, occt]) {
+    for (const adapter of [remus]) {
       const built = await adapter.syncDocument(padded.document);
       expect(built.warnings).toEqual([]);
       const pad = built.bodyRepresentations[padded.bodyId]!;
@@ -188,7 +183,7 @@ describe('three-point and parallel datum planes across exact kernels', () => {
     }
   });
 
-  it('refuses collinear points in both kernels', async () => {
+  it('refuses collinear points in Remus', async () => {
     const planed = addDatumPlane(
       createProjectDocument('Collinear', toUserId('user_r01_pp')),
       {
@@ -203,7 +198,7 @@ describe('three-point and parallel datum planes across exact kernels', () => {
         }
       }
     );
-    for (const adapter of [remus, occt]) {
+    for (const adapter of [remus]) {
       const built = await adapter.syncDocument(planed.document);
       expect(built.warnings.join('\n')).toMatch(/collinear/);
     }

@@ -21,7 +21,7 @@
     // Misses reach the Worker: a missing /assets/* chunk is an uncacheable 404
     // and any other path gets the app shell (worker/assetFallback.ts).
     "not_found_handling": "none",
-    "run_worker_first": ["/api/*", "/healthz", "/assets/freecadImportWorker-*"]
+    "run_worker_first": ["/api/*", "/healthz"]
   },
   "vars": {
     "ENVIRONMENT": "beta",

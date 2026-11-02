@@ -30,26 +30,20 @@ are rerecorded. Per-scenario wall-clock lands in `last-run-timings.json`
 
 ## 2. STEP + geometry parity corpus (`corpus.spec.ts`) — its own CI job
 
-Categorized STEP files measured through **both** kernels (Remus and
-OpenCascade) so the deltas between them are recorded rather than argued about.
-This is the Z1.3 gate that blocks the STEP routing flip (Z3) and the OCCT
-deletion (Z5).
+Categorized STEP files and imported-body modeling scenarios are measured through
+Remus against recorded baselines and independent construction arithmetic.
 
 ```bash
 pnpm test:parity-corpus
 ```
 
-It is a separate vitest project because it runs seconds of WASM geometry per
-file through two kernels. The mechanism is the file suffix — corpus suites are
-`*.spec.ts` and the root config only includes `*.test.ts`, so
-`pnpm exec vitest run test/parity` does not pick them up. Full documentation,
-including how to add a file and how to re-record, is in
-[`corpus/README.md`](./corpus/README.md).
+This serial Vitest project keeps slow import/export/reimport geometry separate
+from the fast suites. Corpus suites use `*.spec.ts`; the root suite collects
+`*.test.ts`. See [`corpus/README.md`](./corpus/README.md).
 
-The corpus's most valuable output is [`corpus-pins.ts`](./corpus-pins.ts): every
-recorded Remus-vs-OCCT delta and every kernel-vs-arithmetic deviation, each
-naming the file, the metric, both literal values, and the plan item
-(K0.1 / K0.2 / K0.4 / K0.5 / K0.6) that owns closing it. Start there.
+[`corpus-pins.ts`](./corpus-pins.ts) records remaining deviations from analytic
+expectations. The reference kernel and its measurements have been removed;
+the existing Remus baseline values and tolerances are unchanged.
 
 ## Shared
 
