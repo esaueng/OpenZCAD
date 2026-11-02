@@ -652,10 +652,9 @@ export function refineAcceptedEdgeModifierSize(
 /**
  * Turns the kernel's own blend refusal into the sentence a user can act on.
  *
- * The kernel reports how many of the named edges it could not blend and how
- * many would round on their own. That count is the whole remedy — deselect
- * the ones it named — and no amount of inspecting the selection afterwards
- * recovers it, so it is relayed rather than re-derived.
+ * Older kernels labelled every non-planar seed as unblendable after a mixed
+ * selection failed, without testing that subset. Those counts do not prove
+ * that an edge fails on its own or that the planar subset succeeds.
  */
 export function blendSubsetRemedy(
   reported: string | null,
@@ -671,12 +670,7 @@ export function blendSubsetRemedy(
   if (!refused || !roundable) {
     return null;
   }
-  const verb = featureKind === 'fillet' ? 'round' : 'chamfer';
-  return (
-    `${refused[1]} of them cannot be blended where two rounds would meet at a corner, ` +
-    `and the kernel will not quietly drop them. The other ${roundable[1]} ${verb} on their own — ` +
-    `deselect those ${refused[1]} and try again.`
-  );
+  return `The kernel could not build these edges together. Try the adjoining edge groups in separate ${featureKind} features.`;
 }
 
 export function edgeModifierFailureMessage(
@@ -769,7 +763,7 @@ export function edgeModifierFailureMessage(
       return `${prefix} ${subsetRemedy}`;
     }
     if (blendReportIsVertexBlend(reported)) {
-      return `${prefix} Two of these rounds would run into each other at a shared corner, which the kernel cannot blend yet — ${featureKind} the edges in smaller groups that do not meet.`;
+      return `${prefix} The kernel could not build the shared corner for this complete selection. Try the adjoining edge groups in separate ${featureKind} features.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected, priorBlendFace)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;

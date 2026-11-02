@@ -78,6 +78,7 @@
   "member-checkpoint-offline.spec.ts": 37,
   "member-checkpoint-roundtrip.spec.ts": 170,
   "member-checkpoint.spec.ts": 4,
+  "mixed-seam-fillet.spec.ts": 8,
   "modeling.spec.ts": 385,
   "move-hidden-sketch.spec.ts": 21,
   "move-selection-guard.spec.ts": 73,
