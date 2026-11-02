@@ -34,6 +34,10 @@ write a diagnostic CPU profile with `OZ_PERF_FACE_CPU_PROFILE` and a preview
 screenshot with `OZ_PERF_FACE_SCREENSHOT`. These outputs and the input remain
 external. The pointer probe currently accepts native backups without archived
 source files; use the full backup importer for histories with external sources.
+For a single-body native-kernel reproduction, `OFFSET_PERF_ARENA_OUT` writes
+the exact solid arena and an adjacent JSON file with the captured display
+deflection, angular tolerance and face selector. Keep both files external;
+capturing them is outside the timed offset work.
 
 The first app changes cache each neighbor's depth within one recognition call,
 and defer the approximate collision-distance hint until the exact kernel returns

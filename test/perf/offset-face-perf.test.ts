@@ -51,6 +51,8 @@
  *   OFFSET_PERF_SAMPLES  Alternating warm edits (default 0). A fresh exact
  *                         rebuild checks the final sample outside timed work.
  *   OFFSET_PERF_OUT      Optional JSONL timing output.
+ *   OFFSET_PERF_ARENA_OUT Optional exact arena + meshing parameters for a
+ *                         single-body native-kernel reproduction (external).
  *   REMUS_WASM_PKG, REMUS_WASM_IO_PKG
  *                         Run against a local Remus build instead of the
  *                         pinned packages (the `vitest.config.ts` overlay).
@@ -161,6 +163,9 @@ const callerTotals = new Map<string, Tally>();
 const callRuns: CallRun[] = [];
 /** The adapter kernel that last restored or took a history checkpoint. */
 let adapterKernel: RemusKernel | undefined;
+let lastDisplayMesh:
+  | { kernel: RemusKernel; solid: number; deflection: number; angular?: number }
+  | undefined;
 /** Set while the harness itself queries the kernel, so it goes untallied. */
 let untallied = false;
 
@@ -254,6 +259,17 @@ function instrumentKernel(): () => void {
         if (name === 'restore' || name === 'checkpoint') {
           adapterKernel = this as RemusKernel;
         }
+        if (
+          process.env.OFFSET_PERF_ARENA_OUT &&
+          name === 'tessellateSolidGroupedBinary'
+        ) {
+          lastDisplayMesh = {
+            kernel: this as RemusKernel,
+            solid: args[0] as number,
+            deflection: args[1] as number,
+            angular: args[2] as number | undefined
+          };
+        }
         const start = performance.now();
         try {
           return original.apply(this, args);
@@ -276,6 +292,7 @@ function instrumentKernel(): () => void {
     phaseProbe?.free();
     phaseProbe = undefined;
     adapterKernel = undefined;
+    lastDisplayMesh = undefined;
   };
 }
 
@@ -653,6 +670,19 @@ it.skipIf(!stepPath && !projectPath)(
         stages
       );
       expect(derived0.warnings).toEqual([]);
+      if (process.env.OFFSET_PERF_ARENA_OUT) {
+        expect(derived0.exportableBodyIds).toHaveLength(1);
+        expect(lastDisplayMesh).toBeDefined();
+        const { kernel, solid, deflection, angular } = lastDisplayMesh!;
+        writeFileSync(
+          process.env.OFFSET_PERF_ARENA_OUT,
+          kernel.serializeSolids(new Uint32Array([solid]))
+        );
+        writeFileSync(
+          `${process.env.OFFSET_PERF_ARENA_OUT}.json`,
+          JSON.stringify({ deflection, angular, normal, targetArea })
+        );
+      }
       // The edited body is the one the import added, not a background box.
       const background = new Set<BodyId>(initial.bodyOrder);
       const bodyId = derived0.exportableBodyIds.find(
