@@ -35,6 +35,7 @@
   "mixed-seam-fillet.spec.ts": 8,
   "modeling.spec.ts": 136,
   "panel-suspension.spec.ts": 13,
+  "parts-list-scroll.spec.ts": 9.7,
   "progressive-loading.spec.ts": 10,
   "reload-face-offset.spec.ts": 60,
   "save-state-history.spec.ts": 13,
