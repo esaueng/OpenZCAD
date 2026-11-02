@@ -22,7 +22,8 @@ Translating the old faces is valid only until the shoulder reaches the fixed
 rim. Beyond contact, the rim needs a new contour and corner bands. An earlier
 ridge construction also rounded the already rounded seam instead of retaining
 the boss as a rolling support, producing a visibly different corner before
-the offset began. Remus PR #1489 addresses both bounded construction families.
+the offset began. [Remus PR #1489](https://github.com/esaueng/remus/pull/1489)
+addresses both bounded construction families.
 
 Offset Face explicitly permits the kernel's sampled cap reconstruction at
 256 stations. Ordinary and prepared journaled moves carry the disclosed
@@ -36,21 +37,31 @@ the approximation during preview, commit and replay.
 
 `test/e2e/shoulder-cap-offset.spec.ts` builds a public primitive fixture and
 uses the viewport picker to select the shoulder, because two upward planes
-make a normal-only test selector ambiguous. It covers independent shoulder and cap moves from a taller source, contact
-onset, joining, further movement, separation, rejoining, undo/redo, durable
-reload and a held drag through both directions. Every committed state exports STEP and is
-reimported to verify one body, the expected 16/19-face topology, the moved
+make a normal-only test selector ambiguous. It covers independent shoulder
+and cap moves from a taller source, contact onset, joining, further movement,
+separation, rejoining, undo/redo, durable reload and a held drag through both
+directions. Every committed state exports STEP and is reimported to verify
+one body, the expected 16/19-face topology, the moved
 shoulder height and unchanged cap height. Warning counts and the actual
 approximation advisory are checked after reload. This coverage needs the
 normal paired kernel-package release and adoption; a local dev overlay alone
 does not update the frozen dependency.
 
+At kernel source `e4a67d16`, the normal paired WASM build and both packaged
+runtime suites pass. All three public browser regressions pass, as does a
+separate browser reproduction using the original dimensions. Its committed
+and reloaded STEP exports are valid closed 19-face bodies with shoulder and
+cap planes at 24.1 and 28.5 mm. The final local operations suite passes
+3,677 tests with 27 skips; one nextest leaky-test report passes cleanly on an
+unchanged isolated rerun. Package adoption and app CI remain separate gates.
+
 The lag investigation found expensive repeated numerical face integration,
 including attempts that exhausted the quadrature work cap before refusing.
 The kernel preflights that unchanged cap, recognizes complete natural NURBS
 domains from boundary authority, and uses a closed-form boundary integral for
-the translation's volume-direction guard. It does not seed measured-volume
-caches or relax solid validation. One functional trace of kernel candidate
+the axial shoulder/rim translation's volume-direction guard. General blend
+moves retain their existing cache-backed integral path. It does not seed
+measured-volume caches or relax solid validation. One functional trace of kernel candidate
 `425438a3` recorded initial translation calls at 197–214 ms, later translations
 at 20–29 ms, and rim reconstruction at 432–499 ms. Worker queueing was at most
 0.1 ms; the first following presented frame arrived 160–847 ms after its
@@ -61,9 +72,10 @@ translation, and target-device responsiveness remains open.
 
 The reconstructed corners and trim contours are approximate. Local comparison
 against the supplied target found matching physical bounds and valid closed
-19-face STEP bodies. Finite bidirectional mesh samples had 99th-percentile
-distance below 0.0004 mm and a worst sampled distance of 0.0043 mm; this is not
-a whole-surface tolerance certificate. A reverse/separation comparison also
+19-face STEP bodies. With 0.002 mm linear tessellation, 20,000 finite samples
+in each direction had 99th-percentile distance below 0.0008 mm and a worst
+sampled distance of 0.0026 mm; this is not a whole-surface tolerance
+certificate. A reverse/separation comparison also
 showed a roughly 0.38 mm³ discrepancy in an independent periodic-cylinder
 volume integral despite much closer meshes. That measurement discrepancy
 remains a qualification limit; general freeform reconstruction and formal
