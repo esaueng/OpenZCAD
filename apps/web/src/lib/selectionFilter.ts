@@ -33,7 +33,8 @@ const FILTER_BY_TOOL: Partial<Record<ToolId, SelectionFilter>> = {
   loft: 'sketch',
   sweep: 'sketch',
   'helical-sweep': 'sketch',
-  'gear-teeth': 'face'
+  'gear-teeth': 'face',
+  thread: 'face'
 };
 
 export function inferredSelectionFilter(tool: ToolId | null): SelectionFilter {

@@ -1,5 +1,6 @@
 import { faceReferenceRepairCandidate } from './exact-reference-resolution';
 import { buildGearFeature } from './exact-gear';
+import { buildThreadFeature } from './exact-thread';
 import {
   carryAnalyticFaces,
   holeLineage,
@@ -3439,6 +3440,9 @@ export function buildFeature(
       break;
     case 'gear':
       buildGearFeature(ctx, feature, feature.data);
+      break;
+    case 'thread':
+      buildThreadFeature(ctx, feature, feature.data);
       break;
     case 'split':
       buildSplitFeature(ctx, feature, feature.data);

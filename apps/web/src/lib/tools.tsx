@@ -35,7 +35,8 @@ import {
   sphereGlyph,
   splitGlyph,
   sweepGlyph,
-  thickenGlyph
+  thickenGlyph,
+  threadGlyph
 } from './toolIcons';
 import { platformShortcutLabel } from './platformShortcut';
 
@@ -69,6 +70,7 @@ export type ToolId =
   | 'hole'
   | 'gear'
   | 'gear-teeth'
+  | 'thread'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -238,6 +240,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'edges-faces',
     hint: 'Cut gear teeth along a cylindrical boss or bore'
   },
+  thread: {
+    label: 'Thread',
+    icon: threadGlyph,
+    group: 'edges-faces',
+    hint: 'Model a screw thread on a boss or in a bore, sized for printing'
+  },
   shell: {
     label: 'Shell',
     icon: shellGlyph,
@@ -365,6 +373,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'fillet',
         'chamfer',
         'hole',
+        'thread',
         'gear-teeth',
         'shell',
         'draft',
@@ -439,6 +448,7 @@ export function toolDisabledReason(
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
+      tool === 'thread' ||
       tool === 'gear-teeth') &&
     !avail.exactGeometryReady
   ) {
@@ -479,6 +489,7 @@ export function toolDisabledReason(
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
+      tool === 'thread' ||
       tool === 'gear-teeth') &&
     avail.liveBodyCount < 1
   ) {

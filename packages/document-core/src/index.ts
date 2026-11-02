@@ -551,6 +551,18 @@ export type GearInput = Omit<
   bodyName?: string;
 };
 
+/**
+ * Schema v53: a thread feature's input — its {@link FeatureData} fields plus
+ * the command's name and optional preallocated ids.
+ */
+export type ThreadInput = Omit<
+  Extract<FeatureData, { featureKind: 'thread' }>,
+  'featureKind'
+> & {
+  name: string;
+  ids?: BodyFeatureIds;
+};
+
 export interface SplitInput {
   name: string;
   /** Consumed, unless `keepOriginal`: the two halves replace it. */
@@ -3437,6 +3449,7 @@ function addBodyResultFeature(
     | 'mirror'
     | 'hole'
     | 'gear'
+    | 'thread'
     | 'shell'
     | 'solid-offset'
     | 'loft'
@@ -3454,6 +3467,7 @@ function addBodyResultFeature(
         | 'mirror'
         | 'hole'
         | 'gear'
+        | 'thread'
         | 'shell'
         | 'solid-offset'
         | 'loft'
@@ -3611,6 +3625,24 @@ export function gearBody(
     deepClone({ featureKind: 'gear', ...parameters }),
     ids,
     bodyName
+  );
+}
+
+/**
+ * Schema v53: adds a screw thread on `targetBodyId`'s cylindrical face, which
+ * consumes that body.
+ */
+export function threadBody(
+  document: ProjectDocument,
+  input: ThreadInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, ids, ...parameters } = input;
+  return addBodyResultFeature(
+    document,
+    name,
+    'thread',
+    deepClone({ featureKind: 'thread', ...parameters }),
+    ids
   );
 }
 
@@ -4589,6 +4621,28 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   mirror: ['targetBodyId', 'plane'],
   'datum-plane': ['definition'],
   'datum-axis': ['definition'],
+  thread: [
+    'targetBodyId',
+    'faceHash',
+    'faceReference',
+    'profile',
+    'majorDiameter',
+    'pitch',
+    'depth',
+    'crestWidth',
+    'upperFlankAngleDeg',
+    'lowerFlankAngleDeg',
+    'clearance',
+    'starts',
+    'hand',
+    'length',
+    'offset',
+    'anchor',
+    'phaseDeg',
+    'chamferStart',
+    'chamferEnd',
+    'chamferAngleDeg'
+  ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
   hole: [
@@ -4727,6 +4781,29 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   revolve: ['axisRef', 'profile'],
   pattern: ['axisRef'],
   transform: ['axisRotation'],
+  // Schema v53: every size and placement field falls back to the face or its
+  // documented default; the custom-profile fields may go only off a custom
+  // profile, which the thread validation enforces. A face picked again
+  // without a lineage name drops the old face's reference.
+  thread: [
+    'faceReference',
+    'majorDiameter',
+    'pitch',
+    'depth',
+    'crestWidth',
+    'upperFlankAngleDeg',
+    'lowerFlankAngleDeg',
+    'clearance',
+    'starts',
+    'hand',
+    'length',
+    'offset',
+    'anchor',
+    'phaseDeg',
+    'chamferStart',
+    'chamferEnd',
+    'chamferAngleDeg'
+  ],
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and
   // `mateTeeth` and `diameterFactor` only off the gear kinds that need them,

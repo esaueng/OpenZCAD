@@ -209,7 +209,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // drawing dimensions. An older client would refuse either as malformed.
 // v52 records the unit an imported mesh was read in when its file stated
 // none (`assumedUnits`). An older client would drop it on its next save.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 52 as const;
+// v53 adds modeled screw threads (`featureKind: 'thread'`) on a body's
+// cylindrical face. An older client has no builder for the kind and would
+// drop the thread on rebuild, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 53 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -239,6 +242,16 @@ export type GearSizing = 'module' | 'circular-pitch' | 'diametral-pitch';
 export type GearFit = 'keep-diameter' | 'module';
 /** M14: which way a helical gear's teeth wind as they advance along its axis. */
 export type GearHand = 'right' | 'left';
+/**
+ * A thread's form: the ISO 68-1 metric profile (60°), a printable profile
+ * whose flanks stand 45° so neither overhangs more than 45° printed upright,
+ * or a custom trapezoid.
+ */
+export type ThreadProfile = 'iso-metric' | 'printable' | 'custom';
+/** Which way a thread winds: a right hand advances turning counter-clockwise. */
+export type ThreadHand = 'right' | 'left';
+/** Which end of the face a thread's `offset` is measured from. */
+export type ThreadAnchor = 'start' | 'end';
 export type FeatureKind =
   | 'primitive'
   | 'sketch'
@@ -260,6 +273,7 @@ export type FeatureKind =
   | 'split'
   | 'hole'
   | 'gear'
+  | 'thread'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
@@ -1973,6 +1987,69 @@ export type FeatureData =
       fit?: GearFit;
     }
   | {
+      /**
+       * Schema v53: a screw thread modeled on a body's cylindrical face
+       * (`faceHash`, anchored by `faceReference`). A boss takes an external
+       * thread, a bore an internal one; the kernel reads which from the face.
+       * The body is consumed and the threaded body replaces it.
+       *
+       * Every size field may be absent, and the face supplies it at build:
+       * - `majorDiameter` absent: an external thread's major diameter is the
+       *   boss; an internal thread takes the ISO 261 coarse size whose tap
+       *   drill (D − P) is nearest the bore.
+       * - `pitch` absent: the ISO 261 coarse pitch for that diameter.
+       * - `depth`, `crestWidth` and the flank angles: required for a
+       *   `'custom'` profile, ignored by the others, which derive them from
+       *   the pitch.
+       *
+       * `clearance` shifts the whole profile radially for a printed fit:
+       * inward on a boss, outward in a bore. Where the face cuts into the
+       * thread (a bore drilled larger than the thread's minor diameter, a
+       * boss smaller than its major diameter) the crest is truncated flat.
+       */
+      featureKind: 'thread';
+      targetBodyId: BodyId;
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      profile: ThreadProfile;
+      majorDiameter?: ParamValue;
+      pitch?: ParamValue;
+      /** Custom profiles: crest to root, radial. */
+      depth?: ParamValue;
+      /** Custom profiles: axial width of the crest flat; 0 is sharp. */
+      crestWidth?: ParamValue;
+      /**
+       * Custom profiles: flank angles from the plane across the axis,
+       * degrees in [0, 75]; the upper flank faces the face's far end.
+       */
+      upperFlankAngleDeg?: ParamValue;
+      lowerFlankAngleDeg?: ParamValue;
+      /** Radial allowance for a printed fit; absent is 0. */
+      clearance?: ParamValue;
+      /** Thread starts; absent is 1. The lead is starts × pitch. */
+      starts?: ParamValue;
+      /** Absent is `'right'`. */
+      hand?: ThreadHand;
+      /** Axial length; absent runs the rest of the face from `offset`. */
+      length?: ParamValue;
+      /** Distance from `anchor` to the thread's near end; absent is 0. */
+      offset?: ParamValue;
+      /** Absent is `'start'`, the face's lower end along its axis. */
+      anchor?: ThreadAnchor;
+      /** Turn of the thread's start about the axis, degrees; absent is 0. */
+      phaseDeg?: ParamValue;
+      /**
+       * Chamfer the thread's end at the face's start (its lower end along
+       * its axis) or at its far end: a cone from just inside the root tapers
+       * the first turn out instead of leaving a full-depth wedge. A
+       * chamfered end must run to that end of the face. Absent is plain.
+       */
+      chamferStart?: boolean;
+      chamferEnd?: boolean;
+      /** The chamfer cone's angle from the axis, degrees; absent is 45. */
+      chamferAngleDeg?: ParamValue;
+    }
+  | {
       featureKind: 'split';
       /** Consumed: the two halves replace the input body. */
       targetBodyId: BodyId;
@@ -3267,7 +3344,14 @@ export interface FeatureWarning {
    * a second one beside it.
    */
   kernelRefusal?: {
-    family: 'boolean' | 'validation' | 'healing' | 'import' | 'blend' | 'gear';
+    family:
+      | 'boolean'
+      | 'validation'
+      | 'healing'
+      | 'import'
+      | 'blend'
+      | 'gear'
+      | 'thread';
     operation?: string;
     category: string;
     code: string;
@@ -5069,6 +5153,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   split: '#f472b6',
   hole: '#fb923c',
   gear: '#c084fc',
+  thread: '#84cc16',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',
@@ -5150,6 +5235,72 @@ export const UNIT_TO_MM: Record<UnitSystem, number> = {
   m: 1000,
   inch: 25.4
 };
+
+/** One ISO 261 coarse-pitch metric thread size, in millimetres. */
+export interface IsoMetricThreadSize {
+  /** Nominal (major) diameter. */
+  nominal: number;
+  /** Coarse pitch. */
+  pitch: number;
+}
+
+/** ISO 261 coarse-pitch metric threads from M1.6 to M36, in millimetres. */
+export const ISO_METRIC_COARSE_THREADS: readonly IsoMetricThreadSize[] = [
+  { nominal: 1.6, pitch: 0.35 },
+  { nominal: 2, pitch: 0.4 },
+  { nominal: 2.5, pitch: 0.45 },
+  { nominal: 3, pitch: 0.5 },
+  { nominal: 3.5, pitch: 0.6 },
+  { nominal: 4, pitch: 0.7 },
+  { nominal: 5, pitch: 0.8 },
+  { nominal: 6, pitch: 1 },
+  { nominal: 8, pitch: 1.25 },
+  { nominal: 10, pitch: 1.5 },
+  { nominal: 12, pitch: 1.75 },
+  { nominal: 14, pitch: 2 },
+  { nominal: 16, pitch: 2 },
+  { nominal: 18, pitch: 2.5 },
+  { nominal: 20, pitch: 2.5 },
+  { nominal: 22, pitch: 2.5 },
+  { nominal: 24, pitch: 3 },
+  { nominal: 27, pitch: 3 },
+  { nominal: 30, pitch: 3.5 },
+  { nominal: 33, pitch: 3.5 },
+  { nominal: 36, pitch: 4 }
+];
+
+/** The coarse size whose nominal diameter (mm) is nearest `diameterMm`. */
+export function nearestIsoMetricThread(
+  diameterMm: number
+): IsoMetricThreadSize {
+  return ISO_METRIC_COARSE_THREADS.reduce((best, size) =>
+    Math.abs(size.nominal - diameterMm) < Math.abs(best.nominal - diameterMm)
+      ? size
+      : best
+  );
+}
+
+/**
+ * The coarse size an internal thread in a bore of `boreMm` takes: the one
+ * whose ISO 2306 tap drill, `D − P`, is nearest the bore.
+ */
+export function isoMetricThreadForBore(boreMm: number): IsoMetricThreadSize {
+  return ISO_METRIC_COARSE_THREADS.reduce((best, size) =>
+    Math.abs(size.nominal - size.pitch - boreMm) <
+    Math.abs(best.nominal - best.pitch - boreMm)
+      ? size
+      : best
+  );
+}
+
+/** `M6×1`: a metric thread's callout from its diameter and pitch in mm. */
+export function isoMetricThreadLabel(
+  nominalMm: number,
+  pitchMm: number
+): string {
+  const format = (value: number) => String(Number(value.toPrecision(6)));
+  return `M${format(nominalMm)}×${format(pitchMm)}`;
+}
 
 const FILE_NAME_MAX_LENGTH = 128;
 
