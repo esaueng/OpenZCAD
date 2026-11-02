@@ -15,6 +15,11 @@ import type { RemusKernel } from './remus-runtime';
 interface PreparedMoveBindings {
   prepareMoveFaces(solid: number, faces: Uint32Array): number;
   moveFacesPreparedJournaled(prepared: number, distance: number): string;
+  moveFacesPreparedJournaledWithQuality?(
+    prepared: number,
+    distance: number,
+    cornerStations: number
+  ): string;
   releasePreparedMove(prepared: number): boolean;
 }
 
@@ -22,6 +27,8 @@ interface PreparedMoveBindings {
 export interface PreparedFaceMove {
   /** `moveFacesJournaled` of the prepared selection. */
   moveJournaled(distance: number): string;
+  /** Explicitly permits and discloses sampled cap-corner reconstruction. */
+  moveJournaledWithQuality?(distance: number, cornerStations: number): string;
 }
 
 /**
@@ -80,7 +87,17 @@ export function preparedFaceMove(
   const handle = target.handle;
   return {
     moveJournaled: (distance) =>
-      bindings.moveFacesPreparedJournaled(handle, distance)
+      bindings.moveFacesPreparedJournaled(handle, distance),
+    ...(bindings.moveFacesPreparedJournaledWithQuality
+      ? {
+          moveJournaledWithQuality: (distance: number, stations: number) =>
+            bindings.moveFacesPreparedJournaledWithQuality!(
+              handle,
+              distance,
+              stations
+            )
+        }
+      : {})
   };
 }
 

@@ -384,7 +384,8 @@ function buildDirectEditFeature(
     data.operation,
     scope,
     feature.featureId,
-    deferOutputLineage
+    deferOutputLineage,
+    (message) => raiseFeatureWarning(result, feature, message, 'advisory')
   );
   if (deferOutputLineage) {
     result.shapes.set(data.targetBodyId, edited);

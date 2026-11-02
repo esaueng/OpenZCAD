@@ -137,6 +137,9 @@ const TRACED_METHODS = new Set([
   'recognizeFeatures',
   'solidEdgeRelations',
   'moveFacesJournaled',
+  'moveFacesJournaledWithQuality',
+  'moveFacesPreparedJournaled',
+  'moveFacesPreparedJournaledWithQuality',
   'tessellateSolidGroupedBinary',
   'edgeLength'
 ]);

@@ -13,6 +13,7 @@ import {
 import { topologyHashOfWitness } from './topology-lineage';
 import {
   decodeRemusMoveFacesJournal,
+  decodeMoveFaceEvolution,
   type RemusMoveFacesRelation
 } from './remus-lineage';
 import { moveFacesJournalFaceMap } from './exact-lineage-builders';
@@ -184,28 +185,116 @@ export function journaledMove(
   solid: number,
   faces: Uint32Array,
   distance: number,
-  prepared: PreparedFaceMove | null = null
-): { solid: number; relation: RemusMoveFacesRelation | null } {
+  prepared: PreparedFaceMove | null = null,
+  allowCapReconstruction = false
+): {
+  solid: number;
+  relation: RemusMoveFacesRelation | null;
+  approximateCapJoin?: true;
+} {
   const sourceFaces = Array.from(kernel.getSolidFaces(solid));
   let journal: { solid: number; op: number };
+  let approximateCapJoin = false;
+  let explicitRelation: RemusMoveFacesRelation | null | undefined;
+  const qualityKernel = kernel as RemusKernel & {
+    moveFacesJournaledWithQuality?: (
+      solid: number,
+      faces: Uint32Array,
+      distance: number,
+      stations: number
+    ) => string;
+  };
+  const withQuality =
+    allowCapReconstruction &&
+    typeof qualityKernel.moveFacesJournaledWithQuality === 'function';
+  let payload: string;
   try {
-    journal = decodeRemusMoveFacesJournal(
-      prepared
+    payload = withQuality
+      ? prepared?.moveJournaledWithQuality
+        ? prepared.moveJournaledWithQuality(distance, 256)
+        : qualityKernel.moveFacesJournaledWithQuality!(
+            solid,
+            faces,
+            distance,
+            256
+          )
+      : prepared
         ? prepared.moveJournaled(distance)
-        : kernel.moveFacesJournaled(solid, faces, distance)
-    );
-  } catch {
+        : kernel.moveFacesJournaled(solid, faces, distance);
+  } catch (error) {
+    if (withQuality && prepared) {
+      releasePreparedFaceMove(kernel);
+      return journaledMove(
+        kernel,
+        solid,
+        faces,
+        distance,
+        null,
+        allowCapReconstruction
+      );
+    }
+    if (withQuality) throw error;
     const moved = kernel.moveFaces(solid, faces, distance);
     if (prepared) releasePreparedFaceMove(kernel);
     return { solid: moved, relation: null };
   }
-  const relation = moveFacesJournalFaceMap(
-    kernel,
-    journal.op,
-    sourceFaces,
-    Array.from(kernel.getSolidFaces(journal.solid))
-  );
-  return { solid: journal.solid, relation };
+  try {
+    journal = decodeRemusMoveFacesJournal(payload);
+    if (withQuality) {
+      const quality = JSON.parse(payload) as Record<string, unknown>;
+      if (
+        quality.quality === 'approximate' &&
+        quality.construction === 'sampledCapJoin' &&
+        quality.cornerStations === 256
+      ) {
+        approximateCapJoin = true;
+      } else if (quality.quality !== 'exact') {
+        throw new Error(
+          'Face move returned an unrecognized construction quality.'
+        );
+      }
+      if (approximateCapJoin) {
+        explicitRelation = decodeMoveFaceEvolution(
+          quality.faceEvolution,
+          sourceFaces,
+          Array.from(kernel.getSolidFaces(journal.solid))
+        );
+      } else {
+        try {
+          explicitRelation = decodeMoveFaceEvolution(
+            quality.faceEvolution,
+            sourceFaces,
+            Array.from(kernel.getSolidFaces(journal.solid))
+          );
+        } catch {
+          // An exact move can keep its historical unresolved lineage. It
+          // publishes no identity claims when the map cannot be verified.
+          explicitRelation = null;
+        }
+      }
+    }
+  } catch (error) {
+    if (withQuality) {
+      throw error;
+    }
+    const moved = kernel.moveFaces(solid, faces, distance);
+    if (prepared) releasePreparedFaceMove(kernel);
+    return { solid: moved, relation: null };
+  }
+  const relation =
+    explicitRelation !== undefined
+      ? explicitRelation
+      : moveFacesJournalFaceMap(
+          kernel,
+          journal.op,
+          sourceFaces,
+          Array.from(kernel.getSolidFaces(journal.solid))
+        );
+  return {
+    solid: journal.solid,
+    relation,
+    ...(approximateCapJoin ? { approximateCapJoin: true } : {})
+  };
 }
 
 /**

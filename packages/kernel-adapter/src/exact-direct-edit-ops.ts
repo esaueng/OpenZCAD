@@ -230,7 +230,8 @@ function offsetCompoundFace(
   kernel: RemusKernel,
   target: ExactShape,
   operation: Extract<DirectEditOperation, { kind: 'offset-face' }>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  onAdvisory?: (message: string) => void
 ): ExactShape {
   if (operation.faceReference && !target.lineage) {
     throw new Error(
@@ -259,7 +260,10 @@ function offsetCompoundFace(
       ...(ownerLineage ? { lineage: ownerLineage } : {})
     },
     operation,
-    scope
+    scope,
+    undefined,
+    false,
+    onAdvisory
   );
   const solids = target.solids.flatMap((solid, index) =>
     index === ownerIndex ? edited.solids : [solid]
@@ -1630,11 +1634,12 @@ export function applyDirectEdit(
   operation: DirectEditOperation,
   scope: Record<string, number>,
   producingFeatureId?: FeatureId,
-  deferOutputLineage = false
+  deferOutputLineage = false,
+  onAdvisory?: (message: string) => void
 ): ExactShape {
   assertDirectEditOperation(operation);
   if (operation.kind === 'offset-face' && target.solids.length > 1) {
-    return offsetCompoundFace(kernel, target, operation, scope);
+    return offsetCompoundFace(kernel, target, operation, scope, onAdvisory);
   }
   const solid = collapseShape(kernel, target);
   const resolved =
@@ -1859,7 +1864,8 @@ export function applyDirectEdit(
             solid,
             faces,
             offset,
-            deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null
+            deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null,
+            true
           ))
         : { solid: analytic, relation: null };
     const output = moved.solid;
@@ -1876,6 +1882,11 @@ export function applyDirectEdit(
     });
     if (facetFallback) {
       throw new Error(facetFallback);
+    }
+    if ('approximateCapJoin' in moved && moved.approximateCapJoin) {
+      onAdvisory?.(
+        'The upper rim was rebuilt with approximate corner surfaces.'
+      );
     }
     // The exact operation, recorded-face guards, validation and analytic
     // carrier census above still run. Only naming the disposable output waits.

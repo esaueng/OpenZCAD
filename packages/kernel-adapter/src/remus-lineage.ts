@@ -326,6 +326,109 @@ export interface RemusMoveFacesJournal {
   readonly op: number;
 }
 
+/** Construction-derived face evolution for moves that change topology. */
+export function decodeMoveFaceEvolution(
+  value: unknown,
+  sourceFaces: readonly number[],
+  resultFaces: readonly number[]
+): RemusMoveFacesRelation {
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  const invalid = () =>
+    new Error('Face move returned incomplete construction history.');
+  if (
+    !record(value) ||
+    value.origin !== 'construction' ||
+    !record(value.modified) ||
+    !record(value.generated) ||
+    !record(value.unresolved) ||
+    Object.keys(value.unresolved).length !== 0 ||
+    !Array.isArray(value.deleted)
+  )
+    throw invalid();
+  const sources = new Set(sourceFaces);
+  const results = new Set(resultFaces);
+  if (
+    sources.size !== sourceFaces.length ||
+    results.size !== resultFaces.length
+  )
+    throw invalid();
+  const coveredSources = new Set<number>();
+  const coveredResults = new Set<number>();
+  const claimants = new Map<number, number[]>();
+  const faceMap = new Map<number, number>();
+  const conflictedSources = new Set<number>();
+  for (const [key, images] of Object.entries(value.modified)) {
+    const source = Number(key);
+    if (
+      !Number.isSafeInteger(source) ||
+      String(source) !== key ||
+      !sources.has(source) ||
+      !Array.isArray(images) ||
+      images.length === 0 ||
+      new Set(images).size !== images.length
+    )
+      throw invalid();
+    coveredSources.add(source);
+    for (const image of images) {
+      if (
+        typeof image !== 'number' ||
+        !Number.isSafeInteger(image) ||
+        !results.has(image)
+      )
+        throw invalid();
+      coveredResults.add(image);
+      claimants.set(image, [...(claimants.get(image) ?? []), source]);
+    }
+    if (images.length === 1) faceMap.set(source, images[0] as number);
+    else conflictedSources.add(source);
+  }
+  for (const [key, images] of Object.entries(value.generated)) {
+    const source = Number(key);
+    if (
+      !Number.isSafeInteger(source) ||
+      String(source) !== key ||
+      !sources.has(source) ||
+      !Array.isArray(images) ||
+      images.length === 0 ||
+      new Set(images).size !== images.length
+    )
+      throw invalid();
+    for (const image of images) {
+      if (
+        typeof image !== 'number' ||
+        !Number.isSafeInteger(image) ||
+        !results.has(image) ||
+        claimants.has(image)
+      )
+        throw invalid();
+      coveredResults.add(image);
+    }
+  }
+  for (const source of value.deleted) {
+    if (
+      typeof source !== 'number' ||
+      !Number.isSafeInteger(source) ||
+      !sources.has(source) ||
+      coveredSources.has(source)
+    )
+      throw invalid();
+    coveredSources.add(source);
+    conflictedSources.add(source);
+  }
+  if (
+    coveredSources.size !== sources.size ||
+    coveredResults.size !== results.size
+  )
+    throw invalid();
+  for (const parents of claimants.values()) {
+    if (parents.length > 1)
+      parents.forEach((source) => conflictedSources.add(source));
+  }
+  for (const source of conflictedSources) faceMap.delete(source);
+  return { faceMap, conflictedSources };
+}
+
 /**
  * Strict decoder for a journaled move-faces result. A malformed record is a
  * refusal, never an empty map: the caller must fall back to the unjournaled
