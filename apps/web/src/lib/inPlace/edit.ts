@@ -536,6 +536,7 @@ export function inPlaceEditSeed(
       value('length', data.length);
       value('offset', data.offset);
       value('phaseDeg', data.phaseDeg);
+      value('chamferAngleDeg', data.chamferAngleDeg);
       break;
     }
     case 'shell':
@@ -1049,7 +1050,10 @@ export function inPlaceFeatureUpdate(
         'length',
         'offset',
         'anchor',
-        'phaseDeg'
+        'phaseDeg',
+        'chamferStart',
+        'chamferEnd',
+        'chamferAngleDeg'
       ] as const;
       const clear = optional.filter(
         (key) => saved[key] !== undefined && request.thread[key] === undefined

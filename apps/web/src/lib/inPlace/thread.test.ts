@@ -31,18 +31,47 @@ const initialValues = (
 });
 
 describe('in-place thread', () => {
-  it('defaults to a printable thread fitted to the face with a printed fit', () => {
+  it('defaults to a printable thread fitted to the face, a printed fit and chamfered ends', () => {
     expect(threadRequestFields(initialValues(), defaults(), 'mm')).toEqual({
       profile: 'printable',
-      clearance: 0.1
+      clearance: 0.1,
+      chamferStart: true,
+      chamferEnd: true
     });
+  });
+
+  it('chamfers the chosen ends at the chosen angle, and never a band', () => {
+    expect(
+      threadRequestFields(
+        initialValues({ chamferAngleDeg: 30 }),
+        defaults({ chamfer: 'end' }),
+        'mm'
+      )
+    ).toEqual({
+      profile: 'printable',
+      clearance: 0.1,
+      chamferEnd: true,
+      chamferAngleDeg: 30
+    });
+    const band = threadRequestFields(
+      initialValues(),
+      defaults({ span: 'band', chamfer: 'both' }),
+      'mm'
+    );
+    expect(band.chamferStart).toBeUndefined();
+    expect(band.chamferEnd).toBeUndefined();
   });
 
   it('stores an ISO size in document units and an exact fit as no clearance', () => {
     expect(
       threadRequestFields(
         initialValues(),
-        defaults({ profile: 'iso-metric', size: 'M8', fit: 'exact' }),
+        defaults({
+          profile: 'iso-metric',
+          size: 'M8',
+          fit: 'exact',
+          chamfer: 'none'
+        }),
         'inch'
       )
     ).toEqual({
@@ -95,7 +124,15 @@ describe('in-place thread', () => {
   it('reads a stored thread back as the options that wrote it', () => {
     const cases: [Record<string, string>, Record<string, ParamValue>][] = [
       [defaults(), {}],
-      [defaults({ profile: 'iso-metric', size: 'M6', fit: 'loose' }), {}],
+      [
+        defaults({
+          profile: 'iso-metric',
+          size: 'M6',
+          fit: 'loose',
+          chamfer: 'start'
+        }),
+        {}
+      ],
       [
         defaults({
           profile: 'custom',
@@ -118,6 +155,7 @@ describe('in-place thread', () => {
       for (const id of ['profile', 'size', 'fit', 'span', 'hand']) {
         expect(read[id], id).toBe(options[id]);
       }
+      if (options.span !== 'band') expect(read.chamfer).toBe(options.chamfer);
       if (options.span === 'band') expect(read.anchor).toBe(options.anchor);
     }
   });
@@ -129,10 +167,13 @@ describe('in-place thread', () => {
       { starts: 2 }
     );
     expect(threadSummary(state, 'mm')).toBe(
-      'M10×1.5 · 2 starts · Left hand · Clearance 0.1 mm'
+      'M10×1.5 · 2 starts · Left hand · Chamfered 45° · Clearance 0.1 mm'
     );
     expect(
-      threadSummary(inPlacePanelState(threadSpec, { fit: 'exact' }, {}), 'mm')
+      threadSummary(
+        inPlacePanelState(threadSpec, { fit: 'exact', chamfer: 'none' }, {}),
+        'mm'
+      )
     ).toBeNull();
   });
 
@@ -170,7 +211,9 @@ describe('in-place thread', () => {
         targetBodyId: 'body_a',
         faceHash: 9,
         profile: 'printable',
-        clearance: 0.1
+        clearance: 0.1,
+        chamferStart: true,
+        chamferEnd: true
       }
     });
   });

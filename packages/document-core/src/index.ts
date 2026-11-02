@@ -4638,7 +4638,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'length',
     'offset',
     'anchor',
-    'phaseDeg'
+    'phaseDeg',
+    'chamferStart',
+    'chamferEnd',
+    'chamferAngleDeg'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -4796,7 +4799,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'length',
     'offset',
     'anchor',
-    'phaseDeg'
+    'phaseDeg',
+    'chamferStart',
+    'chamferEnd',
+    'chamferAngleDeg'
   ],
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and

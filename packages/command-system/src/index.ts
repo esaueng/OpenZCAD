@@ -1105,6 +1105,12 @@ function validateThreadInput(
   nonNegative('offset', input.offset);
   nonNegative('clearance', input.clearance);
   value('phase', input.phaseDeg);
+  const chamfer = value('chamfer angle', input.chamferAngleDeg);
+  if (chamfer !== undefined && !(chamfer > 0 && chamfer < 90)) {
+    throw new Error(
+      'Thread chamfer angle must be strictly between 0 and 90 degrees.'
+    );
+  }
   const starts = value('starts', input.starts);
   if (
     starts !== undefined &&

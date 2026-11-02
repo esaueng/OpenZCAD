@@ -2038,6 +2038,16 @@ export type FeatureData =
       anchor?: ThreadAnchor;
       /** Turn of the thread's start about the axis, degrees; absent is 0. */
       phaseDeg?: ParamValue;
+      /**
+       * Chamfer the thread's end at the face's start (its lower end along
+       * its axis) or at its far end: a cone from just inside the root tapers
+       * the first turn out instead of leaving a full-depth wedge. A
+       * chamfered end must run to that end of the face. Absent is plain.
+       */
+      chamferStart?: boolean;
+      chamferEnd?: boolean;
+      /** The chamfer cone's angle from the axis, degrees; absent is 45. */
+      chamferAngleDeg?: ParamValue;
     }
   | {
       featureKind: 'split';

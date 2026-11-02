@@ -45,6 +45,9 @@ const custom = (state: InPlacePanelState) => state.options.profile === 'custom';
 const customSize = (state: InPlacePanelState) =>
   state.options.size === 'custom';
 const band = (state: InPlacePanelState) => state.options.span === 'band';
+/** A chamfer needs the thread to reach the face's ends: the whole face only. */
+const chamfered = (state: InPlacePanelState) =>
+  !band(state) && (state.options.chamfer ?? 'both') !== 'none';
 
 const THREAD_VALUES: readonly ValueSpec[] = [
   {
@@ -151,6 +154,17 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     initial: 0,
     inOptions: true,
     note: 'Where the thread starts around the axis'
+  },
+  {
+    id: 'chamferAngleDeg',
+    label: 'Chamfer angle',
+    unit: 'angle',
+    initial: 45,
+    min: 0,
+    max: 90,
+    exclusive: true,
+    note: 'The chamfer cone’s angle from the axis; 45° prints cleanly',
+    when: (state) => chamfered(state)
   }
 ];
 
@@ -241,6 +255,22 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     initial: 'start'
   },
   {
+    id: 'chamfer',
+    label: 'Chamfer',
+    when: (state) => !band(state),
+    choices: [
+      {
+        value: 'both',
+        label: 'Both ends',
+        note: 'A cone tapers each end’s first turn out: no thin wedge to print, and a mating part starts easily'
+      },
+      { value: 'start', label: 'Face start' },
+      { value: 'end', label: 'Face end' },
+      { value: 'none', label: 'None' }
+    ],
+    initial: 'both'
+  },
+  {
     id: 'hand',
     label: 'Hand',
     choices: [
@@ -285,6 +315,15 @@ export function threadSummary(
   const starts = Math.round(state.numbers.starts ?? 1);
   if (starts > 1) parts.push(`${starts} starts`);
   if (state.options.hand === 'left') parts.push('Left hand');
+  if (chamfered(state)) {
+    const ends = state.options.chamfer ?? 'both';
+    const angle = Math.round((state.numbers.chamferAngleDeg ?? 45) * 100) / 100;
+    parts.push(
+      ends === 'both'
+        ? `Chamfered ${angle}°`
+        : `Chamfered ${angle}° at the face ${ends}`
+    );
+  }
   const clearance =
     state.options.fit === 'custom'
       ? (state.numbers.clearance ?? 0)
@@ -340,6 +379,14 @@ export function threadEditOptions(
     options.span = 'face';
   }
   options.hand = data.hand ?? 'right';
+  options.chamfer =
+    data.chamferStart && data.chamferEnd
+      ? 'both'
+      : data.chamferStart
+        ? 'start'
+        : data.chamferEnd
+          ? 'end'
+          : 'none';
   return options;
 }
 
@@ -390,6 +437,16 @@ export function threadRequestFields(
   }
   const phase = values.phaseDeg;
   if (phase !== undefined && phase !== 0) fields.phaseDeg = phase;
+  // A chamfered end must reach the end of the face, so only a thread along
+  // the whole face takes one.
+  const chamfer =
+    options.span === 'band' ? 'none' : (options.chamfer ?? 'both');
+  if (chamfer === 'both' || chamfer === 'start') fields.chamferStart = true;
+  if (chamfer === 'both' || chamfer === 'end') fields.chamferEnd = true;
+  if (chamfer !== 'none') {
+    const angle = values.chamferAngleDeg;
+    if (angle !== undefined && angle !== 45) fields.chamferAngleDeg = angle;
+  }
   return fields;
 }
 
@@ -407,7 +464,16 @@ export const threadSpec: InPlaceToolSpec = {
     {
       items: ['profile', 'size', 'majorDiameter', 'pitch', 'fit', 'clearance']
     },
-    { items: ['span', 'anchor', 'length', 'offset'] },
+    {
+      items: [
+        'span',
+        'anchor',
+        'length',
+        'offset',
+        'chamfer',
+        'chamferAngleDeg'
+      ]
+    },
     {
       label: 'Form',
       items: ['depth', 'crestWidth', 'lowerFlankAngleDeg', 'upperFlankAngleDeg']

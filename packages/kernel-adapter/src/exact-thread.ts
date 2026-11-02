@@ -86,7 +86,12 @@ function unwrap(envelope: SolidOperationDetailedResult): number {
     typeof envelope.details?.message === 'string'
       ? envelope.details.message
       : envelope.code;
-  const reason = THREAD_REFUSALS[envelope.code] ?? kernelMessage;
+  // A kernel from before chamfers refuses the spec's end fields by name.
+  const reason =
+    THREAD_REFUSALS[envelope.code] ??
+    (/unknown field `(start|end)`/.test(kernelMessage)
+      ? 'This kernel build cannot chamfer threads. Turn the chamfers off, or update the kernel.'
+      : kernelMessage);
   throw new KernelRefusal({
     family: 'thread',
     category: envelope.category,
@@ -122,6 +127,8 @@ export interface ResolvedThread {
   offset: number;
   length: number;
   phaseDeg: number;
+  /** The chamfer cone's angle from the axis at each chamfered end. */
+  chamfer: { start?: number; end?: number };
   /** How much the face truncated the crest, radially; 0 when it did not. */
   truncation: number;
 }
@@ -245,7 +252,36 @@ export function resolveThread(
         : offset,
     length,
     phaseDeg: values.optional(data.phaseDeg, 'phase') ?? 0,
+    chamfer: threadChamfers(data, values),
     truncation
+  };
+}
+
+/** The chamfered ends' cone angles, in degrees; absent ends are plain. */
+function threadChamfers(
+  data: FeatureDataOf<'thread'>,
+  values: {
+    optional(value: ParamValue | undefined, label: string): number | undefined;
+  }
+): { start?: number; end?: number } {
+  const angle = values.optional(data.chamferAngleDeg, 'chamfer angle') ?? 45;
+  return {
+    ...(data.chamferStart ? { start: angle } : {}),
+    ...(data.chamferEnd ? { end: angle } : {})
+  };
+}
+
+/** The kernel spec's end fields: present only for a chamfered end. */
+export function threadEndSpec(thread: Pick<ResolvedThread, 'chamfer'>): {
+  start?: { kind: 'chamfer'; angle: number };
+  end?: { kind: 'chamfer'; angle: number };
+} {
+  const { start, end } = thread.chamfer;
+  return {
+    ...(start === undefined
+      ? {}
+      : { start: { kind: 'chamfer', angle: start } }),
+    ...(end === undefined ? {} : { end: { kind: 'chamfer', angle: end } })
   };
 }
 
@@ -349,7 +385,10 @@ export function buildThreadFeature(
     majorDiameter: thread.majorDiameter,
     offset: thread.offset,
     length: thread.length,
-    phase: thread.phaseDeg
+    phase: thread.phaseDeg,
+    // Sent only for a chamfered end, so a plain thread builds on a kernel
+    // from before chamfers.
+    ...threadEndSpec(thread)
   };
   const solid = unwrap(
     threadKernel(kernel).cutThreadDetailed(

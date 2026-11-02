@@ -24,6 +24,7 @@ import {
 } from '@openzcad/shared';
 import {
   resolveThread,
+  threadEndSpec,
   threadPrintAdvisories,
   threadProfileForm
 } from '../packages/kernel-adapter/src/exact-thread';
@@ -191,6 +192,37 @@ describe('thread resolution against its face', () => {
   });
 });
 
+describe('thread chamfers', () => {
+  it('sends a chamfered end to the kernel and leaves a plain one out', () => {
+    const chamfered = resolveThread(
+      data({ chamferEnd: true, chamferAngleDeg: 30 }),
+      values,
+      { kind: 'external', radius: 3, faceLength: 8 },
+      1
+    );
+    expect(threadEndSpec(chamfered)).toEqual({
+      end: { kind: 'chamfer', angle: 30 }
+    });
+    const both = resolveThread(
+      data({ chamferStart: true, chamferEnd: true }),
+      values,
+      { kind: 'external', radius: 3, faceLength: 8 },
+      1
+    );
+    expect(threadEndSpec(both)).toEqual({
+      start: { kind: 'chamfer', angle: 45 },
+      end: { kind: 'chamfer', angle: 45 }
+    });
+    const plain = resolveThread(
+      data(),
+      values,
+      { kind: 'external', radius: 3, faceLength: 8 },
+      1
+    );
+    expect(threadEndSpec(plain)).toEqual({});
+  });
+});
+
 describe('thread print advisories', () => {
   const base = resolveThread(
     data(),
@@ -302,6 +334,9 @@ describe('thread command validation', () => {
         lowerFlankAngleDeg: 30
       })
     ).toThrow(/from 0° to 75°/);
+    expect(() =>
+      apply({ profile: 'printable', chamferEnd: true, chamferAngleDeg: 90 })
+    ).toThrow(/chamfer angle must be strictly between 0 and 90/);
   });
 });
 
@@ -417,6 +452,49 @@ describe('thread features on the exact kernel', () => {
         family: 'thread',
         code: 'thread:span-outside-face'
       });
+    },
+    120_000
+  );
+
+  /**
+   * Chamfered ends arrived in Remus after its thread generator. A kernel
+   * without them refuses the spec's end fields, and the feature names that
+   * instead of building plain ends in their place.
+   */
+  it.runIf(kernelHasThreads)(
+    'chamfers both ends of an M6 boss, or names the kernel that cannot',
+    async () => {
+      const { document, bodyId, side } = await shank(3, 8);
+      const plain = threadBody(document, {
+        name: 'Thread',
+        targetBodyId: bodyId,
+        faceHash: side.hash,
+        profile: 'iso-metric'
+      });
+      const chamfered = threadBody(document, {
+        name: 'Thread',
+        targetBodyId: bodyId,
+        faceHash: side.hash,
+        profile: 'iso-metric',
+        chamferStart: true,
+        chamferEnd: true
+      });
+      const plainBody = (await adapter.syncDocument(plain.document))
+        .bodyRepresentations[plain.bodyId]!;
+      const derived = await adapter.syncDocument(chamfered.document);
+      const refusal = derived.featureWarnings!.find(
+        (warning) => warning.kind === 'build-failed'
+      );
+      if (refusal) {
+        expect(refusal.message).toMatch(/cannot chamfer threads/);
+        return;
+      }
+      const body = derived.bodyRepresentations[chamfered.bodyId]!;
+      // The two cones take about 1.9 mm³ off the plain M6 (the kernel's
+      // own test integrates it); the ends never grow.
+      expect(plainBody.volume - body.volume).toBeGreaterThan(1.5);
+      expect(plainBody.volume - body.volume).toBeLessThan(2.5);
+      expect(body.bbox.max.x - body.bbox.min.x).toBeLessThan(6 + 1e-6);
     },
     120_000
   );

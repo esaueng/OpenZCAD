@@ -183,7 +183,12 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       );
       fields(
         data,
-        ['upperFlankAngleDeg', 'lowerFlankAngleDeg', 'phaseDeg'],
+        [
+          'upperFlankAngleDeg',
+          'lowerFlankAngleDeg',
+          'phaseDeg',
+          'chamferAngleDeg'
+        ],
         rewrite,
         'angle'
       );
