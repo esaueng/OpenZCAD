@@ -1865,7 +1865,7 @@ interface OffsetEditPlan {
   successMessage: string;
   validationTargets?: AffectedFeatureTarget[];
   preflightRejection?: string;
-  travelHint?: string;
+  travelHint?: () => string | undefined;
 }
 
 interface OffsetPreviewCandidate {
@@ -1883,7 +1883,7 @@ interface OffsetPreviewCandidate {
   /** A refusal known before any rebuild; the preview reports it unbuilt. */
   preflightRejection?: string;
   /** Mesh estimate used only after an exact collision refusal. */
-  travelHint?: string;
+  travelHint?: () => string | undefined;
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -6949,7 +6949,8 @@ export function App() {
     faceGeometryPreview &&
     faceGeometryPreview.baseProjectId === doc?.projectId &&
     faceGeometryPreview.baseVersion === doc?.version &&
-    faceGeometryPreview.selectionKey === geometryPreviewSelectionKey(interaction)
+    faceGeometryPreview.selectionKey ===
+      geometryPreviewSelectionKey(interaction)
       ? faceGeometryPreview
       : null;
   // A face drag's preview stands in for the picked face, so the panels and

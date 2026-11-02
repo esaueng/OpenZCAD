@@ -10,6 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
+import { localRemusPackages } from './build/localRemus';
 import { remusTranslatorRetry } from './build/remusTranslatorRetry';
 import { lazyChunkPrefetch } from './build/lazyChunkPrefetch';
 import {
@@ -262,7 +263,8 @@ function pdfjsAssets(): PluginOption {
 }
 
 export default defineConfig(async ({ command, isPreview, mode }) => {
-  const remus = await remusBuildInfo();
+  const localRemus = await localRemusPackages(process.env);
+  const remus = localRemus?.build ?? (await remusBuildInfo());
   const commit = sourceCommit();
   const isDesktop = mode === 'desktop';
   const plugins = [];
@@ -385,6 +387,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     },
     resolve: {
       alias: {
+        ...localRemus?.aliases,
         // Imported dynamically so opentype.js lands in its own chunk instead
         // of the entry bundle. Reaching it through the geometry index would
         // not split — that index is statically imported all over the app.

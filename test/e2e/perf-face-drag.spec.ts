@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync
+} from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import type { Locator } from '@playwright/test';
 import { expect, test, stubApi, expectBodyCount } from './openzcad-fixtures';
@@ -9,15 +14,18 @@ import { expect, test, stubApi, expectBodyCount } from './openzcad-fixtures';
  * the same exact-preview path as dragging without camera/grid-snap variance.
  *
  * OZ_PERF=1 OZ_PERF_FACE_STEP=/path/to/public-holder.step \
- * OZ_PERF_FACE_OUT=/tmp/face-preview.jsonl pnpm exec playwright test perf-face-drag
+ * OZ_PERF_FACE_OUT=/tmp/face-preview.jsonl pnpm exec playwright test 'perf-face-drag.spec.ts$'
+ * Use OZ_PERF_FACE_PROJECT instead of OZ_PERF_FACE_STEP for a project backup.
  *
  * Run the same file and fixture against each build. The frame observation is
  * after renderer.render, not physical display presentation. Timings never gate
  * CI; full-result mesh/bounds/volume parity and Undo remain assertions.
  */
+const fixturePath =
+  process.env.OZ_PERF_FACE_PROJECT ?? process.env.OZ_PERF_FACE_STEP;
 test.skip(
-  process.env.OZ_PERF !== '1' || !process.env.OZ_PERF_FACE_STEP,
-  'Set OZ_PERF=1 and OZ_PERF_FACE_STEP to measure an imported face preview.'
+  process.env.OZ_PERF !== '1' || !fixturePath,
+  'Set OZ_PERF=1 and OZ_PERF_FACE_STEP or OZ_PERF_FACE_PROJECT.'
 );
 
 type Bounds = { min: number[]; max: number[] };
@@ -71,6 +79,7 @@ type Probe = {
   actions: Action[];
   baseline?: Summary;
   baselineBounds?: Bounds;
+  renderedHash?: string;
   start(label: string, expectedFeatures: number): void;
   readBounds(): Bounds | undefined;
 };
@@ -83,7 +92,7 @@ declare global {
 let runtimeErrors: string[] = [];
 
 test.afterEach(async ({ page, browser }) => {
-  if (process.env.OZ_PERF !== '1' || !process.env.OZ_PERF_FACE_STEP) return;
+  if (process.env.OZ_PERF !== '1' || !fixturePath) return;
   const observation = await page.evaluate(() => {
     const probe = window.__ozFaceDragPerf;
     return {
@@ -108,12 +117,12 @@ test.afterEach(async ({ page, browser }) => {
       })()
     };
   });
-  const fixture = readFileSync(resolve(process.env.OZ_PERF_FACE_STEP));
+  const fixture = readFileSync(resolve(fixturePath));
   const record = {
     label: process.env.OZ_PERF_FACE_LABEL ?? 'unspecified-build',
     status: test.info().status,
     input: 'typed-offset-preview',
-    fixture: basename(process.env.OZ_PERF_FACE_STEP),
+    fixture: basename(fixturePath),
     fixtureSha256: createHash('sha256').update(fixture).digest('hex'),
     browserVersion: browser.version(),
     node: process.version,
@@ -201,7 +210,15 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
           document.querySelector('.viewer-host canvas')?.dispatchEvent(
             new CustomEvent('openzcad:e2e-render-policy', {
               detail: {
-                resolve: (state: { bodyFaces: { worldBounds?: Bounds }[] }) => {
+                includeBodies: true,
+                resolve: (state: {
+                  bodies?: Body[];
+                  bodyFaces: { worldBounds?: Bounds }[];
+                }) => {
+                  const body = state.bodies?.find((body) => !body.consumed);
+                  this.renderedHash = body
+                    ? `${hash(body.mesh.vertices)}:${hash(body.mesh.indices)}`
+                    : undefined;
                   const boxes = state.bodyFaces.flatMap((face) =>
                     face.worldBounds ? [face.worldBounds] : []
                   );
@@ -417,6 +434,9 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
           if (!accepted) return;
           const bounds = probe.readBounds();
           if (!bounds || !probe.baselineBounds) return;
+          // A local face move can preserve the body's entire bounding box.
+          // Match the geometry actually installed for this rendered frame.
+          if (probe.renderedHash !== accepted.meshHash) return;
           const changed = [...bounds.min, ...bounds.max].some(
             (value, index) =>
               Math.abs(
@@ -428,7 +448,7 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
           );
           if (
             action.label === 'preview' &&
-            (!changed || accepted.meshHash === probe.baseline.meshHash)
+            accepted.meshHash === probe.baseline.meshHash
           )
             return;
           if (
@@ -446,16 +466,22 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
-  await page
-    .getByLabel('Project name')
-    .fill('Imported face preview performance');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
-    .setInputFiles(resolve(process.env.OZ_PERF_FACE_STEP!));
-  await expect(page.getByRole('contentinfo')).toContainText('warnings0', {
-    timeout: 180_000
-  });
+  if (process.env.OZ_PERF_FACE_PROJECT) {
+    await page
+      .getByRole('button', { name: 'Import project', exact: true })
+      .click();
+    await page
+      .getByLabel('Import project backup')
+      .setInputFiles(resolve(fixturePath!));
+  } else {
+    await page
+      .getByLabel('Project name')
+      .fill('Imported face preview performance');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page
+      .getByLabel(/^Import FreeCAD, STEP or /)
+      .setInputFiles(resolve(process.env.OZ_PERF_FACE_STEP!));
+  }
   await expect
     .poll(
       () =>
@@ -467,7 +493,16 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
       { timeout: 180_000 }
     )
     .toBe(true);
+  expect(
+    await page.evaluate(
+      () =>
+        [...window.__ozFaceDragPerf.requests]
+          .reverse()
+          .find((request) => request.complete)?.warnings
+    )
+  ).toEqual([]);
   await expectBodyCount(page, 1);
+  const featureCount = await page.locator('.feature-row').count();
   const canvas = page.locator('.viewer-host canvas');
   await expect
     .poll(() =>
@@ -516,7 +551,14 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
   );
   await page.getByTestId('direct-manipulation-value').click();
   const editor = page.getByRole('dialog', { name: 'Offset value' });
-  await arm(editor.getByRole('textbox'), 'input', 'preview', 1);
+  const profiler = process.env.OZ_PERF_FACE_CPU_PROFILE
+    ? await page.context().newCDPSession(page)
+    : undefined;
+  if (profiler) {
+    await profiler.send('Profiler.enable');
+    await profiler.send('Profiler.start');
+  }
+  await arm(editor.getByRole('textbox'), 'input', 'preview', featureCount);
   await editor.getByRole('textbox').fill(String(offset));
   await expect
     .poll(
@@ -530,13 +572,23 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
       { timeout: 180_000 }
     )
     .toBe(true);
-  await expect(page.locator('.feature-row')).toHaveCount(1);
+  if (profiler) {
+    const { profile } = await profiler.send('Profiler.stop');
+    writeFileSync(
+      process.env.OZ_PERF_FACE_CPU_PROFILE!,
+      JSON.stringify(profile)
+    );
+    await profiler.detach();
+  }
+  if (process.env.OZ_PERF_FACE_SCREENSHOT)
+    await page.screenshot({ path: process.env.OZ_PERF_FACE_SCREENSHOT });
+  await expect(page.locator('.feature-row')).toHaveCount(featureCount);
   await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
   await arm(
     editor.getByRole('button', { name: 'Apply offset' }),
     'click',
     'release',
-    2
+    featureCount + 1
   );
   await editor.getByRole('button', { name: 'Apply offset' }).click();
   await expect
@@ -572,12 +624,19 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
   expect(geometry.final.vertices).toEqual(geometry.preview.vertices);
   expect(geometry.final.indices).toEqual(geometry.preview.indices);
   expect(geometry.finalBounds).toEqual(geometry.previewBounds);
-  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(
+    await page.evaluate(
+      () =>
+        [...window.__ozFaceDragPerf.requests]
+          .reverse()
+          .find((request) => request.complete)?.warnings
+    )
+  ).toEqual([]);
   await arm(
     page.getByRole('button', { name: 'Undo', exact: true }),
     'click',
     'undo',
-    1
+    featureCount
   );
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect

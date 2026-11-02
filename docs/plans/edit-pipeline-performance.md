@@ -1,5 +1,81 @@
 # Edit-to-frame performance (H02 / W02)
 
+## Complex-fillet face offsets: development and profiling
+
+The native-history probes also accept a private `.openzcad` backup kept outside
+the repository. Select the face by normal and, for the adapter probe, nearest
+area. Keep typed exact previews, continuous pointer drags, accepted Apply and
+Undo timings separate. A local face move can preserve the entire body's bounding
+box: the typed probe now matches the accepted mesh to the geometry installed for
+the rendered frame instead of requiring the bounding box to change.
+
+```bash
+OFFSET_PERF_PROJECT=/external/model.openzcad OFFSET_PERF_NORMAL='[0,0,1]' \
+  OFFSET_PERF_DISTANCE=3 OFFSET_PERF_PREVIEW=1 OFFSET_PERF_DEFER_TOPOLOGY=1 \
+  OFFSET_PERF_PREVIEW_TICKS=8 OFFSET_PERF_SAMPLES=3 \
+  OFFSET_PERF_OUT=/external/adapter.jsonl \
+  pnpm exec vitest run --config test/perf/offset-face-perf.config.ts
+
+OZ_PERF=1 OZ_PERF_FACE_PROJECT=/external/model.openzcad \
+  OZ_PERF_FACE_NORMAL='[0,0,1]' OZ_PERF_FACE_OFFSET=3 \
+  OZ_PERF_FACE_OUT=/external/typed.jsonl \
+  pnpm exec playwright test 'perf-face-drag.spec.ts$'
+
+OZ_PERF=1 OZ_FACE_DRAG_PROJECT=/external/model.openzcad \
+  OZ_FACE_DRAG_NORMAL=0,0,1 OZ_FACE_DRAG_DISTANCE=3 \
+  OZ_PERF_OUT=/external/pointer.jsonl \
+  pnpm exec playwright test 'perf-face-drag-trace.spec.ts$' --grep 'supplied project'
+```
+
+`OFFSET_PERF_FRONTEND=1` separately measures display-preview recognition and mesh
+travel hints. `OFFSET_PERF_KERNEL_PHASES=1` records bounded kernel phases and
+cache diagnostics; keep it off for quiet comparisons. The browser probe can
+write a diagnostic CPU profile with `OZ_PERF_FACE_CPU_PROFILE` and a preview
+screenshot with `OZ_PERF_FACE_SCREENSHOT`. These outputs and the input remain
+external. The pointer probe currently accepts native backups without archived
+source files; use the full backup importer for histories with external sources.
+
+The first app changes cache each neighbor's depth within one recognition call,
+and defer the approximate collision-distance hint until the exact kernel returns
+the matching refusal. The mesh estimate never authorizes or rejects geometry.
+On the supplied 44-feature native model, repeated recognition calls dropped from
+roughly 175–190 ms to 1–3 ms; the initial mesh preparation still costs about
+120 ms. Exploratory headed Edge 156 / Intel UHD / 1440×1000 / DPR 1 typed probes
+improved input-to-exact-frame from 1,108 ms to 648 ms, with preview/Apply mesh
+parity and Undo passing. These samples are preliminary, not a qualified 2×
+operation improvement. Curved-face tessellation remains the largest measured
+kernel cost. Rendering accuracy, exact acceptance and package pins are unchanged.
+
+### Paired kernel/browser development
+
+Build Remus on a host that can execute the pinned Rust toolchain and its build
+scripts (`cargo xtask wasm-build`). A working Linux environment requires no
+changes to Windows application-control policy. Both packages must be built
+together because their arena format is paired.
+
+Set **both** `REMUS_WASM_PKG` and `REMUS_WASM_IO_PKG` to the two package
+directories before starting the web development server or building the browser
+bundle. The same variables select the test-kernel overlay. Vite rejects partial
+overlays, mismatched names/versions and packages without shared checkout context
+or matching CI `remusSourceCommit` stamps. Local builds show `+local`; build
+metadata records their context, dirty state and both WASM SHA-256 fingerprints.
+A checkout commit identifies the development checkout, not proof that its
+existing binaries were rebuilt; compare the fingerprints and retain the build
+log. Extracted CI packages must carry the source commit of their producing run.
+
+```bash
+REMUS_WASM_PKG=/external/remus/crates/wasm/pkg \
+  REMUS_WASM_IO_PKG=/external/remus/crates/wasm-io/pkg \
+  VITE_E2E=1 OZ_PERF=1 pnpm dev:web
+```
+
+The default immutable package selection and its checksum gate are unchanged.
+Do not publish a development overlay as a qualified release. Qualification needs
+repeated quiet before/after browser runs, fresh/warm topology and export parity,
+the complete repository checks, and the Remus format/lint/native/WASM gates.
+
+## Earlier edit-pipeline qualification
+
 Implement the 7 October source-based investigation as one coordinated OpenZCAD / Remus change. ROADMAP.md remains the delivery ledger. The baseline is OpenZCAD dcfb5175 with paired Remus packages 2026.1.42: three independent Node runs on the public 160-face STEP fixture gave a 3,111 ms first-offset median, including 1,164 ms volume, 652 ms feature claims, 550 ms edge relations, 149 ms display tessellation and 133 ms face movement. These are adapter timings, not browser frame timings.
 
 Implementation order and acceptance:

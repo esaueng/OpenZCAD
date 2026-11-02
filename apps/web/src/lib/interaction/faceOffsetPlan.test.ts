@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -22,7 +22,27 @@ import {
   type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
-import { faceOffsetBaseline, planFaceOffset } from './faceOffsetPlan';
+import {
+  faceOffsetBaseline,
+  planFaceOffset,
+  withFaceTravelHint
+} from './faceOffsetPlan';
+
+describe('deferred mesh travel hints', () => {
+  it('measures only for the exact nonadjacent-face collision refusal', () => {
+    const hint = vi.fn(() => 'Approximate mesh distance.');
+    expect(withFaceTravelHint('Unsupported adjacent surface.', hint)).toBe(
+      'Unsupported adjacent surface.'
+    );
+    expect(hint).not.toHaveBeenCalled();
+    const collision =
+      'The face would run into another part of the body before it got that far.';
+    expect(withFaceTravelHint(collision, hint)).toBe(
+      `${collision}\nApproximate mesh distance.`
+    );
+    expect(hint).toHaveBeenCalledTimes(1);
+  });
+});
 
 /**
  * The far cap of an extrude re-plans a face offset as an edit of the stored
