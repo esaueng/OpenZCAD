@@ -23,6 +23,24 @@ Related: [ADR-003](../adrs/ADR-003-cloudflare-storage-split.md) (D1/R2 split),
 [ADR-007](../adrs/ADR-007-access-auth-and-live-rooms.md) (live rooms),
 [ADR-012](../adrs/ADR-012-email-code-identity.md) (identity)
 
+## Browser tab restoration
+
+The open project and its navigation revision belong to the current browser tab.
+Reload restores that tab's project, or its explicit return to the library, from
+`sessionStorage`. A fresh tab seeds its pointer once from the device's existing
+last-opened project; later opens and closes in other tabs cannot redirect it.
+Project documents and saved viewport views remain in their existing device stores.
+Account identity adoption moves the current tab's pointer along with its view.
+The existing Web Lock still makes a second tab of the same project read-only,
+while different projects can be edited independently. Leaving a project also
+aborts its queued ownership request, so a background tab cannot briefly take
+an abandoned lock when the project's active tab reloads.
+
+Local regression coverage: `workspaceSession.test.ts` and
+`test/e2e/active-project-pointer.spec.ts`; same-project ownership coverage remains
+in `test/e2e/cloud-sync.spec.ts`. This is source and local-browser evidence;
+production verification remains L01 work after deployment.
+
 ## Cloud access and storage bounds
 
 The owner can retain and restore a trashed project. While it is trashed,

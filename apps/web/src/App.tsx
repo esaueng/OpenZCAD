@@ -2480,7 +2480,7 @@ export function App() {
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
   // One read gives both the project to restore and the compare-and-set guard
-  // for it, so a write from another tab cannot fall between them.
+  // for it, so a newer navigation in this tab cannot fall between them.
   const [{ startupPointer, startupProjectId }] = useState(() => {
     const pointer = snapshotActiveProject();
     return {

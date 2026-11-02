@@ -80,7 +80,7 @@ test('repairs legacy topology in Tweak and keeps parameter edits through reload'
       tx.onerror = () => reject(new Error('Could not seed legacy project'));
     });
     db.close();
-    localStorage.setItem(
+    sessionStorage.setItem(
       'openzcad-workspace-session:v1',
       JSON.stringify({
         version: 1,

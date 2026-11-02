@@ -9,6 +9,10 @@ class FakeLockManager {
   private readonly held = new Set<string>();
   private readonly queued = new Map<string, Array<() => void>>();
 
+  pendingCount(name: string): number {
+    return this.queued.get(name)?.length ?? 0;
+  }
+
   request(
     name: string,
     optionsOrCallback: LockOptions | ((lock: Lock | null) => Promise<void>),
@@ -29,15 +33,27 @@ class FakeLockManager {
     if (options.ifAvailable) {
       return callback(null);
     }
-    return new Promise<void>((granted) => {
+    return new Promise<void>((granted, reject) => {
       const waiters = this.queued.get(name) ?? [];
-      waiters.push(() => {
+      const grant = () => {
+        options.signal?.removeEventListener('abort', abort);
         this.held.add(name);
         void callback(lock).finally(() => {
           this.releaseNext(name);
           granted();
         });
-      });
+      };
+      const abort = () => {
+        const index = waiters.indexOf(grant);
+        if (index !== -1) waiters.splice(index, 1);
+        reject(new DOMException('Lock request cancelled', 'AbortError'));
+      };
+      if (options.signal?.aborted) {
+        abort();
+        return;
+      }
+      options.signal?.addEventListener('abort', abort, { once: true });
+      waiters.push(grant);
       this.queued.set(name, waiters);
     });
   }
@@ -107,12 +123,16 @@ describe('project tab ownership', () => {
   });
 
   it('does not promote a tab that closed the project while waiting', async () => {
-    withLockManager();
+    const locks = withLockManager();
     const promoted = vi.fn();
 
     const first = await claimProjectOwnership('project_a', () => undefined);
     const second = await claimProjectOwnership('project_a', promoted);
+    expect(locks.pendingCount('openzcad-project:project_a')).toBe(1);
     second.release();
+    // Cancellation cannot depend on the background tab running a callback
+    // after the current owner releases its lock (for example on reload).
+    expect(locks.pendingCount('openzcad-project:project_a')).toBe(0);
     first.release();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
