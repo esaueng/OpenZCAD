@@ -164,7 +164,7 @@ class IngressTests(unittest.TestCase):
         self.provider.export.side_effect=lambda root:(root/'database.sql').write_text('')
         runtime={'account_id':target['account'],'name':target['worker'],
                  'd1_databases':[{'database_id':target['database']}]}
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as ram, \
+        with tempfile.TemporaryDirectory() as ram, \
              patch('restore.secret_command',side_effect=secret), \
              patch('restore.owner_only_file',return_value=b'synthetic-read'), \
              patch('restore.unseal',return_value={'source':SOURCE,'objects':[]}), \

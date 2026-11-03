@@ -11,6 +11,47 @@ const TETRAHEDRON_POSITIONS = [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
 const TETRAHEDRON_INDICES = [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3];
 
 describe('boolean result validation', () => {
+  it.each([1, 1 / 25.4, 1000])(
+    'welds f32 copies across cell boundaries at scale %s',
+    (scale) => {
+      const positions = TETRAHEDRON_INDICES.flatMap((vertex, index) => [
+        TETRAHEDRON_POSITIONS[3 * vertex]! * scale,
+        (TETRAHEDRON_POSITIONS[3 * vertex + 1]! +
+          0.5e-6 +
+          (index % 2 ? 2e-8 : -2e-8)) *
+          scale,
+        TETRAHEDRON_POSITIONS[3 * vertex + 2]! * scale
+      ]);
+      expect(
+        inspectTriangleMeshClosure(
+          new Float32Array(positions),
+          positions
+            .map((_, index) => index)
+            .filter((index) => index % 3 === 0)
+            .map((index) => index / 3)
+        )
+      ).toEqual({
+        boundaryEdges: 0,
+        nonManifoldEdges: 0,
+        inconsistentWindingEdges: 0,
+        triangles: 4
+      });
+    }
+  );
+
+  it('keeps an opening larger than the existing weld tolerance open', () => {
+    const positions = TETRAHEDRON_INDICES.flatMap((vertex) =>
+      TETRAHEDRON_POSITIONS.slice(3 * vertex, 3 * vertex + 3)
+    );
+    positions[0] = 1.2e-6;
+    const closure = inspectTriangleMeshClosure(
+      positions,
+      TETRAHEDRON_INDICES.map((_, index) => index)
+    );
+    expect(closure.boundaryEdges).toBeGreaterThan(0);
+    expect(isClosedConsistentlyOrientedMesh(closure)).toBe(false);
+  });
+
   it('diagnoses the exact extent lost by the M4 tangent-boss fuse', () => {
     expect(
       droppedUnionOperandWarning({

@@ -27825,7 +27825,9 @@ export function App() {
       .filter((projectId) => hasUnresolvedConflict(projectId))
   );
 
-  if (openingProject !== null) {
+  // Keep invitation dismissal reachable while its document loads. Until it
+  // is ready, the existing workspace is still the current document.
+  if (openingProject !== null && !(doc && pendingInvitationToken !== null)) {
     return (
       <StartupScreen
         projectName={openingProject}

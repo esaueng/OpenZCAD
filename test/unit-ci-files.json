@@ -130,7 +130,13 @@
     "test/trusted-pr-policy.test.ts",
     "test/typed-parameters.test.ts",
     "test/unit-global-setup.test.ts",
-    "test/unit-suites.test.ts"
+    "test/unit-suites.test.ts",
+    "test/growing-holder-holes.test.ts",
+    "test/growing-holder-units.test.ts",
+    "test/kernel-prose-matching.test.ts",
+    "test/partial-revolve.test.ts",
+    "test/recovery-snapshot.test.ts",
+    "test/synthetic-holder-fixtures.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",

@@ -20,6 +20,7 @@ import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
+  type EdgeTopology,
   type ParamValue,
   type ProjectDocument,
   type SketchObjectData
@@ -583,6 +584,39 @@ function innerEndCapFilletCut(R: number, r: number, h: number): number {
   return (h / 2) * (r * x - (Math.PI * r * r) / 2 + (r * r - R * R) * angle);
 }
 
+/** Green's theorem over the outer circle and its internally tangent fillet.
+ * Its centre is (sqrt(R²-2Rr), r); integrate the two arcs and the end plane.
+ */
+function outerEndCapFilletCut(R: number, r: number, h: number): number {
+  const x = Math.sqrt(R * R - 2 * R * r);
+  const angle = Math.asin(r / (R - r));
+  return (h / 2) * ((R * R - r * r) * angle - r * x - (Math.PI * r * r) / 2);
+}
+
+function endCapRadius(edge: EdgeTopology): number | undefined {
+  if (
+    edge.curve?.type !== 'LINE' ||
+    Math.abs(edge.length! - PROFILE_HEIGHT) >= 1e-9
+  )
+    return undefined;
+  return [PROFILE_INNER_RADIUS, PROFILE_OUTER_RADIUS].find((radius) =>
+    [0, edge.points.length - 3].every(
+      (start) =>
+        Math.abs(
+          Math.hypot(edge.points[start]!, edge.points[start + 1]!) - radius
+        ) < 1e-9
+    )
+  );
+}
+
+function endCapFilletCut(radius: number): number {
+  return (
+    radius === PROFILE_INNER_RADIUS
+      ? innerEndCapFilletCut
+      : outerEndCapFilletCut
+  )(radius, 0.1, PROFILE_HEIGHT);
+}
+
 function expectStrictSolid(document: ProjectDocument, bodyId: BodyId): void {
   const native = new RemusKernel();
   try {
@@ -598,7 +632,7 @@ function expectStrictSolid(document: ProjectDocument, bodyId: BodyId): void {
 }
 
 describe('partial revolve and edge modifiers', () => {
-  it('rounds both inner end-cap edges and explains the remaining wedge refusals', async () => {
+  it('rounds all four radial end-cap edges and explains the remaining wedge refusals', async () => {
     const { document, body } = await buildRevolve(annulusProfile(1), 90);
     const bodyId = getLatestBodyId(document)!;
     const edges = body!.topology!.edges;
@@ -615,19 +649,10 @@ describe('partial revolve and edge modifiers', () => {
         size: 0.1
       });
       const derived = await kernel.syncDocument(candidate.document);
-      // The two vertical inner-radius end-cap edges now round. Identify them
+      // Both inner and outer vertical end-cap edges now round. Identify them
       // geometrically, independently of kernel hash or topology ordering.
-      const innerEndCap =
-        edge.curve?.type === 'LINE' &&
-        Math.abs(edge.length! - PROFILE_HEIGHT) < 1e-9 &&
-        [0, edge.points.length - 3].every(
-          (start) =>
-            Math.abs(
-              Math.hypot(edge.points[start]!, edge.points[start + 1]!) -
-                PROFILE_INNER_RADIUS
-            ) < 1e-9
-        );
-      if (innerEndCap) {
+      const radius = endCapRadius(edge);
+      if (radius !== undefined) {
         accepted += 1;
         expect(derived.warnings).toEqual([]);
         const rounded = derived.bodyRepresentations[candidate.bodyId]!;
@@ -638,11 +663,7 @@ describe('partial revolve and edge modifiers', () => {
         expectSoundSolid(rounded, 2);
         expect(meshSignedVolume(rounded.mesh)).toBeGreaterThan(0);
         expectStrictSolid(candidate.document, candidate.bodyId);
-        const removed = innerEndCapFilletCut(
-          PROFILE_INNER_RADIUS,
-          0.1,
-          PROFILE_HEIGHT
-        );
+        const removed = endCapFilletCut(radius);
         expect(
           Math.abs(rounded.volume - (partialRevolveVolume(90, 1) - removed))
         ).toBeLessThan(1e-9);
@@ -662,11 +683,11 @@ describe('partial revolve and edge modifiers', () => {
       }
       expect(JSON.stringify(document)).toBe(source);
     }
-    expect(accepted).toBe(2);
-    expect(refused).toBe(10);
+    expect(accepted).toBe(4);
+    expect(refused).toBe(8);
   }, 300_000);
 
-  /** The latest kernel must refuse or return a plausibly sized blend. */
+  /** Every published result must enclose the independently computed volume. */
   it('never publishes the doubled wedge body', async () => {
     const { document, body } = await buildRevolve(annulusProfile(1), 90);
     const bodyId = getLatestBodyId(document)!;
@@ -696,12 +717,19 @@ describe('partial revolve and edge modifiers', () => {
           9
         );
       } else {
+        const radius = endCapRadius(edge);
+        expect(radius).toBeDefined();
         const filleted = derived.bodyRepresentations[resultId]!;
-        expect(filleted.volume / WEDGE).toBeGreaterThan(0.9);
-        expect(filleted.volume / WEDGE).toBeLessThan(1.1);
+        expect(filleted.volume).toBeCloseTo(
+          WEDGE - endCapFilletCut(radius!),
+          9
+        );
+        expectSoundSolid(filleted, 2);
+        expect(meshSignedVolume(filleted.mesh)).toBeGreaterThan(0);
+        expectStrictSolid(candidate, resultId);
       }
     }
-    expect(refused).toBeGreaterThanOrEqual(10);
+    expect(refused).toBe(8);
   }, 300_000);
 
   it('leaves the full revolve able to round four of its six edges', async () => {

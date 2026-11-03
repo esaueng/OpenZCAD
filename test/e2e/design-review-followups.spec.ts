@@ -487,11 +487,23 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await reachable(
         bar.getByRole('radio', { name: 'New body', exact: true })
       );
-      expect(
-        await panel.evaluate((element) => element.scrollHeight)
-      ).toBeGreaterThan(
-        await panel.evaluate((element) => element.clientHeight)
+      // The compact form fits at 390 px. Constrain it further to exercise
+      // actual overflow, then prove its final control can be scrolled into view.
+      await page.setViewportSize({ width: 844, height: 260 });
+      await expect
+        .poll(() =>
+          panel.evaluate(
+            (element) => element.scrollHeight > element.clientHeight
+          )
+        )
+        .toBe(true);
+      await panel.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await reachable(
+        bar.getByRole('button', { name: 'Reverse direction', exact: true })
       );
+      await page.setViewportSize({ width: 844, height: 390 });
       await capture(page, testInfo, 'landscape-options');
       await bar.getByRole('button', { name: 'Distance', exact: true }).click();
       const keypad = page.getByRole('dialog', { name: 'Distance value' });
@@ -607,16 +619,29 @@ for (const colorScheme of ['light', 'dark'] as const) {
           width <= 390 ? '150' : '300'
         );
         const controls = page.locator('.settings-auth-controls').last();
-        const contained = await controls.evaluate((element) => {
-          const bounds = element.getBoundingClientRect();
-          return Array.from(
-            element.querySelectorAll('input, iframe, button')
-          ).every((child) => {
-            const box = child.getBoundingClientRect();
-            return box.left >= bounds.left && box.right <= bounds.right + 1;
-          });
-        });
-        expect(contained).toBe(true);
+        await expect
+          .poll(() =>
+            controls.evaluate((element) => {
+              const bounds = element.getBoundingClientRect();
+              return Array.from(
+                element.querySelectorAll('input, iframe, button')
+              ).flatMap((child) => {
+                const box = child.getBoundingClientRect();
+                return box.left >= bounds.left && box.right <= bounds.right + 1
+                  ? []
+                  : [
+                      {
+                        tag: child.tagName,
+                        left: box.left,
+                        right: box.right,
+                        containerLeft: bounds.left,
+                        containerRight: bounds.right
+                      }
+                    ];
+              });
+            })
+          )
+          .toEqual([]);
         await expect(
           page.getByRole('button', { name: 'Email me a code' })
         ).toBeDisabled();

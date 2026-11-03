@@ -86,12 +86,7 @@ function unwrap(envelope: SolidOperationDetailedResult): number {
     typeof envelope.details?.message === 'string'
       ? envelope.details.message
       : envelope.code;
-  // A kernel from before chamfers refuses the spec's end fields by name.
-  const reason =
-    THREAD_REFUSALS[envelope.code] ??
-    (/unknown field `(start|end)`/.test(kernelMessage)
-      ? 'This kernel build cannot chamfer threads. Turn the chamfers off, or update the kernel.'
-      : kernelMessage);
+  const reason = THREAD_REFUSALS[envelope.code] ?? kernelMessage;
   throw new KernelRefusal({
     family: 'thread',
     category: envelope.category,

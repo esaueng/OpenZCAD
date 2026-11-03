@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import {
+  RemusKernel,
+  loadRemusTranslators,
+  remusTranslators
+} from '../packages/kernel-adapter/src/remus-runtime';
 import { resizeThroughHole } from '../packages/kernel-adapter/src/exact-direct-edit-ops';
 import { requireThroughHole } from '../packages/kernel-adapter/src/exact-measure';
 import { applyEdgeModifier } from '../packages/kernel-adapter/src/exact-edge-modifiers';
@@ -11,6 +15,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import type { ProjectDocument } from '@openzcad/shared';
 import { borePreviewProfile } from '../apps/web/src/lib/interaction/cylinderRadius';
+import { syntheticHolderSolid } from './support/synthetic-holder';
 
 const BORE = 3;
 const HEIGHT = 10;
@@ -83,6 +88,115 @@ function volume(radius: number, mouths: number) {
 }
 
 describe('through-hole resizing extends its existing chamfer angle', () => {
+  it.each(['native', 'STEP'] as const)(
+    'shrinks both broken-out countersinks and split rims from %s without moving retained boundaries',
+    async (sourceKind) => {
+      await loadRemusTranslators();
+      const kernel = new RemusKernel();
+      try {
+        let solid = syntheticHolderSolid(kernel);
+        if (sourceKind === 'STEP') {
+          solid = kernel.deserializeSolids(
+            remusTranslators().importStep(
+              remusTranslators().exportStep(
+                kernel.serializeSolids(Uint32Array.of(solid))
+              )
+            )
+          )[0]!;
+        }
+        const volumeBefore = kernel.volume(solid, 1e-5);
+        // The cone apex is z=20-4.5=15.5. Only material inside the old
+        // Ø5 bore changes; the broken-out mouth beyond the 8 mm arm stays
+        // fixed. Integrate 2πρ(15.5+ρ) from new r=2 to old R=2.5.
+        const addedPerHole =
+          Math.PI * 15.5 * (2.5 ** 2 - 2 ** 2) +
+          ((2 * Math.PI) / 3) * (2.5 ** 3 - 2 ** 3);
+        for (const [index, x] of [4, 56].entries()) {
+          const face = [...kernel.getSolidFaces(solid)].find((f) => {
+            if (kernel.getSurfaceType(f) !== 'cylinder') return false;
+            const params = JSON.parse(kernel.getAnalyticSurfaceParams(f)) as {
+              origin: number[];
+            };
+            return Math.abs(params.origin[0]! - x) < 1e-7;
+          })!;
+          expect(face).toBeDefined();
+          const geometry = requireThroughHole(kernel, solid, face);
+          const source = kernel.serializeSolids(Uint32Array.of(solid));
+          const before = steppedArena(kernel, solid);
+          if (x === 56) {
+            const splitRim = before.edges.filter(
+              (e) =>
+                e.curve !== 'Line' &&
+                e.curve.Circle &&
+                Math.abs(e.curve.Circle.center[0] - x) < 1e-7 &&
+                Math.abs(e.curve.Circle.center[2] - 18) < 1e-7 &&
+                Math.abs(e.curve.Circle.radius - 2.5) < 1e-7
+            );
+            if (sourceKind === 'native') expect(splitRim).toHaveLength(4);
+            else expect(splitRim).toHaveLength(1);
+          }
+          const output = resizeThroughHole(
+            kernel,
+            solid,
+            face,
+            {
+              kind: 'resize-through-hole',
+              faceHash: 0,
+              sourceDiameter: geometry.diameter,
+              sourceAxisStart: geometry.axisStart,
+              sourceAxisEnd: geometry.axisEnd,
+              diameter: 4
+            },
+            {}
+          ).solid;
+          expect(kernel.validateSolid(output)).toBe(0);
+          expect(kernel.volume(output, 1e-5)).toBeCloseTo(
+            volumeBefore + (index + 1) * addedPerHole,
+            4
+          );
+          const after = steppedArena(kernel, output);
+          expect(after.wires).toEqual(before.wires);
+          expect(after.boundary_authority).toEqual(before.boundary_authority);
+          before.faces.forEach((f, i) => {
+            const cylinder = f.surface.Cylinder as
+              { origin: number[]; radius: number } | undefined;
+            if (cylinder && Math.abs(cylinder.origin[0]! - x) < 1e-7)
+              expect(after.faces[i]).toEqual({
+                ...f,
+                surface: { Cylinder: { ...cylinder, radius: 2 } }
+              });
+            else expect(after.faces[i]).toEqual(f);
+          });
+          before.edges.forEach((e, i) => {
+            if (e.curve !== 'Line' && 'NurbsCurve' in e.curve)
+              expect(after.edges[i]).toEqual(e);
+          });
+          expect(kernel.serializeSolids(Uint32Array.of(solid))).toEqual(source);
+          solid = output;
+        }
+        const [roundtrip] = kernel.deserializeSolids(
+          remusTranslators().importStep(
+            remusTranslators().exportStep(
+              kernel.serializeSolids(Uint32Array.of(solid))
+            )
+          )
+        );
+        expect(roundtrip).toBeDefined();
+        expect(kernel.validateSolid(roundtrip!)).toBe(0);
+        expect(kernel.volume(roundtrip!, 1e-5)).toBeCloseTo(
+          volumeBefore + 2 * addedPerHole,
+          4
+        );
+        const quality = JSON.parse(
+          kernel.meshQuality(roundtrip!, 0.01) as string
+        ) as { isWatertight: boolean };
+        expect(quality.isWatertight).toBe(true);
+      } finally {
+        kernel.free();
+      }
+    }
+  );
+
   it.each([1, 2] as const)(
     'shrinks a bore with %i chamfered mouth(s) without a flat shelf',
     (mouths) => {

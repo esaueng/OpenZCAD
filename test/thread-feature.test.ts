@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -456,13 +456,50 @@ describe('thread features on the exact kernel', () => {
     120_000
   );
 
-  /**
-   * Chamfered ends arrived in Remus after its thread generator. A kernel
-   * without them refuses the spec's end fields, and the feature names that
-   * instead of building plain ends in their place.
-   */
+  it.each([
+    ['thread:span-outside-face', 'runs past an end'],
+    ['future:structured-refusal', 'unknown field `start`: synthetic diagnostic']
+  ])(
+    'uses the typed %s refusal without interpreting its prose',
+    async (code, reason) => {
+      const { document, bodyId, side } = await shank(3, 8);
+      const threaded = threadBody(document, {
+        name: 'Thread',
+        targetBodyId: bodyId,
+        faceHash: side.hash,
+        profile: 'iso-metric',
+        chamferStart: true
+      });
+      const mock = vi
+        .spyOn(RemusKernel.prototype, 'cutThreadDetailed')
+        .mockReturnValue({
+          status: 'error',
+          code,
+          category: 'invalid_input',
+          value: null,
+          details: { message: 'unknown field `start`: synthetic diagnostic' }
+        });
+      try {
+        const derived = await adapter.syncDocument(threaded.document);
+        const refusal = derived.featureWarnings!.find(
+          (warning) => warning.kind === 'build-failed'
+        );
+        expect(refusal?.message).toContain(reason);
+        expect(refusal?.message).not.toContain('cannot chamfer threads');
+        expect(refusal?.kernelRefusal).toMatchObject({
+          family: 'thread',
+          code
+        });
+        expect(derived.bodyRepresentations[threaded.bodyId]).toBeUndefined();
+        expect(derived.bodyRepresentations[bodyId]!.consumed).toBe(false);
+      } finally {
+        mock.mockRestore();
+      }
+    }
+  );
+
   it.runIf(kernelHasThreads)(
-    'chamfers both ends of an M6 boss, or names the kernel that cannot',
+    'chamfers both ends of an M6 boss with the pinned kernel',
     async () => {
       const { document, bodyId, side } = await shank(3, 8);
       const plain = threadBody(document, {
@@ -482,13 +519,14 @@ describe('thread features on the exact kernel', () => {
       const plainBody = (await adapter.syncDocument(plain.document))
         .bodyRepresentations[plain.bodyId]!;
       const derived = await adapter.syncDocument(chamfered.document);
-      const refusal = derived.featureWarnings!.find(
-        (warning) => warning.kind === 'build-failed'
-      );
-      if (refusal) {
-        expect(refusal.message).toMatch(/cannot chamfer threads/);
-        return;
-      }
+      expect(
+        derived.featureWarnings!.filter(
+          (warning) => warning.kind === 'build-failed'
+        )
+      ).toEqual([]);
+      expect(derived.warnings).toHaveLength(2);
+      expect(derived.warnings[0]).toContain('overhangs 60°');
+      expect(derived.warnings[1]).toContain('crest flat is 0.125 mm');
       const body = derived.bodyRepresentations[chamfered.bodyId]!;
       // The two cones take about 1.9 mm³ off the plain M6 (the kernel's
       // own test integrates it); the ends never grow.

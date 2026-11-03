@@ -359,7 +359,7 @@ for (const stage of ['accept', 'document'] as const) {
 }
 
 for (const stage of ['accept', 'document', 'public share'] as const) {
-  test(`dismisses an invitation during ${stage} without blocking the current workspace`, async ({
+  test(`dismisses an invitation during ${stage} without blocking the current workspace`, { tag: stage === 'document' ? '@ci-smoke' : [] }, async ({
     page
   }) => {
     await stubApi(page, { collaborationRole: 'owner' });
