@@ -351,6 +351,35 @@ describe('hole radius handle', () => {
     radius: 10
   };
 
+  it.each([1, 2])(
+    'uses exact preview for a bore with %i chamfered mouths',
+    (mouths) => {
+      const cylinder = face('wall', 'cylinder', wall);
+      cylinder.hash = 1;
+      const cones = Array.from({ length: mouths }, (_, index) => {
+        const cone = face(`chamfer-${index}`, 'cone');
+        cone.hash = index + 2;
+        return cone;
+      });
+      const body = bodyWithFaces([cylinder, ...cones]);
+      body.topology!.edges = cones.map((cone, index) => ({
+        topologyId: `rim-${index}`,
+        hash: index,
+        points: [],
+        adjacentFaceHashes: [cylinder.hash, cone.hash]
+      }));
+      expect(borePreviewProfile(body, wall)).toBeNull();
+      // A separate chamfer elsewhere on the body does not disable the bore
+      // projection. Only an actual shared boundary selects exact preview.
+      body.topology!.edges = [];
+      expect(borePreviewProfile(body, wall)).toEqual({
+        ...wall,
+        rimStart: 0,
+        rimEnd: 0
+      });
+    }
+  );
+
   it('measures the round on each rim of the bore', () => {
     const rim = (z: number, minor: number) =>
       face(`rim-${z}`, 'torus', {
