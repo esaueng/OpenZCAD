@@ -75,6 +75,10 @@ budget. Policy child processes are bounded at 25 seconds while the routing
 probe keeps its five-second test deadline. Structured-output qualification
 checks every rollout flag combination in batches of 64, retaining the ordinary
 unit deadline.
+The envelope stress checks retain the 500,000-part join under the ordinary
+unit deadline. Real 5,000-record encryption/decryption and 3,000-record hashing
+have 30-second bulk-workload budgets, retaining every record and plaintext
+comparison. Rejection ceilings and resource-limit assertions are unchanged.
 The longer three-account historical-authority journey has a one-minute
 budget, retaining every fresh-browser and historical-version check.
 

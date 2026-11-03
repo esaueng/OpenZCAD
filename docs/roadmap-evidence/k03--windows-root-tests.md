@@ -22,3 +22,5 @@ Disposable history provisioning retains normal Git hooks, runs before timed
 workers, and has an owned-process supervisor with a two-minute bound. Cleanup
 retries Windows locks and retains preparation errors if cleanup also fails;
 the original CI acquisition and policy deadlines remain unchanged.
+Bulk-envelope qualification retains the 500,000-part join, 5,000-record
+round-trip and 3,000-record hash workload with every byte/count assertion.
