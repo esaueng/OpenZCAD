@@ -4,6 +4,7 @@
   "boolean-selection.spec.ts": 9,
   "bore-rest-validation.spec.ts": 60,
   "camera-clipping.spec.ts": 32,
+  "chamfer-fillet-corner.spec.ts": 18.2,
   "cloud-sync.spec.ts": 18,
   "collaboration-lease-recovery.spec.ts": 30,
   "collaboration.spec.ts": 13,
