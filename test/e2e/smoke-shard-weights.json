@@ -57,6 +57,7 @@
   "status-lifetime.spec.ts": 4.7,
   "stl-mesh-compat.spec.ts": 60,
   "text-authoring.spec.ts": 7,
+  "through-hole-chamfer-resize.spec.ts": 60,
   "tool-rail-pins.spec.ts": 6,
   "viewport.spec.ts": 12
 }

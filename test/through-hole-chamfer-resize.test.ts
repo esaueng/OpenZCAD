@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { parseProjectBackup } from '../apps/web/src/lib/projectBackup';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
+import type { ProjectDocument } from '@openzcad/shared';
 
 const BORE = 3;
 const HEIGHT = 10;
