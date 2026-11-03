@@ -25537,6 +25537,49 @@ export function App() {
     });
   }
 
+  function handleDeleteImportedFace(selection: TopologySelection) {
+    // A pick may demand lineage while a complete validated body is already
+    // displayed. The candidate rebuild re-resolves its face before healing.
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!base) return;
+    void import('./lib/featureDeletion')
+      .then(({ importedFaceDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the face again before deleting it.'
+          );
+          return;
+        }
+        const removal = importedFaceDeletion(current, selection);
+        void validatedFeature.runTransaction([removal.command], {
+          label: removal.command.label,
+          targets: [removal.target],
+          validatingMessage: 'Checking imported feature removal…',
+          successMessage: removal.successMessage,
+          onFailure: (message) => announce(message),
+          onSuccess: () => {
+            clearSelection();
+            announce(removal.successMessage, {
+              label: 'Undo',
+              run: handleUndo
+            });
+          }
+        });
+      })
+      .catch((error: unknown) =>
+        setStatus(
+          errorMessage(error, 'Could not remove this imported feature.')
+        )
+      );
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
@@ -27454,6 +27497,29 @@ export function App() {
               setActiveMeasurementId(null);
               setStatus('Measurement removed.');
             }
+            return;
+          }
+          // A STEP face is healed by a replayable direct edit. Its import
+          // history row is never deleted by a viewport face pick.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            features.some(
+              (feature) =>
+                feature.bodyId === selectedTopology.bodyId &&
+                feature.data.featureKind === 'imported-step'
+            )
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology);
             return;
           }
           // A drag or a commit still in flight owns the selection; Delete
