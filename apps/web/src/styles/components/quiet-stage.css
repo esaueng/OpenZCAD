@@ -1001,6 +1001,12 @@
   z-index: calc(var(--z-inspector-float) + 2);
 }
 
+/* Options open over the model, where a floating panel may already stand.
+   Keep the active popover clickable without hiding or moving that panel. */
+.command-bar-lane:has(.in-place-command-options[open]) {
+  z-index: var(--z-popover);
+}
+
 /* The list takes the conversation's place rather than floating over it: a
    slash, or words that name a command, typed with the stream up hide the
    stream, and the list stands on the bar where it stood, bar and list one

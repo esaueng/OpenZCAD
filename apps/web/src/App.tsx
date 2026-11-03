@@ -1686,10 +1686,10 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
-import { usePanelSuspension } from './hooks/usePanelSuspension';
+import { useCommandFold } from './hooks/useCommandFold';
 import { sketchObjectLabels } from './lib/sketch/objectLabels';
 import {
-  commandSuspendsPanels,
+  commandFoldsTools,
   loadPanelState,
   savePanelState,
   type PanelState,
@@ -1705,7 +1705,6 @@ import {
   loadPanelLayout,
   matchingPreset,
   notePanelUsed,
-  openPanel,
   panelStatus,
   pinPanel,
   presentPanel,
@@ -21454,15 +21453,14 @@ export function App() {
   }, [extrudeSessionKey]);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
-  // Creation commands take the stage; edits of an existing feature leave the
-  // panels open (see `commandSuspendsPanels`). Read the active command rather
-  // than inferring it from the selected feature.
+  // Creation commands fold More tools; model panels keep their layout.
+  // Read the active command rather than inferring it from the selected feature.
   // Plane selection and the entered sketch belong to one editing session.
   const sketchPanelSession = interaction.mode === 'sketch' || tool === 'sketch';
-  const panels = usePanelSuspension(panelState, {
+  const toolFold = useCommandFold(panelState, {
     workspaceMode: resolvedWorkspaceMode,
     sketching: sketchPanelSession,
-    editing: commandSuspendsPanels({
+    editing: commandFoldsTools({
       inPlace: { active: inPlace.active, editing: inPlaceEditing !== null },
       extrude: {
         active: extrudeSessionKey !== null,
@@ -21476,7 +21474,7 @@ export function App() {
         'active'
       : inPlace.sessionId !== null
         ? // Picks, options and preview updates keep the same release; even
-          // restarting the same command gets a fresh suspension.
+          // restarting the same command folds More tools again.
           `command:${inPlace.sessionId}`
         : extrudeSessionKey !== null
           ? `extrude:${extrudeSessionKey}:${extrudeCreateGeneration}`
@@ -28049,7 +28047,7 @@ export function App() {
   const panelGeometry = panelStage
     ? computePanelGeometry(panelLayout, panelStage)
     : null;
-  const panelsHidden = panels.panelsHidden || panelLayout.options.hidden;
+  const panelsHidden = panelLayout.options.hidden;
   const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
   /** Whether a panel is on screen right now, for its rail button. */
   const panelShowing = (id: PanelId) =>
@@ -28059,33 +28057,21 @@ export function App() {
       (panelGeometry.phone
         ? phonePanel === id
         : !panelGeometry.parked[id] || panelLayout.revealed === id));
-  /**
-   * A rail press. While a sketch or command has the panels stepped aside it is
-   * the user asking for them back: the pressed panel opens (or comes forward)
-   * and the suspension is released for the rest of that mode, instead of
-   * closing a panel nobody can see.
-   */
+  /** Panel controls work the same way during and between tool sessions. */
   const pressRailPanel = (id: PanelId) => {
-    const suspended = panels.panelsHidden;
     setPanelLayout((current) =>
-      suspended
-        ? openPanel(current, id, panelStageOrUndefined)
-        : togglePanel(current, id, panelStageOrUndefined)
+      togglePanel(current, id, panelStageOrUndefined)
     );
-    if (suspended) panels.release('panels');
   };
   /**
    * Brings History, Parameters or Revisions into view by name, as the
    * palette's feature and parameter results and the undo-floor notice do:
-   * unpinned if it was closed, forward if it was open. Asking for it by name
-   * mid-sketch or mid-command releases the suspension for the rest of that
-   * session, like a rail press.
+   * unpinned if it was closed, forward if it was open.
    */
   const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
     );
-    panels.release('panels');
   };
   const panelControls = (
     id: PanelId,
@@ -29211,16 +29197,16 @@ export function App() {
         onDrawerViewChange={(toolDrawerView) =>
           setPanelState((current) => ({ ...current, toolDrawerView }))
         }
-        moreOpen={panels.commandFoldOpen}
+        moreOpen={toolFold.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
           // keeps it open for the rest of the command.
-          const hidden = panels.foldHidden;
+          const hidden = toolFold.foldHidden;
           setPanelState((current) => ({
             ...current,
             commandFoldOpen: hidden || !current.commandFoldOpen
           }));
-          if (hidden) panels.release('fold');
+          if (hidden) toolFold.release();
         }}
       />
     );
