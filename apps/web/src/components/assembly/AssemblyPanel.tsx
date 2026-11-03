@@ -412,10 +412,16 @@ export function AssemblyPanel({
         </section>
 
         {studies ?? (
-          <AssemblyStudiesSection
-            assembly={document.assembly}
-            execute={execute}
-          />
+          <section className="assembly-section" aria-label="Motion studies">
+            <h3 className="assembly-section-title">
+              Motion studies
+              <span className="assembly-count">{set.studies.length}</span>
+            </h3>
+            <AssemblyStudiesSection
+              assembly={document.assembly}
+              execute={execute}
+            />
+          </section>
         )}
       </div>
       {menu ? (

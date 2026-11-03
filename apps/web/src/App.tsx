@@ -30653,6 +30653,8 @@ export function App() {
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
         assembleMode ? (
+          // The joint tool's card owns the right lane while it is open.
+          !assemblyJointToolOpen &&
           assemblyInspectorOpen(doc, {
             jointId: assemblySelectedJointId,
             componentId: assemblySelectedComponentId
