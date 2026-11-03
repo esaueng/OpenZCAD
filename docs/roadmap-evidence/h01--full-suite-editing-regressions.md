@@ -1,6 +1,7 @@
 ---
 row: H01
 ---
+
 Full-suite follow-up qualifies the inch recipe through 2-inch growth and
 millimetre STEP replay, with strict solids, closed display meshes, measured
 bounds and independent material witnesses. Mesh closure searches adjacent
@@ -38,3 +39,9 @@ holds final validation while pressing the retained handle, preserving the
 selection, validation-lock and no-flash assertions.
 Successive drags also run against a manually held analysis window; the test
 requires all four edits and their cumulative 5 mm rendered boundary.
+Section controls retain their viewport clamp while opening and while compact
+rails reflow; light and dark browser checks require the complete DXF action
+to remain directly clickable at four viewport sizes, including short landscape.
+Running commands consume context clicks on empty space as well as geometry,
+including where a rim stood before its fillet preview moved it. Multi-edge
+fillet coverage preserves both input picks across all three cases.

@@ -257,7 +257,12 @@ textarea {
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
-.rail-section-panel,
+/* Section placement owns translate while clamping the toolbox to the viewport.
+   Measuring a pop animation here would include its temporary displacement. */
+.rail-section-panel {
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
 .view-mode-views-panel {
   animation: oz-pop var(--dur-fast) var(--ease-out);
 }

@@ -26189,6 +26189,12 @@ export function App() {
     if (!doc) {
       return;
     }
+    // A running command owns both its geometry and empty viewport space.
+    // A preview can move an edge away from the pointer before right-click.
+    if (!modelingLocked && inPlaceRef.current.active) {
+      setContextMenu(null);
+      return;
+    }
     // View mode gets the viewport menu whatever was clicked: the selection
     // menu is entirely modeling actions, and an empty one would be worse than
     // the viewport controls someone reading a model actually wants.
@@ -26250,13 +26256,6 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    // A running in-place command owns the viewport: a right-click is
-    // consumed before it reaches the command's picks (it must neither add
-    // nor drop an edge or face), and opens no menu under the command.
-    if (inPlaceRef.current.active) {
-      setContextMenu(null);
-      return;
-    }
     if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
       setContextMenu(null);
       return;
@@ -29649,7 +29648,9 @@ export function App() {
                 ? []
                 : selectedEdges
             }
-            pickListEnabled={appSettings.experiments.directManipulation}
+            pickListEnabled={
+              appSettings.experiments.directManipulation && !inPlace.active
+            }
             frameRateOverlay={appSettings.experiments.frameRateOverlay}
             onCloseFrameRateOverlay={() =>
               handleAppSettingsChange({

@@ -183,57 +183,118 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await capture(page, testInfo, 'complete-tool-names');
     });
 
-    test('section controls clear both rails and short-screen rail buttons fit', async ({
-      page
-    }, testInfo) => {
-      await page.setViewportSize({ width: 320, height: 568 });
-      await openPart(page);
-      for (const size of [
-        { width: 320, height: 568 },
-        { width: 390, height: 844 },
-        { width: 844, height: 390 },
-        { width: 1440, height: 900 }
-      ]) {
-        await page.setViewportSize(size);
-        // Before clicking, so automatic scroll-into-view cannot conceal a
-        // rail that initially extends beyond the viewport.
-        for (const control of await page
-          .locator('.instrument-rail .rail-button')
-          .all()) {
-          await reachable(control);
+    test(
+      'section controls clear both rails and short-screen rail buttons fit',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 320, height: 568 });
+        await openPart(page);
+        for (const size of [
+          { width: 320, height: 568 },
+          { width: 390, height: 844 },
+          { width: 844, height: 390 },
+          { width: 1440, height: 900 }
+        ]) {
+          await page.setViewportSize(size);
+          // Before clicking, so automatic scroll-into-view cannot conceal a
+          // rail that initially extends beyond the viewport.
+          for (const control of await page
+            .locator('.instrument-rail .rail-button')
+            .all()) {
+            await reachable(control);
+          }
+          await page
+            .getByRole('button', { name: /^Section view — now: Off$/ })
+            .click();
+          const section = page.getByRole('group', {
+            name: 'Section view',
+            exact: true
+          });
+          await expect(section).toBeVisible();
+          const dxf = section.getByRole('button', {
+            name: 'Export the exact section as DXF'
+          });
+          await expect
+            .poll(() =>
+              dxf.evaluate((element) => {
+                const r = element.getBoundingClientRect();
+                return [0.15, 0.5, 0.85, 0.95].every((fraction) => {
+                  const hit = document.elementFromPoint(
+                    r.x + r.width * fraction,
+                    r.y + r.height / 2
+                  );
+                  return hit !== null && element.contains(hit);
+                });
+              })
+            )
+            .toBe(true)
+            .catch(async (error: unknown) => {
+              await testInfo.attach('section-placement.json', {
+                body: JSON.stringify(
+                  await section.evaluate((element) => ({
+                    viewport: { width: innerWidth, height: innerHeight },
+                    elements: [
+                      element,
+                      element.closest('.viewer-rail'),
+                      element.closest('.instrument-rail')
+                    ].map((item) => {
+                      if (!item) return null;
+                      const style = getComputedStyle(item);
+                      const bounds = item.getBoundingClientRect();
+                      return {
+                        className: item.getAttribute('class'),
+                        bounds: {
+                          x: bounds.x,
+                          y: bounds.y,
+                          width: bounds.width,
+                          height: bounds.height
+                        },
+                        translate: style.translate,
+                        transform: style.transform
+                      };
+                    })
+                  })),
+                  null,
+                  2
+                ),
+                contentType: 'application/json'
+              });
+              throw error;
+            });
+          await reachable(section.getByRole('switch', { name: 'Section cut' }));
+          await capture(page, testInfo, `section-${size.width}x${size.height}`);
+          // The switch ends the cut and keeps the panel; the button puts it away.
+          await section.getByRole('switch', { name: 'Section cut' }).click();
+          await page
+            .getByRole('button', { name: /^Section view — now: Off$/ })
+            .press('Enter');
+          await expect(section).toHaveCount(0);
         }
-        await page
-          .getByRole('button', { name: /^Section view — now: Off$/ })
-          .click();
+      }
+    );
+
+    test('animated section controls stay reachable on a short landscape screen', async ({
+      page
+    }) => {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await page.setViewportSize({ width: 844, height: 390 });
+      await openPart(page);
+      for (let opening = 0; opening < 3; opening += 1) {
+        const toggle = page.getByRole('button', {
+          name: /^Section view — now:/
+        });
+        await toggle.click();
         const section = page.getByRole('group', {
           name: 'Section view',
           exact: true
         });
-        await expect(section).toBeVisible();
-        const dxf = section.getByRole('button', {
-          name: 'Export the exact section as DXF'
-        });
-        await expect
-          .poll(() =>
-            dxf.evaluate((element) => {
-              const r = element.getBoundingClientRect();
-              return [0.15, 0.5, 0.85, 0.95].every((fraction) => {
-                const hit = document.elementFromPoint(
-                  r.x + r.width * fraction,
-                  r.y + r.height / 2
-                );
-                return hit !== null && element.contains(hit);
-              });
-            })
-          )
-          .toBe(true);
         await reachable(section.getByRole('switch', { name: 'Section cut' }));
-        await capture(page, testInfo, `section-${size.width}x${size.height}`);
-        // The switch ends the cut and keeps the panel; the button puts it away.
-        await section.getByRole('switch', { name: 'Section cut' }).click();
-        await page
-          .getByRole('button', { name: /^Section view — now: Off$/ })
-          .press('Enter');
+        await reachable(
+          section.getByRole('button', {
+            name: 'Export the exact section as DXF'
+          })
+        );
+        await toggle.press('Enter');
         await expect(section).toHaveCount(0);
       }
     });

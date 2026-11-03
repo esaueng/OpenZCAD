@@ -101,6 +101,7 @@ export function SectionToolbox({
   useLayoutEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
+    let frame: number | null = null;
     function place() {
       if (!panel) return;
       panel.style.translate = '';
@@ -112,25 +113,49 @@ export function SectionToolbox({
       );
       panel.style.translate = `${x - box.x}px ${y - box.y}px`;
     }
-    place();
-    const observer = new ResizeObserver(place);
+    function schedulePlacement() {
+      place();
+      // Resize callbacks can precede the parent's responsive positioning.
+      // Measure again after that layout settles, without a permanent loop.
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        place();
+      });
+    }
+    schedulePlacement();
+    const observer = new ResizeObserver(schedulePlacement);
     observer.observe(panel);
     // Dock changes move the anchor without changing the toolbox's own size.
     const stage = panel.closest('.viewer-area');
     if (stage) observer.observe(stage);
-    const dockObserver = new MutationObserver(place);
-    const workspace = panel.closest('.workspace');
-    if (workspace) {
-      dockObserver.observe(workspace, {
-        attributes: true,
-        attributeFilter: ['style']
-      });
+    // Compact rails can reflow inside an unchanged stage on a short screen.
+    for (const selector of ['.viewer-rail', '.instrument-rail']) {
+      const anchor = panel.closest(selector);
+      if (anchor) observer.observe(anchor);
     }
-    window.addEventListener('resize', place);
+    const dockObserver = new MutationObserver(schedulePlacement);
+    // Position and responsive CSS variables can change without resizing an
+    // ancestor. Observe the anchor chain, excluding our own placement style.
+    for (
+      let anchor = panel.parentElement;
+      anchor;
+      anchor = anchor.parentElement
+    ) {
+      dockObserver.observe(anchor, {
+        attributes: true,
+        attributeFilter: ['style', 'class']
+      });
+      if (anchor.classList.contains('workspace')) break;
+    }
+    window.addEventListener('resize', schedulePlacement);
+    window.addEventListener('scroll', schedulePlacement, true);
     return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
       observer.disconnect();
       dockObserver.disconnect();
-      window.removeEventListener('resize', place);
+      window.removeEventListener('resize', schedulePlacement);
+      window.removeEventListener('scroll', schedulePlacement, true);
     };
   }, []);
 
