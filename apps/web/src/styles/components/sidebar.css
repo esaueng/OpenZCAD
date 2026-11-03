@@ -842,8 +842,16 @@
 /* Value and actions share one cell: at rest the value, on hover, focus or
    selection the actions. Only opacity changes, so the actions stay where a
    pointer or a test expects them; the value never takes a click. */
+.history-timeline .feature-row-main {
+  /* The name is the row's identity: it keeps its length, up to most of the
+     row, and the value gives way first. */
+  flex: 1 0 auto;
+  max-width: 60%;
+}
+
 .history-row-tail {
   display: grid;
+  grid-template-columns: minmax(0, auto);
   flex: 0 1 auto;
   min-width: 0;
   justify-items: end;
@@ -857,8 +865,15 @@
     transform var(--dur-base) var(--ease-out);
 }
 
+/* No cap of its own: the value takes whatever the name leaves. The old
+   10rem cap was 130px at the app's root size and cut "⌀ 12 × 1.75 mm,
+   printable" beside a short name with room to spare. What still does not
+   fit is cut here, and the row's tooltip carries it whole. */
 .history-row-value {
-  max-width: 10rem;
+  /* A grid item's automatic minimum is its unwrapped text, which pushed a
+     long value out over the name instead of ending it in an ellipsis. */
+  min-width: 0;
+  max-width: 100%;
   padding-right: 4px;
   overflow: hidden;
   text-overflow: ellipsis;

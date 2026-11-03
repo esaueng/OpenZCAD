@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RemusKernel } from './remus-runtime';
 import {
   fuseUniformSolid,
+  solidMeshIsClosed,
   unifyUnionFaces,
   unifyUnionFacesChecked,
   unifyUnionFacesWithVerdict
@@ -51,6 +52,54 @@ afterEach(() => {
 });
 
 describe('the union gate on unifyFacesChecked', () => {
+  it('merges the coplanar walls of a cut plate and two added uprights', () => {
+    const kernel = new RemusKernel();
+    try {
+      const place = (solid: number, x: number, y: number, z: number) =>
+        kernel.transformSolid(
+          solid,
+          transformMatrix({ x, y, z }, { x: 0, y: 0, z: 0 })
+        );
+      const plate = kernel.makeBox(40, 40, 8);
+      const notch = kernel.makeBox(20, 20, 10);
+      place(notch, 20, 10, -1);
+      const base = kernel.cut(plate, notch);
+      const left = kernel.makeBox(20, 10, 30);
+      const right = kernel.makeBox(20, 10, 30);
+      place(left, 20, 0, 8);
+      place(right, 20, 30, 8);
+
+      // A cut wall and a primitive wall can represent the same outward plane
+      // with opposite surface normals and reversed flags. The production gate
+      // must merge them rather than publish an internal edge on the flat wall.
+      const solid = fuseUniformSolid(kernel, [base, left, right]);
+      const planes = Array.from(kernel.getSolidFaces(solid)).map(
+        (face) =>
+          JSON.parse(kernel.getAnalyticSurfaceParams(face)) as {
+            type: string;
+            normal: number[];
+            d: number;
+          }
+      );
+      for (const y of [10, 30]) {
+        expect(
+          planes.filter(
+            (plane) =>
+              plane.type === 'plane' &&
+              Math.abs(plane.normal[1]!) === 1 &&
+              Math.abs(plane.d / plane.normal[1]! - y) < 1e-9
+          )
+        ).toHaveLength(1);
+      }
+      expect(kernel.getSolidFaces(solid)).toHaveLength(14);
+      expect(kernel.volume(solid, 0.01)).toBeCloseTo(21_600, 7);
+      expect(kernel.validateSolid(solid)).toBe(0);
+      expect(solidMeshIsClosed(kernel, solid)).toBe(true);
+    } finally {
+      kernel.free();
+    }
+  });
+
   it('adopts an accepted unify from the report, validating nothing itself', () => {
     const kernel = new RemusKernel();
     const raw = overlappingBoxes(kernel);
@@ -242,9 +291,7 @@ describe('the union gate on unifyFacesChecked', () => {
     // keeps every merge and never re-validates to decide.
     expect(source.match(/kernel\.unifyFaces\(/g) ?? []).toHaveLength(1);
     const copyHeal = readFileSync(
-      fileURLToPath(
-        new URL('./boolean-result-validation.ts', import.meta.url)
-      ),
+      fileURLToPath(new URL('./boolean-result-validation.ts', import.meta.url)),
       'utf8'
     );
     expect(copyHeal).toContain('unifyFacesReport');

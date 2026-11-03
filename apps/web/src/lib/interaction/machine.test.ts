@@ -1062,7 +1062,7 @@ describe('toolCardFor', () => {
       interactionReducer(IDLE, { type: 'select-face', target: face() })
     );
     expect(faceCard?.title).toBe('Offset Face');
-    expect(faceCard?.hint).toContain('Space faces it head-on');
+    expect(faceCard?.hint).toContain('Space views it head-on');
     expect(faceCard?.actions?.map((action) => action.label)).toEqual([
       'Offset Face',
       'Sketch'
@@ -1116,7 +1116,7 @@ describe('toolCardFor', () => {
     );
     expect(referenced?.hint).not.toContain(UNSTABLE_FACE_OFFSET_REASON);
     expect(referenced?.badge).toBeUndefined();
-    expect(referenced?.hint).toContain('Space faces it head-on');
+    expect(referenced?.hint).toContain('Space views it head-on');
   });
 
   it('keeps sketch offered on a hash-only planar face and says how it will be placed', () => {
