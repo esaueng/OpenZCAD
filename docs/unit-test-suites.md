@@ -66,6 +66,11 @@ flows with real cryptography and use a 30-second integration default. Other
 unit tests retain their five-second default, and explicit per-case deadlines
 still take precedence. Runtime regressions check all three boundaries.
 Protocol, provenance and refusal assertions remain unchanged.
+The explicit approximate-boolean validation probe has a 30-second integration
+budget. Policy child processes are bounded at 25 seconds while the routing
+probe keeps its five-second test deadline. Structured-output qualification
+checks every rollout flag combination in batches of 64, retaining the ordinary
+unit deadline.
 The longer three-account historical-authority journey has a one-minute
 budget, retaining every fresh-browser and historical-version check.
 

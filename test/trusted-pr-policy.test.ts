@@ -46,7 +46,8 @@ describe('required validation gate', () => {
       ['scripts/test-direct-fleet.py'],
       {
         env: pythonEnvironment(),
-        encoding: 'utf8'
+        encoding: 'utf8',
+        timeout: 25_000
       }
     );
     expect(result.status, result.stderr).toBe(0);

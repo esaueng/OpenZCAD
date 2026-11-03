@@ -16,3 +16,5 @@ disjoint-box culling avoids unnecessary crossing arithmetic without changing
 the reference predicate, samples, outcome floors or default test deadline.
 Encrypted-project integration files use a bounded 30-second default; runtime
 regressions preserve ordinary five-second defaults and explicit deadlines.
+Structured-output qualification retains every rollout flag combination in
+64-variant batches under the unchanged ordinary unit deadline.
