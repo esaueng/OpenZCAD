@@ -305,7 +305,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'status messages',
       'errors',
       'warnings',
-      'diagnostics',
       'kernel diagnostic',
       'copy log',
       'download log'
