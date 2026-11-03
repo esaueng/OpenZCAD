@@ -693,7 +693,9 @@ import {
   deleteKeyRemovesFeature,
   resolveSelectionTopology,
   selectionFeature,
-  selectionSetFeature
+  selectionSetFeature,
+  isRemovableDetail,
+  selectedFeatureFaces
 } from './lib/selectionFeature';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import {
@@ -1684,10 +1686,10 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
-import { usePanelSuspension } from './hooks/usePanelSuspension';
+import { useCommandFold } from './hooks/useCommandFold';
 import { sketchObjectLabels } from './lib/sketch/objectLabels';
 import {
-  commandSuspendsPanels,
+  commandFoldsTools,
   loadPanelState,
   savePanelState,
   type PanelState,
@@ -1703,7 +1705,6 @@ import {
   loadPanelLayout,
   matchingPreset,
   notePanelUsed,
-  openPanel,
   panelStatus,
   pinPanel,
   presentPanel,
@@ -8214,7 +8215,31 @@ export function App() {
   // The focus faces are drawn as a selected face is, not with the accent
   // fill of a blend preview that does not exist yet.
   // A box sweep's faces draw the same way: several faces lit as one pick.
-  const focusFaces = historyFocus?.focus.faces ?? boxSelectedFaces ?? undefined;
+  const pickedDetailFaces = useMemo(() => {
+    if (
+      !doc ||
+      !selectedFeature ||
+      featureSelectionSource !== 'inferred' ||
+      tool !== null ||
+      !isRemovableDetail(selectedFeature) ||
+      (isOperationState(interaction) && interaction.phase !== 'armed')
+    )
+      return undefined;
+    const faces = selectedFeatureFaces(doc, representations, selectedFeature);
+    return faces.length ? faces : undefined;
+  }, [
+    doc,
+    selectedFeature,
+    featureSelectionSource,
+    tool,
+    interaction,
+    representations
+  ]);
+  const focusFaces =
+    historyFocus?.focus.faces ??
+    pickedDetailFaces ??
+    boxSelectedFaces ??
+    undefined;
 
   /**
    * The imported face whose own card (resize a hole, remove a blend) the
@@ -8443,7 +8468,12 @@ export function App() {
       return null;
     }
     return {
-      label: selectionSummary.label,
+      label:
+        selectedFeature &&
+        featureSelectionSource === 'inferred' &&
+        isRemovableDetail(selectedFeature)
+          ? textLabelSegments(selectedFeature.name)
+          : selectionSummary.label,
       // Several bodies are counted in the name; the verbs say what they
       // are for.
       ...(selectionSummary.detail && selectedBodyIds.length < 2
@@ -8462,6 +8492,8 @@ export function App() {
     historyFocus,
     boxSelectedFaces,
     selectionSummary,
+    selectedFeature,
+    featureSelectionSource,
     selectedBodyIds,
     calloutVerbsKey,
     calloutPickKey,
@@ -21421,15 +21453,14 @@ export function App() {
   }, [extrudeSessionKey]);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
-  // Creation commands take the stage; edits of an existing feature leave the
-  // panels open (see `commandSuspendsPanels`). Read the active command rather
-  // than inferring it from the selected feature.
+  // Creation commands fold More tools; model panels keep their layout.
+  // Read the active command rather than inferring it from the selected feature.
   // Plane selection and the entered sketch belong to one editing session.
   const sketchPanelSession = interaction.mode === 'sketch' || tool === 'sketch';
-  const panels = usePanelSuspension(panelState, {
+  const toolFold = useCommandFold(panelState, {
     workspaceMode: resolvedWorkspaceMode,
     sketching: sketchPanelSession,
-    editing: commandSuspendsPanels({
+    editing: commandFoldsTools({
       inPlace: { active: inPlace.active, editing: inPlaceEditing !== null },
       extrude: {
         active: extrudeSessionKey !== null,
@@ -21443,7 +21474,7 @@ export function App() {
         'active'
       : inPlace.sessionId !== null
         ? // Picks, options and preview updates keep the same release; even
-          // restarting the same command gets a fresh suspension.
+          // restarting the same command folds More tools again.
           `command:${inPlace.sessionId}`
         : extrudeSessionKey !== null
           ? `extrude:${extrudeSessionKey}:${extrudeCreateGeneration}`
@@ -25504,6 +25535,49 @@ export function App() {
     });
   }
 
+  function handleDeleteImportedFace(selection: TopologySelection) {
+    // A pick may demand lineage while a complete validated body is already
+    // displayed. The candidate rebuild re-resolves its face before healing.
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!base) return;
+    void import('./lib/featureDeletion')
+      .then(({ importedFaceDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the face again before deleting it.'
+          );
+          return;
+        }
+        const removal = importedFaceDeletion(current, selection);
+        void validatedFeature.runTransaction([removal.command], {
+          label: removal.command.label,
+          targets: [removal.target],
+          validatingMessage: 'Checking imported feature removal…',
+          successMessage: removal.successMessage,
+          onFailure: (message) => announce(message),
+          onSuccess: () => {
+            clearSelection();
+            announce(removal.successMessage, {
+              label: 'Undo',
+              run: handleUndo
+            });
+          }
+        });
+      })
+      .catch((error: unknown) =>
+        setStatus(
+          errorMessage(error, 'Could not remove this imported feature.')
+        )
+      );
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
@@ -25532,11 +25606,7 @@ export function App() {
     name: string,
     dependentCount: number
   ) {
-    if (
-      executeCommand(
-        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
-      )
-    ) {
+    const finish = () => {
       // A reopened modeling form outlives the selection (its tool is still
       // running), so it has to be closed with the feature it was editing;
       // so does an in-place edit of it.
@@ -25550,7 +25620,48 @@ export function App() {
         { label: 'Undo', run: handleUndo },
         { repeatsStatusAt: lastStatusAtRef.current }
       );
+    };
+    const manager = managerRef.current;
+    const base = manager?.document;
+    const feature = base && findFeature(base, featureId);
+    if (base && feature && isRemovableDetail(feature)) {
+      void import('./lib/featureDeletion')
+        .then(({ nativeFeatureDeletion }) => {
+          const current = manager.document;
+          if (
+            managerRef.current !== manager ||
+            current.projectId !== base.projectId ||
+            current.version !== base.version
+          ) {
+            setStatus(
+              'The model changed. Select the feature again before deleting it.'
+            );
+            return;
+          }
+          // A geometry-only echo may replace the document object while the
+          // module loads. Its project/revision still owns this deletion.
+          const removal = nativeFeatureDeletion(current, feature);
+          void validatedFeature.runTransaction([removal.command], {
+            label: `Delete ${name}`,
+            targets: [],
+            validateDerived: removal.validateDerived,
+            validatingMessage: `Checking removal of ${name}…`,
+            successMessage: deleteFeatureToastMessage(name, dependentCount),
+            onFailure: (message) => announce(message),
+            onSuccess: finish
+          });
+        })
+        .catch((error: unknown) =>
+          setStatus(errorMessage(error, 'Could not remove this feature.'))
+        );
+      return;
     }
+    if (
+      executeCommand(
+        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
+      )
+    )
+      finish();
   }
 
   function handleRenameFeature(featureId: FeatureId, name: string) {
@@ -27386,6 +27497,29 @@ export function App() {
             }
             return;
           }
+          // A STEP face is healed by a replayable direct edit. Its import
+          // history row is never deleted by a viewport face pick.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            features.some(
+              (feature) =>
+                feature.bodyId === selectedTopology.bodyId &&
+                feature.data.featureKind === 'imported-step'
+            )
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology);
+            return;
+          }
           // A drag or a commit still in flight owns the selection; Delete
           // waits for it rather than removing the feature under it.
           if (
@@ -27913,7 +28047,7 @@ export function App() {
   const panelGeometry = panelStage
     ? computePanelGeometry(panelLayout, panelStage)
     : null;
-  const panelsHidden = panels.panelsHidden || panelLayout.options.hidden;
+  const panelsHidden = panelLayout.options.hidden;
   const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
   /** Whether a panel is on screen right now, for its rail button. */
   const panelShowing = (id: PanelId) =>
@@ -27923,33 +28057,21 @@ export function App() {
       (panelGeometry.phone
         ? phonePanel === id
         : !panelGeometry.parked[id] || panelLayout.revealed === id));
-  /**
-   * A rail press. While a sketch or command has the panels stepped aside it is
-   * the user asking for them back: the pressed panel opens (or comes forward)
-   * and the suspension is released for the rest of that mode, instead of
-   * closing a panel nobody can see.
-   */
+  /** Panel controls work the same way during and between tool sessions. */
   const pressRailPanel = (id: PanelId) => {
-    const suspended = panels.panelsHidden;
     setPanelLayout((current) =>
-      suspended
-        ? openPanel(current, id, panelStageOrUndefined)
-        : togglePanel(current, id, panelStageOrUndefined)
+      togglePanel(current, id, panelStageOrUndefined)
     );
-    if (suspended) panels.release('panels');
   };
   /**
    * Brings History, Parameters or Revisions into view by name, as the
    * palette's feature and parameter results and the undo-floor notice do:
-   * unpinned if it was closed, forward if it was open. Asking for it by name
-   * mid-sketch or mid-command releases the suspension for the rest of that
-   * session, like a rail press.
+   * unpinned if it was closed, forward if it was open.
    */
   const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
     );
-    panels.release('panels');
   };
   const panelControls = (
     id: PanelId,
@@ -28486,7 +28608,7 @@ export function App() {
   // The readout at the head of the line already names the face.
   const faceSelectedHint = [
     railPick ? null : 'Face selected',
-    keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
+    keyHint(keymap, 'view-normal-to-face', 'views it head-on')
   ]
     .filter(Boolean)
     .join(' — ');
@@ -29075,16 +29197,16 @@ export function App() {
         onDrawerViewChange={(toolDrawerView) =>
           setPanelState((current) => ({ ...current, toolDrawerView }))
         }
-        moreOpen={panels.commandFoldOpen}
+        moreOpen={toolFold.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
           // keeps it open for the rest of the command.
-          const hidden = panels.foldHidden;
+          const hidden = toolFold.foldHidden;
           setPanelState((current) => ({
             ...current,
             commandFoldOpen: hidden || !current.commandFoldOpen
           }));
-          if (hidden) panels.release('fold');
+          if (hidden) toolFold.release();
         }}
       />
     );

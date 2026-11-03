@@ -47,6 +47,10 @@ it.
   - **Floating.** Pop-out floats the panel.
 - **Close remembers where the panel was** (dock side, column and index, or its
   floating rectangle). The rail button reopens it there.
+- **Tools preserve panels.** Selecting or switching a tool, including Sketch,
+  leaves open panels mounted in their current positions. Cancel and Done keep
+  that layout too. Closed panels and Hide all remain explicit user choices.
+  The More tools drawer can fold independently while a command is active.
 
 ### Docks and rails
 

@@ -457,7 +457,10 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
           targetBodyId: imported.bodyId,
           edgeHashes: verticalCornerEdges(edges, 'chamfer-on-import'),
           size: 3,
-          ids: createBodyFeatureIds()
+          ids: {
+            ...createBodyFeatureIds(),
+            featureId: toFeatureId('feat_parity_chamfer')
+          }
         })
       ]);
       return manager.document;
