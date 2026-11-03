@@ -221,6 +221,21 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(screen.getByRole('button', { name: 'Play Pivot' })).toBeDisabled();
   });
 
+  it('renames on double-click without closing the row the first click opened', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { rerender } = renderPanel(fixture);
+    const row = screen.getByRole('button', { name: /^Blade B/ });
+    fireEvent.click(row, { detail: 1 });
+    expect(getAssemblyRuntime().selectedComponentId).toBe('comp_b');
+    fireEvent.click(row, { detail: 2 });
+    fireEvent.doubleClick(row);
+    expect(getAssemblyRuntime().selectedComponentId).toBe('comp_b');
+    rerender();
+    expect(
+      screen.getByRole('textbox', { name: 'Rename Blade B' })
+    ).toBeInTheDocument();
+  });
+
   it('renames and removes from the row menu', () => {
     const fixture = scissorsManager({ components: true });
     const { commands, rerender } = renderPanel(fixture);

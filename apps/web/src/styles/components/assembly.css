@@ -384,7 +384,8 @@
 
 .assembly-row-action.assembly-row-pin {
   color: var(--color-text-dim);
-  opacity: 0;
+  /* Faint, not hidden: touch screens have no hover to reveal it. */
+  opacity: 0.45;
 }
 
 .assembly-row-line:hover .assembly-row-pin,

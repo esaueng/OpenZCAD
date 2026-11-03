@@ -308,11 +308,15 @@ function AssemblyLists({
                         type="button"
                         className="assembly-row-main"
                         aria-expanded={selected}
-                        onClick={() =>
+                        aria-controls={`assembly-details-${component.id}`}
+                        onClick={(event) => {
+                          // A double-click renames: its second click must
+                          // not close the row the first one opened.
+                          if (event.detail > 1) return;
                           assemblyRuntime.selectComponent(
                             selected ? null : component.id
-                          )
-                        }
+                          );
+                        }}
                         onDoubleClick={() =>
                           setRenaming({ kind: 'component', id: component.id })
                         }
@@ -468,12 +472,14 @@ function AssemblyLists({
                           type="button"
                           className="assembly-row-main"
                           aria-expanded={selected}
+                          aria-controls={`assembly-details-${joint.id}`}
                           title={JOINT_KIND_META[joint.kind].label}
-                          onClick={() =>
+                          onClick={(event) => {
+                            if (event.detail > 1) return;
                             assemblyRuntime.selectJoint(
                               selected ? null : joint.id
-                            )
-                          }
+                            );
+                          }}
                           onDoubleClick={() =>
                             setRenaming({ kind: 'joint', id: joint.id })
                           }

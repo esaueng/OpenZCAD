@@ -133,7 +133,11 @@ export function JointDetails({
     );
 
   return (
-    <div className="assembly-details" aria-label={`${joint.name} details`}>
+    <div
+      id={`assembly-details-${joint.id}`}
+      className="assembly-details"
+      aria-label={`${joint.name} details`}
+    >
       <p className="assembly-details-kind">
         {JOINT_KIND_META[joint.kind].label} ·{' '}
         {JOINT_KIND_META[joint.kind].hint.toLowerCase()}. Drag the moving part
@@ -385,7 +389,11 @@ export function ComponentDetails({
         ? `Moves with ${via ?? 'its joint'}. Drag it in the view to try.`
         : 'Not joined yet — press J to connect it to another part.';
   return (
-    <div className="assembly-details" aria-label={`${component.name} details`}>
+    <div
+      id={`assembly-details-${component.id}`}
+      className="assembly-details"
+      aria-label={`${component.name} details`}
+    >
       <p className="assembly-details-kind">{roleText}</p>
       {bodyName === null ? (
         <p className="assembly-banner" role="status">
