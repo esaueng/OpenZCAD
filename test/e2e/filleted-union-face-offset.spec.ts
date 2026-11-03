@@ -101,6 +101,7 @@ test(
       '30'
     );
     const featuresBeforeDrag = await page.locator('.feature-row').count();
+    expect(featuresBeforeDrag).toBeGreaterThan(0);
     const handle = await canvas.evaluate((element) => ({
       x: Number(element.dataset.e2eHandleX),
       y: Number(element.dataset.e2eHandleY),
@@ -118,9 +119,10 @@ test(
         box.y + handle.y + handle.dy * handle.scale * delta
       );
       await expect.poll(() => endX()).toBeCloseTo(30 + delta, 2);
-      await expect(canvas).toHaveAttribute(
-        'data-e2e-height-proxy-offset',
-        /.+/
+      // A resting exact check may already have replaced the viewport proxy.
+      // Geometry and document history are the contract for either preview.
+      await expect(page.locator('.feature-row')).toHaveCount(
+        featuresBeforeDrag
       );
     }
     // The proxy changes the displayed part without replaying history. Once
