@@ -78,6 +78,74 @@ export function resolveSelectionTopology(
   };
 }
 
+/** Only construction roles, never a body's last publisher, prove a detail. */
+function nativeDetailFeature(
+  document: ProjectDocument,
+  face: NonNullable<BodyRepresentation['topology']>['faces'][number],
+  faces: NonNullable<BodyRepresentation['topology']>['faces']
+): FeatureNode | null {
+  if (face.geometry?.featureType === 'blend') {
+    return editableFilletFeature(document, face, faces);
+  }
+  const reference = face.reference;
+  if (
+    !reference ||
+    faces.filter(
+      (candidate) =>
+        candidate.reference?.producingFeatureId ===
+          reference.producingFeatureId &&
+        candidate.reference.lineageName === reference.lineageName
+    ).length !== 1
+  )
+    return null;
+  const feature = listFeaturesInOrder(document).find(
+    (candidate) => candidate.featureId === reference.producingFeatureId
+  );
+  if (!feature || isFeatureSuppressed(feature)) return null;
+  return (feature.data.featureKind === 'hole' &&
+    /^hole\.face\.(bore|counterbore|shoulder|floor)$/.test(
+      reference.lineageName
+    )) ||
+    (feature.data.featureKind === 'chamfer' &&
+      reference.lineageName.startsWith('modifier.chamfer.face.band-between.') &&
+      reference.lineageName.length >
+        'modifier.chamfer.face.band-between.'.length)
+    ? feature
+    : null;
+}
+
+export function isRemovableDetail(feature: FeatureNode): boolean {
+  return ['hole', 'fillet', 'chamfer'].includes(feature.data.featureKind);
+}
+
+/** Every surviving face of the operation, including a multi-edge modifier. */
+export function selectedFeatureFaces(
+  document: ProjectDocument,
+  bodies: Record<string, BodyRepresentation>,
+  feature: FeatureNode
+): TopologySelection[] {
+  if (!isRemovableDetail(feature)) return [];
+  return Object.values(bodies).flatMap((body) =>
+    body.consumed
+      ? []
+      : (body.topology?.faces ?? []).flatMap((face) => {
+          if (face.reference?.producingFeatureId !== feature.featureId)
+            return [];
+          const pick: TopologySelection = {
+            bodyId: body.bodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash,
+            ...(face.reference ? { reference: face.reference } : {})
+          };
+          return selectionFeature(document, body, pick)?.featureId ===
+            feature.featureId
+            ? [pick]
+            : [];
+        })
+  );
+}
+
 /** A viewport identity may name its publisher without proving edit ownership. */
 export function selectionFeature(
   document: ProjectDocument,
@@ -98,6 +166,8 @@ export function selectionFeature(
   if (selection.kind === 'face') {
     const face = faces.find((candidate) => candidate === entry);
     if (!face) return null;
+    const detail = nativeDetailFeature(document, face, faces);
+    if (detail && !isFeatureSuppressed(detail)) return detail;
     if (face.geometry?.featureType === 'blend') {
       const feature = editableFilletFeature(document, face, faces);
       return feature && !isFeatureSuppressed(feature) ? feature : null;
@@ -122,13 +192,19 @@ export function selectionFeature(
       faces.filter((face) => face.hash === hash)
     );
     if (adjacent.some((candidates) => candidates.length !== 1)) return null;
-    const blends = adjacent
+    const details = adjacent
       .flat()
-      .filter((face) => face.geometry?.featureType === 'blend');
-    if (blends.length > 0) {
-      const owners = blends.map((face) =>
-        editableFilletFeature(document, face, faces)
-      );
+      .filter(
+        (face) =>
+          face.geometry?.featureType === 'blend' ||
+          face.reference?.lineageName.startsWith('hole.face.') ||
+          face.reference?.lineageName.startsWith(
+            'modifier.chamfer.face.band-between.'
+          )
+      )
+      .map((face) => nativeDetailFeature(document, face, faces));
+    if (details.length > 0) {
+      const owners = details;
       const owner = owners[0];
       return owner &&
         !isFeatureSuppressed(owner) &&

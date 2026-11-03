@@ -772,6 +772,11 @@ export interface FeatureUpdateInput {
 
 export interface FeatureDeleteInput {
   featureId: FeatureId;
+  /** Bypass a removed hole/edge modifier's result with its input body.
+   * Callers must exact-preflight all dependents; topology is never rebound.
+   * Omitted on legacy commands to preserve their replay semantics.
+   */
+  reconnectInput?: boolean;
 }
 
 export interface NodeRenameInput {
@@ -5337,6 +5342,37 @@ export function deleteFeature(
   }
 
   const removedNodeIds = new Set<string>([feature.id]);
+
+  if (input.reconnectInput) {
+    const data = feature.data;
+    if (
+      !feature.bodyId ||
+      (data.featureKind !== 'hole' &&
+        data.featureKind !== 'fillet' &&
+        data.featureKind !== 'chamfer')
+    ) {
+      throw new Error(
+        'Only a hole, fillet or chamfer can reconnect its input on removal.'
+      );
+    }
+    const after = listFeaturesInOrder(next).slice(
+      next.featureOrder.indexOf(feature.featureId) + 1
+    );
+    for (const dependent of after) {
+      const parameters = dependent.data;
+      if (
+        'targetBodyId' in parameters &&
+        parameters.targetBodyId === feature.bodyId
+      ) {
+        parameters.targetBodyId = data.targetBodyId;
+      }
+      if (parameters.featureKind === 'boolean') {
+        parameters.targetBodyIds = parameters.targetBodyIds.map((id) =>
+          id === feature.bodyId ? data.targetBodyId : id
+        );
+      }
+    }
+  }
 
   for (const body of listNodesByKind(next, 'body')) {
     if (body.featureId === feature.featureId) {

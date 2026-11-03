@@ -40,6 +40,7 @@
   "modeling.spec.ts": 136,
   "panel-suspension.spec.ts": 13,
   "parts-list-scroll.spec.ts": 9.7,
+  "picked-feature-delete.spec.ts": 45,
   "progressive-loading.spec.ts": 10,
   "reload-face-offset.spec.ts": 60,
   "save-state-history.spec.ts": 13,

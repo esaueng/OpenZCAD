@@ -2474,8 +2474,13 @@ function buildEdgeModifierFeature(
         resultCandidates: topologyCandidatesForSolid(kernel, modified),
         sourceLineage: storedTarget.lineage,
         generatedBlendFaces: new Set(
-          Array.from(kernel.getSolidFaces(modified)).filter((face) =>
-            isBlendFace(kernel, modified, face)
+          Array.from(kernel.getSolidFaces(modified)).filter(
+            (face) =>
+              // Chamfer bands are planes/cones, not tangent blend surfaces.
+              // The evolution publisher still requires two uniquely named
+              // source supports for every generated face it accepts.
+              data.featureKind === 'chamfer' ||
+              isBlendFace(kernel, modified, face)
           )
         )
       })
