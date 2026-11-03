@@ -119,7 +119,7 @@ async function addBox(page: Page) {
  * room relays and stores only envelopes, and each browser decrypts and
  * verifies what it adopts.
  */
-test('relays an encrypted edit between two browsers of the owner', async ({
+test('relays an encrypted edit between two browsers of the owner', { tag: '@ci-smoke' }, async ({
   page: _unused,
   browser
 }) => {

@@ -438,6 +438,53 @@ function raceCommitBatches(srv: Server, mode: 'fence' | 'constraint') {
 // --- Scenarios -------------------------------------------------------------
 
 describe('solo MLS groups', () => {
+  it.each([false, true])(
+    'rechecks an unknown own-device leaf without admitting it from a stale directory (observer throws: %s)',
+    async (observerThrows) => {
+      const srv = newServer();
+      const projectId = seedProject(srv);
+      const laptop = device(srv, owner, 'owner_laptop');
+      const desktop = device(srv, owner, 'owner_desktop');
+      await createProjectGroup(laptop.ctx, projectId);
+      await joinProjectGroup(desktop.ctx, projectId);
+      const recheck = vi.fn(async () => {
+        if (observerThrows) throw new Error('Account recheck unavailable');
+      });
+      // Model the directory snapshot before the sibling was certified.
+      const staleList = {
+        ...owner.list,
+        devices: owner.list.devices.filter((d) => d.deviceId === 'owner_laptop')
+      };
+      laptop.ctx = {
+        ...laptop.ctx,
+        account: { ...laptop.ctx.account, list: staleList },
+        onDeviceListChanged: recheck
+      };
+      await expect(
+        catchUpProjectGroup(laptop.ctx, projectId)
+      ).rejects.toMatchObject({
+        code: 'device-unknown'
+      });
+      expect(recheck).toHaveBeenCalled();
+      expect(
+        (
+          await laptop.ctx.sessions.status(
+            ref(owner, 'owner_laptop', projectId)
+          )
+        ).epoch
+      ).toBe(0);
+      // Only a replacement client with the verified complete list can catch up.
+      laptop.ctx = {
+        ...laptop.ctx,
+        account: { ...laptop.ctx.account, list: owner.list }
+      };
+      expect(await catchUpProjectGroup(laptop.ctx, projectId)).toEqual({
+        epoch: 1,
+        keyEpoch: 1
+      });
+    }
+  );
+
   it('discovers member lists once per authority publication and refreshes on the next operation', async () => {
     const srv = newServer();
     const projectId = seedProject(srv);

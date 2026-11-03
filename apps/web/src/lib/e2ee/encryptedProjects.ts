@@ -107,7 +107,10 @@ import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
 import type { ShareRemovalNotice } from './shareWorkStore';
 import { contactInvitationPeople, type InvitationContext } from './invitations';
 import { invitationStore } from './invitationStore';
-import { subscribeEncryptionState } from './encryptionStateEvents';
+import {
+  encryptionStateChanged,
+  subscribeEncryptionState
+} from './encryptionStateEvents';
 import { unlockedAccount } from './unlockedKeys';
 import { verifyShelfEntries } from './progressiveShelf';
 
@@ -301,6 +304,35 @@ async function openStore(
   requireCurrent();
   if (state.kind !== 'ready' || !state.account.unlocked) throw locked();
   const account = state.account;
+  let accountRecheck: Promise<void> | null = null;
+  const recheckAccountView = (): Promise<void> => {
+    if (accountRecheck) return accountRecheck;
+    const check = (async () => {
+      requireCurrent();
+      // Verify the latest signed list against this device's persisted pin.
+      // An unrecognized leaf alone never authorizes a new device.
+      const fresh = await loadEncryption(e2ee);
+      requireCurrent();
+      if (
+        fresh.kind !== 'ready' ||
+        fresh.account.unlocked !== account.unlocked ||
+        fresh.account.deviceStatus !== account.deviceStatus ||
+        fresh.account.generation !== account.generation ||
+        fresh.account.list.pin.sequence !== account.list.pin.sequence ||
+        fresh.account.list.pin.entryHash.some(
+          (byte, index) => byte !== account.list.pin.entryHash[index]
+        )
+      ) {
+        // Retire all captured clients, including the connected room codec.
+        // Its replacement opens and verifies the complete account view.
+        encryptionStateChanged(userId);
+      }
+    })();
+    accountRecheck = check.finally(() => {
+      accountRecheck = null;
+    });
+    return accountRecheck;
+  };
   const device =
     account.deviceStatus === 'certified' && account.device
       ? {
@@ -375,13 +407,10 @@ async function openStore(
         })
         .catch(() => notify());
     },
-    // A Commit refused because this account's devices changed elsewhere
-    // (#908 review): `account` is stale, so the next operation opens the
-    // store again on a freshly loaded account view, whose Commit carries
-    // the rotation a removal made due. The unlocked keys stay.
-    onDeviceListChanged: () => {
-      if (current()) invalidateAccountClients(userId, revision);
-    }
+    // A new sibling leaf or a refused Commit can expose a stale view.
+    // Reconnect only after rechecking account authority; unchanged or
+    // unverified lists never admit the leaf or cause a reconnect loop.
+    onDeviceListChanged: recheckAccountView
   };
   const readingBlobs = createEncryptedContentBlobs({
     groups,
