@@ -44,9 +44,11 @@ separation, rejoining, undo/redo, durable reload and a held drag through both
 directions. Every committed state exports STEP and is reimported to verify
 one body, the expected 16/19-face topology, the moved
 shoulder height and unchanged cap height. Warning counts and the actual
-approximation advisory are checked after reload. This coverage needs the
-normal paired kernel-package release and adoption; a local dev overlay alone
-does not update the frozen dependency.
+approximation advisory are checked after reload. Both package specifiers,
+the frozen lockfile and the checksum manifest adopt paired `2026.1.104` at
+`6b44ca58f16971b32a45c0721e17e4970fd8b0d7`, the merged commit of
+[Remus package refresh #1496](https://github.com/esaueng/remus/pull/1496).
+Its file tree is identical to the already-qualified package candidate.
 
 At kernel source `e4a67d16`, the normal paired WASM build and both packaged
 runtime suites pass. All three public browser regressions pass, as does a
@@ -54,7 +56,19 @@ separate browser reproduction using the original dimensions. Its committed
 and reloaded STEP exports are valid closed 19-face bodies with shoulder and
 cap planes at 24.1 and 28.5 mm. The final local operations suite passes
 3,677 tests with 27 skips; one nextest leaky-test report passes cleanly on an
-unchanged isolated rerun. Package adoption and app CI remain separate gates.
+unchanged isolated rerun. Exact-head kernel CI passes 9,663 native tests
+across both shards, both packaged runtime suites, size and version guards,
+repository policy and CodeQL. Source PR #1489 merged through its queue.
+
+Without a local source overlay, the frozen package passes the app build,
+typecheck, all 92 parity cases (one existing skip), and the three browser
+flows. The integrated native-union and quality/history regressions pass
+44 tests. Full root coverage reports 8,907 passed, seven failed and ten
+skipped; all seven failures reproduce on pristine main with its previous
+`2026.1.103` pair. Full web coverage reports 5,109 passed and one failed;
+the viewport-theme assertion also reproduces on pristine main. Assertions
+and protection gates are unchanged. App PR CI and deployment verification
+are separate from these local results.
 
 The lag investigation found expensive repeated numerical face integration,
 including attempts that exhausted the quadrature work cap before refusing.

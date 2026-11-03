@@ -212,7 +212,7 @@ export function journaledMove(
     payload = withQuality
       ? prepared?.moveJournaledWithQuality
         ? prepared.moveJournaledWithQuality(distance, 256)
-        : qualityKernel.moveFacesJournaledWithQuality!(
+        : qualityKernel.moveFacesJournaledWithQuality(
             solid,
             faces,
             distance,
