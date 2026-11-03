@@ -1,0 +1,801 @@
+/* ── Assemble workspace (AS01/AS02/AS06) ──
+   The Assembly panel on the left, its first-run card over the viewport, the
+   joint tool card and the joint/component Inspector in the right lane. Each
+   is a quiet-stage island: the surface fill, a thin border, one accent. ── */
+
+/* ── Islands over the viewport ───────────────────────────── */
+
+.assembly-panel-float {
+  position: absolute;
+  z-index: var(--z-inspector-float);
+  top: var(--stage-top);
+  left: var(--island-gap);
+  bottom: calc(var(--island-gap) * 2 + var(--readout-reserve, 0px));
+  width: min(272px, calc(100% - var(--island-gap) * 2));
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.assembly-first-run-float {
+  position: absolute;
+  z-index: var(--z-inspector-float);
+  top: 50%;
+  left: 50%;
+  width: min(380px, calc(100% - var(--island-gap) * 2));
+  max-height: calc(100% - var(--stage-top) - var(--island-gap) * 2);
+  transform: translate(-50%, -50%);
+  display: flex;
+}
+
+.assembly-panel,
+.assembly-first-run {
+  pointer-events: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-sm);
+}
+
+.assembly-panel {
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* ── First run ───────────────────────────────────────────── */
+
+.assembly-first-run {
+  width: 100%;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+
+.assembly-first-run-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+.assembly-first-run-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.assembly-first-run-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 30px;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border-radius: var(--radius-md);
+}
+
+.assembly-first-run-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.assembly-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  color: var(--color-text-subtle);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-pin:hover:not(:disabled) {
+  color: var(--color-text);
+}
+
+.assembly-pin.is-on {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+}
+
+.assembly-pin:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+/* ── Shared bits ─────────────────────────────────────────── */
+
+.assembly-muted {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+.assembly-note {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  line-height: var(--lh-normal);
+}
+
+.assembly-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.assembly-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.assembly-check input {
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.assembly-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.assembly-icon-button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.assembly-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.assembly-chip.is-ok {
+  color: var(--color-selected-text);
+  background: var(--color-accent-dim);
+}
+
+.assembly-chip.is-warning {
+  color: var(--color-warning);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.assembly-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--color-warning);
+  background: rgba(245, 158, 11, 0.1);
+  border-bottom: var(--border-thin);
+  font-size: var(--fs-xs);
+}
+
+.assembly-banner > span {
+  flex: 1 1 140px;
+  color: var(--color-text);
+}
+
+.assembly-notice {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+/* ── The Assembly panel ──────────────────────────────────── */
+
+.assembly-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
+  border-bottom: var(--border-thin);
+}
+
+.assembly-panel-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.assembly-panel-header .assembly-chip {
+  margin-right: auto;
+}
+
+.assembly-tool-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 26px;
+  padding: 0 var(--sp-2);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-tool-button:hover:not(:disabled) {
+  border-color: var(--color-accent-border);
+}
+
+.assembly-tool-button:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+.assembly-panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-1) 0 var(--sp-2);
+}
+
+.assembly-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-2) 0;
+}
+
+.assembly-section > .assembly-muted {
+  padding: 2px var(--sp-2) var(--sp-1);
+}
+
+.assembly-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 2px;
+  padding: 0 var(--sp-2);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.assembly-count {
+  color: var(--color-text-dim);
+  letter-spacing: 0;
+}
+
+.assembly-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.assembly-row {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: var(--radius-md);
+}
+
+.assembly-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.assembly-row.is-selected {
+  background: var(--color-selected-fill);
+}
+
+.assembly-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  color: var(--color-text);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assembly-row-main.is-static {
+  cursor: default;
+}
+
+.assembly-row.is-selected .assembly-row-main {
+  color: var(--color-selected-text);
+}
+
+.assembly-row-main:focus-visible,
+.assembly-row-action:focus-visible,
+.assembly-row-text-action:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.assembly-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assembly-row-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+}
+
+.assembly-row-pin {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+}
+
+.assembly-row-value {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.assembly-row-flag {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-warning);
+  font-size: var(--fs-mini);
+}
+
+.assembly-row.is-unsolved .assembly-row-icon {
+  color: var(--color-warning);
+}
+
+.assembly-row-action {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.assembly-row-action:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.assembly-row-action:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+.assembly-row-text-action {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  color: var(--color-accent);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-row-text-action:hover {
+  color: var(--color-accent-hi);
+}
+
+.assembly-name-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  box-sizing: border-box;
+  padding: 0 var(--sp-2);
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  font: inherit;
+}
+
+.assembly-name-field.assembly-title-field {
+  width: 100%;
+  min-height: 30px;
+  font-size: var(--fs-md);
+  border-color: var(--color-border);
+}
+
+.assembly-name-field.assembly-title-field:focus {
+  border-color: var(--color-accent-border);
+}
+
+/* ── Inspector ───────────────────────────────────────────── */
+
+.assembly-inspector .panel-title-row {
+  min-height: 24px;
+}
+
+.assembly-inspector-body {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+
+.assembly-kind-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.assembly-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 22px;
+  padding: 0 var(--sp-2);
+  color: var(--color-selected-text);
+  background: var(--color-accent-dim);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.assembly-kind-chip .assembly-row-icon {
+  color: inherit;
+}
+
+.assembly-inspector .assembly-banner {
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+.assembly-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.assembly-field-group .assembly-section-title {
+  padding: 0;
+}
+
+.assembly-dof {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.assembly-dof-label {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.assembly-slider {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.assembly-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.assembly-number input {
+  width: 64px;
+  min-height: 26px;
+  box-sizing: border-box;
+  padding: 0 var(--sp-2);
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.assembly-number input:focus {
+  border-color: var(--color-accent-border);
+  outline: none;
+}
+
+.assembly-unit {
+  min-width: 18px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.assembly-limit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.assembly-limit-range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.assembly-segmented {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  padding: 2px;
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.assembly-segment {
+  min-height: 24px;
+  padding: 0 var(--sp-1);
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.assembly-segment:hover:not(.is-active) {
+  color: var(--color-text);
+}
+
+.assembly-segment.is-active {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+  font-weight: var(--fw-medium);
+}
+
+.primary.assembly-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+}
+
+.assembly-facts {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+
+.assembly-facts dt {
+  color: var(--color-text-subtle);
+}
+
+.assembly-facts dd {
+  margin: 0;
+  color: var(--color-text);
+}
+
+/* ── Joint tool card ─────────────────────────────────────── */
+
+.assembly-joint-tool {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-sm);
+}
+
+.assembly-joint-tool-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.assembly-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.assembly-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.assembly-step.is-active {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-dim);
+}
+
+.assembly-step-index {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--color-text-muted);
+  border: var(--border-strong);
+  border-radius: 50%;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.assembly-step.is-active .assembly-step-index,
+.assembly-step.is-done .assembly-step-index {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.assembly-step-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.assembly-step-title {
+  font-weight: var(--fw-medium);
+}
+
+.assembly-kind-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-1);
+}
+
+.assembly-kind-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 34px;
+  padding: 0 var(--sp-2);
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.assembly-kind-option:hover:not(.is-active) {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.assembly-kind-option.is-active {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+  border-color: var(--color-accent-border);
+}
+
+.assembly-kind-option.is-active .assembly-row-icon {
+  color: inherit;
+}
+
+.assembly-kind-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assembly-kind-dof {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.assembly-kind-suggested {
+  position: absolute;
+  top: -8px;
+  right: 4px;
+  padding: 0 4px;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+  line-height: 14px;
+}
+
+.assembly-tool-row {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.assembly-tool-row > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.assembly-tool-limits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.assembly-tool-limits > summary {
+  cursor: pointer;
+  font-size: var(--fs-xs);
+}
+
+.assembly-tool-limits[open] > summary {
+  margin-bottom: var(--sp-2);
+}

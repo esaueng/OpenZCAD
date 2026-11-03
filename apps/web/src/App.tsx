@@ -174,6 +174,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
+  isAssemblyCommandKind,
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
@@ -1732,6 +1733,21 @@ import {
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
+import { AssemblyFirstRunCard } from './components/assembly/AssemblyFirstRunCard';
+import {
+  AssemblyInspector,
+  assemblyInspectorOpen
+} from './components/assembly/AssemblyInspector';
+import { AssemblyPanel } from './components/assembly/AssemblyPanel';
+import { JointToolCard } from './components/assembly/JointToolCard';
+import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
+import { AssemblyPlayer } from './components/assembly/AssemblyPlayer';
+import {
+  assembleKeyFor,
+  runAssembleKey,
+  useAssembleWorkspace
+} from './lib/assembly/assembleWorkspace';
+import { useAssemblyRuntime } from './lib/assembly/assemblyRuntime';
 
 const START_SCREEN_DEMOS =
   (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
@@ -3291,7 +3307,8 @@ export function App() {
         // The synced resume record predates the Draw workspace and other
         // devices validate it; a drawing session resumes in Build there.
         workspaceMode:
-          panelState.workspaceMode === 'drawing'
+          panelState.workspaceMode === 'drawing' ||
+          panelState.workspaceMode === 'assemble'
             ? 'build'
             : panelState.workspaceMode,
         panels: {
@@ -5384,6 +5401,11 @@ export function App() {
   const drawingModeDisabledReason = shareSession
     ? 'Drawings are not available on a shared link'
     : null;
+  // AS01: Assemble edits the document's assembly section, so whatever locks
+  // Build locks it too; a shared link carries no assembly to edit.
+  const assembleModeDisabledReason = shareSession
+    ? 'Assemblies are not available on a shared link'
+    : buildModeDisabledReason;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
     ? panelState.workspaceMode === 'view' || shareLinkViewOnly
       ? 'view'
@@ -5396,9 +5418,10 @@ export function App() {
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
+  const assembleMode = resolvedWorkspaceMode === 'assemble';
   const drawingModeRef = useRef(drawingMode);
   drawingModeRef.current = drawingMode;
-  // Ctrl+Shift+M steps View → Tweak → Build → Draw past whatever the project
+  // Ctrl+Shift+M steps View → Tweak → Build → Assemble → Draw past whatever the project
   // locks. The shortcut and the palette row that advertises it both read
   // this, so the row always names where the key goes.
   const workspaceModeLock = (mode: WorkspaceMode): string | null =>
@@ -5408,9 +5431,11 @@ export function App() {
         ? tweakModeDisabledReason
         : mode === 'drawing'
           ? drawingModeDisabledReason
-          : null;
+          : mode === 'assemble'
+            ? assembleModeDisabledReason
+            : null;
   const nextWorkspaceMode: WorkspaceMode | null =
-    [1, 2, 3]
+    [1, 2, 3, 4]
       .map(
         (step) =>
           WORKSPACE_MODE_ORDER[
@@ -5423,13 +5448,18 @@ export function App() {
   // live only for a parameter-only entry — the one that command would apply.
   // Computed at render from the manager's tracked kinds — unknown (pre-kind
   // histories) reads as unavailable, matching handleUndo and handleRedo.
-  // The Draw workspace undoes its own sheet edits only.
+  // The Draw workspace undoes its own sheet edits only, and Assemble its own
+  // assembly edits only.
   const undoAvailable = drawingMode
     ? (managerRef.current?.undoIsDrawingOnly ?? false)
-    : (managerRef.current?.canUndoIn(tweakMode) ?? false);
+    : assembleMode
+      ? (managerRef.current?.undoIsAssemblyOnly ?? false)
+      : (managerRef.current?.canUndoIn(tweakMode) ?? false);
   const redoAvailable = drawingMode
     ? (managerRef.current?.redoIsDrawingOnly ?? false)
-    : (managerRef.current?.canRedoIn(tweakMode) ?? false);
+    : assembleMode
+      ? (managerRef.current?.redoIsAssemblyOnly ?? false)
+      : (managerRef.current?.canRedoIn(tweakMode) ?? false);
   // Undo is spent, but only because older steps were dropped to keep the
   // history within its limits: the toolbar and palette say so rather than
   // "Nothing to undo". Dropping a step is not news while modeling — it only
@@ -5438,7 +5468,20 @@ export function App() {
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
-  const modelingLocked = viewMode || tweakMode || drawingMode;
+  const modelingLocked = viewMode || tweakMode || drawingMode || assembleMode;
+  // AS01: the Assemble workspace's runtime, commit handlers and playback.
+  // Every saved assembly change runs through `executeCommand`.
+  const assembleApp = {
+    document: doc,
+    execute: (command: AnyCommand) => executeCommand(command),
+    onStatus: (message: string) => setStatus(message)
+  };
+  useAssembleWorkspace(assembleMode, assembleApp);
+  const assemblySelectedJointId = useAssemblyRuntime((s) => s.selectedJointId);
+  const assemblySelectedComponentId = useAssemblyRuntime(
+    (s) => s.selectedComponentId
+  );
+  const assemblyJointToolOpen = useAssemblyRuntime((s) => s.jointTool !== null);
   // The activity log in the column layout: opened from the dock's button or
   // the toast; the panel itself is App's so both can reach it.
   const [activityLogOpen, setActivityLogOpen] = useState(false);
@@ -5499,13 +5542,22 @@ export function App() {
         ? 'Tweak mode adjusts parameters only — switch to Build to edit'
         : drawingMode
           ? 'Draw mode edits drawing sheets only — switch to Build to model'
-          : projectEditDisabledReason;
+          : assembleMode
+            ? 'Assemble mode edits the assembly only — switch to Build to model'
+            : projectEditDisabledReason;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
   // must not edit sheets either.
   const drawingEditDisabledReason =
-    !projectOpenElsewhere && (viewMode || tweakMode)
+    !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
+      ? editDisabledReason
+      : projectEditDisabledReason;
+  // AS01 assembly edits answer to the project's own locks in Assemble and
+  // Build, and to every other workspace's lock elsewhere, so an
+  // assembly-only undo cannot move parts from View, Tweak or Draw.
+  const assemblyEditDisabledReason =
+    !projectOpenElsewhere && !assembleMode
       ? editDisabledReason
       : projectEditDisabledReason;
   // The parameter guard: the same chain, except Tweak deliberately passes —
@@ -5519,7 +5571,9 @@ export function App() {
         ? // Draw edits sheets only; a parameter-only undo or redo would
           // otherwise change the model from there.
           'Draw mode edits drawing sheets only — switch to Tweak or Build to change parameters'
-        : projectEditDisabledReason;
+        : assembleMode
+          ? 'Assemble mode edits the assembly only — switch to Tweak or Build to change parameters'
+          : projectEditDisabledReason;
   const ownsOpenProject = Boolean(
     doc &&
     (doc.ownerUserId === session?.userId ||
@@ -5544,6 +5598,8 @@ export function App() {
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
   const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
   drawingEditDisabledReasonRef.current = drawingEditDisabledReason;
+  const assemblyEditDisabledReasonRef = useRef(assemblyEditDisabledReason);
+  assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
@@ -5601,11 +5657,31 @@ export function App() {
     return false;
   }
 
+  function ensureCanEditAssembly(action = 'edit this assembly'): boolean {
+    const reason = assemblyEditDisabledReasonRef.current;
+    if (!reason) {
+      return true;
+    }
+    setStatus(
+      projectOpenElsewhereRef.current
+        ? PROJECT_OPEN_ELSEWHERE_NOTICE
+        : `Cannot ${action}: ${reason}.`
+    );
+    return false;
+  }
+
   function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
     // A batch of drawing-sheet commands never touches the model, so it
     // passes in the Draw workspace on the project's own locks alone.
     if (commands.length > 0 && commands.every(isDrawingCommand)) {
       return ensureCanEditDrawings(action);
+    }
+    // Assembly commands move parts, never the model (AS01): Assemble's own.
+    if (
+      commands.length > 0 &&
+      commands.every((command) => isAssemblyCommandKind(command.kind))
+    ) {
+      return ensureCanEditAssembly(action);
     }
     const parametersOnly =
       commands.length > 0 &&
@@ -8837,7 +8913,8 @@ export function App() {
       if (
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
-        isObjectFolderCommandKind(command.kind)
+        isObjectFolderCommandKind(command.kind) ||
+        isAssemblyCommandKind(command.kind)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {
@@ -10603,7 +10680,12 @@ export function App() {
   function handleWorkspaceMode(mode: WorkspaceMode) {
     if (mode !== workspaceModeRef.current)
       trackUsage(mode === 'build' ? 'workflow_model' : 'workflow_setup');
-    if (mode === 'view' || mode === 'tweak' || mode === 'drawing') {
+    if (
+      mode === 'view' ||
+      mode === 'tweak' ||
+      mode === 'drawing' ||
+      mode === 'assemble'
+    ) {
       // The sheet covers the viewport, so nothing can be measured there, and
       // a measurement selected before would stay a hidden Delete target.
       if (mode === 'drawing') {
@@ -14232,8 +14314,11 @@ export function App() {
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
     const imageOnly = managerRef.current.undoIsReferenceImageOnly;
+    const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
+    } else if (assemblyOnly) {
+      if (!ensureCanEditAssembly('undo')) return;
     } else if (!parametersOnly && !ensureCanEdit('undo')) {
       return;
     }
@@ -14246,7 +14331,7 @@ export function App() {
     const undid = managerRef.current.canUndo;
     try {
       const next = managerRef.current.undo();
-      if (drawingOnly || folderOnly || imageOnly)
+      if (drawingOnly || folderOnly || imageOnly || assemblyOnly)
         geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
@@ -14295,8 +14380,11 @@ export function App() {
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
     const imageOnly = managerRef.current.redoIsReferenceImageOnly;
+    const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
+    } else if (assemblyOnly) {
+      if (!ensureCanEditAssembly('redo')) return;
     } else if (!parametersOnly && !ensureCanEdit('redo')) {
       return;
     }
@@ -14306,7 +14394,7 @@ export function App() {
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
-      if (drawingOnly || folderOnly || imageOnly)
+      if (drawingOnly || folderOnly || imageOnly || assemblyOnly)
         geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
@@ -27214,6 +27302,27 @@ export function App() {
         return;
       }
 
+      // AS01: Assemble's own keys (J, G, Space, Escape, Enter) come before
+      // the model's, which they shadow there.
+      if (assembleMode && !typing) {
+        const assembleKey = assembleKeyFor(
+          chord ? keymap.commandFor(chord, ['assemble'])?.id : undefined,
+          meta || event.altKey ? '' : event.key
+        );
+        const onControl =
+          target instanceof Element &&
+          target.closest('button, a, select, [role="menu"]') !== null;
+        if (
+          assembleKey &&
+          !(assembleKey === 'enter' && onControl) &&
+          !event.repeat &&
+          runAssembleKey(assembleApp, assembleKey)
+        ) {
+          event.preventDefault();
+          return;
+        }
+      }
+
       // The command the key means outside a sketch, if any. In a reading
       // workspace a tool key is still looked up, to say why it is refused.
       const resolvedModelCommand = chord
@@ -29364,6 +29473,7 @@ export function App() {
           buildModeDisabledReason={buildModeDisabledReason}
           tweakModeDisabledReason={tweakModeDisabledReason}
           drawingModeDisabledReason={drawingModeDisabledReason}
+          assembleModeDisabledReason={assembleModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
           onSaveAs={openSaveNameDialog}
@@ -29433,7 +29543,7 @@ export function App() {
         ) : null
       }
       sidebar={
-        viewMode || drawingMode ? null : tweakMode ? (
+        viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
             modelError={parameterModelError}
             parameters={exposedParameters}
@@ -30083,6 +30193,14 @@ export function App() {
                         : {})}
                     />
                   )}
+                  {viewMode && <AssemblyPlayer assembly={doc.assembly} />}
+                  {assembleMode && (
+                    <MotionStudyTimeline
+                      floating
+                      assembly={doc.assembly}
+                      execute={executeCommand}
+                    />
+                  )}
                   {measurementDock}
                 </>
               ) : inPlace.active ? (
@@ -30409,7 +30527,27 @@ export function App() {
         </ErrorBoundary>
       }
       panels={
-        !modelingLocked ? (
+        assembleMode ? (
+          <ErrorBoundary label="Assembly" resetKey={doc.projectId}>
+            {(doc.assembly?.components.length ?? 0) > 0 ? (
+              <div className="assembly-panel-float">
+                <AssemblyPanel
+                  document={doc}
+                  execute={assembleApp.execute}
+                  onStatus={assembleApp.onStatus}
+                />
+              </div>
+            ) : (
+              <div className="assembly-first-run-float">
+                <AssemblyFirstRunCard
+                  document={doc}
+                  execute={assembleApp.execute}
+                  onAnnounce={(message) => announce(message)}
+                />
+              </div>
+            )}
+          </ErrorBoundary>
+        ) : !modelingLocked ? (
           <PanelDock
             layout={panelLayout}
             hidden={panelsHidden}
@@ -30434,7 +30572,11 @@ export function App() {
       // takes the command row, as every in-place command's does, so here it
       // only holds the lane empty.
       command={
-        modelingLocked ? null : measurementDock ? (
+        assembleMode ? (
+          assemblyJointToolOpen ? (
+            <JointToolCard document={doc} />
+          ) : null
+        ) : modelingLocked ? null : measurementDock ? (
           measurementDock
         ) : contextualToolCard ? (
           hideSketchToolCard || calloutOperationModel ? null : (
@@ -30527,7 +30669,22 @@ export function App() {
       }
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
-        inspectorActive ? (
+        assembleMode ? (
+          // The joint tool's card owns the right lane while it is open.
+          !assemblyJointToolOpen &&
+          assemblyInspectorOpen(doc, {
+            jointId: assemblySelectedJointId,
+            componentId: assemblySelectedComponentId
+          }) ? (
+            <ErrorBoundary label="Inspector" resetKey={doc.projectId}>
+              <AssemblyInspector
+                document={doc}
+                execute={assembleApp.execute}
+                onStatus={assembleApp.onStatus}
+              />
+            </ErrorBoundary>
+          ) : null
+        ) : inspectorActive ? (
           <ErrorBoundary
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}

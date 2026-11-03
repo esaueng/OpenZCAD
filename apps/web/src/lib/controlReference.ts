@@ -382,6 +382,38 @@ export const KEYBOARD_CONTROL_GROUPS = [
     ]
   },
   {
+    id: 'assemble-mode',
+    title: 'Assemble mode',
+    description:
+      'These keys take over in the Assemble workspace. Dragging and playback never add history steps.',
+    items: [
+      {
+        id: 'assembly-joint',
+        ...bound('assembly-joint'),
+        action: 'Add a joint',
+        detail: 'Pick the part that moves, then the part it joins.'
+      },
+      {
+        id: 'assembly-ground',
+        ...bound('assembly-ground'),
+        action: 'Ground or unground the component',
+        detail: 'A grounded component stays put; joints move the rest.'
+      },
+      {
+        id: 'assembly-play',
+        ...bound('assembly-play'),
+        action: 'Play or pause the joint',
+        detail: 'Sweeps the selected joint through its limits, or a full turn.'
+      },
+      {
+        id: 'assembly-escape',
+        keys: ['Esc'],
+        action: 'Close the joint tool or stop playback',
+        detail: 'The parts return to their saved positions.'
+      }
+    ]
+  },
+  {
     id: 'forms-dialogs',
     title: 'Forms & dialogs',
     description: 'Confirm work and navigate temporary UI surfaces.',

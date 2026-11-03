@@ -6,6 +6,7 @@
   "ai-datum-geometry.spec.ts": 17,
   "ai-holder-lettering.spec.ts": 24,
   "all-edge-fillets.spec.ts": 46,
+  "assembly.spec.ts": 60,
   "blend-preview-commit-reuse.spec.ts": 6,
   "body-visibility-parameter.spec.ts": 10,
   "boolean-selection.spec.ts": 7,

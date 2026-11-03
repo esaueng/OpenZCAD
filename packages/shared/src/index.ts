@@ -14,6 +14,8 @@ export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
+export * from './assembly';
+export * from './assembly-kinematics';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
@@ -24,6 +26,7 @@ import type {
 import type { BoundaryProvenance } from './sketch-boundary-provenance';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
+import type { AssemblySet } from './assembly';
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
@@ -212,7 +215,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v53 adds modeled screw threads (`featureKind: 'thread'`) on a body's
 // cylindrical face. An older client has no builder for the kind and would
 // drop the thread on rebuild, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 53 as const;
+// v54 adds AS01/AS02 assemblies (`assembly`): components placed from bodies,
+// grounding, joints with values and limits, saved positions and motion
+// studies. An older client would drop the section on its next save, so it
+// must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 54 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3471,6 +3478,12 @@ export interface ProjectDocument {
    * lies where, never its pixels. Absent means the project has none.
    */
   referenceImages?: ReferenceImageSet;
+  /**
+   * AS01/AS02 assembly (schema v54): components, grounding, joints, saved
+   * positions and motion studies. Never read by a rebuild. Absent means the
+   * project has no assembly.
+   */
+  assembly?: AssemblySet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {

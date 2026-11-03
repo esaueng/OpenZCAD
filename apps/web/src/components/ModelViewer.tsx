@@ -392,6 +392,9 @@ import {
   type DatumAxisRig,
   type DatumAxisRigInput
 } from './viewer/datumAxisRig';
+import { AssemblyViewport } from './viewer/assemblyViewport';
+import type { AssemblyViewModel } from '../lib/assembly/assemblyView';
+import { useAssemblyRuntime } from '../lib/assembly/assemblyRuntime';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import {
@@ -1342,6 +1345,13 @@ export interface ModelViewerProps {
     y: number,
     selection: TopologySelection | null
   ): void;
+  /**
+   * The Assemble workspace's view (AS02): component bodies drawn at their
+   * solved poses, the rest dimmed, joint glyphs, and the primary button
+   * taken over for dragging components and picking joint frames. Null (or
+   * absent) is the ordinary Build viewport with every body as modelled.
+   */
+  assemblyView?: AssemblyViewModel | null;
 }
 
 /**
@@ -1783,6 +1793,11 @@ const SELECTED_FACE_HIDDEN_OPACITY =
 /** Stable default, so an absent prop does not rerun the bodies pass. */
 const NO_FOCUS_FACES: readonly TopologySelection[] = [];
 /**
+ * Face opacity of a body Assemble shows only as context (not a component),
+ * on top of its own opacity and X-ray.
+ */
+const ASSEMBLY_DIMMED_OPACITY = 0.25;
+/**
  * Scratch vector for the snap projectors. They run once per candidate — every
  * edge endpoint and face centre of every other body — on each frame of a move
  * drag, and each call used to allocate.
@@ -2203,7 +2218,8 @@ export function ModelViewer({
   onMovePreviewChange,
   moveValuesSetterRef,
   viewportImageRef,
-  onContextMenu
+  onContextMenu,
+  assemblyView = null
 }: ModelViewerProps) {
   if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
   const drawingBodiesRef = useRef<
@@ -2216,6 +2232,24 @@ export function ModelViewer({
   }, [suppliedBodies]);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
+  /** The Assemble workspace's posing, glyphs and drags (AS02). */
+  const assemblyViewportRef = useRef<AssemblyViewport | null>(null);
+  /**
+   * Bodies Assemble dims: the live bodies that are not components. A string
+   * so the bodies pass re-runs when the set changes, not on every playback
+   * frame that hands over a new view model.
+   */
+  const assemblyDimmedKey = assemblyView
+    ? assemblyView.otherBodyIds.join('\n')
+    : null;
+  /** The body of the component Assemble has selected, drawn as selected. */
+  const assemblySelectedComponentId = useAssemblyRuntime(
+    (s) => s.selectedComponentId
+  );
+  const assemblySelectedBodyId =
+    assemblyView && assemblySelectedComponentId
+      ? (assemblyView.bodyByComponent.get(assemblySelectedComponentId) ?? null)
+      : null;
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
@@ -3600,6 +3634,38 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    // Assemble (AS02) takes the primary button while its view is shown. Its
+    // own picker ignores the selection filter: a joint frame needs the exact
+    // face or edge under the pointer whatever the filter says, and sketches
+    // and regions are never assembly picks.
+    const assemblyViewport = new AssemblyViewport({
+      host,
+      canvas: renderer.domElement,
+      scene,
+      objectsByBodyId,
+      picker: new PickService({
+        domElement: renderer.domElement,
+        camera: () => cameraRig.activeCamera,
+        regionGroup: new THREE.Group(),
+        sketchGroup: new THREE.Group(),
+        bodyGroup,
+        filter: () => 'any',
+        selectThrough: () => xrayRef.current,
+        clippingPlane: () =>
+          sectionViewRef.current
+            ? sectionClippingPlane(sectionViewRef.current)
+            : null
+      }),
+      camera: () => cameraRig.activeCamera,
+      bodies: () => bodiesRef.current,
+      worldPerPixelAt: (point) => worldPerPixelAt(point),
+      resolution: () => context.fatLineResolution(),
+      requestRender,
+      refreshShadowMap,
+      clearHover: () => selection.applyHover(null),
+      hud
+    });
+    assemblyViewportRef.current = assemblyViewport;
     let offsetBodyProxy: {
       preview: CylinderProfilePreview;
       pending: number | null;
@@ -10213,7 +10279,14 @@ export function ModelViewer({
           rightClickGesture.markDragged(event.pointerId);
         }
         if (
-          rightClickGesture.end(event.pointerId, event.clientX, event.clientY)
+          rightClickGesture.end(
+            event.pointerId,
+            event.clientX,
+            event.clientY
+          ) &&
+          // Build's pick list and context menu act on topology; Assemble
+          // has neither.
+          !assemblyViewport.active
         ) {
           if (!event.shiftKey && showTopologyPickList(event, true, true)) {
             return;
@@ -10916,6 +10989,7 @@ export function ModelViewer({
         pointerType &&
         pointerType !== 'mouse' &&
         !sketchModeRef.current &&
+        !assemblyViewport.active &&
         showTopologyPickList(event, true, true)
       ) {
         event.stopPropagation();
@@ -11134,6 +11208,7 @@ export function ModelViewer({
           moveGizmoWorldScale(worldPerPixelAt(entry.start)) * 0.55
         );
       }
+      assemblyViewport.beforeRender();
       if (moveGizmoGroup.children.length > 0) {
         const baseScale = Math.max(
           (moveGizmoGroup.userData.baseGizmoScale as number | undefined) ?? 1,
@@ -11644,6 +11719,8 @@ export function ModelViewer({
       offsetGhostClearRef.current = null;
       offsetGhostClipRef.current = null;
       moveGizmoHudRef.current = null;
+      assemblyViewport.dispose();
+      assemblyViewportRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
       }
@@ -11843,6 +11920,11 @@ export function ModelViewer({
         selectedEdges.length > 0 ||
         focusFaces.length > 0 ||
         (focusGhostBodies?.length ?? 0) > 0);
+    // Assemble draws the bodies that are not components faint, so the parts
+    // being jointed read first.
+    const assemblyDimmed = new Set(
+      assemblyDimmedKey ? assemblyDimmedKey.split('\n') : []
+    );
     if (bodiesChanged) mark('viewer.bodies:begin');
     if (renderChanged) {
       context.moveCopyPreview.clear();
@@ -11991,12 +12073,17 @@ export function ModelViewer({
           selectedTopology.bodyId === body.bodyId) ||
         selectedEdges.some((edge) => edge.bodyId === body.bodyId);
       const isSelected =
-        selectedBodyIds.includes(body.bodyId) &&
-        !(selectionRecedes && partPicked);
+        (selectedBodyIds.includes(body.bodyId) &&
+          !(selectionRecedes && partPicked)) ||
+        body.bodyId === assemblySelectedBodyId;
 
       // X-ray scales every body's own opacity, so a body already made
       // translucent by its appearance stays the fainter of the two.
-      const faceOpacity = (body.opacity ?? 1) * xrayFactor;
+      const dimmedForAssembly = assemblyDimmed.has(body.bodyId);
+      const faceOpacity =
+        (body.opacity ?? 1) *
+        xrayFactor *
+        (dimmedForAssembly ? ASSEMBLY_DIMMED_OPACITY : 1);
       forEachMesh(object, (mesh) => {
         if (bodyChanged || mesh.userData.appliedOpacity !== faceOpacity) {
           updateBodyMaterialOpacity(mesh.material, faceOpacity);
@@ -12009,7 +12096,7 @@ export function ModelViewer({
         // selection changes.
         contextBodyColor(
           body.color,
-          !selectionRecedes || isSelected,
+          !dimmedForAssembly && (!selectionRecedes || isSelected),
           mesh.material.color
         );
         if (bodiesChanged) {
@@ -12656,8 +12743,17 @@ export function ModelViewer({
     sketchMode,
     units,
     xrayFactor,
-    pickLabel
+    pickLabel,
+    assemblyDimmedKey,
+    assemblySelectedBodyId
   ]);
+
+  // Assemble poses component bodies by matrix and draws the joint glyphs.
+  // Declared after the bodies pass so a body object it just replaced is
+  // posed in the same commit; playback frames land here alone.
+  useEffect(() => {
+    assemblyViewportRef.current?.setView(assemblyView);
+  }, [assemblyView, bodies]);
 
   useEffect(() => {
     const context = contextRef.current;

@@ -15,12 +15,17 @@ import { TOOL_GROUPS, TOOL_META, type ToolId } from './tools';
  * - `build`: outside a sketch while modeling is unlocked (the tools).
  * - `view`: outside a sketch while modeling is locked (Measure).
  * - `sketch`: inside a sketch session, which takes the single keys over.
+ * - `assemble`: the Assemble workspace (AS01). It is searched before `model`
+ *   there, so its keys take precedence over the view keys they share (G is
+ *   Ground instead of the grid, Space plays the selected joint), and it
+ *   never holds with `build`, `view` or a sketch.
  *
  * `build` and `view` never hold at once, so M can be Move in one and Measure
  * in the other; a sketch hands its keys back on exit, so C can be Cylinder
  * and Circle.
  */
-export type KeymapContext = 'global' | 'model' | 'build' | 'view' | 'sketch';
+export type KeymapContext =
+  'global' | 'model' | 'build' | 'view' | 'sketch' | 'assemble';
 
 export type KeymapGroupId =
   | 'workspace'
@@ -28,7 +33,8 @@ export type KeymapGroupId =
   | 'selection-editing'
   | 'view-mode'
   | 'modeling-tools'
-  | 'sketch-mode';
+  | 'sketch-mode'
+  | 'assemble-mode';
 
 export interface KeymapCommand {
   /** Shared with the command bar's row for the same command, where it has one. */
@@ -45,7 +51,8 @@ export const KEYMAP_GROUPS: readonly { id: KeymapGroupId; title: string }[] = [
   { id: 'selection-editing', title: 'Selection' },
   { id: 'view-mode', title: 'View mode' },
   { id: 'modeling-tools', title: 'Modeling tools' },
-  { id: 'sketch-mode', title: 'Sketch mode' }
+  { id: 'sketch-mode', title: 'Sketch mode' },
+  { id: 'assemble-mode', title: 'Assemble mode' }
 ];
 
 const command = (
@@ -163,7 +170,22 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   command('sketch-text', 'Text', 'sketch-mode', 'sketch', 'T'),
   // Pressed again on its tool, it steps between linked and unlinked.
   command('sketch-project', 'Project edges', 'sketch-mode', 'sketch', 'U'),
-  command('sketch-extrude', 'Extrude the sketch', 'sketch-mode', 'sketch', 'E')
+  command('sketch-extrude', 'Extrude the sketch', 'sketch-mode', 'sketch', 'E'),
+  command('assembly-joint', 'Add a joint', 'assemble-mode', 'assemble', 'J'),
+  command(
+    'assembly-ground',
+    'Ground or unground the component',
+    'assemble-mode',
+    'assemble',
+    'G'
+  ),
+  command(
+    'assembly-play',
+    'Play or pause the joint',
+    'assemble-mode',
+    'assemble',
+    'Space'
+  )
 ];
 
 export function toolCommandId(tool: ToolId): string {
@@ -186,6 +208,9 @@ export function keymapCommand(id: string): KeymapCommand | undefined {
 export function contextsOverlap(a: KeymapContext, b: KeymapContext): boolean {
   if (a === b || a === 'global' || b === 'global') return true;
   if (a === 'sketch' || b === 'sketch') return false;
+  // Assemble's keys are searched first in their workspace and shadow the
+  // model's there, so they never refuse each other.
+  if (a === 'assemble' || b === 'assemble') return false;
   // model, build and view: only build and view exclude each other.
   return !((a === 'build' && b === 'view') || (a === 'view' && b === 'build'));
 }

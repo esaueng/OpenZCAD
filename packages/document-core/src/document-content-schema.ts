@@ -23,6 +23,10 @@ export function assertObjectFolderSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 34, 'Objects folders');
 }
 
+export function assertAssemblySchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 54, 'Assemblies');
+}
+
 export function assertSketchObjectContentSchema(
   data: SketchObjectData,
   version: unknown,
@@ -75,6 +79,11 @@ export function assertDocumentContentCommandSchema(
       command.kind === 'objectFolder.move'
     )
       assertObjectFolderSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('assembly.')
+    )
+      assertAssemblySchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     switch (command.kind) {
       case 'sketch.add':
@@ -104,6 +113,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertObjectFolderSchema(document.schemaVersion);
+  if (document.assembly !== undefined)
+    assertAssemblySchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'assembly' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertAssemblySchema(document.schemaVersion);
   for (const node of documentNodesWithHistory(document))
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(

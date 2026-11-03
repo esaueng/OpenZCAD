@@ -99,7 +99,10 @@ describe('keymap registry', () => {
       'sketch-spline': 'S',
       'sketch-text': 'T',
       'sketch-project': 'U',
-      'sketch-extrude': 'E'
+      'sketch-extrude': 'E',
+      'assembly-joint': 'J',
+      'assembly-ground': 'G',
+      'assembly-play': 'Space'
     });
   });
 

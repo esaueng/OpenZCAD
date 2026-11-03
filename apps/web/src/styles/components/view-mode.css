@@ -8,7 +8,7 @@
 /* Docked at the left of the bar, between the brand and the project name:
    the workspace you are in reads before the document you are in it with.
 
-   Four equal segments and one tinted thumb that slides to the segment you
+   Five equal segments and one tinted thumb that slides to the segment you
    chose. The thumb has no outline: it is the same selected fill as the
    armed tool and the switched-on rail buttons, set in by the island's
    padding so all three read as one kind of selection. */
@@ -17,7 +17,7 @@
   position: relative;
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   isolation: isolate;
 }
 
@@ -29,8 +29,12 @@
   --mode-switch-index: 2;
 }
 
-.mode-switch[data-active='drawing'] {
+.mode-switch[data-active='assemble'] {
   --mode-switch-index: 3;
+}
+
+.mode-switch[data-active='drawing'] {
+  --mode-switch-index: 4;
 }
 
 /* The thumb. Sized to one segment and moved by whole segments, so it never
@@ -43,7 +47,7 @@
   z-index: -1;
   inset: var(--mode-switch-inset, 0) auto var(--mode-switch-inset, 0)
     var(--mode-switch-inset, 0);
-  width: calc((100% - var(--mode-switch-inset, 0px) * 2) / 4);
+  width: calc((100% - var(--mode-switch-inset, 0px) * 2) / 5);
   background: var(--color-selected-fill);
   border-radius: var(--radius-md);
   transform: translateX(calc(var(--mode-switch-index) * 100%));
