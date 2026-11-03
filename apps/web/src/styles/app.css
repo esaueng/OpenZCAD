@@ -35,6 +35,8 @@
 @import './components/activity-pill.css';
 @import './components/workspace-column.css';
 @import './components/drawing.css';
+/* AS01/AS02 Assemble workspace: first-run card, panel, inspector, joint tool. */
+@import './components/assembly.css';
 /* AS07 motion studies: the Assembly panel's list, the timeline, the player. */
 @import './components/motion-study.css';
 /* View mode subtracts from the layouts every file above establishes. */
