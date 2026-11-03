@@ -180,7 +180,7 @@ describe('Move gizmo card copy (M10)', () => {
     // Nothing to move yet: a plain Move cannot apply.
     expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
     fireEvent.click(
-      screen.getByRole('checkbox', { name: 'Copy (keep the original)' })
+      screen.getByRole('checkbox', { name: 'Keep original' })
     );
     expect(onCopy).toHaveBeenCalledWith(true);
     rerender(

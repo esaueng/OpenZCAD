@@ -1211,11 +1211,8 @@ export function modelPanel(page: Page, title: PanelTitle) {
 }
 
 /**
- * A sketch or feature command takes the stage: every model panel steps aside
- * while it lasts, whatever the suite seeded. A spec that reads a panel from
- * inside a command asks for it the way a user would — its rail button —
- * which brings the panels back for the rest of that session. A no-op when
- * the panel already shows.
+ * Requests a panel through its rail button if it is closed, parked or hidden.
+ * Tool sessions preserve panel visibility, so an already shown panel is a no-op.
  */
 export async function revealModelPanel(
   page: Page,

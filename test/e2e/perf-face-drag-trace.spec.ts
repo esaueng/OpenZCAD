@@ -1,3 +1,5 @@
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import { longFilletedUnion } from '../support/filleted-union';
 import {
   appendFileSync,
   mkdirSync,
@@ -420,6 +422,25 @@ function record(
 }
 
 test.setTimeout(Number(process.env.OZ_FACE_DRAG_TIMEOUT_MS ?? 600_000));
+
+test('traces a long native history face drag', async ({ page }) => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const { document } = await longFilletedUnion(adapter);
+    await startPage(page, false);
+    await openDocument(page, document, 180_000);
+    const { canvas, handle } = await armPlanarFace(page, { x: 1, y: 0, z: 0 });
+    const summary = record(
+      'public filleted union history',
+      { features: document.featureOrder.length },
+      await traceDrag(page, canvas, handle, 9)
+    );
+    expect(summary.releaseToFrameMs).not.toBeNull();
+    expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+  } finally {
+    adapter.dispose();
+  }
+});
 
 test('traces a supplied project face drag', async ({ page }) => {
   const projectPath = process.env.OZ_FACE_DRAG_PROJECT;

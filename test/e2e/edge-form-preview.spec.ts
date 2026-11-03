@@ -139,10 +139,10 @@ test('a new fillet takes a second edge clicked on its preview', async ({
   const second = await locateEdge(page, { exclude: [first.topologyId] });
   await page.mouse.click(second.x, second.y);
   // The hint's count, not Select all's ("Select all 2 edges").
-  await expect(bar).toContainText('2 edges · click more');
+  await expect(bar).toContainText('2 edges ·');
   // A right-click on a held edge neither drops it nor opens a menu.
   await page.mouse.click(second.x, second.y, { button: 'right' });
-  await expect(bar).toContainText('2 edges · click more');
+  await expect(bar).toContainText('2 edges ·');
   await expect(page.getByRole('menu')).toHaveCount(0);
   await finishInPlaceCommand(page, 'Fillet');
   await expect(
@@ -168,11 +168,11 @@ test('a new fillet among several bodies can select all again after clearing', as
   const bar = page.getByRole('group', { name: 'Fillet command' });
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
-  await expect(bar).toContainText('1 edge · click more');
+  await expect(bar).toContainText('1 edge ·');
   await bar.locator('summary').click();
   await bar.getByRole('button', { name: 'Select all 2 edges' }).click();
   await bar.locator('summary').click();
-  await expect(bar).toContainText('2 edges · click more');
+  await expect(bar).toContainText('2 edges ·');
   await bar.locator('summary').click();
   await bar.getByRole('button', { name: 'Clear edge selection' }).click();
   // Cleared, it still knows its body: Select all takes them back.
@@ -197,14 +197,14 @@ test('a new fillet keeps its edges lit across an undo', async ({ page }) => {
   const canvas = page.locator('.viewer-host canvas');
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
-  await expect(bar).toContainText('1 edge · click more');
+  await expect(bar).toContainText('1 edge ·');
   const lit = await canvas.getAttribute('data-e2e-selected-edges');
   expect(lit).toBeTruthy();
   await page.keyboard.press('ControlOrMeta+z');
   await revealModelPanel(page, 'History');
   await expect(page.locator('.feature-row')).toHaveCount(1);
   // The command still holds the edge, and it is still the one lit.
-  await expect(bar).toContainText('1 edge · click more');
+  await expect(bar).toContainText('1 edge ·');
   await expect(canvas).toHaveAttribute('data-e2e-selected-edges', lit!);
 });
 

@@ -47,6 +47,7 @@ import {
 } from './exact-boolean-evolution';
 import type { RemusKernel } from './remus-runtime';
 import type { IdleLineageView } from './exact-idle-lineage-view';
+import type { AxialExtentCertificate } from './exact-axial-extent';
 import { featureProfileAwaitsFonts } from './feature-profile-dependencies';
 
 /**
@@ -463,6 +464,8 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
 }
 
 export interface HistoryCheckpointEntry {
+  /** Checked prefix eligibility for extending a common axial prism. */
+  axialExtent?: AxialExtentCertificate;
   /** Completed feature index, including every suppressed or failed feature. */
   featureIndex: number;
   /** Digests since the previous checkpoint, including this feature. */
@@ -652,6 +655,8 @@ export interface RebuildCacheEvent {
   reusedPrimitives?: number;
   /** Audited immutable transform/carving branches reused in the same arena. */
   reusedPreparedFeatures?: number;
+  /** Checked prefix features reused by qualified axial extent transport. */
+  reusedAxialFeatures?: number;
   /** Bodies tessellated and measured by this sync. */
   remeasured: number;
   /** Bodies whose measurement was served from the per-body cache. */

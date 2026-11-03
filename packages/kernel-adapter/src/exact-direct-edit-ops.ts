@@ -5,6 +5,7 @@ import {
 } from './exact-operation-lineage';
 import {
   cylinderCarrier,
+  moveFacesJournalFaceMap,
   planeCarrier,
   sameAnalyticCarrier
 } from './exact-lineage-builders';
@@ -85,9 +86,11 @@ import {
 import {
   createRemusSemanticLineage,
   createRemusModifierEvolutionLineage,
+  decodeRemusMoveFacesJournal,
   deriveRemusMoveFacesDirectEditLineage,
   mergeRemusLineageStates,
   propagateRemusUnchangedDirectEditLineage,
+  type RemusMoveFacesJournal,
   type RemusLineageState
 } from './remus-lineage';
 import {
@@ -2128,17 +2131,33 @@ export function applyDirectEdit(
   // sweeps back through material — so growing and shrinking are the same
   // call. The recorded `concavity` is now only a record of what the gesture
   // meant, and shrinking no longer has to fail closed.
-  const output = resizeCylindricalFaceExactly(
-    kernel,
-    solid,
-    face,
-    geometry.radius,
-    newRadius,
-    geometry.axisStart,
-    axisDir,
-    axisTolerance,
-    operation.concavity
-  );
+  const sourceCandidates = deferOutputLineage
+    ? []
+    : topologyCandidatesForSolid(kernel, solid);
+  let journal: RemusMoveFacesJournal | null = null;
+  if (!deferOutputLineage) {
+    try {
+      journal = decodeRemusMoveFacesJournal(
+        kernel.resizeCylindricalFaceJournaled(solid, face, newRadius)
+      );
+    } catch {
+      // Older or unqualified resize constructions can still use the exact
+      // sleeve route. That route makes no construction identity claim.
+    }
+  }
+  const output =
+    journal?.solid ??
+    resizeCylindricalFaceExactly(
+      kernel,
+      solid,
+      face,
+      geometry.radius,
+      newRadius,
+      geometry.axisStart,
+      axisDir,
+      axisTolerance,
+      operation.concavity
+    );
   if (kernel.validateSolidRelaxed(output) !== 0) {
     throw new Error(
       `Resizing the face to radius ${newRadius} does not produce a valid solid.`
@@ -2170,7 +2189,34 @@ export function applyDirectEdit(
         : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
     );
   }
-  return { solids: [output] };
+  if (deferOutputLineage || !journal) return { solids: [output] };
+  const relation = moveFacesJournalFaceMap(
+    kernel,
+    journal.op,
+    Array.from(kernel.getSolidFaces(solid)),
+    Array.from(kernel.getSolidFaces(output))
+  );
+  const lineage = relation
+    ? deriveRemusMoveFacesDirectEditLineage({
+        source: target.lineage,
+        sourceCandidates,
+        resultCandidates: topologyCandidatesForSolid(kernel, output),
+        relation
+      })
+    : undefined;
+  return {
+    solids: [output],
+    ...(lineage && producingFeatureId
+      ? {
+          lineage: withBoundaryEdgeLineage(
+            kernel,
+            output,
+            producingFeatureId,
+            lineage
+          )
+        }
+      : {})
+  };
 }
 
 /** Relative change below which the kernel's resize sleeve may be refused. */
@@ -2215,9 +2261,7 @@ function resizeCylindricalFaceExactly(
       (factor) => factor * Math.max(fromRadius, toRadius)
     );
     const waypoints =
-      concavity === 'hole'
-        ? [...inward, ...outward]
-        : [...outward, ...inward];
+      concavity === 'hole' ? [...inward, ...outward] : [...outward, ...inward];
     for (const waypoint of waypoints) {
       try {
         const via = kernel.resizeCylindricalFace(solid, face, waypoint);

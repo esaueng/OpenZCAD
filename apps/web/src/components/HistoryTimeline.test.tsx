@@ -65,6 +65,21 @@ function renderTimeline(
   return { ...render(<HistoryTimeline {...props} />), props };
 }
 
+/** Scrolls the history list up from its foot, where the latest row sits. */
+function scrollListAwayFromLatest() {
+  const list = document.querySelector('.feature-list') as HTMLElement;
+  Object.defineProperty(list, 'scrollHeight', {
+    configurable: true,
+    value: 600
+  });
+  Object.defineProperty(list, 'clientHeight', {
+    configurable: true,
+    value: 200
+  });
+  list.scrollTop = 0;
+  fireEvent.scroll(list);
+}
+
 function row(name: string): HTMLElement {
   return screen.getByText(name).closest('.feature-row') as HTMLElement;
 }
@@ -100,6 +115,35 @@ afterEach(() => {
 });
 
 describe('HistoryTimeline', () => {
+  it('puts the value beside the name in the row tooltip, whole', () => {
+    renderTimeline({
+      features: [
+        feature(1, {
+          featureKind: 'thread',
+          profile: 'printable',
+          majorDiameter: 12,
+          pitch: 1.75
+        })
+      ]
+    });
+    expect(row('Feature 1').querySelector('.feature-row-main')).toHaveAttribute(
+      'title',
+      'Feature 1 — Thread (⌀ 12 × 1.75 mm, printable), click to edit'
+    );
+  });
+
+  it('offers Show latest operation only while the latest row is scrolled away', () => {
+    renderTimeline();
+    // Every row fits: the latest is already in view.
+    expect(
+      screen.queryByRole('button', { name: 'Show latest operation' })
+    ).not.toBeInTheDocument();
+    scrollListAwayFromLatest();
+    expect(
+      screen.getByRole('button', { name: 'Show latest operation' })
+    ).toBeInTheDocument();
+  });
+
   it('reveals the latest appended operation without changing the edited selection', () => {
     const frames: FrameRequestCallback[] = [];
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
@@ -113,6 +157,7 @@ describe('HistoryTimeline', () => {
     rerender(
       <HistoryTimeline {...props} features={[...props.features, feature(5)]} />
     );
+    scrollListAwayFromLatest();
     row('Feature 5').scrollIntoView = scroll;
     fireEvent.click(
       screen.getByRole('button', { name: 'Show latest operation' })

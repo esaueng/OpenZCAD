@@ -1687,10 +1687,10 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
-import { usePanelSuspension } from './hooks/usePanelSuspension';
+import { useCommandFold } from './hooks/useCommandFold';
 import { sketchObjectLabels } from './lib/sketch/objectLabels';
 import {
-  commandSuspendsPanels,
+  commandFoldsTools,
   loadPanelState,
   savePanelState,
   type PanelState,
@@ -1706,7 +1706,6 @@ import {
   loadPanelLayout,
   matchingPreset,
   notePanelUsed,
-  openPanel,
   panelStatus,
   pinPanel,
   presentPanel,
@@ -1835,6 +1834,8 @@ const TOOLS_WAITING_DELAY_MS = 400;
 const CYLINDER_RADIUS_REST_MS = 250;
 /** How long a fillet or chamfer handle rests before its complete rebuild. */
 const EDGE_BLEND_REST_MS = 250;
+/** Check a generic face's viewport deformation once the hand rests. */
+const OFFSET_FACE_REST_MS = 250;
 /**
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
@@ -4486,6 +4487,15 @@ export function App() {
       }
     })
   ).current;
+
+  const offsetRestTimer = useRef<number | null>(null);
+  const stopOffsetRestCheck = useCallback(() => {
+    if (offsetRestTimer.current !== null) {
+      window.clearTimeout(offsetRestTimer.current);
+      offsetRestTimer.current = null;
+    }
+  }, []);
+  useEffect(() => stopOffsetRestCheck, [stopOffsetRestCheck]);
 
   /**
    * Preview and commit resolve the same command choice. Automatic uses exact
@@ -21542,15 +21552,14 @@ export function App() {
   }, [extrudeSessionKey]);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
-  // Creation commands take the stage; edits of an existing feature leave the
-  // panels open (see `commandSuspendsPanels`). Read the active command rather
-  // than inferring it from the selected feature.
+  // Creation commands fold More tools; model panels keep their layout.
+  // Read the active command rather than inferring it from the selected feature.
   // Plane selection and the entered sketch belong to one editing session.
   const sketchPanelSession = interaction.mode === 'sketch' || tool === 'sketch';
-  const panels = usePanelSuspension(panelState, {
+  const toolFold = useCommandFold(panelState, {
     workspaceMode: resolvedWorkspaceMode,
     sketching: sketchPanelSession,
-    editing: commandSuspendsPanels({
+    editing: commandFoldsTools({
       inPlace: { active: inPlace.active, editing: inPlaceEditing !== null },
       extrude: {
         active: extrudeSessionKey !== null,
@@ -21564,7 +21573,7 @@ export function App() {
         'active'
       : inPlace.sessionId !== null
         ? // Picks, options and preview updates keep the same release; even
-          // restarting the same command gets a fresh suspension.
+          // restarting the same command folds More tools again.
           `command:${inPlace.sessionId}`
         : extrudeSessionKey !== null
           ? `extrude:${extrudeSessionKey}:${extrudeCreateGeneration}`
@@ -24504,6 +24513,7 @@ export function App() {
   }
 
   function handleOffsetPreview(offset: number, exactGeometry = true) {
+    stopOffsetRestCheck();
     const current = interactionRef.current;
     // The arrow rig is shared: in region mode its value is an extrude height.
     if (current.mode === 'region') {
@@ -24531,6 +24541,21 @@ export function App() {
       offsetPreview.clear();
       setPreviewDeferred(false);
       recoverPreviewInteraction();
+      if (offsetHandleTarget?.stepProfilePreview && Math.abs(offset) > 1e-9) {
+        const target = current.target;
+        offsetRestTimer.current = window.setTimeout(() => {
+          offsetRestTimer.current = null;
+          const live = interactionRef.current;
+          if (
+            live.mode === 'face' &&
+            live.op === 'offset-face' &&
+            live.phase !== 'validating' &&
+            live.target === target &&
+            offsetPreviewValueRef.current === offset
+          )
+            offsetPreview.request(offset);
+        }, OFFSET_FACE_REST_MS);
+      }
       return;
     }
     if (Math.abs(offset) <= 1e-9) {
@@ -24544,6 +24569,7 @@ export function App() {
   }
 
   function handleOffsetCancel() {
+    stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
@@ -24575,6 +24601,7 @@ export function App() {
    * refused value with its change band still drawn.
    */
   const clearDirectEditPreviews = useCallback(() => {
+    stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
     cylinderRadiusPreview.clear();
@@ -24606,7 +24633,8 @@ export function App() {
     cylinderRadiusPreview,
     cylinderRadiusRestCheck,
     edgePreview,
-    edgeRestCheck
+    edgeRestCheck,
+    stopOffsetRestCheck
   ]);
 
   // A preview must never outlive the command that made it. Whatever returns
@@ -24849,6 +24877,7 @@ export function App() {
     exact?: ParamValue,
     options?: { keepingLastValid?: boolean }
   ): OffsetCommitOutcome {
+    stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
     if (interaction.mode === 'region') {
       handleRegionExtrudeCommit(offset, exact);
@@ -28158,7 +28187,7 @@ export function App() {
   const panelGeometry = panelStage
     ? computePanelGeometry(panelLayout, panelStage)
     : null;
-  const panelsHidden = panels.panelsHidden || panelLayout.options.hidden;
+  const panelsHidden = panelLayout.options.hidden;
   const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
   /** Whether a panel is on screen right now, for its rail button. */
   const panelShowing = (id: PanelId) =>
@@ -28168,33 +28197,21 @@ export function App() {
       (panelGeometry.phone
         ? phonePanel === id
         : !panelGeometry.parked[id] || panelLayout.revealed === id));
-  /**
-   * A rail press. While a sketch or command has the panels stepped aside it is
-   * the user asking for them back: the pressed panel opens (or comes forward)
-   * and the suspension is released for the rest of that mode, instead of
-   * closing a panel nobody can see.
-   */
+  /** Panel controls work the same way during and between tool sessions. */
   const pressRailPanel = (id: PanelId) => {
-    const suspended = panels.panelsHidden;
     setPanelLayout((current) =>
-      suspended
-        ? openPanel(current, id, panelStageOrUndefined)
-        : togglePanel(current, id, panelStageOrUndefined)
+      togglePanel(current, id, panelStageOrUndefined)
     );
-    if (suspended) panels.release('panels');
   };
   /**
    * Brings History, Parameters or Revisions into view by name, as the
    * palette's feature and parameter results and the undo-floor notice do:
-   * unpinned if it was closed, forward if it was open. Asking for it by name
-   * mid-sketch or mid-command releases the suspension for the rest of that
-   * session, like a rail press.
+   * unpinned if it was closed, forward if it was open.
    */
   const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
     );
-    panels.release('panels');
   };
   const panelControls = (
     id: PanelId,
@@ -28731,7 +28748,7 @@ export function App() {
   // The readout at the head of the line already names the face.
   const faceSelectedHint = [
     railPick ? null : 'Face selected',
-    keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
+    keyHint(keymap, 'view-normal-to-face', 'views it head-on')
   ]
     .filter(Boolean)
     .join(' — ');
@@ -29320,16 +29337,16 @@ export function App() {
         onDrawerViewChange={(toolDrawerView) =>
           setPanelState((current) => ({ ...current, toolDrawerView }))
         }
-        moreOpen={panels.commandFoldOpen}
+        moreOpen={toolFold.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
           // keeps it open for the rest of the command.
-          const hidden = panels.foldHidden;
+          const hidden = toolFold.foldHidden;
           setPanelState((current) => ({
             ...current,
             commandFoldOpen: hidden || !current.commandFoldOpen
           }));
-          if (hidden) panels.release('fold');
+          if (hidden) toolFold.release();
         }}
       />
     );

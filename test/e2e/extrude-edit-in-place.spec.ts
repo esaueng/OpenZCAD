@@ -156,7 +156,7 @@ test('an untouched Done writes the extrude back exactly as stored', async ({
   ).toHaveAttribute('aria-checked', 'true');
   // An edit keeps its operation: nothing to infer.
   await expect(
-    bar.getByRole('radio', { name: 'Automatic', exact: true })
+    bar.getByRole('radio', { name: 'Auto', exact: true })
   ).toHaveCount(0);
   await bar.locator('details.in-place-command-options summary').click();
   await bar.getByRole('button', { name: 'Done' }).click();
@@ -285,13 +285,13 @@ for (const command of ['an edit', 'a new extrude'] as const) {
     }
     await chooseBarOption(bar, 'Extent', 'To face');
     await expect(bar).toContainText(
-      'Click a planar face parallel to the sketch'
+      'Click a flat face parallel to the sketch'
     );
     // One press disarms the pick; the command and its extent stay.
     await page.keyboard.press('Escape');
     await expect(bar).toBeVisible();
     await expect(bar).not.toContainText(
-      'Click a planar face parallel to the sketch'
+      'Click a flat face parallel to the sketch'
     );
     await expect(barChoice(bar, 'Extent', 'To face')).toHaveAttribute(
       'aria-checked',

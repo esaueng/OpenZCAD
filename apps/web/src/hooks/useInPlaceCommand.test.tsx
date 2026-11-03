@@ -906,7 +906,7 @@ describe('review: a sweep guide rail', () => {
     expect(hook.result.current.slots.guide.map((c) => c.entityId)).toEqual([
       'g1'
     ]);
-    expect(hook.result.current.hint).toMatch(/Guide rail of 1/);
+    expect(hook.result.current.hint).toMatch(/Rail of 1/);
   });
 });
 
