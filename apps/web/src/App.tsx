@@ -693,7 +693,9 @@ import {
   deleteKeyRemovesFeature,
   resolveSelectionTopology,
   selectionFeature,
-  selectionSetFeature
+  selectionSetFeature,
+  isRemovableDetail,
+  selectedFeatureFaces
 } from './lib/selectionFeature';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import {
@@ -8214,7 +8216,31 @@ export function App() {
   // The focus faces are drawn as a selected face is, not with the accent
   // fill of a blend preview that does not exist yet.
   // A box sweep's faces draw the same way: several faces lit as one pick.
-  const focusFaces = historyFocus?.focus.faces ?? boxSelectedFaces ?? undefined;
+  const pickedDetailFaces = useMemo(() => {
+    if (
+      !doc ||
+      !selectedFeature ||
+      featureSelectionSource !== 'inferred' ||
+      tool !== null ||
+      !isRemovableDetail(selectedFeature) ||
+      (isOperationState(interaction) && interaction.phase !== 'armed')
+    )
+      return undefined;
+    const faces = selectedFeatureFaces(doc, representations, selectedFeature);
+    return faces.length ? faces : undefined;
+  }, [
+    doc,
+    selectedFeature,
+    featureSelectionSource,
+    tool,
+    interaction,
+    representations
+  ]);
+  const focusFaces =
+    historyFocus?.focus.faces ??
+    pickedDetailFaces ??
+    boxSelectedFaces ??
+    undefined;
 
   /**
    * The imported face whose own card (resize a hole, remove a blend) the
@@ -8443,7 +8469,12 @@ export function App() {
       return null;
     }
     return {
-      label: selectionSummary.label,
+      label:
+        selectedFeature &&
+        featureSelectionSource === 'inferred' &&
+        isRemovableDetail(selectedFeature)
+          ? textLabelSegments(selectedFeature.name)
+          : selectionSummary.label,
       // Several bodies are counted in the name; the verbs say what they
       // are for.
       ...(selectionSummary.detail && selectedBodyIds.length < 2
@@ -8462,6 +8493,8 @@ export function App() {
     historyFocus,
     boxSelectedFaces,
     selectionSummary,
+    selectedFeature,
+    featureSelectionSource,
     selectedBodyIds,
     calloutVerbsKey,
     calloutPickKey,
@@ -25532,11 +25565,7 @@ export function App() {
     name: string,
     dependentCount: number
   ) {
-    if (
-      executeCommand(
-        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
-      )
-    ) {
+    const finish = () => {
       // A reopened modeling form outlives the selection (its tool is still
       // running), so it has to be closed with the feature it was editing;
       // so does an in-place edit of it.
@@ -25550,7 +25579,48 @@ export function App() {
         { label: 'Undo', run: handleUndo },
         { repeatsStatusAt: lastStatusAtRef.current }
       );
+    };
+    const manager = managerRef.current;
+    const base = manager?.document;
+    const feature = base && findFeature(base, featureId);
+    if (base && feature && isRemovableDetail(feature)) {
+      void import('./lib/featureDeletion')
+        .then(({ nativeFeatureDeletion }) => {
+          const current = manager.document;
+          if (
+            managerRef.current !== manager ||
+            current.projectId !== base.projectId ||
+            current.version !== base.version
+          ) {
+            setStatus(
+              'The model changed. Select the feature again before deleting it.'
+            );
+            return;
+          }
+          // A geometry-only echo may replace the document object while the
+          // module loads. Its project/revision still owns this deletion.
+          const removal = nativeFeatureDeletion(current, feature);
+          void validatedFeature.runTransaction([removal.command], {
+            label: `Delete ${name}`,
+            targets: [],
+            validateDerived: removal.validateDerived,
+            validatingMessage: `Checking removal of ${name}…`,
+            successMessage: deleteFeatureToastMessage(name, dependentCount),
+            onFailure: (message) => announce(message),
+            onSuccess: finish
+          });
+        })
+        .catch((error: unknown) =>
+          setStatus(errorMessage(error, 'Could not remove this feature.'))
+        );
+      return;
     }
+    if (
+      executeCommand(
+        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
+      )
+    )
+      finish();
   }
 
   function handleRenameFeature(featureId: FeatureId, name: string) {
