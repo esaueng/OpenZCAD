@@ -247,7 +247,7 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   );
 });
 
-test('collapses the top-bar actions at 1120px without overflow or lost labels', async ({
+test('collapses the top-bar actions at 959px without overflow or lost labels', async ({
   page
 }) => {
   await stubApi(page);
@@ -279,8 +279,9 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
   // Exercise both sides of the exact collapse point, then narrower layouts.
   // Signed in the row carries three controls, so every direct child must own
   // exactly its content width without overlapping a neighbour or escaping the
-  // bar. At 1120px and below, all three become 28px icon squares at once.
-  for (const width of [1121, 1120, 982, 600]) {
+  // bar. At 959px and below, all three become 28px icon squares at once,
+  // with the mode switch's labels.
+  for (const width of [960, 959, 820, 600]) {
     await page.setViewportSize({ width, height: 800 });
     await expect
       .poll(
@@ -316,8 +317,11 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
         overlap: 0,
         unclaimedWidth: 0,
         overflow: 0,
-        compact: width <= 1120
+        compact: width <= 959
       });
+    await expect(topbar.locator('.mode-switch-label').first()).toBeVisible({
+      visible: width > 959
+    });
   }
 });
 
@@ -412,21 +416,40 @@ test(
     await expect(page.locator('.viewer-rail-stack')).toBeVisible();
 
     // The three top islands keep to themselves: with equal-width flanks the
-    // actions ran into the mode switch at this width.
+    // actions ran into the mode switch at this width. On a phone the mode
+    // switch takes a second row, so islands are compared within a row.
     const islands = await page
       .locator('.topbar > .topbar-island')
       .evaluateAll((elements) =>
         elements.map((element) => {
           const bounds = element.getBoundingClientRect();
-          return { left: bounds.left, right: bounds.right };
+          return {
+            left: bounds.left,
+            right: bounds.right,
+            top: bounds.top,
+            bottom: bounds.bottom
+          };
         })
       );
     expect(islands).toHaveLength(3);
-    for (let index = 1; index < islands.length; index += 1) {
-      expect(islands[index]!.left).toBeGreaterThanOrEqual(
-        islands[index - 1]!.right - 0.5
-      );
+    for (const [index, island] of islands.entries()) {
+      for (const other of islands.slice(index + 1)) {
+        const sameRow = island.top < other.bottom && other.top < island.bottom;
+        const apart =
+          other.left >= island.right - 0.5 || island.left >= other.right - 0.5;
+        expect(sameRow && !apart, 'top islands overlap').toBe(false);
+      }
     }
+    // The project name keeps its room: two rows show it in full, where one
+    // row cut every name to 26px at this width.
+    const name = await page
+      .locator('.topbar .breadcrumb strong')
+      .evaluate((element) => ({
+        shown: element.clientWidth,
+        full: element.scrollWidth
+      }));
+    expect(name.shown).toBeGreaterThan(0);
+    expect(name.shown).toBe(name.full);
 
     const overflowingTopbarChildren = await page.locator('.topbar').evaluate(
       (topbar) =>

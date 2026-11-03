@@ -165,9 +165,9 @@
 }
 
 /* A pixel less padding a side gives back the inset and border's 8px: the
-   bar has no width to spare at a laptop's width. (A phone's icon-only
-   options keep their own padding, view-mode.css.) */
-@media (min-width: 621px) {
+   bar has no width to spare at a laptop's width. (The compact bar's
+   icon-only options keep their own padding, view-mode.css.) */
+@media (min-width: 960px) {
   .topbar .mode-switch-option {
     padding-inline: 10px;
   }
@@ -1428,11 +1428,18 @@
 
 /* ── Narrow windows ──────────────────────────────────────── */
 
-/* Content-sized flanks: equal ones overran the action icons into the mode
-   switch once the window was too narrow to centre it. */
-@media (max-width: 620px) {
+/* Content-sized flanks: below 760px a centred mode switch leaves the
+   project name under 160px, so the switch joins the actions on the right
+   and the name takes the rest of the bar. (Equal flanks also overran the
+   action icons into the switch on a phone.) */
+@media (max-width: 759px) {
   .app-shell > .topbar {
     grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .app-shell > .topbar {
     gap: var(--sp-1);
   }
 
@@ -1509,9 +1516,10 @@
 
 /* ── The verb rail (U04 slice 3, streamlined) ─────────── */
 
-/* Two rows preserve project navigation at the smallest supported widths;
-   the stage inherits the taller header clearance, including comfortable UI. */
-@media (max-width: 380px) {
+/* Two rows preserve project navigation on a phone: in one row the mode
+   switch and the actions leave the name 26px at 390px and 66px at 430px.
+   The stage inherits the taller header clearance, including comfortable UI. */
+@media (max-width: 479px) {
   .app-shell {
     --stage-top: calc(
       var(--topbar-island-h) * 2 + var(--sp-1) + var(--island-gap) * 2
@@ -1524,10 +1532,12 @@
     grid-template-rows: repeat(2, var(--topbar-island-h));
   }
 
+  /* Sized to its content, as at every other width: stretched across the
+     row, it parked the lock and the save glyph at its far end, away from
+     the name they describe. */
   .topbar > .topbar-identity {
     grid-column: 1;
     grid-row: 1;
-    width: 100%;
     gap: var(--sp-2);
   }
 

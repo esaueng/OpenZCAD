@@ -20,17 +20,27 @@
   .workspace {
     grid-template-columns: var(--sidebar-col-w) minmax(320px, 1fr);
   }
+}
 
-  /* The action row becomes four 28px icon squares in one step: the save
-     icon already changes glyph and colour with its state, and the live
-     count moves onto a badge. The labels stay in the accessible names and
-     tooltips. */
+/*
+  The top bar sheds in one order so the project name keeps its room for as
+  long as possible: the wordmark and the "Saved" word first (below 1200px),
+  then every label in the mode switch and the action row at once (below
+  960px, here and in view-mode.css), then the centred mode switch itself
+  (below 760px, quiet-stage.css). Each step only removes, so dragging a
+  window narrower never brings something back.
+
+  In the compact row the actions are 28px icons drawn as the wide row draws
+  them, on the bar with a surface only on hover: boxed squares inside the
+  island read as a box in a box. The live count moves onto a badge; the
+  labels stay in the accessible names and tooltips.
+*/
+@media (max-width: 959px) {
   .topbar-actions {
-    gap: 4px;
+    gap: 2px;
   }
 
   .account-state,
-  .save-state,
   .collaboration-state,
   .file-menu > summary,
   .topbar-actions .settings-action {
@@ -40,8 +50,6 @@
     padding: 0;
     gap: 0;
     font-size: 0;
-    background: var(--color-surface-2);
-    border-color: var(--color-border);
   }
 
   .topbar-actions .file-menu {
@@ -92,11 +100,11 @@
 }
 
 /* The top bar's flanks are equal (quiet-stage.css), so the identity island
-   has under half the window: below about 920px the full "OpenZCAD BETA"
-   kept its width and the project name was squeezed to nothing. (It was
-   860px until the save status moved into this island.) The brand is its
-   mark alone from there; the button is still named OpenZCAD. */
-@media (max-width: 920px) {
+   has under half the window, less the full-width mode switch: below 1200px
+   the full "OpenZCAD BETA" took the room the project name needed, which was
+   squeezed to a letter and then to nothing. The brand is its mark alone
+   from there; the button is still named OpenZCAD. */
+@media (max-width: 1199px) {
   .brand {
     flex: 0 0 auto;
     gap: 0;
@@ -106,6 +114,18 @@
   .brand .beta-tag {
     display: none;
   }
+}
+
+/* Wider, the same holds for a name too long to show beside the wordmark
+   (TopBar.tsx measures it). */
+.topbar[data-name-room='tight'] .brand {
+  flex: 0 0 auto;
+  gap: 0;
+  font-size: 0;
+}
+
+.topbar[data-name-room='tight'] .brand .beta-tag {
+  display: none;
 }
 
 @media (max-width: 620px) {

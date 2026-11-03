@@ -1,7 +1,13 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+import {
+  type ChangeEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react';
 import {
   Box,
   Check,
@@ -170,6 +176,54 @@ function PresenceGlyph({
   );
 }
 
+/**
+ * The wide bar spends about 170px on the wordmark and the "Saved" word. A
+ * long project name would be cut short for them, so where it would be, the
+ * bar drops both — as it does for every name below 1200px (responsive.css,
+ * topbar.css). Measured with the full identity in place, so the answer
+ * never depends on itself, and written straight to the header: the toggle
+ * and the measure happen in one layout pass, with no render between.
+ *
+ * The question is the name's own: is it cut? Comparing the island's need
+ * with its grid track allowed a pixel for rounding, and that pixel was
+ * exactly the ellipsis an encrypted project's lock left at 1366px.
+ */
+function fitProjectName(topbar: HTMLElement) {
+  const name = topbar.querySelector<HTMLElement>(
+    '.topbar-identity .breadcrumb strong'
+  );
+  if (!name) {
+    return;
+  }
+  delete topbar.dataset.nameRoom;
+  if (name.scrollWidth > name.clientWidth) {
+    topbar.dataset.nameRoom = 'tight';
+  }
+}
+
+/**
+ * Lays the mode switch's thumb under the active segment. The segments are
+ * as wide as their labels, so the thumb takes its offset and width from the
+ * one it marks; CSS slides it (view-mode.css). It starts animating only
+ * after its first placement, so a page load does not grow it from nothing.
+ */
+function placeModeThumb(topbar: HTMLElement) {
+  const modeSwitch = topbar.querySelector<HTMLElement>('.mode-switch');
+  const active = modeSwitch?.querySelector<HTMLElement>(
+    '.mode-switch-option.active'
+  );
+  if (!modeSwitch || !active) {
+    return;
+  }
+  modeSwitch.style.setProperty('--mode-thumb-x', `${active.offsetLeft}px`);
+  modeSwitch.style.setProperty('--mode-thumb-w', `${active.offsetWidth}px`);
+  if (!modeSwitch.dataset.thumb) {
+    requestAnimationFrame(() => {
+      modeSwitch.dataset.thumb = 'placed';
+    });
+  }
+}
+
 export function TopBar({
   projectName,
   units,
@@ -241,6 +295,7 @@ export function TopBar({
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const topbarRef = useRef<HTMLElement>(null);
   // A saved document can still be preparing its model. Keep the storage
   // label and show preparation separately, rather than relying on a spinner.
   const modelPending =
@@ -534,8 +589,41 @@ export function TopBar({
     </div>
   );
 
+  // The header is pinned to the window's edges, so it resizes only with the
+  // window; observing it never feeds back into its own size.
+  useLayoutEffect(() => {
+    const topbar = topbarRef.current;
+    if (!topbar || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    // A breakpoint drops the mode labels, which resizes every segment.
+    const fit = () => {
+      fitProjectName(topbar);
+      placeModeThumb(topbar);
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(topbar);
+    // The name and the labels are first measured in the fallback face.
+    void document.fonts?.ready.then(fit);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (topbarRef.current) {
+      placeModeThumb(topbarRef.current);
+    }
+  }, [workspaceMode]);
+
+  // What the island holds changes its need without resizing the header.
+  const encrypted = encryption !== null;
+  useLayoutEffect(() => {
+    if (topbarRef.current) {
+      fitProjectName(topbarRef.current);
+    }
+  }, [projectName, editingProjectName, saveText, saveChipActs, encrypted]);
+
   return (
-    <header className="topbar">
+    <header ref={topbarRef} className="topbar">
       {/* Three islands over the stage: who and what (identity), the mode,
           then the actions. The header itself is transparent and lets the
           viewport show between them. */}
