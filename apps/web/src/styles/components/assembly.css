@@ -1,9 +1,15 @@
 /* ── Assemble workspace (AS01/AS02/AS06) ──
-   The Assembly panel on the left, its first-run card over the viewport, the
-   joint tool card and the joint/component Inspector in the right lane. Each
-   is a quiet-stage island: the surface fill, a thin border, one accent. ── */
+   One sidebar on the left holds everything: parts, joints and motion, each
+   opening its controls under its row; the joint tool and the first run take
+   the same sidebar. A quiet-stage island: the surface fill, a thin border,
+   one accent. ── */
 
-/* ── Islands over the viewport ───────────────────────────── */
+:root {
+  /* The sidebar's width; the motion timeline starts past it. */
+  --assembly-sidebar-w: 304px;
+}
+
+/* ── The sidebar island ──────────────────────────────────── */
 
 .assembly-panel-float {
   position: absolute;
@@ -11,25 +17,13 @@
   top: var(--stage-top);
   left: var(--island-gap);
   bottom: calc(var(--island-gap) * 2 + var(--readout-reserve, 0px));
-  width: min(272px, calc(100% - var(--island-gap) * 2));
+  width: min(var(--assembly-sidebar-w), calc(100% - var(--island-gap) * 2));
   display: flex;
   flex-direction: column;
   pointer-events: none;
 }
 
-.assembly-first-run-float {
-  position: absolute;
-  z-index: var(--z-inspector-float);
-  top: 50%;
-  left: 50%;
-  width: min(380px, calc(100% - var(--island-gap) * 2));
-  max-height: calc(100% - var(--stage-top) - var(--island-gap) * 2);
-  transform: translate(-50%, -50%);
-  display: flex;
-}
-
-.assembly-panel,
-.assembly-first-run {
+.assembly-panel {
   pointer-events: auto;
   min-height: 0;
   display: flex;
@@ -50,8 +44,10 @@
 /* ── First run ───────────────────────────────────────────── */
 
 .assembly-first-run {
-  width: 100%;
+  display: flex;
+  flex-direction: column;
   gap: var(--sp-3);
+  min-height: 0;
   padding: var(--sp-4);
   overflow-y: auto;
 }
@@ -69,8 +65,6 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 260px;
-  overflow-y: auto;
 }
 
 .assembly-first-run-row {
@@ -122,13 +116,6 @@
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
-  line-height: var(--lh-normal);
-}
-
-.assembly-note {
-  margin: 0;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
   line-height: var(--lh-normal);
 }
 
@@ -267,37 +254,48 @@
 .assembly-panel-body {
   min-height: 0;
   overflow-y: auto;
-  padding: var(--sp-1) 0 var(--sp-2);
+  padding-bottom: var(--sp-2);
 }
 
 .assembly-section {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--sp-2) var(--sp-2) 0;
+  padding: var(--sp-3) var(--sp-2) var(--sp-2);
+}
+
+.assembly-section + .assembly-section {
+  border-top: var(--border-thin);
 }
 
 .assembly-section > .assembly-muted {
   padding: 2px var(--sp-2) var(--sp-1);
 }
 
+.assembly-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 24px;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+}
+
 .assembly-section-title {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin: 0 0 2px;
-  padding: 0 var(--sp-2);
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  font-weight: var(--fw-regular);
-  letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
 }
 
 .assembly-count {
   color: var(--color-text-dim);
-  letter-spacing: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
 }
 
 .assembly-list {
@@ -311,17 +309,32 @@
 
 .assembly-row {
   display: flex;
-  align-items: center;
-  min-height: 28px;
+  flex-direction: column;
   border-radius: var(--radius-md);
 }
 
-.assembly-row:hover {
+.assembly-row-line {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  border-radius: var(--radius-md);
+}
+
+.assembly-row-line:hover {
   background: var(--color-surface-hover);
 }
 
 .assembly-row.is-selected {
+  background: var(--color-bg);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.assembly-row.is-selected > .assembly-row-line {
   background: var(--color-selected-fill);
+}
+
+.assembly-row.is-addable .assembly-row-name {
+  color: var(--color-text-muted);
 }
 
 .assembly-row-main {
@@ -369,8 +382,19 @@
   color: var(--color-text-subtle);
 }
 
-.assembly-row-pin {
-  flex: 0 0 auto;
+.assembly-row-action.assembly-row-pin {
+  color: var(--color-text-dim);
+  /* Faint, not hidden: touch screens have no hover to reveal it. */
+  opacity: 0.45;
+}
+
+.assembly-row-line:hover .assembly-row-pin,
+.assembly-row-pin:focus-visible,
+.assembly-row-action.assembly-row-pin.is-on {
+  opacity: 1;
+}
+
+.assembly-row-action.assembly-row-pin.is-on {
   color: var(--color-accent);
 }
 
@@ -449,72 +473,179 @@
   font: inherit;
 }
 
-.assembly-name-field.assembly-title-field {
-  width: 100%;
-  min-height: 30px;
-  font-size: var(--fs-md);
-  border-color: var(--color-border);
-}
+/* ── Details under a selected row ────────────────────────── */
 
-.assembly-name-field.assembly-title-field:focus {
-  border-color: var(--color-accent-border);
-}
-
-/* ── Inspector ───────────────────────────────────────────── */
-
-.assembly-inspector .panel-title-row {
-  min-height: 24px;
-}
-
-.assembly-inspector-body {
-  min-height: 0;
-  overflow-y: auto;
+.assembly-details {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4) var(--sp-4);
-}
-
-.assembly-kind-row {
-  display: flex;
-  align-items: center;
   gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
 }
 
-.assembly-kind-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  min-height: 22px;
-  padding: 0 var(--sp-2);
-  color: var(--color-selected-text);
-  background: var(--color-accent-dim);
-  border-radius: var(--radius-sm);
+.assembly-details-kind {
+  margin: 0;
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
 }
 
-.assembly-kind-chip .assembly-row-icon {
-  color: inherit;
-}
-
-.assembly-inspector .assembly-banner {
+.assembly-details .assembly-banner {
   border: 0;
   border-radius: var(--radius-md);
 }
 
-.assembly-field-group {
+.assembly-dof-block {
   display: flex;
   flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.assembly-animate {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.assembly-animate .assembly-play {
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3);
+}
+
+.assembly-animate .assembly-select:last-child {
+  flex: 0 0 64px;
+}
+
+.assembly-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 var(--sp-1);
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.assembly-positions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.assembly-position-chip {
+  display: inline-flex;
+  align-items: center;
+  background: var(--color-surface-hover);
+  border: var(--border-thin);
+  border-radius: 999px;
+}
+
+.assembly-position-apply,
+.assembly-position-delete {
+  min-height: 22px;
+  color: var(--color-text);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-position-apply {
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+}
+
+.assembly-position-delete {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  padding: 0;
+  color: var(--color-text-subtle);
+}
+
+.assembly-position-apply:hover,
+.assembly-position-delete:hover {
+  color: var(--color-accent-hi);
+}
+
+.assembly-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--sp-2);
 }
 
-.assembly-field-group .assembly-section-title {
-  padding: 0;
+.assembly-link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 24px;
+  padding: 0 var(--sp-1);
+  color: var(--color-accent);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-link-button:hover {
+  color: var(--color-accent-hi);
+}
+
+.assembly-link-button.is-danger {
+  color: var(--color-error-text);
+}
+
+/* ── Bodies not in the assembly yet ──────────────────────── */
+
+.assembly-addable {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px dashed var(--color-border);
+}
+
+.assembly-addable-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.assembly-add-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 24px;
+  margin-right: 2px;
+  padding: 0 var(--sp-2);
+  color: var(--color-selected-text);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-add-button:hover {
+  background: var(--color-selected-fill);
 }
 
 .assembly-dof {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-2);
 }
@@ -538,7 +669,7 @@
 }
 
 .assembly-number input {
-  width: 64px;
+  width: 56px;
   min-height: 26px;
   box-sizing: border-box;
   padding: 0 var(--sp-2);
@@ -566,8 +697,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-2);
+  min-height: 26px;
+  padding-left: 56px;
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
 }
 
@@ -577,39 +710,6 @@
   gap: var(--sp-1);
 }
 
-.assembly-segmented {
-  display: grid;
-  grid-auto-columns: minmax(0, 1fr);
-  grid-auto-flow: column;
-  padding: 2px;
-  background: var(--color-bg);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-}
-
-.assembly-segment {
-  min-height: 24px;
-  padding: 0 var(--sp-1);
-  color: var(--color-text-muted);
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.assembly-segment:hover:not(.is-active) {
-  color: var(--color-text);
-}
-
-.assembly-segment.is-active {
-  color: var(--color-selected-text);
-  background: var(--color-selected-fill);
-  font-weight: var(--fw-medium);
-}
-
 .primary.assembly-play {
   display: inline-flex;
   align-items: center;
@@ -617,36 +717,15 @@
   gap: var(--sp-1);
 }
 
-.assembly-facts {
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  gap: var(--sp-1) var(--sp-2);
-  margin: 0;
-  font-size: var(--fs-xs);
-}
-
-.assembly-facts dt {
-  color: var(--color-text-subtle);
-}
-
-.assembly-facts dd {
-  margin: 0;
-  color: var(--color-text);
-}
-
-/* ── Joint tool card ─────────────────────────────────────── */
+/* ── Joint tool (takes the sidebar while open) ───────────── */
 
 .assembly-joint-tool {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
+  min-height: 0;
   padding: var(--sp-3);
-  color: var(--color-text);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
-  font-size: var(--fs-sm);
+  overflow-y: auto;
 }
 
 .assembly-joint-tool-header {
@@ -712,17 +791,17 @@
 
 .assembly-kind-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-1);
 }
 
 .assembly-kind-option {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: var(--sp-1);
-  min-height: 34px;
+  gap: var(--sp-2);
+  min-height: 40px;
   padding: 0 var(--sp-2);
   color: var(--color-text-muted);
   background: var(--color-bg);
@@ -756,10 +835,16 @@
   white-space: nowrap;
 }
 
-.assembly-kind-dof {
+.assembly-kind-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.assembly-kind-hint {
   color: var(--color-text-subtle);
-  font-family: var(--font-mono);
   font-size: var(--fs-mini);
+  line-height: 1.25;
 }
 
 .assembly-kind-suggested {

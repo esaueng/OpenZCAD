@@ -6,7 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { Film, Pause, Play, Plus, SkipBack, X } from 'lucide-react';
+import { Pause, Play, Plus, SkipBack, X } from 'lucide-react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
   evaluateTrack,
@@ -462,46 +462,39 @@ export function MotionStudyTimeline({
         <span className="motion-time" aria-label="Playhead">
           {formatStudyTime(t)} / {formatStudyTime(duration)} s
         </span>
-        <div
-          className="motion-segmented"
-          role="radiogroup"
+        <select
+          className="assembly-select motion-select"
           aria-label="Playback"
+          value={saved.playback}
+          disabled={readOnly}
+          onChange={(event) => {
+            const mode = event.currentTarget.value as AssemblyPlayback;
+            if (saved.playback !== mode)
+              commit(
+                { ...saved, playback: mode },
+                'Change motion playback',
+                ''
+              );
+          }}
         >
           {PLAYBACK_MODES.map(({ mode, label }) => (
-            <button
-              key={mode}
-              type="button"
-              role="radio"
-              aria-checked={saved.playback === mode}
-              className="motion-segment"
-              disabled={readOnly}
-              onClick={() =>
-                saved.playback !== mode &&
-                commit(
-                  { ...saved, playback: mode },
-                  'Change motion playback',
-                  ''
-                )
-              }
-            >
+            <option key={mode} value={mode}>
               {label}
-            </button>
+            </option>
           ))}
-        </div>
-        <div className="motion-segmented" role="radiogroup" aria-label="Speed">
+        </select>
+        <select
+          className="assembly-select motion-select"
+          aria-label="Speed"
+          value={speed}
+          onChange={(event) => changeSpeed(Number(event.currentTarget.value))}
+        >
           {SPEEDS.map((value) => (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={speed === value}
-              className="motion-segment"
-              onClick={() => changeSpeed(value)}
-            >
-              {value}×
-            </button>
+            <option key={value} value={value}>
+              {value}× speed
+            </option>
           ))}
-        </div>
+        </select>
         <label className="motion-field">
           <span>Duration</span>
           <NumberField
@@ -536,15 +529,6 @@ export function MotionStudyTimeline({
           onClick={keyAtPlayhead}
         >
           Key at playhead (K)
-        </button>
-        <button
-          type="button"
-          className="motion-text-button"
-          disabled
-          title="Video export is coming later"
-        >
-          <Film size={13} aria-hidden="true" />
-          Export video
         </button>
         {note && (
           <span className="motion-timeline-note" role="status">

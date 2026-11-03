@@ -37,9 +37,12 @@ export function withLiveBodies(
   };
 }
 
-/** Two blade bodies, optionally already components with a revolute pin. */
+/**
+ * Two blade bodies, optionally already components with a revolute pin, and
+ * optionally a third body (a pivot screw) that is not in the assembly.
+ */
 export function scissorsManager(
-  options: { components?: boolean; joint?: boolean } = {}
+  options: { components?: boolean; joint?: boolean; screw?: boolean } = {}
 ) {
   const manager = new CommandManager(
     createProjectDocument('Scissors', toUserId('user_assemble'))
@@ -53,6 +56,15 @@ export function scissorsManager(
       })
     );
   const [a, b] = manager.document.bodyOrder as [BodyId, BodyId];
+  if (options.screw)
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Pivot screw',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 3, height: 10 }
+      })
+    );
+  const screw = manager.document.bodyOrder[2];
   if (options.components || options.joint)
     manager.execute(
       commandFactories.addAssemblyComponents({
@@ -77,8 +89,12 @@ export function scissorsManager(
       })
     );
   const live = () =>
-    withLiveBodies(manager.document, { [a]: 'Blade A', [b]: 'Blade B' });
-  return { manager, a, b, live };
+    withLiveBodies(manager.document, {
+      [a]: 'Blade A',
+      [b]: 'Blade B',
+      ...(screw ? { [screw]: 'Pivot screw' } : {})
+    });
+  return { manager, a, b, screw, live };
 }
 
 /**

@@ -1733,13 +1733,7 @@ import {
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
-import { AssemblyFirstRunCard } from './components/assembly/AssemblyFirstRunCard';
-import {
-  AssemblyInspector,
-  assemblyInspectorOpen
-} from './components/assembly/AssemblyInspector';
 import { AssemblyPanel } from './components/assembly/AssemblyPanel';
-import { JointToolCard } from './components/assembly/JointToolCard';
 import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 import { AssemblyPlayer } from './components/assembly/AssemblyPlayer';
 import {
@@ -1747,7 +1741,6 @@ import {
   runAssembleKey,
   useAssembleWorkspace
 } from './lib/assembly/assembleWorkspace';
-import { useAssemblyRuntime } from './lib/assembly/assemblyRuntime';
 
 const START_SCREEN_DEMOS =
   (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
@@ -5477,11 +5470,6 @@ export function App() {
     onStatus: (message: string) => setStatus(message)
   };
   useAssembleWorkspace(assembleMode, assembleApp);
-  const assemblySelectedJointId = useAssemblyRuntime((s) => s.selectedJointId);
-  const assemblySelectedComponentId = useAssemblyRuntime(
-    (s) => s.selectedComponentId
-  );
-  const assemblyJointToolOpen = useAssemblyRuntime((s) => s.jointTool !== null);
   // The activity log in the column layout: opened from the dock's button or
   // the toast; the panel itself is App's so both can reach it.
   const [activityLogOpen, setActivityLogOpen] = useState(false);
@@ -30529,23 +30517,16 @@ export function App() {
       panels={
         assembleMode ? (
           <ErrorBoundary label="Assembly" resetKey={doc.projectId}>
-            {(doc.assembly?.components.length ?? 0) > 0 ? (
-              <div className="assembly-panel-float">
-                <AssemblyPanel
-                  document={doc}
-                  execute={assembleApp.execute}
-                  onStatus={assembleApp.onStatus}
-                />
-              </div>
-            ) : (
-              <div className="assembly-first-run-float">
-                <AssemblyFirstRunCard
-                  document={doc}
-                  execute={assembleApp.execute}
-                  onAnnounce={(message) => announce(message)}
-                />
-              </div>
-            )}
+            {/* One sidebar on the left: parts, joints, motion, the joint
+                tool and the first run all live here (AS01). */}
+            <div className="assembly-panel-float">
+              <AssemblyPanel
+                document={doc}
+                execute={assembleApp.execute}
+                onStatus={assembleApp.onStatus}
+                onAnnounce={(message) => announce(message)}
+              />
+            </div>
           </ErrorBoundary>
         ) : !modelingLocked ? (
           <PanelDock
@@ -30572,11 +30553,7 @@ export function App() {
       // takes the command row, as every in-place command's does, so here it
       // only holds the lane empty.
       command={
-        assembleMode ? (
-          assemblyJointToolOpen ? (
-            <JointToolCard document={doc} />
-          ) : null
-        ) : modelingLocked ? null : measurementDock ? (
+        modelingLocked ? null : measurementDock ? (
           measurementDock
         ) : contextualToolCard ? (
           hideSketchToolCard || calloutOperationModel ? null : (
@@ -30669,22 +30646,7 @@ export function App() {
       }
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
-        assembleMode ? (
-          // The joint tool's card owns the right lane while it is open.
-          !assemblyJointToolOpen &&
-          assemblyInspectorOpen(doc, {
-            jointId: assemblySelectedJointId,
-            componentId: assemblySelectedComponentId
-          }) ? (
-            <ErrorBoundary label="Inspector" resetKey={doc.projectId}>
-              <AssemblyInspector
-                document={doc}
-                execute={assembleApp.execute}
-                onStatus={assembleApp.onStatus}
-              />
-            </ErrorBoundary>
-          ) : null
-        ) : inspectorActive ? (
+        assembleMode ? null : inspectorActive ? (
           <ErrorBoundary
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}

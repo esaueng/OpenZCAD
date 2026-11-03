@@ -18,7 +18,6 @@ import {
 import { jointFromTool } from '../../lib/assembly/assemblyView';
 import {
   defaultLimit,
-  dofCountLabel,
   dofLabel,
   JOINT_KIND_META,
   suggestJointKind,
@@ -163,11 +162,13 @@ function JointToolForm({
             }}
           >
             <JointKindIcon kind={kind} />
-            <span className="assembly-kind-label">
-              {JOINT_KIND_META[kind].label}
-            </span>
-            <span className="assembly-kind-dof">
-              {ASSEMBLY_JOINT_DOFS[kind].length}
+            <span className="assembly-kind-text">
+              <span className="assembly-kind-label">
+                {JOINT_KIND_META[kind].label}
+              </span>
+              <span className="assembly-kind-hint">
+                {JOINT_KIND_META[kind].hint}
+              </span>
             </span>
             {suggested === kind ? (
               <span className="assembly-kind-suggested">Suggested</span>
@@ -214,10 +215,7 @@ function JointToolForm({
       {units.length > 0 ? (
         <details className="assembly-tool-limits">
           <summary>
-            Limits{' '}
-            <span className="assembly-muted">
-              optional · {dofCountLabel(units.length)}
-            </span>
+            Limits <span className="assembly-muted">(optional)</span>
           </summary>
           {units.map((unit, dof) => {
             const limit = tool.limits?.[dof] ?? null;

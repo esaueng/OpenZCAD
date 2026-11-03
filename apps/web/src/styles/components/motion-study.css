@@ -169,7 +169,8 @@
 
 .motion-timeline-floating {
   position: absolute;
-  left: var(--lane-inset, var(--island-gap));
+  /* Past the Assemble sidebar, so the timeline never covers it. */
+  left: calc(var(--island-gap) * 2 + var(--assembly-sidebar-w, 0px));
   right: var(--lane-right, var(--island-gap));
   /* Above the command bar, which owns the bottom lane in every mode. */
   bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
@@ -722,4 +723,9 @@
   .assembly-player-name {
     max-width: 96px;
   }
+}
+
+/* The transport's playback and speed menus: the Assemble sidebar's select. */
+.motion-select {
+  flex: 0 0 auto;
 }

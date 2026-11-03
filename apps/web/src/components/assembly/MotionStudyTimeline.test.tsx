@@ -88,17 +88,15 @@ describe('MotionStudyTimeline', () => {
     expect(timeline).toBeTruthy();
     expect(screen.getByLabelText('Playhead').textContent).toBe('0.00 / 2.00 s');
     expect(
-      screen.getByRole('radio', { name: 'Loop' }).getAttribute('aria-checked')
-    ).toBe('true');
+      screen.getByRole<HTMLSelectElement>('combobox', { name: 'Playback' })
+        .value
+    ).toBe('loop');
     expect(screen.getByRole('group', { name: 'Track Pivot' })).toBeTruthy();
     expect(
       screen.getAllByRole('button', { name: /^Key at [0-9]/ })
     ).toHaveLength(2);
-    expect(
-      screen
-        .getByRole('button', { name: 'Export video' })
-        .hasAttribute('disabled')
-    ).toBe(true);
+    // No placeholder controls for features that do not exist yet.
+    expect(screen.queryByRole('button', { name: 'Export video' })).toBeNull();
     // Paused, the parts show the study at the playhead.
     expect(getAssemblyRuntime().overrides.get('j_pivot')).toEqual([0]);
   });
@@ -164,7 +162,9 @@ describe('MotionStudyTimeline', () => {
       37.8
     );
     // Space toggles while the timeline has focus; 2× restarts at that speed.
-    fireEvent.click(screen.getByRole('radio', { name: '2×' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Speed' }), {
+      target: { value: '2' }
+    });
     fireEvent.keyDown(screen.getByRole('region'), { key: ' ' });
     expect(start).toHaveBeenLastCalledWith('study_1', 2, 0.84);
   });
@@ -217,7 +217,9 @@ describe('MotionStudyTimeline', () => {
     fireEvent.blur(duration);
     expect(lastStudy(executed).durationS).toBe(1);
     expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.t)).toEqual([0, 1]);
-    fireEvent.click(screen.getByRole('radio', { name: 'Back and forth' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Playback' }), {
+      target: { value: 'ping-pong' }
+    });
     expect(lastStudy(executed).playback).toBe('ping-pong');
     expect(executed).toHaveLength(2);
   });
