@@ -312,6 +312,12 @@ export interface ValueSpec {
   suffix?: string;
   /** What the value means, as the panel row's tooltip. */
   note?: string;
+  /**
+   * A point's or direction's coordinate: the Options panel sets the values
+   * sharing this name side by side as one row so named ("Origin"), each
+   * field under its own label ("X"). Chips keep the label alone.
+   */
+  vector?: string;
   /** One arrow-key or scrub step; else 1, or 0.1 for a length under 10. */
   step?: number;
   /** Whether the row means anything with the other choices as they stand. */
@@ -1118,9 +1124,9 @@ const loft: InPlaceToolSpec = {
     // How far the apex stands off the last section, along its normal.
     { id: 'apex', label: 'Apex', unit: 'length', initial: 10 },
     // Or the apex anywhere, as the card's X, Y and Z fields placed it.
-    { id: 'apexX', label: 'X', unit: 'length', initial: 0 },
-    { id: 'apexY', label: 'Y', unit: 'length', initial: 0 },
-    { id: 'apexZ', label: 'Z', unit: 'length', initial: 0 }
+    { id: 'apexX', label: 'X', unit: 'length', initial: 0, vector: 'Point' },
+    { id: 'apexY', label: 'Y', unit: 'length', initial: 0, vector: 'Point' },
+    { id: 'apexZ', label: 'Z', unit: 'length', initial: 0, vector: 'Point' }
   ],
   options: [
     {
@@ -1285,7 +1291,7 @@ const sweep: InPlaceToolSpec = {
           value: 'smooth',
           label: 'Smooth',
           // The card's own explanation, so Smooth is not taken for exact.
-          note: 'Finer sampling, not exact surfaces'
+          tip: 'Finer sampling, not exact surfaces'
         }
       ],
       initial: 'standard'
@@ -1300,7 +1306,7 @@ const sweep: InPlaceToolSpec = {
         {
           value: 'guide',
           label: 'Rail',
-          note: 'The profile turns to face the rail'
+          tip: 'The profile turns to face the rail'
         }
       ],
       initial: 'path'
@@ -1358,8 +1364,8 @@ const AXIS_MODE_OPTION: OptionSpec = {
 };
 
 const TYPED_AXIS_VALUES: ValueSpec[] = [
-  ...vectorValues('axisO', 'length', { x: 0, y: 0, z: 0 }),
-  ...vectorValues('axisD', 'count', { x: 0, y: 0, z: 1 })
+  ...vectorValues('axisO', 'length', { x: 0, y: 0, z: 0 }, 'Origin'),
+  ...vectorValues('axisD', 'count', { x: 0, y: 0, z: 1 }, 'Direction')
 ];
 
 const helicalSweep: InPlaceToolSpec = {
@@ -1959,10 +1965,17 @@ const GEAR_TOOTH_VALUES: ValueSpec[] = [
 
 /** Both gear commands' tooth form, folded shut: set once, seldom changed. */
 const GEAR_FORM_SECTIONS: readonly InPlacePanelSection[] = [
-  { label: 'Helix', items: ['helixAngleDeg', 'hand', 'helix'] },
   {
-    label: 'Tooth form',
+    label: 'Helix',
+    boxed: true,
+    compact: true,
+    items: ['helixAngleDeg', 'hand', 'helix']
+  },
+  // Set once for a mate and rarely changed: folded, as the Thread's More.
+  {
+    label: 'More',
     collapsed: true,
+    compact: true,
     items: ['pressureAngleDeg', 'profileShift', 'backlash', 'phaseDeg']
   }
 ];
@@ -1997,7 +2010,7 @@ const GEAR_HELIX_OPTION: OptionSpec = {
     {
       value: 'herringbone',
       label: 'Herringbone',
-      note: 'V-shaped teeth'
+      tip: 'V-shaped teeth'
     }
   ],
   initial: 'single',
@@ -2013,7 +2026,7 @@ const GEAR_THROAT_OPTION: OptionSpec = {
     {
       value: 'throated',
       label: 'Throated',
-      note: 'Tips wrap the worm'
+      tip: 'Tips wrap the worm'
     }
   ],
   initial: 'plain',
@@ -2231,23 +2244,36 @@ const gear: InPlaceToolSpec = {
   ],
   layout: [
     {
+      label: 'Gear',
+      boxed: true,
+      compact: true,
       items: [
         'gearType',
+        'sizing',
+        'throat',
         'teeth',
         'starts',
-        'sizing',
         'module',
         'circularPitch',
         'diametralPitch',
         'faceWidth',
         'diameterFactor',
         'wormLength',
-        'throat',
         'outsideDiameter'
       ]
     },
-    { label: 'Mate', items: ['mateTeeth', 'shaftAngleDeg'] },
-    { label: 'Hub', items: ['boreDiameter', 'rimDiameter'] },
+    {
+      label: 'Mate',
+      boxed: true,
+      compact: true,
+      items: ['mateTeeth', 'shaftAngleDeg']
+    },
+    {
+      label: 'Hub',
+      boxed: true,
+      compact: true,
+      items: ['boreDiameter', 'rimDiameter']
+    },
     ...GEAR_FORM_SECTIONS
   ],
   summary: gearSummary,
@@ -2260,42 +2286,42 @@ const gear: InPlaceToolSpec = {
         {
           value: 'external',
           label: 'External',
-          note: 'Spur or helical'
+          tip: 'Spur or helical'
         },
         {
           value: 'internal',
           label: 'Internal (ring)',
-          note: 'Teeth inside a rim'
+          tip: 'Teeth inside a rim'
         },
         {
           value: 'rack',
           label: 'Rack',
-          note: 'Straight teeth on the plane'
+          tip: 'Straight teeth on the plane'
         },
         {
           value: 'bevel',
           label: 'Bevel',
-          note: 'Meshes at a shaft angle'
+          tip: 'Meshes at a shaft angle'
         },
         {
           value: 'worm',
           label: 'Worm',
-          note: 'Drives a worm wheel'
+          tip: 'Drives a worm wheel'
         },
         {
           value: 'worm-wheel',
           label: 'Worm wheel',
-          note: 'Meshes with a worm'
+          tip: 'Meshes with a worm'
         },
         {
           value: 'enveloping-worm',
           label: 'Enveloping worm',
-          note: 'Hourglass worm'
+          tip: 'Hourglass worm'
         },
         {
           value: 'enveloping-wheel',
           label: 'Enveloping wheel',
-          note: 'Meshes with an enveloping worm'
+          tip: 'Meshes with an enveloping worm'
         }
       ],
       initial: 'external'
@@ -2520,12 +2546,12 @@ const gearTeeth: InPlaceToolSpec = {
         {
           value: 'keep-diameter',
           label: 'Keep diameter',
-          note: 'Module follows the teeth'
+          tip: 'Module follows the teeth'
         },
         {
           value: 'module',
           label: 'Set module',
-          note: 'Turns the boss down or opens the bore'
+          tip: 'Turns the boss down or opens the bore'
         }
       ],
       initial: 'keep-diameter'
@@ -2536,11 +2562,14 @@ const gearTeeth: InPlaceToolSpec = {
   ],
   layout: [
     {
+      label: 'Teeth',
+      boxed: true,
+      compact: true,
       items: [
         'side',
         'fit',
-        'teeth',
         'sizing',
+        'teeth',
         'module',
         'circularPitch',
         'diametralPitch'
@@ -2700,6 +2729,25 @@ const hole: InPlaceToolSpec = {
         { value: 'countersink', label: 'Countersink' }
       ],
       initial: 'simple'
+    }
+  ],
+  layout: [
+    {
+      boxed: true,
+      compact: true,
+      items: [
+        'style',
+        'depthMode',
+        'place',
+        'diameter',
+        'depth',
+        'counterboreDiameter',
+        'counterboreDepth',
+        'countersinkDiameter',
+        'countersinkAngleDeg',
+        'positionU',
+        'positionV'
+      ]
     }
   ],
   defaults: (_slots, _ctx, numbers) => holeStepSizes(numbers.diameter ?? 6),
@@ -3197,8 +3245,8 @@ const draft: InPlaceToolSpec = {
       max: 90,
       exclusive: true
     },
-    ...vectorValues('pull', 'count', { x: 0, y: 0, z: 1 }),
-    ...vectorValues('neutral', 'length', { x: 0, y: 0, z: 0 })
+    ...vectorValues('pull', 'count', { x: 0, y: 0, z: 1 }, 'Pull'),
+    ...vectorValues('neutral', 'length', { x: 0, y: 0, z: 0 }, 'Hinge')
   ],
   options: [
     {
@@ -3496,13 +3544,15 @@ const PLANE_OFFSET: ValueSpec = {
 function vectorValues(
   prefix: string,
   unit: ValueSpec['unit'],
-  initial: Vector3
+  initial: Vector3,
+  vector: string
 ): ValueSpec[] {
   return (['x', 'y', 'z'] as const).map((axis) => ({
     id: `${prefix}${axis.toUpperCase()}`,
     label: `${axis.toUpperCase()}`,
     unit,
-    initial: initial[axis]
+    initial: initial[axis],
+    vector
   }));
 }
 
@@ -3565,8 +3615,8 @@ const PLANE_MODE_OPTION: OptionSpec = {
 };
 
 const TYPED_PLANE_VALUES: ValueSpec[] = [
-  ...vectorValues('planeO', 'length', { x: 0, y: 0, z: 0 }),
-  ...vectorValues('planeN', 'count', { x: 0, y: 0, z: 1 })
+  ...vectorValues('planeO', 'length', { x: 0, y: 0, z: 0 }, 'Origin'),
+  ...vectorValues('planeN', 'count', { x: 0, y: 0, z: 1 }, 'Normal')
 ];
 
 /**
@@ -3750,7 +3800,7 @@ const scale: InPlaceToolSpec = {
       min: 0,
       exclusive: true
     },
-    ...vectorValues('pivot', 'length', { x: 0, y: 0, z: 0 })
+    ...vectorValues('pivot', 'length', { x: 0, y: 0, z: 0 }, 'Pivot')
   ],
   options: [
     {
@@ -4053,9 +4103,9 @@ const linearPattern: InPlaceToolSpec = {
       integer: true
     },
     // A custom repeat direction, as the card's X, Y and Z fields gave it.
-    { id: 'dirX', label: 'X', unit: 'count', initial: 1 },
-    { id: 'dirY', label: 'Y', unit: 'count', initial: 0 },
-    { id: 'dirZ', label: 'Z', unit: 'count', initial: 0 }
+    { id: 'dirX', label: 'X', unit: 'count', initial: 1, vector: 'Direction' },
+    { id: 'dirY', label: 'Y', unit: 'count', initial: 0, vector: 'Direction' },
+    { id: 'dirZ', label: 'Z', unit: 'count', initial: 0, vector: 'Direction' }
   ],
   options: [
     {
@@ -4183,12 +4233,12 @@ const circularPattern: InPlaceToolSpec = {
         {
           value: 'equal',
           label: 'Equal',
-          note: 'Copies share the total angle'
+          tip: 'Copies share the total angle'
         },
         {
           value: 'step',
           label: 'Fixed step',
-          note: 'Each copy turns one step'
+          tip: 'Each copy turns one step'
         }
       ],
       initial: 'equal'
@@ -4305,6 +4355,20 @@ const gridPattern: InPlaceToolSpec = {
   options: [
     { ...AXIS_OPTION('x'), distinctFrom: 'axis2' },
     { ...AXIS_OPTION('y', 'axis2', 'Then along'), distinctFrom: 'axis' }
+  ],
+  layout: [
+    {
+      label: 'First',
+      boxed: true,
+      compact: true,
+      items: ['axis', 'spacing', 'count']
+    },
+    {
+      label: 'Second',
+      boxed: true,
+      compact: true,
+      items: ['axis2', 'spacing2', 'count2']
+    }
   ],
   hint: (slots) =>
     slots.bodies.length === 0
@@ -4473,15 +4537,15 @@ const fillet: InPlaceToolSpec = {
   options: [
     {
       id: 'law',
-      label: 'Radius change',
+      label: 'Radius',
       // Constant by default, as a blank End radius was on the card.
       choices: [
         { value: 'constant', label: 'Constant' },
-        { value: 'linear', label: 'Linear', note: VARIABLE_RADIUS_NOTE },
+        { value: 'linear', label: 'Linear', tip: VARIABLE_RADIUS_NOTE },
         {
           value: 'scurve',
           label: 'Eased',
-          note: VARIABLE_RADIUS_NOTE
+          tip: VARIABLE_RADIUS_NOTE
         }
       ],
       initial: 'constant'
@@ -4562,11 +4626,11 @@ const chamfer: InPlaceToolSpec = {
       // Equal setbacks by default, as blank Angle and Second distance were.
       choices: [
         { value: 'equal', label: 'Equal' },
-        { value: 'angle', label: 'Distance and angle' },
+        { value: 'angle', label: 'Angle' },
         {
           value: 'two',
           label: 'Two distances',
-          note: 'Swap them if they land on the wrong faces'
+          tip: 'Swap them if they land on the wrong faces'
         }
       ],
       initial: 'equal'
@@ -4676,6 +4740,15 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
         initial: 0,
         inOptions: true
       }))
+    ],
+    layout: [
+      {
+        label: 'Size',
+        boxed: true,
+        compact: true,
+        items: PRIMITIVE_SIZES[kind].map((size) => size.id)
+      },
+      { label: 'Position', boxed: true, compact: true, items: ['x', 'y', 'z'] }
     ],
     hint(slots) {
       return slots.placement

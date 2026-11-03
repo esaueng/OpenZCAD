@@ -192,7 +192,7 @@ test('Gear parameters: typed in place, in their own units, only where they apply
   await bar.locator('details.in-place-command-options summary').click();
   const panel = bar.locator('.in-place-command-options-panel');
   // An angle reads in degrees and a shift in modules, never in mm.
-  await panel.getByText('Tooth form').click();
+  await panel.getByRole('button', { name: 'More' }).click();
   const pressure = panel.getByRole('textbox', { name: 'Pressure angle' });
   await expect(pressure).toHaveValue('20');
   await expect(pressure.locator('..')).toContainText('°');

@@ -111,7 +111,7 @@ const OPERATIONS: InPlaceOption['choices'] = [
   {
     value: 'automatic',
     label: 'Auto',
-    note: 'Adds, cuts or starts a body as it meets the model'
+    tip: 'Adds, cuts or starts a body as it meets the model'
   },
   { value: 'new-body', label: 'New body' },
   { value: 'add', label: 'Add' },
@@ -409,7 +409,7 @@ export function ExtrudeCommand({
               {
                 value: 'to-face',
                 label: 'To face',
-                note: 'Follows the face if it moves'
+                tip: 'Follows the face if it moves'
               }
             ]
           : []),
@@ -418,7 +418,7 @@ export function ExtrudeCommand({
               {
                 value: 'through-all',
                 label: 'Through all',
-                note: 'Cuts through the whole target'
+                tip: 'Cuts through the whole target'
               }
             ]
           : [])
@@ -443,7 +443,7 @@ export function ExtrudeCommand({
         {
           value: 'symmetric',
           label: 'Symmetric',
-          note: 'Half each side'
+          tip: 'Half each side'
         }
       ]
     });

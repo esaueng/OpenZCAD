@@ -274,6 +274,8 @@ export function InPlaceCommandBar({
             {(
               sections ?? [
                 {
+                  boxed: true,
+                  compact: true,
                   rows: [
                     ...options.map((option) => ({
                       kind: 'option' as const,
@@ -546,7 +548,7 @@ function KeypadValueRow({
     ((valueId: string, at: { x: number; y: number }) => void) | undefined;
 }) {
   return (
-    <div className="in-place-option in-place-param-row">
+    <div className="in-place-option in-place-param-row is-keypad">
       <span className="in-place-option-label" aria-hidden="true">
         {value.label}
       </span>

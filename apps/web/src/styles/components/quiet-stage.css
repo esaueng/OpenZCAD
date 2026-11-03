@@ -4176,15 +4176,19 @@ button.model-panel-grip[aria-expanded='true'] {
    choice, names in a column on the left, controls on the right, so a
    gear's dozen numbers fit beside the model rather than over it. */
 .in-place-command-options-panel.in-place-params {
-  width: min(380px, calc(100vw - 32px));
+  width: min(360px, calc(100vw - 32px));
   padding: 8px 10px 10px;
   font-size: var(--fs-sm);
 }
 
 .in-place-params-summary {
   margin: 0 0 6px;
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
+  padding: 5px 7px;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
   line-height: 1.45;
 }
@@ -4198,9 +4202,11 @@ button.model-panel-grip[aria-expanded='true'] {
 .in-place-params-heading {
   margin: 0 0 4px;
   color: var(--color-text-subtle);
-  font: inherit;
-  font-size: var(--fs-xs);
-  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
 }
 
 /* A folded group's title is its toggle, with a chevron that turns. */
@@ -4341,6 +4347,55 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .in-place-params-grid.is-compact
   > .in-place-param-value:not(.is-vector):focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+/* A number typed on the keypad (an Extrude's) sits as the typed ones do:
+   one box, named inside it, two to a row. */
+.in-place-params-grid.is-compact > .in-place-param-row.is-keypad {
+  display: flex;
+  grid-column: auto;
+  gap: 6px;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 0 6px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-params-section.is-boxed
+  .in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad {
+  background: var(--color-surface);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad
+  > .in-place-option-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad
+  > .in-place-option-value {
+  flex: 1 0 40px;
+  min-height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  text-align: right;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 1px var(--color-accent);
 }
