@@ -2052,9 +2052,14 @@ button.command-rail.is-suggested {
   max-height: none;
 }
 
+/* The simple list stands on the stage's foot, lifted until its own foot is
+   level with the More tools button (--flyout-lift, measured in
+   CommandCard), but never past the frame's top. */
 .viewer-area .workspace-column-float .command-flyout.is-simple {
   top: auto;
-  bottom: calc(100% - var(--sheet-top) - var(--sheet-h));
+  bottom: calc(
+    100% - var(--sheet-top) - var(--sheet-h) + var(--flyout-lift, 0px)
+  );
   max-height: var(--sheet-h);
 }
 

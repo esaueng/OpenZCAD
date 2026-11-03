@@ -28608,7 +28608,7 @@ export function App() {
   // The readout at the head of the line already names the face.
   const faceSelectedHint = [
     railPick ? null : 'Face selected',
-    keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
+    keyHint(keymap, 'view-normal-to-face', 'views it head-on')
   ]
     .filter(Boolean)
     .join(' — ');

@@ -69,7 +69,7 @@ function armedStep(state: InteractionState): string {
         // longer wording ellipsized the Escape rung off its end.
         return [
           'Drag to push or pull the face, or type an exact distance',
-          keyHint(activeKeymap(), 'view-normal-to-face', 'faces it head-on')
+          keyHint(activeKeymap(), 'view-normal-to-face', 'views it head-on')
         ]
           .filter(Boolean)
           .join(' · ');

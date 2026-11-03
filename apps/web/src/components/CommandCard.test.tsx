@@ -747,6 +747,96 @@ describe('CommandCard', () => {
     ).toBeVisible();
   });
 
+  it('leaves the pick’s own tools out of the simple list', () => {
+    const verb = (id: `tool:${ToolId}` | 'action:sketch-on-face') => ({
+      id,
+      label: id,
+      title: id,
+      disabled: false,
+      pressed: false
+    });
+    const { container } = renderCard(
+      { ...NOTHING, faceSelected: true, bodyCount: 1 },
+      {
+        initialView: 'simple',
+        pickSummary: '1 face',
+        pick: {
+          label: textLabelSegments('Bracket · Top face'),
+          verbs: [
+            verb('action:sketch-on-face'),
+            verb('tool:hole'),
+            verb('tool:shell')
+          ],
+          anchor: 'selection',
+          onVerb: vi.fn(),
+          onClear: vi.fn()
+        }
+      }
+    );
+    openDrawer();
+    const listed = foldTools(container);
+    // The rail beside the list already draws these three.
+    expect(listed).not.toContain('sketch');
+    expect(listed).not.toContain('hole');
+    expect(listed).not.toContain('shell');
+    expect(listed).toContain('draft');
+    // The advanced sheet still lists every tool, to pin from.
+    fireEvent.click(screen.getByRole('button', { name: /^All tools & pins/ }));
+    expect(foldTools(container)).toEqual(
+      expect.arrayContaining(['sketch', 'hole', 'shell'])
+    );
+  });
+
+  it.each([
+    // The button stands 200px above the stage's foot, with room to rise.
+    { toggleBottom: 500, lift: '200px' },
+    // Higher than the frame allows: the list stops at the frame's top.
+    { toggleBottom: 100, lift: '300px' },
+    // At the foot already: nothing to lift.
+    { toggleBottom: 700, lift: '0px' }
+  ])(
+    'stands the simple list level with More tools ($toggleBottom)',
+    ({ toggleBottom, lift }) => {
+      const rect = vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          if (this.classList.contains('command-flyout')) {
+            return { top: 400, bottom: 700, height: 300 } as DOMRect;
+          }
+          if (this.classList.contains('command-more-toggle')) {
+            return {
+              top: toggleBottom - 30,
+              bottom: toggleBottom,
+              height: 30
+            } as DOMRect;
+          }
+          return { top: 0, bottom: 0, height: 0 } as DOMRect;
+        });
+      const style = window.getComputedStyle;
+      const computed = vi
+        .spyOn(window, 'getComputedStyle')
+        .mockImplementation((element, pseudo) =>
+          (element as HTMLElement).classList.contains('command-flyout')
+            ? ({ maxHeight: '600px' } as CSSStyleDeclaration)
+            : style(element, pseudo)
+        );
+      try {
+        const { container } = renderCard(NOTHING, { initialView: 'simple' });
+        openDrawer();
+        const flyout = container.querySelector<HTMLElement>('.command-flyout')!;
+        expect(flyout.style.getPropertyValue('--flyout-lift')).toBe(lift);
+        // The advanced sheet keeps the stage's full height.
+        fireEvent.click(
+          screen.getByRole('button', { name: /^All tools & pins/ })
+        );
+        expect(flyout.style.getPropertyValue('--flyout-lift')).toBe('');
+      } finally {
+        rect.mockRestore();
+        computed.mockRestore();
+      }
+    }
+  );
+
   it('greys a tool that cannot run but still lets it move and pin', () => {
     const { container, onLaunchTool } = renderCard();
     layOutPins(container);

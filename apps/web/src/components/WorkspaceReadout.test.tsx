@@ -29,7 +29,7 @@ describe('WorkspaceReadout', () => {
   it('exposes the complete operation instructions independently of the clipped hint', async () => {
     const user = userEvent.setup();
     const prompt =
-      'Drag to offset · type an exact distance · Space faces it head-on · Escape cancels';
+      'Drag to offset · type an exact distance · Space views it head-on · Escape cancels';
     render(
       <WorkspaceReadout
         status=""

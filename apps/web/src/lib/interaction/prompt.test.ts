@@ -233,7 +233,7 @@ describe('the step describes the operation actually armed', () => {
 
   it('reads as one line for the status bar', () => {
     expect(commandPromptText(faceState('armed'))).toBe(
-      'Drag to push or pull the face, or type an exact distance · Space faces it head-on · Esc clears the selection'
+      'Drag to push or pull the face, or type an exact distance · Space views it head-on · Esc clears the selection'
     );
   });
 });
