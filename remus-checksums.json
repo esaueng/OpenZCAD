@@ -1,7 +1,7 @@
 {
-  "commit": "35b197aa83c411481921b302446ebcec710ed816",
+  "commit": "d04ad1eac4fde1fada9f3824a81ceefd3c4080ff",
   "files": {
-    "remus-wasm/remus_wasm_bg.wasm": "90df69a00bede3639276b59f83656fed2d9beeee",
+    "remus-wasm/remus_wasm_bg.wasm": "9f82e9cf702a7d3287401e5ea1c1058ce9392ad5",
     "remus-wasm-io/remus_wasm_io_bg.wasm": "f3092bb3b0fc0f39adff28a315ea6f8e62f14089"
   }
 }

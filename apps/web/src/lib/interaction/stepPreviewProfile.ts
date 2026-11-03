@@ -221,6 +221,24 @@ export function stepPreviewProfile(
     }
   }
   if (!(span > tolerance) || !(reach > tolerance)) return null;
+  // Edge polylines and face triangles sample curved boundaries independently.
+  // Every sample on an edge of the rigid region must travel with that region,
+  // including the selected rim's samples absent from the triangle mesh.
+  const movingFaces = new Set([...moving].map((info) => info.face.hash));
+  for (const edge of body.topology!.edges) {
+    if (!edge.adjacentFaceHashes?.some((hash) => movingFaces.has(hash)))
+      continue;
+    for (let i = 0; i + 2 < edge.points.length; i += 3) {
+      const key = stepPreviewKey(
+        edge.points[i]!,
+        edge.points[i + 1]!,
+        edge.points[i + 2]!,
+        origin,
+        quantum
+      );
+      if (key >= 0) movingKeys.add(key);
+    }
+  }
   return { normal, origin, quantum, movingKeys, span, reach, planarFaces };
 }
 

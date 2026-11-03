@@ -1818,6 +1818,8 @@ const TOOLS_WAITING_DELAY_MS = 400;
 const CYLINDER_RADIUS_REST_MS = 250;
 /** How long a fillet or chamfer handle rests before its complete rebuild. */
 const EDGE_BLEND_REST_MS = 250;
+/** Check a generic face's viewport deformation once the hand rests. */
+const OFFSET_FACE_REST_MS = 250;
 /**
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
@@ -4468,6 +4470,15 @@ export function App() {
       }
     })
   ).current;
+
+  const offsetRestTimer = useRef<number | null>(null);
+  const stopOffsetRestCheck = useCallback(() => {
+    if (offsetRestTimer.current !== null) {
+      window.clearTimeout(offsetRestTimer.current);
+      offsetRestTimer.current = null;
+    }
+  }, []);
+  useEffect(() => stopOffsetRestCheck, [stopOffsetRestCheck]);
 
   /**
    * Preview and commit resolve the same command choice. Automatic uses exact
@@ -24414,6 +24425,7 @@ export function App() {
   }
 
   function handleOffsetPreview(offset: number, exactGeometry = true) {
+    stopOffsetRestCheck();
     const current = interactionRef.current;
     // The arrow rig is shared: in region mode its value is an extrude height.
     if (current.mode === 'region') {
@@ -24441,6 +24453,21 @@ export function App() {
       offsetPreview.clear();
       setPreviewDeferred(false);
       recoverPreviewInteraction();
+      if (offsetHandleTarget?.stepProfilePreview && Math.abs(offset) > 1e-9) {
+        const target = current.target;
+        offsetRestTimer.current = window.setTimeout(() => {
+          offsetRestTimer.current = null;
+          const live = interactionRef.current;
+          if (
+            live.mode === 'face' &&
+            live.op === 'offset-face' &&
+            live.phase !== 'validating' &&
+            live.target === target &&
+            offsetPreviewValueRef.current === offset
+          )
+            offsetPreview.request(offset);
+        }, OFFSET_FACE_REST_MS);
+      }
       return;
     }
     if (Math.abs(offset) <= 1e-9) {
@@ -24454,6 +24481,7 @@ export function App() {
   }
 
   function handleOffsetCancel() {
+    stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
@@ -24485,6 +24513,7 @@ export function App() {
    * refused value with its change band still drawn.
    */
   const clearDirectEditPreviews = useCallback(() => {
+    stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
     cylinderRadiusPreview.clear();
@@ -24516,7 +24545,8 @@ export function App() {
     cylinderRadiusPreview,
     cylinderRadiusRestCheck,
     edgePreview,
-    edgeRestCheck
+    edgeRestCheck,
+    stopOffsetRestCheck
   ]);
 
   // A preview must never outlive the command that made it. Whatever returns
@@ -24759,6 +24789,7 @@ export function App() {
     exact?: ParamValue,
     options?: { keepingLastValid?: boolean }
   ): OffsetCommitOutcome {
+    stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
     if (interaction.mode === 'region') {
       handleRegionExtrudeCommit(offset, exact);
