@@ -98,6 +98,21 @@ const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
     sentence: 'The exact kernel could not build this result.'
   },
   {
+    pattern: /conical cap reaches or crosses its support apex/i,
+    sentence:
+      'The conical end would collapse at that distance. Try a smaller offset.'
+  },
+  {
+    pattern: /radial resize intersects nonincident meridian boundaries/i,
+    sentence: 'That diameter would make parts of the body overlap.'
+  },
+  {
+    pattern:
+      /radial resize (?:reverses a meridian segment|collapses a (?:meridian segment|torus ring))/i,
+    sentence:
+      'That diameter would collapse a wall or blend. Try a smaller change.'
+  },
+  {
     // A local face move sweeps the face and lets only its edge neighbours
     // stretch; anything else in the path refuses the move.
     pattern:

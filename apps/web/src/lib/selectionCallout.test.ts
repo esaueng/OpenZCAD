@@ -625,6 +625,40 @@ describe('selection callout placement', () => {
   const bounds = { left: 4, top: 52, right: 1196, bottom: 846 };
   const handle = { left: 690, top: 225, right: 840, bottom: 249 };
 
+  it('keeps the selected face controls out from under an open Section toolbox', () => {
+    const root = document.createElement('div');
+    root.className = 'app-shell';
+    root.innerHTML =
+      '<div class="viewer-area"><div class="viewer-shell"><div class="labels"><div class="selection-callout selection-callout-chip"></div></div><div class="rail-section-panel"></div></div></div>';
+    document.body.append(root);
+    try {
+      const container = root.querySelector<HTMLElement>('.labels')!;
+      const chip = root.querySelector<HTMLElement>('.selection-callout-chip')!;
+      const section = root.querySelector<HTMLElement>('.rail-section-panel')!;
+      vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(0, 0, 1200, 850)
+      );
+      vi.spyOn(section, 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(720, 280, 300, 250)
+      );
+      vi.spyOn(chip, 'getBoundingClientRect').mockImplementation(() => {
+        const [dx, dy] = chip.style.translate
+          .split(/\s+/)
+          .map(Number.parseFloat);
+        return new DOMRect(600 + (dx || 0), 300 + (dy || 0), 300, 30);
+      });
+      for (let frame = 0; frame < 12; frame += 1) {
+        placeSelectionCallouts(container);
+        const rect = chip.getBoundingClientRect();
+        expect(rect.right <= 720 || rect.bottom <= 280 || rect.top >= 530).toBe(
+          true
+        );
+      }
+    } finally {
+      root.remove();
+    }
+  });
+
   it('leaves a chip clear of the chrome and handle at its anchor', () => {
     expect(
       selectionCalloutPlacement(
