@@ -30,7 +30,7 @@ const PIVOT: AssemblyFrame = {
   xAxis: { x: 1, y: 0, z: 0 }
 };
 
-function blades(name: string, joined: boolean): ProjectDocument {
+function blades(name: string, joined: boolean, screw = false): ProjectDocument {
   let document = createProjectDocument(name, toUserId('user_e2e'));
   for (const bodyName of ['Blade A', 'Blade B']) {
     document = addPrimitiveFeature(document, {
@@ -40,6 +40,13 @@ function blades(name: string, joined: boolean): ProjectDocument {
       dimensions: { width: 60, height: 4, depth: 12 }
     });
   }
+  if (screw)
+    document = addPrimitiveFeature(document, {
+      name: 'Pivot screw',
+      bodyName: 'Pivot screw',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 3, height: 10 }
+    });
   if (!joined) return document;
   const [a, b] = document.bodyOrder as [BodyId, BodyId];
   document = addAssemblyComponents(document, {
@@ -80,7 +87,7 @@ async function openDocument(page: Page, document: ProjectDocument) {
       : route.fulfill({ json: { projects: [] } })
   );
   await createProject(page, document.name);
-  await expectBodyCount(page, 2);
+  await expectBodyCount(page, document.bodyOrder.length);
 }
 
 const assemble = (page: Page) =>
@@ -90,18 +97,42 @@ const panel = (page: Page) =>
   page.getByRole('complementary', { name: 'Assembly' });
 
 test(
-  'turns bodies into components from the first-run card (AS01)',
+  'turns bodies into parts from the first run in the sidebar (AS01)',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     await openDocument(page, blades('Assembly first run', false));
     await assemble(page);
-    await page
-      .getByRole('button', { name: /Use 2 bodies as components/ })
-      .click();
-    const components = panel(page).getByRole('region', { name: 'Components' });
-    await expect(components).toContainText('Blade A');
-    await expect(components).toContainText('Blade B');
-    await expect(components.getByLabel('Grounded')).toHaveCount(1);
+    await panel(page).getByRole('button', { name: 'Add 2 parts' }).click();
+    const parts = panel(page).getByRole('region', { name: 'Parts' });
+    await expect(parts).toContainText('Blade A');
+    await expect(parts).toContainText('Blade B');
+    await expect(
+      parts.getByRole('button', { name: 'Blade A is fixed' })
+    ).toBeVisible();
+  }
+);
+
+test(
+  'adds a body that is not in the assembly yet (regression)',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openDocument(page, blades('Assembly add body', true, true));
+    await assemble(page);
+    const parts = panel(page).getByRole('region', { name: 'Parts' });
+    await expect(
+      parts.getByRole('group', { name: 'Not in the assembly' })
+    ).toContainText('Pivot screw');
+    await parts.getByRole('button', { name: 'Add Pivot screw' }).click();
+    await expect(
+      parts.getByRole('group', { name: 'Not in the assembly' })
+    ).toHaveCount(0);
+    await expect(parts).toContainText('Pivot screw');
+    await expect(parts).toContainText('Not joined');
+    // One undo takes the added part back out.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(
+      parts.getByRole('group', { name: 'Not in the assembly' })
+    ).toContainText('Pivot screw');
   }
 );
 

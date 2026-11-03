@@ -63,7 +63,7 @@ export function AssemblyFirstRunCard({
       return;
     const groundedCount = components.filter((c) => c.grounded).length;
     onAnnounce(
-      `${count} ${count === 1 ? 'component' : 'components'} · ${groundedCount} grounded. Next: press J to add a joint`
+      `${count} ${count === 1 ? 'part' : 'parts'} · ${groundedCount} fixed. Next: press J to join two parts`
     );
   };
 
@@ -73,7 +73,7 @@ export function AssemblyFirstRunCard({
       aria-labelledby="assembly-first-run-title"
     >
       <h2 id="assembly-first-run-title" className="assembly-first-run-title">
-        Make an assembly from this document
+        Start an assembly
       </h2>
       {bodies.length === 0 ? (
         <p className="assembly-muted">
@@ -83,8 +83,8 @@ export function AssemblyFirstRunCard({
       ) : (
         <>
           <p className="assembly-muted">
-            Each body becomes a component. A grounded component stays where you
-            modelled it; joints move the rest.
+            Tick the bodies that are parts. A fixed part stays where you
+            modelled it; joints move the rest. You can add more later.
           </p>
           <ul className="assembly-first-run-list" aria-label="Bodies">
             {bodies.map((body) => {
@@ -106,15 +106,15 @@ export function AssemblyFirstRunCard({
                     type="button"
                     className={`assembly-pin${isGrounded ? ' is-on' : ''}`}
                     aria-pressed={isGrounded}
-                    aria-label={`Ground ${body.name}`}
-                    title={isGrounded ? 'Grounded' : 'Ground'}
+                    aria-label={`Fix ${body.name} in place`}
+                    title={isGrounded ? 'Fixed in place' : 'Fix in place'}
                     disabled={!included}
                     onClick={() =>
                       setGrounded(toggle(groundedIds, body.bodyId))
                     }
                   >
                     <Pin size={13} aria-hidden="true" />
-                    <span>Ground</span>
+                    <span>{isGrounded ? 'Fixed' : 'Fix'}</span>
                   </button>
                 </li>
               );
@@ -125,19 +125,11 @@ export function AssemblyFirstRunCard({
       <div className="assembly-actions">
         <button
           type="button"
-          className="secondary"
-          disabled
-          title="Coming later: insert parts from another project"
-        >
-          Insert from another project…
-        </button>
-        <button
-          type="button"
           className="primary"
           disabled={count === 0}
           onClick={create}
         >
-          Use {count} {count === 1 ? 'body' : 'bodies'} as components
+          Add {count} {count === 1 ? 'part' : 'parts'}
         </button>
       </div>
     </section>

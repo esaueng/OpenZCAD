@@ -114,16 +114,17 @@ export function assemblyStatusChip(
   set: AssemblySet,
   solution: AssemblySolution
 ): { label: string; tone: 'ok' | 'warning' } {
-  const dof = dofCountLabel(solution.dof);
+  // Plain words, not degrees of freedom: what the user needs to act on.
   if (set.components.length === 0) return { label: 'Empty', tone: 'ok' };
   if (solution.grounded === 0)
-    return { label: `${dof} · nothing grounded`, tone: 'warning' };
+    return { label: 'Nothing fixed', tone: 'warning' };
   if (solution.unsolved.size > 0)
     return {
-      label: `${dof} · ${solution.unsolved.size} not solved`,
+      label: `${solution.unsolved.size} can’t move`,
       tone: 'warning'
     };
-  return { label: `${dof} · solved`, tone: 'ok' };
+  if (set.joints.length === 0) return { label: 'No joints yet', tone: 'ok' };
+  return { label: 'Ready', tone: 'ok' };
 }
 
 /** Components whose body (and every body made from it) is gone. */
