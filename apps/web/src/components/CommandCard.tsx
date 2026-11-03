@@ -22,7 +22,10 @@ import {
   toolApplies,
   type CommandSelection
 } from '../lib/commandContext';
-import type { SelectionCalloutContent } from '../lib/selectionCallout';
+import type {
+  SelectionCalloutContent,
+  SelectionCalloutVerb
+} from '../lib/selectionCallout';
 import type { LabelSegment } from '../lib/topologyLabels';
 import {
   DEFAULT_PINNED_TOOLS,
@@ -139,6 +142,15 @@ export function CommandCard({
     ? []
     : suggestedTools(context, availability, pinnedTools, recentTools);
   const onRail = new Set<ToolId>([...pins, ...suggested]);
+  // What the rail draws while a pick owns it: the pick's verbs that are
+  // tools. The simple list skips them as it skips pins, so Shell is not
+  // offered twice side by side.
+  const pickTools = new Set<ToolId>(
+    (pick?.verbs ?? []).flatMap((verb) => {
+      const tool = verbTool(verb.id);
+      return tool ? [tool] : [];
+    })
+  );
   const restCount = TOOL_COUNT - onRail.size;
   const keymap = useKeymap();
   const listRef = useRef<HTMLDivElement>(null);
@@ -172,7 +184,8 @@ export function CommandCard({
         .map((group) => ({
           ...group,
           tools: group.tools.filter(
-            (tool) => tool === activeTool || !onRail.has(tool)
+            (tool) =>
+              tool === activeTool || (!onRail.has(tool) && !pickTools.has(tool))
           )
         }))
         .filter((group) => group.tools.length > 0);
@@ -183,6 +196,14 @@ export function CommandCard({
     groups.map((group) => group.tools.join()).join('|')
   );
   const canPin = onPinnedToolsChange !== undefined;
+  const moreToggleRef = useRef<HTMLButtonElement>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  useFlyoutAtToggle(
+    flyoutRef,
+    moreToggleRef,
+    moreOpen && !advanced,
+    groups.map((group) => group.tools.join()).join('|')
+  );
 
   useLayoutEffect(() => {
     const tool = focusAfterMove.current;
@@ -496,6 +517,7 @@ export function CommandCard({
             }
           >
             <button
+              ref={moreToggleRef}
               type="button"
               className={`command-rail command-more-toggle${moreOpen ? ' active' : ''}`}
               aria-expanded={moreOpen}
@@ -510,6 +532,7 @@ export function CommandCard({
             // drops its description, and a row's help opens beside the
             // drawer rather than over the rows below it.
             <div
+              ref={flyoutRef}
               className={`command-flyout ${advanced ? 'is-advanced' : 'is-simple'}${below.length > 0 ? ' has-more-below' : ''}${unpinTarget ? ' is-unpin-target' : ''}`}
               data-rail-flyout=""
               onDragOver={(event) => {
@@ -702,6 +725,71 @@ function railDragImage(source: HTMLElement): HTMLElement | null {
  * on scroll, on resize and whenever the listed tools change; a heading
  * counts as hidden once the overflow cue itself would cover it.
  */
+/** The tool a selection verb launches, if it is one. */
+function verbTool(id: SelectionCalloutVerb['id']): ToolId | null {
+  if (id.startsWith('tool:')) return id.slice('tool:'.length) as ToolId;
+  return VERB_ACTION_TOOLS[id] ?? null;
+}
+
+/** Selection actions that are a tool started on the pick. */
+const VERB_ACTION_TOOLS: Partial<Record<SelectionCalloutVerb['id'], ToolId>> = {
+  'action:sketch-on-face': 'sketch',
+  'action:fillet': 'fillet',
+  'action:chamfer': 'chamfer',
+  'action:extrude-region': 'extrude'
+};
+
+/**
+ * Stands the simple list's foot level with the More tools button that opened
+ * it, rather than at the stage's foot: the rail is centred and its length
+ * follows the pick, so a list pinned to the stage hung from nowhere, up to a
+ * few hundred pixels below the button. The lift stays within the frame the
+ * stylesheet gives the list (its max-height above the stage's foot), so a
+ * list taller than the room above the button still runs down past it.
+ *
+ * Measured, not laid out: the list takes the column float as its containing
+ * block (the rail scrolls and would clip it), and the button's place in the
+ * float moves with the rail's length and centring.
+ */
+function useFlyoutAtToggle(
+  flyoutRef: { readonly current: HTMLDivElement | null },
+  toggleRef: { readonly current: HTMLButtonElement | null },
+  active: boolean,
+  listKey: string
+) {
+  useLayoutEffect(() => {
+    const flyout = flyoutRef.current;
+    const toggle = toggleRef.current;
+    if (!active || !flyout || !toggle) return;
+    const measure = () => {
+      flyout.style.setProperty('--flyout-lift', '0px');
+      const frame = flyout.getBoundingClientRect();
+      const anchor = toggle.getBoundingClientRect();
+      const maxHeight = Number.parseFloat(getComputedStyle(flyout).maxHeight);
+      // The frame's top is the max-height above the list's resting foot.
+      const room = Number.isFinite(maxHeight)
+        ? Math.max(0, maxHeight - frame.height)
+        : 0;
+      const lift = Math.min(room, Math.max(0, frame.bottom - anchor.bottom));
+      flyout.style.setProperty('--flyout-lift', `${lift}px`);
+    };
+    measure();
+    const rail = toggle.closest<HTMLElement>('nav') ?? toggle;
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(rail);
+    observer?.observe(flyout);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      flyout.style.removeProperty('--flyout-lift');
+    };
+  }, [flyoutRef, toggleRef, active, listKey]);
+}
+
 function useGroupsBelowFold(
   listRef: { readonly current: HTMLDivElement | null },
   open: boolean,
