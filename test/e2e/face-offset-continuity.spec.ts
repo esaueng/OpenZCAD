@@ -85,6 +85,27 @@ for (const [name, normal, axis, amount] of [
       });
       await expectBodyCount(page, 1);
       const canvas = page.locator('.viewer-host canvas');
+      const span = () =>
+        canvas.evaluate(
+          (element, axis) =>
+            new Promise<number>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-render-policy', {
+                  detail: {
+                    resolve: (state: {
+                      bodyFaces: {
+                        worldBounds: { min: number[]; max: number[] };
+                      }[];
+                    }) => {
+                      const bounds = state.bodyFaces[0]!.worldBounds;
+                      resolve(bounds.max[axis]! - bounds.min[axis]!);
+                    }
+                  }
+                })
+              );
+            }),
+          axis
+        );
       await expect
         .poll(async () => {
           await canvas.evaluate(
@@ -117,10 +138,9 @@ for (const [name, normal, axis, amount] of [
         start.y + handle.dy * handle.perUnit * amount,
         { steps: 6 }
       );
-      await expect(canvas).toHaveAttribute(
-        'data-e2e-height-proxy-offset',
-        /.+/
-      );
+      // A resting exact preview can replace the proxy before this assertion.
+      // Either path must already display the complete requested enlargement.
+      await expect.poll(span).toBeCloseTo((axis === 0 ? 80 : 6) + amount, 3);
       await expect(chip).toHaveAttribute('data-variant', 'pin');
       const submitted = (await chip.innerText()).replace(/\s+/g, ' ').trim();
       await page.evaluate(() => {
@@ -227,27 +247,6 @@ for (const [name, normal, axis, amount] of [
         contentType: 'image/png'
       });
       expect(errors).toEqual([]);
-      const span = () =>
-        canvas.evaluate(
-          (element, axis) =>
-            new Promise<number>((resolve) => {
-              element.dispatchEvent(
-                new CustomEvent('openzcad:e2e-render-policy', {
-                  detail: {
-                    resolve: (state: {
-                      bodyFaces: {
-                        worldBounds: { min: number[]; max: number[] };
-                      }[];
-                    }) => {
-                      const bounds = state.bodyFaces[0]!.worldBounds;
-                      resolve(bounds.max[axis]! - bounds.min[axis]!);
-                    }
-                  }
-                })
-              );
-            }),
-          axis
-        );
       const committedSpan = await span();
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect.poll(span).toBeCloseTo(axis === 0 ? 80 : 6, 3);
