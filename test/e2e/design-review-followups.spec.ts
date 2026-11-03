@@ -119,7 +119,12 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await reachable(
           page.getByRole('button', { name: /^Close settings and go back/ })
         );
-        await page.getByRole('button', { name: 'Back to workspace' }).click();
+        await page
+          .getByRole('button', {
+            name: 'Close settings and go back to workspace',
+            exact: true
+          })
+          .click();
         await reachable(page.getByRole('button', { name: /OpenZCAD/ }));
         await reachable(page.getByRole('button', { name: /Rename project/ }));
         for (const mode of await page.locator('.mode-switch-option').all())

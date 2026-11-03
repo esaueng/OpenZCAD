@@ -113,7 +113,12 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
   await settings.getByRole('button', { name: 'Show personal info' }).click();
-  await page.getByRole('button', { name: 'Back to projects' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to projects',
+      exact: true
+    })
+    .click();
   await page.getByRole('button', { name: 'Open settings' }).click();
   // The choice lasts the session (project sharing follows it) but not a reload.
   await expect(
@@ -550,7 +555,12 @@ test('settings name their sections and search individual settings', async ({
     page.getByRole('button', { name: 'Viewport', exact: true })
   ).toBeVisible();
 
-  await page.getByRole('button', { name: 'Back to projects' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to projects',
+      exact: true
+    })
+    .click();
   await expect(settingsTrigger).toBeFocused();
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
@@ -676,7 +686,12 @@ test('turns project sharing off without disabling cloud saves', async ({
   await expect(
     page.getByRole('checkbox', { name: 'Cloud autosave' })
   ).toBeChecked();
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
 
   await expect(
     page.getByRole('button', { name: 'Open project sharing' })
@@ -744,7 +759,12 @@ test('settings restore the exact non-sensitive view after reload', async ({
     Math.min(scrollTop, restoredScroll.maximum)
   );
 
-  await page.getByRole('button', { name: 'Back to projects' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to projects',
+      exact: true
+    })
+    .click();
   await page.reload();
   await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
 });
@@ -861,7 +881,12 @@ test('settings leave the conversation and its in-flight reply intact', async ({
   await expect(settings).toBeVisible();
 
   releaseReply();
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
   await expect(settings).toHaveCount(0);
 
   // The press on Settings tucked the stream away; the reply that landed
@@ -907,7 +932,12 @@ test('disabling the assistant takes its live preview with it', async ({
   await expect(
     page.getByRole('checkbox', { name: 'AI assistant' })
   ).not.toBeChecked();
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
 
   // The panel is gone, so nothing is left that could retire the preview — the
   // workspace has to drop it rather than render a proposal forever.
@@ -935,7 +965,12 @@ test('settings swallow workspace shortcuts instead of editing behind them', asyn
   await page.keyboard.press('Control+k');
   await page.keyboard.press('b');
 
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
 
   // Every one of those keys edited or opened something behind the settings UI
   // before the workspace map learned to stand down.

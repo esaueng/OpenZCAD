@@ -75,6 +75,7 @@ async function fontFault(
   expect(loaders.size).toBeGreaterThan(0);
   let recovering = false;
   const urls: string[] = [];
+  const moduleUrls: string[] = [];
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
@@ -83,6 +84,8 @@ async function fontFault(
     if (!loaders.has(new URL(route.request().url()).pathname))
       return route.continue();
     urls.push(route.request().url());
+    if (route.request().resourceType() === 'script')
+      moduleUrls.push(route.request().url());
     if (!recovering && failure === 'stall') {
       await held;
       return route.continue().catch(() => undefined);
@@ -100,6 +103,7 @@ async function fontFault(
   });
   return {
     urls,
+    moduleUrls,
     recover: () => {
       recovering = true;
     },
@@ -214,11 +218,11 @@ for (const failure of ['fetch', 'evaluation'] as const) {
     await page.keyboard.press('t');
     const card = page.getByRole('form', { name: 'Place text' });
     await expect(card).toBeVisible();
-    await expect.poll(() => fault.urls.length).toBe(1);
+    await expect.poll(() => fault.moduleUrls.length).toBe(1);
     // The failed response must finish evaluating before the new mount retries;
     // an in-flight import is deliberately shared by both consumers.
     await expect.poll(() => failures.length).toBeGreaterThan(0);
-    expect(new URL(fault.urls[0]!).search).toBe('');
+    expect(new URL(fault.moduleUrls[0]!).search).toBe('');
     fault.recover();
     await page.keyboard.press('Escape');
     await expect(card).toHaveCount(0);
@@ -245,13 +249,19 @@ for (const failure of ['fetch', 'evaluation'] as const) {
         { timeout: 15_000 }
       )
       .toBeGreaterThan(0);
-    expect(fault.urls).toHaveLength(2);
-    expect(new URL(fault.urls[1]!).pathname).toBe(
-      new URL(fault.urls[0]!).pathname
-    );
-    expect(
-      new URL(fault.urls[1]!).searchParams.get('openzcad-font-retry')
-    ).toBe('2');
+    // HTTP cache refreshes and idle prefetches are fetches, not native module
+    // retries. The parser itself imports once, then once with a new URL.
+    const urls = fault.moduleUrls;
+    expect(urls).toHaveLength(2);
+    expect(new URL(urls[1]!).pathname).toBe(new URL(urls[0]!).pathname);
+    expect(new URL(urls[1]!).searchParams.get('openzcad-font-retry')).toBe('2');
+    const settled = fault.urls.length;
+    await page.keyboard.press('Escape');
+    await expect(card).toHaveCount(0);
+    await page.keyboard.press('t');
+    await expect(card).toBeVisible();
+    await waitForStillViewport(page);
+    expect(fault.urls).toHaveLength(settled);
   });
 }
 

@@ -803,8 +803,21 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
       (edge) => edge.visible && edge.depthTest && !edge.depthWrite
     )
   ).toBe(true);
+  const tangentBodyEdges = renderPolicy.bodyEdges.filter(
+    (edge) => edge.name === 'body-edge-tangent'
+  );
+  expect(tangentBodyEdges.length).toBeGreaterThan(0);
+  expect(
+    tangentBodyEdges.every(
+      (edge) =>
+        !edge.visible &&
+        edge.depthTest &&
+        !edge.depthWrite &&
+        edge.renderOrder === idleBodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
   const overlayEdges = renderPolicy.bodyEdges.filter(
-    (edge) => edge.name !== 'body-edge'
+    (edge) => edge.name !== 'body-edge' && edge.name !== 'body-edge-tangent'
   );
   expect(
     overlayEdges.every(
@@ -1630,7 +1643,10 @@ test('preflights and splits a box into two live half bodies', async ({
   const splitBar = page.getByRole('group', { name: 'Split command' });
   await expect(splitBar).toContainText('Pick a plane or flat face');
   await clickWorldPoint(page, [0, -3, 4]);
-  await expect(splitBar).toContainText('Slide the plane');
+  await expect(splitBar).toContainText('the cutting plane contains edge');
+  await expect(
+    splitBar.getByRole('button', { name: 'Done', exact: true })
+  ).toBeDisabled();
   await enterCommandValue(page, 'offset', '5');
   await finishInPlaceCommand(page, 'Split');
 
@@ -2872,6 +2888,10 @@ test('archives a browser-generated STEP export and lists the stored file', async
     route.fulfill({ json: { artifact: finalized ? artifact() : null } })
   );
   await page.route('**/api/artifacts/finalize', async (route) => {
+    const payload = route.request().postDataJSON() as {
+      uploadSessionId?: string;
+    };
+    if (payload.uploadSessionId !== uploadSessionId) return route.fallback();
     expect(route.request().postDataJSON()).toEqual({
       projectId,
       uploadSessionId,
@@ -2896,6 +2916,7 @@ test('archives a browser-generated STEP export and lists the stored file', async
       contentType: string;
       kind: string;
     };
+    if (payload.kind !== 'step-export') return route.fallback();
     projectId = payload.projectId;
     expect(payload).toMatchObject({
       fileName: 'Archived-Part.step',
@@ -2938,6 +2959,7 @@ test('archives a browser-generated STEP export and lists the stored file', async
   expect(uploadedStep).toContain('MANIFOLD_SOLID_BREP');
 
   await expect(fileMenu.locator('summary')).toContainText('File 1');
+  await fileMenu.locator('summary').click();
   await expect(
     fileMenu.getByRole('link', { name: /Archived-Part\.step/ })
   ).toHaveAttribute('href', `/api/artifacts/${artifactId}/download`);

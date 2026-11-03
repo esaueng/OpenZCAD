@@ -325,9 +325,9 @@ test(
     expect(await removals(page, 'data-e2e-selected-face', pressed)).toBe(0);
     expect(await removals(page, 'data-e2e-offset-ghost', pressed)).toBe(0);
     await page.evaluate(() => window.__holdFinal!.release());
-    await expect(page.getByText('depth set to', { exact: false })).toBeVisible(
-      { timeout: 30_000 }
-    );
+    await expect(page.getByText('depth set to', { exact: false })).toBeVisible({
+      timeout: 30_000
+    });
     await expect(
       page.getByRole('button', { name: 'Selection: Move', exact: true })
     ).toHaveCount(0);
@@ -367,10 +367,13 @@ test('dragging the selected face itself pushes it, as the arrow does', async ({
   ).toHaveCount(1);
 });
 
-test('a value the drag preview cannot show holds the last one it could', async ({
+test('a refused generic face drag holds its last exact preview', async ({
   page
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await page.addInitScript(() => {
+    window.__openzcadE2EExactFaceDrag = true;
+  });
   const { canvas, handle } = await armedBox(page, { hole: true });
   await recordCanvas(canvas);
   const to = (value: number) =>
@@ -382,10 +385,29 @@ test('a value the drag preview cannot show holds the last one it could', async (
   await page.mouse.move(handle.x, handle.y);
   await page.mouse.down();
   const pressed = await now(page);
-  for (let value = 1; value <= 6; value++) await to(value);
-  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '-6');
-  // Past 6 mm the face would cut into the hole, which the drag preview cannot
-  // draw. It used to snap back to the unmoved part there.
+  const front = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<number | null>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                resolve: (state: {
+                  bodyFaces: { worldBounds?: { min: number[] } }[];
+                }) =>
+                  resolve(
+                    state.bodyFaces.find((face) => face.worldBounds)
+                      ?.worldBounds?.min[1] ?? null
+                  )
+              }
+            })
+          );
+        })
+    );
+  for (let value = 1; value <= 5; value++) await to(value);
+  await expect.poll(front).toBeCloseTo(5, 4);
+  // At 6 mm the face reaches the Ø6 hole. Generic faces deliberately use
+  // exact worker previews; an affine height proxy would distort that hole.
   for (let value = 7; value <= 9; value++) await to(value);
   // Total reads the line from the arrow back to where the material ends,
   // and the arrow stands right in front of the hole: 6 mm to its wall, so
@@ -393,10 +415,16 @@ test('a value the drag preview cannot show holds the last one it could', async (
   await expect(page.getByTestId('direct-manipulation-value')).toContainText(
     '-3 mm'
   );
-  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '-6');
-  expect(await removals(page, 'data-e2e-height-proxy-offset', pressed)).toBe(0);
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveAttribute(
+    'data-state',
+    'warning'
+  );
+  await expect.poll(front).toBeCloseTo(5, 4);
+  await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+  expect(await removals(page, 'data-e2e-offset-ghost', pressed)).toBe(0);
   await page.keyboard.press('Escape');
   await page.mouse.up();
+  await expect.poll(front).toBeCloseTo(0, 4);
 });
 
 test('the face an exact preview redrew can still be grabbed after a refusal', async ({
@@ -679,7 +707,13 @@ test('applying a fillet goes straight from its preview to the blend face', async
     .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
     .toBeGreaterThan(0);
   await page.waitForTimeout(1200);
-  await expect(page.locator('.selection-readout')).toContainText('Blend face');
+  // U09 names a removable detail by its feature. Prove the actual face and
+  // radius edit remain armed, rather than depending on the older label.
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
+  await page.getByTestId('direct-manipulation-value').click();
+  await expect(keypad).toBeVisible();
+  await expect(keypad.getByRole('textbox')).toHaveValue('2');
+  await keypad.getByRole('textbox').press('Escape');
   expect(await page.evaluate(() => window.__bodyCardFrames)).toBe(0);
 });
 
