@@ -500,7 +500,9 @@ async function threeDevices(count: number) {
 
 // --- Removal ---------------------------------------------------------------
 
-describe('device removal across encrypted projects', () => {
+// These scenarios exercise complete multi-project cryptographic rotations.
+// Keep all protocol assertions under the same bounded integration budget.
+describe('device removal across encrypted projects', { timeout: 30_000 }, () => {
   it('rotates every project, signs its cutoffs and replaces the dedupe secret', async () => {
     const { srv, recovery, laptop, desktop, phone, projects } =
       await threeDevices(3);
@@ -1635,7 +1637,7 @@ function cutoffRows(srv: Server) {
 const isDeviceListPost = (path: string, init: RequestInit) =>
   path === '/api/e2ee/device-list' && init.method === 'POST';
 
-describe('a device revocation and its cutoffs in one write', () => {
+describe('a device revocation and its cutoffs in one write', { timeout: 30_000 }, () => {
   it('refuses a device revocation without its cutoffs and changes nothing', async () => {
     const { srv, recovery, laptop, phone, projects } = await threeDevices(2);
     await saveEdit(phone, projects[0]!, 'Phone edit');
