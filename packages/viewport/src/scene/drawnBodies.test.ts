@@ -33,6 +33,19 @@ describe('a body drawn as the document built it', () => {
     expect(bodyDrawnAsBuilt(bodyObject())).toBe(true);
   });
 
+  it('is not one an assembly poses by its matrix, whatever its fields say', () => {
+    // Assembly components are posed by `matrix` with `matrixAutoUpdate` off,
+    // which leaves position and rotation at rest while the body moves.
+    const object = bodyObject();
+    object.matrixAutoUpdate = false;
+    object.matrix.makeRotationZ(Math.PI / 6).setPosition(4, 0, 0);
+    expect(object.position.x).toBe(0);
+    expect(bodyDrawnAsBuilt(object)).toBe(false);
+
+    object.matrix.identity();
+    expect(bodyDrawnAsBuilt(object)).toBe(true);
+  });
+
   it('is not one the Move gizmo has translated', () => {
     // Exactly what applyMovePreview does for a typed Z of 10 with no
     // rotation: compose the transform about the body centre and set it.
