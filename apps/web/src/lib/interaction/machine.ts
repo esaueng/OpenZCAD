@@ -1527,7 +1527,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
                       keyHint(
                         activeKeymap(),
                         'view-normal-to-face',
-                        'faces it head-on'
+                        'views it head-on'
                       )
                     ]
                       .filter(Boolean)

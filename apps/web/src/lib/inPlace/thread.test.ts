@@ -7,7 +7,7 @@ import {
   threadSummary,
   type ThreadRequest
 } from './thread';
-import { inPlacePanelState } from './panel';
+import { inPlacePanelSections, inPlacePanelState } from './panel';
 import type { InPlaceSlots } from './tools';
 
 const evaluate = (value: ParamValue) =>
@@ -160,21 +160,78 @@ describe('in-place thread', () => {
     }
   });
 
-  it('summarizes the callout, starts, hand and clearance', () => {
+  it('summarizes only the folded rows that leave their defaults', () => {
     const state = inPlacePanelState(
       threadSpec,
       { size: 'M10', hand: 'left' },
-      { starts: 2 }
+      { starts: 2, phaseDeg: 30, chamferAngleDeg: 30 }
     );
-    expect(threadSummary(state, 'mm')).toBe(
-      'M10×1.5 · 2 starts · Left hand · Chamfered 45° · Clearance 0.1 mm'
+    expect(threadSummary(state)).toBe(
+      'Left hand · 2 starts · Rotated 30° · Chamfer 30°'
     );
     expect(
       threadSummary(
-        inPlacePanelState(threadSpec, { fit: 'exact', chamfer: 'none' }, {}),
-        'mm'
+        inPlacePanelState(threadSpec, { span: 'band' }, { chamferAngleDeg: 30 })
       )
     ).toBeNull();
+    expect(threadSummary(inPlacePanelState(threadSpec, {}, {}))).toBeNull();
+  });
+
+  it('lists every custom number in the panel, though none has a handle', () => {
+    const rows = (options: Record<string, string>) =>
+      inPlacePanelSections(
+        threadSpec,
+        inPlacePanelState(threadSpec, options, {}),
+        new Set()
+      ).flatMap((section) =>
+        section.rows.flatMap((row) => (row.kind === 'value' ? [row.id] : []))
+      );
+    expect(
+      rows({ profile: 'custom', size: 'custom', fit: 'custom' }).sort()
+    ).toEqual(
+      [
+        'chamferAngleDeg',
+        'clearance',
+        'crestWidth',
+        'depth',
+        'lowerFlankAngleDeg',
+        'majorDiameter',
+        'phaseDeg',
+        'pitch',
+        'starts',
+        'upperFlankAngleDeg'
+      ].sort()
+    );
+    expect(rows({}).sort()).toEqual(
+      ['chamferAngleDeg', 'phaseDeg', 'starts'].sort()
+    );
+  });
+
+  it('groups its rows in tinted boxes, numbers paired, More folded', () => {
+    const sections = inPlacePanelSections(
+      threadSpec,
+      inPlacePanelState(threadSpec, { profile: 'custom' }, {}),
+      new Set()
+    );
+    expect(
+      sections.map((s) => [s.label, !!s.compact, !!s.boxed, !!s.collapsed])
+    ).toEqual([
+      ['Thread', true, true, false],
+      ['Length', true, true, false],
+      ['Form', true, true, false],
+      ['More', true, false, true]
+    ]);
+  });
+
+  it('keeps every choice to a short label, explained only by its tooltip', () => {
+    for (const option of threadSpec.options ?? []) {
+      for (const choice of option.choices) {
+        expect(choice.note, `${option.id}:${choice.value}`).toBeUndefined();
+        if (option.id !== 'size') {
+          expect(choice.label.length, choice.label).toBeLessThanOrEqual(9);
+        }
+      }
+    }
   });
 
   it('asks for a cylinder and builds once one is picked', () => {
@@ -192,6 +249,9 @@ describe('in-place thread', () => {
     };
     expect(threadSpec.ready(empty)).toBe(false);
     expect(threadSpec.hint(empty)).toMatch(/cylindrical face/);
+    expect(threadSpec.hint({ ...empty, faces: [{} as never] })).toBe(
+      'Enter to finish'
+    );
     const face = {
       bodyId: 'body_a' as BodyId,
       hash: 9,

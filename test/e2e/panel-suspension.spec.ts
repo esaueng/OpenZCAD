@@ -22,9 +22,8 @@ import {
   waitForStillViewport
 } from './openzcad-fixtures';
 
-// U08 / #951: creation commands own the same temporary room as History
-// edits. Exercise the real entry paths, with docked, unpinned and floating
-// panels, rather than seeding model-only and hiding the missing suspension.
+// U08: tools preserve docked, unpinned and floating panels. Exercise real
+// entry paths and keep More tools folding independent of model-panel layout.
 async function openWorkspace(page: Page, { locked = true } = {}) {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await stubApi(page, {
@@ -46,7 +45,7 @@ async function openWorkspace(page: Page, { locked = true } = {}) {
   });
   let document = addSketchFeature(
     addPrimitiveFeature(
-      createProjectDocument('Creation suspension', toUserId('user_e2e')),
+      createProjectDocument('Tools keep panels', toUserId('user_e2e')),
       {
         name: 'Block',
         primitiveKind: 'box',
@@ -118,7 +117,7 @@ async function preferences(page: Page) {
 }
 
 // Screen projections detect changes to orientation, target, zoom and canvas
-// framing, including an unwanted automatic Fit as panels disappear/reappear.
+// framing, including an unwanted automatic Fit when a command starts or ends.
 async function framing(page: Page) {
   await waitForStillViewport(page);
   return page.locator('.viewer-host canvas').evaluate(
@@ -149,11 +148,23 @@ async function framing(page: Page) {
   );
 }
 
-async function expectSuspended(page: Page) {
-  await expect(page.locator('.model-panel')).toHaveCount(0);
-  await expect(
-    page.locator('.panel-column, .panel-unpinned, .panel-float')
-  ).toHaveCount(0);
+async function expectPanelsDuringCommand(page: Page, { phone = false } = {}) {
+  await expect(page.locator('.model-panel')).toHaveCount(phone ? 1 : 4);
+  if (phone) {
+    await expect(page.locator('.panel-lane-float')).toBeVisible();
+  } else {
+    await expect(
+      page.locator('.panel-column, .panel-unpinned, .panel-float')
+    ).toHaveCount(3);
+    for (const name of [
+      'Objects',
+      'History',
+      'Parameters',
+      'Diagnostics'
+    ] as const) {
+      await expect(modelPanel(page, name)).toBeVisible();
+    }
+  }
   await expect(
     page.getByRole('button', { name: /^More tools/ })
   ).toHaveAttribute('aria-expanded', 'false');
@@ -169,16 +180,106 @@ async function launch(page: Page, title: string) {
   return bar;
 }
 
+test(
+  'selecting and switching Fillet and Chamfer keeps every open panel in place',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openWorkspace(page);
+    const saved = await preferences(page);
+    const camera = await framing(page);
+    const panelNodes = await page.locator('.model-panel').elementHandles();
+    const panelBounds = () =>
+      page.locator('.model-panel').evaluateAll((elements) =>
+        elements.map((element) => {
+          const { x, y, width, height } = element.getBoundingClientRect();
+          return {
+            title: element.getAttribute('aria-label'),
+            x,
+            y,
+            width,
+            height
+          };
+        })
+      );
+    const bounds = await panelBounds();
+    await page.getByRole('button', { name: /^Fillet —/ }).click();
+    for (const [index, title] of ['Fillet', 'Chamfer', 'Fillet'].entries()) {
+      if (index > 0) {
+        await launch(page, title);
+      }
+      await expect(
+        page.getByRole('group', { name: `${title} command` })
+      ).toBeVisible();
+      await expect(page.locator('.model-panel')).toHaveCount(4);
+      for (const name of [
+        'Objects',
+        'History',
+        'Parameters',
+        'Diagnostics'
+      ] as const) {
+        await expect(modelPanel(page, name)).toBeVisible();
+      }
+      // Preserve the mounted panel bodies as well as their saved placement.
+      for (const node of panelNodes) {
+        expect(await node.evaluate((element) => element.isConnected)).toBe(
+          true
+        );
+      }
+      expect(await panelBounds()).toEqual(bounds);
+      expect(await preferences(page)).toEqual(saved);
+      expect(await framing(page)).toEqual(camera);
+    }
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.model-panel')).toHaveCount(4);
+    expect(await panelBounds()).toEqual(bounds);
+    expect(await preferences(page)).toEqual(saved);
+  }
+);
+
+test(
+  'closed panels and Hide all stay user-controlled across tool switches',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openWorkspace(page);
+    await modelPanel(page, 'History')
+      .getByRole('button', { name: 'Close History', exact: true })
+      .click();
+    const saved = await preferences(page);
+    for (const title of ['Fillet', 'Chamfer']) {
+      await launch(page, title);
+      await expect(page.locator('.model-panel')).toHaveCount(3);
+      await expect(modelPanel(page, 'History')).toHaveCount(0);
+      expect(await preferences(page)).toEqual(saved);
+    }
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+Backslash');
+    await expect(page.locator('.model-panel')).toHaveCount(0);
+    const hidden = await preferences(page);
+    for (const title of ['Fillet', 'Chamfer']) {
+      await launch(page, title);
+      await expect(page.locator('.model-panel')).toHaveCount(0);
+      expect(await preferences(page)).toEqual(hidden);
+    }
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.model-panel')).toHaveCount(0);
+    await page.keyboard.press('Control+Backslash');
+    await expect(page.locator('.model-panel')).toHaveCount(3);
+    await expect(modelPanel(page, 'History')).toHaveCount(0);
+    expect(await preferences(page)).toEqual(saved);
+  }
+);
+
 for (const [title, entry] of [
   ['Box', 'keyboard'],
   ['Hole', 'rail'],
   ['Fillet', 'rail'],
+  ['Chamfer', 'fold'],
   ['Revolve', 'keyboard'],
   ['Loft', 'fold'],
   ['Plane', 'fold'],
   ['Axis', 'fold']
 ] as const) {
-  test(`${title} creation from the ${entry} suspends panels and Cancel restores layout and camera`, async ({
+  test(`${title} creation from the ${entry} keeps panels visible through Cancel without changing layout or camera`, async ({
     page
   }) => {
     await openWorkspace(page);
@@ -193,7 +294,7 @@ for (const [title, entry] of [
     }
     const bar = page.getByRole('group', { name: `${title} command` });
     await expect(bar).toBeVisible();
-    await expectSuspended(page);
+    await expectPanelsDuringCommand(page);
     expect(await preferences(page)).toEqual(saved);
     expect(await framing(page)).toEqual(camera);
     await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -205,13 +306,13 @@ for (const [title, entry] of [
   });
 }
 
-test('panel and tool releases last through value changes and reset on every command, including the same tool', async ({
+test('panels stay visible while More tools requests reset on every command, including the same tool', async ({
   page
 }) => {
   await openWorkspace(page);
   await page.keyboard.press('b');
-  for (const next of ['Box', 'Hole', 'Fillet', 'Box']) {
-    await expectSuspended(page);
+  for (const next of ['Box', 'Hole', 'Fillet', 'Chamfer', 'Box']) {
+    await expectPanelsDuringCommand(page);
     await revealModelPanel(page, 'History');
     await expect(page.locator('.model-panel')).toHaveCount(4);
     const more = page.getByRole('button', { name: /^More tools/ });
@@ -225,17 +326,17 @@ test('panel and tool releases last through value changes and reset on every comm
     }
     await launch(page, next);
   }
-  await expectSuspended(page);
+  await expectPanelsDuringCommand(page);
   await page.keyboard.press('Escape');
   await expect(page.locator('.model-panel')).toHaveCount(4);
 });
 
-test('Objects can be requested for body reference picking and stay released through command updates', async ({
+test('Objects remain available for body reference picking and command updates', async ({
   page
 }) => {
   await openWorkspace(page);
   const bar = await launch(page, 'Linear pattern');
-  await expectSuspended(page);
+  await expectPanelsDuringCommand(page);
   await revealModelPanel(page, 'Objects');
   await modelPanel(page, 'Objects')
     .locator('.body-row:not(.consumed) .body-row-main', { hasText: 'Block' })
@@ -252,80 +353,84 @@ test('Objects can be requested for body reference picking and stay released thro
   expect(await framing(page)).toEqual(camera);
 });
 
-test('Done restores the saved panels and fold without reframing a new primitive', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await openWorkspace(page);
-  const saved = await preferences(page);
-  const camera = await framing(page);
-  await page.keyboard.press('b');
-  await expectSuspended(page);
-  await enterCommandValue(page, 'width', '12');
-  await finishInPlaceCommand(page, 'Box');
-  await expectBodyCount(page, 2);
-  await expect(page.locator('.model-panel')).toHaveCount(4);
-  expect(await preferences(page)).toEqual(saved);
-  expect(await framing(page)).toEqual(camera);
-  await expect(modelPanel(page, 'History').locator('.feature-row')).toHaveCount(
-    4
-  );
-});
+test(
+  'Done keeps panels visible and restores the tool fold without reframing a new primitive',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openWorkspace(page);
+    const saved = await preferences(page);
+    const camera = await framing(page);
+    await page.keyboard.press('b');
+    await expectPanelsDuringCommand(page);
+    await enterCommandValue(page, 'width', '12');
+    await finishInPlaceCommand(page, 'Box');
+    await expectBodyCount(page, 2);
+    await expect(page.locator('.model-panel')).toHaveCount(4);
+    expect(await preferences(page)).toEqual(saved);
+    expect(await framing(page)).toEqual(camera);
+    await expect(
+      modelPanel(page, 'History').locator('.feature-row')
+    ).toHaveCount(4);
+  }
+);
 
-test('in-place Extrude keeps overrides through profile/value picks, resets on relaunch and restores on Done', async ({
-  page
-}) => {
-  await openWorkspace(page);
-  const canvas = page.locator('.viewer-host canvas');
-  const saved = await preferences(page);
-  const camera = await framing(page);
-  await canvas.evaluate((element) =>
-    element.dispatchEvent(
-      new CustomEvent('openzcad:e2e-select-profile', {
-        detail: { index: 0, additive: false }
-      })
-    )
-  );
-  const bar = extrudeBar(page);
-  await expect(bar).toBeVisible();
-  await expectSuspended(page);
-  expect(await preferences(page)).toEqual(saved);
-  await revealModelPanel(page, 'History');
-  const released = await preferences(page);
-  await canvas.evaluate((element) =>
-    element.dispatchEvent(
-      new CustomEvent('openzcad:e2e-select-profile', {
-        detail: { index: 0, additive: false }
-      })
-    )
-  );
-  await expect(modelPanel(page, 'History')).toBeVisible();
-  await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
-  await expect(modelPanel(page, 'History')).toBeVisible();
-  // Re-arming the same sketch must not inherit that release.
-  await page.getByRole('button', { name: /^Extrude \(E\)/ }).click();
-  await expectSuspended(page);
-  await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(page.locator('.model-panel')).toHaveCount(4);
-  expect(await framing(page)).toEqual(camera);
-  await canvas.evaluate((element) =>
-    element.dispatchEvent(
-      new CustomEvent('openzcad:e2e-select-profile', {
-        detail: { index: 0, additive: false }
-      })
-    )
-  );
-  await expectSuspended(page);
-  await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
-  await finishInPlaceCommand(page, 'Extrude');
-  await expectBodyCount(page, 2);
-  await expect(page.locator('.model-panel')).toHaveCount(4);
-  expect(await preferences(page)).toEqual(released);
-  expect(await framing(page)).toEqual(camera);
-  await expect(railPanelButton(page, 'History')).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
-});
+test(
+  'in-place Extrude keeps panels through profile/value picks, relaunch and Done',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openWorkspace(page);
+    const canvas = page.locator('.viewer-host canvas');
+    const saved = await preferences(page);
+    const camera = await framing(page);
+    await canvas.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-profile', {
+          detail: { index: 0, additive: false }
+        })
+      )
+    );
+    const bar = extrudeBar(page);
+    await expect(bar).toBeVisible();
+    await expectPanelsDuringCommand(page);
+    expect(await preferences(page)).toEqual(saved);
+    await revealModelPanel(page, 'History');
+    const released = await preferences(page);
+    await canvas.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-profile', {
+          detail: { index: 0, additive: false }
+        })
+      )
+    );
+    await expect(modelPanel(page, 'History')).toBeVisible();
+    await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
+    await expect(modelPanel(page, 'History')).toBeVisible();
+    // Re-arming the same sketch keeps the panels in place too.
+    await page.getByRole('button', { name: /^Extrude \(E\)/ }).click();
+    await expectPanelsDuringCommand(page);
+    await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.locator('.model-panel')).toHaveCount(4);
+    expect(await framing(page)).toEqual(camera);
+    await canvas.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-profile', {
+          detail: { index: 0, additive: false }
+        })
+      )
+    );
+    await expectPanelsDuringCommand(page);
+    await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
+    await finishInPlaceCommand(page, 'Extrude');
+    await expectBodyCount(page, 2);
+    await expect(page.locator('.model-panel')).toHaveCount(4);
+    expect(await preferences(page)).toEqual(released);
+    expect(await framing(page)).toEqual(camera);
+    await expect(railPanelButton(page, 'History')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  }
+);
 
 test('Move leaves the saved panels and tool fold visible', async ({ page }) => {
   await openWorkspace(page);
@@ -343,43 +448,59 @@ test('Move leaves the saved panels and tool fold visible', async ({ page }) => {
   expect(await preferences(page)).toEqual(saved);
 });
 
-test('a phone panel request repaints non-Extrude command chips and leaves them tappable', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await openWorkspace(page);
-  await page.setViewportSize({ width: 720, height: 800 });
-  await expect(page.locator('.panel-lane-float')).toBeVisible();
-  await page.keyboard.press('b');
-  await expectSuspended(page);
-  await waitForStillViewport(page);
-  const canvas = page.locator('.viewer-host canvas');
-  const frames = Number(await canvas.getAttribute('data-e2e-frames'));
-  await revealModelPanel(page, 'History');
-  await expect(page.locator('.panel-lane-float')).toBeVisible();
-  // A settled command must draw again against the phone lane's obstacles,
-  // without a value edit or a pointer move to provoke an unrelated frame.
-  await expect
-    .poll(async () => Number(await canvas.getAttribute('data-e2e-frames')))
-    .toBeGreaterThan(frames);
-  const chip = page.getByTestId('command-handle-height');
-  await expect
-    .poll(() =>
-      chip.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return (
-          document
-            .elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-            ?.closest('[data-testid="command-handle-height"]') === element
-        );
-      })
-    )
-    .toBe(true);
-  await enterCommandValue(page, 'height', '12');
-  await expect(chip).toHaveText('Height 12 mm');
-  await expect(modelPanel(page, 'History')).toBeVisible();
-});
+test(
+  'a phone panel stays visible on tool entry and restoring panels repaints tappable command chips',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openWorkspace(page);
+    await page.setViewportSize({ width: 720, height: 800 });
+    await expect(page.locator('.panel-lane-float')).toBeVisible();
+    await revealModelPanel(page, 'Objects');
+    await page.keyboard.press('b');
+    await expectPanelsDuringCommand(page, { phone: true });
+    await expect(modelPanel(page, 'Objects')).toBeVisible();
+    // Deliberately hide the panels, then restore one: its new obstacle
+    // must repaint the settled command even without pointer or value changes.
+    await page.keyboard.press('Control+Backslash');
+    await expect(page.locator('.panel-lane-float')).toHaveCount(0);
+    await waitForStillViewport(page);
+    const canvas = page.locator('.viewer-host canvas');
+    const frames = Number(await canvas.getAttribute('data-e2e-frames'));
+    await revealModelPanel(page, 'History');
+    await expect(page.locator('.panel-lane-float')).toBeVisible();
+    // A settled command must draw again against the phone lane's obstacles,
+    // without a value edit or a pointer move to provoke an unrelated frame.
+    await expect
+      .poll(async () => Number(await canvas.getAttribute('data-e2e-frames')))
+      .toBeGreaterThan(frames);
+    const chip = page.getByTestId('command-handle-height');
+    await expect
+      .poll(() =>
+        chip.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return (
+            document
+              .elementFromPoint(
+                rect.x + rect.width / 2,
+                rect.y + rect.height / 2
+              )
+              ?.closest('[data-testid="command-handle-height"]') === element
+          );
+        })
+      )
+      .toBe(true);
+    await enterCommandValue(page, 'height', '12');
+    await expect(chip).toHaveText('Height 12 mm');
+    await expect(modelPanel(page, 'History')).toBeVisible();
+    for (const title of ['Fillet', 'Chamfer']) {
+      await launch(page, title);
+      await expectPanelsDuringCommand(page, { phone: true });
+      await expect(modelPanel(page, 'History')).toBeVisible();
+    }
+  }
+);
 
-test('a restored floating panel leaves command values and their keypad accessible', async ({
+test('a floating panel stays visible and leaves command values and their keypad accessible on relaunch', async ({
   page
 }) => {
   await openWorkspace(page, { locked: false });
@@ -400,21 +521,11 @@ test('a restored floating panel leaves command values and their keypad accessibl
   await page.mouse.move(press.x + dx, press.y + dy, { steps: 12 });
   await page.mouse.up();
   const restored = (await window.boundingBox())!;
-  // Restarting the same command hides that saved window again. Its new
-  // height chip now has its model anchor underneath the window's saved spot.
+  // Restarting the command keeps the saved window and dodges it immediately.
   await launch(page, 'Box');
-  await expectSuspended(page);
+  await expectPanelsDuringCommand(page);
   await waitForStillViewport(page);
-  const covered = (await chip.boundingBox())!;
-  const center = {
-    x: covered.x + covered.width / 2,
-    y: covered.y + covered.height / 2
-  };
-  expect(center.x).toBeGreaterThan(restored.x);
-  expect(center.x).toBeLessThan(restored.x + restored.width);
-  expect(center.y).toBeGreaterThan(restored.y);
-  expect(center.y).toBeLessThan(restored.y + restored.height);
-  await revealModelPanel(page, 'Diagnostics');
+  expect(await window.boundingBox()).toEqual(restored);
   await expect
     .poll(() =>
       chip.evaluate((element) => {
@@ -432,7 +543,7 @@ test('a restored floating panel leaves command values and their keypad accessibl
   await expect(modelPanel(page, 'Diagnostics')).toBeVisible();
 });
 
-test('an asynchronously loaded Image starts a suspended creation session and Cancel restores it', async ({
+test('an asynchronously loaded Image keeps panels visible through creation and Cancel', async ({
   page
 }) => {
   await openWorkspace(page);
@@ -455,7 +566,7 @@ test('an asynchronously loaded Image starts a suspended creation session and Can
   });
   const bar = page.getByRole('group', { name: 'Image command' });
   await expect(bar).toBeVisible();
-  await expectSuspended(page);
+  await expectPanelsDuringCommand(page);
   expect(await preferences(page)).toEqual(saved);
   await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.locator('.model-panel')).toHaveCount(4);

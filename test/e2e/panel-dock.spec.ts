@@ -23,7 +23,7 @@ import type { Locator, Page } from '@playwright/test';
   beside the instrument rail, Pin docks it in the right dock against the
   screen edge, and the rail stands on the dock's inner edge. Every other
   spec runs with all five docked; this one covers how they open, dock,
-  stack, resize, step aside for a sketch (not a drag), migrate and fall back
+  stack, resize, stay visible during sketches and drags, migrate and fall back
   to one panel at a time on a phone-width stage. Dragging, the left dock and floating windows
   (slice 4) are `panel-drag.spec.ts` and `panel-float.spec.ts`.
 */
@@ -598,10 +598,10 @@ test('on a stage too narrow for both, an unpinned panel covers the lane instead 
   await expect(inspector).toBeVisible();
 });
 
-test('a sketch hides the dock and an open unpinned panel and restores both', async ({
+test('a sketch keeps docked and unpinned panels visible and respects manual closes', async ({
   page
 }) => {
-  await openWorkspace(page, 'Suspend check', {
+  await openWorkspace(page, 'Sketch keeps panels check', {
     right: [['parameters']],
     unpinned: 'history'
   });
@@ -616,20 +616,16 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
     .poll(async () => (await box(rail)).x)
     .toBeLessThan(stageWidth - 10 - 40 - 299);
 
+  const railX = (await box(rail)).x;
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
-  await expect(page.locator('.model-panel')).toHaveCount(0);
-  // Nothing is left behind as an obstacle, and the rail gives the stage back.
-  await expect(
-    page.locator('.panel-column, .panel-unpinned, .panel-lane-float')
-  ).toHaveCount(0);
-  // The rail slides back to the screen's edge once its transition lands.
-  await expect
-    .poll(async () => (await box(rail)).x)
-    .toBeCloseTo(stageWidth - 10 - 40, 0);
-  // Suspension is not a preference: the stored layout keeps both.
+  await expect(page.locator('.model-panel')).toHaveCount(2);
+  await expect(docked).toBeVisible();
+  await expect(unpinned).toBeVisible();
+  await expect.poll(async () => (await box(rail)).x).toBeCloseTo(railX, 0);
+  // Starting a sketch preserves both the visible and stored layout.
   expect(await storedLayout(page)).toMatchObject({
     right: [['parameters']],
     unpinned: 'history'
@@ -643,21 +639,22 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
   await expect(unpinned).toBeVisible();
   await expect(unpinned).toHaveClass(/is-unpinned/);
 
-  // A rail press while sketching is the user asking for them back.
+  // Closing a panel during a sketch is an explicit choice, kept on exit.
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
-  await expect(page.locator('.model-panel')).toHaveCount(0);
+  await expect(page.locator('.model-panel')).toHaveCount(2);
   await railPanelButton(page, 'Parameters').click();
-  await expect(docked).toBeVisible();
+  await expect(docked).toHaveCount(0);
   await expect(unpinned).toBeVisible();
   await expect(railPanelButton(page, 'Parameters')).toHaveAttribute(
     'aria-pressed',
-    'true'
+    'false'
   );
   await page
     .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();
-  await expect(docked).toBeVisible();
+  await expect(docked).toHaveCount(0);
+  await expect(unpinned).toBeVisible();
 });
 
 test('a drag on the model keeps the dock and an open unpinned panel where they are', async ({
@@ -745,12 +742,13 @@ test('⌘K opens a parameter unpinned and focuses it, and reveals a panel mid-sk
     page.getByRole('textbox', { name: 'Expression for plate_t' })
   ).toBeFocused();
 
-  // Mid-sketch, naming a feature brings the panels back for the sketch.
+  // Mid-sketch, Parameters stays open and naming a feature also opens History.
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
-  await expect(page.locator('.model-panel')).toHaveCount(0);
+  await expect(page.locator('.model-panel')).toHaveCount(1);
+  await expect(parameters).toBeVisible();
   await promptField(page).fill('/base');
   await page.getByRole('option').filter({ hasText: 'Feature' }).first().click();
   await expect(modelPanel(page, 'History')).toBeVisible();
@@ -1110,7 +1108,7 @@ test('with a panel open unpinned or in the phone lane, the keypad and the select
   const reopened = await fitFront();
   expect(Math.abs(reopened[0]! - open[0]!)).toBeLessThan(0.5);
 
-  // Suspended by a sketch, it leaves none either.
+  // A sketch keeps the open panel registered as an obstacle.
   await railPanelButton(page, 'History').click();
   await expect(peek).toBeVisible();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
@@ -1120,7 +1118,7 @@ test('with a panel open unpinned or in the phone lane, the keypad and the select
   ).toBeVisible();
   await expect(
     page.locator('.panel-column, .panel-unpinned, .panel-lane-float')
-  ).toHaveCount(0);
+  ).toHaveCount(1);
   await page
     .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();
