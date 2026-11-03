@@ -36,6 +36,7 @@
     "packages/kernel-adapter/src/remus-modeling-operations.test.ts",
     "packages/kernel-adapter/src/remus-native-vertices.test.ts",
     "packages/kernel-adapter/src/remus-runtime.test.ts",
+    "packages/kernel-adapter/src/union-unify-gate.test.ts",
     "packages/mls/src/boundary.test.ts",
     "packages/mls/src/certification.test.ts",
     "packages/mls/src/mls.test.ts",
