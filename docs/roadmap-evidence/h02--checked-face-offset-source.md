@@ -50,6 +50,12 @@ the frozen lockfile and the checksum manifest adopt paired `2026.1.104` at
 [Remus package refresh #1496](https://github.com/esaueng/remus/pull/1496).
 Its file tree is identical to the already-qualified package candidate.
 
+The existing stale-gear-reference browser case also reselects the current cap
+and retries opening its keypad while import reference repairs rebuild the
+stored model. A production-build trace reproduced the correctly refused early
+click; the corrected case passes with test retries disabled and retains its
+committed-height, History-edit and reload assertions.
+
 At kernel source `e4a67d16`, the normal paired WASM build and both packaged
 runtime suites pass. All three public browser regressions pass, as does a
 separate browser reproduction using the original dimensions. Its committed
