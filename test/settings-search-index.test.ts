@@ -105,8 +105,8 @@ describe('settings search index', () => {
 
     // Guard the parser itself: a regex that silently stopped matching would
     // otherwise make this test pass by comparing two empty maps.
-    expect(rendered.size).toBe(11);
-    expect(indexed.size).toBe(11);
+    expect(rendered.size).toBe(12);
+    expect(indexed.size).toBe(12);
     expect(Array.from(rendered.values()).flat().length).toBeGreaterThanOrEqual(
       30
     );

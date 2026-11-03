@@ -6,6 +6,7 @@
   "camera-clipping.spec.ts": 32,
   "chamfer-fillet-corner.spec.ts": 18.2,
   "chamfer-rounded-block.spec.ts": 60,
+  "chamfer-rounded-edge.spec.ts": 45.1,
   "cloud-sync.spec.ts": 18,
   "collaboration-lease-recovery.spec.ts": 30,
   "collaboration.spec.ts": 13,

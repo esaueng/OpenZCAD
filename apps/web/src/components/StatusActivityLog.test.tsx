@@ -1,40 +1,47 @@
-import { createRef } from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { render } from '@testing-library/react';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  getActivityLogSnapshot,
+  resetActivityLogForTests
+} from '../lib/activityLog';
 import { StatusActivityLog } from './StatusActivityLog';
 
+const logged = () =>
+  getActivityLogSnapshot().entries.map((entry) => ({
+    source: entry.source,
+    message: entry.message,
+    ...(entry.detail ? { detail: entry.detail } : {})
+  }));
+
 describe('StatusActivityLog', () => {
-  it('keeps the full diagnostic with its compact status entry', async () => {
+  beforeEach(() => resetActivityLogForTests());
+
+  it('keeps the full diagnostic with its compact status entry', () => {
     render(
       <StatusActivityLog
-        id="test-activity-log"
-        open
         status="Parameter height was not changed."
         detail="move-face would change topology at face 9"
         tone="warning"
-        triggerRef={createRef<HTMLButtonElement>()}
-        onClose={vi.fn()}
+        workspace="Tweak"
+        project="Bracket"
       />
     );
 
-    expect(
-      await screen.findByText('Parameter height was not changed.')
-    ).toBeTruthy();
-    expect(
-      screen.getByText('move-face would change topology at face 9')
-    ).toHaveClass('status-log-detail');
+    expect(getActivityLogSnapshot().entries).toEqual([
+      expect.objectContaining({
+        level: 'warning',
+        source: 'status',
+        message: 'Parameter height was not changed.',
+        detail: 'move-face would change topology at face 9',
+        workspace: 'Tweak',
+        project: 'Bracket'
+      })
+    ]);
   });
 
-  it('logs a message set while the geometry line is up, not only the line', async () => {
-    const props = {
-      id: 'test-activity-log',
-      open: true,
-      triggerRef: createRef<HTMLButtonElement>(),
-      onClose: vi.fn()
-    };
+  it('logs a message set while the geometry line is up, not only the line', () => {
     const { rerender } = render(
       <StatusActivityLog
-        {...props}
         status="Offline workspace"
         geometryStatus="Starting geometry worker · the model appears when it is ready"
         tone="running"
@@ -42,7 +49,6 @@ describe('StatusActivityLog', () => {
     );
     rerender(
       <StatusActivityLog
-        {...props}
         status="Cannot use Box: This shared project is read-only."
         geometryStatus="Starting geometry worker · the model appears when it is ready"
         tone="running"
@@ -51,82 +57,52 @@ describe('StatusActivityLog', () => {
     // The geometry settling changes the tone, but is not the message again.
     rerender(
       <StatusActivityLog
-        {...props}
         status="Cannot use Box: This shared project is read-only."
         geometryStatus={null}
         tone="ready"
       />
     );
 
-    // The region shows a loading frame until the panel's chunk arrives.
-    await screen.findAllByRole('listitem');
-    const log = screen.getByRole('region', { name: 'Activity log' });
-    const messages = within(log)
-      .getAllByRole('listitem')
-      .map((item) => item.textContent ?? '');
-    expect(messages).toHaveLength(3);
-    expect(messages[0]).toContain('Offline workspace');
-    expect(messages[1]).toContain('Starting geometry worker');
-    expect(messages[2]).toContain(
-      'Cannot use Box: This shared project is read-only.'
-    );
+    expect(logged()).toEqual([
+      { source: 'status', message: 'Offline workspace' },
+      {
+        source: 'geometry',
+        message: 'Starting geometry worker · the model appears when it is ready'
+      },
+      {
+        source: 'status',
+        message: 'Cannot use Box: This shared project is read-only.'
+      }
+    ]);
   });
 
-  it('leaves a lane-only message out of the log', async () => {
-    const props = {
-      id: 'test-activity-log',
-      open: true,
-      tone: 'ready' as const,
-      triggerRef: createRef<HTMLButtonElement>(),
-      onClose: vi.fn()
-    };
+  it('leaves a lane-only message out of the log', () => {
     const { rerender } = render(
-      <StatusActivityLog {...props} status="Added box." />
+      <StatusActivityLog status="Added box." tone="ready" />
     );
     // A workspace switch says where the user is, not what the model did.
     rerender(
       <StatusActivityLog
-        {...props}
         status="Build mode · modeling tools are back."
         logged={false}
+        tone="ready"
       />
     );
-    rerender(<StatusActivityLog {...props} status="Added cylinder." />);
+    rerender(<StatusActivityLog status="Added cylinder." tone="ready" />);
 
-    // The region shows a loading frame until the panel's chunk arrives.
-    await screen.findAllByRole('listitem');
-    const log = screen.getByRole('region', { name: 'Activity log' });
-    const messages = within(log)
-      .getAllByRole('listitem')
-      .map((item) => item.textContent ?? '');
-    expect(messages).toHaveLength(2);
-    expect(messages[0]).toContain('Added box.');
-    expect(messages[1]).toContain('Added cylinder.');
-    expect(log).not.toHaveTextContent('Build mode');
+    expect(logged().map((entry) => entry.message)).toEqual([
+      'Added box.',
+      'Added cylinder.'
+    ]);
   });
 
-  it('closes on Escape before the workspace sees the key', async () => {
-    const onClose = vi.fn();
-    const workspaceEscape = vi.fn();
-    window.addEventListener('keydown', workspaceEscape);
-    try {
-      render(
-        <StatusActivityLog
-          id="test-activity-log"
-          open
-          status="Ready"
-          tone="ready"
-          triggerRef={createRef<HTMLButtonElement>()}
-          onClose={onClose}
-        />
-      );
-      // The handler is the log's own, there before and after the panel loads.
-      await screen.findByRole('listitem');
-      fireEvent.keyDown(document.body, { key: 'Escape' });
-      expect(onClose).toHaveBeenCalledWith(true);
-      expect(workspaceEscape).not.toHaveBeenCalled();
-    } finally {
-      window.removeEventListener('keydown', workspaceEscape);
-    }
+  it('does not log the same line again when it remounts', () => {
+    // The start screen and the workspace each mount a recorder; switching
+    // between them carries the current line over.
+    const first = render(<StatusActivityLog status="Saved." tone="ready" />);
+    first.unmount();
+    render(<StatusActivityLog status="Saved." tone="ready" />);
+
+    expect(logged()).toEqual([{ source: 'status', message: 'Saved.' }]);
   });
 });

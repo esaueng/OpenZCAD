@@ -15,6 +15,7 @@ import '@fontsource/geist-sans/latin-500.css';
 import '@fontsource/geist-sans/latin-600.css';
 import '@fontsource/geist-mono/latin-400.css';
 import '@fontsource/geist-mono/latin-500.css';
+import { installRuntimeErrorCapture } from './lib/activityLog';
 import { mark } from './lib/perf';
 import { loadWhenOnline } from './lib/staleChunk';
 import './theme/tokens.css';
@@ -52,6 +53,8 @@ if (import.meta.env.VITE_E2E === '1') {
   window.__openzcadE2EMls = () => import('./lib/e2ee/mls/e2eSmoke');
 }
 
+// Uncaught errors join the activity log (Settings › Activity log).
+installRuntimeErrorCapture();
 mark('bundle.evaluated');
 // Prefetch every on-demand chunk once the page has settled. Not in e2e
 // builds, whose specs assert which chunks a flow loads. The helper itself

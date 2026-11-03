@@ -12,8 +12,8 @@ import type { SettingsSectionId } from './settingsSectionIds';
 export type { SettingsSectionId };
 
 /**
- * The sidebar heading a section sits under. Advanced has none: it closes the
- * list on its own, below a rule.
+ * The sidebar heading a section sits under. Activity log and Advanced have
+ * none: they close the list on their own, below a rule.
  */
 export type SettingsSectionGroup = 'Workspace' | 'Cloud and data';
 
@@ -292,6 +292,22 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'permanent deletion',
       'delete all cloud data',
       'delete cloud profile'
+    ]
+  },
+  {
+    id: 'activity',
+    label: 'Activity log',
+    detail: 'Everything this session reported, with filters',
+    settings: [],
+    searchTerms: [
+      'activity',
+      'log',
+      'status messages',
+      'errors',
+      'warnings',
+      'kernel diagnostic',
+      'copy log',
+      'download log'
     ]
   },
   {
