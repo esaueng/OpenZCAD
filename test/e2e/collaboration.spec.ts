@@ -1893,6 +1893,19 @@ test('leaves the restore screen when a remembered project is missing', async ({
   page
 }) => {
   await stubAnonymousApi(page);
+  // Hold the startup lookup until its loading state is observed. A missing
+  // local project can otherwise resolve before Playwright sees that frame.
+  let releaseSession!: () => void;
+  const sessionReady = new Promise<void>((resolve) => {
+    releaseSession = resolve;
+  });
+  await page.route('**/api/session', async (route) => {
+    await sessionReady;
+    await route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    });
+  });
   await page.addInitScript((storageKey) => {
     window.localStorage.setItem(
       storageKey,
@@ -1905,9 +1918,13 @@ test('leaves the restore screen when a remembered project is missing', async ({
   }, WORKSPACE_SESSION_STORAGE_KEY);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await expect(
-    page.getByRole('status', { name: 'Restoring workspace' })
-  ).toBeVisible();
+  try {
+    await expect(
+      page.getByRole('status', { name: 'Restoring workspace' })
+    ).toBeVisible();
+  } finally {
+    releaseSession();
+  }
   await expect(page.getByLabel('Project name')).toBeVisible();
   await expect(page.locator('.startup-screen')).toHaveCount(0);
   await expect(page.locator('.start-account-text')).toHaveText(

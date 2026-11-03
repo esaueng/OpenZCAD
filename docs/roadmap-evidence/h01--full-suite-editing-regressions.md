@@ -27,3 +27,8 @@ their first action behind its toolbar; desktop and phone browser coverage
 checks menu containment, opening properties and unchanged saved documents.
 Validated commits register timing intent before publishing their geometry,
 retaining installation and frame evidence when a preflight result is reused.
+The complete browser sweep also exposed reentrant assembly animation
+scheduling: synchronous pose notifications started a second frame loop.
+Playback now permits one pending frame across joint sweeps, studies and tool
+previews; regression coverage checks sustained motion, pause, completion and
+unmount without modifying the saved document.

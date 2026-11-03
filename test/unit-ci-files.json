@@ -171,6 +171,7 @@
     "src/lib/apiProjectListing.test.ts",
     "src/lib/apiSavePoints.test.ts",
     "src/lib/artifactUpload.test.ts",
+    "src/lib/assembly/assemblyPlayback.test.ts",
     "src/lib/cloudConfigurationReads.test.ts",
     "src/lib/commandContext.test.ts",
     "src/lib/commandOutcome.test.ts",
