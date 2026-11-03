@@ -69,31 +69,39 @@ it('refuses access and production targets before any storage side effects', asyn
   ).toBe(503);
   expect(calls).toBe(0);
 });
-it('restores the original opaque key and metadata only with create-only storage', async () => {
-  let calls = 0;
-  const target = environment(async (key, body, options) => {
-    calls++;
-    expect(key).toBe(metadata.key);
-    expect(await new Response(body).text()).toBe('data');
-    expect(options).toEqual({
-      onlyIf: { etagDoesNotMatch: '*' },
-      storageClass: metadata.storage_class,
-      httpMetadata: metadata.http_metadata,
-      customMetadata: metadata.custom_metadata
+it.each(['Standard', 'InfrequentAccess'])(
+  'restores %s source metadata with Standard create-only storage',
+  async (storageClass) => {
+    let calls = 0;
+    const target = environment(async (key, body, options) => {
+      calls++;
+      expect(key).toBe(metadata.key);
+      expect(await new Response(body).text()).toBe('data');
+      expect(options).toEqual({
+        onlyIf: { etagDoesNotMatch: '*' },
+        storageClass: 'Standard',
+        httpMetadata: metadata.http_metadata,
+        customMetadata: metadata.custom_metadata
+      });
+      return {};
     });
-    return {};
-  });
-  expect((await worker.fetch(request(), target)).status).toBe(201);
-  expect(calls).toBe(1);
-  expect(
-    (
-      await worker.fetch(
-        request(),
-        environment(async () => null)
+    const headers = {
+      'x-openzcad-metadata': encodeURIComponent(
+        JSON.stringify({ ...metadata, storage_class: storageClass })
       )
-    ).status
-  ).toBe(409);
-});
+    };
+    expect((await worker.fetch(request(headers), target)).status).toBe(201);
+    expect(calls).toBe(1);
+    expect(
+      (
+        await worker.fetch(
+          request(headers),
+          environment(async () => null)
+        )
+      ).status
+    ).toBe(409);
+  }
+);
 it('refuses malformed, mismatched and oversized restore input', async () => {
   let calls = 0;
   const target = environment(async () => {

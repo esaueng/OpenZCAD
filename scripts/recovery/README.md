@@ -79,6 +79,14 @@ Create empty D1 and R2 resources whose names start with
 ingress with `wrangler deploy --no-bundle`, binding only its `TARGET` R2 bucket,
 setting `TARGET_BUCKET` to the same bucket name and storing a new random
 `RESTORE_TOKEN` as a Worker secret.
+
+Use Standard as the bucket default and for every live qualification fixture.
+The client and ingress explicitly write every disposable copy with
+`storageClass: 'Standard'`, including copies whose source manifest records
+InfrequentAccess. Cover InfrequentAccess metadata with local mocks only:
+even tiny live tests incur rounded operation and retrieval charges outside
+the Standard free tier ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)).
+
 Enable `preview_urls` for this ingress (it contains no Durable Object), so
 uploads can use an immutable version URL rather than the mutable Worker URL.
 The ingress exposes no database or object-read route; uploads require the
@@ -108,8 +116,13 @@ The archive is authenticated and safely extracted before remote writes. The
 tool restores the paired SQL and opaque R2 keys/metadata, exports the new D1
 again, compares every table's schema, typed rows and AUTOINCREMENT sequence
 state (including counters above retained row IDs), and reads back every R2 body
-and its metadata, including the original Standard or InfrequentAccess storage
-class. Missing or unsupported storage classes are refused before import.
+and its HTTP/custom metadata. It verifies Standard storage before reading
+back a restored body. The authenticated archive retains the original Standard
+or InfrequentAccess storage class; the disposable copy deliberately uses
+Standard. This drill does not qualify restoration of the original storage
+class. Missing or unsupported source storage classes are refused before import.
+The ingress must be redeployed from this checkout for a new drill; existing
+ingress code that preserves the source class fails the byte-identity preflight.
 Failed/partial drills are retained for investigation; retry
 with new resources. It never overwrites a source or resumes a partial restore.
 

@@ -162,7 +162,10 @@ def restore(config, archive):
         for item in manifest['objects']:
             data=read_private_file(object_path(root,item['key']),MAX_OBJECT_BYTES)
             original=metadata[item['key']]
-            encoded=quote(json.dumps(original,separators=(',',':')),safe='')
+            # Keep the authenticated source metadata intact; disposable copies
+            # must use Standard regardless of the source or bucket default.
+            drill_metadata={**original,'storage_class':'Standard'}
+            encoded=quote(json.dumps(drill_metadata,separators=(',',':')),safe='')
             request=Request(origin+'/restore',data=data,method='PUT',headers={
                 'Authorization':'Bearer '+ingress_token,'Content-Type':'application/octet-stream',
                 'X-OpenZCAD-Metadata':encoded,'User-Agent':'OpenZCAD-Recovery/1.0'})
@@ -177,7 +180,9 @@ def restore(config, archive):
         for item in manifest['objects']:
             original=metadata[item['key']]
             restored=actual[item['key']]
-            for field in ['size','http_metadata','custom_metadata','storage_class']:
+            if restored.get('storage_class')!='Standard':
+                raise SnapshotError('Restored qualification object must use Standard storage.')
+            for field in ['size','http_metadata','custom_metadata']:
                 if restored.get(field)!=original.get(field):
                     raise SnapshotError('Restored object metadata differs from its source.')
             data,_=provider.read_object(item['key'], item['bytes'])

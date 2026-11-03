@@ -58,7 +58,9 @@ export default {
     // If the target already contains an object, fail instead of overwriting a drill.
     const result = await env.TARGET.put(metadata.key, request.body, {
       onlyIf: { etagDoesNotMatch: '*' },
-      storageClass: metadata.storage_class,
+      // Qualification copies always use Standard, even for archived IA metadata
+      // or a bucket with a different default. IA has no free operation tier.
+      storageClass: 'Standard',
       httpMetadata: metadata.http_metadata ?? {},
       customMetadata: metadata.custom_metadata ?? {}
     });
