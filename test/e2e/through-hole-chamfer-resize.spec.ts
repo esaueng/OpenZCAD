@@ -5,7 +5,7 @@ import {
   holeBody
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type GeometryBodyRepresentation } from '@openzcad/shared';
 import { test, expect, stubApi } from './openzcad-fixtures';
 
 async function sourceBackup() {
@@ -65,7 +65,7 @@ async function sourceBackup() {
 }
 
 test(
-  'shrinking a chamfered bore extends the slopes through commit, undo, redo and reload',
+  'chamfered bore slopes match during drag, release, exact entry, undo, redo and reload',
   { tag: '@ci-smoke' },
   async ({ page }, testInfo) => {
     test.setTimeout(180_000);
@@ -145,6 +145,109 @@ test(
         return canvas.getAttribute('data-e2e-handle-x');
       })
       .not.toBeNull();
+    const renderedSlopes = () =>
+      canvas.evaluate(
+        (element) =>
+          new Promise<{ cones: number; maxError: number }>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-render-policy', {
+                detail: {
+                  includeBodies: true,
+                  resolve: (state: {
+                    bodies: GeometryBodyRepresentation[];
+                  }) => {
+                    const body = state.bodies.find((body) => !body.consumed)!;
+                    const cones = body.topology!.faces.filter(
+                      (face) => face.geometry?.surfaceType === 'cone'
+                    );
+                    let maxError = 0;
+                    for (const face of cones) {
+                      const { apex, axis } = face.geometry!;
+                      for (
+                        let t = face.triangleStart;
+                        t < face.triangleStart + face.triangleCount;
+                        t++
+                      ) {
+                        for (let corner = 0; corner < 3; corner++) {
+                          const v = body.mesh.indices[t * 3 + corner]! * 3;
+                          const x = body.mesh.vertices[v]! - apex!.x;
+                          const y = body.mesh.vertices[v + 1]! - apex!.y;
+                          const z = body.mesh.vertices[v + 2]! - apex!.z;
+                          const axial = x * axis!.x + y * axis!.y + z * axis!.z;
+                          const radial = Math.hypot(
+                            x - axial * axis!.x,
+                            y - axial * axis!.y,
+                            z - axial * axis!.z
+                          );
+                          // Independent 45-degree oracle: equal rise and run,
+                          // measured from the displayed vertices, not its label.
+                          maxError = Math.max(
+                            maxError,
+                            Math.abs(Math.abs(axial) - radial)
+                          );
+                        }
+                      }
+                    }
+                    resolve({ cones: cones.length, maxError });
+                  }
+                }
+              })
+            );
+          })
+      );
+    const handle = await canvas.evaluate(
+      (element) =>
+        new Promise<{
+          x: number;
+          y: number;
+          dx: number;
+          dy: number;
+          scale: number;
+        }>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() =>
+              resolve({
+                x: Number(element.dataset.e2eHandleX),
+                y: Number(element.dataset.e2eHandleY),
+                dx: Number(element.dataset.e2eHandleDx),
+                dy: Number(element.dataset.e2eHandleDy),
+                scale: Number(element.dataset.e2eHandlePixelsPerUnit)
+              })
+            )
+          )
+        )
+    );
+    const bounds = (await canvas.boundingBox())!;
+    await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + handle.x - handle.dx * handle.scale,
+      bounds.y + handle.y - handle.dy * handle.scale,
+      { steps: 4 }
+    );
+    radius = 2;
+    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(4, 6);
+    await expect(canvas).not.toHaveAttribute(
+      'data-e2e-cylinder-proxy-radius',
+      /.+/
+    );
+    expect((await renderedSlopes()).cones).toBe(2);
+    expect((await renderedSlopes()).maxError).toBeLessThan(1e-4);
+    await expect
+      .poll(async () => (await bore())?.axialLength)
+      .toBeCloseTo(beforeLength - 2, 6);
+    await page.screenshot({ path: testInfo.outputPath('chamfer-held.png') });
+    await page.mouse.up();
+    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(4, 6);
+    await expect(page.getByTestId('direct-manipulation-value')).toBeEnabled();
+    expect((await renderedSlopes()).maxError).toBeLessThan(1e-4);
+    await page.screenshot({
+      path: testInfo.outputPath('chamfer-released.png')
+    });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    radius = 3;
+    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(6, 6);
+    await bore(true);
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Diameter value' });
     await keypad.getByRole('textbox').fill('4.2');

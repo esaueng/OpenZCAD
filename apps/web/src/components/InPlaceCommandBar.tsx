@@ -27,7 +27,13 @@ export interface InPlaceOption {
   id: string;
   label: string;
   value: string;
-  choices: readonly { value: string; label: string; note?: string }[];
+  choices: readonly {
+    value: string;
+    label: string;
+    note?: string;
+    /** Shown only as the choice's tooltip. */
+    tip?: string;
+  }[];
 }
 
 /** An exact number too rare for a handle (a primitive's position). */
@@ -285,6 +291,8 @@ export function InPlaceCommandBar({
                 key={section.label ?? `section-${index}`}
                 label={section.label}
                 collapsed={section.collapsed ?? false}
+                compact={section.compact ?? false}
+                boxed={section.boxed ?? false}
               >
                 {section.rows.map((row) => {
                   if (row.kind === 'option') {
@@ -381,12 +389,18 @@ export function InPlaceCommandBar({
 function PanelSection({
   label,
   collapsed,
+  compact,
+  boxed,
   children
 }: {
   label: string | undefined;
   collapsed: boolean;
+  compact: boolean;
+  boxed: boolean;
   children: ReactNode;
 }) {
+  const boxClass = boxed ? ' is-boxed' : '';
+  const gridClass = `in-place-params-grid${compact ? ' is-compact' : ''}`;
   // A button, not a nested <details>: the bar's own Options summary stays
   // the only summary under it.
   const [open, setOpen] = useState(!collapsed);
@@ -394,7 +408,7 @@ function PanelSection({
   if (collapsed && label) {
     return (
       <section
-        className={`in-place-params-section is-foldable${open ? ' is-open' : ''}`}
+        className={`in-place-params-section is-foldable${open ? ' is-open' : ''}${boxClass}`}
         aria-label={label}
       >
         <button
@@ -406,7 +420,7 @@ function PanelSection({
         >
           {label}
         </button>
-        <div className="in-place-params-grid" id={gridId} hidden={!open}>
+        <div className={gridClass} id={gridId} hidden={!open}>
           {children}
         </div>
       </section>
@@ -414,11 +428,11 @@ function PanelSection({
   }
   return (
     <section
-      className="in-place-params-section"
+      className={`in-place-params-section${boxClass}`}
       aria-label={label ?? undefined}
     >
       {label ? <h3 className="in-place-params-heading">{label}</h3> : null}
-      <div className="in-place-params-grid">{children}</div>
+      <div className={gridClass}>{children}</div>
     </section>
   );
 }
@@ -487,7 +501,7 @@ function OptionRow({
           onChange={(event) => onOption?.(option.id, event.target.value)}
         >
           {option.choices.map((choice) => (
-            <option key={choice.value} value={choice.value}>
+            <option key={choice.value} value={choice.value} title={choice.tip}>
               {choice.label}
             </option>
           ))}
@@ -506,6 +520,7 @@ function OptionRow({
               role="radio"
               aria-checked={choice.value === option.value}
               className="in-place-option-choice"
+              title={choice.tip}
               disabled={locked}
               onClick={() => onOption?.(option.id, choice.value)}
             >

@@ -33,6 +33,40 @@ interface ValidationReport {
   issues: { severity: string; description: string }[];
 }
 
+function coplanarEdgeCount(kernel: RemusKernel, solid: number) {
+  const adjacency = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
+    string,
+    number[]
+  >;
+  const planes = new Map<number, { normal: number[]; d: number }>();
+  for (const face of kernel.getSolidFaces(solid)) {
+    if (kernel.getSurfaceType(face) === 'plane') {
+      planes.set(
+        face,
+        JSON.parse(kernel.getAnalyticSurfaceParams(face)) as {
+          normal: number[];
+          d: number;
+        }
+      );
+    }
+  }
+  return Object.values(adjacency).filter((owners) => {
+    const pair = [...new Set(owners)];
+    if (pair.length !== 2) return false;
+    const a = planes.get(pair[0]!);
+    const b = planes.get(pair[1]!);
+    if (!a || !b) return false;
+    const dot = a.normal.reduce(
+      (sum, value, i) => sum + value * b.normal[i]!,
+      0
+    );
+    return (
+      Math.abs(Math.abs(dot) - 1) < 1e-9 &&
+      Math.abs(a.d - b.d * Math.sign(dot)) < 1e-7
+    );
+  }).length;
+}
+
 function inspect(
   stage: HolderStage,
   points: readonly (readonly [number, number, number])[] = []
@@ -56,6 +90,7 @@ function inspect(
         volume: kernel.volume(solid, 0.08),
         shells: kernel.getSolidShells(solid).length,
         faces: kernel.getSolidFaces(solid).length,
+        coplanarEdges: coplanarEdgeCount(kernel, solid),
         mesh: inspectTriangleMeshClosure(mesh.positions, mesh.indices),
         samples: points.map(([x, y, z]) =>
           kernel.classifyPoint(solid, x, y, z, 1e-7)
@@ -120,13 +155,13 @@ describe(
           badEdges: 0
         },
         firstArm: {
-          faces: 17,
+          faces: 15,
           volume: 35776.00421470196,
           height: 58,
           badEdges: 0
         },
         secondArm: {
-          faces: 24,
+          faces: 20,
           volume: 52320.008429403926,
           height: 58,
           badEdges: 0
@@ -142,7 +177,10 @@ describe(
         expect(result.warnings).toEqual([]);
         expect(result.relaxed).toBe(0);
         expect(result.shells).toBe(1);
+        // Added arms now merge their coplanar wall patches. Keep all shape,
+        // material, volume and validity witnesses while pinning the healed count.
         expect(result.faces).toBe(reference.faces);
+        expect(result.coplanarEdges).toBe(0);
         result.bounds.forEach((value, i) =>
           expect(value).toBeCloseTo(
             [-37, -43, 0, 37, 10, reference.height][i]!,
@@ -201,7 +239,7 @@ describe(
       });
       const result = await adapter.syncDocument(mirrored.document);
       expect(result.warnings).toEqual([]);
-      expect(result.bodyRepresentations[mirrored.bodyId]?.faceCount).toBe(17);
+      expect(result.bodyRepresentations[mirrored.bodyId]?.faceCount).toBe(15);
       expect(bodyOf(result, stage).consumed).toBe(false);
       expect(result.exportableBodyIds).toContain(stage.bodyId);
     });
@@ -238,7 +276,7 @@ describe(
         });
         const result = await adapter.syncDocument(fillet.document);
         expect(result.warnings).toEqual([]);
-        expect(bodyOf(result, fillet).faceCount).toBe(27);
+        expect(bodyOf(result, fillet).faceCount).toBe(23);
         expect(bodyOf(result, stage).consumed).toBe(true);
         expect(result.exportableBodyIds).toContain(fillet.bodyId);
         const rounded = inspect(fillet, points);
@@ -247,7 +285,8 @@ describe(
         expect(rounded.relaxed).toBe(0);
         expect(rounded.report.issues).toEqual([]);
         expect(rounded.shells).toBe(1);
-        expect(rounded.faces).toBe(27);
+        expect(rounded.faces).toBe(23);
+        expect(rounded.coplanarEdges).toBe(0);
         expect(rounded.bounds).toEqual([-37, -43, 0, 37, 10, 58]);
         expect(rounded.mesh).toMatchObject({
           boundaryEdges: 0,
@@ -306,7 +345,7 @@ describe(
       });
       const roundedTop = await adapter.syncDocument(topFillet.document);
       expect(roundedTop.warnings).toEqual([]);
-      expect(bodyOf(roundedTop, topFillet).faceCount).toBe(25);
+      expect(bodyOf(roundedTop, topFillet).faceCount).toBe(21);
       expect(bodyOf(roundedTop, stage).consumed).toBe(true);
       expect(roundedTop.exportableBodyIds).toContain(topFillet.bodyId);
       const topInspection = inspect(topFillet);
@@ -314,7 +353,8 @@ describe(
       expect(topInspection.relaxed).toBe(0);
       expect(topInspection.report.issues).toEqual([]);
       expect(topInspection.shells).toBe(1);
-      expect(topInspection.faces).toBe(25);
+      expect(topInspection.faces).toBe(21);
+      expect(topInspection.coplanarEdges).toBe(0);
       topInspection.bounds.forEach((value, i) =>
         expect(value).toBeCloseTo([-37, -43, 0, 37, 10, 58][i]!, 6)
       );
@@ -337,7 +377,7 @@ describe(
       });
       const filleted = await adapter.syncDocument(fillet.document);
       expect(filleted.warnings).toEqual([]);
-      expect(bodyOf(filleted, fillet).faceCount).toBe(25);
+      expect(bodyOf(filleted, fillet).faceCount).toBe(21);
       expect(bodyOf(filleted, stage).consumed).toBe(true);
 
       // The observed Hole attempts followed the plate-edge fillet. On the
@@ -351,8 +391,8 @@ describe(
       );
       expect(top).toBeDefined();
       for (const [style, faces] of [
-        ['simple', 27],
-        ['countersink', 28]
+        ['simple', 23],
+        ['countersink', 24]
       ] as const) {
         const hole = holeBody(fillet.document, {
           name: 'Hole',

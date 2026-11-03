@@ -253,8 +253,16 @@ export interface InPlaceSlots {
 export interface OptionSpec {
   id: string;
   label: string;
-  /** A choice's `note` explains it under the row while it is chosen. */
-  choices: readonly { value: string; label: string; note?: string }[];
+  /**
+   * A choice's `note` explains it under the row while it is chosen; its
+   * `tip` explains it only as the choice's tooltip, for a panel kept terse.
+   */
+  choices: readonly {
+    value: string;
+    label: string;
+    note?: string;
+    tip?: string;
+  }[];
   initial: string;
   /**
    * Another option this one may never equal (a grid's two directions):
@@ -357,6 +365,13 @@ export interface InPlaceContext {
 export interface InPlacePanelSection {
   label?: string;
   collapsed?: boolean;
+  /**
+   * Numbers sit two to a row, each named inside its own field; choices
+   * still take a whole row. Pair related values next to each other.
+   */
+  compact?: boolean;
+  /** Set apart as a tinted group under its label, with no border. */
+  boxed?: boolean;
   /** Option and value ids, in order. */
   items: readonly string[];
 }
