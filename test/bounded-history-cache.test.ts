@@ -1006,15 +1006,17 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         edit(document, 4, 12),
         'Resize box'
       );
+      // Compare replay bytes with the same metadata, even across a clock tick.
+      const exportOptions = { timestamp: '2026-01-01T00:00:00Z' };
       for (const next of [changed, manager.undo(), manager.redo()]) {
         const actual = await adapter.syncDocument(next);
         await equivalent(next, actual);
         expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1 });
         const ids = actual.exportableBodyIds;
-        const step = await adapter.exportStep(next, ids);
+        const step = await adapter.exportStep(next, ids, exportOptions);
         ownership(adapter, 2);
         expect(step).toContain('MANIFOLD_SOLID_BREP');
-        expect(await adapter.exportStep(next, ids)).toBe(step);
+        expect(await adapter.exportStep(next, ids, exportOptions)).toBe(step);
         const stl = await adapter.exportStl(next, ids);
         expect(await adapter.exportStl(next, ids)).toBe(stl);
         ownership(adapter, 2);
