@@ -96,7 +96,10 @@ export function jointFromTool(
       tool.kind
     );
   } else {
-    childFrame = tool.flip ? flipFrame(child.frame) : child.frame;
+    // Picked frames point out of their faces, so mating parts face each
+    // other: the moving frame is reversed onto the target's axis by default
+    // (a face lands against the face, a pin goes into its hole). Flip undoes it.
+    childFrame = tool.flip ? child.frame : flipFrame(child.frame);
     for (let turn = 0; turn < ((tool.quarterTurns % 4) + 4) % 4; turn += 1)
       childFrame = quarterTurnFrame(childFrame);
   }

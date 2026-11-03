@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId, type AssemblyFrame, type BodyId } from '@openzcad/shared';
+import {
+  rotateVector,
+  toUserId,
+  transformPoint,
+  type AssemblyFrame,
+  type BodyId
+} from '@openzcad/shared';
 import {
   buildAssemblyView,
   jointFromTool,
@@ -86,6 +92,60 @@ describe('assembly view model', () => {
     );
     expect(made?.asBuilt).toBe(true);
     expect(made?.joint.name).toBe('Revolute 1');
+  });
+
+  it('snaps a picked face against the target face, not into it', () => {
+    const { manager, a, b } = scissors();
+    const lidTop: AssemblyFrame = {
+      origin: { x: 0, y: 0, z: 12 },
+      zAxis: { x: 0, y: 0, z: 1 },
+      xAxis: { x: 1, y: 0, z: 0 }
+    };
+    const baseFront: AssemblyFrame = {
+      origin: { x: 30, y: -20, z: 2 },
+      zAxis: { x: 0, y: -1, z: 0 },
+      xAxis: { x: 1, y: 0, z: 0 }
+    };
+    const tool: AssemblyJointToolState = {
+      step: 'review',
+      child: {
+        componentId: 'comp_b',
+        bodyId: b,
+        frame: lidTop,
+        source: { kind: 'plane', label: 'Face' }
+      },
+      parent: {
+        componentId: 'comp_a',
+        bodyId: a,
+        frame: baseFront,
+        source: { kind: 'plane', label: 'Face' }
+      },
+      kind: 'rigid',
+      flip: false,
+      quarterTurns: 0,
+      preview: false
+    };
+    const view = buildAssemblyView(manager.document, {
+      ...runtime,
+      jointTool: tool
+    })!;
+    const pose = view.solution.poses.get('comp_b')!;
+    // The lid's top face normal now points into the base (+y): faces touch,
+    // and the lid's body (below its top, −z) sits outside the base (−y side).
+    const normal = rotateVector(pose.q, lidTop.zAxis);
+    expect(normal.y).toBeCloseTo(1, 12);
+    const body = transformPoint(pose, { x: 0, y: 0, z: 0 });
+    expect(body.y).toBeCloseTo(-32, 9);
+    const flipped = buildAssemblyView(manager.document, {
+      ...runtime,
+      jointTool: { ...tool, flip: true }
+    })!;
+    const inside = transformPoint(flipped.solution.poses.get('comp_b')!, {
+      x: 0,
+      y: 0,
+      z: 0
+    });
+    expect(inside.y).toBeCloseTo(-8, 9);
   });
 
   it('plays a joint sweep from elapsed time alone', () => {
