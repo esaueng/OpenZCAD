@@ -95,15 +95,6 @@ test(
       page.getByRole('heading', { name: 'History 3' })
     ).toBeVisible();
     await expect(status).toContainText('warnings0');
-    await page.getByRole('button', { name: 'View', exact: true }).click();
-    await page
-      .getByRole('button', {
-        name: 'Bottom front left isometric view',
-        exact: true
-      })
-      .click();
-    await page.getByRole('button', { name: 'Fit view (F)' }).click();
-    await waitForStillViewport(page);
     await page.screenshot({
       path: testInfo.outputPath('single-edge-chamfer-applied.png')
     });
@@ -155,6 +146,15 @@ test(
     }
     await page.keyboard.press('Escape');
     await expect(status).toContainText('warnings0');
+    await page.getByRole('button', { name: 'View', exact: true }).click();
+    await page
+      .getByRole('button', {
+        name: 'Bottom front left isometric view',
+        exact: true
+      })
+      .click();
+    await page.getByRole('button', { name: 'Fit view (F)' }).click();
+    await waitForStillViewport(page);
     await page.screenshot({
       path: testInfo.outputPath('single-edge-chamfer-reloaded.png')
     });
