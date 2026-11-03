@@ -32,3 +32,9 @@ scheduling: synchronous pose notifications started a second frame loop.
 Playback now permits one pending frame across joint sweeps, studies and tool
 previews; regression coverage checks sustained motion, pause, completion and
 unmount without modifying the saved document.
+Drag continuity checks measure the rendered face boundary for both valid
+preview routes. A holed-body regression forces the exact worker stream and
+holds final validation while pressing the retained handle, preserving the
+selection, validation-lock and no-flash assertions.
+Successive drags also run against a manually held analysis window; the test
+requires all four edits and their cumulative 5 mm rendered boundary.

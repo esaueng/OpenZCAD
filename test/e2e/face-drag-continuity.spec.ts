@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { renderedMinimumY } from './rendered-body-fixtures';
 import {
   createPrimitiveInPlace,
   test,
@@ -153,10 +154,7 @@ async function dragAndCommit(
     y + handle.dy * handle.pixels * value,
     { steps: 12 }
   );
-  await expect(canvas).toHaveAttribute(
-    'data-e2e-height-proxy-offset',
-    String(value)
-  );
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-value, 3);
   const released = await now(page);
   await page.mouse.up();
   await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
@@ -236,7 +234,12 @@ test('a press on the handle while its release validates changes nothing', async 
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
   await holdValidation(page);
-  const { canvas, handle } = await armedBox(page);
+  // This holed side must use the exact stream: a body stretch would also
+  // deform the bore. Exercise validation locking on that route explicitly.
+  await page.addInitScript(() => {
+    window.__openzcadE2EExactFaceDrag = true;
+  });
+  const { canvas, handle } = await armedBox(page, { hole: true });
   await page.evaluate(() => {
     window.__holdFinal!.hold = true;
   });
@@ -245,7 +248,8 @@ test('a press on the handle while its release validates changes nothing', async 
   await page.mouse.move(handle.x, handle.y);
   await page.mouse.down();
   await page.mouse.move(endX, endY, { steps: 12 });
-  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
+  await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
   await page.mouse.up();
   const card = page.getByRole('region', { name: 'Offset Face operation' });
   await expect
@@ -305,7 +309,7 @@ test(
       handle.y + handle.dy * handle.pixels * 3,
       { steps: 12 }
     );
-    await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+    await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
     await page.mouse.up({ clickCount: 2 });
     // A click re-arms a box side as Resize Body, whichever card the drag
     // started from.
@@ -567,7 +571,7 @@ test('the committed face stays selected while the follow-up rebuild analyses', a
     handle.y + handle.dy * handle.pixels * 3,
     { steps: 12 }
   );
-  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
   await page.mouse.up();
   await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
     timeout: 30_000
@@ -588,16 +592,21 @@ test('a commit reads as complete while its follow-up rebuild analyses', async ({
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
   await slowAnalysis(page);
-  const { canvas, handle } = await armedBox(page);
+  const { canvas } = await armedBox(page);
   const drag = async (value: number) => {
-    const x = Number(await canvas.getAttribute('data-e2e-handle-x'));
-    const y = Number(await canvas.getAttribute('data-e2e-handle-y'));
+    const current = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      pixels: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
     const bounds = (await canvas.boundingBox())!;
-    await page.mouse.move(bounds.x + x, bounds.y + y);
+    await page.mouse.move(bounds.x + current.x, bounds.y + current.y);
     await page.mouse.down();
     await page.mouse.move(
-      bounds.x + x + handle.dx * handle.pixels * value,
-      bounds.y + y + handle.dy * handle.pixels * value,
+      bounds.x + current.x + current.dx * current.pixels * value,
+      bounds.y + current.y + current.dy * current.pixels * value,
       { steps: 8 }
     );
     await page.mouse.up();
@@ -640,15 +649,29 @@ test('a commit reads as complete while its follow-up rebuild analyses', async ({
     unselectedRows: 0
   });
   // A drag released inside a held window is not refused either.
+  await page.evaluate(() => {
+    window.__slowAnalysis!.manual = true;
+  });
   const held = await page.evaluate(() => window.__slowAnalysis!.held);
   await drag(1);
   await expect
     .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
     .toBeGreaterThan(held);
-  await drag(-1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Offset face' })
   ).toHaveCount(3, { timeout: 30_000 });
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).not.toContainText('Validating');
+  await drag(-1);
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = false;
+    window.__slowAnalysis!.release!();
+  });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(4, { timeout: 30_000 });
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-5, 3);
   await expect(
     page.getByText('still rebuilding', { exact: false })
   ).toHaveCount(0);
@@ -730,7 +753,7 @@ test('a tool that needs the finished model waits for a genuine rebuild', async (
     handle.y + handle.dy * handle.pixels * 3,
     { steps: 8 }
   );
-  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
   await page.mouse.up();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Offset face' })
