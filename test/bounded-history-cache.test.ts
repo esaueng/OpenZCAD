@@ -611,6 +611,8 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
     }
   });
 
+  // Exercise all 1,024 real replays; this is ownership/retirement coverage,
+  // rather than a wall-clock performance assertion.
   it('retires a replayed kernel before export and sync without serving stale handles', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -665,7 +667,7 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
       adapter.dispose();
       ownership(adapter, 0);
     }
-  });
+  }, 300_000);
 
   it.each([0, -1, 2.5, NaN, Infinity])(
     'preserves disabled and integer count semantics for limit %s',

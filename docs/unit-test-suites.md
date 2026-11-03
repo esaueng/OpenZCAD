@@ -63,3 +63,10 @@ ten-second preparation deadline. The outer process harness separately allows
 startup time. Multi-process Git fixtures and multi-project cryptographic
 recovery tests have explicit 30-second integration budgets; their protocol,
 provenance and refusal assertions remain unchanged.
+
+The 1,024-replay kernel-retirement stress case has a five-minute budget and
+the gear fixture uses its suite's existing one-minute geometry budget. The
+glyph audit scans the real source tree once in a bounded 30-second setup;
+coverage and scan-floor assertions inspect that same result. These checks
+assert correctness and ownership, not elapsed-time performance. Global test
+timeouts, worker limits, replay counts and assertion thresholds are unchanged.

@@ -33,14 +33,14 @@ beforeAll(async () => {
     '/package.json',
     '/pnpm-lock.yaml'
   );
-});
+}, 30_000);
 beforeEach(async () => {
   git('reset', '--hard', sourceCommit);
   await rm(join(directory, 'new-benchmark-source.ts'), { force: true });
-});
+}, 30_000);
 afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
-});
+}, 30_000);
 
 it('identifies the same clean benchmark checkout from a nested directory', async () => {
   const initial = benchmarkCheckout({ cwd: directory });
@@ -48,10 +48,11 @@ it('identifies the same clean benchmark checkout from a nested directory', async
   const nested = join(directory, 'apps', 'web');
   await mkdir(nested, { recursive: true });
   expect(benchmarkCheckout({ cwd: nested })).toEqual(initial);
-});
+}, 30_000);
 
 it.each(['worktree', 'index', 'untracked'])(
   'refuses a dirty benchmark %s',
+  { timeout: 30_000 },
   async (kind) => {
     const initial = benchmarkCheckout({ cwd: directory });
     const file =
@@ -75,7 +76,7 @@ it('refuses a different lockfile digest', () => {
       directory
     )
   ).toThrow(/changed after the build/);
-});
+}, 30_000);
 
 it('refuses a different clean revision even with the same tree', () => {
   const initial = benchmarkCheckout({ cwd: directory });
@@ -96,4 +97,4 @@ it('refuses a different clean revision even with the same tree', () => {
   expect(() => assertBenchmarkCheckout(initial, directory)).toThrow(
     /changed after the build/
   );
-});
+}, 30_000);

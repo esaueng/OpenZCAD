@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   auditGlyphCoverage,
   describeAudit,
@@ -66,16 +66,19 @@ describe('glyph coverage extraction', () => {
 });
 
 describe('glyph coverage', () => {
-  it('draws every interface glyph with a bundled face', () => {
-    const audit = auditGlyphCoverage();
+  let audit: ReturnType<typeof auditGlyphCoverage>;
+  // Scan the actual source tree once, then assert coverage and scan floors on
+  // the same result. This is filesystem setup, not a five-second latency gate.
+  beforeAll(() => {
+    audit = auditGlyphCoverage();
+  }, 30_000);
 
+  it('draws every interface glyph with a bundled face', () => {
     // Compared as text so a failure prints the offending strings.
     expect(describeAudit(audit)).toBe('');
   });
 
   it('scans the files it claims to', () => {
-    const audit = auditGlyphCoverage();
-
     // A guard that silently reads nothing passes forever. Floors, not counts:
     // 345 files, some 22,000 strings and 552 code points when this landed.
     expect(audit.fileCount).toBeGreaterThan(200);

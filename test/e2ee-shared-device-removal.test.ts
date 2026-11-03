@@ -663,7 +663,9 @@ async function people() {
 
 // --- Removal from shared projects ---------------------------------------------
 
-describe('device removal across shared encrypted projects (slice 5-7)', () => {
+// Real multi-account cryptographic flows have an integration budget; every
+// cutoff, directory, authorship and readback assertion still runs.
+describe('device removal across shared encrypted projects (slice 5-7)', { timeout: 30_000 }, () => {
   it('carries a removal’s rotation in every Commit, a member removal included (#908 review)', async () => {
     const { alice, bob, bobRecovery, bobPhone } = await people();
     // Bob's project, shared with Alice; his phone holds a leaf in it.

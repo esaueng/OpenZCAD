@@ -287,5 +287,5 @@ describe('a co-member’s revoked device without a signed cutoff (slice 5-7)', (
         error instanceof MlsDirectoryError &&
         error.code === 'revocation-cutoff-missing'
     );
-  });
+  }, 30_000);
 });
