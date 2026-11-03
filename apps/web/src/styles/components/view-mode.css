@@ -5,53 +5,42 @@
 
 /* ── Top bar: the mode switch ────────────────────────────── */
 
-/* Docked at the left of the bar, between the brand and the project name:
-   the workspace you are in reads before the document you are in it with.
-
-   Five equal segments and one tinted thumb that slides to the segment you
-   chose. The thumb has no outline: it is the same selected fill as the
+/* Five segments as wide as their own labels, and one tinted thumb that
+   slides to the segment you chose. Equal segments sized every one to
+   "Assemble", padding View and Draw with empty space and costing the bar
+   about 90px. The thumb has no outline: it is the same selected fill as the
    armed tool and the switched-on rail buttons, set in by the island's
    padding so all three read as one kind of selection. */
 .mode-switch {
-  --mode-switch-index: 0;
   position: relative;
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
   isolation: isolate;
 }
 
-.mode-switch[data-active='tweak'] {
-  --mode-switch-index: 1;
-}
-
-.mode-switch[data-active='build'] {
-  --mode-switch-index: 2;
-}
-
-.mode-switch[data-active='assemble'] {
-  --mode-switch-index: 3;
-}
-
-.mode-switch[data-active='drawing'] {
-  --mode-switch-index: 4;
-}
-
-/* The thumb. Sized to one segment and moved by whole segments, so it never
-   has to know how wide a label is; the move is a transform, so it costs no
-   layout, and it collapses to a jump under prefers-reduced-motion with every
-   other transition (tokens.css). */
+/* The thumb. TopBar.tsx measures the active segment and hands over its
+   offset and width, since the segments differ; the move is a transform, so
+   it costs no layout, and it collapses to a jump under
+   prefers-reduced-motion with every other transition (tokens.css). It
+   animates only once placed (`data-thumb`), so the first frame does not
+   grow it from nothing. */
 .mode-switch::before {
   content: '';
   position: absolute;
   z-index: -1;
-  inset: var(--mode-switch-inset, 0) auto var(--mode-switch-inset, 0)
-    var(--mode-switch-inset, 0);
-  width: calc((100% - var(--mode-switch-inset, 0px) * 2) / 5);
+  inset: var(--mode-switch-inset, 0) auto var(--mode-switch-inset, 0) 0;
+  width: var(--mode-thumb-w, 0px);
   background: var(--color-selected-fill);
   border-radius: var(--radius-md);
-  transform: translateX(calc(var(--mode-switch-index) * 100%));
-  transition: transform var(--dur-base) var(--ease-out);
+  transform: translateX(var(--mode-thumb-x, 0px));
+}
+
+.mode-switch[data-thumb='placed']::before {
+  transition:
+    transform var(--dur-base) var(--ease-out),
+    width var(--dur-base) var(--ease-out);
 }
 
 .mode-switch-option {
@@ -890,17 +879,21 @@
   opacity: 1;
 }
 
-@media (max-width: 620px) {
-  /* Icons alone carry the modes when the bar has no room for labels; the
-     title tooltip still names each one. */
+/* Icons alone carry the modes once the bar needs their room for the project
+   name: the labelled switch is 384px, the icons 163px. It goes with the
+   action row's labels (responsive.css), so the bar is either all words or
+   all glyphs. The tooltip still names each mode. */
+@media (max-width: 959px) {
   .mode-switch-option {
-    padding-inline: 8px;
+    padding-inline: 9px;
   }
 
   .mode-switch-option .mode-switch-label {
     display: none;
   }
+}
 
+@media (max-width: 620px) {
   /* The stacked narrow layout gives the sidebar a row; without one the
      viewport takes the whole workspace. Outranks the stacked rule in
      responsive.css, and follows it in the cascade. */
