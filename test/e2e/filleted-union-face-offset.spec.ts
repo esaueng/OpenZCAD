@@ -123,15 +123,18 @@ test(
         /.+/
       );
     }
-    // Motion changes the whole displayed part without replaying history or
-    // posting a kernel request. Escape restores the original geometry/history.
-    expect(
-      await page.evaluate(
-        () =>
-          (window as typeof window & { offsetPreviewRequests: number })
-            .offsetPreviewRequests
+    // The proxy changes the displayed part without replaying history. Once
+    // motion rests, exact validation checks that the result can be committed.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { offsetPreviewRequests: number })
+              .offsetPreviewRequests
+        )
       )
-    ).toBe(0);
+      .toBeGreaterThan(0);
+    await expect(page.locator('.feature-row')).toHaveCount(featuresBeforeDrag);
     await page.keyboard.press('Escape');
     await page.mouse.up();
     await page.keyboard.up('Shift');
