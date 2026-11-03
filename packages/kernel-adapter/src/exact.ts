@@ -1714,8 +1714,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (
       kernel &&
       cachingEnabled &&
-      !displayOnlyBlends &&
-      !deferredDirectEditFeatureId &&
       this.historyProjectId === document.projectId &&
       this.historyScopeKey === scopeKey
     ) {
@@ -1732,6 +1730,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       if (
         entry &&
         entry.featureIndex + 1 >= MIN_AXIAL_HISTORY_FEATURES &&
+        (!deferredDirectEditFeatureId ||
+          features.findIndex(
+            (feature) => feature.featureId === deferredDirectEditFeatureId
+          ) > entry.featureIndex) &&
         certificate &&
         root &&
         typeof width === 'number' &&
@@ -1773,7 +1775,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           const probeKey = probeKeys[entry.featureIndex]!;
           const probeBytes = new TextEncoder().encode(probeKey).byteLength;
           const certificateBytes = axialCertificateBytes(updated.certificate);
-          const viewDigests = idleDigests.slice(0, entry.featureIndex + 1);
+          // The source and all native transports are checked even when a
+          // resting display preview requested this update. Its deferred tail
+          // is outside this prefix, so retain checked digests for release.
+          const viewDigests = idleDigests
+            .slice(0, entry.featureIndex + 1)
+            .map((digest, index) => {
+              const salt = displayOnlyBlendSalt(
+                features[index]!,
+                displayOnlyBlends
+              );
+              return salt ? digest.slice(0, -salt.length) : digest;
+            });
           const viewBytes = updated.idle
             ? idleLineageViewBytes(updated.idle, viewDigests)
             : 0;
@@ -1804,7 +1817,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           const replacement: HistoryCheckpointEntry = {
             featureIndex: entry.featureIndex,
             checkpointId,
-            digests: digests.slice(0, entry.featureIndex + 1),
+            digests: checkedDigests.slice(0, entry.featureIndex + 1),
             snapshot: updated.snapshot,
             lineageProbeKey: probeKey,
             lineageMetadataBytes: probeBytes + certificateBytes + viewBytes,

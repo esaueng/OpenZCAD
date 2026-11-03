@@ -135,6 +135,90 @@ describe('qualified axial history reuse', { timeout: 120_000 }, () => {
     }
   });
 
+  it('retains a checked prefix through a resting preview, release and cancel', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const { document } = await longUnion(adapter);
+      const next = widthEdit(document, 2.25);
+      const fillets = vi.spyOn(RemusKernel.prototype, 'filletWithEvolution');
+      const preview = await adapter.previewGeometry(next, {
+        deferTopology: true
+      });
+      expect(preview.analysis).toBe('pending');
+      // Geometry-only replies publish no complete rebuild cache event.
+      // The native spy and the following checked restore prove prefix reuse.
+      expect(fillets).not.toHaveBeenCalled();
+      const derived = await adapter.syncDocument(next);
+      expect(events.at(-1)).toMatchObject({
+        restored: next.featureOrder.length - 1,
+        replayed: 1
+      });
+      expect(fillets).not.toHaveBeenCalled();
+      expect(physical(derived)).toEqual(await fresh(next));
+      fillets.mockClear();
+      const idle = await adapter.syncDocument(
+        next,
+        undefined,
+        undefined,
+        undefined,
+        { lineageDemand: [] }
+      );
+      expect(fillets).not.toHaveBeenCalled();
+      expect(physical(idle)).toEqual(await fresh(next, true));
+      const later = widthEdit({ ...next, derived }, 1);
+      await adapter.previewGeometry(later, { deferTopology: true });
+      fillets.mockClear();
+      const cancelled = await adapter.syncDocument(document);
+      expect(events.at(-1)?.reusedAxialFeatures).toBe(
+        document.featureOrder.length - 1
+      );
+      expect(fillets).not.toHaveBeenCalled();
+      expect(physical(cancelled)).toEqual(await fresh(document));
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('keeps the checked source when an in-flight resting preview is cancelled', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const { document } = await longUnion(adapter);
+      const next = widthEdit(document, 2);
+      let cancelled = false;
+      const native = RemusKernel.prototype.moveFacesJournaled;
+      const journal = vi
+        .spyOn(RemusKernel.prototype, 'moveFacesJournaled')
+        .mockImplementationOnce(function (this: RemusKernel, ...args) {
+          const result = native.apply(this, args);
+          cancelled = true;
+          return result;
+        });
+      const outcome = await adapter
+        .previewGeometry(next, {
+          deferTopology: true,
+          cancellation: { isCancelled: () => cancelled }
+        })
+        .catch((error: unknown) => isBuildCancelled(error));
+      expect(outcome).toBe(true);
+      journal.mockRestore();
+      const fillets = vi.spyOn(RemusKernel.prototype, 'filletWithEvolution');
+      const result = await adapter.syncDocument(next);
+      expect(events.at(-1)?.reusedAxialFeatures).toBe(
+        next.featureOrder.length - 1
+      );
+      expect(fillets).not.toHaveBeenCalled();
+      expect(physical(result)).toEqual(await fresh(next));
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it('does not skip a simultaneous radius change', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({

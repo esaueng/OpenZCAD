@@ -43,6 +43,13 @@ Only the literal root width may differ in the reused prefix. Its other fields,
 every subsequent feature digest, project, units, scope, lineage demand and
 checkpoint ownership are checked through the existing cache contracts.
 
+A resting display preview may reuse the same fully checked prefix when its
+deferred face edit lies strictly after that prefix. The transported prefix
+retains checked feature and idle-lineage digests; display-only blend salts
+never replace its checked provenance. Its deferred tail still requires the
+normal authoritative release build. Resting exact refusal checks remain
+enabled, and cancellation preserves only the existing owned checked source.
+
 Each affected root is moved through the exact native journal entry point.
 Unavailable or conflicting construction maps, facet fallback, relaxed
 validation errors, or an end plane that differs from the requested width
