@@ -8,6 +8,7 @@ import {
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import { stepPreviewProfile } from '../apps/web/src/lib/interaction/stepPreviewProfile';
 import { roundedPlateDocument } from './support/rounded-plate';
+import { filletedUnion, unionEndFace } from './support/filleted-union';
 
 function side(body: BodyRepresentation, axis: 'x' | 'y', sense: 1 | -1) {
   return body.topology!.faces.find(
@@ -67,6 +68,57 @@ function bounds(vertices: ArrayLike<number>) {
 }
 
 describe('whole-body step previews for planar face offsets', () => {
+  it('stretches a filleted union end without carrying its junction blend', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const { document, body, bodyId } = await filletedUnion(adapter);
+      const face = unionEndFace(body);
+      const profile = stepPreviewProfile(body, face);
+      expect(profile).not.toBeNull();
+      expect(profile!.reach).toBe(Infinity);
+      expect(profile!.span).toBeGreaterThan(2);
+      for (const delta of [5, -2]) {
+        const preview = stretched(body, profile!, delta);
+        const plan = planFaceOffset({
+          document,
+          bodyId,
+          face,
+          faceHash: face.hash,
+          offset: delta
+        })!;
+        expect(plan.kind).toBe('primitive-dimension');
+        const after = await adapter.syncDocument(plan.command.apply(document));
+        expect(after.warnings).toEqual([]);
+        const exact = after.bodyRepresentations[bodyId]!;
+        expect(bounds(preview).min).toEqual(bounds(body.mesh.vertices).min);
+        expect(bounds(preview).max[0]).toBeCloseTo(exact.bbox.max.x, 4);
+        expect(
+          meshVolume(preview, body.mesh.indices) -
+            meshVolume(body.mesh.vertices, body.mesh.indices)
+        ).toBeCloseTo(exact.volume - body.volume, 1);
+        const moves = stepPreviewMatcher(profile!);
+        // The complex junction stays put; only the opposite planar end moves.
+        for (const junction of body.topology!.faces.filter(
+          (candidate) => candidate.geometry?.surfaceType === 'bspline'
+        )) {
+          const end = (junction.triangleStart + junction.triangleCount) * 3;
+          for (let t = junction.triangleStart * 3; t < end; t++) {
+            const index = body.mesh.indices[t]! * 3;
+            expect(
+              moves(
+                body.mesh.vertices[index]!,
+                body.mesh.vertices[index + 1]!,
+                body.mesh.vertices[index + 2]!
+              )
+            ).toBe(false);
+          }
+        }
+      }
+    } finally {
+      adapter.dispose();
+    }
+  }, 60_000);
+
   it.each([
     { axis: 'x' as const, sense: 1 as const, delta: 15 },
     { axis: 'x' as const, sense: -1 as const, delta: 6 },
