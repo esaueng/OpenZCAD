@@ -13,6 +13,7 @@ import {
   shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
 import { datumAxisDisplays } from '../lib/datumAxisDisplay';
+import { useAssemblyView } from '../lib/assembly/useAssemblyView';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
@@ -565,6 +566,8 @@ export function ViewerShell({
   sectionOutline
 }: ViewerShellProps) {
   const { bodies, standIns: parameterVisualPreview } = view;
+  // Assemble's posed view of the same document; null outside Assemble.
+  const assemblyView = useAssemblyView(view.document);
   /**
    * The section as this drawing may show it. An exact section describes the
    * document's own geometry, and while a stand-in is up the viewport is not
@@ -893,6 +896,7 @@ export function ViewerShell({
         onResizePrimitiveFace={onResizePrimitiveFace}
         onMovePreviewChange={onMovePreviewChange}
         onContextMenu={onContextMenu}
+        assemblyView={assemblyView}
       />
       {dockLayout && !hideViewerToolbar && (
         <>
