@@ -171,7 +171,8 @@
   position: absolute;
   left: var(--lane-inset, var(--island-gap));
   right: var(--lane-right, var(--island-gap));
-  bottom: var(--island-gap);
+  /* Above the command bar, which owns the bottom lane in every mode. */
+  bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   z-index: var(--z-viewer-overlay);
   max-height: 45%;
   box-shadow: var(--shadow-1);
