@@ -84,6 +84,7 @@
     "test/e2ee-shared-device-removal.test.ts",
     "test/exact-kernel-adapter.test.ts",
     "test/filleted-union-face-offset.test.ts",
+    "test/axial-extent-reuse.test.ts",
     "test/flange-bolt-hole-resize.test.ts",
     "test/fleet-checkout-fixtures.test.ts",
     "test/gear-face-width-cap-drag.test.ts",

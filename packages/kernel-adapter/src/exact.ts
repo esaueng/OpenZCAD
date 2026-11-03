@@ -1,3 +1,11 @@
+import {
+  AxialExtentTracker,
+  MIN_AXIAL_HISTORY_FEATURES,
+  axialRootKey,
+  axialCertificateBytes,
+  resizeAxialPrefix,
+  type AxialExtentCertificate
+} from './exact-axial-extent';
 import { CooperativeWork } from './cooperative-work';
 import {
   cloneIdleLineageView,
@@ -1526,6 +1534,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     restored: number;
     reusedPrimitives: number;
     reusedPreparedFeatures: number;
+    reusedAxialFeatures: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
     strictVerdicts: StrictUnionVerdicts;
     /** The replay's kernel reads, for the measurement pass of this sync. */
@@ -1659,11 +1668,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let kernel = this.historyKernel;
     let startIndex = 0;
     let initial: ExactBuildResult | null = null;
+    let initialAxialExtent: AxialExtentCertificate | undefined;
     let initialIdleLineageView: IdleLineageView | undefined;
     let initialLineageIsIdle = false;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
     let reusedPreparedFeatures = 0;
+    let reusedAxialFeatures = 0;
     let cacheResetReason:
       'checkpoint-ownership' | 'checkpoint-restore' | undefined;
     this.primitiveBuildCache.prune(features);
@@ -1693,6 +1704,147 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         cacheResetReason = 'checkpoint-ownership';
         this.invalidateHistoryCache();
         kernel = null;
+      }
+    }
+
+    // A changed literal box width can reuse a checked prefix only through
+    // its common clear prism. No other changed feature is skipped. Native
+    // moves, complete construction maps and the normal measurement pass still
+    // establish every result. Any missing proof restores ordinary replay.
+    if (
+      kernel &&
+      cachingEnabled &&
+      this.historyProjectId === document.projectId &&
+      this.historyScopeKey === scopeKey
+    ) {
+      const entry = this.historyCheckpoints.at(-1);
+      const certificate = entry?.axialExtent;
+      const root = features[0];
+      const width =
+        root?.data.featureKind === 'primitive'
+          ? root.data.dimensions.width
+          : undefined;
+      const oldDigests = this.historyCheckpoints.flatMap(
+        (checkpoint) => checkpoint.digests
+      );
+      if (
+        entry &&
+        entry.featureIndex + 1 >= MIN_AXIAL_HISTORY_FEATURES &&
+        (!deferredDirectEditFeatureId ||
+          features.findIndex(
+            (feature) => feature.featureId === deferredDirectEditFeatureId
+          ) > entry.featureIndex) &&
+        certificate &&
+        root &&
+        typeof width === 'number' &&
+        width !== certificate.width &&
+        axialRootKey(document, root) === certificate.rootKey &&
+        entry.lineageProbeKey === probeKeys[entry.featureIndex] &&
+        oldDigests.length === entry.featureIndex + 1 &&
+        oldDigests.slice(1).every((digest, offset) => {
+          const index = offset + 1;
+          return (
+            digest === digests[index] ||
+            digest === probedDigests[index] ||
+            digest === checkedDigests[index]
+          );
+        })
+      ) {
+        try {
+          kernel.restore(entry.checkpointId);
+          throwIfBuildCancelled(cancellation);
+          // Failed/cancelled attempts allocate too; conservatively charge
+          // every possible source move before entering the native calls.
+          this.historyReplayWork += certificate.influenced.length;
+          const axialReads = new SyncReadMemo(
+            kernel,
+            this.topologyWitnessStore
+          );
+          const sourceKernel = kernel;
+          const updated = withSyncReadMemo(axialReads, () =>
+            resizeAxialPrefix(
+              sourceKernel,
+              entry.snapshot,
+              certificate,
+              width,
+              entry.idleLineageView?.state
+            )
+          );
+          throwIfBuildCancelled(cancellation);
+          if (!updated) throw new Error('The axial prefix was not qualified.');
+          const probeKey = probeKeys[entry.featureIndex]!;
+          const probeBytes = new TextEncoder().encode(probeKey).byteLength;
+          const certificateBytes = axialCertificateBytes(updated.certificate);
+          // The source and all native transports are checked even when a
+          // resting display preview requested this update. Its deferred tail
+          // is outside this prefix, so retain checked digests for release.
+          const viewDigests = idleDigests
+            .slice(0, entry.featureIndex + 1)
+            .map((digest, index) => {
+              const salt = displayOnlyBlendSalt(
+                features[index]!,
+                displayOnlyBlends
+              );
+              return salt ? digest.slice(0, -salt.length) : digest;
+            });
+          const viewBytes = updated.idle
+            ? idleLineageViewBytes(updated.idle, viewDigests)
+            : 0;
+          const memory = checkpointMemoryStats(kernel);
+          const budget =
+            this.options.historyCheckpointEstimatedBytes ??
+            MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES;
+          if (
+            !memory ||
+            memory.nextMutationEstimatedBytes +
+              probeBytes +
+              certificateBytes +
+              viewBytes >
+              budget
+          )
+            throw new Error('The axial prefix exceeds checkpoint retention.');
+          kernel.discardCheckpoint(this.historyCheckpoints[0]!.checkpointId);
+          this.historyCheckpoints = [];
+          this.historyCheckpointOwners.clear();
+          const checkpointId = kernel.checkpoint();
+          if (
+            !isCheckpointHandle(checkpointId) ||
+            kernel.checkpointCount() !== 1
+          )
+            throw new HistoryCacheIntegrityError(
+              'Axial checkpoint allocation disagrees.'
+            );
+          const replacement: HistoryCheckpointEntry = {
+            featureIndex: entry.featureIndex,
+            checkpointId,
+            digests: checkedDigests.slice(0, entry.featureIndex + 1),
+            snapshot: updated.snapshot,
+            lineageProbeKey: probeKey,
+            lineageMetadataBytes: probeBytes + certificateBytes + viewBytes,
+            axialExtent: updated.certificate,
+            ...(updated.idle
+              ? {
+                  idleLineageView: {
+                    digests: viewDigests,
+                    state: updated.idle,
+                    estimatedBytes: viewBytes
+                  }
+                }
+              : {})
+          };
+          this.historyCheckpoints.push(replacement);
+          this.historyCheckpointOwners.set(checkpointId, replacement);
+          this.primitiveBuildCache.clear();
+          reusedAxialFeatures = entry.featureIndex + 1;
+        } catch (error) {
+          try {
+            kernel.restore(entry.checkpointId);
+          } catch {
+            this.invalidateHistoryCache();
+            kernel = null;
+          }
+          if (isBuildCancelled(error)) throw error;
+        }
       }
     }
 
@@ -1761,7 +1913,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             break;
           }
         }
-        if (entry.featureIndex !== checkpointIndices[index]) {
+        if (!checkpointIndexSet.has(entry.featureIndex)) {
           if (index === this.historyCheckpoints.length - 1) {
             prefix = index;
             prefixUsesIdleView = needsIdleView;
@@ -1832,6 +1984,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           initial = restoredEntry
             ? cloneBuildState(restoredEntry.snapshot)
             : null;
+          initialAxialExtent = restoredEntry?.axialExtent;
           if (restoredEntry && initial) {
             const view = restoredEntry.idleLineageView;
             if (view) {
@@ -1878,6 +2031,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           initial = null;
           initialIdleLineageView = undefined;
           initialLineageIsIdle = false;
+          initialAxialExtent = undefined;
         }
       } else {
         this.invalidateHistoryCache();
@@ -1895,6 +2049,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyProjectId = document.projectId;
     }
     const activeKernel = kernel;
+    const axialExtent = new AxialExtentTracker(
+      activeKernel,
+      document,
+      features,
+      startIndex,
+      initial,
+      initialAxialExtent,
+      cachingEnabled && !displayOnlyBlends && !deferredDirectEditFeatureId
+    );
 
     const report = rebuildReporter(onProgress);
     let featureDone: (() => void) | undefined;
@@ -1914,6 +2077,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       idleView?: IdleLineageView
     ) => {
       featureDone?.();
+      if (index <= checkpointIndices.at(-1)!)
+        axialExtent.observe(index, result);
       // Publish only a disposable mesh projection before an expensive pattern.
       // It is never cached as an exact result, nor used by export/validation.
       const nextFeature = features[index + 1];
@@ -1973,15 +2138,41 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         return;
       // A checkpoint is cheap to create but makes the next mutation copy the
       // arena. Admit against that projected cost, including retired slots.
-      const memory = checkpointMemoryStats(activeKernel);
-      const retainedLineageBytes = this.historyLineageMetadataBytes;
+      let memory = checkpointMemoryStats(activeKernel);
+      let retainedLineageBytes = this.historyLineageMetadataBytes;
       const probeKey = probeKeys[index]!;
+      const axialCertificate = axialExtent.snapshot();
+      const axialBytes = axialCertificate
+        ? axialCertificateBytes(axialCertificate)
+        : 0;
       const probeKeyBytes = memory
-        ? new TextEncoder().encode(probeKey).byteLength
+        ? new TextEncoder().encode(probeKey).byteLength + axialBytes
         : 0;
       const byteBudget =
         this.options.historyCheckpointEstimatedBytes ??
         MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES;
+      // Prefer the checked tail/source to earlier prefixes when the existing
+      // byte ceiling cannot hold both. Discarding checkpoints does not restore
+      // topology or retire current handles. The tail records the whole digest
+      // span and its own finalized lineage view, so the next sync can restore
+      // it through the ordinary provenance/ownership checks.
+      if (
+        memory &&
+        index === checkpointIndices.at(-1) &&
+        this.historyCheckpoints.length > 0 &&
+        memory.nextMutationEstimatedBytes +
+          retainedLineageBytes +
+          probeKeyBytes >
+          byteBudget
+      ) {
+        activeKernel.discardCheckpoint(
+          this.historyCheckpoints[0]!.checkpointId
+        );
+        this.historyCheckpoints = [];
+        this.historyCheckpointOwners.clear();
+        memory = checkpointMemoryStats(activeKernel);
+        retainedLineageBytes = 0;
+      }
       if (memory) {
         if (
           memory.nextMutationEstimatedBytes +
@@ -2013,6 +2204,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         digests: digests.slice((previous?.featureIndex ?? -1) + 1, index + 1),
         checkpointId,
         snapshot: cloneBuildState(result),
+        ...(axialCertificate ? { axialExtent: axialCertificate } : {}),
         ...(memory
           ? { lineageProbeKey: probeKey, lineageMetadataBytes: probeKeyBytes }
           : {})
@@ -2177,6 +2369,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       restored: startIndex,
       reusedPrimitives,
       reusedPreparedFeatures,
+      reusedAxialFeatures,
       ...(cacheResetReason ? { cacheResetReason } : {}),
       ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
       strictVerdicts,
@@ -2931,6 +3124,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         restored,
         reusedPrimitives,
         reusedPreparedFeatures,
+        reusedAxialFeatures,
         strictVerdicts,
         readMemo,
         recycleReason,
@@ -3556,6 +3750,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               : 'full-rebuild',
         ...(reusedPrimitives > 0 ? { reusedPrimitives } : {}),
         ...(reusedPreparedFeatures > 0 ? { reusedPreparedFeatures } : {}),
+        ...(reusedAxialFeatures > 0 ? { reusedAxialFeatures } : {}),
         ...(recycleReason ? { recycleReason } : {}),
         replayed,
         restored,
