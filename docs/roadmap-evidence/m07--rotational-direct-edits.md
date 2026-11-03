@@ -30,3 +30,11 @@ covered by Remus's walking-stick-foot regression. No private project is shipped.
 entry, saved reload and downloaded STEP validity with 13 faces, 22 edges and
 12 vertices. `panel-float.spec.ts` pans a face handle toward an open Section
 panel and verifies the numeric value remains unobstructed and clickable.
+
+Kernel adoption also retains the curved-support fillet repair already used by
+the application. `retained-fillet-package.test.ts` imports an anonymous STEP
+from Remus's public synthetic crowned-box regression, rounds the opposite rim,
+and checks its unchanged rational crown and non-unit parameter interval, source
+B-Rep records, closed-form removed volume and exact STEP round trip. The
+published rotational-edit-only snapshot fails this case, while the combined
+source preserves both delivered capabilities.
