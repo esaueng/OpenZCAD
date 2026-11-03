@@ -24,6 +24,7 @@
   "face-offset-continuity.spec.ts": 30,
   "face-offset-total.spec.ts": 60,
   "feature-history.spec.ts": 21,
+  "filleted-union-face-offset.spec.ts": 60,
   "gear-face-width.spec.ts": 30,
   "gear-height-preview.spec.ts": 47.5,
   "gear-stale-reference.spec.ts": 60,

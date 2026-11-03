@@ -1,4 +1,5 @@
 import {
+  booleanConsumedBodyIds,
   getParameterScope,
   listFeaturesInOrder,
   resolveParamValue
@@ -32,6 +33,12 @@ interface PrimitiveChain {
   scale: number;
 }
 
+interface UnionBoxPath {
+  reference: FaceTopologyReferenceV5;
+  operandIndex: number;
+  axis: BoxAxis;
+}
+
 /**
  * Finds the source primitive that owns one selected face, along
  * with the features allowed to have named that face.
@@ -39,8 +46,9 @@ interface PrimitiveChain {
  * Fillets and chamfers create new BodyIds, so a face on their result no
  * longer points directly at the primitive; so do gear teeth cut along a
  * cylinder, which stay transparent to its height alone. Walk only that
- * uninterrupted result-body ancestry: crossing another body-producing feature
- * would make a primitive dimension edit ambiguous. In-place transforms are deliberately
+ * uninterrupted result-body ancestry. A construction-named maximum box side
+ * may also cross one union to its consumed operand; other body-producing
+ * features make a primitive dimension edit ambiguous. In-place transforms are deliberately
  * transparent, matching the existing transformed-cylinder behavior.
  *
  * Direct edits in the chain are transparent only for a planar face offset
@@ -54,7 +62,8 @@ function primitiveChain(
   document: ProjectDocument,
   selectedBodyId: BodyId,
   primitiveKind: 'cylinder' | 'box',
-  dimension: CylinderDimension | BoxDimension
+  dimension: CylinderDimension | BoxDimension,
+  unionPath?: UnionBoxPath
 ): PrimitiveChain | null {
   const features = listFeaturesInOrder(document);
   const producerByBodyId = new Map(
@@ -67,6 +76,8 @@ function primitiveChain(
   const consumerIndexByBodyId = new Map<BodyId, number>();
   let bodyId = selectedBodyId;
   let primitive: FeatureNode | null = null;
+  let crossedUnion = false;
+  let hasEdgeModifier = false;
 
   while (!ancestryBodyIds.has(bodyId)) {
     ancestryBodyIds.add(bodyId);
@@ -86,6 +97,25 @@ function primitiveChain(
       break;
     }
     const data = producer.data;
+    if (data.featureKind === 'boolean' && unionPath) {
+      const operand = data.targetBodyIds[unionPath.operandIndex];
+      // Only a construction-named operand face proves which input to resize.
+      // Cuts, intersections, nested/shared carriers and kept source bodies
+      // cannot inherit this bounded resize contract.
+      if (
+        crossedUnion ||
+        !hasEdgeModifier ||
+        data.operation !== 'union' ||
+        producer.featureId !== unionPath.reference.producingFeatureId ||
+        !operand ||
+        !booleanConsumedBodyIds(data).includes(operand)
+      )
+        return null;
+      crossedUnion = true;
+      consumerIndexByBodyId.set(operand, features.indexOf(producer));
+      bodyId = operand;
+      continue;
+    }
     const targetBodyId =
       data.featureKind === 'fillet' || data.featureKind === 'chamfer'
         ? data.targetBodyId
@@ -100,11 +130,13 @@ function primitiveChain(
     if (targetBodyId === undefined) {
       return null;
     }
+    hasEdgeModifier ||=
+      data.featureKind === 'fillet' || data.featureKind === 'chamfer';
     consumerIndexByBodyId.set(targetBodyId, features.indexOf(producer));
     bodyId = targetBodyId;
   }
 
-  if (!primitive) {
+  if (!primitive || (unionPath && !crossedUnion)) {
     return null;
   }
   const hasBlockingDirectEdit = features.some((feature, index) => {
@@ -128,6 +160,32 @@ function primitiveChain(
     );
   });
   if (hasBlockingDirectEdit) return null;
+  if (
+    unionPath &&
+    features.some((feature) => {
+      if (isFeatureSuppressed(feature) || publishers.has(feature.featureId))
+        return false;
+      const data = feature.data;
+      const inputs =
+        'targetBodyIds' in data
+          ? data.targetBodyIds
+          : 'targetBodyId' in data && data.targetBodyId
+            ? [data.targetBodyId]
+            : [];
+      if (!inputs.some((input) => ancestryBodyIds.has(input))) return false;
+      if (data.featureKind === 'direct-edit') {
+        // A previous local move of this dimension has its own baseline. Do
+        // not replace that baseline with the primitive's stored dimension.
+        return (
+          data.operation.kind !== 'offset-face' ||
+          Math.abs(data.operation.sourceNormal[unionPath.axis]) > 1e-6
+        );
+      }
+      // A copied/patterned/shared source would resize another branch too.
+      return !isInPlaceTransform(data);
+    })
+  )
+    return null;
   let scale = 1;
   const { scope } = getParameterScope(document);
   for (const [index, feature] of features.entries()) {
@@ -152,7 +210,7 @@ function primitiveChain(
       // A rotation before that modifier cannot prove the primitive's local axis.
       if (
         primitiveKind === 'box' &&
-        consumerIndex < features.length &&
+        (unionPath || consumerIndex < features.length) &&
         [
           feature.data.transform.rotationDeg.x,
           feature.data.transform.rotationDeg.y,
@@ -256,6 +314,9 @@ const BOX_DIMENSION_BY_AXIS: Record<BoxAxis, BoxDimension> = {
 const BOX_SIDE_LINEAGE =
   /^(?:primitive|modifier)\.box\.face\.([xyz])-(min|max)$/;
 
+const UNION_BOX_SIDE_LINEAGE =
+  /^boolean\.face\.operand\.(0|[1-9]\d*)\.((?:primitive|modifier)\.box\.face\.[xyz]-max)$/;
+
 export interface BoxFaceAncestor {
   primitive: FeatureNode;
   dimension: BoxDimension;
@@ -270,7 +331,8 @@ export interface BoxFaceAncestor {
  * Same contract as {@link primitiveCylinderHeightAncestor}: identity is
  * proven by a v5 role published by a feature in the walked chain, never by
  * geometry. A minimum-side edit additionally shifts the primitive base so
- * the opposite side stays fixed.
+ * the opposite side stays fixed. Across a union only maximum sides qualify:
+ * shifting an input's base could move its junction with the other operands.
  */
 export function primitiveBoxFaceAncestor(
   document: ProjectDocument,
@@ -281,14 +343,23 @@ export function primitiveBoxFaceAncestor(
   if (!faceReference || faceReference.currentHash !== faceHash) {
     return null;
   }
-  const match = BOX_SIDE_LINEAGE.exec(faceReference.lineageName);
+  const union = UNION_BOX_SIDE_LINEAGE.exec(faceReference.lineageName);
+  const match = BOX_SIDE_LINEAGE.exec(union?.[2] ?? faceReference.lineageName);
   if (!match) {
     return null;
   }
   const axis = match[1] as BoxAxis;
   const side = match[2] as 'min' | 'max';
   const dimension = BOX_DIMENSION_BY_AXIS[axis];
-  const chain = primitiveChain(document, selectedBodyId, 'box', dimension);
+  const chain = primitiveChain(
+    document,
+    selectedBodyId,
+    'box',
+    dimension,
+    union
+      ? { reference: faceReference, operandIndex: Number(union[1]), axis }
+      : undefined
+  );
   return chain?.publishers.has(faceReference.producingFeatureId)
     ? { primitive: chain.primitive, dimension, axis, side, scale: chain.scale }
     : null;
