@@ -209,6 +209,51 @@ export function shrinkChamferedThroughHole(
       const slope = Math.tan(cone.half_angle) / alignment;
       if (!close(geometry.radius, (ring.at - axial(cone.apex)) / slope))
         throw refusal();
+      for (const e of edgesOf(other)) {
+        if (e === edge) continue;
+        const boundaryEdge = arena.edges[e]!;
+        const circle =
+          boundaryEdge.curve === 'Line' ? undefined : boundaryEdge.curve.Circle;
+        // A coaxial circular carrier has a constant radius over its whole trim.
+        if (
+          circle &&
+          parallel(circle.normal) &&
+          onAxis(circle.center) &&
+          circle.radius > geometry.radius + tolerance
+        )
+          continue;
+        const neighbours = owners.get(e)!.filter((f) => f !== other);
+        if (!neighbours.length && boundaryEdge.curve === 'Line') {
+          const uses = arena.wires[
+            arena.faces[other]!.outer_wire
+          ]!.edges.filter((use) => use.edge === e);
+          if (uses.length === 2 && uses[0]!.forward !== uses[1]!.forward)
+            continue;
+        }
+        const plane =
+          neighbours.length === 1
+            ? arena.faces[neighbours[0]!]!.surface.Plane
+            : undefined;
+        const normal = plane && normalized(vector(plane.normal));
+        if (!normal) throw refusal();
+        const along = dot(normal, axis);
+        const p = arena.vertices[boundaryEdge.start]!.point;
+        const radiusAtVertex = (axial(p) - axial(cone.apex)) / slope;
+        // A transverse plane fixes the cone radius. A parallel side plane's
+        // distance from the axis bounds every point of its intersection curve.
+        if (
+          Math.abs(Math.abs(along) - 1) <= ANALYTIC_MATCH_EPSILON &&
+          radiusAtVertex > geometry.radius + tolerance
+        )
+          continue;
+        if (
+          Math.abs(along) <= ANALYTIC_MATCH_EPSILON &&
+          Math.abs(dot(normal, subtract(vector(p), origin))) >
+            geometry.radius + tolerance
+        )
+          continue;
+        throw refusal();
+      }
       // The input has a strictly valid, nonintersecting cone wire. Its complete
       // bore ring separates the outer boundary from the region being added.
       // Certify that every other boundary vertex is on the outward side of
