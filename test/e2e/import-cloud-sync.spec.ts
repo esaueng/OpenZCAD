@@ -272,7 +272,7 @@ for (const {
       // Account A was cached on this browser before account B signed in.
       // Its content-addressed bytes remain on-device, but A's archived IDs
       // cannot identify bytes owned by the new account project.
-      await page.getByRole('button', { name: 'OpenZCAD Beta' }).click();
+      await page.getByTitle('Back to projects', { exact: true }).click();
       const cachedTile = page.locator('.start-tile-open', {
         hasText: 'Editable imported cube'
       });

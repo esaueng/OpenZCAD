@@ -45,3 +45,6 @@ to remain directly clickable at four viewport sizes, including short landscape.
 Running commands consume context clicks on empty space as well as geometry,
 including where a rim stood before its fillet preview moved it. Multi-edge
 fillet coverage preserves both input picks across all three cases.
+Project-shelf navigation follows the stable Back to projects action while
+the responsive header hides its optional Beta badge; save-failure and local
+reopening assertions retain their original storage and request checks.
