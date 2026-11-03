@@ -174,7 +174,7 @@ test('Revolve turns about a body edge in its sketch plane', async ({
       return bar.textContent();
     })
     .toContain('Pick an axis');
-  await expect(bar).toContainText('edge, cylinder');
+  await expect(bar).toContainText('edge or cylinder');
   await setSelectionFilter(page, 'Edge');
   await clickWorldPoint(page, [6, 0, 3]);
   await expect(bar).toContainText('Drag the angle');

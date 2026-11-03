@@ -351,7 +351,7 @@ export const referenceImage: InPlaceToolSpec = {
       if (picked === 1) return 'Click the second point';
       return 'Tap the distance to type its real length';
     }
-    return 'Click to move · drag the corner to scale, the ring to turn';
+    return 'Click to move it · drag the corner to scale, the ring to turn';
   },
   // Its plane must resolve: a picture on a broken datum would be added
   // where nothing draws it.
