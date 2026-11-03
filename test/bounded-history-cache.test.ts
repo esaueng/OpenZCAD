@@ -1013,10 +1013,22 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         await equivalent(next, actual);
         expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1 });
         const ids = actual.exportableBodyIds;
-        const step = await adapter.exportStep(next, ids);
-        ownership(adapter, 2);
-        expect(step).toContain('MANIFOLD_SOLID_BREP');
-        expect(await adapter.exportStep(next, ids)).toBe(step);
+        const metadata = { timestamp: '2026-01-01T00:00:00Z' };
+        const clock = new Date();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+          vi.setSystemTime(clock);
+          const step = await adapter.exportStep(next, ids, metadata);
+          ownership(adapter, 2);
+          expect(step).toContain('MANIFOLD_SOLID_BREP');
+          expect(step).toContain(`'${metadata.timestamp}'`);
+          // STEP defaults to the current time. Hold the caller's metadata
+          // fixed while crossing a second; compare every byte, header included.
+          vi.setSystemTime(new Date(clock.getTime() + 1_000));
+          expect(await adapter.exportStep(next, ids, metadata)).toBe(step);
+        } finally {
+          vi.useRealTimers();
+        }
         const stl = await adapter.exportStl(next, ids);
         expect(await adapter.exportStl(next, ids)).toBe(stl);
         ownership(adapter, 2);

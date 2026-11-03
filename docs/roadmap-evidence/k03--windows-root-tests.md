@@ -24,3 +24,5 @@ retries Windows locks and retains preparation errors if cleanup also fails;
 the original CI acquisition and policy deadlines remain unchanged.
 Bulk-envelope qualification retains the 500,000-part join, 5,000-record
 round-trip and 3,000-record hash workload with every byte/count assertion.
+Export-cache fixtures hold STEP metadata fixed and retain full-byte equality,
+including a controlled clock transition across a second.

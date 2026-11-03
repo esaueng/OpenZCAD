@@ -91,3 +91,7 @@ timeouts, worker limits, replay counts and assertion thresholds are unchanged.
 The dense spline oracle still checks all 120 seeded trials and all 4,000
 chords. It skips intersection arithmetic only for segment pairs with
 provably disjoint closed bounding boxes, retaining its default test deadline.
+Repeated STEP byte comparisons supply a fixed timestamp through the public
+export options, since the API defaults to export time. The checkpoint test
+advances the clock across a second while retaining equality of every byte,
+including the header; STL equality and ownership checks are unchanged.
