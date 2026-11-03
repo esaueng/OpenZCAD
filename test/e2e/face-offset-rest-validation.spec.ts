@@ -70,7 +70,15 @@ test(
         return canvas.getAttribute('data-e2e-handle-x');
       })
       .not.toBeNull();
-    const count = await page.locator('.feature-row').count();
+    const featureCount = async () => {
+      const label = await page
+        .getByRole('group', { name: 'Workspace status' })
+        .getByLabel(/ · \d+ features? · 1 body\. Sync /)
+        .getAttribute('aria-label');
+      return Number(label?.match(/ · (\d+) features?/)?.[1]);
+    };
+    const count = await featureCount();
+    expect(count).toBeGreaterThan(0);
     const h = await canvas.evaluate((element) => ({
       x: Number(element.dataset.e2eHandleX),
       y: Number(element.dataset.e2eHandleY),
@@ -101,11 +109,11 @@ test(
       await expect(
         page.getByTestId('direct-manipulation-value')
       ).toHaveAttribute('aria-invalid', 'true');
-      expect(await page.locator('.feature-row').count()).toBe(count);
+      expect(await featureCount()).toBe(count);
     } finally {
       await page.keyboard.press('Escape');
       await page.mouse.up();
     }
-    await expect(page.locator('.feature-row')).toHaveCount(count);
+    await expect.poll(featureCount).toBe(count);
   }
 );
