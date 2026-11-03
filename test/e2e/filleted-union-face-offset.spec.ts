@@ -30,6 +30,16 @@ test(
       if (message.type() === 'error') errors.push(message.text());
     });
     await stubApi(page);
+    await page.addInitScript(() => {
+      const scope = window as typeof window & { offsetPreviewRequests: number };
+      scope.offsetPreviewRequests = 0;
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, transfer) {
+        if ((message as { type?: string } | null)?.type === 'preview-geometry')
+          scope.offsetPreviewRequests += 1;
+        return send.call(this, message, transfer as StructuredSerializeOptions);
+      };
+    });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
     await expect(page).toHaveTitle('OpenZCAD');
@@ -90,6 +100,43 @@ test(
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '30'
     );
+    const featuresBeforeDrag = await page.locator('.feature-row').count();
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      scale: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + handle.x, box.y + handle.y);
+    await page.mouse.down();
+    await page.keyboard.down('Shift');
+    for (const delta of [2, 5, -2, 3]) {
+      await page.mouse.move(
+        box.x + handle.x + handle.dx * handle.scale * delta,
+        box.y + handle.y + handle.dy * handle.scale * delta
+      );
+      await expect.poll(() => endX()).toBeCloseTo(30 + delta, 2);
+      await expect(canvas).toHaveAttribute(
+        'data-e2e-height-proxy-offset',
+        /.+/
+      );
+    }
+    // Motion changes the whole displayed part without replaying history or
+    // posting a kernel request. Escape restores the original geometry/history.
+    expect(
+      await page.evaluate(
+        () =>
+          (window as typeof window & { offsetPreviewRequests: number })
+            .offsetPreviewRequests
+      )
+    ).toBe(0);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await expect.poll(endX).toBeCloseTo(30, 4);
+    await expect(page.locator('.feature-row')).toHaveCount(featuresBeforeDrag);
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Total value' });
     await keypad.getByRole('textbox').fill('35.59');

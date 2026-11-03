@@ -342,12 +342,45 @@ function prepare(body: BodyRepresentation): Prepared | null {
   return prepared;
 }
 
-/** Every triangle of `face` contains the drag direction. */
+/** The face's carrier contains the drag direction. */
 function ruledAlong(
   body: BodyRepresentation,
   face: FaceTopology,
   normal: Vector3
 ): boolean {
+  const geometry = face.geometry;
+  // Use the exact carrier before sampled triangle normals. Float32 slivers
+  // beside a trimmed round can point away from its cylinder's true normal;
+  // treating that ruled wall as a moving blend then reaches the unrelated
+  // junction and incorrectly disables the whole immediate preview.
+  if (geometry?.surfaceType === 'plane' && geometry.normal) {
+    const n = geometry.normal;
+    const length = Math.hypot(n.x, n.y, n.z);
+    return (
+      length > 1e-9 &&
+      Math.abs(n.x * normal.x + n.y * normal.y + n.z * normal.z) / length < 1e-6
+    );
+  }
+  if (
+    geometry?.surfaceType === 'cylinder' &&
+    geometry.axisStart &&
+    geometry.axisEnd
+  ) {
+    const x = geometry.axisEnd.x - geometry.axisStart.x;
+    const y = geometry.axisEnd.y - geometry.axisStart.y;
+    const z = geometry.axisEnd.z - geometry.axisStart.z;
+    const length = Math.hypot(x, y, z);
+    return (
+      length > 1e-9 &&
+      Math.hypot(
+        y * normal.z - z * normal.y,
+        z * normal.x - x * normal.z,
+        x * normal.y - y * normal.x
+      ) /
+        length <
+        1e-6
+    );
+  }
   const { vertices, indices } = body.mesh;
   const end = (face.triangleStart + face.triangleCount) * 3;
   for (let t = face.triangleStart * 3; t < end; t += 3) {
