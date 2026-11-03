@@ -88,23 +88,35 @@ Three alternating local browser comparisons used the public 25-feature
 fixture, 120 pointer moves at 16 ms intervals, full production rendering and
 headed Chromium on Apple M5 Pro/Metal. The baseline is the deployed preview
 change (`5dda745871c1195d41f78fdf97d62a87a7291ee5`, Remus 2026.1.104);
-the candidate includes this axial reuse and the paired Remus 2026.1.106
-packages at `47cd42066d51df87291baa0ca47d86b3efb0617b`.
+the candidate includes this axial reuse and the paired Remus 2026.1.107
+packages at `261ac4c0567018dbe5432b941f2f4ef842afbfc5`. The packages use
+the source-identical hosted build artifact documented in Remus #1505.
 
 | Release through accepted final checked frame | Baseline | Candidate |
 | --- | ---: | ---: |
-| Run 1 | 801.8 ms | 120.7 ms |
-| Run 2 | 919.2 ms | 117.5 ms |
-| Run 3 | 773.7 ms | 128.8 ms |
-| Median | 801.8 ms | 120.7 ms |
+| Run 1 | 757.4 ms | 117.2 ms |
+| Run 2 | 686.3 ms | 101.7 ms |
+| Run 3 | 892.7 ms | 121.2 ms |
+| Median | 757.4 ms | 117.2 ms |
 
-The median improves 6.6 times on this public case; every run presents all 120
+The median improves 6.5 times on this public case; every run presents all 120
 display frames. This is a local sample, not a universal latency guarantee.
 Cold loading, an unsupported history, an occupied-region contraction or a
 kernel cache recycle still takes the normal rebuild path. No CPU profiler was
 active during these comparisons; the desktop host was not isolated.
 
-The pinned package passes 51 focused regression tests and the parity corpus
-(92 passed, one existing skip), type checking and the production build/bundle
-gate. Final integration checks and hosted CI are reported in the PR. Local
-test results do not establish production deployment.
+The final pinned package passes 51 focused regression tests and the parity
+corpus (92 passed, one existing skip), type checking and the production
+build/bundle gate. Browser reload coverage also waits for current exact STEP
+export readiness, so a restored cached display alone cannot pass.
+
+The broad local integration run passed 8,934 root tests with eight failing
+tests, and 5,119 web tests with one failing CSS-token assertion. All eight
+test failures and the CSS assertion independently reproduce on pristine
+current main (`3a1dae9f`, paired Remus `35b197aa`). A separate gear fixture
+setup deadline under the broad load passes all five tests on isolated retry.
+These failures were not suppressed or relabelled as passes. This broad run
+used the source-identical Mac package before the final hosted-artifact pin;
+the final pin has the focused and parity validation above. Hosted checks on
+the exact PR head are reported separately. Local test results do not
+establish production deployment.

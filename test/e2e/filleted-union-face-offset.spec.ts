@@ -204,6 +204,14 @@ for (const longHistory of [false, true])
       await page.reload();
       await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(35.59, 4);
       await expectBodyCount(page, 1);
+      // Cached display geometry can appear before the restored history has
+      // finished checking. Export readiness proves the current exact build.
+      const fileMenu = page.locator('details.file-menu');
+      await fileMenu.locator('summary').click();
+      await expect(
+        fileMenu.getByRole('button', { name: /^Export STEP/ })
+      ).toBeEnabled({ timeout: 120_000 });
+      await page.keyboard.press('Escape');
       await expect(page.getByRole('contentinfo')).toContainText('warnings0');
       await expect(
         page.locator('.feature-row-main', { hasText: 'Junction fillet' })
