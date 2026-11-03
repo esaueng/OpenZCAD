@@ -207,6 +207,19 @@ describe('in-place thread', () => {
     );
   });
 
+  it('pairs its numbers in compact sections', () => {
+    const sections = inPlacePanelSections(
+      threadSpec,
+      inPlacePanelState(threadSpec, { profile: 'custom' }, {}),
+      new Set()
+    );
+    expect(sections.map((s) => [s.label, s.compact])).toEqual([
+      [undefined, true],
+      ['Form', true],
+      ['More', true]
+    ]);
+  });
+
   it('keeps every choice to a short label, explained only by its tooltip', () => {
     for (const option of threadSpec.options ?? []) {
       for (const choice of option.choices) {

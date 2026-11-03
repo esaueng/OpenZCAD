@@ -291,6 +291,7 @@ export function InPlaceCommandBar({
                 key={section.label ?? `section-${index}`}
                 label={section.label}
                 collapsed={section.collapsed ?? false}
+                compact={section.compact ?? false}
               >
                 {section.rows.map((row) => {
                   if (row.kind === 'option') {
@@ -387,12 +388,15 @@ export function InPlaceCommandBar({
 function PanelSection({
   label,
   collapsed,
+  compact,
   children
 }: {
   label: string | undefined;
   collapsed: boolean;
+  compact: boolean;
   children: ReactNode;
 }) {
+  const gridClass = `in-place-params-grid${compact ? ' is-compact' : ''}`;
   // A button, not a nested <details>: the bar's own Options summary stays
   // the only summary under it.
   const [open, setOpen] = useState(!collapsed);
@@ -412,7 +416,7 @@ function PanelSection({
         >
           {label}
         </button>
-        <div className="in-place-params-grid" id={gridId} hidden={!open}>
+        <div className={gridClass} id={gridId} hidden={!open}>
           {children}
         </div>
       </section>
@@ -424,7 +428,7 @@ function PanelSection({
       aria-label={label ?? undefined}
     >
       {label ? <h3 className="in-place-params-heading">{label}</h3> : null}
-      <div className="in-place-params-grid">{children}</div>
+      <div className={gridClass}>{children}</div>
     </section>
   );
 }

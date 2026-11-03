@@ -24,6 +24,8 @@ export interface InPlacePanelSectionView {
   label?: string;
   /** Folded shut until opened: rows set once and rarely changed. */
   collapsed?: boolean;
+  /** Numbers two to a row, each named inside its field. */
+  compact?: boolean;
   rows: readonly InPlacePanelRow[];
 }
 
@@ -135,6 +137,7 @@ export function inPlacePanelSections(
       out.push({
         ...(section.label ? { label: section.label } : {}),
         ...(section.collapsed ? { collapsed: true } : {}),
+        ...(section.compact ? { compact: true } : {}),
         rows
       });
     }

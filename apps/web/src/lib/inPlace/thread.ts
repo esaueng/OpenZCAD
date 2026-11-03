@@ -447,8 +447,10 @@ export const threadSpec: InPlaceToolSpec = {
   wantsPath: false,
   values: THREAD_VALUES,
   options: THREAD_OPTIONS,
+  // Compact: numbers pair up two to a row, so each pair is listed together.
   layout: [
     {
+      compact: true,
       items: [
         'profile',
         'size',
@@ -465,11 +467,13 @@ export const threadSpec: InPlaceToolSpec = {
     },
     {
       label: 'Form',
+      compact: true,
       items: ['depth', 'crestWidth', 'lowerFlankAngleDeg', 'upperFlankAngleDeg']
     },
     {
       label: 'More',
       collapsed: true,
+      compact: true,
       items: ['hand', 'starts', 'phaseDeg', 'chamferAngleDeg']
     }
   ],

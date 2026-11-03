@@ -4248,6 +4248,71 @@ button.model-panel-grip[aria-expanded='true'] {
   display: none;
 }
 
+/* A compact section: choices keep a whole row; each number is one box,
+   named inside it, two to a row. */
+.in-place-params-grid.is-compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.in-place-params-grid.is-compact > * {
+  grid-column: 1 / -1;
+}
+
+.in-place-params-grid.is-compact > .in-place-param-value:not(.is-vector) {
+  display: flex;
+  grid-column: auto;
+  gap: 6px;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 0 6px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  > .in-place-option-label {
+  flex: 0 1 auto;
+  color: var(--color-text-subtle);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  > .in-place-param-fields {
+  flex: 1 0 40px;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  .in-place-param-field {
+  min-height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  .in-place-param-field
+  input {
+  text-align: right;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector):focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector):has(.is-refused) {
+  border-color: var(--color-error);
+  box-shadow: 0 0 0 1px var(--color-error);
+}
+
 .in-place-params .in-place-option + .in-place-option {
   margin-top: 0;
 }
@@ -4350,6 +4415,12 @@ button.model-panel-grip[aria-expanded='true'] {
   outline: none;
   font: inherit;
   font-variant-numeric: tabular-nums;
+}
+
+/* The field draws the focus ring; the global input ring would nest a
+   second box inside it. */
+.in-place-param-field input:focus {
+  box-shadow: none;
 }
 
 .in-place-param-axis,

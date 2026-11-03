@@ -365,6 +365,11 @@ export interface InPlaceContext {
 export interface InPlacePanelSection {
   label?: string;
   collapsed?: boolean;
+  /**
+   * Numbers sit two to a row, each named inside its own field; choices
+   * still take a whole row. Pair related values next to each other.
+   */
+  compact?: boolean;
   /** Option and value ids, in order. */
   items: readonly string[];
 }

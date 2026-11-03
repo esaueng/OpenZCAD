@@ -555,6 +555,7 @@ describe('InPlaceCommandBar', () => {
           {
             label: 'Tooth form',
             collapsed: true,
+            compact: true,
             rows: [{ kind: 'value', id: 'backlash' }]
           }
         ]}
@@ -577,6 +578,9 @@ describe('InPlaceCommandBar', () => {
     expect(fold).toHaveAttribute('aria-expanded', 'false');
     expect(folded.hidden).toBe(true);
     expect(folded.textContent).toContain('Backlash');
+    // A compact section pairs its numbers; the others keep the label column.
+    expect(folded.classList.contains('is-compact')).toBe(true);
+    expect(document.querySelectorAll('.is-compact')).toHaveLength(1);
     expect(document.querySelectorAll('summary')).toHaveLength(1);
     fireEvent.click(fold);
     expect(fold).toHaveAttribute('aria-expanded', 'true');
