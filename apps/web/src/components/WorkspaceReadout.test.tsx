@@ -1,6 +1,5 @@
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { OVERLAY_EXIT_MS } from '../hooks/useDelayedUnmount';
 import { STATUS_MIN_DWELL_MS } from '../hooks/usePacedStatus';
@@ -34,8 +33,7 @@ describe('WorkspaceReadout', () => {
       <WorkspaceReadout
         status=""
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
         prompt={prompt}
         instructionDetails="Total can change when a hole lies behind the picked point."
@@ -60,8 +58,7 @@ describe('WorkspaceReadout', () => {
       <WorkspaceReadout
         status=""
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
       />
     );
@@ -85,8 +82,7 @@ describe('WorkspaceReadout', () => {
         status="Fillet added"
         statusAt={Date.now()}
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
       />
     );
@@ -102,8 +98,7 @@ describe('WorkspaceReadout', () => {
       <WorkspaceReadout
         status=""
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
         pick={pick}
       />
@@ -116,8 +111,7 @@ describe('WorkspaceReadout', () => {
         status="Fillet added"
         statusAt={Date.now()}
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
         pick={pick}
       />
@@ -130,20 +124,19 @@ describe('WorkspaceReadout', () => {
 
   it('shows the live status as a toast that opens the activity log', async () => {
     const user = userEvent.setup();
-    const onToggleLog = vi.fn();
+    const onOpenLog = vi.fn();
     render(
       <WorkspaceReadout
         status="Fillet added"
         statusAt={Date.now()}
         tone="ready"
-        logOpen={false}
-        onToggleLog={onToggleLog}
+        onOpenLog={onOpenLog}
         {...SUMMARY}
       />
     );
     expect(screen.getByRole('status')).toHaveTextContent('Fillet added');
     await user.click(screen.getByRole('button', { name: /Open activity log/ }));
-    expect(onToggleLog).toHaveBeenCalledTimes(1);
+    expect(onOpenLog).toHaveBeenCalledTimes(1);
     // The summary the status bar carried for assistive tech is still there.
     expect(
       screen.getByRole('group', { name: 'Workspace status' })
@@ -162,8 +155,7 @@ describe('WorkspaceReadout', () => {
         status="The resulting body wouldn't be valid."
         tone="warning"
         muted
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
       />
     );
@@ -173,8 +165,7 @@ describe('WorkspaceReadout', () => {
       <WorkspaceReadout
         status=""
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
       />
     );
@@ -189,8 +180,7 @@ describe('WorkspaceReadout', () => {
         status="Fillet added"
         statusAt={Date.now()}
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
       />
     );
@@ -202,8 +192,7 @@ describe('WorkspaceReadout', () => {
       <WorkspaceReadout
         status=""
         tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
       />
     );
@@ -220,8 +209,7 @@ describe('WorkspaceReadout pacing', () => {
       status={status}
       statusAt={Date.now()}
       tone={tone}
-      logOpen={false}
-      onToggleLog={vi.fn()}
+      onOpenLog={vi.fn()}
       {...SUMMARY}
     />
   );
@@ -324,8 +312,7 @@ describe('WorkspaceReadout message lifetime', () => {
         statusAt={statusAt}
         geometryStatus={geometryStatus}
         tone={geometryStatus ? 'running' : 'ready'}
-        logOpen={false}
-        onToggleLog={vi.fn()}
+        onOpenLog={vi.fn()}
         {...SUMMARY}
       />
     );
@@ -392,8 +379,7 @@ describe('WorkspaceReadout message lifetime', () => {
           status="Deleted Boss bore."
           statusAt={at}
           tone="ready"
-          logOpen={false}
-          onToggleLog={vi.fn()}
+          onOpenLog={vi.fn()}
           repeatingToast={toastUp ? { toastId: 1, statusAt: at } : null}
           {...SUMMARY}
         />
@@ -420,8 +406,7 @@ describe('WorkspaceReadout message lifetime', () => {
           status="Deleted Boss bore."
           statusAt={at}
           tone={tone}
-          logOpen={false}
-          onToggleLog={vi.fn()}
+          onOpenLog={vi.fn()}
           repeatingToast={toastUp ? { toastId: 1, statusAt: at } : null}
           {...SUMMARY}
         />
@@ -459,8 +444,7 @@ describe('WorkspaceReadout message lifetime', () => {
           status="Display: Wireframe."
           statusAt={displayAt}
           tone="ready"
-          logOpen={false}
-          onToggleLog={vi.fn()}
+          onOpenLog={vi.fn()}
           repeatingToast={
             toastUp ? { toastId: 2, statusAt: suppressedAt } : null
           }
@@ -496,8 +480,7 @@ describe('WorkspaceReadout message lifetime', () => {
           status={status}
           statusAt={statusAt}
           tone="ready"
-          logOpen={false}
-          onToggleLog={vi.fn()}
+          onOpenLog={vi.fn()}
           repeatingToast={repeatingToast}
           {...SUMMARY}
         />
@@ -631,33 +614,14 @@ describe('ViewportDockExtras', () => {
 });
 
 describe('ActivityLogButton', () => {
-  it('is a rail button that names its state and opens the log', async () => {
+  it('is a rail button that opens the log in Settings', async () => {
     const user = userEvent.setup();
-    const onToggleLog = vi.fn();
-    const ref = createRef<HTMLButtonElement>();
-    const { rerender } = render(
-      <ActivityLogButton
-        logOpen={false}
-        onToggleLog={onToggleLog}
-        logTriggerRef={ref}
-      />
-    );
+    const onOpenLog = vi.fn();
+    render(<ActivityLogButton onOpenLog={onOpenLog} />);
     const button = screen.getByRole('button', { name: 'Open activity log' });
     expect(button).toHaveClass('rail-button');
-    expect(button).toHaveAttribute('aria-expanded', 'false');
-    // The log returns focus here when it closes.
-    expect(ref.current).toBe(button);
+    expect(button).toHaveAttribute('aria-haspopup', 'dialog');
     await user.click(button);
-    expect(onToggleLog).toHaveBeenCalledTimes(1);
-    rerender(
-      <ActivityLogButton
-        logOpen
-        onToggleLog={onToggleLog}
-        logTriggerRef={ref}
-      />
-    );
-    expect(
-      screen.getByRole('button', { name: 'Close activity log' })
-    ).toHaveClass('active');
+    expect(onOpenLog).toHaveBeenCalledTimes(1);
   });
 });

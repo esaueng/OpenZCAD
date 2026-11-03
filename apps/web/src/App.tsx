@@ -547,6 +547,8 @@ import {
   WorkspaceReadout
 } from './components/WorkspaceReadout';
 import { StatusActivityLog } from './components/StatusActivityLog';
+import { recordActivity } from './lib/activityLog';
+import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { createLazyPanel } from './components/LazyPanel';
@@ -619,6 +621,12 @@ import type {
 import type { ViewportImageSource } from './components/viewer/viewportImage';
 import type { ShaprImportDialogPhase } from './components/ShaprImportDialog';
 import type { GeometryWorkerState } from './worker/geometryWorker';
+
+function workspaceModeLabel(mode: WorkspaceMode): string {
+  return (
+    WORKSPACE_MODE_OPTIONS.find((option) => option.mode === mode)?.label ?? mode
+  );
+}
 
 /** The export dialog's progress stage for one geometry-worker state. */
 function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
@@ -2992,6 +3000,7 @@ export function App() {
     ) => {
       toastIdRef.current += 1;
       const id = toastIdRef.current;
+      recordActivity({ level: 'ready', source: 'notice', message });
       const repeats =
         options?.repeatsStatusAt === undefined
           ? {}
@@ -5471,11 +5480,8 @@ export function App() {
     onStatus: (message: string) => setStatus(message)
   };
   useAssembleWorkspace(assembleMode, assembleApp);
-  // The activity log in the column layout: opened from the dock's button or
-  // the toast; the panel itself is App's so both can reach it.
-  const [activityLogOpen, setActivityLogOpen] = useState(false);
-  const activityLogTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const activityLogId = 'workspace-activity-log';
+  // The activity log is a Settings page; every "details" link opens it there.
+  const openActivityLog = () => openSettingsAt('activity');
   workspaceModeRef.current = resolvedWorkspaceMode;
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
@@ -25192,7 +25198,7 @@ export function App() {
   // refills the chip.
   const calloutOperationActions = {
     onEditCulprit: handleEditCulpritFeature,
-    onViewDetails: () => setActivityLogOpen(true),
+    onViewDetails: openActivityLog,
     onKeepLastValid: () => keepLastValid?.keep(),
     onSelectAllEdges: () => {
       if (edgeModifierBody) handleSelectAllEdges(edgeModifierBody);
@@ -27167,9 +27173,6 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        // The log is a sheet over the prompt's lane: left open, it kept
-        // covering the field this focuses, so typing went somewhere unseen.
-        setActivityLogOpen(false);
         setPaletteOpen((open) => !open);
         return;
       }
@@ -28019,6 +28022,17 @@ export function App() {
           loadThumbnail={loadThumbnail}
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
+        />
+        <StatusActivityLog
+          status={status}
+          {...(statusEntry.detail ? { detail: statusEntry.detail } : {})}
+          logged={!statusEntry.unlogged}
+          tone={
+            /fail|error|invalid|unable|denied/i.test(status)
+              ? 'warning'
+              : 'ready'
+          }
+          workspace="Projects"
         />
         {settingsOverlay}
         <ToastHost toast={toast} onDismiss={dismissToast} />
@@ -29238,7 +29252,7 @@ export function App() {
           : Promise.resolve(`Parameter ${name} does not exist.`);
       }}
       parameterQuantitySuggestions={parameterQuantitySuggestions}
-      onViewActivityLog={() => setActivityLogOpen(true)}
+      onViewActivityLog={openActivityLog}
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
       }
@@ -29404,7 +29418,7 @@ export function App() {
               ? lastDirectEditFailure.message
               : null
           }
-          onReviewEditFailure={() => setActivityLogOpen(true)}
+          onReviewEditFailure={openActivityLog}
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
@@ -29555,7 +29569,7 @@ export function App() {
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
             }
-            onViewActivityLog={() => setActivityLogOpen(true)}
+            onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
             share={shareSession ? { onMakeCopy: requestShareCopy } : null}
@@ -29744,11 +29758,7 @@ export function App() {
                       )
                     }
                   />
-                  <ActivityLogButton
-                    logOpen={activityLogOpen}
-                    onToggleLog={() => setActivityLogOpen((open) => !open)}
-                    logTriggerRef={activityLogTriggerRef}
-                  />
+                  <ActivityLogButton onOpenLog={openActivityLog} />
                 </div>
                 {panelLayout.options.hidden && (
                   <PanelsHiddenPill
@@ -30594,7 +30604,7 @@ export function App() {
               onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
               onAction={handleSelectionAction}
               onEditCulprit={handleEditCulpritFeature}
-              onViewDetails={() => setActivityLogOpen(true)}
+              onViewDetails={openActivityLog}
               {...(keepLastValid ? { keepLastValid } : {})}
               // Never up in sketch mode (the column header names the
               // sketch), so a close is always a clear.
@@ -31083,8 +31093,7 @@ export function App() {
             geometryStatus={geometryStatus}
             tone={tone}
             muted={contextualToolCard !== null && !hideSketchToolCard}
-            logOpen={activityLogOpen}
-            onToggleLog={() => setActivityLogOpen((open) => !open)}
+            onOpenLog={openActivityLog}
             prompt={workspacePrompt}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
@@ -31417,8 +31426,6 @@ export function App() {
             }
           />
           <StatusActivityLog
-            id={activityLogId}
-            open={activityLogOpen}
             status={visibleStatus}
             {...(visibleStatus === status && statusEntry.detail
               ? { detail: statusEntry.detail }
@@ -31426,13 +31433,8 @@ export function App() {
             logged={!(visibleStatus === status && statusEntry.unlogged)}
             geometryStatus={geometryLogLine}
             tone={tone}
-            triggerRef={activityLogTriggerRef}
-            onClose={(restoreFocus) => {
-              setActivityLogOpen(false);
-              if (restoreFocus) {
-                activityLogTriggerRef.current?.focus();
-              }
-            }}
+            workspace={workspaceModeLabel(resolvedWorkspaceMode)}
+            project={doc.name}
           />
         </>
       }

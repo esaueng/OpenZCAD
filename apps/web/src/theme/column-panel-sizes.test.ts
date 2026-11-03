@@ -107,10 +107,4 @@ describe('column and panel sizes', () => {
       96
     );
   });
-
-  it('keeps the activity log clear of the instrument rail', () => {
-    const panel = rule(sheet('status-bar.css'), '.status-log-panel');
-    expect(panel.right).toBe('var(--status-log-rail-clear)');
-    expect(panel['--status-log-rail-clear']).toContain('var(--rail-w)');
-  });
 });

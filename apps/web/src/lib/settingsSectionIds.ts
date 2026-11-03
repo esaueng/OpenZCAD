@@ -18,6 +18,7 @@ export const SETTINGS_SECTION_IDS = [
   'encryption',
   'assistant',
   'privacy',
+  'activity',
   'advanced'
 ] as const;
 

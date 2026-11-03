@@ -243,7 +243,6 @@ textarea {
   animation: oz-drop var(--dur-fast) var(--ease-out);
 }
 
-.status-log-panel,
 .color-picker {
   animation: oz-rise var(--dur-fast) var(--ease-out);
 }
