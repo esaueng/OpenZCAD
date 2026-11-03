@@ -1,0 +1,88 @@
+# Checked axial extent reuse
+
+M07 remains partial. This qualifies a narrow incremental width edit through
+an existing native history, including its authoritative checking and final
+build. Display previews retain their existing contract.
+
+## Eligibility and geometry
+
+`exact-axial-extent.ts` records bounded evidence while building checked history.
+It accepts an initial literal box in millimetres, fixed cylinder operands,
+union, constant-radius fillets, and perpendicular planar face offsets. A
+retained prefix needs at least 16 features for reuse. Expressions, other
+operations, suppressed/refused features, compound shapes and native vertex
+construction metadata keep ordinary replay. Axial widths above 1,000,000 mm
+also keep reconstruction; this eligibility ceiling bounds floating-point
+transport error and does not restrict model dimensions.
+
+For every prefix, all non-invariant carriers and transverse edges must avoid
+one common open x slab beyond every fixed primitive operand. Plane and
+cylinder carriers invariant along x may cross it. Other analytic carriers use
+conservative support bounds; positive-weight spline control hulls bound free
+forms and edge curves. Only an exact two-pole linear curve proves an axial
+edge. Sampled mesh normals, near-collinearity and analytic recognition labels
+do not supply that evidence.
+
+Inside the slab, the boundaries describe a product cross-section. Extending
+that product leaves its fixed side unchanged and translates its far side.
+Set union commutes with this homeomorphism. Constant-radius blends act on
+rigid neighbourhoods or on invariant axial sections, and perpendicular planar
+face moves change those sections independently of their length. Recording
+both input and output prefixes keeps their curved transitions outside the
+common slab. A contraction must leave the slab open, with a clearance margin;
+a move into its occupied region replays history.
+
+Hash-only fillet picks additionally constrain their complete curves to the
+fixed region. Their legacy resolver must still find one identical curve and
+ordered endpoints after transport; a changed pick or new collision refuses
+reuse. A later in-place edit of their retained source also ends eligibility.
+
+## Acceptance, naming and ownership
+
+Only the literal root width may differ in the reused prefix. Its other fields,
+every subsequent feature digest, project, units, scope, lineage demand and
+checkpoint ownership are checked through the existing cache contracts.
+
+Each affected root is moved through the exact native journal entry point.
+Unavailable or conflicting construction maps, facet fallback, relaxed
+validation errors, or an end plane that differs from the requested width
+abort reuse. The normal measurement, strict union and commit gates still run.
+There is no additional approximation permission or deferred validation.
+
+Face identities require a complete one-to-one native construction map.
+Named edges require a unique boundary between the mapped incident faces.
+The existing semantic publisher verifies newly measured witnesses; incomplete
+identity is a replay fallback. Both eager and idle lineage views are refreshed
+on the same output handles.
+
+The source checkpoint owns the proof. Its serialized metadata is charged to
+the existing checkpoint ceiling, with bounded interval/body/pole counts. The
+kernel owner, native handle discipline and replay-work ceiling remain in
+force. Local move attempts are charged before execution, including failed and
+cancelled attempts. Failure restores the checked source before normal replay;
+cancellation publishes no result.
+
+Checkpoint admission also prefers the checked tail when earlier snapshots
+exhaust the byte ceiling. Restore now accepts a retained subset of scheduled
+positions after validating its complete digest spans and ownership. It no
+longer discards a scheduled tail solely because preceding slots were evicted.
+
+## Verification
+
+The public `longFilletedUnion` fixture extends the existing authored native
+fixture with perpendicular height adjustments. Unit regressions compare all
+body quantities, bounds, face/edge hashes and construction references with a
+fresh adapter whose history cache is disabled. They cover successive sizes,
+a return to the original width, eager/idle views, occupied-region contraction,
+simultaneous radius changes, expression widths, width-sensitive legacy picks,
+missing native history, cancellation and recovery. Sparse-tail coverage checks
+that repeated restores retain their owned checkpoint.
+
+The public browser test covers both short and long histories: immediate
+whole-body display, Total entry, Apply, unchanged feature count, undo, redo,
+device persistence and reload, with console/page-error checks and screenshots.
+The opt-in `perf-face-drag-trace.spec.ts` case `long native history` measures
+pointer release through an accepted revision's final checked frame.
+
+Public performance measurements and final check results are recorded after
+qualification. Local test results do not establish production deployment.

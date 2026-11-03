@@ -193,6 +193,53 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
     }
   });
 
+  it('prioritizes a complete tail when earlier checkpoints exhaust the byte ceiling', async () => {
+    const native = RemusKernel.prototype.checkpointMemoryStats;
+    const telemetry = vi
+      .spyOn(RemusKernel.prototype, 'checkpointMemoryStats')
+      .mockImplementation(function (this: RemusKernel) {
+        const stats = JSON.parse(native.call(this)) as { checkpoints: number };
+        // Simulate large copy-on-write prefix snapshots. The live arena fits;
+        // retaining two earlier snapshots leaves no room for another mutation.
+        return JSON.stringify({
+          ...stats,
+          nextMutationEstimatedBytes: stats.checkpoints >= 2 ? 2_000_000 : 100
+        });
+      });
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointEstimatedBytes: 1_000_000,
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const document = boxes(5);
+      await equivalent(document, await adapter.syncDocument(document));
+      const state = cacheState(adapter);
+      expect(state.historyCheckpoints).toHaveLength(1);
+      expect(state.historyCheckpoints[0]).toMatchObject({ featureIndex: 4 });
+      expect(state.historyCheckpoints[0]!.digests).toHaveLength(5);
+      expect(state.historyCheckpointOwners.size).toBe(1);
+      expect(state.historyKernel!.checkpointCount()).toBe(1);
+      // The normal ownership and full-prefix digest checks must accept the
+      // sparse tail, and publication must still equal a fresh exact build.
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)).toMatchObject({ restored: 5, replayed: 0 });
+      expect(state.historyCheckpoints).toHaveLength(1);
+      // Admission may retain a scheduled tail without its earlier slots.
+      // Restoring it must not mistake its table position for a stale schedule.
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)).toMatchObject({ restored: 5, replayed: 0 });
+      expect(state.historyCheckpoints).toHaveLength(1);
+      expect(state.historyKernel!.checkpointCount()).toBe(1);
+      const changed = edit(document, 0, 13);
+      await equivalent(changed, await adapter.syncDocument(changed));
+      expect(events.at(-1)!.restored).toBe(0);
+    } finally {
+      adapter.dispose();
+      telemetry.mockRestore();
+    }
+  });
+
   it("keeps opaque checkpoints through dependent edits, export and mass queries", async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({

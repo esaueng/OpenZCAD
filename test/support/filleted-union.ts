@@ -5,7 +5,10 @@ import {
   directEditBody,
   filletEdges
 } from '@openzcad/document-core';
-import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter
+} from '@openzcad/kernel-adapter/exact';
 import { toUserId, type BodyRepresentation } from '@openzcad/shared';
 
 export function unionEndFace(body: BodyRepresentation) {
@@ -97,5 +100,41 @@ export async function filletedUnion(adapter: ExactKernelAdapter) {
     document: edited.document,
     bodyId,
     body: final.bodyRepresentations[bodyId]!
+  };
+}
+
+/** A completed public history loaded cold into the caller's adapter. */
+export async function longFilletedUnion(adapter: ExactKernelAdapter) {
+  const authoring = await createExactKernelAdapter();
+  const model = await filletedUnion(authoring).finally(() =>
+    authoring.dispose()
+  );
+  let document = model.document;
+  const top = model.body.topology!.faces.find(
+    (f) =>
+      f.reference?.lineageName ===
+      'boolean.face.operand.1.primitive.box.face.z-max'
+  )!;
+  for (let index = 0; index < 20; index += 1) {
+    document = directEditBody(document, {
+      name: `Height adjustment ${index + 1}`,
+      targetBodyId: model.bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: top.hash,
+        faceReference: top.reference,
+        sourceSurfaceType: 'plane',
+        sourceArea: top.geometry!.area,
+        sourceCenter: top.geometry!.center,
+        sourceNormal: top.geometry!.normal!,
+        offset: index % 2 === 0 ? 0.4 : -0.3
+      }
+    }).document;
+  }
+  const derived = await adapter.syncDocument(document);
+  return {
+    ...model,
+    document: { ...document, derived },
+    body: derived.bodyRepresentations[model.bodyId]!
   };
 }
