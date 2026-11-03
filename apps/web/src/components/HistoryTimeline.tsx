@@ -391,6 +391,10 @@ export function HistoryTimeline({
   const pendingFeature = features.find(
     (feature) => feature.id === pendingAppendId
   );
+  // The latest row is the list's last: it is out of view only while the
+  // panel scrolls and is scrolled up from its foot, the one time a button
+  // to reach it does anything.
+  const [latestOutOfView, setLatestOutOfView] = useState(false);
 
   const markProgrammaticScroll = useCallback(() => {
     programmaticScroll.current = true;
@@ -425,7 +429,19 @@ export function HistoryTimeline({
     const list = listRef.current;
     const host = list?.closest<HTMLElement>('.model-panel-body') ?? list;
     if (!host) return;
+    const measure = () =>
+      setLatestOutOfView(
+        host.scrollHeight - host.clientHeight - host.scrollTop > 24
+      );
+    measure();
+    const resize =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    resize?.observe(host);
+    if (list && list !== host) resize?.observe(list);
     const onScroll = () => {
+      measure();
       if (programmaticScroll.current) return;
       following.current =
         host.scrollHeight - host.clientHeight - host.scrollTop <= 24;
@@ -440,6 +456,7 @@ export function HistoryTimeline({
     for (const input of inputs)
       host.addEventListener(input, userInput, { passive: true });
     return () => {
+      resize?.disconnect();
       host.removeEventListener('scroll', onScroll);
       for (const input of inputs) host.removeEventListener(input, userInput);
     };
@@ -830,7 +847,7 @@ export function HistoryTimeline({
           ? `New operation available: ${pendingFeature.name}`
           : ''}
       </span>
-      {features.length > 0 && (
+      {features.length > 0 && (pendingFeature || latestOutOfView) && (
         <button
           type="button"
           className="history-resume history-latest"
@@ -1137,7 +1154,10 @@ export function HistoryTimeline({
                   // Every row used to announce the same generic kind label, so
                   // a history read aloud was a list of identical items. The
                   // feature's own name comes first, as on screen.
-                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', combined into a later feature' : ''}, click to edit`}
+                  // The value beside the name can be cut short in a narrow
+                  // panel, and fades for the row's actions on hover: the
+                  // tooltip carries it whole.
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}, click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">

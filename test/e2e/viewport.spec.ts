@@ -2239,10 +2239,11 @@ test('controls announce themselves as what they are', async ({ page }) => {
 
   // The row's accessible NAME comes from its content, so it was always the
   // feature's name — the claim that every row announced the same thing was
-  // wrong. Its tooltip was the generic part, and that is what changed.
+  // wrong. Its tooltip was the generic part, and that is what changed. It
+  // also carries the value beside the name whole, which a narrow panel cuts.
   await expect(page.locator('.feature-row-main').first()).toHaveAttribute(
     'title',
-    'Box — Primitive, click to edit'
+    'Box — Primitive (30 × 18 × 24 mm), click to edit'
   );
 });
 
