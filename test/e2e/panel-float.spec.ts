@@ -604,6 +604,54 @@ test('a window floated over a live handle leaves its value chip clear and reacha
   ).toBe(true);
 });
 
+test(
+  'Section controls leave a panned face handle value clear and reachable',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openWorkspace(page, 'Section chip', { right: [] });
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('Escape');
+    const face = await findFacePoint(page);
+    await page.mouse.click(face.x, face.y);
+    const chip = page.locator('.handle-value-chip');
+    await expect(chip).toBeVisible();
+    await page.getByRole('button', { name: /^Section view/ }).click();
+    const section = page.locator('.rail-section-panel');
+    await expect(section).toBeVisible();
+    const before = await box(chip);
+    const panel = await box(section);
+    const dx = panel.x + panel.width / 2 - (before.x + before.width / 2);
+    const dy = panel.y + panel.height / 2 - (before.y + before.height / 2);
+    // Pan the selected face so its normal HUD anchor would fall inside the
+    // open Section panel. The value must move out of that panel's way.
+    const canvas = await box(page.locator('.viewer-host canvas'));
+    const start = {
+      x: canvas.x + canvas.width * 0.3,
+      y: canvas.y + canvas.height * 0.8
+    };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.move(start.x + dx, start.y + dy, { steps: 12 });
+    await page.mouse.up({ button: 'right' });
+    await expect
+      .poll(async () => overlaps(await box(chip), await box(section)))
+      .toBe(false);
+    const after = await box(chip);
+    expect(
+      await page.evaluate(
+        ({ x, y }) =>
+          Boolean(
+            document.elementFromPoint(x, y)?.closest('.handle-value-chip')
+          ),
+        { x: after.x + after.width / 2, y: after.y + after.height / 2 }
+      )
+    ).toBe(true);
+    await page.getByTestId('direct-manipulation-value').click();
+    await expect(page.getByRole('dialog', { name: /value$/ })).toBeVisible();
+  }
+);
+
 test("a window floating over the rail leaves the pick's verbs pressable", async ({
   page
 }) => {
