@@ -14,3 +14,5 @@ acceptance remains blocked by an exact-union refusal (K07).
 The dense spline oracle retains 120 seeded trials and all 4,000 chords;
 disjoint-box culling avoids unnecessary crossing arithmetic without changing
 the reference predicate, samples, outcome floors or default test deadline.
+Encrypted-project integration files use a bounded 30-second default; runtime
+regressions preserve ordinary five-second defaults and explicit deadlines.

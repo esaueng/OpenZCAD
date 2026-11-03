@@ -81,6 +81,7 @@
     "test/e2ee-project-groups.test.ts",
     "test/e2ee-project-info.test.ts",
     "test/e2ee-project-state-code.test.ts",
+    "test/e2ee-runtime-budget.test.ts",
     "test/e2ee-share-links.test.ts",
     "test/e2ee-shared-device-removal.test.ts",
     "test/exact-kernel-adapter.test.ts",
@@ -131,6 +132,7 @@
     "test/trusted-pr-policy.test.ts",
     "test/typed-parameters.test.ts",
     "test/unit-global-setup.test.ts",
+    "test/unit-runtime-budget.test.ts",
     "test/unit-suites.test.ts"
   ],
   "web": [

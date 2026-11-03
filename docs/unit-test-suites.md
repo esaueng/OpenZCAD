@@ -60,9 +60,12 @@ This prevents a slow cold Git transfer from consuming the policy hook's
 10-second deadline, as happened in the preceding browser-profile PR.
 The nested routing control retains its five-second assertion deadline and
 ten-second preparation deadline. The outer process harness separately allows
-startup time. Multi-process Git fixtures and multi-project cryptographic
-recovery tests have explicit 30-second integration budgets; their protocol,
-provenance and refusal assertions remain unchanged.
+startup time. Multi-process Git fixtures have explicit 30-second integration
+budgets. Root `test/e2ee-*.test.ts` files exercise complete encrypted-project
+flows with real cryptography and use a 30-second integration default. Other
+unit tests retain their five-second default, and explicit per-case deadlines
+still take precedence. Runtime regressions check all three boundaries.
+Protocol, provenance and refusal assertions remain unchanged.
 The longer three-account historical-authority journey has a one-minute
 budget, retaining every fresh-browser and historical-version check.
 
