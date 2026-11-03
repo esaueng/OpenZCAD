@@ -197,8 +197,15 @@ Ordered by expected leverage; each item retires pins and states which.
   Box faces default to Resize Body, with Offset Face available explicitly.
   Rotations before an edge modifier remain outside the proven box-axis
   mapping; rotations after the modifier preserve verified face roles.
-  Boolean, imported, and otherwise unresolvable bodies retain local push/pull
-  semantics. General tangent-propagating move-face support remains the kernel
+  A maximum box side carried through one union and a later fillet/chamfer
+  also drives its source dimension when its current v5 operand role proves
+  the consumed input. The input must not feed another branch, and local
+  edits along that dimension or rotated frames keep the local route. Minimum
+  union sides retain local semantics because shifting an operand base can
+  move its junction. Regression coverage: `filleted-union-face-offset.test.ts`
+  and `filleted-union-face-offset.spec.ts`. Other boolean, imported, and
+  otherwise unresolvable bodies retain local push/pull semantics.
+  General tangent-propagating move-face support remains the kernel
   M6 work, distinct from this history-based route. Kernel dependencies:
   none. Retired all three class-S shape pins
   (`box-all-edges-filleted-top-offset`,
