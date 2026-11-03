@@ -133,6 +133,7 @@
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",
+    "src/components/assembly/AssemblyPanel.test.tsx",
     "src/components/ExportDialog.test.tsx",
     "src/components/FeatureHistoryPanel.test.tsx",
     "src/components/FileDropTarget.test.tsx",

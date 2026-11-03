@@ -11,6 +11,7 @@ import {
   isProjectCheckpoint,
   isRevisionRecord,
   objectFolderSetError,
+  assemblySetError,
   referenceImageSetError,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -105,6 +106,10 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
       record.referenceImages === undefined
         ? null
         : referenceImageSetError(record.referenceImages)
+    ],
+    [
+      'assembly',
+      record.assembly === undefined ? null : assemblySetError(record.assembly)
     ]
   ] as const) {
     if (error)

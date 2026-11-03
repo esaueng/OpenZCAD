@@ -205,6 +205,28 @@ import {
   renameObjectFolder,
   deleteObjectFolder,
   moveToObjectFolder,
+  addAssemblyComponents,
+  updateAssemblyComponent,
+  deleteAssemblyComponent,
+  addAssemblyJoint,
+  updateAssemblyJoint,
+  deleteAssemblyJoint,
+  setAssemblyPose,
+  saveAssemblyPosition,
+  deleteAssemblyPosition,
+  setAssemblyStudy,
+  deleteAssemblyStudy,
+  type AssemblyComponentsAddInput,
+  type AssemblyComponentUpdateInput,
+  type AssemblyComponentDeleteInput,
+  type AssemblyJointAddInput,
+  type AssemblyJointUpdateInput,
+  type AssemblyJointDeleteInput,
+  type AssemblyPoseSetInput,
+  type AssemblyPositionSaveInput,
+  type AssemblyPositionDeleteInput,
+  type AssemblyStudySetInput,
+  type AssemblyStudyDeleteInput,
   type ObjectFolderCreateInput,
   type ObjectFolderRenameInput,
   type ObjectFolderDeleteInput,
@@ -350,6 +372,17 @@ export type CommandKind =
   | 'objectFolder.rename'
   | 'objectFolder.delete'
   | 'objectFolder.move'
+  | 'assembly.components.add'
+  | 'assembly.component.update'
+  | 'assembly.component.delete'
+  | 'assembly.joint.add'
+  | 'assembly.joint.update'
+  | 'assembly.joint.delete'
+  | 'assembly.pose.set'
+  | 'assembly.position.save'
+  | 'assembly.position.delete'
+  | 'assembly.study.set'
+  | 'assembly.study.delete'
   | 'drawing.annotation.add'
   | 'drawing.annotation.update'
   | 'drawing.annotation.delete'
@@ -424,6 +457,17 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderRenameInput>
   | CommandDefinition<ObjectFolderDeleteInput>
   | CommandDefinition<ObjectFolderMoveInput>
+  | CommandDefinition<AssemblyComponentsAddInput>
+  | CommandDefinition<AssemblyComponentUpdateInput>
+  | CommandDefinition<AssemblyComponentDeleteInput>
+  | CommandDefinition<AssemblyJointAddInput>
+  | CommandDefinition<AssemblyJointUpdateInput>
+  | CommandDefinition<AssemblyJointDeleteInput>
+  | CommandDefinition<AssemblyPoseSetInput>
+  | CommandDefinition<AssemblyPositionSaveInput>
+  | CommandDefinition<AssemblyPositionDeleteInput>
+  | CommandDefinition<AssemblyStudySetInput>
+  | CommandDefinition<AssemblyStudyDeleteInput>
   | CommandDefinition<DrawingAnnotationAddInput>
   | CommandDefinition<DrawingAnnotationUpdateInput>
   | CommandDefinition<DrawingAnnotationDeleteInput>
@@ -2712,6 +2756,119 @@ export const commandFactories = {
       (document) => deleteDrawingView(document, payload)
     );
   },
+  addAssemblyComponents(
+    payload: AssemblyComponentsAddInput
+  ): CommandDefinition<AssemblyComponentsAddInput> {
+    return makeCommand(
+      'assembly.components.add',
+      payload.components.length === 1
+        ? `Add ${payload.components[0]?.name ?? 'component'} to the assembly`
+        : `Add ${payload.components.length} components`,
+      payload,
+      (document) => addAssemblyComponents(document, payload)
+    );
+  },
+  updateAssemblyComponent(
+    payload: AssemblyComponentUpdateInput,
+    label = payload.grounded === true
+      ? 'Ground component'
+      : payload.grounded === false
+        ? 'Unground component'
+        : payload.placement
+          ? 'Move component'
+          : 'Edit component'
+  ): CommandDefinition<AssemblyComponentUpdateInput> {
+    return makeCommand(
+      'assembly.component.update',
+      label,
+      payload,
+      (document) => updateAssemblyComponent(document, payload)
+    );
+  },
+  deleteAssemblyComponent(
+    payload: AssemblyComponentDeleteInput
+  ): CommandDefinition<AssemblyComponentDeleteInput> {
+    return makeCommand(
+      'assembly.component.delete',
+      'Remove component',
+      payload,
+      (document) => deleteAssemblyComponent(document, payload)
+    );
+  },
+  addAssemblyJoint(
+    payload: AssemblyJointAddInput
+  ): CommandDefinition<AssemblyJointAddInput> {
+    return makeCommand(
+      'assembly.joint.add',
+      `Add joint ${payload.joint.name}`,
+      payload,
+      (document) => addAssemblyJoint(document, payload)
+    );
+  },
+  updateAssemblyJoint(
+    payload: AssemblyJointUpdateInput,
+    label = 'Edit joint'
+  ): CommandDefinition<AssemblyJointUpdateInput> {
+    return makeCommand('assembly.joint.update', label, payload, (document) =>
+      updateAssemblyJoint(document, payload)
+    );
+  },
+  deleteAssemblyJoint(
+    payload: AssemblyJointDeleteInput
+  ): CommandDefinition<AssemblyJointDeleteInput> {
+    return makeCommand(
+      'assembly.joint.delete',
+      'Delete joint',
+      payload,
+      (document) => deleteAssemblyJoint(document, payload)
+    );
+  },
+  setAssemblyPose(
+    payload: AssemblyPoseSetInput,
+    label = 'Move joint'
+  ): CommandDefinition<AssemblyPoseSetInput> {
+    return makeCommand('assembly.pose.set', label, payload, (document) =>
+      setAssemblyPose(document, payload)
+    );
+  },
+  saveAssemblyPosition(
+    payload: AssemblyPositionSaveInput
+  ): CommandDefinition<AssemblyPositionSaveInput> {
+    return makeCommand(
+      'assembly.position.save',
+      `Save position ${payload.name}`,
+      payload,
+      (document) => saveAssemblyPosition(document, payload)
+    );
+  },
+  deleteAssemblyPosition(
+    payload: AssemblyPositionDeleteInput
+  ): CommandDefinition<AssemblyPositionDeleteInput> {
+    return makeCommand(
+      'assembly.position.delete',
+      'Delete position',
+      payload,
+      (document) => deleteAssemblyPosition(document, payload)
+    );
+  },
+  setAssemblyStudy(
+    payload: AssemblyStudySetInput,
+    label = 'Edit motion study'
+  ): CommandDefinition<AssemblyStudySetInput> {
+    return makeCommand('assembly.study.set', label, payload, (document) =>
+      setAssemblyStudy(document, payload)
+    );
+  },
+  deleteAssemblyStudy(
+    payload: AssemblyStudyDeleteInput
+  ): CommandDefinition<AssemblyStudyDeleteInput> {
+    return makeCommand(
+      'assembly.study.delete',
+      'Delete motion study',
+      payload,
+      (document) => deleteAssemblyStudy(document, payload)
+    );
+  },
   createObjectFolder(
     payload: ObjectFolderCreateInput
   ): CommandDefinition<ObjectFolderCreateInput> {
@@ -4853,6 +5010,16 @@ function drawingOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isDrawingCommandKind, 'drawings');
 }
 
+/** AS01: a command that edits the assembly and never the model. */
+export function isAssemblyCommandKind(kind: string): boolean {
+  return kind.startsWith('assembly.');
+}
+
+/** Whether a history entry edits the assembly section and nothing else. */
+function assemblyOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  return sectionOnly(entry, isAssemblyCommandKind, 'assembly');
+}
+
 /** I05: a command that edits reference images and never the model. */
 export function isReferenceImageCommandKind(kind: string): boolean {
   return kind.startsWith('reference-image.');
@@ -4866,7 +5033,7 @@ function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
 function sectionOnly(
   entry: DocumentHistoryEntry | undefined,
   isSectionKind: (kind: string) => boolean,
-  field: 'drawings' | 'referenceImages'
+  field: 'drawings' | 'referenceImages' | 'assembly'
 ): boolean {
   if (!entry?.commandKinds?.length) return false;
   if (!entry.commandKinds.every(isSectionKind)) return false;
@@ -5060,6 +5227,16 @@ export class CommandManager {
   }
   get redoIsReferenceImageOnly(): boolean {
     return referenceImageOnly(this.history?.entries[this.history.cursor]);
+  }
+  /**
+   * Whether undo would revert assembly edits only (placements, joints,
+   * motion studies), which leave the model and its geometry alone.
+   */
+  get undoIsAssemblyOnly(): boolean {
+    return assemblyOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1]);
+  }
+  get redoIsAssemblyOnly(): boolean {
+    return assemblyOnly(this.history?.entries[this.history.cursor]);
   }
   /**
    * Whether undo is available, in a workspace that allows parameter edits
@@ -5549,6 +5726,63 @@ export function replayCommands(
         next = deleteObjectFolder(
           next,
           command.payload as ObjectFolderDeleteInput
+        );
+        break;
+      case 'assembly.components.add':
+        next = addAssemblyComponents(
+          next,
+          command.payload as AssemblyComponentsAddInput
+        );
+        break;
+      case 'assembly.component.update':
+        next = updateAssemblyComponent(
+          next,
+          command.payload as AssemblyComponentUpdateInput
+        );
+        break;
+      case 'assembly.component.delete':
+        next = deleteAssemblyComponent(
+          next,
+          command.payload as AssemblyComponentDeleteInput
+        );
+        break;
+      case 'assembly.joint.add':
+        next = addAssemblyJoint(next, command.payload as AssemblyJointAddInput);
+        break;
+      case 'assembly.joint.update':
+        next = updateAssemblyJoint(
+          next,
+          command.payload as AssemblyJointUpdateInput
+        );
+        break;
+      case 'assembly.joint.delete':
+        next = deleteAssemblyJoint(
+          next,
+          command.payload as AssemblyJointDeleteInput
+        );
+        break;
+      case 'assembly.pose.set':
+        next = setAssemblyPose(next, command.payload as AssemblyPoseSetInput);
+        break;
+      case 'assembly.position.save':
+        next = saveAssemblyPosition(
+          next,
+          command.payload as AssemblyPositionSaveInput
+        );
+        break;
+      case 'assembly.position.delete':
+        next = deleteAssemblyPosition(
+          next,
+          command.payload as AssemblyPositionDeleteInput
+        );
+        break;
+      case 'assembly.study.set':
+        next = setAssemblyStudy(next, command.payload as AssemblyStudySetInput);
+        break;
+      case 'assembly.study.delete':
+        next = deleteAssemblyStudy(
+          next,
+          command.payload as AssemblyStudyDeleteInput
         );
         break;
       case 'objectFolder.move':

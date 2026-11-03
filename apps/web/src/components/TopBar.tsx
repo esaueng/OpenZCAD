@@ -103,6 +103,8 @@ interface TopBarProps {
   tweakModeDisabledReason: string | null;
   /** Why the Drawing workspace cannot open, or null (absent: never locked). */
   drawingModeDisabledReason?: string | null;
+  /** Why Assemble is locked (AS01): it edits the document's assembly. */
+  assembleModeDisabledReason?: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
   saveToAccount?: boolean;
   /**
@@ -195,6 +197,7 @@ export function TopBar({
   buildModeDisabledReason,
   tweakModeDisabledReason,
   drawingModeDisabledReason = null,
+  assembleModeDisabledReason = null,
   onWorkspaceMode,
   saveToAccount = false,
   knownDeviceOnly = false,
@@ -599,7 +602,9 @@ export function TopBar({
                 ? tweakModeDisabledReason
                 : mode === 'drawing'
                   ? drawingModeDisabledReason
-                  : null;
+                  : mode === 'assemble'
+                    ? assembleModeDisabledReason
+                    : null;
           return (
             <Tooltip
               key={mode}

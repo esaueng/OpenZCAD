@@ -1,6 +1,7 @@
 import type { ProjectDocument, UserId } from './index';
 import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
+import { assemblySetError } from './assembly';
 import {
   referenceImageSetError,
   type ReferenceImage
@@ -26,7 +27,8 @@ export const HISTORY_FIELDS = [
   'shaprImportOrder',
   'drawings',
   'objectFolders',
-  'referenceImages'
+  'referenceImages',
+  'assembly'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
@@ -181,6 +183,15 @@ export function isDocumentHistory(
             [change.before, change.after].some(
               (side) =>
                 side !== undefined && referenceImageSetError(side) !== null
+            ))
+        )
+          return false;
+        // The same holds for the assembly section (AS01).
+        if (
+          change.field === 'assembly' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) => side !== undefined && assemblySetError(side) !== null
             ))
         )
           return false;

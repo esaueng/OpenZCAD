@@ -1,0 +1,725 @@
+/* ── AS07 motion studies ─────────────────────────────────────
+   The Assembly panel's study list, the Assemble workspace's timeline dock
+   and View mode's player island. Colours are tokens only, so both themes
+   follow tokens.css. ── */
+
+/* ── Study list (Assembly panel) ─────────────────────────── */
+
+.assembly-studies {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+
+.assembly-studies-empty {
+  margin: 0;
+  padding: 4px 6px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+}
+
+.assembly-studies-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assembly-study-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 26px;
+  border-radius: var(--radius-md);
+}
+
+.assembly-study-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.assembly-study-row-selected,
+.assembly-study-row-selected:hover {
+  background: var(--color-accent-dim);
+}
+
+.assembly-study-select {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.assembly-study-row-selected .assembly-study-select {
+  color: var(--color-selected-text);
+}
+
+.assembly-study-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assembly-study-duration {
+  flex: none;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.assembly-study-rename {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.assembly-study-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.assembly-study-row:hover .assembly-study-action,
+.assembly-study-row:focus-within .assembly-study-action,
+.assembly-study-row-selected .assembly-study-action {
+  opacity: 1;
+}
+
+.assembly-study-action:hover {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.assembly-studies-new {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-studies-new:hover:not(:disabled) {
+  border-color: var(--color-accent-border);
+  color: var(--color-text);
+}
+
+.assembly-studies-new:disabled {
+  cursor: default;
+  opacity: var(--opacity-disabled);
+}
+
+/* ── Timeline dock (Assemble) ────────────────────────────── */
+
+.motion-timeline {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+.motion-timeline:focus-visible {
+  outline: 1px solid var(--color-accent-border);
+  outline-offset: -1px;
+}
+
+.motion-timeline-floating {
+  position: absolute;
+  left: var(--lane-inset, var(--island-gap));
+  right: var(--lane-right, var(--island-gap));
+  /* Above the command bar, which owns the bottom lane in every mode. */
+  bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  z-index: var(--z-viewer-overlay);
+  max-height: 45%;
+  box-shadow: var(--shadow-1);
+}
+
+.motion-timeline-transport {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: var(--border-thin);
+}
+
+.motion-icon-button,
+.motion-play {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.motion-icon-button {
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.motion-icon-button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.motion-play {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.motion-play:hover {
+  background: var(--color-accent-hi);
+}
+
+.motion-time {
+  min-width: 92px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.motion-segmented {
+  display: inline-flex;
+  flex: none;
+  padding: 2px;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.motion-segment {
+  min-height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.motion-segment:hover:not(:disabled) {
+  color: var(--color-text);
+}
+
+.motion-segment[aria-checked='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-selected-text);
+}
+
+.motion-segment:disabled {
+  cursor: default;
+  opacity: var(--opacity-disabled);
+}
+
+.motion-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.motion-number {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 6px 0 0;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.motion-number:focus-within {
+  border-color: var(--color-accent-border);
+}
+
+.motion-number-input {
+  width: 58px;
+  height: 22px;
+  padding: 0 4px 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  outline: none;
+}
+
+.motion-number-input:disabled {
+  opacity: var(--opacity-disabled);
+}
+
+.motion-number-unit {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.motion-text-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.motion-text-button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.motion-text-button:disabled {
+  cursor: default;
+  opacity: var(--opacity-disabled);
+}
+
+.motion-timeline-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-warning);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.motion-timeline-close {
+  margin-left: auto;
+}
+
+.motion-timeline-grid {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.motion-track {
+  display: contents;
+}
+
+.motion-track-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 4px 0 10px;
+  border-right: var(--border-thin);
+  border-bottom: var(--border-thin);
+}
+
+.motion-ruler-label {
+  min-height: 24px;
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.motion-track-label-selected {
+  background: var(--color-accent-dim);
+}
+
+.motion-track-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.motion-track-value {
+  flex: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+.motion-track-remove {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.motion-track-label:hover .motion-track-remove,
+.motion-track-remove:focus-visible {
+  opacity: 1;
+}
+
+.motion-track-remove:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* Ruler and lanes share their inset, so one x is one time in every row. */
+.motion-ruler,
+.motion-lane {
+  position: relative;
+  margin: 0 12px;
+  border-bottom: var(--border-thin);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.motion-ruler {
+  min-height: 24px;
+}
+
+.motion-lane {
+  min-height: 36px;
+}
+
+.motion-tick {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 5px;
+  background: var(--color-border-strong);
+}
+
+.motion-tick-major {
+  height: 9px;
+  background: var(--color-text-dim);
+}
+
+.motion-tick-label {
+  position: absolute;
+  bottom: 10px;
+  left: 0;
+  transform: translateX(-50%);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.motion-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--color-accent);
+  pointer-events: none;
+}
+
+.motion-curve {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.motion-curve polyline {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-opacity: 0.7;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.motion-key {
+  position: absolute;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 1px solid var(--color-surface);
+  border-radius: 1px;
+  background: var(--color-text-muted);
+  transform: translate(-50%, -50%) rotate(45deg);
+  cursor: grab;
+  touch-action: none;
+}
+
+.motion-key:hover {
+  background: var(--color-text);
+}
+
+.motion-key-selected,
+.motion-key-selected:hover {
+  background: var(--color-accent-hi);
+  box-shadow: 0 0 0 2px var(--color-accent-border);
+}
+
+.motion-key:active {
+  cursor: grabbing;
+}
+
+.motion-timeline-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.motion-track-add {
+  position: relative;
+  grid-column: 1 / -1;
+  padding: 6px 10px;
+}
+
+.motion-track-menu {
+  position: absolute;
+  bottom: calc(100% - 2px);
+  left: 10px;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.motion-track-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.motion-track-menu-item:hover,
+.motion-track-menu-item:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.motion-track-menu-unit {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.motion-key-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: var(--border-thin);
+  background: var(--color-surface-2);
+}
+
+.motion-key-editor-title {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* ── View mode player island ─────────────────────────────── */
+
+.assembly-player {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - var(--island-gap) * 2);
+  padding: 5px 8px;
+  transform: translateX(-50%);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+  box-shadow: var(--shadow-1);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+.assembly-player-name {
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assembly-player-study {
+  max-width: 160px;
+  height: 26px;
+  padding: 0 6px;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.assembly-player-play {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  cursor: pointer;
+}
+
+.assembly-player-play:hover {
+  background: var(--color-accent-hi);
+}
+
+.assembly-player-slider {
+  flex: 1 1 200px;
+  width: 200px;
+  min-width: 80px;
+  accent-color: var(--color-accent);
+}
+
+.assembly-player-time {
+  flex: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.assembly-player-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.assembly-player-toggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.assembly-player-toggle[aria-pressed='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-selected-text);
+}
+
+@media (max-width: 620px) {
+  .motion-timeline-grid {
+    grid-template-columns: 120px minmax(0, 1fr);
+  }
+
+  .assembly-player {
+    bottom: calc(var(--island-gap) * 3 + var(--command-bar-h) + 36px);
+    gap: 6px;
+  }
+
+  .assembly-player-study,
+  .assembly-player-name {
+    max-width: 96px;
+  }
+}
