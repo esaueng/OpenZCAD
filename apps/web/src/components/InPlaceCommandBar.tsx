@@ -27,7 +27,13 @@ export interface InPlaceOption {
   id: string;
   label: string;
   value: string;
-  choices: readonly { value: string; label: string; note?: string }[];
+  choices: readonly {
+    value: string;
+    label: string;
+    note?: string;
+    /** Shown only as the choice's tooltip. */
+    tip?: string;
+  }[];
 }
 
 /** An exact number too rare for a handle (a primitive's position). */
@@ -455,7 +461,7 @@ function OptionRow({
           onChange={(event) => onOption?.(option.id, event.target.value)}
         >
           {option.choices.map((choice) => (
-            <option key={choice.value} value={choice.value}>
+            <option key={choice.value} value={choice.value} title={choice.tip}>
               {choice.label}
             </option>
           ))}
@@ -473,6 +479,7 @@ function OptionRow({
               role="radio"
               aria-checked={choice.value === option.value}
               className="in-place-option-choice"
+              title={choice.tip}
               disabled={locked}
               onClick={() => onOption?.(option.id, choice.value)}
             >

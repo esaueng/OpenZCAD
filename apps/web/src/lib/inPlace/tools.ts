@@ -253,8 +253,16 @@ export interface InPlaceSlots {
 export interface OptionSpec {
   id: string;
   label: string;
-  /** A choice's `note` explains it under the row while it is chosen. */
-  choices: readonly { value: string; label: string; note?: string }[];
+  /**
+   * A choice's `note` explains it under the row while it is chosen; its
+   * `tip` explains it only as the choice's tooltip, for a panel kept terse.
+   */
+  choices: readonly {
+    value: string;
+    label: string;
+    note?: string;
+    tip?: string;
+  }[];
   initial: string;
   /**
    * Another option this one may never equal (a grid's two directions):

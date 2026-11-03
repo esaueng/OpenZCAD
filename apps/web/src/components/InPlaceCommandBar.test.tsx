@@ -303,6 +303,33 @@ describe('InPlaceCommandBar', () => {
     expect(screen.getByText('Not exact surfaces.')).toBeTruthy();
   });
 
+  it('keeps a tip-only choice terse: its explanation is the tooltip', () => {
+    render(
+      <InPlaceCommandBar
+        title="Thread"
+        hint="Pick a face"
+        canFinish={false}
+        options={[
+          {
+            id: 'fit',
+            label: 'Fit',
+            value: 'print',
+            choices: [
+              { value: 'print', label: 'Print', tip: '0.1 mm radial gap' },
+              { value: 'exact', label: 'Exact' }
+            ]
+          }
+        ]}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('radio', { name: 'Print' }).getAttribute('title')
+    ).toBe('0.1 mm radial gap');
+    expect(screen.queryByText('0.1 mm radial gap')).toBeNull();
+  });
+
   it('puts exact numbers behind Options, each opening entry where it sits', () => {
     const onValue = vi.fn();
     render(
