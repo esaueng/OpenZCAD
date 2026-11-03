@@ -15,7 +15,7 @@
   "drawings.spec.ts": 12,
   "edge-overlay-growth.spec.ts": 6,
   "encrypted-projects.spec.ts": 11,
-  "encrypted-room.spec.ts": 6,
+  "encrypted-room.spec.ts": 8,
   "encrypted-share-links.spec.ts": 14,
   "encryption-device-approval.spec.ts": 7,
   "encryption-passkeys.spec.ts": 3,

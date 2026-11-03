@@ -8,6 +8,7 @@ import { d1Database } from '../d1-sqlite';
 import {
   createPrimitiveInPlace,
   expect,
+  expectBodyCount,
   stubApi,
   test
 } from './openzcad-fixtures';
@@ -189,7 +190,28 @@ test('relays an encrypted edit between two browsers of the owner', { tag: '@ci-s
     }
     await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
 
-    // An edit on A reaches B live, decrypted and verified there.
+    // Enrollment can retire A's captured account view and reconnect its
+    // room. An edit during that handoff must still reach B automatically;
+    // its encrypted account fallback remains available while reconnecting.
+    await addBox(a);
+    await expect(b.getByText(/from another of your devices/)).toBeVisible({
+      timeout: SYNC_BUDGET_MS
+    });
+    await expectBodyCount(b, 2);
+    await expect(
+      a.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    for (const page of [a, b]) {
+      await expect(
+        page.getByRole('button', {
+          name: 'Open project sharing · 2 live',
+          exact: true
+        })
+      ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    }
+
+    // Once both hold the current encrypted view, the next edit goes through
+    // the live room alone. Its autosave must not duplicate the account write.
     const versionsBefore = (
       server.db
         .prepare(
@@ -211,6 +233,7 @@ test('relays an encrypted edit between two browsers of the owner', { tag: '@ci-s
     await expect(b.getByText(/from another of your devices/)).toBeVisible({
       timeout: SYNC_BUDGET_MS
     });
+    await expectBodyCount(b, 3);
     await expect(
       a.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
