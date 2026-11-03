@@ -7,9 +7,12 @@ from pathlib import Path
 import re
 import runpy
 import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from policy_test_tools import git_command
 
 
 def fixtures():
@@ -29,7 +32,7 @@ def fixtures_ready():
     for pin, path in snapshots:
         for arguments in (("show", f"{pin}:{path}"),
                           ("merge-base", "--is-ancestor", pin, "refs/remotes/origin/main")):
-            if subprocess.run(["git", *arguments], cwd=ROOT,
+            if subprocess.run(git_command(*arguments), cwd=ROOT,
                               capture_output=True).returncode != 0:
                 return False
     return True
@@ -44,8 +47,8 @@ def fetch_main_history():
     if since.tzinfo is None:
         raise ValueError("Fixture history boundary must include a timezone")
     subprocess.run(
-        ["git", "fetch", "--no-tags", "--quiet", f"--shallow-since={since.isoformat()}",
-         "origin", "+refs/heads/main:refs/remotes/origin/main"], cwd=ROOT, check=True,
+        git_command("fetch", "--no-tags", "--quiet", f"--shallow-since={since.isoformat()}",
+                    "origin", "+refs/heads/main:refs/remotes/origin/main"), cwd=ROOT, check=True,
     )
 
 

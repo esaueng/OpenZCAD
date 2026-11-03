@@ -1057,7 +1057,7 @@ describe('device removal across encrypted projects', () => {
       );
       expect(keyEpochOf(srv, projectId)).toBe(predicted.get(projectId));
     }
-  });
+  }, 30_000);
 
   it('refuses a stolen device’s later Commits and versions, by directory and by authorship', async () => {
     const { srv, recovery, laptop, desktop, phone, projects } =

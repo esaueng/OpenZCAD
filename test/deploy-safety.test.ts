@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 import { foldEvidence, readFragments } from '../scripts/roadmap-evidence.mjs';
@@ -16,8 +16,11 @@ it('runs the locked deployment CLI from the repository root without registry or 
   ) as { version: string };
   try {
     const version = execFileSync(
-      'npm',
+      process.platform === 'win32' ? process.execPath : 'npm',
       [
+        ...(process.platform === 'win32'
+          ? [join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')]
+          : []),
         'exec',
         '--offline',
         '--yes=false',
@@ -289,9 +292,10 @@ describe('documented facts match the code', () => {
     for (const path of ['architecture.md', 'ROADMAP.md']) {
       // Implementation PRs record schema evidence in fragments; the standalone
       // fold PR updates the shared ledger later. Check that composed ledger.
-      const documented = path === 'ROADMAP.md'
-        ? foldEvidence(read(path), readFragments())
-        : read(path);
+      const documented =
+        path === 'ROADMAP.md'
+          ? foldEvidence(read(path), readFragments())
+          : read(path);
       const claimed = Array.from(
         documented.matchAll(/schema[- ]v(\d+)/gi),
         (match) => match[1]

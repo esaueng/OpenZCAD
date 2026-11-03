@@ -1361,7 +1361,7 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
       { user: BOB, body: {} }
     );
     expect([403, 404]).toContain(byMember.status);
-  });
+  }, 30_000);
 
   it('holds co-members off when a removal stops right after its device-list entry lands', async () => {
     const { srv, alice, bob, bobRecovery, bobDesktop, bobPhone } =

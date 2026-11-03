@@ -57,7 +57,8 @@ const refusal = () =>
 /**
  * Only shrinks are handled: all added material lies inside the old bore.
  * Both end rings must be complete circles, each meeting a planar end or a
- * complete coaxial cone. Other neighbours and stored UV traces refuse.
+ * coaxial cone. Its outer mouth may break out through a side face: those
+ * boundary curves remain untouched. Other neighbours and stored UV traces refuse.
  * The pinned native representation is copied; cone carriers, outer rings,
  * unrelated faces, edge trims and tolerances are retained verbatim.
  */
@@ -203,32 +204,38 @@ export function shrinkChamferedThroughHole(
         cone.half_angle >= Math.PI / 2
       )
         throw refusal();
-      const coneRings = ringsOf(other);
-      const outer = coneRings.find((r) => !r.edges.includes(edge));
-      if (
-        coneRings.length !== 2 ||
-        !outer ||
-        outer.radius <= geometry.radius + tolerance ||
-        (end === 0
-          ? outer.at >= -tolerance
-          : outer.at <= geometry.axialLength + tolerance)
-      )
+      if (arena.faces[other]!.inner_wires.length) throw refusal();
+      const alignment = dot(axis, vector(cone.axis));
+      const slope = Math.tan(cone.half_angle) / alignment;
+      if (!close(geometry.radius, (ring.at - axial(cone.apex)) / slope))
         throw refusal();
-      // Remus stores the cone's angle to the radial plane. Verify both
-      // existing rings against that exact carrier before extending it.
-      for (const r of coneRings)
+      // The input has a strictly valid, nonintersecting cone wire. Its complete
+      // bore ring separates the outer boundary from the region being added.
+      // Certify that every other boundary vertex is on the outward side of
+      // that ring; retain all of its clipped curves verbatim.
+      const vertices = new Set(
+        edgesOf(other).flatMap((e) => [
+          arena.edges[e]!.start,
+          arena.edges[e]!.end
+        ])
+      );
+      let extendsOutward = false;
+      for (const v of vertices) {
+        const p = arena.vertices[v]!.point;
+        const r = length(
+          subtract(subtract(vector(p), origin), scale(axis, axial(p)))
+        );
         if (
-          !close(
-            r.radius,
-            ((r.at - axial(cone.apex)) * dot(axis, vector(cone.axis))) /
-              Math.tan(cone.half_angle)
-          )
+          r < geometry.radius - tolerance ||
+          !close(r, (axial(p) - axial(cone.apex)) / slope)
         )
           throw refusal();
-      return (
-        ((radius - geometry.radius) * (outer.at - ring.at)) /
-        (outer.radius - geometry.radius)
-      );
+        if (r > geometry.radius + tolerance) extendsOutward = true;
+      }
+      const move = (radius - geometry.radius) * slope;
+      if (!extendsOutward || (end === 0 ? move <= 0 : move >= 0))
+        throw refusal();
+      return move;
     });
     if (rings[1]!.at + moves[1]! - rings[0]!.at - moves[0]! <= tolerance)
       throw new Error(
