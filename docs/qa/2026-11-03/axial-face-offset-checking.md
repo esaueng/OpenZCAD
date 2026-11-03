@@ -91,7 +91,7 @@ device persistence and reload, with console/page-error checks and screenshots.
 The opt-in `perf-face-drag-trace.spec.ts` case `long native history` measures
 pointer release through an accepted revision's final checked frame.
 
-Three alternating local browser comparisons used the public 25-feature
+An earlier qualification used three alternating local browser comparisons on the public 25-feature
 fixture, 120 pointer moves at 16 ms intervals, full production rendering and
 headed Chromium on Apple M5 Pro/Metal. The baseline is the deployed preview
 change (`5dda745871c1195d41f78fdf97d62a87a7291ee5`, Remus 2026.1.104);
@@ -114,7 +114,7 @@ active during these comparisons; the desktop host was not isolated. The
 candidate retains the newer resting exact check, which may finish while the
 pointer pauses before release; no such check is disabled for the measurement.
 
-The final pinned package passes 54 focused regression tests and the parity
+That candidate passes 54 focused regression tests and the parity
 corpus (92 passed, one existing skip), type checking and the production
 build/bundle gate. Browser reload coverage also waits for current exact STEP
 export readiness, so a restored cached display alone cannot pass.
@@ -129,3 +129,11 @@ used the source-identical Mac package before the final hosted-artifact pin;
 the final pin has the focused and parity validation above. Hosted checks on
 the exact PR head are reported separately. Local test results do not
 establish production deployment.
+
+The final integration retains main's already qualified Remus 2026.1.108
+runtime at `f96eba5745bdb8da8fe3cd0bef158c923f075055`, preserving the
+newly released retained-bottom-fillet repair. Checked-prefix reuse and resting
+validation use its existing native API; they do not require the additional
+kernel optimizations in Remus #1505. That source PR follows its normal
+package-refresh channel independently. Qualification of this final pin and
+the exact merge head is recorded in the PR.
