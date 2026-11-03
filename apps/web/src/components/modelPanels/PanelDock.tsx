@@ -71,8 +71,8 @@ export interface PanelDockHandle {
 export interface PanelDockProps {
   layout: PanelLayout;
   /**
-   * A sketch or a drag has the stage (and nothing released it): no panel
-   * draws, and the dock gives its width back to the rails and the lanes.
+   * The user chose Hide all: no panel draws, and the dock gives its width
+   * back to the rails and the lanes. Tool selection never hides the dock.
    */
   hidden: boolean;
   /** The stage the dock measured, whenever it changes size. */

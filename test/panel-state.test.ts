@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  commandSuspendsPanels,
+  commandFoldsTools,
   DEFAULT_PANEL_STATE,
   defaultPanelState,
-  effectivePanels,
+  effectiveCommandFold,
   loadPanelState,
   normalizePanelState,
   PANEL_STATE_STORAGE_KEY,
@@ -287,7 +287,7 @@ describe('workspace panel state', () => {
   });
 });
 
-describe('which commands take the stage from the panels', () => {
+describe('which commands fold More tools', () => {
   const none = {
     inPlace: { active: false, editing: false },
     extrude: { active: false, editing: false },
@@ -295,56 +295,56 @@ describe('which commands take the stage from the panels', () => {
     moving: false
   };
 
-  it('suspends the panels while a feature is being created', () => {
-    expect(commandSuspendsPanels(none)).toBe(false);
+  it('folds More tools while a feature is being created', () => {
+    expect(commandFoldsTools(none)).toBe(false);
     expect(
-      commandSuspendsPanels({
+      commandFoldsTools({
         ...none,
         inPlace: { active: true, editing: false }
       })
     ).toBe(true);
     expect(
-      commandSuspendsPanels({
+      commandFoldsTools({
         ...none,
         extrude: { active: true, editing: false }
       })
     ).toBe(true);
     expect(
-      commandSuspendsPanels({ ...none, tool: { name: 'box', editing: false } })
+      commandFoldsTools({ ...none, tool: { name: 'box', editing: false } })
     ).toBe(true);
   });
 
-  it('keeps History open while a step from it is edited', () => {
-    // Clicking a History row used to close History under the pointer.
+  it('leaves More tools open while an existing feature is edited', () => {
+    // Existing-feature edits keep the current tool-drawer state.
     expect(
-      commandSuspendsPanels({
+      commandFoldsTools({
         ...none,
         inPlace: { active: true, editing: true }
       })
     ).toBe(false);
     expect(
-      commandSuspendsPanels({
+      commandFoldsTools({
         ...none,
         extrude: { active: true, editing: true }
       })
     ).toBe(false);
     expect(
-      commandSuspendsPanels({
+      commandFoldsTools({
         ...none,
         tool: { name: 'datum-plane', editing: true }
       })
     ).toBe(false);
   });
 
-  it('leaves the panels for Move and a drag', () => {
+  it('leaves More tools open for Move and a drag', () => {
     expect(
-      commandSuspendsPanels({
+      commandFoldsTools({
         ...none,
         tool: { name: 'transform', editing: false }
       })
     ).toBe(false);
     expect(
-      commandSuspendsPanels({
+      commandFoldsTools({
         ...none,
         inPlace: { active: true, editing: false },
         moving: true
@@ -353,54 +353,38 @@ describe('which commands take the stage from the panels', () => {
   });
 });
 
-describe('panel suspension while a mode has the stage', () => {
-  const idle = { suspended: false, panelsReleased: false, foldReleased: false };
+describe('temporary folding of More tools', () => {
+  const idle = { suspended: false, released: false };
   const suspended = { ...idle, suspended: true };
 
-  it('shows what the user chose while no mode suspends the panels', () => {
-    expect(effectivePanels({ commandFoldOpen: true }, idle)).toEqual({
-      panelsSuspended: false,
-      commandFoldOpen: true
-    });
-    expect(effectivePanels({ commandFoldOpen: false }, idle)).toEqual({
-      panelsSuspended: false,
-      commandFoldOpen: false
-    });
+  it('shows the saved choice outside a creation session', () => {
+    expect(effectiveCommandFold({ commandFoldOpen: true }, idle)).toBe(true);
+    expect(effectiveCommandFold({ commandFoldOpen: false }, idle)).toBe(false);
   });
 
-  it('suspends the panels and hides the fold, preference untouched', () => {
+  it('folds temporarily without overwriting the saved preference', () => {
     const state = { ...defaultPanelState(), commandFoldOpen: true };
-    expect(effectivePanels(state, suspended)).toEqual({
-      panelsSuspended: true,
-      commandFoldOpen: false
-    });
-    // Suspension is not a write: the stored choice is what comes back.
+    expect(effectiveCommandFold(state, suspended)).toBe(false);
     expect(state.commandFoldOpen).toBe(true);
     savePanelState(state);
     expect(loadPanelState().commandFoldOpen).toBe(true);
   });
 
-  it('never opens a fold the user left closed', () => {
+  it('lets an explicit request reveal the fold during the session', () => {
     expect(
-      effectivePanels(
-        { commandFoldOpen: false },
-        { suspended: true, panelsReleased: true, foldReleased: true }
-      ).commandFoldOpen
-    ).toBe(false);
+      effectiveCommandFold(
+        { commandFoldOpen: true },
+        { ...suspended, released: true }
+      )
+    ).toBe(true);
   });
 
-  it('lets the panels and the fold be released during the mode, each on its own', () => {
+  it('never opens a fold the user left closed', () => {
     expect(
-      effectivePanels(
-        { commandFoldOpen: true },
-        { ...suspended, panelsReleased: true }
+      effectiveCommandFold(
+        { commandFoldOpen: false },
+        { ...suspended, released: true }
       )
-    ).toEqual({ panelsSuspended: false, commandFoldOpen: false });
-    expect(
-      effectivePanels(
-        { commandFoldOpen: true },
-        { ...suspended, foldReleased: true }
-      )
-    ).toEqual({ panelsSuspended: true, commandFoldOpen: true });
+    ).toBe(false);
   });
 });

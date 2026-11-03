@@ -115,8 +115,8 @@ for (const size of [
     await expect(
       card.getByRole('region', { name: 'Extrude operation' })
     ).toBeVisible();
-    // This clearance journey tests the card beside the stored dock. A new
-    // Extrude suspends that dock until it is explicitly requested.
+    // This clearance journey tests the card beside the dock, which stays
+    // visible throughout the Extrude command.
     await revealModelPanel(page, 'History');
     await waitForStillViewport(page);
     const cardBox = (await card.boundingBox())!;

@@ -19,7 +19,9 @@ const CIRCLE_DRAG_PX = 30;
 
 async function openTopSketch(page: Page, name: string) {
   await stubApi(page);
-  await page.setViewportSize({ width: 1280, height: 720 });
+  // Multi-object drags need room beside both the persistent model dock and
+  // the entity editor. Keep both open throughout these interaction journeys.
+  await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'New project' }).click();
@@ -98,6 +100,13 @@ test('dragging a circle by its centre snaps it onto another centre', { tag: '@ci
   await drawCircles(page, sketchTools, [first!, second!]);
 
   const target = await selectCircle(page, second!);
+  expect(
+    await page.locator('.viewer-host canvas').evaluate(
+      (canvas, point) => document.elementFromPoint(point.x, point.y) === canvas,
+      { x: first!.x + CIRCLE_DRAG_PX, y: first!.y }
+    ),
+    'the other circle rim must stay clear of the open entity editor'
+  ).toBe(true);
   const moved = await selectCircle(page, first!);
   expect(`${moved.x},${moved.y}`).not.toBe(`${target.x},${target.y}`);
 
