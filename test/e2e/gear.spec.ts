@@ -113,7 +113,7 @@ test(
     });
     await startTool(page, /^Gear(?! teeth)/, 'Gear');
     const bar = page.getByRole('group', { name: 'Gear command' });
-    await expect(bar).toContainText('Pick where the gear stands');
+    await expect(bar).toContainText('Pick a plane or flat face');
     await expect
       .poll(() => pickPlanarFace(page, { x: 0, y: 0, z: 1 }))
       .not.toBeNull();
@@ -148,7 +148,7 @@ test('Gear teeth in place: teeth cut along a picked cylinder keep its diameter',
   });
   await startTool(page, /^Gear teeth/, 'Gear teeth');
   const bar = page.getByRole('group', { name: 'Gear teeth command' });
-  await expect(bar).toContainText('Pick a cylindrical face');
+  await expect(bar).toContainText('Pick a boss or bore');
   await expect
     .poll(() =>
       canvas.evaluate(
@@ -163,7 +163,7 @@ test('Gear teeth in place: teeth cut along a picked cylinder keep its diameter',
       )
     )
     .not.toBeNull();
-  await expect(bar).toContainText('the teeth run the whole face');
+  await expect(bar).toContainText('Tap the teeth to type');
   await enterCommandValue(page, 'teeth', '20');
   await finishInPlaceCommand(page, 'Gear teeth');
   const [teeth] = await gearData(page);
@@ -208,7 +208,7 @@ test('Gear parameters: typed in place, in their own units, only where they apply
   // Another sizing keeps the tooth: module 2 is 12.7 teeth per inch.
   await panel
     .getByRole('radiogroup', { name: 'Size by' })
-    .getByRole('radio', { name: 'Diametral pitch' })
+    .getByRole('radio', { name: 'Diametral' })
     .click();
   const diametral = panel.getByRole('textbox', { name: 'Diametral pitch' });
   await expect(diametral).toHaveValue('12.7');

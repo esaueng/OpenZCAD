@@ -777,8 +777,6 @@ export interface InPlaceToolSpec {
   ): HandleSpec[];
 }
 
-const FINISH = 'Enter to finish · Esc cancels';
-
 function section(pick: ProfilePick): SketchSectionReference {
   return { sketchId: pick.sketchId, profile: pick.reference };
 }
@@ -1009,10 +1007,9 @@ const revolve: InPlaceToolSpec = {
     }
   ],
   hint(slots) {
-    if (slots.profiles.length === 0) return 'Pick a sketch profile to revolve';
-    if (!slots.axis)
-      return 'Pick the axis to turn around: a sketch line, an edge, a cylinder or a datum axis';
-    return `Drag the angle, or type a value · ${FINISH}`;
+    if (slots.profiles.length === 0) return 'Pick a profile';
+    if (!slots.axis) return 'Pick an axis: sketch line, edge or cylinder';
+    return 'Drag the angle, or tap it to type';
   },
   ready: (slots) => slots.profiles.length > 0 && slots.axis !== null,
   refuseAxis(slots, axis, ctx) {
@@ -1113,11 +1110,11 @@ const loft: InPlaceToolSpec = {
   options: [
     {
       id: 'end',
-      label: 'Ends',
+      label: 'End',
       choices: [
-        { value: 'section', label: 'On the last section' },
-        { value: 'apex', label: 'At an apex point' },
-        { value: 'point', label: 'At a point (X, Y, Z)' }
+        { value: 'section', label: 'Last section' },
+        { value: 'apex', label: 'Apex' },
+        { value: 'point', label: 'Point' }
       ],
       initial: 'section'
     },
@@ -1133,9 +1130,9 @@ const loft: InPlaceToolSpec = {
     }
   ],
   hint(slots) {
-    if (slots.profiles.length === 0) return 'Pick the first section profile';
-    if (slots.profiles.length === 1) return 'Pick the next section profile';
-    return `${slots.profiles.length} sections · pick another, or ${FINISH}`;
+    if (slots.profiles.length === 0) return 'Pick the first section';
+    if (slots.profiles.length === 1) return 'Pick the next section';
+    return `${slots.profiles.length} sections · pick more`;
   },
   // A point apex not yet set starts where the apex off the last section
   // stands.
@@ -1273,39 +1270,38 @@ const sweep: InPlaceToolSpec = {
           value: 'smooth',
           label: 'Smooth',
           // The card's own explanation, so Smooth is not taken for exact.
-          note: 'Smooth samples a path of one line, or one arc of up to a quarter turn, more finely. It does not make exact curved surfaces, and a longer path builds the same body as Standard.'
+          note: 'Finer sampling, not exact surfaces'
         }
       ],
       initial: 'standard'
     },
     {
       id: 'curves',
-      label: 'Clicks pick',
+      label: 'Picking',
       // A guide rail is the profile's up-vector track: curve clicks add to
       // it instead of the path while this is chosen.
       choices: [
         { value: 'path', label: 'Path' },
         {
           value: 'guide',
-          label: 'Guide rail',
-          note: 'The profile turns to keep facing the rail instead of holding a rotation-minimizing frame. Both the path and the rail must be one curve: a line, or an arc of at most a quarter turn.'
+          label: 'Rail',
+          note: 'The profile turns to face the rail'
         }
       ],
       initial: 'path'
     }
   ],
   hint(slots, options) {
-    if (slots.profiles.length === 0) return 'Pick the profile to sweep';
+    if (slots.profiles.length === 0) return 'Pick a profile';
     if (options?.curves === 'guide') {
       return slots.guide.length === 0
-        ? 'Pick the guide rail: click its sketch curves'
-        : `Guide rail of ${slots.guide.length}${
-            options.mode === 'smooth' ? ' (guided sweeps are Standard)' : ''
-          } · click more curves, or ${FINISH}`;
+        ? 'Pick the rail curves'
+        : `Rail of ${slots.guide.length}${
+            options.mode === 'smooth' ? ' · builds Standard' : ''
+          } · pick more`;
     }
-    if (slots.path.length === 0)
-      return 'Pick the path: click its sketch curves';
-    return `Path of ${slots.path.length} · click more curves, or ${FINISH}`;
+    if (slots.path.length === 0) return 'Pick the path curves';
+    return `Path of ${slots.path.length} · pick more`;
   },
   ready: (slots) => slots.profiles.length > 0 && slots.path.length > 0,
   request(slots, _values, options) {
@@ -1340,8 +1336,8 @@ const AXIS_MODE_OPTION: OptionSpec = {
   id: 'axisMode',
   label: 'Axis',
   choices: [
-    { value: 'picked', label: 'A picked axis' },
-    { value: 'typed', label: 'Typed (origin and direction)' }
+    { value: 'picked', label: 'Picked' },
+    { value: 'typed', label: 'Typed' }
   ],
   initial: 'picked'
 };
@@ -1420,12 +1416,10 @@ const helicalSweep: InPlaceToolSpec = {
     };
   },
   hint(slots, options) {
-    if (slots.profiles.length === 0) return 'Pick the profile to coil';
-    if (options?.axisMode === 'typed') {
-      return `Type the axis origin and direction on their chips · ${FINISH}`;
-    }
+    if (slots.profiles.length === 0) return 'Pick a profile';
+    if (options?.axisMode === 'typed') return 'Tap the axis chips to type it';
     if (!slots.axis) return 'Pick the helix axis';
-    return `Drag radius and pitch, tap turns to type · ${FINISH}`;
+    return 'Drag radius and pitch · tap turns';
   },
   ready: (slots, options) =>
     slots.profiles.length > 0 &&
@@ -1847,12 +1841,8 @@ const GEAR_SIZING_OPTION: OptionSpec = {
   when: (state) => state.options.fit !== 'keep-diameter',
   choices: [
     { value: 'module', label: 'Module' },
-    { value: 'circular-pitch', label: 'Circular pitch' },
-    {
-      value: 'diametral-pitch',
-      label: 'Diametral pitch',
-      note: 'Teeth per inch of pitch diameter, in every unit system'
-    }
+    { value: 'circular-pitch', label: 'Circular' },
+    { value: 'diametral-pitch', label: 'Diametral' }
   ],
   initial: 'module'
 };
@@ -1969,13 +1959,11 @@ const GEAR_HAND_OPTION: OptionSpec = {
   choices: [
     {
       value: 'right',
-      label: 'Right',
-      note: 'Teeth twist like a right-hand screw thread'
+      label: 'Right'
     },
     {
       value: 'left',
-      label: 'Left',
-      note: 'Teeth twist like a left-hand screw thread'
+      label: 'Left'
     }
   ],
   initial: 'right',
@@ -1994,7 +1982,7 @@ const GEAR_HELIX_OPTION: OptionSpec = {
     {
       value: 'herringbone',
       label: 'Herringbone',
-      note: 'The hand reverses at mid-width, so the teeth meet in a V'
+      note: 'V-shaped teeth'
     }
   ],
   initial: 'single',
@@ -2010,7 +1998,7 @@ const GEAR_THROAT_OPTION: OptionSpec = {
     {
       value: 'throated',
       label: 'Throated',
-      note: 'The tips wrap the worm across the middle of the face'
+      note: 'Tips wrap the worm'
     }
   ],
   initial: 'plain',
@@ -2257,42 +2245,42 @@ const gear: InPlaceToolSpec = {
         {
           value: 'external',
           label: 'External',
-          note: 'Spur, or helical with a helix angle'
+          note: 'Spur or helical'
         },
         {
           value: 'internal',
           label: 'Internal (ring)',
-          note: 'Teeth on the inside of a rim'
+          note: 'Teeth inside a rim'
         },
         {
           value: 'rack',
           label: 'Rack',
-          note: 'Straight teeth along the plane'
+          note: 'Straight teeth on the plane'
         },
         {
           value: 'bevel',
           label: 'Bevel',
-          note: 'Straight teeth tapering to a cone apex, to mesh at a shaft angle'
+          note: 'Meshes at a shaft angle'
         },
         {
           value: 'worm',
           label: 'Worm',
-          note: 'A thread of one or more starts, driving a worm wheel at 90°'
+          note: 'Drives a worm wheel'
         },
         {
           value: 'worm-wheel',
           label: 'Worm wheel',
-          note: 'The helical wheel that meshes with a worm of these starts and diameter factor'
+          note: 'Meshes with a worm'
         },
         {
           value: 'enveloping-worm',
           label: 'Enveloping worm',
-          note: 'An hourglass worm wrapping a wheel of these teeth, its thread cut by the wheel’s straight teeth'
+          note: 'Hourglass worm'
         },
         {
           value: 'enveloping-wheel',
           label: 'Enveloping wheel',
-          note: 'The wheel an enveloping worm of these starts, diameter factor and length drives'
+          note: 'Meshes with an enveloping worm'
         }
       ],
       initial: 'external'
@@ -2309,13 +2297,11 @@ const gear: InPlaceToolSpec = {
     return { rimDiameter: module * (teeth + 10.5) };
   },
   hint(slots) {
-    if (!slots.plane) {
-      return 'Pick where the gear stands: a ghost plane or a flat face';
-    }
+    if (!slots.plane) return 'Pick a plane or flat face';
     if (slots.plane.kind === 'datum') {
-      return 'A gear stands on a ghost plane or a flat face';
+      return 'Pick a ghost plane or flat face instead';
     }
-    return 'Drag the face width; tap the teeth or the pitch to type';
+    return 'Drag the face width · tap a chip to type';
   },
   ready: (slots) => gearFrame(slots.plane) !== null,
   request(slots, values, options, ctx, numbers) {
@@ -2505,10 +2491,10 @@ const gearTeeth: InPlaceToolSpec = {
   options: [
     {
       id: 'side',
-      label: 'Teeth',
+      label: 'Side',
       choices: [
-        { value: 'outside', label: 'Outside (a boss)' },
-        { value: 'inside', label: 'Inside (a bore)' }
+        { value: 'outside', label: 'Outside' },
+        { value: 'inside', label: 'Inside' }
       ],
       initial: 'outside'
     },
@@ -2518,13 +2504,13 @@ const gearTeeth: InPlaceToolSpec = {
       choices: [
         {
           value: 'keep-diameter',
-          label: 'Keep the diameter',
-          note: 'The tips stay on the cylinder; the module follows the teeth'
+          label: 'Keep diameter',
+          note: 'Module follows the teeth'
         },
         {
           value: 'module',
-          label: 'Set the module',
-          note: 'A boss is turned down, a bore opened up, to fit'
+          label: 'Set module',
+          note: 'Turns the boss down or opens the bore'
         }
       ],
       initial: 'keep-diameter'
@@ -2550,12 +2536,10 @@ const gearTeeth: InPlaceToolSpec = {
   summary: gearSummary,
   optionCarries: gearSizingCarries,
   hint(slots, options) {
-    if (slots.faces.length === 0) {
-      return 'Pick a cylindrical face: a boss for outside teeth, a bore for inside';
-    }
+    if (slots.faces.length === 0) return 'Pick a boss or bore';
     return options?.fit === 'module'
-      ? 'Tap the teeth or the pitch to type; the teeth run the whole face'
-      : 'Tap the teeth to type; the teeth run the whole face';
+      ? 'Tap the teeth or pitch to type'
+      : 'Tap the teeth to type';
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values, options, ctx) {
@@ -2678,8 +2662,8 @@ const hole: InPlaceToolSpec = {
       id: 'place',
       label: 'Position',
       choices: [
-        { value: 'clicked', label: 'Where clicked' },
-        { value: 'typed', label: 'Typed (U, V)' }
+        { value: 'clicked', label: 'Clicked' },
+        { value: 'typed', label: 'Typed' }
       ],
       initial: 'clicked'
     },
@@ -2705,16 +2689,11 @@ const hole: InPlaceToolSpec = {
   ],
   defaults: (_slots, _ctx, numbers) => holeStepSizes(numbers.diameter ?? 6),
   hint(slots, options) {
-    if (slots.faces.length === 0)
-      return 'Click a flat face where the hole goes';
-    const step =
-      options?.style === 'counterbore' || options?.style === 'countersink'
-        ? ` · tap the ${options.style} chips to size it`
-        : '';
+    if (slots.faces.length === 0) return 'Click a flat face';
     if (options?.place === 'typed') {
-      return `Type its U and V on their chips · drag the diameter${step} · ${FINISH}`;
+      return 'Tap U and V to place it · drag the diameter';
     }
-    return `Click again to move it · drag the diameter${step} · ${FINISH}`;
+    return 'Click to move it · drag the diameter';
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values, options, ctx, numbers) {
@@ -2922,7 +2901,7 @@ const shell: InPlaceToolSpec = {
   ],
   hint(slots) {
     if (slots.faces.length === 0) return 'Click the faces to open';
-    return `${slots.faces.length} open · click more, drag the wall · ${FINISH}`;
+    return `${slots.faces.length} open · drag the wall`;
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values) {
@@ -2955,7 +2934,7 @@ const thicken: InPlaceToolSpec = {
   values: [{ id: 'thickness', label: 'Thickness', unit: 'length', initial: 2 }],
   hint(slots) {
     if (slots.faces.length === 0) return 'Click the face to thicken';
-    return `Drag the thickness (either side) · ${FINISH}`;
+    return 'Drag the thickness, either side';
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values) {
@@ -2995,8 +2974,8 @@ const solidOffset: InPlaceToolSpec = {
     }
   ],
   hint(slots) {
-    if (slots.faces.length === 0) return 'Click any face of the body to offset';
-    return `Drag the offset · ${FINISH}`;
+    if (slots.faces.length === 0) return 'Click the body to offset';
+    return 'Drag the offset';
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values) {
@@ -3215,7 +3194,7 @@ const draft: InPlaceToolSpec = {
           value,
           label: value
         })),
-        { value: 'custom', label: 'Custom (X, Y, Z)' }
+        { value: 'custom', label: 'Custom' }
       ],
       initial: '+Z'
     },
@@ -3227,7 +3206,7 @@ const draft: InPlaceToolSpec = {
         { value: 'top', label: 'Top' },
         { value: 'point', label: 'Clicked point' },
         { value: 'origin', label: 'Origin' },
-        { value: 'custom', label: 'At a point (X, Y, Z)' }
+        { value: 'custom', label: 'Typed point' }
       ],
       initial: 'base'
     }
@@ -3235,10 +3214,10 @@ const draft: InPlaceToolSpec = {
   hint(slots, options) {
     if (slots.faces.length === 0) return 'Click the faces to draft';
     if (options?.neutral === 'point' && !clickedFace(slots)) {
-      return 'Click a face where the hinge goes';
+      return 'Click where the hinge goes';
     }
     const count = slots.faces.length;
-    return `${count} ${count === 1 ? 'face' : 'faces'} · tap the angle to type · ${FINISH}`;
+    return `${count} ${count === 1 ? 'face' : 'faces'} · tap the angle to type`;
   },
   ready: (slots, options) =>
     slots.faces.length > 0 &&
@@ -3564,8 +3543,8 @@ const PLANE_MODE_OPTION: OptionSpec = {
   id: 'planeMode',
   label: 'Plane',
   choices: [
-    { value: 'picked', label: 'A picked plane' },
-    { value: 'typed', label: 'Typed (origin and normal)' }
+    { value: 'picked', label: 'Picked' },
+    { value: 'typed', label: 'Typed' }
   ],
   initial: 'picked'
 };
@@ -3638,11 +3617,9 @@ function planeHint(
 ): string | null {
   if (slots.bodies.length === 0) return `Click the body to ${what}`;
   if (options?.planeMode === 'typed') {
-    return `Slide the plane, or type its origin and normal on their chips · ${FINISH}`;
+    return 'Slide the plane, or tap its chips to type';
   }
-  if (!slots.plane) {
-    return 'Pick the plane: a ghost plane, a datum plane or a flat face';
-  }
+  if (!slots.plane) return 'Pick a plane or flat face';
   return null;
 }
 
@@ -3658,7 +3635,7 @@ const mirror: InPlaceToolSpec = {
   options: [PLANE_MODE_OPTION],
   hint: (slots, options) =>
     planeHint(slots, 'mirror', options) ??
-    `Slide the plane, or pick another · ${FINISH}`,
+    'Slide the plane, or pick another',
   ready: (slots, options) =>
     slots.bodies.length > 0 &&
     (slots.plane !== null || options?.planeMode === 'typed'),
@@ -3705,7 +3682,7 @@ const split: InPlaceToolSpec = {
   ],
   hint: (slots, options) =>
     planeHint(slots, 'split', options) ??
-    `Slide the plane, or pick another · ${FINISH}`,
+    'Slide the plane, or pick another',
   ready: (slots, options) =>
     slots.bodies.length > 0 &&
     (slots.plane !== null || options?.planeMode === 'typed'),
@@ -3767,7 +3744,7 @@ const scale: InPlaceToolSpec = {
       choices: [
         { value: 'centre', label: 'Body centre' },
         { value: 'origin', label: 'Origin' },
-        { value: 'typed', label: 'A point (X, Y, Z)' }
+        { value: 'typed', label: 'Point' }
       ],
       // About the body's own centre, not the world origin, so it grows in
       // place rather than drifting away.
@@ -3779,8 +3756,8 @@ const scale: InPlaceToolSpec = {
     slots.bodies.length === 0
       ? 'Click the body to scale'
       : options?.pivot === 'typed'
-        ? `Type the point it scales about on its chips · drag the corner handle · ${FINISH}`
-        : `Drag the corner handle, or tap × to type · ${FINISH}`,
+        ? 'Tap the pivot chips · drag the corner'
+        : 'Drag the corner, or tap × to type',
   ready: (slots) => slots.bodies.length > 0,
   request(slots, values, options) {
     const body = slots.bodies[0];
@@ -3887,9 +3864,8 @@ const axisRotate: InPlaceToolSpec = {
   options: [COPY_OPTION],
   hint(slots) {
     if (slots.bodies.length === 0) return 'Click the body to rotate';
-    if (!slots.axis)
-      return 'Pick the axis to turn about: an edge, a cylinder, X, Y, Z or a datum axis';
-    return `Drag the angle, or type a value · ${FINISH}`;
+    if (!slots.axis) return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
+    return 'Drag the angle, or tap it to type';
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
   request(slots, values, options) {
@@ -3969,7 +3945,7 @@ function booleanSpec(
           ? 'Click the bodies to cut away'
           : 'Click the next body';
       }
-      return `${slots.bodies.length} bodies · click more, or ${FINISH}`;
+      return `${slots.bodies.length} bodies · pick more`;
     },
     ready: (slots) => slots.bodies.length >= 2,
     request(slots, _values, options) {
@@ -4071,14 +4047,14 @@ const linearPattern: InPlaceToolSpec = {
       ...AXIS_OPTION('x'),
       choices: [
         ...AXIS_OPTION('x').choices,
-        { value: 'custom', label: 'Custom vector' }
+        { value: 'custom', label: 'Custom' }
       ]
     }
   ],
   hint: (slots) =>
     slots.bodies.length === 0
       ? 'Click the body to repeat'
-      : `Drag the spacing, tap the count · an edge, a flat face or an axis sets the direction · ${FINISH}`,
+      : 'Drag the spacing · pick an edge or face to aim it',
   ready: (slots) => slots.bodies.length > 0,
   request(slots, values, options, ctx) {
     const body = slots.bodies[0];
@@ -4191,13 +4167,13 @@ const circularPattern: InPlaceToolSpec = {
       choices: [
         {
           value: 'equal',
-          label: 'Equal spacing',
-          note: 'The copies share the total angle.'
+          label: 'Equal',
+          note: 'Copies share the total angle'
         },
         {
           value: 'step',
           label: 'Fixed step',
-          note: 'Each copy turns the step from the one before; a new count keeps it.'
+          note: 'Each copy turns one step'
         }
       ],
       initial: 'equal'
@@ -4206,10 +4182,10 @@ const circularPattern: InPlaceToolSpec = {
   hint(slots, options) {
     if (slots.bodies.length === 0) return 'Click the body to repeat';
     if (!slots.axis)
-      return 'Pick the axis to repeat about: an edge, a cylinder, X, Y, Z or a datum axis';
+      return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
     return options?.spacing === 'step'
-      ? `Drag the step, tap the count · ${FINISH}`
-      : `Drag the total angle, tap the count · ${FINISH}`;
+      ? 'Drag the step · tap the count'
+      : 'Drag the angle · tap the count';
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
   request(slots, values, options) {
@@ -4318,7 +4294,7 @@ const gridPattern: InPlaceToolSpec = {
   hint: (slots) =>
     slots.bodies.length === 0
       ? 'Click the body to repeat'
-      : `Drag both spacings, tap the counts · ${FINISH}`,
+      : 'Drag the spacings · tap the counts',
   // An edited grid whose second spacing or count is absent took the first's:
   // until the user sets it, it still follows the first.
   defaults(_slots, ctx, numbers) {
@@ -4417,7 +4393,7 @@ function edgeReferences(
 function edgeHint(slots: InPlaceSlots, what: string, drag: string): string {
   const count = slots.edges.length;
   if (count === 0) return `Click the edges to ${what}`;
-  return `${count} ${count === 1 ? 'edge' : 'edges'} · click more, drag the ${drag} · ${FINISH}`;
+  return `${count} ${count === 1 ? 'edge' : 'edges'} · drag the ${drag}`;
 }
 
 /**
@@ -4452,8 +4428,7 @@ function edgeEndChip(valueId: string, slots: InPlaceSlots): HandleSpec[] {
   ];
 }
 
-const VARIABLE_RADIUS_NOTE =
-  "Variable radius runs the kernel's experimental blend and is offered only for these two laws. The radius runs from Radius at each edge's start to End radius at its far end.";
+const VARIABLE_RADIUS_NOTE = 'Experimental · R at the start, End R at the end';
 
 const fillet: InPlaceToolSpec = {
   id: 'fillet',
@@ -4490,7 +4465,7 @@ const fillet: InPlaceToolSpec = {
         { value: 'linear', label: 'Linear', note: VARIABLE_RADIUS_NOTE },
         {
           value: 'scurve',
-          label: 'Eased at both ends',
+          label: 'Eased',
           note: VARIABLE_RADIUS_NOTE
         }
       ],
@@ -4576,7 +4551,7 @@ const chamfer: InPlaceToolSpec = {
         {
           value: 'two',
           label: 'Two distances',
-          note: 'Distance and Second distance land on the two faces the edge separates. The preview shows which is which; swap them if it is the wrong way round.'
+          note: 'Swap them if they land on the wrong faces'
         }
       ],
       initial: 'equal'
@@ -4689,8 +4664,8 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
     ],
     hint(slots) {
       return slots.placement
-        ? `Drag the arrows, or tap a size to type · ${FINISH}`
-        : `Drag a footprint on the ground or a face · ${FINISH}`;
+        ? 'Drag the arrows, or tap a size to type'
+        : 'Drag a footprint on the ground or a face';
     },
     // It stands on the ground at the origin until a drag places it, so
     // Enter alone makes the card's default primitive.

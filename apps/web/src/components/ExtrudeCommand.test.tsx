@@ -211,7 +211,7 @@ describe('in-place Extrude bar', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Extent' })).toBeNull();
     await user.click(choice('Operation', 'Cut'));
     await user.click(choice('Extent', 'Through all'));
-    await user.click(choice('Direction', 'Both sides'));
+    await user.click(choice('Direction', 'Both'));
     expect(screen.queryByRole('button', { name: 'Draft angle' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect(onSubmit).toHaveBeenCalledWith(
@@ -359,7 +359,7 @@ describe('in-place Extrude bar', () => {
     expect(
       within(screen.getByRole('radiogroup', { name: 'Operation' })).queryByRole(
         'radio',
-        { name: 'Automatic' }
+        { name: 'Auto' }
       )
     ).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Done' }));

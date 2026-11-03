@@ -41,7 +41,6 @@ export interface ImagePlacement {
   point?: Vector3;
 }
 
-const FINISH = 'Enter to finish · Esc cancels';
 
 /**
  * The opacities Options offers: 100% down to 10% in tens, then the least
@@ -299,9 +298,9 @@ export const referenceImage: InPlaceToolSpec = {
       id: 'clicks',
       label: 'Clicks',
       choices: [
-        { value: 'place', label: 'Move it' },
-        { value: 'plane', label: 'Pick a plane' },
-        { value: 'scale', label: 'Scale from 2 points' }
+        { value: 'place', label: 'Move' },
+        { value: 'plane', label: 'Plane' },
+        { value: 'scale', label: 'Scale' }
       ],
       initial: 'place'
     },
@@ -343,16 +342,16 @@ export const referenceImage: InPlaceToolSpec = {
     const image = slots.image;
     const name = image?.record.name ?? 'the picture';
     if (!image?.plane || options?.clicks === 'plane')
-      return `Pick a plane or a flat face for ${name}`;
+      return `Pick a plane or flat face for ${name}`;
     if (!ctx?.imagePlaneBasis?.(image.plane))
-      return `Its plane no longer resolves · pick another plane for ${name}`;
+      return `Its plane is gone · pick another for ${name}`;
     if (options?.clicks === 'scale') {
       const picked = image.calibration.length;
-      if (picked === 0) return 'Click the first of two points on the picture';
-      if (picked === 1) return 'Click the second point on the picture';
-      return `Tap the distance to type how far apart they really are · ${FINISH}`;
+      if (picked === 0) return 'Click the first of two points';
+      if (picked === 1) return 'Click the second point';
+      return 'Tap the distance to type its real length';
     }
-    return `Click to move it · drag the corner to scale, the ring to turn · ${FINISH}`;
+    return 'Click to move · drag the corner to scale, the ring to turn';
   },
   // Its plane must resolve: a picture on a broken datum would be added
   // where nothing draws it.

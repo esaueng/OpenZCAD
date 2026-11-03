@@ -85,6 +85,6 @@ test('discloses a faceted round sweep in Diagnostics and explains Smooth', async
     'aria-checked',
     'true'
   );
-  await expect(bar).toContainText('It does not make exact curved surfaces');
+  await expect(bar).toContainText('not exact surfaces');
   expect(errors).toEqual([]);
 });

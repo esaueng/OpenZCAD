@@ -34,7 +34,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('40');
   await overlay
-    .getByRole('checkbox', { name: 'Copy (keep the original)' })
+    .getByRole('checkbox', { name: 'Keep original' })
     .check();
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
   await expect(page.getByText('3D viewer could not be rendered.')).toHaveCount(
@@ -78,7 +78,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await page.keyboard.press('m');
   await openMoveOptions(overlay);
   await overlay
-    .getByRole('checkbox', { name: 'Copy (keep the original)' })
+    .getByRole('checkbox', { name: 'Keep original' })
     .check();
   await overlay.getByRole('button', { name: 'Done' }).click();
   await expectBodyCount(page, 3);
@@ -125,7 +125,7 @@ test('a coincident copy asks before a tool, history, measure or selection transi
   const overlay = page.getByRole('form', { name: 'Move controls' });
   await expect(overlay).toBeVisible();
   const copy = overlay.getByRole('checkbox', {
-    name: 'Copy (keep the original)'
+    name: 'Keep original'
   });
   await openMoveOptions(overlay);
   await copy.check();
@@ -206,7 +206,7 @@ test('keeps the applied copy visible until the exact worker publishes it', async
   await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('40');
   await overlay
-    .getByRole('checkbox', { name: 'Copy (keep the original)' })
+    .getByRole('checkbox', { name: 'Keep original' })
     .check();
   await expect(canvas).toHaveAttribute('data-e2e-move-copy-preview', 'true');
   await page.evaluate(() => {

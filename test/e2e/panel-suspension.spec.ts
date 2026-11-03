@@ -240,7 +240,7 @@ test('Objects can be requested for body reference picking and stay released thro
   await modelPanel(page, 'Objects')
     .locator('.body-row:not(.consumed) .body-row-main', { hasText: 'Block' })
     .click();
-  await expect(bar).toContainText('sets the direction');
+  await expect(bar).toContainText('aim it');
   await enterCommandValue(page, 'count', '2');
   await expect(modelPanel(page, 'Objects')).toBeVisible();
   await expect(bar).toBeVisible();

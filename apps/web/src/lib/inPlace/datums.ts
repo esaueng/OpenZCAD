@@ -45,7 +45,6 @@ export type RefPick =
 
 export type RefKind = RefPick['kind'];
 
-const FINISH = 'Enter to finish · Esc cancels';
 
 function ofKind<K extends RefKind>(
   refs: readonly RefPick[],
@@ -245,18 +244,18 @@ export const datumPlane: InPlaceToolSpec = {
     const points = ofKind(slots.refs, 'point').length;
     if (!shape) {
       if (points > 0)
-        return `Point ${points} of 3 · click an edge near its end for the next`;
-      return 'Pick a plane or flat face, or three edge ends';
+        return `Point ${points} of 3 · click near an edge end`;
+      return 'Pick a plane, flat face or three edge ends';
     }
     switch (shape.mode) {
       case 'offset':
-        return `Drag the offset · a second plane makes a midplane, an edge end a parallel plane · ${FINISH}`;
+        return 'Drag the offset · pick a second plane for a midplane';
       case 'midplane':
-        return `Midway between the two planes · ${FINISH}`;
+        return 'Midway between the two planes';
       case 'parallel-point':
-        return `Parallel, through the picked point · ${FINISH}`;
+        return 'Parallel, through the point';
       case 'three-point':
-        return `Through the three points · ${FINISH}`;
+        return 'Through the three points';
     }
   },
   ready: (slots) => datumPlaneShape(slots.refs) !== null,
@@ -337,19 +336,19 @@ export const datumAxis: InPlaceToolSpec = {
     const [first] = slots.refs;
     if (!shape) {
       if (first?.kind === 'point')
-        return 'Pick the second point: click an edge near its end';
+        return 'Click near an edge end for the second point';
       if (first?.kind === 'plane') return 'Pick the second plane';
-      return 'Pick a straight edge, a cylinder, two edge ends or two planes';
+      return 'Pick an edge, cylinder, two points or two planes';
     }
     switch (shape.mode) {
       case 'edge':
-        return `Along the edge · ${FINISH}`;
+        return 'Along the edge';
       case 'cylinder':
-        return `Along the face's axis · ${FINISH}`;
+        return "Along the face's axis";
       case 'two-point':
-        return `Through the two points · ${FINISH}`;
+        return 'Through the two points';
       case 'plane-intersection':
-        return `Where the two planes meet · ${FINISH}`;
+        return 'Where the two planes meet';
     }
   },
   ready: (slots) => datumAxisShape(slots.refs) !== null,

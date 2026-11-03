@@ -185,7 +185,7 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   await page.getByRole('button', { name: /^Split — / }).click();
   await pickObjectsBody(page, 'Box 1');
   const splitBar = page.getByRole('group', { name: 'Split command' });
-  await expect(splitBar).toContainText('Pick the plane');
+  await expect(splitBar).toContainText('Pick a plane or flat face');
   await pickDatumRow(page, 'Plane 1');
   await finishInPlaceCommand(page, 'Split');
   await expect(

@@ -110,8 +110,8 @@ interface ExtrudeCommandProps {
 const OPERATIONS: InPlaceOption['choices'] = [
   {
     value: 'automatic',
-    label: 'Automatic',
-    note: 'Adds, cuts or starts a body from where the extrusion meets the model.'
+    label: 'Auto',
+    note: 'Adds, cuts or starts a body as it meets the model'
   },
   { value: 'new-body', label: 'New body' },
   { value: 'add', label: 'Add' },
@@ -120,9 +120,9 @@ const OPERATIONS: InPlaceOption['choices'] = [
 ];
 
 const THROUGH_ALL_SIDES: InPlaceOption['choices'] = [
-  { value: 'forward', label: 'Along the sketch normal' },
-  { value: 'backward', label: 'Against the sketch normal' },
-  { value: 'both', label: 'Both sides' }
+  { value: 'forward', label: 'Forward' },
+  { value: 'backward', label: 'Reverse' },
+  { value: 'both', label: 'Both' }
 ];
 
 const VALUE_LABELS: Record<ExtrudeValueId, string> = {
@@ -130,8 +130,6 @@ const VALUE_LABELS: Record<ExtrudeValueId, string> = {
   backDistance: 'Back distance',
   draftAngle: 'Draft angle'
 };
-
-const FINISH = 'Enter to finish · Esc cancels';
 
 /**
  * The values an extrude in this extent offers to type: Distance only for a
@@ -351,14 +349,14 @@ export function ExtrudeCommand({
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
   const regions = profileCount > 1 ? ` · ${profileCount} profiles` : '';
   const guidance = toFacePicking?.armed
-    ? 'Click a planar face parallel to the sketch · Esc cancels'
+    ? 'Click a flat face parallel to the sketch'
     : toFace
       ? toFaceInfo
-        ? `Up to ${toFaceInfo.label}${regions} · ${FINISH}`
-        : 'Pick the face to reach from Options'
+        ? `Up to ${toFaceInfo.label}${regions}`
+        : 'Pick the face to reach'
       : throughAll
-        ? `Through the whole target${regions} · ${FINISH}`
-        : `Drag the arrows, or tap a value to type${regions} · ${FINISH}`;
+        ? `Through all${regions}`
+        : `Drag the arrows, or tap a value${regions}`;
   const choice =
     draft.choice.operation === 'automatic'
       ? (resolvedChoice ?? draft.choice)
@@ -369,7 +367,7 @@ export function ExtrudeCommand({
       : null;
   const operation =
     choice.operation === 'automatic'
-      ? 'Automatic · checking operation'
+      ? 'Auto · checking'
       : choice.operation === 'new-body'
         ? 'New body'
         : `${OPERATIONS.find((item) => item.value === choice.operation)!.label}${target ? ` · ${target}` : ''}`;
@@ -411,7 +409,7 @@ export function ExtrudeCommand({
               {
                 value: 'to-face',
                 label: 'To face',
-                note: 'Reaches the face wherever it moves later; the face is found again by its identity on every rebuild.'
+                note: 'Follows the face if it moves'
               }
             ]
           : []),
@@ -420,7 +418,7 @@ export function ExtrudeCommand({
               {
                 value: 'through-all',
                 label: 'Through all',
-                note: 'Cuts through the whole target, however its size or position changes later.'
+                note: 'Cuts through the whole target'
               }
             ]
           : [])
@@ -445,7 +443,7 @@ export function ExtrudeCommand({
         {
           value: 'symmetric',
           label: 'Symmetric',
-          note: 'Half the distance to each side of the sketch plane.'
+          note: 'Half each side'
         }
       ]
     });
