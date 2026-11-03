@@ -5,6 +5,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent
@@ -634,6 +635,47 @@ export function StartScreen({
   useEffect(() => {
     if (!unitsEdited.current) setUnits(defaultUnits);
   }, [defaultUnits]);
+
+  // An upward-opening menu on the first row can extend behind the shelf's
+  // toolbar. Keep both card and list menus inside the visible scrolling body,
+  // including after a resize or scroll, before moving focus into an item.
+  useLayoutEffect(() => {
+    const screen = screenRef.current;
+    if (!screen || (!openMenu && !folderMenu)) return;
+    const menus = [...screen.querySelectorAll<HTMLElement>('.start-tile-menu')];
+    const place = () => {
+      for (const menu of menus) {
+        const body = menu.closest('.start-body') ?? screen;
+        const bounds = body.getBoundingClientRect();
+        const top = Math.max(8, bounds.top + 4);
+        const bottom = Math.min(window.innerHeight - 8, bounds.bottom - 4);
+        menu.style.maxHeight = `${Math.max(0, bottom - top)}px`;
+        // The drop animation owns `translate`; keep placement independent.
+        menu.style.transform = '';
+        const rect = menu.getBoundingClientRect();
+        const offset = Math.max(
+          top - rect.top,
+          Math.min(0, bottom - rect.bottom)
+        );
+        menu.style.transform = `translateY(${offset}px)`;
+      }
+    };
+    place();
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place);
+    for (const menu of menus) {
+      observer?.observe(menu);
+      const body = menu.closest('.start-body');
+      if (body) observer?.observe(body);
+    }
+    window.addEventListener('resize', place);
+    screen.addEventListener('scroll', place, { capture: true, passive: true });
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', place);
+      screen.removeEventListener('scroll', place, { capture: true });
+    };
+  }, [openMenu, folderMenu, layout]);
 
   // A tile menu is a transient overlay: any click that is not inside it, and
   // Escape from anywhere, dismisses it. It takes focus as it opens, so the

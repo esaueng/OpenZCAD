@@ -130,7 +130,9 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   ).toBeVisible();
 });
 
-test('suggests a fresh part name without focusing it', async ({ page }) => {
+test('suggests a part name without focusing it and retains its draft on reload', async ({
+  page
+}) => {
   await page.addInitScript(() => {
     const storageKey = '__openzcad_e2e_cute_name_seed';
     const seed = Number(window.sessionStorage.getItem(storageKey) ?? '0') + 1;
@@ -160,7 +162,7 @@ test('suggests a fresh part name without focusing it', async ({ page }) => {
   await page.reload();
   await expect(projectName).toBeVisible();
   await expect(projectName).not.toBeFocused();
-  await expect(projectName).not.toHaveValue(initialName);
+  await expect(projectName).toHaveValue(initialName);
 });
 
 test('keeps command names visible at the compact desktop breakpoint', async ({

@@ -34,13 +34,26 @@ for (const width of [1440, 390]) {
     // them: their centres share the stage's centre line, clear of the bar.
     const stageTop = topbarBounds!.y + topbarBounds!.height + ISLAND_GAP;
     const stageMiddle = stageTop + (900 - stageTop - ISLAND_GAP) / 2;
+    const rulerReserve = await page
+      .locator('.workspace')
+      .evaluate((element) =>
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue('--scale-rule-reserve')
+        )
+      );
+    const columnBandBottom = 900 - ISLAND_GAP * 2 - rulerReserve;
     // The rail's entry slides it in over 200ms; measure once it has landed.
+    // A taller rail lifts just enough to clear the bottom-left scale ruler.
     await expect
       .poll(async () => {
         const bounds = await column.boundingBox();
-        return bounds!.y + bounds!.height / 2;
+        const centre = Math.min(
+          stageMiddle,
+          columnBandBottom - bounds!.height / 2
+        );
+        return bounds!.y + bounds!.height / 2 - centre;
       })
-      .toBeCloseTo(stageMiddle, 0);
+      .toBeCloseTo(0, 0);
     const columnBounds = await column.boundingBox();
     expect(columnBounds!.y).toBeGreaterThanOrEqual(stageTop - 0.5);
     // The instrument rail rises into place too; within 2px once it has,

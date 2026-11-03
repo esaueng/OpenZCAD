@@ -12,7 +12,13 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
-import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  revealModelPanel,
+  stubApi,
+  test,
+  MODEL_ONLY
+} from './openzcad-fixtures';
 
 /**
  * S03: diagnostics lead from the actual GCS result to a stored constraint and
@@ -91,7 +97,7 @@ function fixture(kind: 'conflicting-distances' | 'refused-collapse') {
 }
 
 async function openFixture(page: Page, document: ProjectDocument) {
-  await stubApi(page);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.route('**/api/projects', (route) =>
     route.request().method() === 'POST'
@@ -133,6 +139,14 @@ async function enterSketch(page: Page, canvas: Locator, objectCount = 1) {
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
+  // The History panel opened to enter the sketch overlays its flyouts on a
+  // phone. Put it away before testing the sketch's own shared scroll path.
+  const history = page.getByRole('button', {
+    name: 'History panel',
+    exact: true
+  });
+  if ((await history.getAttribute('aria-pressed')) === 'true')
+    await history.click();
   await expect
     .poll(async () => (await sketchObjects(canvas)).length)
     .toBe(objectCount);
@@ -141,16 +155,20 @@ async function enterSketch(page: Page, canvas: Locator, objectCount = 1) {
 async function expectReachable(control: Locator) {
   await control.scrollIntoViewIfNeeded();
   await expect(control).toBeInViewport({ ratio: 1 });
-  expect(
-    await control.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const hit = document.elementFromPoint(
-        bounds.x + bounds.width / 2,
-        bounds.y + bounds.height / 2
-      );
-      return hit === element || element.contains(hit);
-    })
-  ).toBe(true);
+  await expect
+    .poll(() =>
+      control.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.x + bounds.width / 2,
+          bounds.y + bounds.height / 2
+        );
+        return hit === element || element.contains(hit)
+          ? null
+          : (hit?.outerHTML.slice(0, 240) ?? 'No element at the control');
+      })
+    )
+    .toBeNull();
 }
 
 test('inspects a real conflicting dimension and recovers with one undoable deletion across reopen', async ({

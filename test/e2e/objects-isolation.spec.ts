@@ -105,6 +105,9 @@ for (const viewport of [
     await expect(objects.getByRole('listitem')).toHaveCount(4);
     await objects.getByRole('button', { name: 'Hide body Spare' }).click();
     await objects.getByRole('button', { name: 'Plate', exact: true }).click();
+    // The shared fixture leaves More tools open. Close that picker before
+    // narrowing the window, where it intentionally overlays the model panels.
+    await page.getByRole('button', { name: /^More tools/ }).click();
     await page.setViewportSize(viewport);
     await page.mouse.move(0, 0);
     const isolate = objects.getByRole('button', { name: 'Isolate body Plate' });

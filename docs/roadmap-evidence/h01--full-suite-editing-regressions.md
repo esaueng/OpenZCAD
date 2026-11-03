@@ -22,3 +22,6 @@ millimetre, inch and enlarged fixtures verify strict solids, bounds and
 volume after serialization into a fresh kernel. Browser regressions cover
 invitation dismissal during document loading, last-valid exact drag previews,
 fillet rearming, font retry recovery and repeated unitless mesh imports.
+Library action menus stay inside the visible shelf body rather than hiding
+their first action behind its toolbar; desktop and phone browser coverage
+checks menu containment, opening properties and unchanged saved documents.
