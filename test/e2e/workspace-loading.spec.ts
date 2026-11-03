@@ -38,10 +38,12 @@ for (const width of [1440, 390]) {
       expect(Math.abs(card.x + card.width / 2 - width / 2)).toBeLessThan(2);
       expect(card.y).toBeGreaterThan(0);
       expect(card.y + card.height).toBeLessThan(844);
-      await expect(page.locator('.startup-progress')).toHaveCSS(
-        'animation-name',
-        'none'
-      );
+      const mark = page.locator('.startup-mark');
+      await expect(mark).toBeVisible();
+      const paths = await mark.locator(':scope > path').all();
+      expect(paths.length).toBeGreaterThan(0);
+      for (const path of paths)
+        await expect(path).toHaveCSS('animation-name', 'none');
       await context.setOffline(true);
       await expect(
         page.getByText(

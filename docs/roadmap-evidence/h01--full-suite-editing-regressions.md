@@ -25,3 +25,5 @@ fillet rearming, font retry recovery and repeated unitless mesh imports.
 Library action menus stay inside the visible shelf body rather than hiding
 their first action behind its toolbar; desktop and phone browser coverage
 checks menu containment, opening properties and unchanged saved documents.
+Validated commits register timing intent before publishing their geometry,
+retaining installation and frame evidence when a preflight result is reused.

@@ -2,7 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   createProject,
   seedDismissedWorkspaceTour,
-  stubApi
+  stubApi,
+  MODEL_ONLY
 } from './openzcad-fixtures';
 
 /*
@@ -152,7 +153,7 @@ for (const { width, compact, minLane, phoneBar } of [
     page
   }) => {
     await page.setViewportSize({ width, height: 900 });
-    await stubApi(page);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
     await seedDismissedWorkspaceTour(page);
     await createProject(page, 'Readout row');
     await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();

@@ -488,6 +488,7 @@ import {
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
+import { beginEditTrace } from './lib/editTrace';
 import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
 import {
   modalHoldsKeyboard,
@@ -8807,6 +8808,9 @@ export function App() {
     document: ProjectDocument,
     derived: ProjectDocument['derived']
   ): void {
+    // A validated result can install before the broadcast effect runs.
+    // Register its committed revision before publishing it to the viewport.
+    beginEditTrace(document);
     const complete =
       'analysis' in derived
         ? null

@@ -85,6 +85,9 @@ test('discloses a faceted round sweep in Diagnostics and explains Smooth', async
     'aria-checked',
     'true'
   );
-  await expect(bar).toContainText('not exact surfaces');
+  await expect(bar.getByRole('radio', { name: 'Smooth' })).toHaveAttribute(
+    'title',
+    'Finer sampling, not exact surfaces'
+  );
   expect(errors).toEqual([]);
 });
