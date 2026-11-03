@@ -1,4 +1,4 @@
-import { Check, MoreHorizontal, X } from 'lucide-react';
+import { Check, SlidersHorizontal, X } from 'lucide-react';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
@@ -255,14 +255,13 @@ export function MoveOverlay({
       <span className="in-place-command-title">{title}</span>
       <span className="in-place-command-hint" title={bodyName}>
         {copy ? 'A copy of ' : ''}
-        <span className="move-target-name">{bodyName}</span> · drag the gizmo,
-        or type exact values under Options
+        <span className="move-target-name">{bodyName}</span> · drag the gizmo
       </span>
       {/* The gizmo is the Move: its exact numbers, name, body and copy are
           rare enough to sit behind Options, as every in-place command's. */}
       <details className="in-place-command-options">
         <summary aria-label={`${title} options`}>
-          <MoreHorizontal size={14} aria-hidden="true" />
+          <SlidersHorizontal size={14} aria-hidden="true" />
         </summary>
         <div className="in-place-command-options-panel move-options">
           {name !== undefined && onName ? (
@@ -337,7 +336,7 @@ export function MoveOverlay({
                 checked={copy}
                 onChange={(event) => onCopy(event.target.checked)}
               />
-              <span>Copy (keep the original)</span>
+              <span>Keep original</span>
             </label>
           ) : null}
         </div>

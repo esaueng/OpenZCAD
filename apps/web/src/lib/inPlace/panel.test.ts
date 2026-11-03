@@ -63,8 +63,8 @@ describe('in-place Options panel', () => {
     const ids = rowIds(gearPanel({})).flat();
     expect(ids).toEqual([
       'gearType',
-      'teeth',
       'sizing',
+      'teeth',
       'module',
       'faceWidth',
       'boreDiameter',
@@ -143,17 +143,21 @@ describe('in-place Options panel', () => {
     }
   });
 
-  it('folds the tooth form away and drops empty groups', () => {
+  it('folds the tooth form away under More and drops empty groups', () => {
     const sections = gearPanel({});
     expect(sections.map((section) => section.label)).toEqual([
-      undefined,
+      'Gear',
       'Hub',
       'Helix',
-      'Tooth form'
+      'More'
     ]);
-    expect(sections.find((s) => s.label === 'Tooth form')?.collapsed).toBe(
-      true
-    );
+    expect(sections.find((s) => s.label === 'More')?.collapsed).toBe(true);
+    // Grouped as the Thread panel: tinted groups, More folded plain.
+    expect(sections.filter((s) => s.boxed).map((s) => s.label)).toEqual([
+      'Gear',
+      'Hub',
+      'Helix'
+    ]);
   });
 
   it('gives gear teeth kept to the face no sizing to choose', () => {
@@ -194,8 +198,11 @@ describe('in-place Options panel', () => {
       state,
       new Set(['width', 'depth', 'height'])
     );
-    expect(sections).toHaveLength(1);
-    expect(sections[0]!.rows).toEqual([
+    expect(sections.map((section) => section.label)).toEqual([
+      'Size',
+      'Position'
+    ]);
+    expect(sections.flatMap((section) => section.rows)).toEqual([
       { kind: 'value', id: 'width' },
       { kind: 'value', id: 'depth' },
       { kind: 'value', id: 'height' },
@@ -204,6 +211,48 @@ describe('in-place Options panel', () => {
         label: 'Corner',
         ids: ['x', 'y', 'z'],
         axes: ['X', 'Y', 'Z']
+      }
+    ]);
+  });
+
+  it('names a typed vector’s row, its fields keeping their axes', () => {
+    // Mirror's typed plane was six bare X/Y/Z rows: origin and normal now
+    // read as one row each.
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    const state = inPlacePanelState(spec, { planeMode: 'typed' }, {});
+    const rows = inPlacePanelSections(
+      spec,
+      state,
+      new Set(['planeOX', 'planeOY', 'planeOZ', 'planeNX', 'planeNY', 'planeNZ'])
+    ).flatMap((section) => section.rows);
+    expect(rows.filter((row) => row.kind === 'vector')).toEqual([
+      {
+        kind: 'vector',
+        label: 'Origin',
+        ids: ['planeOX', 'planeOY', 'planeOZ'],
+        axes: ['X', 'Y', 'Z']
+      },
+      {
+        kind: 'vector',
+        label: 'Normal',
+        ids: ['planeNX', 'planeNY', 'planeNZ'],
+        axes: ['X', 'Y', 'Z']
+      }
+    ]);
+  });
+
+  it('groups a tool without a layout as one tinted, compact group', () => {
+    const spec = IN_PLACE_TOOL_SPECS.shell;
+    const sections = inPlacePanelSections(
+      spec,
+      inPlacePanelState(spec, {}, {}),
+      new Set(['thickness'])
+    );
+    expect(sections).toEqual([
+      {
+        boxed: true,
+        compact: true,
+        rows: [{ kind: 'value', id: 'thickness' }]
       }
     ]);
   });

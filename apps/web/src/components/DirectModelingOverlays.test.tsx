@@ -255,7 +255,7 @@ describe('Move overlay', () => {
       'Rotate X in degrees',
       'Rotate Y in degrees',
       'Rotate Z in degrees',
-      'Copy (keep the original)'
+      'Keep original'
     ]) {
       expect(options.contains(screen.getByLabelText(label))).toBe(true);
     }

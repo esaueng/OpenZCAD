@@ -225,11 +225,9 @@ export function revolveRigPlacement(
 
 /** The one-line hint for the next thing the command needs. */
 export function revolveHint(slots: RevolveSlots): string {
-  if (!slots.sketchId) return 'Pick a sketch profile to revolve';
-  if (!slots.axis) {
-    return 'Pick the axis to turn around';
-  }
-  return 'Drag the angle, or type a value · Enter to finish · Esc cancels';
+  if (!slots.sketchId) return 'Pick a profile';
+  if (!slots.axis) return 'Pick an axis';
+  return 'Drag the angle, or tap it to type';
 }
 
 /** The smallest sweep kept; the kernel accepts every angle in `(0, 360]`. */

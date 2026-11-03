@@ -99,7 +99,7 @@ describe('placing a picture', () => {
     const image = { ...UNPLACED, plane: DATUM };
     expect(spec.ready({ ...SLOTS, image }, {}, unresolved)).toBe(false);
     expect(spec.hint({ ...SLOTS, image }, {}, unresolved)).toMatch(
-      /no longer resolves/
+      /plane is gone/
     );
     expect(spec.ready({ ...SLOTS, image }, {}, CTX)).toBe(true);
   });

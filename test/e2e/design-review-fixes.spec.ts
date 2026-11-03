@@ -72,7 +72,7 @@ async function preciseHole(page: Page) {
   await keypad.locator('input').press('Enter');
   await expect(bar).toBeVisible();
   await bar.getByLabel('Hole options').click();
-  await bar.getByRole('radio', { name: 'Typed (U, V)', exact: true }).click();
+  await bar.getByRole('radio', { name: 'Typed', exact: true }).click();
   await bar.getByLabel('Hole options').click();
   await enterCommandValue(page, 'positionU', '0');
   await enterCommandValue(page, 'positionV', '0');

@@ -184,7 +184,7 @@ test('cuts two native profiles with explicit intent and retains it through undo 
         includeHidden: true
       })
       .getByRole('radio', {
-        name: 'Automatic',
+        name: 'Auto',
         exact: true,
         includeHidden: true
       })

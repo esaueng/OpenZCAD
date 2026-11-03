@@ -4036,7 +4036,10 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .in-place-command-done:disabled {
-  opacity: 0.45;
+  /* Neutral until it can run: a faded accent read as pressable. */
+  color: var(--color-text-muted);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
   cursor: default;
 }
 
@@ -4359,6 +4362,55 @@ button.model-panel-grip[aria-expanded='true'] {
   box-shadow: 0 0 0 1px var(--color-accent);
 }
 
+/* A number typed on the keypad (an Extrude's) sits as the typed ones do:
+   one box, named inside it, two to a row. */
+.in-place-params-grid.is-compact > .in-place-param-row.is-keypad {
+  display: flex;
+  grid-column: auto;
+  gap: 6px;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 0 6px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-params-section.is-boxed
+  .in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad {
+  background: var(--color-surface);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad
+  > .in-place-option-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad
+  > .in-place-option-value {
+  flex: 1 0 40px;
+  min-height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  text-align: right;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
 .in-place-params-grid.is-compact
   > .in-place-param-value:not(.is-vector):has(.is-refused) {
   border-color: var(--color-error);
@@ -4392,7 +4444,9 @@ button.model-panel-grip[aria-expanded='true'] {
 /* Choices sit joined, as one control, and share the row's width. */
 .in-place-param-segments {
   display: flex;
-  flex-wrap: wrap;
+  /* One line only: a row too long for it becomes a menu (OptionRow). */
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 2px;
   padding: 2px;
   background: var(--color-surface-hover);
