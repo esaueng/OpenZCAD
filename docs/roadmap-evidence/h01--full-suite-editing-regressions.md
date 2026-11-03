@@ -48,3 +48,6 @@ fillet coverage preserves both input picks across all three cases.
 Project-shelf navigation follows the stable Back to projects action while
 the responsive header hides its optional Beta badge; save-failure and local
 reopening assertions retain their original storage and request checks.
+Legacy demo fixtures release their live workspace save owner before rewriting
+IndexedDB. They prove the old record exists and await the parameter, repaired
+placement and repair revision together in one committed snapshot.
