@@ -88,16 +88,67 @@ describe('local chamfered end offsets on stepped imported bodies', () => {
         expect(arena.faces.filter((face) => face.surface.Nurbs)).toHaveLength(
           1
         );
-        // The former whole-cylinder specialization declines this fixture and
-        // the ordinary kernel move reproduces the original cone refusal.
+        // The whole-cylinder specialization declines this fixture. Native
+        // cone-cap moves now support shortening this end along the fixed
+        // cone; longer sweeps through the unrelated freeform shoulder still
+        // refuse. The local construction below instead carries the chamfer.
         expect(
           tryExactChamferedCylinderCapOffset(kernel, solid!, selected, offset)
         ).toBeNull();
-        // An outward move reaches the cone guard; shortening can hit the
-        // general swept-face topology guard before cone classification.
-        expect(() =>
-          kernel.moveFaces(solid!, Uint32Array.of(selected), offset)
-        ).toThrow(offset > 0 ? /cone/ : /offset:/);
+        if (offset < 0) {
+          const native = kernel.moveFaces(
+            solid!,
+            Uint32Array.of(selected),
+            offset
+          );
+          expect(kernel.validateSolid(native)).toBe(0);
+          expect(kernel.getSolidFaces(native).length).toBe(9);
+          const fixedCones = (shape: number) =>
+            [...kernel.getSolidFaces(shape)]
+              .filter((face) => kernel.getSurfaceType(face) === 'cone')
+              .map(
+                (face) =>
+                  JSON.parse(kernel.getAnalyticSurfaceParams(face)) as unknown
+              );
+          expect(fixedCones(native)).toEqual(fixedCones(solid!));
+          const normal = [...kernel.getFaceNormal(selected)];
+          const beforeFrame = JSON.parse(
+            kernel.getAnalyticSurfaceParams(selected)
+          ) as { normal: number[]; d: number };
+          const alignment = normal.reduce(
+            (sum, value, i) => sum + value * beforeFrame.normal[i]!,
+            0
+          );
+          const movedPlanes = [...kernel.getSolidFaces(native)]
+            .filter((face) => kernel.getSurfaceType(face) === 'plane')
+            .map(
+              (face) =>
+                JSON.parse(kernel.getAnalyticSurfaceParams(face)) as {
+                  normal: number[];
+                  d: number;
+                }
+            );
+          expect(
+            movedPlanes.some(
+              (plane) =>
+                plane.normal.every(
+                  (value, i) => Math.abs(value - beforeFrame.normal[i]!) < 1e-7
+                ) &&
+                Math.abs(plane.d - beforeFrame.d - offset * alignment) < 1e-7
+            )
+          ).toBe(true);
+          const quality: unknown = kernel.meshQuality(native, 0.01);
+          if (typeof quality !== 'string') {
+            throw new Error('Mesh quality did not return its JSON payload.');
+          }
+          const report: unknown = JSON.parse(quality);
+          expect(report).toMatchObject({ isWatertight: true });
+          expect(kernel.serializeSolid(solid!)).toEqual(before);
+        } else {
+          expect(() =>
+            kernel.moveFaces(solid!, Uint32Array.of(selected), offset)
+          ).toThrow(/offset:/);
+        }
         const result = tryExactLocalChamferCapOffset(
           kernel,
           solid!,
@@ -301,10 +352,13 @@ describe('local chamfered end offsets on stepped imported bodies', () => {
       expect(() =>
         tryExactLocalChamferCapOffset(kernel, solid, face, -100)
       ).toThrow(/no cylindrical wall/);
+      expect(() =>
+        tryExactLocalChamferCapOffset(kernel, solid, face, -43)
+      ).toThrow(/no cylindrical wall/);
       // A positive wall length alone cannot prove clearance to a rounded
       // shoulder. A move beyond its conservative support bound declines.
       expect(
-        tryExactLocalChamferCapOffset(kernel, solid, face, -43)
+        tryExactLocalChamferCapOffset(kernel, solid, face, -42)
       ).toBeNull();
       const wall = [...kernel.getSolidFaces(solid)].find(
         (f) => kernel.getSurfaceType(f) === 'cylinder'

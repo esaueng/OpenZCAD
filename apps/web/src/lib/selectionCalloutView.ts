@@ -273,13 +273,14 @@ export interface ScreenRect {
 /**
  * Every model panel drawn over the viewport: both docks' columns, the
  * floating windows, the unpinned panel beside the rail and the phone lane's
- * panel. Only what is drawn matches — a panel hidden by Hide all or
+ * panel, plus the Section view controls beside the rail. Only what is drawn
+ * matches — a panel hidden by Hide all or
  * suspended by a sketch or a drag is not rendered — so a closed panel
  * leaves no stale obstacle. A transient panel may cover the model, but
  * nothing interactive or fitted is placed under it.
  */
 export const MODEL_PANEL_OBSTACLES =
-  '.panel-column, .panel-float, .panel-unpinned, .panel-lane-float';
+  '.panel-column, .panel-float, .panel-unpinned, .panel-lane-float, .rail-section-panel';
 
 /** The model panels that stand in the right lane, beside the inspector. */
 export const RIGHT_LANE_MODEL_PANELS =

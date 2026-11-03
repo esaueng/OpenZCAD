@@ -98,6 +98,22 @@ describe('plainRefusal', () => {
         // The demo bracket's plate top pushed past the boss above it.
         'offset: move-face would change topology at face Some(Id(338)), edge None: swept face reaches nonadjacent face 340 before completing the move',
         'The face would run into another part of the body before it got that far.'
+      ],
+      [
+        'offset: move-face would change topology: conical cap reaches or crosses its support apex',
+        'The conical end would collapse at that distance. Try a smaller offset.'
+      ],
+      [
+        'resize blend: radial resize intersects nonincident meridian boundaries 2 and 7',
+        'That diameter would make parts of the body overlap.'
+      ],
+      [
+        'resize blend: radial resize reverses a meridian segment',
+        'That diameter would collapse a wall or blend. Try a smaller change.'
+      ],
+      [
+        'resize blend: radial resize collapses a torus ring',
+        'That diameter would collapse a wall or blend. Try a smaller change.'
       ]
     ];
     for (const [raw, sentence] of cases) {
