@@ -2,7 +2,7 @@
 row: K08
 ---
 
-Paired Remus 2026.1.110 enables an exact isolated chamfer through earlier
+Paired Remus 2026.1.111 enables an exact isolated chamfer through earlier
 convex cylindrical endpoint rounds, with orthogonal whole-body planar supports
 and fail-closed neighborhood checks (Remus PR #1517). The 2.1 mm regression
 checks independent section volume, undo/redo, cold replay, and STEP export;
