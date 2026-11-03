@@ -58,6 +58,7 @@
     "test/boolean-refusal-reporting.test.ts",
     "test/boolean-result-validation.test.ts",
     "test/bundle-size-policy.test.ts",
+    "test/chamfer-fillet-corner.test.ts",
     "test/cloudflare-adapters.test.ts",
     "test/collaboration-checkpoint.test.ts",
     "test/command-system.test.ts",
