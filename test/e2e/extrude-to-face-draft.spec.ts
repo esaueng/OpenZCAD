@@ -188,7 +188,7 @@ for (const action of ['Cancel']) {
     // To face arms the face pick at once.
     await chooseBarOption(edit, 'Extent', 'To face');
     await expect(edit).toContainText(
-      'Click a planar face parallel to the sketch'
+      'Click a flat face parallel to the sketch'
     );
     await page.getByRole('button', { name: action, exact: true }).click();
     await expect(edit).toHaveCount(0);
@@ -240,7 +240,7 @@ test('creates a drafted extrude up to a face picked in the viewport', async ({
   await chooseInPlaceOption(page, 'Extrude', 'Operation', 'New body');
   // To face arms its face pick at once; Done waits for the face.
   await chooseInPlaceOption(page, 'Extrude', 'Extent', 'To face');
-  await expect(bar).toContainText('Click a planar face parallel to the sketch');
+  await expect(bar).toContainText('Click a flat face parallel to the sketch');
   await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
   await page.mouse.click(point.x, point.y);
   await expect(bar).toContainText('Up to Ceiling Body · face');

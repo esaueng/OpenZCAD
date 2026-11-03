@@ -60,7 +60,7 @@ export interface InPlaceOptionValue {
 
 /**
  * A choice row this long or longer is a menu rather than buttons (a gear's
- * six types); an Extrude's five operations stay one press each.
+ * types); a shorter row that does not fit on one line becomes one too.
  */
 const MENU_CHOICES = 6;
 /** Pixels of scrub per step. */
@@ -274,6 +274,8 @@ export function InPlaceCommandBar({
             {(
               sections ?? [
                 {
+                  boxed: true,
+                  compact: true,
                   rows: [
                     ...options.map((option) => ({
                       kind: 'option' as const,
@@ -454,7 +456,39 @@ function OptionRow({
   const note = option.choices.find(
     (choice) => choice.value === option.value
   )?.note;
-  const menu = option.choices.length >= MENU_CHOICES;
+  // Buttons that would wrap onto a second line read as two rows of
+  // choices: measured once laid out (the panel opens closed), the row turns
+  // into a menu and stays one.
+  const segments = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const element = segments.current;
+    if (!element || overflows) return;
+    // A closed Options panel is still laid out by Chrome, narrower than it
+    // opens: only the open panel's width counts.
+    const details = element.closest('details');
+    const measure = () => {
+      if (details && !details.open) return;
+      if (
+        element.clientWidth > 0 &&
+        element.scrollWidth > element.clientWidth + 1
+      ) {
+        setOverflows(true);
+      }
+    };
+    measure();
+    details?.addEventListener('toggle', measure);
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => {
+      details?.removeEventListener('toggle', measure);
+      observer?.disconnect();
+    };
+  }, [overflows]);
+  const menu = overflows || option.choices.length >= MENU_CHOICES;
   return (
     <div className="in-place-option in-place-param-row">
       <span className="in-place-option-label" id={labelId}>
@@ -476,6 +510,7 @@ function OptionRow({
         </select>
       ) : (
         <div
+          ref={segments}
           className="in-place-param-segments"
           role="radiogroup"
           aria-label={option.label}
@@ -513,7 +548,7 @@ function KeypadValueRow({
     ((valueId: string, at: { x: number; y: number }) => void) | undefined;
 }) {
   return (
-    <div className="in-place-option in-place-param-row">
+    <div className="in-place-option in-place-param-row is-keypad">
       <span className="in-place-option-label" aria-hidden="true">
         {value.label}
       </span>

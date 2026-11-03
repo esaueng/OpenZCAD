@@ -169,7 +169,7 @@ test('Revolve runs in place: region, axis line, angle drag, keypad, Done', async
   // Revolve opens no card: its bar takes the guidance row.
   await page.keyboard.press('r');
   const bar = page.getByRole('group', { name: 'Revolve command' });
-  await expect(bar).toContainText('Pick a sketch profile');
+  await expect(bar).toContainText('Pick a profile');
   await expect(page.locator('form.feature-form')).toHaveCount(0);
   await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
 
@@ -178,7 +178,7 @@ test('Revolve runs in place: region, axis line, angle drag, keypad, Done', async
       await pickProfile(canvas, 0);
       return bar.textContent();
     })
-    .toContain('Pick the axis');
+    .toContain('Pick an axis');
 
   // The sketch's vertical axis is world Z on Front. Click it above the
   // profile: below it, the line can run under the command bar.
@@ -274,7 +274,7 @@ test('Escape leaves an in-place Revolve with nothing added', async ({
       await pickProfile(canvas, 0);
       return bar.textContent();
     })
-    .toContain('Pick the axis');
+    .toContain('Pick an axis');
   const onAxis = await projected(canvas, [0, 0, 16]);
   await page.mouse.click(onAxis.x, onAxis.y);
   await expect(bar).toContainText('Drag the angle');
