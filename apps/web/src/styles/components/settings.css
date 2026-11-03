@@ -1420,3 +1420,248 @@
     --settings-back-w: 40px;
   }
 }
+
+/* ── Activity log ──
+   Settings › Activity log: filters over a live list of the session's
+   entries. The list scrolls inside its card so the filters stay in reach. */
+
+.activity-log {
+  min-width: 0;
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.activity-log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.activity-log-search {
+  flex: 1 1 220px;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-inline: var(--sp-2);
+  color: var(--color-text-subtle);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.activity-log-search:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.activity-log-search input {
+  min-width: 0;
+  flex: 1;
+  padding-inline: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.activity-log-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.activity-log-chip {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: var(--border-thin);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.activity-log-chip:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.activity-log-chip[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent);
+}
+
+.activity-log-chip > i,
+.activity-log-entry > i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--color-success);
+}
+
+.activity-log-chip.running > i,
+.activity-log-entry > i.running {
+  background: var(--color-accent);
+}
+
+.activity-log-chip.warning > i,
+.activity-log-entry > i.warning {
+  background: var(--color-warning);
+}
+
+.activity-log-chip.error > i,
+.activity-log-entry > i.error {
+  background: var(--color-error);
+}
+
+.activity-log-chip-count {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-log-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.activity-log-count,
+.activity-log-feedback {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.activity-log-feedback {
+  flex: 1;
+}
+
+.activity-log-bar .secondary {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+}
+
+.activity-log-empty {
+  margin: 0;
+  padding: var(--sp-4);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: 8px;
+}
+
+.activity-log-list {
+  max-height: calc(100vh - 300px);
+  min-height: 160px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: 8px;
+}
+
+.activity-log-list:empty {
+  display: none;
+}
+
+.activity-log-entry {
+  display: grid;
+  grid-template-columns: 8px 104px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 8px var(--sp-3);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--color-border) 65%, transparent);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  content-visibility: auto;
+  contain-intrinsic-size: 0 52px;
+}
+
+.activity-log-entry:last-child {
+  border-bottom: 0;
+}
+
+.activity-log-entry > i {
+  margin-top: 5px;
+}
+
+.activity-log-entry.current {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+}
+
+.activity-log-entry time {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* On the current row's accent wash subtle text fell under 4.5:1 (light). */
+.activity-log-entry.current time,
+.activity-log-entry.current .activity-log-meta {
+  color: var(--color-text-muted);
+}
+
+.activity-log-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.activity-log-message {
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.activity-log-entry.error .activity-log-message {
+  color: var(--color-error-text);
+}
+
+/* Kernel diagnostics and stacks: kept whole, wrapped anywhere. */
+.activity-log-detail {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.activity-log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+@media (max-width: 580px) {
+  .activity-log-entry {
+    grid-template-columns: 8px minmax(0, 1fr);
+  }
+
+  .activity-log-entry time {
+    grid-column: 2;
+  }
+
+  .activity-log-copy {
+    grid-column: 2;
+  }
+}

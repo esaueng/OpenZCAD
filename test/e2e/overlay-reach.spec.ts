@@ -1,6 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
-  promptField,
   revealModelPanel,
   stubApi,
   createPrimitiveInPlace
@@ -102,10 +101,10 @@ test('UI-01: an inch part’s selection chip stays under the top bar and its Mov
   ).toHaveAttribute('aria-pressed', 'true');
 });
 
-test('UI-05: Ctrl+K over an open activity log reveals the prompt it focuses', async ({
+test('UI-05: the activity log opens in Settings and Escape returns to the workspace', async ({
   page
 }) => {
-  await createBox(page, 'Log And Prompt');
+  await createBox(page, 'Log In Settings');
   for (const size of [
     { width: 960, height: 540 },
     { width: 390, height: 844 }
@@ -115,16 +114,23 @@ test('UI-05: Ctrl+K over an open activity log reveals the prompt it focuses', as
       .getByRole('button', { name: /^Open activity log/ })
       .first()
       .click();
-    await expect(page.locator('.status-log-list')).toBeVisible();
-    await page.keyboard.press('ControlOrMeta+k');
-    const field = promptField(page);
-    await expect(field).toBeFocused();
-    await expect(page.locator('.status-log-list')).toHaveCount(0);
-    await expectReachable(field);
-    await page.keyboard.type('fil');
-    await expect(field).toHaveValue('fil');
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    const log = settings.getByRole('region', { name: 'Activity log' });
+    await expect(log).toContainText('Added box.');
+    const filter = log.getByLabel('Filter entries');
+    await expectReachable(filter);
+    await filter.fill('box');
+    await expect(log.locator('.activity-log-entry').first()).toContainText(
+      /box/i
+    );
+    // The first Escape clears the filter, the second leaves Settings.
+    await filter.press('Escape');
+    await expect(filter).toHaveValue('');
     await page.keyboard.press('Escape');
-    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
+    await expect(
+      page.getByRole('region', { name: '3D viewport' })
+    ).toBeVisible();
   }
 });
 

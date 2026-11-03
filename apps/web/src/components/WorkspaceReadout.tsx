@@ -3,8 +3,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ReactNode,
-  type RefObject
+  type ReactNode
 } from 'react';
 import { CircleHelp, Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
@@ -44,8 +43,8 @@ interface WorkspaceReadoutProps {
   tone: StatusTone;
   /** A tool card is up and carries the message itself. */
   muted?: boolean;
-  logOpen: boolean;
-  onToggleLog(): void;
+  /** Opens Settings › Activity log. */
+  onOpenLog(): void;
   /**
    * The context-sensitive next-step line the status bar showed beside the
    * message: what a click takes, what Escape does next. The tool card and the
@@ -94,7 +93,7 @@ interface WorkspaceReadoutProps {
 /**
  * What the status bar said, as a toast above the viewport dock: the live
  * message while it has its lifetime, nothing once it has gone quiet. It is
- * also a handle for the activity log, whose panel App owns.
+ * also a handle for the activity log, a page in Settings.
  */
 export function WorkspaceReadout({
   status,
@@ -103,8 +102,7 @@ export function WorkspaceReadout({
   geometryStatus = null,
   tone,
   muted = false,
-  logOpen,
-  onToggleLog,
+  onOpenLog,
   prompt,
   instructionDetails = null,
   pick = null,
@@ -318,11 +316,11 @@ export function WorkspaceReadout({
           }
           aria-label={
             quiet || line === ''
-              ? `${logOpen ? 'Close' : 'Open'} activity log.`
-              : `${logOpen ? 'Close' : 'Open'} activity log. Current status: ${line}`
+              ? 'Open activity log.'
+              : `Open activity log. Current status: ${line}`
           }
-          aria-expanded={logOpen}
-          onClick={onToggleLog}
+          aria-haspopup="dialog"
+          onClick={onOpenLog}
         >
           <i aria-hidden="true" />
           <span role="status" aria-live="polite" aria-atomic="true">
@@ -360,9 +358,8 @@ export function WorkspaceReadout({
 }
 
 interface ActivityLogButtonProps {
-  logOpen: boolean;
-  onToggleLog(): void;
-  logTriggerRef: RefObject<HTMLButtonElement | null>;
+  /** Opens Settings › Activity log. */
+  onOpenLog(): void;
 }
 
 /**
@@ -371,20 +368,15 @@ interface ActivityLogButtonProps {
  * as the column for one chip and one icon; here it sits with Objects, History
  * and Parameters, which is what it is: a panel about the model.
  */
-export function ActivityLogButton({
-  logOpen,
-  onToggleLog,
-  logTriggerRef
-}: ActivityLogButtonProps) {
+export function ActivityLogButton({ onOpenLog }: ActivityLogButtonProps) {
   return (
     <button
-      ref={logTriggerRef}
       type="button"
-      className={`rail-button${logOpen ? ' active' : ''}`}
+      className="rail-button"
       title="Activity log"
-      aria-label={`${logOpen ? 'Close' : 'Open'} activity log`}
-      aria-expanded={logOpen}
-      onClick={onToggleLog}
+      aria-label="Open activity log"
+      aria-haspopup="dialog"
+      onClick={onOpenLog}
     >
       {/* Not the clock: that is rollback and Restore, one rail up from here. */}
       <ScrollText size={16} aria-hidden="true" />
