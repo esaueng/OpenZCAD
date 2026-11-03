@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type {
+  AssemblyDofLimit,
   AssemblyFrame,
   AssemblyFrameSource,
   AssemblyJointKind,
@@ -42,6 +43,11 @@ export interface AssemblyJointToolState {
   quarterTurns: number;
   /** Plays the joint's motion while the tool is open. */
   preview: boolean;
+  /**
+   * Limits the new joint starts with, per free value of `kind`; absent or
+   * null leaves a value unlimited. Cleared when the kind changes.
+   */
+  limits?: (AssemblyDofLimit | null)[];
 }
 
 export type AssemblyPlaybackState =

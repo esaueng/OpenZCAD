@@ -35,6 +35,7 @@
 @import './components/activity-pill.css';
 @import './components/workspace-column.css';
 @import './components/drawing.css';
+@import './components/assembly.css';
 /* View mode subtracts from the layouts every file above establishes. */
 @import './components/view-mode.css';
 /* Last: the quiet stage re-anchors every floating region, in every mode, as
