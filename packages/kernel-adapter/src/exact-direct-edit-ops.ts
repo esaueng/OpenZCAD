@@ -104,6 +104,7 @@ import {
 import { preparedFaceMove } from './exact-prepared-face-move';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
+import { shrinkChamferedThroughHole } from './exact-chamfered-hole';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -693,20 +694,30 @@ export function resizeThroughHole(
         output = cut.solid;
         boundedCutter = cut.boundedCutter;
       } else {
-        output = exactFuse(
+        const chamfered = shrinkChamferedThroughHole(
           kernel,
           solid,
-          exactCut(
-            kernel,
-            cylinderAlongAxis(
-              kernel,
-              geometry.axisStart,
-              geometry.axisEnd,
-              geometry.radius
-            ),
-            newBore
-          )
+          face,
+          geometry,
+          radius,
+          rimTolerance
         );
+        output =
+          chamfered ??
+          exactFuse(
+            kernel,
+            solid,
+            exactCut(
+              kernel,
+              cylinderAlongAxis(
+                kernel,
+                geometry.axisStart,
+                geometry.axisEnd,
+                geometry.radius
+              ),
+              newBore
+            )
+          );
       }
     } catch (error) {
       throw new Error(
