@@ -450,24 +450,21 @@ export const threadSpec: InPlaceToolSpec = {
   // Compact: numbers pair up two to a row, so each pair is listed together.
   layout: [
     {
+      label: 'Thread',
       compact: true,
-      items: [
-        'profile',
-        'size',
-        'majorDiameter',
-        'pitch',
-        'fit',
-        'clearance',
-        'span',
-        'anchor',
-        'length',
-        'offset',
-        'chamfer'
-      ]
+      boxed: true,
+      items: ['profile', 'size', 'majorDiameter', 'pitch', 'fit', 'clearance']
+    },
+    {
+      label: 'Length',
+      compact: true,
+      boxed: true,
+      items: ['span', 'anchor', 'length', 'offset', 'chamfer']
     },
     {
       label: 'Form',
       compact: true,
+      boxed: true,
       items: ['depth', 'crestWidth', 'lowerFlankAngleDeg', 'upperFlankAngleDeg']
     },
     {

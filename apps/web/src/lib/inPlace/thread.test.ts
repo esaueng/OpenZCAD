@@ -207,16 +207,19 @@ describe('in-place thread', () => {
     );
   });
 
-  it('pairs its numbers in compact sections', () => {
+  it('groups its rows in tinted boxes, numbers paired, More folded', () => {
     const sections = inPlacePanelSections(
       threadSpec,
       inPlacePanelState(threadSpec, { profile: 'custom' }, {}),
       new Set()
     );
-    expect(sections.map((s) => [s.label, s.compact])).toEqual([
-      [undefined, true],
-      ['Form', true],
-      ['More', true]
+    expect(
+      sections.map((s) => [s.label, !!s.compact, !!s.boxed, !!s.collapsed])
+    ).toEqual([
+      ['Thread', true, true, false],
+      ['Length', true, true, false],
+      ['Form', true, true, false],
+      ['More', true, false, true]
     ]);
   });
 

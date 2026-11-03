@@ -4248,6 +4248,47 @@ button.model-panel-grip[aria-expanded='true'] {
   display: none;
 }
 
+/* A boxed section: a tinted group under its label, set apart by spacing
+   and tone rather than a border or rule. */
+.in-place-command-options-panel.in-place-params:has(
+    > .in-place-params-section.is-boxed
+  ) {
+  padding: 6px;
+}
+
+.in-place-params-section.is-boxed {
+  padding: 6px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-params-section.is-boxed + .in-place-params-section,
+.in-place-params-section + .in-place-params-section.is-boxed {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 0;
+}
+
+.in-place-params-section.is-boxed .in-place-param-row {
+  grid-template-columns: 60px minmax(0, 1fr);
+}
+
+/* On the darker group, fields lift to the panel's tone to stay visible. */
+.in-place-params-section.is-boxed .in-place-param-select,
+.in-place-params-section.is-boxed .in-place-param-field,
+.in-place-params-section.is-boxed
+  .in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector) {
+  background: var(--color-surface);
+}
+
+.in-place-params-section.is-boxed
+  .in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  .in-place-param-field {
+  background: transparent;
+}
+
 /* A compact section: choices keep a whole row; each number is one box,
    named inside it, two to a row. */
 .in-place-params-grid.is-compact {

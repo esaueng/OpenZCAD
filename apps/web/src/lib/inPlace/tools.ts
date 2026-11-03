@@ -370,6 +370,8 @@ export interface InPlacePanelSection {
    * still take a whole row. Pair related values next to each other.
    */
   compact?: boolean;
+  /** Set apart as a tinted group under its label, with no border. */
+  boxed?: boolean;
   /** Option and value ids, in order. */
   items: readonly string[];
 }

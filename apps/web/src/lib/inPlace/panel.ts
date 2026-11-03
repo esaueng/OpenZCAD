@@ -26,6 +26,8 @@ export interface InPlacePanelSectionView {
   collapsed?: boolean;
   /** Numbers two to a row, each named inside its field. */
   compact?: boolean;
+  /** A tinted group under its label. */
+  boxed?: boolean;
   rows: readonly InPlacePanelRow[];
 }
 
@@ -138,6 +140,7 @@ export function inPlacePanelSections(
         ...(section.label ? { label: section.label } : {}),
         ...(section.collapsed ? { collapsed: true } : {}),
         ...(section.compact ? { compact: true } : {}),
+        ...(section.boxed ? { boxed: true } : {}),
         rows
       });
     }
