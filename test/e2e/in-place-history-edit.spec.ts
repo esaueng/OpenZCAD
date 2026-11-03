@@ -218,7 +218,7 @@ test('Linear pattern edits its stored vector part by part', async ({ page }) => 
   const bar = await editFromHistory(page, 'Row');
   // The stored vector is a custom one, each part on its own chip.
   await bar.locator('summary').click();
-  await expect(bar.getByRole('radio', { name: 'Custom vector' })).toBeChecked();
+  await expect(bar.getByRole('radio', { name: 'Custom' })).toBeChecked();
   await bar.locator('summary').click();
   await expect(page.getByTestId('command-handle-dirY')).toBeVisible();
   await enterCommandValue(page, 'dirY', '2');

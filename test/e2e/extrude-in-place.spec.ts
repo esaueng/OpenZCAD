@@ -459,7 +459,7 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   await radio('Operation', 'Cut').click();
   await radio('Extent', 'Through all').click();
   await expect(keypad).toHaveCount(0);
-  await expect(bar).toContainText('Through the whole target');
+  await expect(bar).toContainText('Through all');
   await expect(radio('Extent', 'Through all')).toHaveAttribute(
     'aria-checked',
     'true'

@@ -160,7 +160,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
   await expect(planeBar).toContainText('Drag the offset');
   await setSelectionFilter(page, 'Edge');
   await clickWorldPoint(page, [20, 18, 20]);
-  await expect(planeBar).toContainText('Parallel, through the picked point');
+  await expect(planeBar).toContainText('Parallel, through the point');
   const vertex = { x: 20, y: 20, z: 20 };
   await finishInPlaceCommand(page, 'Plane');
   const parallelRow = page.locator('.feature-row', { hasText: 'Plane 1' });

@@ -315,7 +315,7 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
       if (kind === 'loft') {
         // Clicking a section takes it out; the other one replaces it.
         await pickRegion(data.upper.reference.sketchId);
-        await expect(bar).toContainText('Pick the next section profile');
+        await expect(bar).toContainText('Pick the next section');
       }
       await pickRegion(data.distractor.reference.sketchId);
     }
@@ -362,7 +362,7 @@ test('refuses a saved section that cannot resolve to an upstream sketch', async 
   const bar = page.getByRole('group', {
     name: 'Edit Authored feature command'
   });
-  await expect(bar).toContainText('Pick the first section profile');
+  await expect(bar).toContainText('Pick the first section');
   await expect(page.getByRole('contentinfo')).toContainText(
     'its saved profile no longer resolves · pick its sections again, in order'
   );

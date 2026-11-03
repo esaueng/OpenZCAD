@@ -110,3 +110,13 @@ describe('theme switch', () => {
     }
   });
 });
+
+describe('in-place Options panel sections', () => {
+  it('hides a folded section, though its grid sets its own display', () => {
+    // `.in-place-params-grid { display: grid }` beat the `hidden` attribute,
+    // so a collapsed section (a gear's Tooth form) never folded shut.
+    expect(
+      rule(sheet('quiet-stage.css'), '.in-place-params-grid[hidden]')
+    ).toMatch(/display:\s*none/);
+  });
+});

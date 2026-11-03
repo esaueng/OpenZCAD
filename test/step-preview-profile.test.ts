@@ -68,6 +68,54 @@ function bounds(vertices: ArrayLike<number>) {
 }
 
 describe('whole-body step previews for planar face offsets', () => {
+  it('moves every independently sampled outline point with its incident moving face', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const { body } = await filletedUnion(adapter);
+      const face = unionEndFace(body);
+      const edge = body.topology!.edges.find((candidate) =>
+        candidate.adjacentFaceHashes?.includes(face.hash)
+      )!;
+      expect(edge.points.length).toBeGreaterThanOrEqual(6);
+      // Wireframe curves are sampled separately from the face triangles.
+      // Put a display sample between two existing points so it is absent
+      // from the triangle mesh's vertex keys.
+      const sample = [0, 1, 2].map(
+        (axis) => (edge.points[axis]! + edge.points[axis + 3]!) / 2
+      );
+      const sampled = {
+        ...body,
+        topology: {
+          ...body.topology!,
+          edges: body.topology!.edges.map((candidate) =>
+            candidate === edge
+              ? {
+                  ...edge,
+                  points: [
+                    ...edge.points.slice(0, 3),
+                    ...sample,
+                    ...edge.points.slice(3)
+                  ]
+                }
+              : candidate
+          )
+        }
+      };
+      const profile = stepPreviewProfile(sampled, face)!;
+      expect(profile).not.toBeNull();
+      const moves = stepPreviewMatcher(profile);
+      expect(moves(sample[0]!, sample[1]!, sample[2]!)).toBe(true);
+      // The opposite end remains fixed.
+      const fixed = body.topology!.faces.find(
+        (candidate) =>
+          candidate.geometry?.normal?.x === -face.geometry!.normal!.x
+      )!.geometry!.center;
+      expect(moves(fixed.x, fixed.y, fixed.z)).toBe(false);
+    } finally {
+      adapter.dispose();
+    }
+  }, 60_000);
+
   it('stretches a filleted union end without carrying its junction blend', async () => {
     const adapter = await createExactKernelAdapter();
     try {

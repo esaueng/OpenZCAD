@@ -272,7 +272,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   // its own 2:1 aspect, drawn from its decoded pixels. Nothing is added yet.
   await insertImage(page);
   const imageBar = page.getByRole('group', { name: 'Image command' });
-  await expect(imageBar).toContainText('Pick a plane or a flat face');
+  await expect(imageBar).toContainText('Pick a plane or flat face');
   await clickWorldPoint(page, [3, -2, 0]);
   await expect(imageBar).toContainText('Click to move it');
   await expect
@@ -301,7 +301,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   // image 60 mm wide (30 mm tall).
   const options = imageBar.locator('summary');
   await options.click();
-  await imageBar.getByRole('radio', { name: 'Scale from 2 points' }).click();
+  await imageBar.getByRole('radio', { name: 'Scale' }).click();
   await options.click();
   await expect(imageBar).toContainText('Click the first of two points');
   // (Both clear of the command bar along the canvas's bottom edge.)
@@ -507,7 +507,7 @@ test('an image canceled while it is placed adds nothing', async ({ page }) => {
   const canvas = page.locator('.viewer-host canvas');
   await insertImage(page);
   const imageBar = page.getByRole('group', { name: 'Image command' });
-  await expect(imageBar).toContainText('Pick a plane or a flat face');
+  await expect(imageBar).toContainText('Pick a plane or flat face');
   await clickWorldPoint(page, [0, 0, 0]);
   await expect.poll(async () => (await drawnImages(canvas)).length).toBe(1);
   await page.keyboard.press('Escape');

@@ -103,7 +103,7 @@ test('switches a blind cut to through all and back through undo', async ({
       includeHidden: true
     })
   ).toHaveCount(0);
-  await chooseBarOption(edit, 'Direction', 'Against the sketch normal');
+  await chooseBarOption(edit, 'Direction', 'Reverse');
   await edit.getByRole('button', { name: 'Done' }).click();
   // A successful edit closes; reopen it to read what was committed.
   await expect(edit).toHaveCount(0, { timeout: 30_000 });
@@ -117,7 +117,7 @@ test('switches a blind cut to through all and back through undo', async ({
     'true'
   );
   await expect(
-    barChoice(edit, 'Direction', 'Against the sketch normal')
+    barChoice(edit, 'Direction', 'Reverse')
   ).toHaveAttribute('aria-checked', 'true');
 
   await edit.getByRole('button', { name: 'Cancel' }).click();
@@ -192,7 +192,7 @@ test('creates a cut through all straight from a sketch', { tag: '@ci-smoke' }, a
     page,
     'Extrude',
     'Direction',
-    'Against the sketch normal'
+    'Reverse'
   );
   // No distance was typed: through all needs none.
   await bar.getByRole('button', { name: 'Done' }).click();

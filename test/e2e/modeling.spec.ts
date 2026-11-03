@@ -1628,7 +1628,7 @@ test('preflights and splits a box into two live half bodies', async ({
   await page.getByRole('button', { name: /^Split/ }).click();
   await pickObjectsBody(page, 'Box 1');
   const splitBar = page.getByRole('group', { name: 'Split command' });
-  await expect(splitBar).toContainText('Pick the plane');
+  await expect(splitBar).toContainText('Pick a plane or flat face');
   await clickWorldPoint(page, [0, -3, 4]);
   await expect(splitBar).toContainText('Slide the plane');
   await enterCommandValue(page, 'offset', '5');
