@@ -49,15 +49,18 @@ const band = (state: InPlacePanelState) => state.options.span === 'band';
 const chamfered = (state: InPlacePanelState) =>
   !band(state) && (state.options.chamfer ?? 'both') !== 'none';
 
+// Only the band's length has a handle: every other number is typed in the
+// Options panel, so each must be `inOptions` or its row never shows.
 const THREAD_VALUES: readonly ValueSpec[] = [
   {
     id: 'majorDiameter',
-    label: 'Major Ø',
+    label: 'Diameter',
     unit: 'length',
     initial: 6,
     min: 0,
     exclusive: true,
-    note: 'The thread’s outer diameter: a bolt’s crest, a nut’s root',
+    inOptions: true,
+    note: 'Major diameter: a bolt’s crest, a nut’s root',
     when: customSize
   },
   {
@@ -67,7 +70,8 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     initial: 1,
     min: 0,
     exclusive: true,
-    note: 'Axial distance from one thread to the next',
+    inOptions: true,
+    note: 'Axial distance between threads',
     when: (state) => customSize(state) || custom(state)
   },
   {
@@ -77,16 +81,18 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     initial: 0.5,
     min: 0,
     exclusive: true,
-    note: 'Crest to root, measured across the axis',
+    inOptions: true,
+    note: 'Crest to root',
     when: custom
   },
   {
     id: 'crestWidth',
-    label: 'Crest flat',
+    label: 'Crest',
     unit: 'length',
     initial: 0.25,
     min: 0,
-    note: 'Width of the flat on each crest; a printed crest narrower than a line prints sharp',
+    inOptions: true,
+    note: 'Flat width on each crest',
     when: custom
   },
   {
@@ -96,7 +102,8 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     initial: 45,
     min: 0,
     max: 75,
-    note: 'From the plane across the axis. Printed upright, a flank under 45° overhangs past 45°',
+    inOptions: true,
+    note: 'From the plane across the axis; over 45° overhangs when printed upright',
     when: custom
   },
   {
@@ -106,16 +113,18 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     initial: 45,
     min: 0,
     max: 75,
-    note: 'The flank facing the face’s far end; 0° is square',
+    inOptions: true,
+    note: 'Facing the face’s far end; 0° is square',
     when: custom
   },
   {
     id: 'clearance',
-    label: 'Clearance',
+    label: 'Gap',
     unit: 'length',
     initial: 0.1,
     min: 0,
-    note: 'Radial gap to the mating thread: a boss’s thread shrinks, a bore’s grows',
+    inOptions: true,
+    note: 'Radial gap to the mating part: a boss shrinks, a bore grows',
     when: (state) => state.options.fit === 'custom'
   },
   {
@@ -133,7 +142,7 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     unit: 'length',
     initial: 0,
     min: 0,
-    note: 'From the chosen end of the face to the thread',
+    note: 'From the chosen end',
     inOptions: true,
     when: band
   },
@@ -145,11 +154,12 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     min: 1,
     max: 16,
     integer: true,
-    note: 'Parallel threads; more starts advance faster per turn'
+    inOptions: true,
+    note: 'Parallel threads'
   },
   {
     id: 'phaseDeg',
-    label: 'Start angle',
+    label: 'Rotation',
     unit: 'angle',
     initial: 0,
     inOptions: true,
@@ -163,7 +173,8 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     min: 0,
     max: 90,
     exclusive: true,
-    note: 'The chamfer cone’s angle from the axis; 45° prints cleanly',
+    inOptions: true,
+    note: 'Cone angle from the axis',
     when: (state) => chamfered(state)
   }
 ];
@@ -175,18 +186,18 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     choices: [
       {
         value: 'printable',
-        label: 'Printable 45°',
-        note: 'Both flanks at 45° print upright without support, with quarter-pitch flats instead of sharp crests. Mates with other printable threads, not ISO hardware.'
+        label: 'Printable',
+        tip: '45° flanks with flat crests: prints upright without support. Mates with other printable threads.'
       },
       {
         value: 'iso-metric',
-        label: 'ISO metric 60°',
-        note: 'ISO 68-1: mates with standard bolts and nuts. Printed upright its flanks overhang 60°.'
+        label: 'ISO',
+        tip: 'ISO metric 60°: mates with standard bolts and nuts'
       },
       {
         value: 'custom',
         label: 'Custom',
-        note: 'Set the pitch, depth, crest flat and each flank'
+        tip: 'Set the pitch, depth, crest and flanks'
       }
     ],
     initial: 'printable'
@@ -197,8 +208,8 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     choices: [
       {
         value: 'auto',
-        label: 'Fit the face',
-        note: 'A boss keeps its diameter with the nearest ISO coarse pitch; a bore takes the size whose tap drill it is'
+        label: 'Auto',
+        tip: 'From the face: a boss keeps its diameter, a bore takes the size it is the tap drill for'
       },
       ...ISO_SIZES.map(({ value, size }) => ({
         value,
@@ -214,18 +225,18 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     choices: [
       {
         value: 'print',
-        label: 'Printed (0.1 mm)',
-        note: 'A radial gap that lets printed parts turn freely'
+        label: 'Print',
+        tip: '0.1 mm radial gap: printed parts turn freely'
       },
       {
         value: 'loose',
-        label: 'Loose (0.2 mm)',
-        note: 'For coarse layers, or a first-layer flare on a bolt’s head end'
+        label: 'Loose',
+        tip: '0.2 mm radial gap: for coarse layers or elephant’s foot'
       },
       {
         value: 'exact',
         label: 'Exact',
-        note: 'Nominal size, for machined parts or a drawing'
+        tip: 'No gap: nominal size, for machined parts or drawings'
       },
       { value: 'custom', label: 'Custom' }
     ],
@@ -233,13 +244,13 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
   },
   {
     id: 'span',
-    label: 'Runs',
+    label: 'Extent',
     choices: [
-      { value: 'face', label: 'The whole face' },
+      { value: 'face', label: 'Full', tip: 'The whole face' },
       {
         value: 'band',
-        label: 'Part of the face',
-        note: 'The cylinder stays as it was beside the thread'
+        label: 'Partial',
+        tip: 'Part of the face; the rest stays plain'
       }
     ],
     initial: 'face'
@@ -249,8 +260,8 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     label: 'From',
     when: band,
     choices: [
-      { value: 'start', label: 'The face’s start' },
-      { value: 'end', label: 'The face’s end' }
+      { value: 'start', label: 'Start' },
+      { value: 'end', label: 'End' }
     ],
     initial: 'start'
   },
@@ -261,11 +272,11 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     choices: [
       {
         value: 'both',
-        label: 'Both ends',
-        note: 'A cone tapers each end’s first turn out: no thin wedge to print, and a mating part starts easily'
+        label: 'Both',
+        tip: 'Taper both ends: no thin wedge to print, and mating parts start easily'
       },
-      { value: 'start', label: 'Face start' },
-      { value: 'end', label: 'Face end' },
+      { value: 'start', label: 'Start' },
+      { value: 'end', label: 'End' },
       { value: 'none', label: 'None' }
     ],
     initial: 'both'
@@ -274,8 +285,8 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     id: 'hand',
     label: 'Hand',
     choices: [
-      { value: 'right', label: 'Right hand' },
-      { value: 'left', label: 'Left hand' }
+      { value: 'right', label: 'Right' },
+      { value: 'left', label: 'Left' }
     ],
     initial: 'right'
   }
@@ -292,44 +303,20 @@ function fitClearance(fit: string | undefined, units: UnitSystem): number {
   return mm / UNIT_TO_MM[units];
 }
 
-function threadLength(value: number, units: UnitSystem): string {
-  return `${Math.round(value * 1000) / 1000} ${units}`;
-}
-
-/** What the choices come to: the callout and the fit, when they are known. */
-export function threadSummary(
-  state: InPlacePanelState,
-  units: UnitSystem
-): string | null {
+/**
+ * What the folded More rows come to, where they leave their defaults: the
+ * rows in view already say the rest.
+ */
+export function threadSummary(state: InPlacePanelState): string | null {
   const parts: string[] = [];
-  const iso = isoSize(state.options.size);
-  if (iso) {
-    parts.push(isoMetricThreadLabel(iso.nominal, iso.pitch));
-  } else if (state.options.size === 'custom') {
-    const major = state.numbers.majorDiameter ?? 6;
-    const pitch = state.numbers.pitch ?? 1;
-    parts.push(
-      `Ø ${threadLength(major, units)} × ${threadLength(pitch, units)}`
-    );
-  }
+  if (state.options.hand === 'left') parts.push('Left hand');
   const starts = Math.round(state.numbers.starts ?? 1);
   if (starts > 1) parts.push(`${starts} starts`);
-  if (state.options.hand === 'left') parts.push('Left hand');
+  const phase = Math.round((state.numbers.phaseDeg ?? 0) * 100) / 100;
+  if (phase !== 0) parts.push(`Rotated ${phase}°`);
   if (chamfered(state)) {
-    const ends = state.options.chamfer ?? 'both';
     const angle = Math.round((state.numbers.chamferAngleDeg ?? 45) * 100) / 100;
-    parts.push(
-      ends === 'both'
-        ? `Chamfered ${angle}°`
-        : `Chamfered ${angle}° at the face ${ends}`
-    );
-  }
-  const clearance =
-    state.options.fit === 'custom'
-      ? (state.numbers.clearance ?? 0)
-      : fitClearance(state.options.fit, units);
-  if (clearance > 0) {
-    parts.push(`Clearance ${threadLength(clearance, units)}`);
+    if (angle !== 45) parts.push(`Chamfer ${angle}°`);
   }
   return parts.length > 0 ? parts.join(' · ') : null;
 }
@@ -460,34 +447,39 @@ export const threadSpec: InPlaceToolSpec = {
   wantsPath: false,
   values: THREAD_VALUES,
   options: THREAD_OPTIONS,
+  // Compact: numbers pair up two to a row, so each pair is listed together.
   layout: [
     {
+      label: 'Thread',
+      compact: true,
+      boxed: true,
       items: ['profile', 'size', 'majorDiameter', 'pitch', 'fit', 'clearance']
     },
     {
-      items: [
-        'span',
-        'anchor',
-        'length',
-        'offset',
-        'chamfer',
-        'chamferAngleDeg'
-      ]
+      label: 'Length',
+      compact: true,
+      boxed: true,
+      items: ['span', 'anchor', 'length', 'offset', 'chamfer']
     },
     {
       label: 'Form',
+      compact: true,
+      boxed: true,
       items: ['depth', 'crestWidth', 'lowerFlankAngleDeg', 'upperFlankAngleDeg']
     },
-    { label: 'More', collapsed: true, items: ['hand', 'starts', 'phaseDeg'] }
+    {
+      label: 'More',
+      collapsed: true,
+      compact: true,
+      items: ['hand', 'starts', 'phaseDeg', 'chamferAngleDeg']
+    }
   ],
   summary: threadSummary,
   hint(slots: InPlaceSlots, options?: Record<string, string>) {
-    if (slots.faces.length === 0) {
-      return 'Pick a cylindrical face: a boss for a bolt’s thread, a bore for a nut’s';
-    }
+    if (slots.faces.length === 0) return 'Pick a cylindrical face or hole';
     return options?.span === 'band'
-      ? 'Tap the length to type; the thread starts at the chosen end'
-      : 'The thread runs the whole face · Enter to finish';
+      ? 'Drag or tap the length · Enter to finish'
+      : 'Enter to finish';
   },
   ready: (slots: InPlaceSlots) => slots.faces.length > 0,
   request(
