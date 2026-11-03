@@ -10,3 +10,7 @@ fillets with independent closed-form volume and strict topology checks;
 refresh the synthetic STEP golden only after geometry-equivalence checks.
 Inch source-width preflight is strictly valid; the existing two-inch growth
 acceptance remains blocked by an exact-union refusal (K07).
+
+The dense spline oracle retains 120 seeded trials and all 4,000 chords;
+disjoint-box culling avoids unnecessary crossing arithmetic without changing
+the reference predicate, samples, outcome floors or default test deadline.

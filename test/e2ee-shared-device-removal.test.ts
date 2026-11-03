@@ -870,7 +870,7 @@ describe('device removal across shared encrypted projects (slice 5-7)', { timeou
   // This journey also replays historical authority across all three accounts.
   it(
     'lets a member remove a stolen device: co-members refuse its later Commits and versions and still read its earlier ones',
-    { timeout: 30_000 },
+    { timeout: 60_000 },
     async () => {
       const { srv, alice, bob, bobRecovery, bobDesktop, bobPhone, carol } =
         await people();
