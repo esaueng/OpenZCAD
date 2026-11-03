@@ -7,7 +7,7 @@ export interface RestoreEnvironment {
       body: ReadableStream<Uint8Array> | null,
       options: {
         onlyIf: { etagDoesNotMatch: string };
-        storageClass: 'Standard' | 'InfrequentAccess';
+        storageClass: 'Standard';
         httpMetadata: Record<string, unknown>;
         customMetadata: Record<string, string>;
       }
