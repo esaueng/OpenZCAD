@@ -1946,7 +1946,7 @@ export function projectRebuildInputs(document: ProjectDocument): unknown {
 
 /**
  * The rebuild inputs that decide geometry exclude drawing sheets, reference
- * images, Objects folders and undo history. These are saved document content,
+ * images, Objects folders, the assembly and undo history. These are saved document content,
  * but no mesh depends on them; every such edit also records an undo entry.
  */
 function projectGeometryInputs(document: ProjectDocument): unknown {
@@ -1954,6 +1954,7 @@ function projectGeometryInputs(document: ProjectDocument): unknown {
     drawings: _drawings,
     objectFolders: _objectFolders,
     referenceImages: _referenceImages,
+    assembly: _assembly,
     editHistory: _editHistory,
     ...inputs
   } = projectRebuildInputs(document) as Partial<ProjectDocument>;

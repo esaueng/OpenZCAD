@@ -55,6 +55,7 @@ export * from './sketch-projections';
 export * from './document-content-schema';
 export * from './drawings';
 export * from './object-folders';
+export * from './assembly';
 export * from './reference-images';
 export {
   constantRigidTransform,
@@ -81,6 +82,7 @@ import {
   deepClone,
   assertDrawingSet,
   assertObjectFolderSet,
+  assertAssemblySet,
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
@@ -985,6 +987,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   assertReferenceImageSet(document.referenceImages);
   // Schema v34 Objects folders: validated as written, never synthesized.
   assertObjectFolderSet(document.objectFolders);
+  // Schema v54 assemblies: the same.
+  assertAssemblySet(document.assembly);
   assertDocumentContentSchema(document);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
