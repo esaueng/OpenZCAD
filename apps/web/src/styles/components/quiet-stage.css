@@ -4243,6 +4243,12 @@ button.model-panel-grip[aria-expanded='true'] {
   gap: 4px;
 }
 
+/* The grid's own display would otherwise override `hidden`, leaving a
+   folded section (a gear's tooth form) open. */
+.in-place-params-grid[hidden] {
+  display: none;
+}
+
 .in-place-params .in-place-option + .in-place-option {
   margin-top: 0;
 }
