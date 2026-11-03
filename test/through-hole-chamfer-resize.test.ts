@@ -10,6 +10,7 @@ import { parseProjectBackup } from '../apps/web/src/lib/projectBackup';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import type { ProjectDocument } from '@openzcad/shared';
+import { borePreviewProfile } from '../apps/web/src/lib/interaction/cylinderRadius';
 
 const BORE = 3;
 const HEIGHT = 10;
@@ -222,6 +223,13 @@ it.skipIf(!privateProject)(
         (f) => f.geometry?.featureType === 'through-hole'
       )!;
       expect(wall.geometry!.diameter).toBeCloseTo(6, 7);
+      expect(
+        borePreviewProfile(body, {
+          axisStart: wall.geometry!.axisStart!,
+          axisEnd: wall.geometry!.axisEnd!,
+          radius: wall.geometry!.radius!
+        })
+      ).toBeNull();
       const cones = body.topology!.faces.filter(
         (f) => f.geometry?.surfaceType === 'cone'
       );
@@ -241,9 +249,37 @@ it.skipIf(!privateProject)(
           }
         })
       );
+      const preview = await adapter.previewGeometry(manager.document);
+      expect(preview.warnings).toEqual([]);
+      const previewBody = preview.bodyRepresentations[bodyId]!;
+      for (const face of previewBody.topology!.faces.filter(
+        (f) => f.geometry?.surfaceType === 'cone'
+      )) {
+        const { apex, axis } = face.geometry!;
+        for (
+          let t = face.triangleStart;
+          t < face.triangleStart + face.triangleCount;
+          t++
+        ) {
+          for (let corner = 0; corner < 3; corner++) {
+            const v = previewBody.mesh.indices[t * 3 + corner]! * 3;
+            const x = previewBody.mesh.vertices[v]! - apex!.x;
+            const y = previewBody.mesh.vertices[v + 1]! - apex!.y;
+            const z = previewBody.mesh.vertices[v + 2]! - apex!.z;
+            const axial = x * axis!.x + y * axis!.y + z * axis!.z;
+            const radial = Math.hypot(
+              x - axial * axis!.x,
+              y - axial * axis!.y,
+              z - axial * axis!.z
+            );
+            expect(Math.abs(axial)).toBeCloseTo(radial, 4);
+          }
+        }
+      }
       const resized = await adapter.syncDocument(manager.document);
       expect(resized.warnings).toEqual([]);
       const changed = resized.bodyRepresentations[bodyId]!;
+      expect(changed.mesh).toEqual(previewBody.mesh);
       expect(changed.faceCount).toBe(body.faceCount);
       const bore = changed.topology!.faces.find(
         (f) => f.geometry?.featureType === 'through-hole'
