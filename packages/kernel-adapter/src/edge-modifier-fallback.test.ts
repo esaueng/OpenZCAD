@@ -17,6 +17,23 @@ const refusingKernel = new Proxy(
 ) as RemusKernel;
 
 describe('edge modifier fallback advice', () => {
+  it.each(['fillet', 'chamfer'] as const)(
+    'does not advise selecting fewer edges for a single refused %s edge',
+    (kind) => {
+      const message = edgeModifierFailureMessage(
+        refusingKernel,
+        1,
+        [2],
+        kind,
+        2.1,
+        false
+      );
+      expect(message).not.toContain('fewer edges');
+      expect(message).toContain('neighboring faces');
+      expect(message).not.toContain('Try a smaller');
+    }
+  );
+
   it('does not advise a smaller size once every smaller size was refused', () => {
     const fillet = edgeModifierFailureMessage(
       refusingKernel,
@@ -41,8 +58,8 @@ describe('edge modifier fallback advice', () => {
     );
     expect(chamfer).toBe(
       'Chamfer could not be created on 1 selected edge with distance 1.5. ' +
-        'Smaller distances were refused too, so the size is not the cause. ' +
-        'Try chamfering fewer edges at once, or different edges.'
+        'Smaller distances were refused too. The kernel could not build this edge ' +
+        'with its current neighboring faces. Try a different edge or change the adjacent geometry.'
     );
     expect(chamfer).not.toContain('Try a smaller');
   });

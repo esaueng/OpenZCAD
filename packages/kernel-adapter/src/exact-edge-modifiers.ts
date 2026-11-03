@@ -775,6 +775,9 @@ export function edgeModifierFailureMessage(
     // No cause was named, but the ladder proved the size is not it: telling
     // the user to shrink the value sent them round the same refusal.
     const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
+    if (selected.length === 1) {
+      return `${prefix} Smaller ${sizes} were refused too. The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.`;
+    }
     const gerund = featureKind === 'fillet' ? 'rounding' : 'chamfering';
     return `${prefix} Smaller ${sizes} were refused too, so the size is not the cause. Try ${gerund} fewer edges at once, or different edges.`;
   }
