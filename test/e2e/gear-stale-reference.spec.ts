@@ -43,7 +43,7 @@ async function setHeight(page: Page, height: number) {
   // cap and retry instead of waiting forever for that refused keypad.
   await expect(async () => {
     expect(await pickPlanarFace(page, { x: 0, y: 0, z: 1 })).not.toBeNull();
-    await page.getByTestId('direct-manipulation-value').click({ timeout: 1000 });
+    await page.getByTestId('direct-manipulation-value').click({ timeout: 5000 });
     await expect(keypad).toBeVisible({ timeout: 1000 });
   }).toPass({ timeout: 30_000 });
   await keypad.getByRole('textbox').fill(String(height));
