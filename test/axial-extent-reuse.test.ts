@@ -219,6 +219,26 @@ describe('qualified axial history reuse', { timeout: 120_000 }, () => {
     }
   });
 
+  it('does not promote a display-only initial history into a checked prefix', async () => {
+    const authoring = await createExactKernelAdapter();
+    const model = await longUnion(authoring).finally(() => authoring.dispose());
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      await adapter.previewGeometry(model.document, { deferTopology: true });
+      const next = widthEdit(model.document, 2);
+      const fillets = vi.spyOn(RemusKernel.prototype, 'filletWithEvolution');
+      const result = await adapter.syncDocument(next);
+      expect(fillets).toHaveBeenCalled();
+      expect(events.at(-1)?.reusedAxialFeatures).toBeUndefined();
+      expect(physical(result)).toEqual(await fresh(next));
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it('does not skip a simultaneous radius change', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({

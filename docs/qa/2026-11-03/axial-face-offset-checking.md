@@ -96,23 +96,25 @@ fixture, 120 pointer moves at 16 ms intervals, full production rendering and
 headed Chromium on Apple M5 Pro/Metal. The baseline is the deployed preview
 change (`5dda745871c1195d41f78fdf97d62a87a7291ee5`, Remus 2026.1.104);
 the candidate includes this axial reuse and the paired Remus 2026.1.107
-packages at `261ac4c0567018dbe5432b941f2f4ef842afbfc5`. The packages use
+packages at `a12bae1d0a3bfb646457dc5bac90a431669e2433`. The packages use
 the source-identical hosted build artifact documented in Remus #1505.
 
 | Release through accepted final checked frame | Baseline | Candidate |
 | --- | ---: | ---: |
-| Run 1 | 757.4 ms | 117.2 ms |
-| Run 2 | 686.3 ms | 101.7 ms |
-| Run 3 | 892.7 ms | 121.2 ms |
-| Median | 757.4 ms | 117.2 ms |
+| Run 1 | 696.3 ms | 73.0 ms |
+| Run 2 | 673.2 ms | 71.8 ms |
+| Run 3 | 708.3 ms | 72.1 ms |
+| Median | 696.3 ms | 72.1 ms |
 
-The median improves 6.5 times on this public case; every run presents all 120
+The median improves 9.7 times on this public case; every run presents all 120
 display frames. This is a local sample, not a universal latency guarantee.
 Cold loading, an unsupported history, an occupied-region contraction or a
 kernel cache recycle still takes the normal rebuild path. No CPU profiler was
-active during these comparisons; the desktop host was not isolated.
+active during these comparisons; the desktop host was not isolated. The
+candidate retains the newer resting exact check, which may finish while the
+pointer pauses before release; no such check is disabled for the measurement.
 
-The final pinned package passes 51 focused regression tests and the parity
+The final pinned package passes 54 focused regression tests and the parity
 corpus (92 passed, one existing skip), type checking and the production
 build/bundle gate. Browser reload coverage also waits for current exact STEP
 export readiness, so a restored cached display alone cannot pass.
