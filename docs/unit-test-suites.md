@@ -52,6 +52,10 @@ workers start, with a 60-second process limit and fatal acquisition errors.
 When the shallow-checkout regression is selected, its disposable history is
 also prepared before workers, including in a local full run. Its original
 provenance assertions still run in the individual test cases.
+That disposable six-commit history uses normal shared Git hooks and has a
+separate two-minute provisioning budget (65 seconds measured on Windows).
+On timeout, the supervisor retires its owned process tree before cleanup;
+Windows cleanup retries transient locks and preserves the original error.
 The policy suite still runs its original setup and every assertion under the
 existing deadlines, including the cold/offline/stale-pin negative controls.
 The nested deadline harness uses its own full-selection config without outer

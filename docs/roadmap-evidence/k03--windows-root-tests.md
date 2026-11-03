@@ -18,3 +18,7 @@ Encrypted-project integration files use a bounded 30-second default; runtime
 regressions preserve ordinary five-second defaults and explicit deadlines.
 Structured-output qualification retains every rollout flag combination in
 64-variant batches under the unchanged ordinary unit deadline.
+Disposable history provisioning retains normal Git hooks, runs before timed
+workers, and has an owned-process supervisor with a two-minute bound. Cleanup
+retries Windows locks and retains preparation errors if cleanup also fails;
+the original CI acquisition and policy deadlines remain unchanged.
