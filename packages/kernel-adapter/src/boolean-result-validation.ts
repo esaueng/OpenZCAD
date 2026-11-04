@@ -155,6 +155,66 @@ export function inspectTriangleMeshClosure(
   };
 }
 
+/**
+ * The display-mesh closure verdict without paying for a weld on good meshes.
+ *
+ * Remus shares vertex indices along face boundaries, so a closed mesh pairs
+ * every index edge with exactly one opposite use. That pass is roughly 15x
+ * cheaper than welding. Anything it cannot prove closed is re-inspected with
+ * the welded check, so a mesh that only duplicates boundary vertices is never
+ * reported as open.
+ */
+export function inspectDisplayMeshClosure(
+  positions: ArrayLike<number>,
+  indices: ArrayLike<number>
+): TriangleMeshClosure {
+  const vertexCount = Math.floor(positions.length / 3);
+  if (Number.isSafeInteger(vertexCount * vertexCount)) {
+    // Net direction per undirected edge: +1 for low→high, -1 for high→low.
+    const balance = new Map<number, number>();
+    const uses = new Map<number, number>();
+    let triangles = 0;
+    let indexClosed = true;
+    for (let index = 0; index + 2 < indices.length; index += 3) {
+      const corners = [
+        indices[index] ?? 0,
+        indices[index + 1] ?? 0,
+        indices[index + 2] ?? 0
+      ];
+      triangles += 1;
+      for (let corner = 0; corner < 3; corner += 1) {
+        const start = corners[corner]!;
+        const end = corners[(corner + 1) % 3]!;
+        if (start === end || start >= vertexCount || end >= vertexCount) {
+          indexClosed = false;
+          continue;
+        }
+        const key =
+          start < end ? start * vertexCount + end : end * vertexCount + start;
+        balance.set(key, (balance.get(key) ?? 0) + (start < end ? 1 : -1));
+        uses.set(key, (uses.get(key) ?? 0) + 1);
+      }
+    }
+    if (indexClosed && triangles > 0) {
+      for (const [key, count] of uses) {
+        if (count !== 2 || balance.get(key) !== 0) {
+          indexClosed = false;
+          break;
+        }
+      }
+      if (indexClosed) {
+        return {
+          boundaryEdges: 0,
+          nonManifoldEdges: 0,
+          inconsistentWindingEdges: 0,
+          triangles
+        };
+      }
+    }
+  }
+  return inspectTriangleMeshClosure(positions, indices);
+}
+
 export function isClosedConsistentlyOrientedMesh(
   closure: TriangleMeshClosure
 ): boolean {

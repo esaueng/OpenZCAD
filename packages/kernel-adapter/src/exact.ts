@@ -316,6 +316,7 @@ export {
 } from './exact-boolean-evolution';
 import { readBodyMassProperties } from './body-properties';
 import {
+  inspectDisplayMeshClosure,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
 } from './boolean-result-validation';
@@ -3654,6 +3655,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             feature,
             'Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.',
             'refusal'
+          );
+        } else if (
+          !requiresStrictUnionValidation &&
+          !geometryOnly &&
+          !consumed &&
+          !hiddenBodies.has(bodyId) &&
+          measured.valid &&
+          feature !== undefined &&
+          feature.featureKind !== 'imported-step' &&
+          !hasRefusingFeatureWarning(build, feature.featureId) &&
+          !isClosedConsistentlyOrientedMesh(
+            inspectDisplayMeshClosure(measured.vertices, measured.indices)
+          )
+        ) {
+          // The B-rep passed validation, so the solid is kept; only its
+          // display tessellation has gaps. Say so instead of letting the
+          // viewport show holes that look like missing geometry.
+          raiseFeatureWarning(
+            build,
+            feature,
+            'The result is a valid solid, but its display mesh has gaps, so the viewport can show holes that are not in the model. Volume, measurements and STEP export use the exact solid.',
+            'advisory'
           );
         }
         geometryRepresentations[bodyId] = {
