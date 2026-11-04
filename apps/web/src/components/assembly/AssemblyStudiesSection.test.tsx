@@ -5,26 +5,36 @@ import {
   assemblyRuntime,
   getAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
-import { AssemblyStudiesSection } from './AssemblyStudiesSection';
+import {
+  AddStudyButton,
+  AssemblyStudiesSection
+} from './AssemblyStudiesSection';
 import { pivotProject } from './motionTestFixture';
 
 function mount(manager: CommandManager) {
   const executed: AnyCommand[] = [];
   let n = 1;
+  const execute = (command: AnyCommand) => {
+    executed.push(command);
+    manager.execute(command);
+    view.rerender(element());
+    return true;
+  };
   const element = () => (
-    <AssemblyStudiesSection
-      assembly={manager.document.assembly}
-      newStudyId={() => `study_new_${n++}`}
-      execute={(command) => {
-        executed.push(command);
-        manager.execute(command);
-        view.rerender(element());
-        return true;
-      }}
-    />
+    <>
+      <AddStudyButton
+        assembly={manager.document.assembly}
+        newStudyId={() => `study_new_${n++}`}
+        execute={execute}
+      />
+      <AssemblyStudiesSection
+        assembly={manager.document.assembly}
+        execute={execute}
+      />
+    </>
   );
   const view = render(element());
-  return { executed, manager };
+  return { executed, manager, view };
 }
 
 beforeEach(() => {
@@ -37,10 +47,10 @@ afterEach(() => {
 });
 
 describe('AssemblyStudiesSection', () => {
-  it('creates a default study keyed where the joints stand and opens it', () => {
-    const { manager, executed } = mount(pivotProject({ study: false }));
-    expect(screen.getByText(/No motion studies yet/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'New study' }));
+  it('adds a default study and opens it with the playhead at its end', () => {
+    const { manager, executed, view } = mount(pivotProject({ study: false }));
+    expect(screen.queryByRole('list', { name: 'Motion studies' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add motion study' }));
     expect(executed.map((c) => c.kind)).toEqual(['assembly.study.set']);
     expect(manager.document.assembly?.studies).toEqual([
       {
@@ -58,34 +68,54 @@ describe('AssemblyStudiesSection', () => {
       }
     ]);
     expect(getAssemblyRuntime().selectedStudyId).toBe('study_new_1');
+    // The next part moved keys the end, so the study moves at once.
+    expect(getAssemblyRuntime().studyTimeS).toBe(2);
     expect(
       screen
         .getByRole('button', { name: /^Motion 1/ })
         .getAttribute('aria-pressed')
     ).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'New study' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add motion study' }));
     expect(manager.document.assembly?.studies.map((s) => s.name)).toEqual([
       'Motion 1',
       'Motion 2'
     ]);
+    view.unmount();
   });
 
-  it('lists studies with durations, selects, renames and deletes', () => {
+  it('offers no Add while nothing can move', () => {
+    const manager = pivotProject({ study: false });
+    const set = manager.document.assembly!;
+    const { container } = render(
+      <AddStudyButton
+        assembly={{
+          ...set,
+          joints: set.joints.map((j) => ({ ...j, kind: 'rigid', values: [] }))
+        }}
+        execute={() => true}
+      />
+    );
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('lists studies with durations, toggles, renames and deletes', () => {
     const { manager, executed } = mount(pivotProject());
     expect(screen.getByText('2.00 s')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /^Motion 1/ }));
+    const row = () => screen.getByRole('button', { name: /^Motion 1|^Open/ });
+    fireEvent.click(row());
     expect(getAssemblyRuntime().selectedStudyId).toBe('study_1');
+    // Clicking the open study again closes it.
+    fireEvent.click(row());
+    expect(getAssemblyRuntime().selectedStudyId).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename Motion 1' }));
+    fireEvent.doubleClick(row());
     const field = screen.getByRole('textbox', { name: 'Rename Motion 1' });
     fireEvent.change(field, { target: { value: '  Open and close ' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(manager.document.assembly?.studies[0]?.name).toBe('Open and close');
 
     // Escape leaves the name alone.
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Rename Open and close' })
-    );
+    fireEvent.doubleClick(row());
     const again = screen.getByRole('textbox', {
       name: 'Rename Open and close'
     });
@@ -111,7 +141,8 @@ describe('AssemblyStudiesSection', () => {
         readOnly
       />
     );
-    expect(screen.queryByRole('button', { name: 'New study' })).toBeNull();
+    fireEvent.doubleClick(screen.getByRole('button', { name: /^Motion 1/ }));
+    expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
   });
 });

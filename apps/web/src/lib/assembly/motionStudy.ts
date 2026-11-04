@@ -6,6 +6,7 @@ import {
   MAX_ASSEMBLY_TRACKS,
   assemblySetError,
   evaluateTrack,
+  jointSweepRange,
   type AssemblyDofUnit,
   type AssemblyEasing,
   type AssemblyJoint,
@@ -110,6 +111,87 @@ export function createDefaultStudy(
     playback: 'loop',
     tracks
   };
+}
+
+/** Joint values closer than this are the same pose (degrees or millimetres). */
+export const POSE_VALUE_TOLERANCE = 1e-6;
+
+/**
+ * Keys a pose at `t`: each joint motion whose value differs from what the
+ * study shows there gets a key. A motion without a track gains one, starting
+ * from its saved value at 0, since that is what the study showed before.
+ * `changed` is false when the pose already matches the study; `study` is
+ * null when a track or the study is full.
+ */
+export function keyPoseAt(
+  set: AssemblySet,
+  study: AssemblyMotionStudy,
+  t: number,
+  values: Readonly<Record<string, readonly number[]>>
+): { study: AssemblyMotionStudy | null; changed: boolean } {
+  const at = Math.min(study.durationS, Math.max(0, t));
+  let next: AssemblyMotionStudy = study;
+  let changed = false;
+  for (const joint of set.joints) {
+    const posed = values[joint.id];
+    if (!posed) continue;
+    const dofs = ASSEMBLY_JOINT_DOFS[joint.kind].length;
+    for (let dof = 0; dof < dofs; dof += 1) {
+      const value = posed[dof];
+      if (value === undefined) continue;
+      let index = next.tracks.findIndex(
+        (track) => track.jointId === joint.id && track.dof === dof
+      );
+      const shown =
+        index >= 0
+          ? evaluateTrack(next.tracks[index] as AssemblyTrack, at)
+          : (joint.values[dof] ?? 0);
+      if (Math.abs(value - shown) <= POSE_VALUE_TOLERANCE) continue;
+      changed = true;
+      if (index < 0) {
+        const added = addTrack(set, next, joint.id, dof, shown);
+        if (!added) return { study: null, changed };
+        next = added;
+        index = next.tracks.length - 1;
+      }
+      const keyed = setKeyAt(next, index, at, value);
+      if (!keyed) return { study: null, changed };
+      next = keyed;
+    }
+  }
+  return { study: next, changed };
+}
+
+/**
+ * A joint's Animate sweep as a study, for a project without studies to
+ * play in View mode: its range from the low end to the high one with the
+ * same ease, back and forth, so it moves exactly as Animate does.
+ */
+export function jointSweepStudy(
+  joint: AssemblyJoint,
+  sweepS: number
+): AssemblyMotionStudy | null {
+  for (let dof = 0; dof < ASSEMBLY_JOINT_DOFS[joint.kind].length; dof += 1) {
+    const range = jointSweepRange(joint, dof);
+    if (!range || !(sweepS > 0)) continue;
+    return {
+      id: `sweep:${joint.id}`,
+      name: joint.name,
+      durationS: sweepS,
+      playback: 'ping-pong',
+      tracks: [
+        {
+          jointId: joint.id,
+          dof,
+          keys: [
+            { t: 0, value: range.min, easing: 'linear' },
+            { t: sweepS, value: range.max, easing: 'ease' }
+          ]
+        }
+      ]
+    };
+  }
+  return null;
 }
 
 /** Index of the key within {@link KEY_TIME_TOLERANCE_S} of `t`, or -1. */

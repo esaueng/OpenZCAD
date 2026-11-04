@@ -1,7 +1,12 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link2, Pause, Pin, Play, Plus, TriangleAlert } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
-import { createId, type BodyId, type ProjectDocument } from '@openzcad/shared';
+import {
+  ASSEMBLY_JOINT_DOFS,
+  createId,
+  type BodyId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import {
   toggleComponentGrounded,
   toggleJointPlayback,
@@ -25,7 +30,10 @@ import {
 } from './AssemblyFirstRunCard';
 import { ComponentDetails, JointDetails } from './AssemblyDetails';
 import { AssemblyNameField } from './AssemblyNameField';
-import { AssemblyStudiesSection } from './AssemblyStudiesSection';
+import {
+  AddStudyButton,
+  AssemblyStudiesSection
+} from './AssemblyStudiesSection';
 import { JointKindIcon } from './JointKindIcon';
 import { JointToolCard } from './JointToolCard';
 import { useAssemblyModel } from './useAssemblyModel';
@@ -530,14 +538,27 @@ function AssemblyLists({
           )}
         </Section>
 
-        {studies ?? (
-          <Section title="Motion" count={set.studies.length}>
-            <AssemblyStudiesSection
-              assembly={document.assembly}
-              execute={execute}
-            />
-          </Section>
-        )}
+        {studies ??
+          ((set.studies.length > 0 ||
+            set.joints.some(
+              (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
+            )) && (
+            <Section
+              title="Motion"
+              count={set.studies.length}
+              action={
+                <AddStudyButton
+                  assembly={document.assembly}
+                  execute={execute}
+                />
+              }
+            >
+              <AssemblyStudiesSection
+                assembly={document.assembly}
+                execute={execute}
+              />
+            </Section>
+          ))}
       </div>
       {menu ? (
         <ContextMenu
