@@ -342,6 +342,44 @@ describe('hole diameter drag', () => {
         ?.topologyId
     ).toBe('bore');
   });
+
+  it.each([
+    ['shrunk', 2.1, 1.9, 8.1],
+    ['enlarged', 3.5, 0.5, 9.5],
+    ['past the chamfer', 5.2, 0, 10]
+  ] as const)(
+    'keeps a %s preview wall selected when its chamfer moves the endpoints',
+    (_label, radius, start, end) => {
+      const axisStart = { x: 0, y: 0, z: 1 };
+      const axisEnd = { x: 0, y: 0, z: 9 };
+      const wall = face('preview-bore', 'cylinder', {
+        radius,
+        axisStart: { x: 0, y: 0, z: start },
+        axisEnd: { x: 0, y: 0, z: end }
+      });
+      const outer = face('coaxial-outer-wall', 'cylinder', {
+        radius: 12,
+        axisStart,
+        axisEnd
+      });
+      expect(
+        sameCylinderAxis(
+          axisStart,
+          axisEnd,
+          wall.geometry!.axisStart!,
+          wall.geometry!.axisEnd!
+        )
+      ).toBe(false);
+      for (const [from, to] of [
+        [axisStart, axisEnd],
+        [axisEnd, axisStart]
+      ]) {
+        expect(
+          findResizedCylinderFace([outer, wall], from!, to!, radius)?.topologyId
+        ).toBe('preview-bore');
+      }
+    }
+  );
 });
 
 describe('hole radius handle', () => {
