@@ -260,6 +260,9 @@ textarea {
    Measuring a pop animation here would include its temporary displacement. */
 .rail-section-panel {
   animation: oz-fade var(--dur-fast) var(--ease-out);
+  /* Reduced motion sets a nonzero duration globally. Exclude placement
+     properties so even that tiny transition cannot delay clamp reads. */
+  transition-property: none;
 }
 
 .view-mode-views-panel {

@@ -55,3 +55,7 @@ Sweep path clicks reframe after the staged sketch arrives and after each
 exact preview, checking projected points stay on the canvas and each path
 segment becomes valid before continuing. Panel drag picks wait for camera
 rest and the current hover frame instead of accepting a stale cursor.
+Section placement excludes CSS transitions of its translation, including
+under reduced-motion's global duration override. Browser coverage requires
+programmatic placement to move the visible panel within the same frame and
+keeps controls reachable through the Computing → Exact size change.

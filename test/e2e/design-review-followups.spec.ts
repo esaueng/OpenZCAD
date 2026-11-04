@@ -211,6 +211,23 @@ for (const colorScheme of ['light', 'dark'] as const) {
             exact: true
           });
           await expect(section).toBeVisible();
+          // Reduced motion must not introduce a tiny translate transition:
+          // the clamp reads placement again during the same layout delivery.
+          const sameFrameMove = await section.evaluate((element) => {
+            const panel = element as HTMLElement;
+            const original = panel.style.translate;
+            const [x, y] = original
+              .split(/\s+/)
+              .map((value) => Number.parseFloat(value) || 0);
+            const before = panel.getBoundingClientRect().top;
+            try {
+              panel.style.translate = `${x ?? 0}px ${(y ?? 0) + 1}px`;
+              return panel.getBoundingClientRect().top - before;
+            } finally {
+              panel.style.translate = original;
+            }
+          });
+          expect(sameFrameMove).toBeCloseTo(1, 5);
           const dxf = section.getByRole('button', {
             name: 'Export the exact section as DXF'
           });
@@ -289,11 +306,13 @@ for (const colorScheme of ['light', 'dark'] as const) {
           exact: true
         });
         await reachable(section.getByRole('switch', { name: 'Section cut' }));
-        await reachable(
-          section.getByRole('button', {
-            name: 'Export the exact section as DXF'
-          })
-        );
+        const dxf = section.getByRole('button', {
+          name: 'Export the exact section as DXF'
+        });
+        // Keep it open through Computing → Exact, when the result changes
+        // its height and another placement pass must preserve the clamp.
+        await expect(dxf).toBeEnabled({ timeout: 30_000 });
+        await reachable(dxf);
         await toggle.press('Enter');
         await expect(section).toHaveCount(0);
       }
