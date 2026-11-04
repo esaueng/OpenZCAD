@@ -10,6 +10,7 @@ import { toUserId, type BodyId } from '@openzcad/shared';
 import { createExactKernelAdapter } from './exact';
 import { RemusKernel } from './remus-runtime';
 import {
+  acceptedBlendRadiusProbe,
   acceptedEdgeModifierProbe,
   applyEdgeModifier,
   blendSubsetRemedy,
@@ -800,5 +801,92 @@ describe('fillet suggestion on a thin plate', () => {
     expect(
       refineAcceptedEdgeModifierSize(untouchable, 1, [2], 'fillet', 4, 3)
     ).toBe(4);
+  });
+});
+
+describe('fillet suggestion beside an earlier, smaller round', () => {
+  it("quotes the earlier round's radius when the ladder steps past it", () => {
+    const kernel = new RemusKernel();
+    const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+    type Point = { x: number; y: number; z: number };
+    const edgesWhere = (
+      solid: number,
+      keep: (start: Point, end: Point) => boolean
+    ) =>
+      Array.from(kernel.getSolidEdges(solid)).filter((candidate) => {
+        const sample = edgeSampleOf(kernel, candidate);
+        if (sample.closed) return false;
+        const [start, end] = sample.endpoints;
+        return keep(start, end);
+      });
+    // A 45 x 15 x 35 block: its top end edge rounded r8, then its top edges
+    // r1. That r1 round follows its tangent chain around the r8 band and down
+    // the block's sides to the bottom, so the bottom front edge's own chain
+    // runs onto it, and no ball larger than r1 can follow.
+    const block = kernel.makeBox(45, 15, 35);
+    const endTop = edgesWhere(
+      block,
+      (a, b) => near(a.x, 45) && near(b.x, 45) && near(a.y, 15) && near(b.y, 15)
+    );
+    const ended = applyEdgeModifier(kernel, block, endTop, 'fillet', 8)!;
+    expect(ended).not.toBeNull();
+    const topEdges = edgesWhere(
+      ended,
+      (a, b) =>
+        near(a.y, 15) && near(b.y, 15) && !(near(a.x, 37) && near(b.x, 37))
+    );
+    const body = applyEdgeModifier(kernel, ended, topEdges, 'fillet', 1)!;
+    expect(body).not.toBeNull();
+    const bottom = edgesWhere(
+      body,
+      (a, b) => near(a.y, 0) && near(b.y, 0) && near(a.z, 0) && near(b.z, 0)
+    );
+    expect(bottom).toHaveLength(1);
+
+    let reported: string | null = null;
+    expect(
+      applyEdgeModifier(kernel, body, bottom, 'fillet', 3, (m) => {
+        reported = m;
+      })
+    ).toBeNull();
+    // The premise: the ladder alone stops at an eighth of the request.
+    expect(
+      acceptedEdgeModifierProbe(
+        kernel,
+        body,
+        bottom,
+        'fillet',
+        3,
+        blendCliffLimit(reported)
+      )
+    ).toBe(0.375);
+    expect(acceptedBlendRadiusProbe(kernel, body, bottom, 3, 0.375)).toBe(1);
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      body,
+      bottom,
+      'fillet',
+      3,
+      false,
+      reported
+    );
+    expect(message).toContain('Try a smaller radius: radius 1 builds here.');
+    // And it is a size that builds, exactly.
+    const rounded = applyEdgeModifier(
+      kernel,
+      body,
+      bottom,
+      'fillet',
+      1,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true
+    );
+    expect(rounded).not.toBeNull();
+    expect(kernel.validateSolid(rounded!)).toBe(0);
   });
 });
