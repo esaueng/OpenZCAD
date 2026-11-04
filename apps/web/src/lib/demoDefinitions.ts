@@ -21,6 +21,8 @@ export interface DemoDefinition {
   summary?: string;
   /** Stored design stages; empty for samples supplied as a finished project. */
   revisions: [] | [string, string, string];
+  /** Open an assembly example with its first joint ready to try. */
+  initialWorkspace?: 'assemble';
 }
 
 export const DEMO_DEFINITIONS: DemoDefinition[] = [
@@ -58,7 +60,8 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     name: 'Demo · Scissors',
     tagline: 'Scissors assembly with a working revolute pivot',
     summary: 'Three parts, limited pivot motion',
-    revisions: []
+    revisions: [],
+    initialWorkspace: 'assemble'
   }
 ];
 
