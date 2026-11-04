@@ -19,6 +19,21 @@ from test_snapshot import SCHEMA, SOURCE
 
 
 class RamPolicyTests(unittest.TestCase):
+    def test_restore_refuses_root_siblings_and_symlink_escapes_before_decryption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'ram'
+            root.mkdir()
+            outside = Path(temporary)/'ram-sibling'
+            outside.mkdir()
+            (root/'escape').symlink_to(outside, target_is_directory=True)
+            with patch('sealed.RAM_ROOT', root), patch('sealed.gpg') as decrypt, \
+                 patch('sealed.ram_directory') as allocate:
+                for destination in [root, outside/'restored', root/'escape/restored']:
+                    with self.subTest(destination=destination), self.assertRaises(SnapshotError):
+                        unseal(Path('unused.gpg'), destination, b'synthetic passphrase')
+                decrypt.assert_not_called()
+                allocate.assert_not_called()
+
     def test_plaintext_staging_requires_tmpfs_and_safe_swap(self):
         mounts = 'tmpfs /dev/shm tmpfs rw 0 0\n'
         header = 'Filename Type Size Used Priority\n'
@@ -57,13 +72,19 @@ class SealedTests(unittest.TestCase):
         # Exercise the host staging policy separately, without requiring CI's
         # swap configuration to qualify it for handling production plaintext.
         def synthetic_ram():
-            return tempfile.TemporaryDirectory(prefix='openzcad-recovery-test-', dir='/dev/shm')
+            return tempfile.TemporaryDirectory(prefix='openzcad-recovery-test-')
         allocator = patch('sealed.ram_directory', synthetic_ram)
         allocator.start()
         self.addCleanup(allocator.stop)
         self.temporary = synthetic_ram()
         self.addCleanup(self.temporary.cleanup)
         self.ram = Path(self.temporary.name)
+        # Production still requires Linux tmpfs and safe swap. Only these
+        # synthetic archives use the portable test root; policy tests above
+        # exercise the real allocator and resolved-path refusal separately.
+        ram_root = patch('sealed.RAM_ROOT', self.ram)
+        ram_root.start()
+        self.addCleanup(ram_root.stop)
         self.root = self.ram/'snapshot'
         self.root.mkdir(mode=0o700)
         (self.root/'objects').mkdir(mode=0o700)

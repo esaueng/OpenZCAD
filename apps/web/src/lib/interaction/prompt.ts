@@ -4,6 +4,7 @@ import {
   type InteractionState
 } from './machine';
 import { activeKeymap, keyHint } from '../keymap';
+import type { DimensionMode } from '../keypad';
 
 /**
  * What the workspace should be telling you to do right now.
@@ -51,11 +52,14 @@ const SKETCH_TOOL_STEPS: Record<string, string> = {
 };
 
 /** The armed step for an operation, before any drag has begun. */
-function armedStep(state: InteractionState): string {
+function armedStep(
+  state: InteractionState,
+  dimensionMode: DimensionMode
+): string {
   if (state.mode === 'face') {
     switch (state.op) {
       case 'resize-cylinder-radius':
-        return 'Drag the radial handle to adjust the radius, or type an exact radius';
+        return `Drag the radial handle to adjust the ${dimensionMode}, or type an exact ${dimensionMode}`;
       case 'edit-fillet':
         return 'Drag the arrow to edit the fillet, or type an exact radius · R0 removes it';
       case 'remove-face-feature':
@@ -110,7 +114,10 @@ function draggingStep(state: InteractionState): string {
  * and clearing the selection are one press, so "clears the selection" is
  * true whether or not a panel is up.
  */
-export function commandPrompt(state: InteractionState): CommandPrompt | null {
+export function commandPrompt(
+  state: InteractionState,
+  dimensionMode: DimensionMode = 'diameter'
+): CommandPrompt | null {
   const escape = ESCAPE_LABELS[escapeTarget(state)];
   if (state.mode === 'idle') {
     return null;
@@ -157,12 +164,15 @@ export function commandPrompt(state: InteractionState): CommandPrompt | null {
   if (state.phase === 'dragging') {
     return { step: draggingStep(state), escape };
   }
-  return { step: armedStep(state), escape };
+  return { step: armedStep(state, dimensionMode), escape };
 }
 
 /** The prompt as one line, ready for the status bar. */
-export function commandPromptText(state: InteractionState): string | null {
-  const prompt = commandPrompt(state);
+export function commandPromptText(
+  state: InteractionState,
+  dimensionMode: DimensionMode = 'diameter'
+): string | null {
+  const prompt = commandPrompt(state, dimensionMode);
   if (!prompt) {
     return null;
   }

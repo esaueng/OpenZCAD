@@ -33,7 +33,9 @@ for (const fixture of [
     total: 182,
     offset: 105,
     radius: 6,
-    wallEnd: 45 + 2 * Math.tan(Math.atan(0.4) / 2)
+    // The R2 blend's centre is outside the r6 wall. Tangency to the
+    // flaring cone places its cylinder contact below the z45 intersection.
+    wallEnd: 45 - 2 * Math.tan(Math.atan(0.4) / 2)
   }
 ]) {
   test(`offsets an imported ${fixture.name} bottom cap while preserving the chamfer and shoulder, undo, redo and reload`, async ({

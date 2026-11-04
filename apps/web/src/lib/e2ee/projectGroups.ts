@@ -412,7 +412,8 @@ export interface ProjectGroupContext {
    */
   readonly onMemberDevicesRemoved?: (removal: MemberDevicesRemoved) => void;
   /**
-   * Told when the Worker refused a member Commit because this account's
+   * Recheck when a new own-device leaf is absent from this account view,
+   * or when the Worker refused a member Commit because this account's
    * device list moved past `account.list` (409 `E2EE_DEVICE_LIST_CHANGED`:
    * a removal or approval on another device). Every Commit built from this
    * view is refused the same way, and one built from a view that misses a
@@ -420,7 +421,7 @@ export interface ProjectGroupContext {
    * the page reloads its account view before committing again. Best
    * effort; a throw is ignored.
    */
-  readonly onDeviceListChanged?: () => void;
+  readonly onDeviceListChanged?: () => void | Promise<void>;
 }
 
 /** Other members' devices whose leaves one Commit removed (slice 5-7). */
@@ -655,6 +656,26 @@ async function directoryFor(
     known
   );
   const { leaves } = await ctx.api.leaves(projectId);
+  const own = ctx.account.list;
+  if (
+    leaves.some(
+      (leaf) =>
+        leaf.userId === own.userId &&
+        !own.devices.some((device) => device.deviceId === leaf.deviceId) &&
+        !own.revoked.some(
+          (device) => device.kind === 'device' && device.id === leaf.deviceId
+        )
+    )
+  ) {
+    // A sibling may have enrolled since this view opened. Recheck signed
+    // account authority, but keep this operation's directory unchanged:
+    // the unrecognized certification must still fail closed.
+    try {
+      await ctx.onDeviceListChanged?.();
+    } catch {
+      // Directory verification below still owns the refusal.
+    }
+  }
   const certifications: LeafCertification[] = leaves.map((leaf) => {
     if (!lists.some((list) => list.userId === leaf.userId)) {
       throw new ProjectGroupError(
@@ -1988,7 +2009,7 @@ async function submitPending(
       // carries any rotation the removal made due.
       await ctx.sessions.discardCommit(ref).catch(() => undefined);
       try {
-        ctx.onDeviceListChanged?.();
+        await ctx.onDeviceListChanged?.();
       } catch {
         // The refusal is still thrown.
       }

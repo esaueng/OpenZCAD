@@ -181,6 +181,11 @@ export function useCollaboration({
    * confirmed as, that version.
    */
   const baseVersionRef = useRef<number | null>(null);
+  const baseIdentityRef = useRef<{
+    projectId: string;
+    userId: string;
+    encrypted: boolean;
+  } | null>(null);
   const roleRef = useRef<ProjectAccessRole | null>(null);
   const leaseIdRef = useRef<string | null>(null);
   const leaseRef = useRef<ProjectEditLease | null>(null);
@@ -334,6 +339,14 @@ export function useCollaboration({
 
   useEffect(() => {
     roomEpochRef.current += 1;
+    const previousBase =
+      baseIdentityRef.current?.projectId === projectId &&
+      baseIdentityRef.current.userId === userId &&
+      baseIdentityRef.current.encrypted === encrypted
+        ? baseVersionRef.current
+        : null;
+    baseIdentityRef.current =
+      enabled && projectId && userId ? { projectId, userId, encrypted } : null;
     if (!enabled || !projectId || !userId || !displayName) {
       setStatus('offline');
       setMembers([]);
@@ -918,10 +931,27 @@ export function useCollaboration({
               message.role === 'viewer' && unconfirmedLeaseWorkRef.current
             );
             const local = documentRef.current;
+            const choice = chooseProjectDocument(local, message.document);
             const canAdopt =
               message.role === 'viewer' ||
-              chooseProjectDocument(local, message.document).choice ===
-                'remote';
+              choice.choice === 'remote';
+            if (codecLoad && !retained && !canAdopt) {
+              if (
+                choice.choice === 'local' ||
+                previousBase === message.document.version
+              ) {
+                // The fresh codec verified this head. Either lineage proves
+                // the local edit retains it, or it is the same pinned base
+                // this account/project already acknowledged (including an
+                // empty project's first edit). Keep the unsent local work.
+                baseVersionRef.current = message.document.version;
+              } else {
+                // The codec cannot seal on an unknown base. Exposing the
+                // divergence preserves both copies without publishing a
+                // falsely rebased edit or falling back to a blind write.
+                retainConflict(message.document, true);
+              }
+            }
             if (canAdopt && !retained) {
               lastSentVersionRef.current = message.document.version;
               baseVersionRef.current = message.document.version;

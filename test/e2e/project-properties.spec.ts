@@ -55,6 +55,21 @@ for (const viewport of [
       name: 'Actions for Properties bracket'
     });
     await actions.click();
+    const menu = page.getByRole('menu', {
+      name: 'Actions for Properties bracket'
+    });
+    await expect
+      .poll(() =>
+        menu.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const body = element.closest('.start-body')!.getBoundingClientRect();
+          return (
+            rect.top >= Math.max(0, body.top) &&
+            rect.bottom <= Math.min(innerHeight, body.bottom)
+          );
+        })
+      )
+      .toBe(true);
     await page
       .getByRole('menuitem', { name: 'Properties', exact: true })
       .click();

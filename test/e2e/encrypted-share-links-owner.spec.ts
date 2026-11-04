@@ -53,7 +53,8 @@ for (const { width, hasTouch } of [
     const copy = links.getByRole('button', { name: 'Copy View only link' });
     const revoke = links.getByRole('button', { name: 'Revoke View only link' });
     await alice.mouse.move(0, 0);
-    await expect(copy).toHaveCSS('opacity', hasTouch ? '1' : '0');
+    // Copy stays discoverable for keyboard and pointer users alike.
+    await expect(copy).toHaveCSS('opacity', '1');
     if (!hasTouch) {
       await copy.hover();
       await expect(copy).toHaveCSS('opacity', '1');

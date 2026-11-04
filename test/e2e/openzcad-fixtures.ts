@@ -581,7 +581,7 @@ export async function locateEdge(
 
 export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   // Edge picks only become meaningful after the exact body projection lands.
-  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
+  await expect(page.getByRole('button', { name: /^Fillet —/ })).toBeEnabled({
     timeout: 30_000
   });
   await setSelectionFilter(page, 'Edge');

@@ -613,7 +613,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   );
   await expect.poll(() => readBlend(canvas, 2), REPUBLISH).toBeNull();
 
-  // 5. Dragging streams monotone diameter chips and exact preview topology.
+  // 5. Dragging streams monotone diameter chips and the applied viewport profile.
   bore = await probeFace(canvas, 'bore');
   expect(bore).not.toBeNull();
   await expect(canvas).toHaveAttribute(
@@ -678,19 +678,14 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
       .getByRole('region', { name: 'Resize Hole operation' })
       .locator('.selection-callout-phase-dot')
   ).toHaveAttribute('aria-label', 'Dragging');
-  // Keep the probe the poll accepted. Re-reading it is a second round trip
-  // into a viewport that may already have moved on, and every round trip is
-  // seconds of budget when the main thread is contended.
-  let firstPreview: FaceProbe | null = null;
-  await expect
-    .poll(async () => {
-      firstPreview = await probeFace(canvas, 'bore', 'inspect');
-      return firstPreview?.geometry.diameter;
-    }, REPUBLISH)
-    .toBeLessThan(20);
-  const firstPreviewDiameter = firstPreview!.geometry.diameter!;
-  // Retained buffers expose the new topology before the next animation frame
-  // paints the chip. Judge the visible value once that frame has landed.
+  // The profile readback is published only after its vertex deformation.
+  const displayedDiameter = async () => {
+    const radius = await canvas.getAttribute('data-e2e-cylinder-proxy-radius');
+    return radius === null ? null : Number(radius) * 2;
+  };
+  await expect.poll(displayedDiameter, REPUBLISH).toBeCloseTo(18, 3);
+  const firstPreviewDiameter = (await displayedDiameter())!;
+  // Judge the chip once the frame carrying the deformation has landed.
   await expect
     .poll(async () => readChipValue(await chip.innerText()), REPUBLISH)
     .toBeCloseTo(firstPreviewDiameter, 3);
@@ -716,20 +711,19 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     },
     { ...handle, ...handleStart }
   );
-  let secondPreview: FaceProbe | null = null;
-  await expect
-    .poll(async () => {
-      secondPreview = await probeFace(canvas, 'bore', 'inspect');
-      return secondPreview?.geometry.diameter;
-    }, REPUBLISH)
-    .toBeLessThan(firstPreviewDiameter);
-  const secondPreviewDiameter = secondPreview!.geometry.diameter!;
+  await expect.poll(displayedDiameter, REPUBLISH).toBeCloseTo(17.4, 3);
+  const secondPreviewDiameter = (await displayedDiameter())!;
   await expect
     .poll(async () => readChipValue(await chip.innerText()), REPUBLISH)
     .toBeCloseTo(secondPreviewDiameter, 3);
   const secondDraggedValue = readChipValue(await chip.innerText());
   expect(secondDraggedValue).toBeLessThan(firstDraggedValue);
   expect(secondPreviewDiameter).toBeCloseTo(secondDraggedValue, 3);
+  // The certified profile owns the live frame; the source topology stays
+  // at its committed diameter until release, and Escape discards the profile.
+  expect((await probeFace(canvas, 'bore', 'inspect'))?.geometry.diameter).toBe(
+    20
+  );
   await page.keyboard.press('Escape');
   await canvas.evaluate((element, target) => {
     element.dispatchEvent(
@@ -746,6 +740,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
       })
     );
   }, handleStart);
+  await expect(canvas).not.toHaveAttribute('data-e2e-cylinder-proxy-radius');
   await expect
     .poll(
       async () =>
@@ -834,7 +829,9 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     rimBlend!.topologyId
   );
   const selectionReadout = page.locator('.selection-readout');
-  await expect(selectionReadout).toContainText('Blend face R1.5');
+  await expect(selectionReadout.locator('.selection-callout-name')).toHaveText(
+    'Fillet edges'
+  );
 
   // 10. A second oblique angle keeps the rim selection and chip world anchor.
   const trackingEdge = await selectOuterCircle(canvas);

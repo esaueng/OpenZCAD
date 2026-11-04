@@ -180,11 +180,32 @@ describe('the Escape line matches the ladder it describes', () => {
 });
 
 describe('the step describes the operation actually armed', () => {
-  it('distinguishes pushing a face from adjusting a cylinder radius', () => {
+  it('distinguishes pushing a face from adjusting a cylinder diameter', () => {
     expect(commandPrompt(faceState('armed'))?.step).toContain('push or pull');
     expect(
       commandPrompt(faceState('armed', 'resize-cylinder-radius'))?.step
-    ).toContain('radius');
+    ).toContain('diameter');
+  });
+
+  it.each(['diameter', 'radius'] as const)(
+    'uses the displayed %s in the radial help and status bar',
+    (mode) => {
+      const state = faceState('armed', 'resize-cylinder-radius');
+      expect(commandPrompt(state, mode)?.step).toBe(
+        `Drag the radial handle to adjust the ${mode}, or type an exact ${mode}`
+      );
+      expect(commandPromptText(state, mode)).toBe(
+        `Drag the radial handle to adjust the ${mode}, or type an exact ${mode} · Esc clears the selection`
+      );
+    }
+  );
+
+  it('keeps fillet help in radius when cylinder controls display diameter', () => {
+    expect(
+      commandPrompt(faceState('armed', 'edit-fillet'), 'diameter')?.step
+    ).toBe(
+      'Drag the arrow to edit the fillet, or type an exact radius · R0 removes it'
+    );
   });
 
   it('names the edge operation and how many edges it covers', () => {

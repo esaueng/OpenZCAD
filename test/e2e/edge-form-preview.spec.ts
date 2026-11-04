@@ -87,7 +87,7 @@ test('a fillet takes another edge after creation from its History row', async ({
   await setSelectionFilter(page, 'Edge');
   const first = await locateEdge(page);
   await page.mouse.click(first.x, first.y);
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await page.getByRole('button', { name: /^Fillet —/ }).click();
   const bar = page.getByRole('group', { name: 'Fillet command' });
   await expect(bar).toContainText('1 edge');
   await enterCommandValue(page, 'radius', '1');
@@ -115,41 +115,60 @@ test('a fillet takes another edge after creation from its History row', async ({
   await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
 });
 
-test('a new fillet takes a second edge clicked on its preview', async ({
-  page
-}) => {
-  await stubApi(page);
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Fillet two clicks');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await createPrimitiveInPlace(page, 'cylinder', {
-    sizes: { radius: '14', height: '28' }
-  });
-  await expect(page.locator('.feature-row')).toHaveCount(1);
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  const bar = page.getByRole('group', { name: 'Fillet command' });
-  await expect(bar).toContainText('Click the edges to fillet');
-  const first = await locateEdge(page);
-  await page.mouse.click(first.x, first.y);
-  await expect(bar).toContainText('1 edge');
-  await enterCommandValue(page, 'radius', '1');
-  // The preview now shows the rounded body under its own new id: a click
-  // on its other rim names the input's edge.
-  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled();
-  const second = await locateEdge(page, { exclude: [first.topologyId] });
-  await page.mouse.click(second.x, second.y);
-  // The hint's count, not Select all's ("Select all 2 edges").
-  await expect(bar).toContainText('2 edges ·');
-  // A right-click on a held edge neither drops it nor opens a menu.
-  await page.mouse.click(second.x, second.y, { button: 'right' });
-  await expect(bar).toContainText('2 edges ·');
-  await expect(page.getByRole('menu')).toHaveCount(0);
-  await finishInPlaceCommand(page, 'Fillet');
-  await expect(
-    page.locator('.feature-row', { hasText: /^Fillet/ })
-  ).toBeVisible();
-  await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
-});
+test(
+  'a new fillet takes a second edge clicked on its preview',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Fillet two clicks');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'cylinder', {
+      sizes: { radius: '14', height: '28' }
+    });
+    await expect(page.locator('.feature-row')).toHaveCount(1);
+    await page.getByRole('button', { name: /^Fillet —/ }).click();
+    const bar = page.getByRole('group', { name: 'Fillet command' });
+    await expect(bar).toContainText('Click the edges to fillet');
+    const first = await locateEdge(page);
+    await page.mouse.click(first.x, first.y);
+    await expect(bar).toContainText('1 edge');
+    await enterCommandValue(page, 'radius', '1');
+    // The preview now shows the rounded body under its own new id: a click
+    // on its other rim names the input's edge.
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled();
+    const second = await locateEdge(page, { exclude: [first.topologyId] });
+    await page.mouse.click(second.x, second.y);
+    // The hint's count, not Select all's ("Select all 2 edges").
+    await expect(bar).toContainText('2 edges ·');
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled();
+    const canvas = page.locator('.viewer-host canvas');
+    const selected = await canvas.getAttribute('data-e2e-selected-edges');
+    expect(selected?.split(',')).toEqual([first.topologyId, second.topologyId]);
+    const previewEdge = await locateEdge(page);
+    const bounds = (await canvas.boundingBox())!;
+    // Rounding moves the rims: consume right-clicks on the preceding point,
+    // a current preview edge, and empty space without dropping either pick.
+    for (const point of [
+      second,
+      previewEdge,
+      { x: bounds.x + 5, y: bounds.y + bounds.height - 5 }
+    ]) {
+      await page.mouse.click(point.x, point.y, { button: 'right' });
+      await expect(bar).toContainText('2 edges ·');
+      await expect(canvas).toHaveAttribute(
+        'data-e2e-selected-edges',
+        selected!
+      );
+      await expect(page.getByRole('menu')).toHaveCount(0);
+    }
+    await finishInPlaceCommand(page, 'Fillet');
+    await expect(
+      page.locator('.feature-row', { hasText: /^Fillet/ })
+    ).toBeVisible();
+    await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
+  }
+);
 
 test('a new fillet among several bodies can select all again after clearing', async ({
   page
@@ -164,7 +183,7 @@ test('a new fillet among several bodies can select all again after clearing', as
     });
   }
   await expect(page.locator('.feature-row')).toHaveCount(2);
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await page.getByRole('button', { name: /^Fillet —/ }).click();
   const bar = page.getByRole('group', { name: 'Fillet command' });
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
@@ -192,7 +211,7 @@ test('a new fillet keeps its edges lit across an undo', async ({ page }) => {
   // A second feature, for the undo to take back while the fillet runs.
   await createPrimitiveInPlace(page, 'box');
   await expect(page.locator('.feature-row')).toHaveCount(2);
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await page.getByRole('button', { name: /^Fillet —/ }).click();
   const bar = page.getByRole('group', { name: 'Fillet command' });
   const canvas = page.locator('.viewer-host canvas');
   const edge = await locateEdge(page);
@@ -219,7 +238,7 @@ test('a box sweep during Fillet adds the edges it catches', async ({
     sizes: { radius: '14', height: '28' }
   });
   await expect(page.locator('.feature-row')).toHaveCount(1);
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await page.getByRole('button', { name: /^Fillet —/ }).click();
   const bar = page.getByRole('group', { name: 'Fillet command' });
   await expect(bar).toContainText('Click the edges to fillet');
   // Both rims, swept from empty space around the part.

@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { createPrimitiveInPlace, stubApi } from './openzcad-fixtures';
+import {
+  ALL_PANELS_DOCKED,
+  MODEL_ONLY,
+  createPrimitiveInPlace,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * Production QA, 1 October: in short and narrow windows the rails, their
@@ -35,8 +40,12 @@ async function clickCentre(page: Page, locator: Locator) {
   await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
 }
 
-async function createBoxProject(page: Page, name: string) {
-  await stubApi(page);
+async function createBoxProject(
+  page: Page,
+  name: string,
+  panelLayout = ALL_PANELS_DOCKED
+) {
+  await stubApi(page, { panelLayout });
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'New project' }).click();
@@ -204,7 +213,7 @@ test('UI-10: the entity editor and palette clear the right rails on a phone', as
   page
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
-  await createBoxProject(page, 'Phone Sketch');
+  await createBoxProject(page, 'Phone Sketch', MODEL_ONLY);
   const { edge } = await sketchWithRectangle(page);
   await page.mouse.click(edge.x, edge.y);
   const editor = page.locator('.sketch-flyouts .sketch-entity-dock');

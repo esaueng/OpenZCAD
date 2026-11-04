@@ -46,6 +46,8 @@ import { transformReferenceMesh } from './mesh-reference';
 
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
+/** Remus's pinned arena policy: 1000 times its default linear tolerance. */
+const MESH_SEW_TOLERANCE_CEILING = 1000 * 1e-7;
 
 export function formatMeasuredVolume(value: number): string {
   const magnitude = Math.abs(value);
@@ -419,10 +421,11 @@ export function importMeshSolid(
 }
 
 /**
- * Preserve the established sew for successful imports. When it refuses, cap
- * one retry below the shortest source edge: a large STL can contain tiny but
- * valid facets, and a bounds-only tolerance collapses their endpoints. There
- * is deliberately no absolute floor tied to the document's length unit.
+ * Use the relative sewing budget within the native arena's legal ceiling.
+ * When it refuses, cap one retry below the shortest source edge: a large STL
+ * can contain tiny but valid facets, and a bounds-only tolerance collapses
+ * their endpoints. There is deliberately no absolute floor tied to the
+ * document's length unit.
  */
 function sewImportedMesh(
   kernel: RemusKernel,
@@ -430,7 +433,13 @@ function sewImportedMesh(
   faces: Uint32Array,
   scale: number
 ): number {
-  const tolerance = scale * MESH_SEW_TOLERANCE_RATIO;
+  // The live sew must remain readable by the same kernel's arena reader.
+  // Otherwise an inch-sized mesh works once but its cached replay refuses
+  // the raised vertex tolerance. Choose a legal budget before sewing.
+  const tolerance = Math.min(
+    scale * MESH_SEW_TOLERANCE_RATIO,
+    MESH_SEW_TOLERANCE_CEILING
+  );
   try {
     return kernel.sewFaces(faces, tolerance);
   } catch (error) {

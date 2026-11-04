@@ -325,7 +325,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   // Reimport the exported STEP as a new project and verify it stays valid.
   // Navigate via the product button rather than goto('/'): the workspace
   // restores the current project from local autosave on a bare navigation.
-  await page.getByRole('button', { name: 'OpenZCAD Beta' }).click();
+  await page.getByTitle('Back to projects', { exact: true }).click();
   await page.getByLabel('Project name').fill('Hook STEP Reimport');
   await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel(/^Import STEP or /).setInputFiles({

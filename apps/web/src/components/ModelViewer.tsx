@@ -11293,7 +11293,11 @@ export function ModelViewer({
       );
       presentedBounds([sketchGroup, regionGroup], clippingBounds);
       clippingBounds.union(scaleBarModelBounds);
-      updateCameraClipping(context.activeCamera, clippingBounds);
+      updateCameraClipping(
+        context.activeCamera,
+        clippingBounds,
+        context.activeCamera.position.distanceTo(cameraRig.controls.target)
+      );
       scaleIndicatorRef.current?.(
         chooseViewportScale(
           worldPerPixelAt(

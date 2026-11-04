@@ -184,6 +184,13 @@ for (const mode of ['new', 'reopen', 'restore'] as const)
       }
 
       if (legacy) {
+        // Leave through the product so pending local writes drain and the
+        // workspace releases its autosave owner before changing its fixture.
+        await page.getByTitle('Back to projects', { exact: true }).click();
+        await expect(
+          page.getByRole('button', { name: 'New project', exact: true })
+        ).toBeVisible();
+        const before = await savedState(page, name!);
         // Reconstruct the old application's durable nodes, command payloads
         // and undo patches, while keeping the actual owner and parameter edit.
         await page.evaluate(async (height) => {
@@ -217,14 +224,27 @@ for (const mode of ['new', 'reopen', 'restore'] as const)
             db.close();
           }
         }, BRACKET_BOSS_HEIGHT);
+        expect(await savedState(page, name!)).toEqual({
+          ...before,
+          heights: ['plate_t + wall_h / 2', 'plate_t + wall_h / 2']
+        });
+        await page
+          .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+          .click();
+        await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+        await expect(input).toHaveValue(value!);
       }
       await page.reload();
       if (legacy) {
         await expect
-          .poll(async () => (await savedState(page, name!)).heights, {
+          .poll(async () => savedState(page, name!), {
             timeout: 30_000
           })
-          .toEqual([BRACKET_BOSS_HEIGHT, BRACKET_BOSS_HEIGHT]);
+          .toMatchObject({
+            expression: value,
+            heights: [BRACKET_BOSS_HEIGHT, BRACKET_BOSS_HEIGHT],
+            label: 'Repair bracket fillet clearance'
+          });
         const repaired = await savedState(page, name!);
         expect(repaired.expression).toBe(value);
         expect(repaired.label).toBe('Repair bracket fillet clearance');

@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { renderedMinimumY } from './rendered-body-fixtures';
 import {
   createPrimitiveInPlace,
   test,
@@ -101,7 +102,7 @@ test('a drag release whose check answers quickly never blinks a Validating pill'
     y + handle.dy * handle.pixels * 3,
     { steps: 12 }
   );
-  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
   await page.mouse.up();
   await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
     timeout: 30_000

@@ -8,6 +8,7 @@ import { d1Database } from '../d1-sqlite';
 import {
   createPrimitiveInPlace,
   expect,
+  expectBodyCount,
   stubApi,
   test
 } from './openzcad-fixtures';
@@ -119,143 +120,170 @@ async function addBox(page: Page) {
  * room relays and stores only envelopes, and each browser decrypts and
  * verifies what it adopts.
  */
-test('relays an encrypted edit between two browsers of the owner', async ({
-  page: _unused,
-  browser
-}) => {
-  test.setTimeout(180_000);
-  const globals = installWorkerSocketGlobals();
-  try {
-    const server = createE2eeServer({ projectsEnabled: true });
-    const rooms = encryptedRooms(server);
-    const contextA = await browser.newContext();
-    const contextB = await browser.newContext();
-    const errors: string[] = [];
-    const a = await browserOf(contextA, server, rooms, globals.serverSockets);
-    const b = await browserOf(contextB, server, rooms, globals.serverSockets);
-    for (const page of [a, b]) {
-      page.on('pageerror', (error) => errors.push(error.message));
-    }
-
-    // Browser A sets the account up, opts in and creates an encrypted project.
-    await a.goto('/');
-    const seeded = await seedE2eeDevice(a, server, { label: 'Laptop' });
-    const settings = await openEncryptionSettings(a);
-    const toggle = settings.getByRole('checkbox', {
-      name: 'Encrypt new projects'
-    });
-    await expect(toggle).toBeEnabled();
-    await toggle.click();
-    await expect(toggle).toBeChecked();
-    await a.keyboard.press('Escape');
-    await a.getByLabel('Project name').fill('Shared bracket');
-    await a.getByRole('button', { name: 'New project' }).click();
-    await addBox(a);
-    await expect(
-      a.getByRole('status', { name: 'Saved', exact: true })
-    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    const projectId = (
-      server.db.prepare('SELECT id FROM projects').get() as { id: string }
-    ).id;
-    // The edit went through the room, which wrote it to the account.
-    await expect
-      .poll(() => rooms.rooms.get(projectId)?.values.get('room:e2ee:meta'), {
-        timeout: SYNC_BUDGET_MS
-      })
-      .toMatchObject({ schema: 1 });
-
-    // Browser B, a second certified device, opens it from its shelf.
-    await b.goto('/');
-    await seedAnotherE2eeDevice(b, server, seeded, 'Desktop');
-    await b.reload();
-    const card = b.locator('.start-tile-project', {
-      hasText: 'Shared bracket'
-    });
-    await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await card.locator('.start-tile-open').click();
-    // A's encrypted view state (slice 4-7) may be offered here, as a
-    // plaintext project's workspace session is on a second device, once A's
-    // view has reached the account: open with the default view either way.
-    const resume = b.getByRole('dialog', {
-      name: 'Resume where you left off?'
-    });
-    const saved = b.getByRole('status', { name: 'Saved', exact: true });
-    await expect(resume.or(saved)).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    if (await resume.isVisible()) {
-      await resume
-        .getByRole('button', { name: 'Open with default view' })
-        .click();
-      await expect(resume).toHaveCount(0);
-    }
-    await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
-
-    // An edit on A reaches B live, decrypted and verified there.
-    const versionsBefore = (
-      server.db
-        .prepare(
-          'SELECT MAX(document_version) AS v FROM e2ee_project_versions WHERE project_id = ?'
-        )
-        .get(projectId) as { v: number }
-    ).v;
-    const accountWritesFromA: string[] = [];
-    a.on('request', (request) => {
-      const path = new URL(request.url()).pathname;
-      if (
-        request.method() !== 'GET' &&
-        /^\/api\/e2ee\/projects\/[^/]+\/(document|revisions)$/.test(path)
-      ) {
-        accountWritesFromA.push(`${request.method()} ${path}`);
+test(
+  'relays an encrypted edit between two browsers of the owner',
+  { tag: '@ci-smoke' },
+  async ({ page: _unused, browser }) => {
+    test.setTimeout(180_000);
+    const globals = installWorkerSocketGlobals();
+    try {
+      const server = createE2eeServer({ projectsEnabled: true });
+      const rooms = encryptedRooms(server);
+      const contextA = await browser.newContext();
+      const contextB = await browser.newContext();
+      const errors: string[] = [];
+      const a = await browserOf(contextA, server, rooms, globals.serverSockets);
+      const b = await browserOf(contextB, server, rooms, globals.serverSockets);
+      for (const page of [a, b]) {
+        page.on('pageerror', (error) => errors.push(error.message));
       }
-    });
-    await addBox(a);
-    await expect(b.getByText(/from another of your devices/)).toBeVisible({
-      timeout: SYNC_BUDGET_MS
-    });
-    await expect(
-      a.getByRole('status', { name: 'Saved', exact: true })
-    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    // The room wrote A's live edit to the account; A's autosave stood down.
-    expect(accountWritesFromA).toEqual([]);
-    const head = server.db
-      .prepare(
-        'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ? ORDER BY document_version DESC LIMIT 1'
-      )
-      .get(projectId) as { version_hash: string };
-    expect(
-      rooms.rooms.get(projectId)!.values.get('room:e2ee:meta')
-    ).toMatchObject({ latest: head.version_hash });
-    await expect
-      .poll(
-        () =>
-          (
-            server.db
-              .prepare(
-                'SELECT MAX(document_version) AS v FROM e2ee_project_versions WHERE project_id = ?'
-              )
-              .get(projectId) as { v: number }
-          ).v
-      )
-      .toBeGreaterThan(versionsBefore);
 
-    // The room and the account hold ciphertext only.
-    const stored = rooms.rooms.get(projectId)!.values;
-    expect([...stored.keys()]).not.toContain('room:latest');
-    const text = new TextDecoder();
-    for (const value of stored.values()) {
-      const envelope = (value as { envelope?: Uint8Array } | null)?.envelope;
+      // Browser A sets the account up, opts in and creates an encrypted project.
+      await a.goto('/');
+      const seeded = await seedE2eeDevice(a, server, { label: 'Laptop' });
+      const settings = await openEncryptionSettings(a);
+      const toggle = settings.getByRole('checkbox', {
+        name: 'Encrypt new projects'
+      });
+      await expect(toggle).toBeEnabled();
+      await toggle.click();
+      await expect(toggle).toBeChecked();
+      await a.keyboard.press('Escape');
+      await a.getByLabel('Project name').fill('Shared bracket');
+      await a.getByRole('button', { name: 'New project' }).click();
+      await addBox(a);
+      await expect(
+        a.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      const projectId = (
+        server.db.prepare('SELECT id FROM projects').get() as { id: string }
+      ).id;
+      // The edit went through the room, which wrote it to the account.
+      await expect
+        .poll(() => rooms.rooms.get(projectId)?.values.get('room:e2ee:meta'), {
+          timeout: SYNC_BUDGET_MS
+        })
+        .toMatchObject({ schema: 1 });
+
+      // Browser B, a second certified device, opens it from its shelf.
+      await b.goto('/');
+      await seedAnotherE2eeDevice(b, server, seeded, 'Desktop');
+      await b.reload();
+      const card = b.locator('.start-tile-project', {
+        hasText: 'Shared bracket'
+      });
+      await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      // A's encrypted view state (slice 4-7) may be offered here, as a
+      // plaintext project's workspace session is on a second device, once A's
+      // view has reached the account: open with the default view either way.
+      const resume = b.getByRole('dialog', {
+        name: 'Resume where you left off?'
+      });
+      // The encrypted view can arrive after the initial Saved indicator. Keep
+      // the default-view choice available throughout the asynchronous handoff.
+      await b.addLocatorHandler(
+        resume,
+        async () => {
+          await resume
+            .getByRole('button', { name: 'Open with default view' })
+            .click();
+        },
+        { times: 1 }
+      );
+      await card.locator('.start-tile-open').click();
+      const saved = b.getByRole('status', { name: 'Saved', exact: true });
+      await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
+
+      // Enrollment can retire A's captured account view and reconnect its
+      // room. An edit during that handoff must still reach B automatically;
+      // its encrypted account fallback remains available while reconnecting.
+      await addBox(a);
+      await expect(b.getByText(/from another of your devices/)).toBeVisible({
+        timeout: SYNC_BUDGET_MS
+      });
+      await expectBodyCount(b, 2);
+      await expect(
+        a.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      for (const page of [a, b]) {
+        await expect(
+          page.getByRole('button', {
+            name: 'Open project sharing · 2 live',
+            exact: true
+          })
+        ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      }
+
+      // Once both hold the current encrypted view, the next edit goes through
+      // the live room alone. Its autosave must not duplicate the account write.
+      const versionsBefore = (
+        server.db
+          .prepare(
+            'SELECT MAX(document_version) AS v FROM e2ee_project_versions WHERE project_id = ?'
+          )
+          .get(projectId) as { v: number }
+      ).v;
+      const accountWritesFromA: string[] = [];
+      a.on('request', (request) => {
+        const path = new URL(request.url()).pathname;
+        if (
+          request.method() !== 'GET' &&
+          /^\/api\/e2ee\/projects\/[^/]+\/(document|revisions)$/.test(path)
+        ) {
+          accountWritesFromA.push(`${request.method()} ${path}`);
+        }
+      });
+      await addBox(a);
+      await expect(b.getByText(/from another of your devices/)).toBeVisible({
+        timeout: SYNC_BUDGET_MS
+      });
+      await expectBodyCount(b, 3);
+      await expect(
+        a.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      // The room wrote A's live edit to the account; A's autosave stood down.
+      expect(accountWritesFromA).toEqual([]);
+      const head = server.db
+        .prepare(
+          'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ? ORDER BY document_version DESC LIMIT 1'
+        )
+        .get(projectId) as { version_hash: string };
       expect(
-        envelope ? text.decode(envelope) : JSON.stringify(value)
+        rooms.rooms.get(projectId)!.values.get('room:e2ee:meta')
+      ).toMatchObject({ latest: head.version_hash });
+      await expect
+        .poll(
+          () =>
+            (
+              server.db
+                .prepare(
+                  'SELECT MAX(document_version) AS v FROM e2ee_project_versions WHERE project_id = ?'
+                )
+                .get(projectId) as { v: number }
+            ).v
+        )
+        .toBeGreaterThan(versionsBefore);
+
+      // The room and the account hold ciphertext only.
+      const stored = rooms.rooms.get(projectId)!.values;
+      expect([...stored.keys()]).not.toContain('room:latest');
+      const text = new TextDecoder();
+      for (const value of stored.values()) {
+        const envelope = (value as { envelope?: Uint8Array } | null)?.envelope;
+        expect(
+          envelope ? text.decode(envelope) : JSON.stringify(value)
+        ).not.toContain('Shared bracket');
+      }
+      expect(
+        JSON.stringify(
+          server.db.prepare('SELECT * FROM e2ee_project_versions').all()
+        )
       ).not.toContain('Shared bracket');
+      expect(errors).toEqual([]);
+      await contextA.close();
+      await contextB.close();
+    } finally {
+      globals.restore();
     }
-    expect(
-      JSON.stringify(
-        server.db.prepare('SELECT * FROM e2ee_project_versions').all()
-      )
-    ).not.toContain('Shared bracket');
-    expect(errors).toEqual([]);
-    await contextA.close();
-    await contextB.close();
-  } finally {
-    globals.restore();
   }
-});
+);

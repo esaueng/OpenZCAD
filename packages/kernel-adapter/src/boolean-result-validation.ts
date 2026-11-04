@@ -54,27 +54,55 @@ export function inspectTriangleMeshClosure(
     extent * POSITION_QUANTIZATION_RATIO,
     maximumMagnitude * 2 ** -22
   );
-  const quantize = (value: number): number =>
-    Math.round(value / positionQuantization);
-  // Quantize each indexed vertex once, then count edges by canonical vertex
-  // ids. The old loop allocated three coordinate strings and a Set for every
-  // triangle, even though adjacent triangles name the same vertices.
-  const vertexIds = new Map<string, number>();
+  // A quantization cell is a search index, not proof of coincidence. Two
+  // f32 projections of the same boundary can straddle any cell boundary
+  // (notably after converting a holder to inches). Search adjacent cells
+  // within the existing per-axis weld tolerance. Compare against the stored
+  // representative, never an alias, so chains cannot bridge a larger gap.
+  const vertices = new Map<
+    string,
+    { id: number; x: number; y: number; z: number }
+  >();
   const indexedIds = new Map<number, number>();
   const vertexId = (index: number): number => {
     const cached = indexedIds.get(index);
     if (cached !== undefined) return cached;
     const offset = index * 3;
-    const key = `${quantize(positions[offset] ?? 0)},${quantize(
-      positions[offset + 1] ?? 0
-    )},${quantize(positions[offset + 2] ?? 0)}`;
-    let id = vertexIds.get(key);
-    if (id === undefined) {
-      id = vertexIds.size;
-      vertexIds.set(key, id);
+    const x = positions[offset] ?? 0;
+    const y = positions[offset + 1] ?? 0;
+    const z = positions[offset + 2] ?? 0;
+    const cellX = Math.floor(x / positionQuantization);
+    const cellY = Math.floor(y / positionQuantization);
+    const cellZ = Math.floor(z / positionQuantization);
+    const key = `${cellX},${cellY},${cellZ}`;
+    const coincides = (v: { x: number; y: number; z: number }) =>
+      Math.abs(v.x - x) <= positionQuantization &&
+      Math.abs(v.y - y) <= positionQuantization &&
+      Math.abs(v.z - z) <= positionQuantization;
+    let vertex = vertices.get(key);
+    if (!vertex || !coincides(vertex)) {
+      vertex = undefined;
+      search: for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            if (dx === 0 && dy === 0 && dz === 0) continue;
+            const candidate = vertices.get(
+              `${cellX + dx},${cellY + dy},${cellZ + dz}`
+            );
+            if (candidate && coincides(candidate)) {
+              vertex = candidate;
+              break search;
+            }
+          }
+        }
+      }
     }
-    indexedIds.set(index, id);
-    return id;
+    if (!vertex) {
+      vertex = { id: vertices.size, x, y, z };
+      vertices.set(key, vertex);
+    }
+    indexedIds.set(index, vertex.id);
+    return vertex.id;
   };
 
   // At most indices.length distinct vertices can be visited. Keep a string

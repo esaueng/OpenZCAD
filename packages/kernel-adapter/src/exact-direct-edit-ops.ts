@@ -107,7 +107,7 @@ import {
 import { preparedFaceMove } from './exact-prepared-face-move';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
-import { shrinkChamferedThroughHole } from './exact-chamfered-hole';
+import { resizeChamferedThroughHole } from './exact-chamfered-hole';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -323,28 +323,33 @@ export function resolveFaceByFingerprint(
  * identically on either kernel.
  */
 /**
- * Cut the wider bore. A cutter that barely clears the bore's own span stops
- * inside a countersink, and the kernel refuses a cylinder whose end cap lies
- * inside the cone. When that happens the cutter is run through the body's
- * whole extent along the bore axis instead: a through-hole runs through, so
- * along its own axis the only material beyond the bore is the mouth of the
- * hole, and the countersink keeps its diameter while its depth shrinks.
+ * Cut the wider bore. At a chamfered mouth the cutter must clear the body's
+ * whole extent along the axis, not just the straight wall. A short cutter can
+ * succeed while leaving its end cap inside the cone: a shelf and a hidden
+ * pocket beneath the unchanged chamfer. Run through the mouth so the cone
+ * meets the new bore, keeping its carrier until the bore consumes it.
+ * Other holes retain the bounded cut and its existing full-depth fallback.
  */
 function enlargeThroughHole(
   kernel: RemusKernel,
   solid: number,
+  face: number,
   geometry: ThroughHoleGeometry,
   radius: number,
   newBore: number
 ): { solid: number; boundedCutter: boolean } {
-  try {
-    return { solid: exactCut(kernel, solid, newBore), boundedCutter: true };
-  } catch (shortCutError) {
+  const boreEdges = new Set(kernel.getFaceEdges(face));
+  const hasConicalMouth = [...kernel.getSolidFaces(solid)].some(
+    (candidate) =>
+      surfaceTypeOf(kernel, candidate) === 'cone' &&
+      [...kernel.getFaceEdges(candidate)].some((edge) => boreEdges.has(edge))
+  );
+  const fullDepthCut = () => {
     const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
-    if (!axis) throw shortCutError;
+    if (!axis) throw new Error('The selected face has a degenerate axis.');
     const bounds = kernel.boundingBox(solid);
     if (bounds.length !== 6 || !bounds.every(Number.isFinite))
-      throw shortCutError;
+      throw new Error('The through-hole’s full depth could not be measured.');
     const corners: Vec3[] = [];
     for (const x of [bounds[0]!, bounds[3]!])
       for (const y of [bounds[1]!, bounds[4]!])
@@ -361,14 +366,21 @@ function enlargeThroughHole(
       geometry.axisStart,
       scale(axis, Math.max(...reach) + margin)
     );
+    const output = exactCut(
+      kernel,
+      solid,
+      cylinderAlongAxis(kernel, start, end, radius)
+    );
     return {
-      solid: exactCut(
-        kernel,
-        solid,
-        cylinderAlongAxis(kernel, start, end, radius)
-      ),
+      solid: output,
       boundedCutter: false
     };
+  };
+  if (hasConicalMouth) return fullDepthCut();
+  try {
+    return { solid: exactCut(kernel, solid, newBore), boundedCutter: true };
+  } catch {
+    return fullDepthCut();
   }
 }
 
@@ -686,18 +698,9 @@ export function resizeThroughHole(
       extension
     );
     try {
-      if (radius > geometry.radius) {
-        const cut = enlargeThroughHole(
-          kernel,
-          solid,
-          geometry,
-          radius,
-          newBore
-        );
-        output = cut.solid;
-        boundedCutter = cut.boundedCutter;
-      } else {
-        const chamfered = shrinkChamferedThroughHole(
+      let chamfered: number | null = null;
+      try {
+        chamfered = resizeChamferedThroughHole(
           kernel,
           solid,
           face,
@@ -705,22 +708,39 @@ export function resizeThroughHole(
           radius,
           rimTolerance
         );
-        output =
-          chamfered ??
-          exactFuse(
+      } catch (error) {
+        // Shrinks have no safe generic fallback through a conical mouth.
+        // Wider cuts can rebuild changed topology through the full body.
+        if (radius < geometry.radius) throw error;
+      }
+      if (chamfered !== null) {
+        output = chamfered;
+      } else if (radius > geometry.radius) {
+        const cut = enlargeThroughHole(
+          kernel,
+          solid,
+          face,
+          geometry,
+          radius,
+          newBore
+        );
+        output = cut.solid;
+        boundedCutter = cut.boundedCutter;
+      } else {
+        output = exactFuse(
+          kernel,
+          solid,
+          exactCut(
             kernel,
-            solid,
-            exactCut(
+            cylinderAlongAxis(
               kernel,
-              cylinderAlongAxis(
-                kernel,
-                geometry.axisStart,
-                geometry.axisEnd,
-                geometry.radius
-              ),
-              newBore
-            )
-          );
+              geometry.axisStart,
+              geometry.axisEnd,
+              geometry.radius
+            ),
+            newBore
+          )
+        );
       }
     } catch (error) {
       throw new Error(

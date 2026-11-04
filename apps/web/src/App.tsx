@@ -488,6 +488,7 @@ import {
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
+import { beginEditTrace } from './lib/editTrace';
 import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
 import {
   modalHoldsKeyboard,
@@ -8824,6 +8825,9 @@ export function App() {
     document: ProjectDocument,
     derived: ProjectDocument['derived']
   ): void {
+    // A validated result can install before the broadcast effect runs.
+    // Register its committed revision before publishing it to the viewport.
+    beginEditTrace(document);
     const complete =
       'analysis' in derived
         ? null
@@ -17759,7 +17763,13 @@ export function App() {
 
   function handleSelectAllEdges(body: BodyRepresentation) {
     const edges = (body.topology?.edges ?? [])
-      .filter((edge) => edge.displayRole !== 'seam')
+      .filter(
+        (edge) =>
+          edge.displayRole !== 'seam' &&
+          (interaction.mode !== 'edges' ||
+            interaction.op !== 'chamfer' ||
+            edge.isSmooth !== true)
+      )
       .map((edge): TopologySelection => ({
         bodyId: body.bodyId,
         kind: 'edge',
@@ -22164,7 +22174,9 @@ export function App() {
     : null;
   const inPlaceBodyEdges = inPlaceEdgeBody
     ? (representations[inPlaceEdgeBody]?.topology?.edges.filter(
-        (edge) => edge.displayRole !== 'seam'
+        (edge) =>
+          edge.displayRole !== 'seam' &&
+          (inPlace.tool !== 'chamfer' || edge.isSmooth !== true)
       ) ?? [])
     : [];
   const inPlaceActions = [
@@ -25203,12 +25215,14 @@ export function App() {
     selectionCallout?.anchor === 'selection' &&
     selectedBodyIds.length > 0 &&
     (interaction.mode === 'face' || interaction.mode === 'edges')
-      ? toolCardFor(interaction)
+      ? toolCardFor(interaction, cylinderDimensionMode)
       : null;
   const calloutEdgeCount =
     interaction.mode === 'edges' && edgeModifierBody?.topology
       ? edgeModifierBody.topology.edges.filter(
-          (edge) => edge.displayRole !== 'seam'
+          (edge) =>
+            edge.displayRole !== 'seam' &&
+            (interaction.op !== 'chamfer' || edge.isSmooth !== true)
         ).length
       : 0;
   // Read through a ref, like the verbs, so the handlers' identity never
@@ -26212,6 +26226,12 @@ export function App() {
     if (!doc) {
       return;
     }
+    // A running command owns both its geometry and empty viewport space.
+    // A preview can move an edge away from the pointer before right-click.
+    if (!modelingLocked && inPlaceRef.current.active) {
+      setContextMenu(null);
+      return;
+    }
     // View mode gets the viewport menu whatever was clicked: the selection
     // menu is entirely modeling actions, and an empty one would be worse than
     // the viewport controls someone reading a model actually wants.
@@ -26273,13 +26293,6 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    // A running in-place command owns the viewport: a right-click is
-    // consumed before it reaches the command's picks (it must neither add
-    // nor drop an edge or face), and opens no menu under the command.
-    if (inPlaceRef.current.active) {
-      setContextMenu(null);
-      return;
-    }
     if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
       setContextMenu(null);
       return;
@@ -27849,7 +27862,9 @@ export function App() {
       .filter((projectId) => hasUnresolvedConflict(projectId))
   );
 
-  if (openingProject !== null) {
+  // Keep invitation dismissal reachable while its document loads. Until it
+  // is ready, the existing workspace is still the current document.
+  if (openingProject !== null && !(doc && pendingInvitationToken !== null)) {
     return (
       <StartupScreen
         projectName={openingProject}
@@ -28758,7 +28773,7 @@ export function App() {
     (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
-  const baseToolCard = toolCardFor(interaction);
+  const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
       ? (sketchOptions.find(
@@ -28834,7 +28849,7 @@ export function App() {
           ? viewModeHint
           : tweakMode
             ? tweakModeHint
-            : (commandPromptText(interaction) ??
+            : (commandPromptText(interaction, cylinderDimensionMode) ??
               (tool === 'sketch'
                 ? [
                     'Drag to draw',
@@ -29715,7 +29730,9 @@ export function App() {
                 ? []
                 : selectedEdges
             }
-            pickListEnabled={appSettings.experiments.directManipulation}
+            pickListEnabled={
+              appSettings.experiments.directManipulation && !inPlace.active
+            }
             frameRateOverlay={appSettings.experiments.frameRateOverlay}
             onCloseFrameRateOverlay={() =>
               handleAppSettingsChange({
@@ -30633,11 +30650,16 @@ export function App() {
                 edgeModifierBody?.topology &&
                 interaction.edges.length <
                   edgeModifierBody.topology.edges.filter(
-                    (edge) => edge.displayRole !== 'seam'
+                    (edge) =>
+                      edge.displayRole !== 'seam' &&
+                      (interaction.op !== 'chamfer' || edge.isSmooth !== true)
                   ).length
                   ? {
                       count: edgeModifierBody.topology.edges.filter(
-                        (edge) => edge.displayRole !== 'seam'
+                        (edge) =>
+                          edge.displayRole !== 'seam' &&
+                          (interaction.op !== 'chamfer' ||
+                            edge.isSmooth !== true)
                       ).length,
                       select: () => handleSelectAllEdges(edgeModifierBody)
                     }

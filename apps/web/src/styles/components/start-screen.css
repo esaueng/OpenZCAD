@@ -2114,6 +2114,7 @@
   display: grid;
   min-width: 168px;
   padding: 4px;
+  overflow-y: auto;
   /* The one menu style: the context and inspector overflow menus match. */
   background: var(--color-surface);
   border: var(--border-strong);

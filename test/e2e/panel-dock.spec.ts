@@ -12,6 +12,7 @@ import {
   revealModelPanel,
   stubApi,
   test,
+  waitForStillViewport,
   type PanelTitle,
   type SeedPanelLayout
 } from './openzcad-fixtures';
@@ -98,6 +99,7 @@ async function addBox(page: Page) {
 }
 
 async function findFacePoint(page: Page) {
+  await waitForStillViewport(page);
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await box(canvas);
   for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
@@ -115,6 +117,14 @@ async function findFacePoint(page: Page) {
       );
       if (!onCanvas) continue;
       await page.mouse.move(candidate.x, candidate.y);
+      // Hover picking runs on the next animation frame. Reading immediately
+      // can return the previous candidate's cursor and click empty space.
+      await canvas.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          )
+      );
       if (
         (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
       ) {

@@ -145,10 +145,39 @@ test(
         return canvas.getAttribute('data-e2e-handle-x');
       })
       .not.toBeNull();
+    const instructions = page.locator('.workspace-hint-help p');
+    const value = page.getByTestId('direct-manipulation-value');
+    await expect(value).toContainText('Ø');
+    await expect(instructions).toContainText(
+      'adjust the diameter, or type an exact diameter'
+    );
+    await page.getByRole('button', { name: 'Switch to radius entry' }).click();
+    await expect(value).toContainText('R');
+    await expect(instructions).toContainText(
+      'adjust the radius, or type an exact radius'
+    );
+    await page
+      .getByRole('button', { name: 'Switch to diameter entry' })
+      .click();
+    await expect(value).toContainText('Ø');
+    await expect(instructions).toContainText(
+      'adjust the diameter, or type an exact diameter'
+    );
+    await page.getByLabel('Operation instructions').click();
+    await expect(instructions).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath('hole-diameter-help.png')
+    });
+    await page.getByLabel('Operation instructions').click();
     const renderedSlopes = () =>
       canvas.evaluate(
         (element) =>
-          new Promise<{ cones: number; maxError: number }>((resolve) => {
+          new Promise<{
+            cones: number;
+            planes: number;
+            cylinders: number;
+            maxError: number;
+          }>((resolve) => {
             element.dispatchEvent(
               new CustomEvent('openzcad:e2e-render-policy', {
                 detail: {
@@ -188,7 +217,16 @@ test(
                         }
                       }
                     }
-                    resolve({ cones: cones.length, maxError });
+                    const count = (surface: string) =>
+                      body.topology!.faces.filter(
+                        (face) => face.geometry?.surfaceType === surface
+                      ).length;
+                    resolve({
+                      cones: cones.length,
+                      planes: count('plane'),
+                      cylinders: count('cylinder'),
+                      maxError
+                    });
                   }
                 }
               })
@@ -275,6 +313,75 @@ test(
     await expect
       .poll(async () => (await bore())?.axialLength)
       .toBeCloseTo(beforeLength - 1.8, 6);
+    // Reverse the shrink with the actual handle. Previously a short cutter
+    // stopped under each chamfer, adding shelves around a hidden pocket even
+    // though the diameter label and solid validator both looked correct.
+    await bore(true);
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+    const largerHandle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      scale: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const growBy = 3.5 - radius;
+    await page.mouse.move(bounds.x + largerHandle.x, bounds.y + largerHandle.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + largerHandle.x + largerHandle.dx * largerHandle.scale * growBy,
+      bounds.y + largerHandle.y + largerHandle.dy * largerHandle.scale * growBy,
+      { steps: 4 }
+    );
+    radius = 3.5;
+    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(7, 6);
+    await expect
+      .poll(async () => (await bore())?.axialLength)
+      .toBeCloseTo(beforeLength + 1, 6);
+    expect(await renderedSlopes()).toMatchObject({
+      cones: 2,
+      planes: 6,
+      cylinders: 1
+    });
+    expect((await renderedSlopes()).maxError).toBeLessThan(1e-4);
+    await page.mouse.up();
+    await expect(page.getByTestId('direct-manipulation-value')).toBeEnabled();
+    await page.keyboard.press('Escape');
+    await page.screenshot({
+      path: testInfo.outputPath('chamfer-enlarged.png')
+    });
+    // Past the old outer rim, the through cut consumes the conical mouths
+    // cleanly rather than retaining the old inner ring above a larger bore.
+    await bore(true);
+    await page.getByTestId('direct-manipulation-value').click();
+    await keypad.getByRole('textbox').fill('10.4');
+    await keypad.getByRole('textbox').press('Enter');
+    await expect(keypad).toBeHidden();
+    radius = 5.2;
+    await expect
+      .poll(async () => (await bore())?.diameter)
+      .toBeCloseTo(10.4, 6);
+    await expect
+      .poll(async () => (await bore())?.axialLength)
+      .toBeCloseTo(beforeLength + 2, 6);
+    expect(await renderedSlopes()).toMatchObject({
+      cones: 0,
+      planes: 6,
+      cylinders: 1
+    });
+    await page.keyboard.press('Escape');
+    await page.screenshot({
+      path: testInfo.outputPath('chamfer-consumed.png')
+    });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    radius = 3.5;
+    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(7, 6);
+    expect(await renderedSlopes()).toMatchObject({ cones: 2, planes: 6 });
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    radius = 5.2;
+    await expect
+      .poll(async () => (await bore())?.diameter)
+      .toBeCloseTo(10.4, 6);
     await expect
       .poll(
         () =>
@@ -315,10 +422,15 @@ test(
     await page.reload();
     await expect
       .poll(async () => (await bore())?.diameter, { timeout: 60_000 })
-      .toBeCloseTo(4.2, 6);
+      .toBeCloseTo(10.4, 6);
     await expect
       .poll(async () => (await bore())?.axialLength)
-      .toBeCloseTo(beforeLength - 1.8, 6);
+      .toBeCloseTo(beforeLength + 2, 6);
+    expect(await renderedSlopes()).toMatchObject({
+      cones: 0,
+      planes: 6,
+      cylinders: 1
+    });
     expect(errors).toEqual([]);
   }
 );

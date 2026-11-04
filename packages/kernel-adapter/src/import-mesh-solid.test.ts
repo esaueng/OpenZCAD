@@ -76,6 +76,38 @@ afterEach(() => {
 });
 
 describe('importMeshSolid face unification', () => {
+  it.each([1, 25.4, 254])(
+    'keeps a mesh at scale %s readable through cached arena replay',
+    (scale) => {
+      const kernel = new RemusKernel();
+      const restored = new RemusKernel();
+      try {
+        const solid = importMeshSolid(
+          kernel,
+          boxSoup([0], 0, [scale, scale, scale])
+        );
+        const [copy] = restored.deserializeSolids(
+          kernel.serializeSolids(Uint32Array.of(solid))
+        );
+        expect(copy).toBeDefined();
+        expect(restored.validateSolid(copy!)).toBe(0);
+        expect([...restored.boundingBox(copy!)]).toEqual([
+          0,
+          0,
+          0,
+          2 * scale,
+          3 * scale,
+          4 * scale
+        ]);
+        expect(restored.volume(copy!, 0.01) / scale ** 3).toBeCloseTo(24, 9);
+        expect(restored.getSolidFaces(copy!)).toHaveLength(6);
+      } finally {
+        kernel.free();
+        restored.free();
+      }
+    }
+  );
+
   it.each([1, 1 / 25.4])(
     'sews tiny edges without changing bounds or volume at document scale %s',
     (unitScale) => {

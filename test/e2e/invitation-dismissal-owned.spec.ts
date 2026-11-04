@@ -152,7 +152,10 @@ test('disabling cloud features releases a pending invitation navigation', async 
       .getByRole('checkbox', { name: 'Cloud features', exact: true })
       .uncheck();
     await settings
-      .getByRole('button', { name: 'Back to workspace', exact: true })
+      .getByRole('button', {
+        name: 'Close settings and go back to workspace',
+        exact: true
+      })
       .click();
     await expect(settings).toHaveCount(0);
     await expect(
@@ -204,7 +207,10 @@ for (const sharingEnabled of [false, true]) {
       await expect(settings).toBeVisible();
       expect(accepted).toBe(0);
       await settings
-        .getByRole('button', { name: 'Back to workspace', exact: true })
+        .getByRole('button', {
+          name: 'Close settings and go back to workspace',
+          exact: true
+        })
         .click();
       await expect(settings).toHaveCount(0);
       current = await openSharing(page);

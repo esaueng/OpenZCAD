@@ -48,9 +48,7 @@ test('creating a project while sketching clears the old session and accepts a fr
   await page.goto('/');
   await create(page, 'QA switch source');
   await sketch(page);
-  await page
-    .getByRole('button', { name: 'OpenZCAD Beta', exact: true })
-    .click();
+  await page.getByTitle('Back to projects', { exact: true }).click();
   await create(page, 'QA switch destination');
   await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toHaveCount(
     0

@@ -2853,6 +2853,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // angular limits as the shaded mesh. This keeps circular outlines closed
       // and prevents a smooth edge from visibly drifting away from its surface.
       const edgeHandles = Array.from(kernel.getSolidEdges(solid));
+      let smoothEdges: Set<number> | undefined;
+      try {
+        smoothEdges = new Set(kernel.getSolidSmoothEdges(solid));
+      } catch {
+        // Continuity is optional selection advice. A boundary whose normals
+        // cannot be classified stays selectable; it must not hide the body.
+      }
       const edgeLines = kernel.meshEdgesAll(
         solid,
         displayTessellation.linearDeflection,
@@ -2902,6 +2909,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             reference: verifiedReference,
             length: kernel.edgeLength(edge),
             displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
+            isSmooth: smoothEdges?.has(edge),
             adjacentFaceHashes: brepAdjacentFaceHashes(
               edge,
               edgeToFaces,

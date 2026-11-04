@@ -317,7 +317,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   // Turn and fade it; the viewport follows before Done.
   await enterCommandValue(page, 'rotation', '90');
   await options.click();
-  await imageBar.getByRole('radio', { name: '30%' }).click();
+  await imageBar.getByRole('combobox', { name: 'Opacity' }).selectOption('0.3');
   await options.click();
   await expect
     .poll(async () => drawnImages(canvas))

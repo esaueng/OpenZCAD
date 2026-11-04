@@ -83,42 +83,50 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
   useEffect(() => {
     if (!set) return;
     let frame = 0;
+    let ticking = false;
     let previewStart = 0;
     const tick = (now: number) => {
       frame = 0;
-      const runtime = getAssemblyRuntime();
-      if (runtime.playback) {
-        const next = playbackFrame(set, runtime.playback, now);
-        if (!next) {
-          assemblyRuntime.stop();
-          return;
-        }
-        assemblyRuntime.setOverrides(next.overrides);
-        if (next.studyTimeS !== undefined)
-          assemblyRuntime.setStudyTime(next.studyTimeS);
-        if (next.done) {
-          // Once: leave the last frame showing, stop the clock.
-          stopClockKeepPose();
-          return;
-        }
-      } else if (runtime.jointTool) {
-        if (!previewStart) previewStart = now;
-        const values = toolPreviewValues(
-          runtime.jointTool,
-          (now - previewStart) / 1000
-        );
-        if (!values) {
+      // Runtime notifications are synchronous. Publishing a pose must not
+      // let our subscriber start a second loop while this frame is running.
+      ticking = true;
+      try {
+        const runtime = getAssemblyRuntime();
+        if (runtime.playback) {
+          const next = playbackFrame(set, runtime.playback, now);
+          if (!next) {
+            assemblyRuntime.stop();
+            return;
+          }
+          assemblyRuntime.setOverrides(next.overrides);
+          if (next.studyTimeS !== undefined)
+            assemblyRuntime.setStudyTime(next.studyTimeS);
+          if (next.done) {
+            // Once: leave the last frame showing, stop the clock.
+            stopClockKeepPose();
+            return;
+          }
+        } else if (runtime.jointTool) {
+          if (!previewStart) previewStart = now;
+          const values = toolPreviewValues(
+            runtime.jointTool,
+            (now - previewStart) / 1000
+          );
+          if (!values) {
+            previewStart = 0;
+            if (runtime.overrides.has(TOOL_PREVIEW_JOINT_ID))
+              assemblyRuntime.setOverride(TOOL_PREVIEW_JOINT_ID, null);
+            return;
+          }
+          assemblyRuntime.setOverride(TOOL_PREVIEW_JOINT_ID, values);
+        } else {
           previewStart = 0;
-          if (runtime.overrides.has(TOOL_PREVIEW_JOINT_ID))
-            assemblyRuntime.setOverride(TOOL_PREVIEW_JOINT_ID, null);
           return;
         }
-        assemblyRuntime.setOverride(TOOL_PREVIEW_JOINT_ID, values);
-      } else {
-        previewStart = 0;
-        return;
+        frame = requestAnimationFrame(tick);
+      } finally {
+        ticking = false;
       }
-      frame = requestAnimationFrame(tick);
     };
     const kick = () => {
       const runtime = getAssemblyRuntime();
@@ -126,7 +134,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
         runtime.playback !== null ||
         (runtime.jointTool?.preview === true &&
           runtime.jointTool.step === 'review');
-      if (running && !frame) frame = requestAnimationFrame(tick);
+      if (running && !frame && !ticking) frame = requestAnimationFrame(tick);
     };
     const unsubscribe = subscribeAssemblyRuntime(kick);
     kick();

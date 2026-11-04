@@ -235,7 +235,11 @@ test('a connected edge run settles the typed Move before replacing its target', 
   await expect(move).toHaveCount(0);
   await expect(
     page.locator('.selection-readout .selection-callout-name')
-  ).toHaveText('8 edges');
+  ).toHaveText('Fillet');
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-edges',
+    /^[^,]+(,[^,]+){7}$/
+  );
   await expect(moveRows).toHaveCount(0);
 
   await startMove(page);
@@ -265,7 +269,11 @@ test('a connected edge run settles the typed Move before replacing its target', 
   await expect(move).toHaveCount(0);
   await expect(
     page.locator('.selection-readout .selection-callout-name')
-  ).toHaveText('8 edges');
+  ).toHaveText('Fillet');
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-edges',
+    /^[^,]+(,[^,]+){7}$/
+  );
   expect(await maxCards()).toBe(1);
 });
 

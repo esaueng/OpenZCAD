@@ -5,7 +5,7 @@ import type {
   SketchConstraintData,
   SketchObjectData
 } from '@openzcad/shared';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import { expect, stubApi, test, MODEL_ONLY } from './openzcad-fixtures';
 
 /**
  * S04 composite identity through the real rail, canvas and keyboard: the
@@ -21,7 +21,8 @@ const READ_TIMEOUT = { timeout: 30_000 };
 
 async function startSketch(page: Page, name: string) {
   page.setDefaultTimeout(15_000);
-  await stubApi(page);
+  // Geometry gestures use open canvas, clear of the docked model panels.
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   // Signed out, so Export project is a plain local download.
   await page.route('**/api/session', (route) =>
     route.fulfill({ status: 401, json: { error: 'Not signed in' } })

@@ -698,6 +698,16 @@ export function edgeModifierFailureMessage(
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
   const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
   const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
+  if (featureKind === 'chamfer' && selected.length > 0) {
+    try {
+      const smooth = new Set(kernel.getSolidSmoothEdges(target));
+      if (selected.every((edge) => smooth.has(edge))) {
+        return `${prefix} These faces already meet smoothly at the selected boundary. Select a sharp edge.`;
+      }
+    } catch {
+      // A failed continuity query cannot establish that a boundary is smooth.
+    }
+  }
   // Used to aim the ladder only — see the size-bound branch below for why it
   // is never quoted.
   const cliffLimit = blendCliffLimit(reported);
@@ -766,6 +776,9 @@ export function edgeModifierFailureMessage(
       return `${prefix} The kernel could not build the shared corner for this complete selection. Try the adjoining edge groups in separate ${featureKind} features.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected, priorBlendFace)) {
+      if (featureKind === 'chamfer') {
+        return `${prefix} The modeling engine could not join this chamfer to the existing fillet or chamfer. Smaller distances were refused too. The last valid body is unchanged.`;
+      }
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
     }
   } catch {
