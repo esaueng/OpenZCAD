@@ -95,6 +95,11 @@ export interface ModelPanelSource {
   onResumeHistory(): void;
   /** Renames a history feature in place, from its row's menu. */
   onRenameFeature?(featureId: FeatureId, name: string): void;
+  /**
+   * Deletes a History multi-selection as one undoable step. Without it the
+   * rows select one at a time, as before.
+   */
+  onDeleteFeatures?(featureIds: readonly FeatureId[]): void;
   /** The document's length unit, for the value each history row shows. */
   units: UnitSystem;
   onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;

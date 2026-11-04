@@ -53,6 +53,7 @@ export type HistoryPanelProps = Pick<
   | 'onReorderFeature'
   | 'reorderBusy'
   | 'onRenameFeature'
+  | 'onDeleteFeatures'
 > & { find: HistoryFind };
 
 export function HistoryPanel({
@@ -80,6 +81,7 @@ export function HistoryPanel({
   onReorderFeature,
   reorderBusy,
   onRenameFeature,
+  onDeleteFeatures,
   find
 }: HistoryPanelProps) {
   return (
@@ -113,6 +115,7 @@ export function HistoryPanel({
         onReorderFeature={onReorderFeature}
         reorderBusy={reorderBusy}
         onRenameFeature={onRenameFeature}
+        onDeleteFeatures={onDeleteFeatures}
       />
       {/* Below the list, so selecting a row never pushes the rows down. */}
       {historyDetails}

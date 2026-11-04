@@ -191,6 +191,65 @@ test('deleting a history feature raises an undoable toast that counts its depend
 });
 
 /**
+ * History rows select one at a time, so clearing out a run of abandoned
+ * steps meant one menu, one confirm and one toast per row. Shift-click
+ * picks a range, Delete removes it as one undoable step, and one Undo
+ * brings every step back.
+ */
+test('shift-click selects a run of history rows that delete and undo together', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  const status = page.getByRole('contentinfo');
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 120_000
+  });
+  await expect(status).not.toContainText(
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    { timeout: 60_000 }
+  );
+  const summary = page.getByRole('group', { name: 'Workspace status' });
+  await expect(
+    summary.getByLabel(/ · 17 features · 1 body\. Sync /)
+  ).toBeVisible();
+
+  const rows = page.locator('.history-timeline .feature-row-main');
+  await rows.nth(-3).click();
+  await rows.nth(-1).click({ modifiers: ['Shift'] });
+  const bar = page.getByRole('toolbar', { name: 'Selected steps' });
+  await expect(bar).toContainText('3 selected');
+  await expect(
+    page.locator('.history-timeline .feature-row.in-batch')
+  ).toHaveCount(3);
+  // The batch stands alone: no edit card stays open on one of its steps.
+  await expect(
+    page.locator('.history-timeline .feature-row.selected')
+  ).toHaveCount(0);
+  await page.keyboard.press('Delete');
+  const confirm = page.getByRole('alertdialog', { name: 'Delete 3 features?' });
+  if (await confirm.isVisible().catch(() => false)) {
+    await confirm.getByRole('button', { name: 'Delete' }).click();
+  }
+  const toast = page.locator('.toast');
+  await expect(toast).toHaveText(/Deleted 3 features/);
+  await expect(summary.getByLabel(/ · 14 features · /)).toBeVisible({
+    timeout: 60_000
+  });
+  await expect(bar).toHaveCount(0);
+
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(
+    summary.getByLabel(/ · 17 features · 1 body\. Sync /)
+  ).toBeVisible({ timeout: 60_000 });
+});
+
+/**
  * The history list is a CSS grid, and its one implicit `auto` track sized
  * itself to the longest nowrap feature name. A long name (an imported part's
  * "Hammer Holder 46mm v4.step opening: negativeEnd mask placement") widened
