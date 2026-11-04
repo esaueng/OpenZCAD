@@ -5929,6 +5929,7 @@ export function App() {
           : kept,
         null,
         {
+          conflict: pendingAccount,
           onSettled: () =>
             setAccountRecheckProjectId((current) =>
               current === conflict.projectId ? null : current
@@ -14546,7 +14547,7 @@ export function App() {
     projectId: string,
     localDocument: ProjectDocument,
     accountVersion: number | null,
-    recheck: { onSettled(): void } | null = null
+    recheck: { conflict: ProjectConflict; onSettled(): void } | null = null
   ) {
     if (!recheck) {
       setStatus(
@@ -14556,12 +14557,15 @@ export function App() {
       );
     }
     // A re-check replaces an open account question rather than raising a new
-    // one: an outcome that needs no decision retires it and its marker.
+    // one: an outcome that needs no decision retires it and its marker. Only
+    // that exact question — one raised meanwhile (a 409 on a manual save) is
+    // still owed to the user.
     const retireOpenConflict = () => {
       if (!recheck) return;
+      if (accountConflictRef.current !== recheck.conflict) return;
       clearUnresolvedConflict(projectId, 'account');
       setAccountConflict((current) =>
-        current?.projectId === projectId ? null : current
+        current === recheck.conflict ? null : current
       );
     };
     void (async () => {
