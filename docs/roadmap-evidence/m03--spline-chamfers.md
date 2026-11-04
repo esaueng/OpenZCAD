@@ -2,7 +2,7 @@
 row: M03
 ---
 
-Remus 2026.1.117 covers straight ridges between rational spline
+Remus 2026.1.118 covers straight ridges between rational spline
 extrusion walls and monotone curved spline rims with normal planar ends.
 `test/e2e/chamfer-freeform.spec.ts` selects both kinds on a genuine imported
 cubic spline prism and checks preview/commit, Undo/Redo and saved replay with
@@ -10,7 +10,7 @@ the full renderer. The paired kernel retains source carriers and adds
 whole-interval contact and parameter certificates; it also preserves distant
 bores and refuses exhausted or intersecting requests transactionally.
 The paired kernel and translator packages are pinned to immutable source
-`6ec69d97fe052e407a1ce0ac99fe913508540ba3` from
+`29a68ab1f00aa05de67f2851f1081d44981a302d` from
 [Remus #1519](https://github.com/esaueng/remus/pull/1519). Before the update,
 both browser cases retained six faces after the chamfer preview; the new
 package produces seven faces. The regressions also export STEP through the

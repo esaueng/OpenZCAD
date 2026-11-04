@@ -224,6 +224,12 @@ for (const curved of [false, true]) {
       for await (const chunk of await download.createReadStream())
         chunks.push(chunk as Buffer);
       const bytes = Buffer.concat(chunks);
+      const stepPath = testInfo.outputPath('fixture-chamfer-result.step');
+      await download.saveAs(stepPath);
+      await testInfo.attach('fixture-chamfer-result.step', {
+        path: stepPath,
+        contentType: 'application/step'
+      });
       expect(bytes.toString()).toContain('CLOSED_SHELL');
       expect(bytes.toString()).toContain('B_SPLINE_SURFACE_WITH_KNOTS');
       const kernel = new RemusKernel();
