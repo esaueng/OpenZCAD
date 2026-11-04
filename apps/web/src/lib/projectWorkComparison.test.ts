@@ -8,7 +8,9 @@ import {
 import {
   chooseProjectDocument,
   projectPreservesLocalWork,
-  projectWorkDifferences
+  projectsHaveSameCanonicalContent,
+  projectWorkDifferences,
+  withMatchingLocalDerived
 } from './localProjectStore';
 
 const owner = toUserId('user_schema_comparison');
@@ -46,6 +48,21 @@ describe('comparing copies across a schema bump', () => {
     const room = savedByPreviousBuild(hydrated);
     expect(projectPreservesLocalWork(hydrated, room)).toBe(true);
     expect(projectWorkDifferences(hydrated, room)).toEqual([]);
+  });
+
+  it('keeps every content comparison blind to the schema stamp alone', () => {
+    const opened = project();
+    const older = savedByPreviousBuild(opened);
+    expect(projectsHaveSameCanonicalContent(older, opened)).toBe(true);
+    // Room documents travel without meshes; an unchanged model keeps its own
+    // rather than blanking the viewport until a rebuild.
+    const local = {
+      ...opened,
+      derived: { ...opened.derived, exportableBodyIds: ['body_kept'] }
+    } as ProjectDocument;
+    expect(
+      withMatchingLocalDerived(older, local).derived.exportableBodyIds
+    ).toEqual(['body_kept']);
   });
 
   it('still reports real divergence behind an older schema stamp', () => {
