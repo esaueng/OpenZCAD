@@ -1222,6 +1222,9 @@ const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
     default: module.UnappliedCardDialog
   }))
 );
+/** Longest an account conflict waits for the project's room to connect. */
+const ROOM_SETTLE_TIMEOUT_MS = 5000;
+
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectConflictDialog').then((module) => ({
     default: module.ProjectConflictDialog
@@ -4125,6 +4128,12 @@ export function App() {
    */
   const [accountConflict, setAccountConflict] =
     useState<ProjectConflict | null>(null);
+  const accountConflictRef = useRef(accountConflict);
+  accountConflictRef.current = accountConflict;
+  /** Hides an account question while it is being re-asked after a room choice. */
+  const [accountRecheckProjectId, setAccountRecheckProjectId] = useState<
+    string | null
+  >(null);
   /**
    * The save-to-account run currently on screen, one entry per project in
    * attempt order. Deliberately not cleared when the loop finishes: the
@@ -5294,9 +5303,11 @@ export function App() {
           : `Applied revision ${remoteDocument.version} from another of your devices.`
       );
     },
-    onConflict(remoteDocument) {
+    onConflict() {
+      // Not the room's version number: the dialog counts edits, and the two
+      // numbers read as a contradiction side by side.
       setStatus(
-        `Collaboration conflict at revision ${remoteDocument.version}; local edits were preserved.`
+        'This project changed in the live session too. Nothing has been discarded — choose which version to keep.'
       );
     }
   });
@@ -5900,6 +5911,31 @@ export function App() {
     } finally {
       setBusy(false);
     }
+    // The account question waiting behind this one compared the copy that was
+    // on screen before the choice. Ask it again about the document the choice
+    // left; otherwise one divergence asks twice, the second time about a
+    // browser copy that no longer exists.
+    const pendingAccount = accountConflictRef.current;
+    if (pendingAccount?.projectId === conflict.projectId) {
+      const kept =
+        resolution === 'keep-mine'
+          ? conflict.localDocument
+          : conflict.remoteDocument;
+      setAccountRecheckProjectId(conflict.projectId);
+      raiseAccountConflict(
+        conflict.projectId,
+        managerRef.current?.document.projectId === conflict.projectId
+          ? managerRef.current.document
+          : kept,
+        null,
+        {
+          onSettled: () =>
+            setAccountRecheckProjectId((current) =>
+              current === conflict.projectId ? null : current
+            )
+        }
+      );
+    }
   }
 
   // "Decide later" on a room conflict. The hook re-raises the conflict on
@@ -5911,6 +5947,30 @@ export function App() {
   const roomConflictKey = collaboration.conflict
     ? `${collaboration.conflict.projectId}:${collaboration.conflict.localDocument.version}:${collaboration.conflict.expectedRemoteVersion}`
     : null;
+  // The account answers at startup before the room has connected. Showing its
+  // question first and swapping it for the room's when the room's arrives
+  // flipped one dialog between "Cloud" and "Live session" under the pointer.
+  // Hold the account question until this project's room has settled once
+  // (or plainly is not coming); it is kept, not dropped.
+  const [roomSettledProjectId, setRoomSettledProjectId] = useState<
+    string | null
+  >(null);
+  const roomConnectingForProject =
+    collaboration.status === 'connecting' &&
+    roomSettledProjectId !== openProjectId;
+  useEffect(() => {
+    if (!roomConnectingForProject) {
+      if (collaboration.status !== 'connecting') {
+        setRoomSettledProjectId(openProjectId);
+      }
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setRoomSettledProjectId(openProjectId),
+      ROOM_SETTLE_TIMEOUT_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [roomConnectingForProject, collaboration.status, openProjectId]);
   const roomKeepMineDisabledReason: string | null = !collaboration.conflict
     ? null
     : collaboration.role === 'viewer'
@@ -14485,14 +14545,33 @@ export function App() {
   function raiseAccountConflict(
     projectId: string,
     localDocument: ProjectDocument,
-    accountVersion: number | null
+    accountVersion: number | null,
+    recheck: { onSettled(): void } | null = null
   ) {
-    setStatus(
-      accountVersion === null
-        ? 'This project changed elsewhere. Your work is saved on this device.'
-        : `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
-    );
+    if (!recheck) {
+      setStatus(
+        accountVersion === null
+          ? 'This project changed elsewhere. Your work is saved on this device.'
+          : `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
+      );
+    }
+    // A re-check replaces an open account question rather than raising a new
+    // one: an outcome that needs no decision retires it and its marker.
+    const retireOpenConflict = () => {
+      if (!recheck) return;
+      clearUnresolvedConflict(projectId, 'account');
+      setAccountConflict((current) =>
+        current?.projectId === projectId ? null : current
+      );
+    };
     void (async () => {
+      try {
+        await reconcile();
+      } finally {
+        recheck?.onSettled();
+      }
+    })();
+    async function reconcile() {
       let remote: ProjectDocument;
       try {
         remote = await api.loadProject(projectId);
@@ -14529,12 +14608,15 @@ export function App() {
       );
       if (outcome.choice === 'remote') {
         await acceptAccountDocument(outcome.document, localDocument);
+        retireOpenConflict();
         setSaveState('synced');
-        setStatus(
-          outcome.document.version === localDocument.version
-            ? 'Your account already holds this version.'
-            : 'Opened the newer copy from your account.'
-        );
+        if (!recheck) {
+          setStatus(
+            outcome.document.version === localDocument.version
+              ? 'Your account already holds this version.'
+              : 'Opened the newer copy from your account.'
+          );
+        }
         return;
       }
       if (outcome.choice === 'local') {
@@ -14556,8 +14638,9 @@ export function App() {
             },
             localDocument
           );
+          retireOpenConflict();
           setSaveState('synced');
-          setStatus('Synced with your account.');
+          if (!recheck) setStatus('Synced with your account.');
           return;
         } catch (error) {
           if (!(error instanceof ApiError && error.status === 409)) {
@@ -14574,7 +14657,7 @@ export function App() {
       setAccountConflict(
         conflictFromDocuments(localDocument, remote, 'account')
       );
-    })();
+    }
   }
 
   async function retryUnavailableAccountProject(
@@ -31820,7 +31903,9 @@ export function App() {
             )}
           {accountConflict &&
             accountConflict.projectId === doc.projectId &&
-            !collaboration.conflict && (
+            !collaboration.conflict &&
+            !roomConnectingForProject &&
+            accountRecheckProjectId !== doc.projectId && (
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}
