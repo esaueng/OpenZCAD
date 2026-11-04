@@ -7,15 +7,20 @@ import { toUserId } from '@openzcad/shared';
 import type { Locator, Page, TestInfo } from '@playwright/test';
 import {
   editExtrudeFromHistory,
+  createPrimitiveInPlace,
   featureCardFromHistory,
   expect,
   revealModelPanel,
   stubApi,
+  type SeedPanelLayout,
   test
 } from './openzcad-fixtures';
 
-async function openPart(page: Page) {
-  await stubApi(page, { panelLayout: null, commandFoldClosed: true });
+async function openPart(
+  page: Page,
+  panelLayout: SeedPanelLayout | null = null
+) {
+  await stubApi(page, { panelLayout, commandFoldClosed: true });
   const sketch = addSketchFeature(
     createProjectDocument('Design review fixture', toUserId('user_e2e')),
     {
@@ -64,39 +69,521 @@ async function openPart(page: Page) {
 
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   const path = testInfo.outputPath(`${name}.png`);
-  await page.screenshot({ path });
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path, animations: 'disabled' });
   await testInfo.attach(name, { path, contentType: 'image/png' });
 }
 
 async function reachable(control: Locator) {
   await expect(control).toBeVisible();
   await expect
-    .poll(() =>
-      control.evaluate((element) => {
-        const box = element.getBoundingClientRect();
-        const hit = document.elementFromPoint(
-          box.x + box.width / 2,
-          box.y + box.height / 2
-        );
-        return (
-          box.width >= 1 &&
-          box.height >= 1 &&
-          box.x >= 0 &&
-          box.right <= innerWidth &&
-          box.y >= 0 &&
-          box.bottom <= innerHeight &&
-          hit !== null &&
-          element.contains(hit)
-        );
-      })
+    .poll(
+      () =>
+        control.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            box.x + box.width / 2,
+            box.y + box.height / 2
+          );
+          return (
+            box.width >= 1 &&
+            box.height >= 1 &&
+            box.x >= 0 &&
+            box.right <= innerWidth &&
+            box.y >= 0 &&
+            box.bottom <= innerHeight &&
+            hit !== null &&
+            element.contains(hit) &&
+            [0.15, 0.5, 0.85].every((x) =>
+              [0.15, 0.5, 0.85].every((y) => {
+                const sample = document.elementFromPoint(
+                  box.x + box.width * x,
+                  box.y + box.height * y
+                );
+                return sample !== null && element.contains(sample);
+              })
+            )
+          );
+        }),
+      {
+        message: `Reachable: ${(await control.getAttribute('aria-label')) ?? (await control.textContent())}`
+      }
     )
-    .toBe(true);
+    .toBe(true)
+    .catch(async (error: unknown) => {
+      console.info(
+        await control.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return {
+            control: element.getAttribute('aria-label'),
+            box: { x: box.x, y: box.y, width: box.width, height: box.height },
+            viewport: { width: innerWidth, height: innerHeight },
+            hits: [0.15, 0.5, 0.85].map((x) =>
+              [0.15, 0.5, 0.85].map((y) =>
+                document
+                  .elementFromPoint(
+                    box.x + box.width * x,
+                    box.y + box.height * y
+                  )
+                  ?.getAttribute('class')
+              )
+            )
+          };
+        })
+      );
+      throw error;
+    });
+}
+
+async function tabTo(page: Page, target: Locator) {
+  for (let step = 0; step < 100; step += 1) {
+    if (await target.evaluate((element) => element === document.activeElement))
+      return;
+    await page.keyboard.press('Tab');
+  }
+  await expect(target).toBeFocused();
 }
 
 for (const colorScheme of ['light', 'dark'] as const) {
   test.describe(`${colorScheme} review followups`, () => {
     test.use({ colorScheme, reducedMotion: 'reduce' });
     test.setTimeout(90_000);
+
+    test(
+      'keyboard modeling, catalog and help preserve visible focus',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 768, height: 600 });
+        await openPart(page);
+        await page.keyboard.press('b');
+        await expect(
+          page.getByRole('group', { name: 'Box command', exact: true })
+        ).toBeFocused();
+        await expect(
+          page
+            .getByRole('group', { name: 'Box command', exact: true })
+            .getByRole('button', { name: 'Done', exact: true })
+        ).toBeEnabled();
+        await page.keyboard.press('Enter');
+        await expect(
+          page.getByRole('group', { name: 'Box command', exact: true })
+        ).toBeHidden();
+        const more = page.getByRole('button', { name: /^More tools/ });
+        await tabTo(page, more);
+        await page.keyboard.press('Enter');
+        const search = page.getByRole('searchbox', { name: 'Find a tool' });
+        await expect(search).toBeFocused();
+        await page.keyboard.type('Loft');
+        await reachable(search);
+        await capture(page, testInfo, 'keyboard-catalog');
+        await page.keyboard.press('Escape');
+        await expect(search).toHaveValue('');
+        await page.keyboard.press('Escape');
+        await expect(search).toBeHidden();
+        await page.keyboard.press('?');
+        const help = page.getByRole('dialog', { name: 'Help & controls' });
+        await expect(help).toBeVisible();
+        await tabTo(
+          page,
+          help.getByRole('button', { name: 'Close', exact: true })
+        );
+        await capture(page, testInfo, 'keyboard-help');
+        await page.keyboard.press('Enter');
+        await expect(help).toBeHidden();
+      }
+    );
+
+    test(
+      'modeling guide survives keyboard commands and compact help stays readable',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await stubApi(page, {
+          workspaceTour: true,
+          panelLayout: null,
+          commandFoldClosed: true
+        });
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto('/');
+        await page.getByLabel('Project name').fill('Guided first part');
+        await page.getByRole('button', { name: 'New project' }).click();
+        const guide = page.getByRole('region', {
+          name: 'Modeling guide',
+          exact: true
+        });
+        await expect(
+          guide.getByRole('heading', { name: 'Create your first feature' })
+        ).toBeVisible();
+        await capture(page, testInfo, 'guide-expanded');
+        await guide
+          .getByRole('button', { name: 'Minimize modeling guide' })
+          .click();
+        await expect(
+          guide.getByRole('button', { name: 'Expand modeling guide' })
+        ).toBeVisible();
+        await page.keyboard.press('b');
+        const box = page.getByRole('group', {
+          name: 'Box command',
+          exact: true
+        });
+        await expect(box).toBeVisible();
+        await expect(guide).toBeHidden();
+        await expect(
+          box.getByRole('button', { name: 'Done', exact: true })
+        ).toBeEnabled();
+        await page.keyboard.press('Enter');
+        await expect(box).toBeHidden();
+        await expect(
+          guide.getByRole('button', { name: 'Expand modeling guide' })
+        ).toBeVisible();
+        await expect(guide.getByRole('status')).toContainText('Select to edit');
+        await capture(page, testInfo, 'guide-minimized-after-command');
+        for (const width of [390, 320]) {
+          await page.setViewportSize({ width, height: 844 });
+          await reachable(
+            guide.getByRole('button', { name: 'Expand modeling guide' })
+          );
+          await page.keyboard.press('?');
+          const help = page.getByRole('dialog', { name: 'Help & controls' });
+          await expect(help).toBeVisible();
+          await reachable(
+            help.getByRole('button', { name: 'Close', exact: true })
+          );
+          await expect
+            .poll(() =>
+              help
+                .getByRole('region', { name: 'Controls list' })
+                .evaluate(
+                  (element) => element.scrollWidth <= element.clientWidth + 1
+                )
+            )
+            .toBe(true);
+          await capture(page, testInfo, `help-${width}`);
+          await page.keyboard.press('Escape');
+          await expect(help).toBeHidden();
+        }
+      }
+    );
+
+    test(
+      'invalid dimensions recover without losing the committed model',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openPart(page);
+        await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+        const box = page.getByRole('group', {
+          name: 'Box command',
+          exact: true
+        });
+        await box.getByLabel('Box options').click();
+        const width = box.getByRole('textbox', { name: 'Width', exact: true });
+        await width.fill('-10');
+        await width.press('Enter');
+        await expect(width).toHaveAttribute('aria-invalid', 'true');
+        await capture(page, testInfo, 'invalid-dimension');
+        await width.fill('32');
+        await width.press('Enter');
+        await expect(width).not.toHaveAttribute('aria-invalid', 'true');
+        await box.getByLabel('Box options').click();
+        await box.getByRole('button', { name: 'Done', exact: true }).click();
+        await expect(box).toBeHidden();
+        const summary = page.getByRole('group', { name: 'Workspace status' });
+        await expect(
+          summary.getByLabel(/ · 3 features · 2 bodies\. Sync /)
+        ).toBeVisible();
+        await page.getByRole('button', { name: 'Undo', exact: true }).click();
+        await expect(
+          summary.getByLabel(/ · 2 features · 1 body\. Sync /)
+        ).toBeVisible();
+        await page.getByRole('button', { name: 'Redo', exact: true }).click();
+        await expect(
+          summary.getByLabel(/ · 3 features · 2 bodies\. Sync /)
+        ).toBeVisible();
+        await capture(page, testInfo, 'dimension-recovered');
+      }
+    );
+
+    test(
+      'docked panels preserve Objects by default and follow deliberate activity',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await openPart(page, { left: [['bodies']], right: [['parameters']] });
+        const objects = page.getByRole('region', {
+          name: 'Objects',
+          exact: true
+        });
+        const parameters = page.getByRole('region', {
+          name: 'Parameters',
+          exact: true
+        });
+        await expect(objects).toBeVisible();
+        await expect(parameters).toBeVisible();
+        await capture(page, testInfo, 'panels-1440');
+        await page.setViewportSize({ width: 1000, height: 844 });
+        await expect(objects).toBeVisible();
+        await expect(parameters).toBeHidden();
+        await capture(page, testInfo, 'panels-1000-objects');
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await parameters
+          .getByRole('textbox', { name: 'New parameter name' })
+          .click();
+        await page.setViewportSize({ width: 1000, height: 844 });
+        await expect(parameters).toBeVisible();
+        await expect(objects).toBeHidden();
+        await capture(page, testInfo, 'panels-1000-parameters');
+        await page
+          .getByRole('button', { name: 'Objects panel', exact: true })
+          .click();
+        await expect(objects).toBeVisible();
+        await capture(page, testInfo, 'panels-temporary-objects');
+        await page
+          .getByRole('button', { name: 'Objects panel', exact: true })
+          .click();
+        await expect(objects).toBeHidden();
+        await expect(parameters).toBeVisible();
+      }
+    );
+
+    test(
+      'modeling previews, recovery and searchable tools remain clear across widths',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await openPart(page);
+        await createPrimitiveInPlace(page, 'box', {
+          sizes: { width: '20', depth: '15', height: '8' }
+        });
+        await page.getByRole('button', { name: 'Undo', exact: true }).click();
+        await expect(
+          page.getByRole('button', { name: 'Redo', exact: true })
+        ).toBeEnabled();
+        await page.getByRole('button', { name: 'Redo', exact: true }).click();
+        for (const width of [1440, 1280, 1000, 768, 390, 320]) {
+          await page.setViewportSize({ width, height: 844 });
+          await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+          const command = page.getByRole('group', {
+            name: 'Box command',
+            exact: true
+          });
+          await expect(command).toContainText('Preview');
+          await reachable(
+            command.getByRole('button', { name: 'Cancel', exact: true })
+          );
+          await reachable(
+            command.getByRole('button', { name: 'Done', exact: true })
+          );
+          await command.getByLabel('Box options').click();
+          for (const field of [
+            'Width',
+            'Depth',
+            'Height',
+            'Corner X',
+            'Corner Y',
+            'Corner Z'
+          ]) {
+            await reachable(
+              command.getByRole('textbox', { name: field, exact: true })
+            );
+          }
+          await capture(page, testInfo, `modeling-${width}`);
+          await command
+            .getByRole('button', { name: 'Cancel', exact: true })
+            .click();
+          await expect(command).toBeHidden();
+          await page.getByRole('button', { name: /^More tools/ }).click();
+          const search = page.getByRole('searchbox', { name: 'Find a tool' });
+          await expect(search).toBeVisible();
+          await search.fill('Loft');
+          await reachable(search);
+          await reachable(
+            page.getByRole('button', { name: 'Ready now', exact: true })
+          );
+          await reachable(
+            page.getByRole('button', { name: 'All 35', exact: true })
+          );
+          const loft = page
+            .locator('.command-tile')
+            .filter({ hasText: 'Loft' });
+          await expect(loft).toHaveCount(1);
+          await expect(loft).toContainText('closed sketch');
+          await capture(page, testInfo, `catalog-${width}`);
+          await search.fill('');
+          await page.getByRole('button', { name: /^More tools/ }).click();
+        }
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.keyboard.press('?');
+        await expect(
+          page.getByRole('heading', { name: 'Modeling guide' })
+        ).toBeVisible();
+        await capture(page, testInfo, 'modeling-help');
+      }
+    );
+
+    test(
+      'drawing tools clear sheet actions at desktop, tablet and phone widths',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await openPart(page);
+        await page
+          .getByRole('group', { name: 'Workspace mode' })
+          .getByRole('button', { name: 'Draw', exact: true })
+          .click();
+        await page.getByRole('button', { name: 'New drawing sheet' }).click();
+        const drawing = page.getByRole('region', { name: 'Drawings' });
+        await expect(
+          drawing.locator(
+            '.drawing-canvas [data-view="front"]:not(.is-placeholder)'
+          )
+        ).toHaveCount(1, { timeout: 30_000 });
+        await expect(
+          page.getByRole('status', { name: 'Saved', exact: true })
+        ).toBeVisible({ timeout: 10_000 });
+        for (const width of [1440, 1280, 1000, 768, 390, 320]) {
+          await page.setViewportSize({ width, height: 812 });
+          await reachable(
+            drawing.getByRole('button', { name: 'Export PDF', exact: true })
+          );
+          await expect
+            .poll(async () => {
+              const rail = await drawing
+                .getByRole('toolbar', { name: 'Annotation tools' })
+                .boundingBox();
+              const bar = await drawing
+                .locator('.drawing-stage-bar')
+                .boundingBox();
+              return Boolean(rail && bar && rail.y >= bar.y + bar.height - 1);
+            })
+            .toBe(true);
+          if (width <= 1100) {
+            const properties = drawing.getByRole('complementary', {
+              name: 'Drawing properties'
+            });
+            await expect(properties).toBeHidden();
+            await drawing
+              .getByRole('button', { name: 'Properties', exact: true })
+              .click();
+            await expect(properties).toBeVisible();
+            await capture(page, testInfo, `drawing-properties-${width}`);
+            await reachable(
+              drawing.getByRole('button', { name: 'Export PDF', exact: true })
+            );
+            await drawing
+              .getByRole('button', { name: 'Hide properties', exact: true })
+              .click();
+            await expect(properties).toBeHidden();
+          }
+          const tools = drawing.getByRole('toolbar', {
+            name: 'Annotation tools'
+          });
+          for (const tool of await tools.getByRole('button').all()) {
+            await reachable(tool);
+          }
+          await tools
+            .getByRole('button', { name: 'Note', exact: true })
+            .click();
+          await expect(
+            page.locator('.workspace-toast:not(.hidden)')
+          ).toContainText('Note placement started.');
+          await reachable(drawing.locator('.drawing-tool-hint-cancel'));
+          const instruction = drawing.locator('.drawing-tool-hint > span');
+          await expect
+            .poll(async () => (await instruction.boundingBox())!.width)
+            .toBeGreaterThan(140);
+          await expect
+            .poll(async () => (await instruction.boundingBox())!.height)
+            .toBeLessThan(100);
+          await capture(page, testInfo, `drawing-note-${width}`);
+          if (width <= 1100) {
+            await drawing
+              .getByRole('button', { name: 'Properties', exact: true })
+              .click();
+            await expect(drawing.locator('.drawing-tool-hint')).toBeHidden();
+            await expect(
+              tools.getByRole('button', { name: 'Note', exact: true })
+            ).toHaveAttribute('aria-pressed', 'false');
+            await capture(
+              page,
+              testInfo,
+              `drawing-properties-after-placement-${width}`
+            );
+            await tools
+              .getByRole('button', { name: 'Note', exact: true })
+              .click();
+            await expect(
+              drawing.getByRole('complementary', { name: 'Drawing properties' })
+            ).toBeHidden();
+            await expect
+              .poll(
+                async () =>
+                  (await drawing.locator('.drawing-paper').boundingBox())!.width
+              )
+              .toBeGreaterThan(250);
+            await expect
+              .poll(
+                async () =>
+                  (await drawing.locator('.drawing-paper').boundingBox())!
+                    .height
+              )
+              .toBeGreaterThan(175);
+            await capture(
+              page,
+              testInfo,
+              `drawing-placement-after-properties-${width}`
+            );
+          }
+          await drawing.locator('.drawing-tool-hint-cancel').click();
+          // Compact properties change the available canvas height. Wait for
+          // the SVG's measured pixel scale, rather than capturing between a
+          // ResizeObserver delivery and the label-size render it schedules.
+          await expect
+            .poll(() =>
+              drawing
+                .locator('.drawing-view-label')
+                .first()
+                .evaluate((label) => {
+                  const transform = (label as SVGTextElement).getScreenCTM();
+                  return transform
+                    ? parseFloat(getComputedStyle(label).fontSize) *
+                        Math.hypot(transform.a, transform.b)
+                    : 0;
+                })
+            )
+            .toBeCloseTo(11, 0);
+          await capture(page, testInfo, `drawing-${width}`);
+          if (width === 1440) {
+            const units = drawing
+              .locator('.drawing-texts text')
+              .filter({ hasText: /^Millimetres$/ });
+            await expect(units).toHaveCSS('fill', 'rgb(0, 0, 0)');
+            await drawing.locator('.drawing-title-hit').screenshot({
+              path: testInfo.outputPath('drawing-title-block-1440.png')
+            });
+          }
+        }
+        await drawing
+          .getByRole('toolbar', { name: 'Annotation tools' })
+          .getByRole('button', { name: 'Note', exact: true })
+          .click();
+        const paper = (await drawing.locator('.drawing-paper').boundingBox())!;
+        await page.mouse.click(paper.x + 18, paper.y + paper.height - 25);
+        const text = drawing
+          .getByRole('complementary', { name: 'Drawing properties' })
+          .getByLabel('Text', { exact: true });
+        await expect(text).toBeVisible();
+        await text.fill('REVIEW NOTE');
+        await text.press('Enter');
+        await expect(drawing.locator('.drawing-texts')).toContainText(
+          'REVIEW NOTE'
+        );
+        await expect
+          .poll(
+            async () =>
+              (await drawing.locator('.drawing-paper').boundingBox())!.height
+          )
+          .toBeGreaterThan(100);
+        await capture(page, testInfo, 'drawing-note-created-320');
+      }
+    );
 
     test('320px navigation and sparse phone panels stay reachable', async ({
       page
@@ -115,6 +602,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
             exact: true
           })
           .click();
+        await capture(page, testInfo, `settings-appearance-${density}-320`);
         // Column first: the way back heads the sections rail at any width.
         await reachable(
           page.getByRole('button', { name: /^Close settings and go back/ })
@@ -159,6 +647,11 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.getByRole('button', { name: /^More tools/ }).click();
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: 844 });
+        await expect(page.locator('.command-tile')).toHaveCount(35);
+        await reachable(page.getByRole('searchbox', { name: 'Find a tool' }));
+        await reachable(
+          page.getByRole('button', { name: 'All 35', exact: true })
+        );
         const labels = await page
           .locator('.command-tile > span')
           .evaluateAll((elements) =>
@@ -179,6 +672,12 @@ for (const colorScheme of ['light', 'dark'] as const) {
             label.height + 1
           );
         }
+        const last = page.locator('.command-tile').last();
+        await last.scrollIntoViewIfNeeded();
+        await reachable(last);
+        await capture(page, testInfo, `full-catalog-end-${width}`);
+        await page.locator('.command-tile').first().scrollIntoViewIfNeeded();
+        await capture(page, testInfo, `full-catalog-${width}`);
       }
       await capture(page, testInfo, 'complete-tool-names');
     });
@@ -279,6 +778,15 @@ for (const colorScheme of ['light', 'dark'] as const) {
               throw error;
             });
           await reachable(section.getByRole('switch', { name: 'Section cut' }));
+          await reachable(
+            page.getByRole('combobox', { name: 'Search commands' })
+          );
+          for (const button of await section.getByRole('button').all())
+            await reachable(button);
+          const status = page.locator(
+            '.workspace-toast:not(.hidden) .workspace-toast-body'
+          );
+          if (await status.count()) await reachable(status);
           await capture(page, testInfo, `section-${size.width}x${size.height}`);
           // The switch ends the cut and keeps the panel; the button puts it away.
           await section.getByRole('switch', { name: 'Section cut' }).click();
@@ -325,7 +833,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await openPart(page);
       await page.keyboard.press('?');
       const controls = page.getByRole('dialog', {
-        name: 'Controls',
+        name: 'Help & controls',
         exact: true
       });
       await expect(controls).toBeVisible();
@@ -346,6 +854,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await capture(page, testInfo, '320px-shortcut-descriptions');
       for (const size of [
         { width: 390, height: 844 },
+        { width: 768, height: 900 },
         { width: 1440, height: 900 }
       ]) {
         await page.setViewportSize(size);
@@ -360,6 +869,24 @@ for (const colorScheme of ['light', 'dark'] as const) {
           controls.getByRole('button', { name: 'Close', exact: true })
         );
         await capture(page, testInfo, `shortcuts-${size.width}x${size.height}`);
+        const actions = list.locator('.shortcut-row dt');
+        await expect
+          .poll(() =>
+            actions.evaluateAll((elements) =>
+              Math.min(
+                ...elements.map(
+                  (element) => element.getBoundingClientRect().width
+                )
+              )
+            )
+          )
+          .toBeGreaterThan(150);
+        const firstShortcut = list.locator('.shortcut-row').first();
+        await firstShortcut.evaluate((element) =>
+          element.scrollIntoView({ block: 'start' })
+        );
+        await reachable(firstShortcut.locator('dd'));
+        await capture(page, testInfo, `shortcuts-list-${size.width}`);
       }
       await controls
         .getByRole('button', { name: 'Close', exact: true })
@@ -735,3 +1262,55 @@ for (const colorScheme of ['light', 'dark'] as const) {
     });
   });
 }
+
+test.describe('touch review followups', () => {
+  test.use({ hasTouch: true, isMobile: true, colorScheme: 'dark' });
+  test(
+    'touch targets and the full catalog remain usable through rotation',
+    { tag: '@ci-smoke' },
+    async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openPart(page);
+      for (const size of [
+        { width: 390, height: 844 },
+        { width: 844, height: 390 }
+      ]) {
+        await page.setViewportSize(size);
+        await capture(
+          page,
+          testInfo,
+          `touch-rails-${size.width}x${size.height}`
+        );
+        await reachable(page.getByRole('button', { name: /^More tools/ }));
+        await reachable(
+          page.getByRole('combobox', { name: 'Search commands' })
+        );
+        const status = page.locator(
+          '.workspace-toast:not(.hidden) .workspace-toast-body'
+        );
+        if (await status.count()) await reachable(status);
+        for (const control of await page
+          .locator('button.command-rail, .instrument-rail .rail-button')
+          .all()) {
+          await reachable(control);
+          const box = await control.boundingBox();
+          expect(box!.width).toBeGreaterThanOrEqual(40);
+          expect(box!.height).toBeGreaterThanOrEqual(40);
+        }
+        const more = page.getByRole('button', { name: /^More tools/ });
+        await more.tap();
+        await reachable(page.getByRole('searchbox', { name: 'Find a tool' }));
+        await expect(page.locator('.command-tile')).toHaveCount(35);
+        const last = page.locator('.command-tile').last();
+        await last.scrollIntoViewIfNeeded();
+        await reachable(last);
+        await capture(
+          page,
+          testInfo,
+          `touch-catalog-${size.width}x${size.height}`
+        );
+        await more.tap();
+      }
+    }
+  );
+});

@@ -72,7 +72,9 @@ interface WorkspaceReadoutProps {
    */
   projectName: string | null;
   featureCount: number;
+  /** Visible committed bodies; consumed sources and previews are excluded. */
   bodyCount: number;
+  previewActive?: boolean;
   warningCount: number;
   documentVersion: number | null;
   saveState: WorkspaceSaveState;
@@ -111,6 +113,7 @@ export function WorkspaceReadout({
   projectName,
   featureCount,
   bodyCount,
+  previewActive = false,
   warningCount,
   documentVersion,
   saveState,
@@ -356,7 +359,7 @@ export function WorkspaceReadout({
           </span>
           <span
             title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
-            aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
+            aria-label={`${workspaceSummary}. Sync ${syncLabel}.${previewActive ? ' Preview active, not applied.' : ''}`}
           >
             <b>sync</b>
             {syncLabel}

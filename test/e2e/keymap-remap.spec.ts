@@ -75,7 +75,7 @@ test('a remapped shortcut works, refuses a taken key by name and survives a relo
 
   // The shortcut reference shows the live binding.
   await page.keyboard.press('?');
-  const reference = page.getByRole('dialog', { name: 'Controls' });
+  const reference = page.getByRole('dialog', { name: 'Help & controls' });
   await expect(
     reference.locator('.shortcut-row', { hasText: 'Toggle the grid' })
   ).toContainText('H');

@@ -589,6 +589,21 @@ describe('CommandCard', () => {
     );
   });
 
+  it('focuses catalog search for keyboard entry and restores the toggle on Escape', () => {
+    renderCard(NOTHING, { initialView: 'advanced' });
+    const toggle = screen.getByRole('button', { name: /^More tools/ });
+    fireEvent.click(toggle, { detail: 0 });
+    const search = screen.getByRole('searchbox', { name: 'Find a tool' });
+    expect(search).toHaveFocus();
+    fireEvent.change(search, { target: { value: 'Loft' } });
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(search).toHaveValue('');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
+    expect(toggle).toHaveFocus();
+  });
+
   it('pins and unpins from the drawer, and resets to the original rail', () => {
     const onPins = vi.fn();
     const { container } = renderCard(NOTHING, { onPins });
@@ -673,6 +688,34 @@ describe('CommandCard', () => {
     expect(railTools(container)).not.toContain('hole');
     // Unpinned, Hole has nothing to fit with no pick: it is a suggestion now.
     expect(suggestedRail(container)).toContain('hole');
+  });
+
+  it('places a dragged tool between columns in a compact rail', () => {
+    const { container } = renderCard();
+    openDrawer();
+    container
+      .querySelectorAll<HTMLElement>('[data-pinned-tool]')
+      .forEach((button, index) => {
+        vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(
+          new DOMRect((index % 2) * 40, Math.floor(index / 2) * 32, 30, 30)
+        );
+      });
+    const transfer = dataTransfer();
+    fireEvent.dragStart(screen.getByRole('button', { name: /^Sphere/ }), {
+      dataTransfer: transfer
+    });
+    const pins = container.querySelector('.command-rail-pins')!;
+    const drop = createEvent.drop(pins, { dataTransfer: transfer });
+    Object.defineProperties(drop, {
+      clientX: { value: 39 },
+      clientY: { value: 16 }
+    });
+    fireEvent(pins, drop);
+    expect(railTools(container).slice(0, 3)).toEqual([
+      'sketch',
+      'sphere',
+      'extrude'
+    ]);
   });
 
   it('moves a focused pin with Alt+arrow keys and keeps it focused', () => {

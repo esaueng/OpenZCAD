@@ -7131,6 +7131,13 @@ export function App() {
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
   );
+  const visibleCommittedBodyCount = useMemo(
+    () =>
+      Object.values(representations).filter(
+        (body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)
+      ).length,
+    [representations, hiddenBodyIds]
+  );
   const currentFaceGeometryPreview =
     !previewDoc &&
     faceGeometryPreview &&
@@ -30937,8 +30944,16 @@ export function App() {
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
             tourProjectId === doc.projectId &&
+            !inPlace.active &&
             interaction.mode !== 'sketch' && (
               <WorkspaceTour
+                minimized={panelState.workspaceTourMinimized}
+                onMinimizedChange={(workspaceTourMinimized) =>
+                  setPanelState((current) => ({
+                    ...current,
+                    workspaceTourMinimized
+                  }))
+                }
                 featureCount={features.length}
                 hasSelection={
                   selectedTopology !== null ||
@@ -31820,7 +31835,10 @@ export function App() {
             }
             projectName={doc.name}
             featureCount={features.length}
-            bodyCount={viewerBodies.length}
+            bodyCount={visibleCommittedBodyCount}
+            previewActive={Boolean(
+              inPlace.active || previewDoc || currentFaceGeometryPreview
+            )}
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
@@ -31944,7 +31962,19 @@ export function App() {
             }}
           />
           {shortcutsOpen && (
-            <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
+            <ShortcutsOverlay
+              tourDeferred={inPlace.active}
+              onClose={() => setShortcutsOpen(false)}
+              onTour={() => {
+                setShortcutsOpen(false);
+                setTourProjectId(doc.projectId);
+                setPanelState((current) => ({
+                  ...current,
+                  workspaceTourDismissed: false,
+                  workspaceTourMinimized: false
+                }));
+              }}
+            />
           )}
           {contextMenuExit.rendered ? (
             <ContextMenu

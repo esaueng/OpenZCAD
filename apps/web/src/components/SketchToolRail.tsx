@@ -1108,7 +1108,12 @@ export function SketchToolRail({
           }}
         >
           <Icon size={16} aria-hidden="true" />
-          {inFold && <span aria-hidden="true">{label}</span>}
+          {inFold && (
+            <span aria-hidden="true">
+              {label}
+              {!canConstrain && <small>Draw an entity first</small>}
+            </span>
+          )}
         </button>
       </Tooltip>
     );

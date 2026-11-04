@@ -198,6 +198,14 @@ export function CommandCard({
   const canPin = onPinnedToolsChange !== undefined;
   const moreToggleRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
+  const focusOnOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (!moreOpen || !focusOnOpen.current) return;
+    focusOnOpen.current = false;
+    flyoutRef.current
+      ?.querySelector<HTMLElement>('input[type="search"]')
+      ?.focus();
+  }, [moreOpen]);
   useFlyoutAtToggle(
     flyoutRef,
     moreToggleRef,
@@ -242,15 +250,24 @@ export function CommandCard({
     setLifted(null);
   };
 
-  /** Where a drop at `clientY` lands, counted among the other pins. */
-  const dropIndexAt = (clientY: number, tool: ToolId) => {
+  /** Where a drop lands in the rail's one- or two-column reading order. */
+  const dropIndexAt = (clientX: number, clientY: number, tool: ToolId) => {
     const buttons = Array.from(
       railRef.current?.querySelectorAll<HTMLElement>('[data-pinned-tool]') ?? []
     ).filter((button) => button.dataset.pinnedTool !== tool);
+    const boxes = buttons.map((button) => button.getBoundingClientRect());
+    const twoColumns = new Set(boxes.map((box) => box.left)).size > 1;
     let index = 0;
-    for (const button of buttons) {
-      const rect = button.getBoundingClientRect();
-      if (clientY > rect.top + rect.height / 2) index += 1;
+    for (const rect of boxes) {
+      if (
+        twoColumns
+          ? clientY > rect.bottom ||
+            (clientY >= rect.top &&
+              clientY <= rect.bottom &&
+              clientX > rect.left + rect.width / 2)
+          : clientY > rect.top + rect.height / 2
+      )
+        index += 1;
     }
     return index;
   };
@@ -259,14 +276,18 @@ export function CommandCard({
     if (!drag) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = drag.from === 'pin' ? 'move' : 'copy';
-    const index = dropIndexAt(event.clientY, drag.tool);
+    const index = dropIndexAt(event.clientX, event.clientY, drag.tool);
     if (index !== dropIndex) setDropIndex(index);
   };
   const onRailDrop = (event: DragEvent<HTMLDivElement>) => {
     if (!drag) return;
     event.preventDefault();
     setPins(
-      pinTool(pinnedTools, drag.tool, dropIndexAt(event.clientY, drag.tool))
+      pinTool(
+        pinnedTools,
+        drag.tool,
+        dropIndexAt(event.clientX, event.clientY, drag.tool)
+      )
     );
     endDrag();
   };
@@ -402,7 +423,10 @@ export function CommandCard({
             }}
           >
             {meta.icon}
-            <span>{meta.label}</span>
+            <span className="command-tile-description">
+              <span>{meta.label}</span>
+              {advanced && <small>{disabledReason ?? meta.hint}</small>}
+            </span>
             {advanced && shortcut && <kbd>{shortcut}</kbd>}
           </button>
         </Tooltip>
@@ -522,7 +546,10 @@ export function CommandCard({
               className={`command-rail command-more-toggle${moreOpen ? ' active' : ''}`}
               aria-expanded={moreOpen}
               aria-label={`More tools (${restCount})`}
-              onClick={onToggleMore}
+              onClick={(event) => {
+                if (!moreOpen) focusOnOpen.current = event.detail === 0;
+                onToggleMore();
+              }}
             >
               <Ellipsis size={16} aria-hidden="true" />
               <span className="command-rail-label" aria-hidden="true">
@@ -538,6 +565,13 @@ export function CommandCard({
               ref={flyoutRef}
               className={`command-flyout ${advanced ? 'is-advanced' : 'is-simple'}${below.length > 0 ? ' has-more-below' : ''}${unpinTarget ? ' is-unpin-target' : ''}`}
               data-rail-flyout=""
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return;
+                event.preventDefault();
+                event.stopPropagation();
+                onToggleMore();
+                moreToggleRef.current?.focus();
+              }}
               onDragOver={(event) => {
                 if (!unpinTarget) return;
                 event.preventDefault();

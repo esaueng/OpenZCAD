@@ -25,6 +25,22 @@ const SUMMARY = {
 };
 
 describe('WorkspaceReadout', () => {
+  it('distinguishes committed body counts from an unapplied preview', () => {
+    render(
+      <WorkspaceReadout
+        {...SUMMARY}
+        previewActive
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByLabelText(
+        /Bracket · 2 features · 1 body\. Sync Synced\. Preview active, not applied\./
+      )
+    ).toBeInTheDocument();
+  });
   it('exposes the complete operation instructions independently of the clipped hint', async () => {
     const user = userEvent.setup();
     const prompt =

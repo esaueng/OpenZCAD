@@ -182,6 +182,34 @@ describe('sketch mode defined colours', () => {
   const basis = PLANE_BASES.XY;
   const resolution = () => ({ width: 800, height: 600 });
 
+  it('distinguishes selected curves by weight while retaining invisible pick proxies', () => {
+    const rig = buildSketchModeRig(basis, resolution);
+    try {
+      rig.setObjects(
+        [
+          { id: 'selected', data: line() },
+          { id: 'other', data: line({ y1: 5, y2: 5 }) }
+        ],
+        'selected',
+        resolve,
+        [],
+        []
+      );
+      const children = committedGroupOf(rig).children;
+      const visuals = children.filter(
+        (child): child is Line2 => child instanceof Line2
+      );
+      expect(visuals[0]!.material.linewidth).toBeGreaterThan(
+        visuals[1]!.material.linewidth
+      );
+      const proxies = children.filter((child) => child.userData.pickProxy);
+      expect(proxies).toHaveLength(2);
+      expect(proxies.every((proxy) => !proxy.visible)).toBe(true);
+    } finally {
+      rig.dispose();
+    }
+  });
+
   it('paints lines and their snap-point dots fully-defined green', () => {
     const rig = buildSketchModeRig(basis, resolution);
     try {

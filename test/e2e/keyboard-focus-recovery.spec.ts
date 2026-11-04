@@ -64,7 +64,7 @@ test('Escape closes the Controls sheet, with focus on Close or in the list', { t
   page
 }) => {
   await createProject(page, 'Controls sheet');
-  const controls = page.getByRole('dialog', { name: 'Controls', exact: true });
+  const controls = page.getByRole('dialog', { name: 'Help & controls', exact: true });
 
   await page.keyboard.press('?');
   await expect(controls).toBeVisible();
