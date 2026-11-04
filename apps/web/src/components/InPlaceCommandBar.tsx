@@ -193,6 +193,13 @@ export function InPlaceCommandBar({
       tabIndex={-1}
       aria-label={`${title} command`}
       aria-describedby={hintId}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' || event.target !== event.currentTarget)
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (canFinish && !locked) onDone();
+      }}
     >
       <span className="in-place-command-title">{title}</span>
       <span

@@ -3,6 +3,32 @@ import { describe, expect, it, vi } from 'vitest';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
 
 describe('InPlaceCommandBar', () => {
+  it('confirms from the focused instructions only when ready and leaves child controls their Enter key', () => {
+    const onDone = vi.fn();
+    const command = (canFinish: boolean, locked = false) => (
+      <InPlaceCommandBar
+        title="Box"
+        hint="Drag a footprint"
+        canFinish={canFinish}
+        locked={locked}
+        onDone={onDone}
+        onCancel={vi.fn()}
+      />
+    );
+    const { rerender } = render(command(false));
+    const instructions = screen.getByRole('group', { name: 'Box command' });
+    fireEvent.keyDown(instructions, { key: 'Enter' });
+    rerender(command(true, true));
+    fireEvent.keyDown(instructions, { key: 'Enter' });
+    rerender(command(true));
+    fireEvent.keyDown(screen.getByRole('button', { name: /Cancel/ }), {
+      key: 'Enter'
+    });
+    expect(onDone).not.toHaveBeenCalled();
+    fireEvent.keyDown(instructions, { key: 'Enter' });
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
   it('focuses the new command with its instructions and returns to the viewport on dismissal', () => {
     const workspace = (open: boolean) => (
       <div className="viewer-area">
