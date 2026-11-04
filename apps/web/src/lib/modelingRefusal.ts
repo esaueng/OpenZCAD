@@ -7,7 +7,7 @@ export function modelingRefusalSummary(
     operation === 'Intersect' &&
     /solid has no vertices|empty result|no intersection/i.test(reason)
   ) {
-    return 'Intersect would leave no solid. Move the bodies so they overlap, or use Union.';
+    return 'Intersect would leave no solid. Move the bodies so they overlap, then try again.';
   }
   if (
     /empty result:.*(?:cut|subtract).*target fully contained in tool/i.test(

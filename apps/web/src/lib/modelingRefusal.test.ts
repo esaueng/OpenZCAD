@@ -9,7 +9,7 @@ describe('modeling refusal recovery', () => {
         'Intersect'
       )
     ).toBe(
-      'Intersect would leave no solid. Move the bodies so they overlap, or use Union.'
+      'Intersect would leave no solid. Move the bodies so they overlap, then try again.'
     );
   });
 

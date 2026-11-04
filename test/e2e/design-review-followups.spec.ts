@@ -1009,116 +1009,123 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.keyboard.press('Escape');
     });
 
-    test('sketch modify flyout follows a scrolled trigger and stays inside the viewport', async ({
-      page
-    }, testInfo) => {
-      await page.setViewportSize({ width: 320, height: 568 });
-      await openPart(page);
-      await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-      await page.getByRole('button', { name: 'Top (XY)', exact: true }).click();
-      const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
-      const toggle = rail.getByRole('button', { name: 'More modify tools' });
-      await toggle.click();
-      const flyout = page.getByRole('group', {
-        name: 'More modify tools',
-        exact: true
-      });
-      const checkDialogStack = async () => {
-        await page.locator('details.file-menu > summary').click();
-        await expect(flyout).toHaveCount(0);
-        await page.getByRole('button', { name: /^Export mesh/ }).click();
-        const dialog = page.getByRole('dialog', {
-          name: 'Export mesh',
+    test(
+      'sketch modify flyout follows a scrolled trigger and stays inside the viewport',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 320, height: 568 });
+        await openPart(page);
+        await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+        await page
+          .getByRole('button', { name: 'Top (XY)', exact: true })
+          .click();
+        const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+        const toggle = rail.getByRole('button', { name: 'More modify tools' });
+        await toggle.click();
+        const flyout = page.getByRole('group', {
+          name: 'More modify tools',
           exact: true
         });
-        await expect(dialog).toBeVisible();
-        await capture(
-          page,
-          testInfo,
-          `modify-under-dialog-${page.viewportSize()!.width}px`
-        );
-        await dialog
-          .getByRole('button', { name: 'Cancel', exact: true })
-          .click();
-        await expect(dialog).toHaveCount(0);
-        await toggle.click();
-        await expect(flyout).toBeVisible();
-      };
-      const follows = () =>
-        flyout.evaluate((element) => {
-          const r = element.getBoundingClientRect();
-          const trigger = document
-            .querySelector<HTMLButtonElement>(
-              'button[aria-label="More modify tools"]'
-            )!
-            .getBoundingClientRect();
-          const expectedY = Math.max(
-            8,
-            Math.min(
-              trigger.top,
-              (innerWidth <= 600
-                ? Math.min(
-                    document
-                      .querySelector('.workspace-toast:not(.hidden)')
-                      ?.getBoundingClientRect().top ?? innerHeight,
-                    document
-                      .querySelector('.command-bar-lane')
-                      ?.getBoundingClientRect().top ?? innerHeight
-                  )
-                : innerHeight) -
-                r.height -
-                8
-            )
+        const checkDialogStack = async () => {
+          await page.locator('details.file-menu > summary').click();
+          await expect(flyout).toHaveCount(0);
+          await page.getByRole('button', { name: /^Export mesh/ }).click();
+          const dialog = page.getByRole('dialog', {
+            name: 'Export mesh',
+            exact: true
+          });
+          await expect(dialog).toBeVisible();
+          await capture(
+            page,
+            testInfo,
+            `modify-under-dialog-${page.viewportSize()!.width}px`
           );
-          return (
-            r.left >= 8 &&
-            r.right <= innerWidth - 8 &&
-            r.top >= 8 &&
-            r.bottom <= innerHeight - 8 &&
-            Math.abs(r.top - expectedY) < 1
-          );
-        });
-      await expect.poll(follows).toBe(true);
-      await reachable(
-        flyout.getByRole('button', { name: 'Circular pattern', exact: true })
-      );
-      await capture(page, testInfo, '320px-sketch-modify');
-      const search = page.getByRole('combobox', { name: 'Search commands' });
-      const status = page.locator(
-        '.workspace-toast:not(.hidden) .workspace-toast-body'
-      );
-      await reachable(search);
-      await reachable(status);
-      expect((await search.boundingBox())!.width).toBeGreaterThan(160);
-      expect((await status.boundingBox())!.width).toBeGreaterThan(160);
-      await checkDialogStack();
-      const scroller = page.locator('.workspace-column-tools');
-      const bounds = (await scroller.boundingBox())!;
-      await page.mouse.move(
-        bounds.x + bounds.width / 2,
-        bounds.y + bounds.height / 2
-      );
-      await page.mouse.wheel(0, -70);
-      await expect.poll(follows).toBe(true);
-      for (const size of [
-        { width: 390, height: 844 },
-        { width: 844, height: 390 },
-        { width: 1440, height: 900 }
-      ]) {
-        await page.setViewportSize(size);
+          await dialog
+            .getByRole('button', { name: 'Cancel', exact: true })
+            .click();
+          await expect(dialog).toHaveCount(0);
+          await toggle.click();
+          await expect(flyout).toBeVisible();
+        };
+        const follows = () =>
+          flyout.evaluate((element) => {
+            const r = element.getBoundingClientRect();
+            const trigger = document
+              .querySelector<HTMLButtonElement>(
+                'button[aria-label="More modify tools"]'
+              )!
+              .getBoundingClientRect();
+            const expectedY = Math.max(
+              8,
+              Math.min(
+                trigger.top,
+                (innerWidth <= 600
+                  ? Math.min(
+                      document
+                        .querySelector('.workspace-toast:not(.hidden)')
+                        ?.getBoundingClientRect().top ?? innerHeight,
+                      document
+                        .querySelector('.command-bar-lane')
+                        ?.getBoundingClientRect().top ?? innerHeight
+                    )
+                  : innerHeight) -
+                  r.height -
+                  8
+              )
+            );
+            return (
+              r.left >= 8 &&
+              r.right <= innerWidth - 8 &&
+              r.top >= 8 &&
+              r.bottom <= innerHeight - 8 &&
+              Math.abs(r.top - expectedY) < 1
+            );
+          });
         await expect.poll(follows).toBe(true);
         await reachable(
           flyout.getByRole('button', { name: 'Circular pattern', exact: true })
         );
+        await capture(page, testInfo, '320px-sketch-modify');
+        const search = page.getByRole('combobox', { name: 'Search commands' });
+        const status = page.locator(
+          '.workspace-toast:not(.hidden) .workspace-toast-body'
+        );
+        await reachable(search);
+        await reachable(status);
+        expect((await search.boundingBox())!.width).toBeGreaterThan(160);
+        expect((await status.boundingBox())!.width).toBeGreaterThan(160);
+        await checkDialogStack();
+        const scroller = page.locator('.workspace-column-tools');
+        const bounds = (await scroller.boundingBox())!;
+        await page.mouse.move(
+          bounds.x + bounds.width / 2,
+          bounds.y + bounds.height / 2
+        );
+        await page.mouse.wheel(0, -70);
+        await expect.poll(follows).toBe(true);
+        for (const size of [
+          { width: 390, height: 844 },
+          { width: 844, height: 390 },
+          { width: 1440, height: 900 }
+        ]) {
+          await page.setViewportSize(size);
+          await expect.poll(follows).toBe(true);
+          await reachable(
+            flyout.getByRole('button', {
+              name: 'Circular pattern',
+              exact: true
+            })
+          );
+        }
+        await capture(page, testInfo, 'desktop-sketch-modify');
+        await checkDialogStack();
+        await toggle.press('Escape');
+        await expect(flyout).toHaveCount(0);
+        await page.keyboard.press('Escape');
+        await page.keyboard.press('Escape');
+        await expect(rail).toHaveCount(0);
       }
-      await capture(page, testInfo, 'desktop-sketch-modify');
-      await checkDialogStack();
-      await toggle.press('Escape');
-      await expect(flyout).toHaveCount(0);
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
-      await expect(rail).toHaveCount(0);
-    });
+    );
 
     test('options scroll on rotation and exact entry remains clickable through resize and cancel', async ({
       page
