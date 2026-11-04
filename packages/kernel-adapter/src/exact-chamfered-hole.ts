@@ -1,4 +1,4 @@
-/** Shrink an analytic bore while extending its existing conical mouths. */
+/** Resize an analytic bore and its shared boundaries with conical mouths. */
 import { RemusKernel } from './remus-runtime';
 import type { Vec3 } from '@openzcad/geometry';
 import type { ThroughHoleGeometry } from './exact-measure';
@@ -6,6 +6,7 @@ import { faceFingerprint } from './exact-witnesses';
 import {
   ANALYTIC_MATCH_EPSILON,
   add,
+  cross,
   dot,
   length,
   normalized,
@@ -44,6 +45,9 @@ interface Arena {
       Cylinder?: { origin: Point; axis: Point; radius: number };
       Cone?: { apex: Point; axis: Point; half_angle: number };
       Plane?: { normal: Point; d: number };
+      Torus?: { center: Point; major_radius: number; minor_radius: number };
+      Sphere?: { center: Point; radius: number };
+      Nurbs?: { control_points: Point[][]; weights: number[][] };
     };
   }[];
   shells: { faces: number[] }[];
@@ -59,10 +63,13 @@ interface Arena {
 const vector = (p: Point): Vec3 => ({ x: p[0], y: p[1], z: p[2] });
 const point = (v: Vec3): Point => [v.x, v.y, v.z];
 const refusal = () =>
-  new Error('The hole’s chamfer cannot be extended exactly at this diameter.');
+  new Error('The hole’s chamfer cannot be rebuilt exactly at this diameter.');
 
 /**
- * Only shrinks are handled: all added material lies inside the old bore.
+ * Shrinks add material inside the old bore. Bounded enlargements also move
+ * the shared cone rings, but require certified clearance from every other
+ * surface. An enlargement reaching a retained outer trim uses a full-depth
+ * boolean instead, which can consume the mouth or change its topology.
  * Both end rings must be complete circles, each meeting a planar end or a
  * coaxial cone. Split circular rims require complete angular coverage; a
  * broken-out cone's retained outer trims must stay outside the old bore.
@@ -70,7 +77,7 @@ const refusal = () =>
  * The pinned native representation is copied; cone carriers, outer rings,
  * unrelated faces, edge trims and tolerances are retained verbatim.
  */
-export function shrinkChamferedThroughHole(
+export function resizeChamferedThroughHole(
   kernel: RemusKernel,
   solid: number,
   face: number,
@@ -87,7 +94,6 @@ export function shrinkChamferedThroughHole(
     )
   )
     return null;
-  if (radius >= geometry.radius) return null;
   const bytes = kernel.serializeSolids(Uint32Array.of(solid));
   const original = new TextDecoder().decode(bytes);
   const arena = JSON.parse(original) as Arena;
@@ -275,6 +281,8 @@ export function shrinkChamferedThroughHole(
       )
         throw refusal();
       const side = end === 0 ? -1 : 1;
+      const limitRadius = Math.max(radius, geometry.radius);
+      const limitAt = ring.at + (limitRadius - geometry.radius) * slope;
       const ringVertices = new Set(
         ring.edges.flatMap((e) => [arena.edges[e]!.start, arena.edges[e]!.end])
       );
@@ -312,8 +320,8 @@ export function shrinkChamferedThroughHole(
           if (
             !parallel(circle.normal) ||
             !onAxis(circle.center) ||
-            circle.radius <= geometry.radius + tolerance ||
-            side * (axial(circle.center) - ring.at) <= tolerance ||
+            circle.radius <= limitRadius + tolerance ||
+            side * (axial(circle.center) - limitAt) <= tolerance ||
             !close(
               axial(circle.center),
               axial(cone.apex) + circle.radius * slope
@@ -335,7 +343,7 @@ export function shrinkChamferedThroughHole(
         }
         // Positive rational weights keep a retained trim in its control
         // hull. A separating radial half-plane and axial bound prove that
-        // whole hull stays beyond the old rim; sampled points would not.
+        // whole hull stays beyond both rims; sampled points would not.
         const radial = (p: Point) =>
           subtract(subtract(vector(p), origin), scale(axis, axial(p)));
         const direction = normalized(
@@ -346,8 +354,8 @@ export function shrinkChamferedThroughHole(
           controls.some(
             (p) =>
               p.some((v) => !Number.isFinite(v)) ||
-              dot(radial(p), direction) <= geometry.radius + tolerance ||
-              side * (axial(p) - ring.at) <= tolerance
+              dot(radial(p), direction) <= limitRadius + tolerance ||
+              side * (axial(p) - limitAt) <= tolerance
           )
         )
           throw refusal();
@@ -360,6 +368,88 @@ export function shrinkChamferedThroughHole(
       throw new Error(
         'That diameter would leave no cylindrical wall between the hole’s chamfers.'
       );
+    if (radius > geometry.radius) {
+      const start = add(origin, scale(axis, rings[0]!.at + moves[0]!));
+      const end = add(origin, scale(axis, rings[1]!.at + moves[1]!));
+      // Moving a carrier alone cannot split another face that the wider bore
+      // reaches. Prove separation with complete analytic support bounds,
+      // never point samples or tessellation; otherwise use the boolean path.
+      for (const f of probe.getSolidFaces(input)) {
+        if (local.has(f)) continue;
+        const surface = arena.faces[f]!.surface;
+        const radialDirection = (p: Point) => {
+          const delta = subtract(vector(p), origin);
+          return normalized(subtract(delta, scale(axis, dot(delta, axis))));
+        };
+        let clearance: number | null = null;
+        if (surface.Plane) {
+          const normal = vector(surface.Plane.normal);
+          const a = dot(normal, start) - surface.Plane.d;
+          const b = dot(normal, end) - surface.Plane.d;
+          const radialNormal = length(
+            subtract(normal, scale(axis, dot(normal, axis)))
+          );
+          if (a * b > 0) {
+            clearance =
+              radialNormal === 0
+                ? Infinity
+                : Math.min(Math.abs(a), Math.abs(b)) / radialNormal;
+          }
+        } else if (surface.Cylinder) {
+          const cylinder = surface.Cylinder;
+          const perpendicular = cross(axis, vector(cylinder.axis));
+          const perpendicularLength = length(perpendicular);
+          const direction =
+            perpendicularLength > 0
+              ? scale(perpendicular, 1 / perpendicularLength)
+              : radialDirection(cylinder.origin);
+          if (direction)
+            clearance =
+              Math.abs(
+                dot(subtract(vector(cylinder.origin), origin), direction)
+              ) - cylinder.radius;
+        } else if (surface.Sphere || surface.Torus) {
+          const round = surface.Sphere ?? surface.Torus!;
+          const direction = radialDirection(round.center);
+          if (direction)
+            clearance =
+              dot(subtract(vector(round.center), origin), direction) -
+              (surface.Sphere
+                ? surface.Sphere.radius
+                : surface.Torus!.major_radius + surface.Torus!.minor_radius);
+        } else if (surface.Nurbs) {
+          const { control_points: rows, weights } = surface.Nurbs;
+          const controls = rows.flat();
+          if (
+            controls.length &&
+            rows.length === weights.length &&
+            rows.every(
+              (row, i) =>
+                row.length === weights[i]!.length &&
+                weights[i]!.every((w) => Number.isFinite(w) && w > 0)
+            )
+          ) {
+            const center = scale(
+              controls.reduce((sum, p) => add(sum, vector(p)), {
+                x: 0,
+                y: 0,
+                z: 0
+              }),
+              1 / controls.length
+            );
+            const direction = radialDirection(point(center));
+            if (direction)
+              clearance = Math.min(
+                ...controls.map((p) =>
+                  dot(subtract(vector(p), origin), direction)
+                )
+              );
+          }
+        }
+        if (clearance === null || !(clearance > radius + tolerance))
+          throw refusal();
+      }
+    }
     for (const f of local) {
       const boundary = arena.boundary_authority;
       const faceBoundary = boundary.faces[f]!;

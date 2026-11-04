@@ -17,6 +17,7 @@ import type { ProjectDocument } from '@openzcad/shared';
 import { borePreviewProfile } from '../apps/web/src/lib/interaction/cylinderRadius';
 import { drillHole } from '../packages/kernel-adapter/src/exact-cylinder-ops';
 import { syntheticHolderSolid } from './support/synthetic-holder';
+import { resizeChamferedThroughHole } from '../packages/kernel-adapter/src/exact-chamfered-hole';
 
 const BORE = 3;
 const HEIGHT = 10;
@@ -77,7 +78,7 @@ function resize(kernel: RemusKernel, solid: number, diameter: number) {
 
 function volume(radius: number, mouths: number) {
   const mouthRadius = BORE + 1;
-  const depth = mouthRadius - radius;
+  const depth = Math.max(0, mouthRadius - radius);
   const sinkBeyondBore =
     (Math.PI *
       depth *
@@ -89,6 +90,135 @@ function volume(radius: number, mouths: number) {
 }
 
 describe('through-hole resizing extends its existing chamfer angle', () => {
+  it('requires a boolean when enlargement reaches an unrelated blind bore', () => {
+    const kernel = new RemusKernel();
+    try {
+      const other = kernel.copyAndTransformSolid(
+        kernel.makeCylinder(1, 5),
+        new Float64Array([1, 0, 0, 19.2, 0, 1, 0, 15, 0, 0, 1, 0, 0, 0, 0, 1])
+      );
+      const solid = kernel.cut(chamferedPlate(kernel, 1), other);
+      expect(kernel.validateSolid(solid)).toBe(0);
+      const face = [...kernel.getSolidFaces(solid)].find((f) => {
+        if (kernel.getSurfaceType(f) !== 'cylinder') return false;
+        const params = JSON.parse(kernel.getAnalyticSurfaceParams(f)) as {
+          radius: number;
+        };
+        return Math.abs(params.radius - BORE) < 1e-7;
+      })!;
+      const geometry = requireThroughHole(kernel, solid, face);
+      const before = kernel.serializeSolids(Uint32Array.of(solid));
+      // The neighbouring void starts 3.2 mm from this bore's axis. A new
+      // radius of 3.5 must split its wall, which a local ring move cannot do.
+      expect(() =>
+        resizeChamferedThroughHole(kernel, solid, face, geometry, 3.5, 1e-5)
+      ).toThrow(/chamfer cannot be rebuilt exactly/);
+      expect(kernel.serializeSolids(Uint32Array.of(solid))).toEqual(before);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it.each(
+    (['native', 'STEP'] as const).flatMap((source) =>
+      ([1, 2] as const).flatMap((mouths) =>
+        [6, 7, 7.8, 8.2, 10.4].map(
+          (diameter) => [source, mouths, diameter] as const
+        )
+      )
+    )
+  )(
+    'rejoins %s bore with %i chamfered mouth(s) when it grows to diameter %s',
+    async (sourceKind, mouths, diameter) => {
+      await loadRemusTranslators();
+      const kernel = new RemusKernel();
+      try {
+        let original = chamferedPlate(kernel, mouths);
+        if (sourceKind === 'STEP') {
+          original = kernel.deserializeSolids(
+            remusTranslators().importStep(
+              remusTranslators().exportStep(
+                kernel.serializeSolids(Uint32Array.of(original))
+              )
+            )
+          )[0]!;
+        }
+        const shrunk = resize(kernel, original, 4.6);
+        const source = kernel.serializeSolids(Uint32Array.of(shrunk));
+        const enlarged = resize(kernel, shrunk, diameter);
+        expect(kernel.validateSolid(enlarged)).toBe(0);
+        expect(kernel.volume(enlarged, 1e-5)).toBeCloseTo(
+          volume(diameter / 2, mouths),
+          4
+        );
+        const counts: Record<string, number> = {};
+        for (const face of kernel.getSolidFaces(enlarged)) {
+          const type = kernel.getSurfaceType(face);
+          counts[type] = (counts[type] ?? 0) + 1;
+        }
+        const retainedMouths = diameter < 2 * (BORE + 1) ? mouths : 0;
+        // No cutter-cap shelf, old bore sleeve, or pocket beneath the cone.
+        expect(counts).toEqual({
+          plane: 6,
+          cylinder: 1,
+          ...(retainedMouths ? { cone: retainedMouths } : {})
+        });
+        const wall = [...kernel.getSolidFaces(enlarged)].find(
+          (face) => kernel.getSurfaceType(face) === 'cylinder'
+        )!;
+        const bore = requireThroughHole(kernel, enlarged, wall);
+        expect(bore.diameter).toBeCloseTo(diameter, 7);
+        expect(bore.axialLength).toBeCloseTo(
+          HEIGHT - mouths * Math.max(0, BORE + 1 - diameter / 2),
+          7
+        );
+        const quality = JSON.parse(
+          kernel.meshQuality(enlarged, 0.01) as string
+        ) as {
+          isWatertight: boolean;
+        };
+        expect(quality.isWatertight).toBe(true);
+        const [roundtrip] = kernel.deserializeSolids(
+          remusTranslators().importStep(
+            remusTranslators().exportStep(
+              kernel.serializeSolids(Uint32Array.of(enlarged))
+            )
+          )
+        );
+        expect(roundtrip).toBeDefined();
+        expect(kernel.validateSolid(roundtrip!)).toBe(0);
+        expect(kernel.volume(roundtrip!, 1e-5)).toBeCloseTo(
+          volume(diameter / 2, mouths),
+          4
+        );
+        expect(kernel.serializeSolids(Uint32Array.of(shrunk))).toEqual(source);
+      } finally {
+        kernel.free();
+      }
+    }
+  );
+
+  it.each([1, 2] as const)(
+    'refuses exact outer-rim coincidence on %i mouth(s) without changing the source',
+    (mouths) => {
+      const kernel = new RemusKernel();
+      try {
+        const shrunk = resize(kernel, chamferedPlate(kernel, mouths), 4.6);
+        const before = kernel.serializeSolids(Uint32Array.of(shrunk));
+        // The pin refuses the zero-height cone at exact coincidence. Keep
+        // that explicit refusal rather than accepting the old short pocket
+        // or nudging the requested diameter/tolerance to make a cut pass.
+        expect(() => resize(kernel, shrunk, 8)).toThrow(
+          /Through-hole diameter 8 does not fit this body: .*could not be cut exactly/
+        );
+        expect(kernel.serializeSolids(Uint32Array.of(shrunk))).toEqual(before);
+        expect(kernel.validateSolid(shrunk)).toBe(0);
+      } finally {
+        kernel.free();
+      }
+    }
+  );
+
   it.each(['native', 'STEP'] as const)(
     'shrinks both broken-out countersinks and split rims from %s without moving retained boundaries',
     async (sourceKind) => {
@@ -359,6 +489,12 @@ describe('through-hole resizing extends its existing chamfer angle', () => {
           .map((f) => kernel.getAnalyticSurfaceParams(f));
         expect(afterCones.sort()).toEqual(beforeCones.sort());
         expect(cones).toHaveLength(2);
+        const restored = resize(kernel, resized, 6);
+        expect(kernel.validateSolid(restored)).toBe(0);
+        expect(kernel.volume(restored, 1e-5)).toBeCloseTo(
+          kernel.volume(transformed, 1e-5),
+          4
+        );
       } finally {
         kernel.free();
       }
