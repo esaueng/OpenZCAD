@@ -154,13 +154,13 @@ for (const width of [1440, 390]) {
       };
 
       await sample.click();
-      await ready('-30');
-      await angle.fill('-45');
+      await ready('30');
+      await angle.fill('45');
       await angle.press('Enter');
       await angle.blur();
       await expect(
         panel(page).getByRole('region', { name: 'Joints' })
-      ).toContainText('-45.0°');
+      ).toContainText('45.0°');
       await panel(page)
         .getByRole('combobox', { name: 'Playback' })
         .selectOption('once');
@@ -174,9 +174,9 @@ for (const width of [1440, 390]) {
       await page.getByRole('button', { name: 'Build', exact: true }).click();
       await backToProjects();
       await sample.click();
-      await ready('-45');
+      await ready('45');
       await page.reload();
-      await ready('-45');
+      await ready('45');
 
       await page.getByRole('button', { name: 'Build', exact: true }).click();
       await backToProjects();
@@ -187,7 +187,7 @@ for (const width of [1440, 390]) {
       await reset.click();
       await expect(reset).toHaveCount(0);
       await sample.click();
-      await ready('-30');
+      await ready('30');
     }
   );
 }
@@ -225,14 +225,14 @@ test(
       name: 'Angle',
       exact: true
     });
-    await expect(angle).toHaveValue('-30');
+    await expect(angle).toHaveValue('30');
     await panel(page)
       .getByRole('button', { name: 'Play', exact: true })
       .click();
     await panel(page)
       .getByRole('button', { name: 'Pause', exact: true })
       .click();
-    await expect(angle).toHaveValue('-30');
+    await expect(angle).toHaveValue('30');
   }
 );
 
