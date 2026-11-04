@@ -2636,6 +2636,8 @@ export interface EdgeTopology {
    * identity, but are not physical feature edges and stay out of the viewport.
    */
   displayRole?: 'feature' | 'seam';
+  /** Native G1 continuity verdict: a smooth boundary has no edge to bevel. */
+  isSmooth?: boolean;
   /**
    * Hashes of the faces this edge bounds, sorted ascending.
    *

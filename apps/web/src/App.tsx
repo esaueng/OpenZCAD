@@ -17754,7 +17754,13 @@ export function App() {
 
   function handleSelectAllEdges(body: BodyRepresentation) {
     const edges = (body.topology?.edges ?? [])
-      .filter((edge) => edge.displayRole !== 'seam')
+      .filter(
+        (edge) =>
+          edge.displayRole !== 'seam' &&
+          (interaction.mode !== 'edges' ||
+            interaction.op !== 'chamfer' ||
+            edge.isSmooth !== true)
+      )
       .map((edge): TopologySelection => ({
         bodyId: body.bodyId,
         kind: 'edge',
@@ -22147,7 +22153,9 @@ export function App() {
     : null;
   const inPlaceBodyEdges = inPlaceEdgeBody
     ? (representations[inPlaceEdgeBody]?.topology?.edges.filter(
-        (edge) => edge.displayRole !== 'seam'
+        (edge) =>
+          edge.displayRole !== 'seam' &&
+          (inPlace.tool !== 'chamfer' || edge.isSmooth !== true)
       ) ?? [])
     : [];
   const inPlaceActions = [
@@ -25191,7 +25199,9 @@ export function App() {
   const calloutEdgeCount =
     interaction.mode === 'edges' && edgeModifierBody?.topology
       ? edgeModifierBody.topology.edges.filter(
-          (edge) => edge.displayRole !== 'seam'
+          (edge) =>
+            edge.displayRole !== 'seam' &&
+            (interaction.op !== 'chamfer' || edge.isSmooth !== true)
         ).length
       : 0;
   // Read through a ref, like the verbs, so the handlers' identity never
@@ -30581,11 +30591,16 @@ export function App() {
                 edgeModifierBody?.topology &&
                 interaction.edges.length <
                   edgeModifierBody.topology.edges.filter(
-                    (edge) => edge.displayRole !== 'seam'
+                    (edge) =>
+                      edge.displayRole !== 'seam' &&
+                      (interaction.op !== 'chamfer' || edge.isSmooth !== true)
                   ).length
                   ? {
                       count: edgeModifierBody.topology.edges.filter(
-                        (edge) => edge.displayRole !== 'seam'
+                        (edge) =>
+                          edge.displayRole !== 'seam' &&
+                          (interaction.op !== 'chamfer' ||
+                            edge.isSmooth !== true)
                       ).length,
                       select: () => handleSelectAllEdges(edgeModifierBody)
                     }
