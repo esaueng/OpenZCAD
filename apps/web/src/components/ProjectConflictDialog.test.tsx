@@ -364,4 +364,41 @@ describe('ProjectConflictDialog', () => {
     expect(onResolve).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+  it.each(['account', 'room'] as const)(
+    'starts %s focus on Decide later, not on a version row',
+    (source) => {
+      render(
+        <ProjectConflictDialog
+          conflict={conflict(source)}
+          busy={false}
+          keepMineDisabledReason={
+            source === 'room'
+              ? 'Keeping this device’s version requires an active edit lease.'
+              : null
+          }
+          onResolve={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      expect(
+        screen.getByRole('button', { name: 'Decide later' })
+      ).toHaveFocus();
+    }
+  );
+
+  it('says where two otherwise identical-looking copies differ', () => {
+    const value = conflict('account');
+    value.localDocument.name = 'Edited here';
+    render(
+      <ProjectConflictDialog
+        conflict={value}
+        busy={false}
+        onResolve={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText(/Using one version replaces the other\./)
+    ).toHaveTextContent('They differ in the project name.');
+  });
 });
