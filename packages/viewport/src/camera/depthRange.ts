@@ -4,8 +4,15 @@ import * as THREE from 'three';
  * Fit depth planes to the geometry being drawn, without changing its framing.
  * Recomputed after navigation and previews: saved poses carry no depth range,
  * and a fixed far plane can slice a full-size assembly even when it fits in XY.
+ * `focusDistance` is the camera-to-orbit-target distance in model units. It
+ * retains Fit's relative depth precision when a coarse moving AABB straddles
+ * the camera, without imposing a fixed minimum inspection scale.
  */
-export function updateCameraClipping(camera: THREE.Camera, bounds: THREE.Box3) {
+export function updateCameraClipping(
+  camera: THREE.Camera,
+  bounds: THREE.Box3,
+  focusDistance = 0
+) {
   if (
     !(camera instanceof THREE.PerspectiveCamera) &&
     !(camera instanceof THREE.OrthographicCamera)
@@ -42,7 +49,11 @@ export function updateCameraClipping(camera: THREE.Camera, bounds: THREE.Box3) {
   const near =
     camera instanceof THREE.PerspectiveCamera
       ? Math.max(
-          1e-6,
+          // A bounding-box corner behind the camera is not nearby visible
+          // geometry. Falling back to 1e-6 there destroys depth ordering even
+          // between separated opaque faces. Use the same relative floor as
+          // Fit while allowing genuinely microscopic focus distances.
+          Math.max(1e-6, focusDistance / 1000),
           Math.min(closest - padding, Math.abs(centerDepth) / 1000)
         )
       : closest - padding;
