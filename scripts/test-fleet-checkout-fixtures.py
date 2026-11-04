@@ -72,6 +72,12 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         (workflows / "fleet-ci.yml").unlink()
         (workflows / CALLEE).write_text(WORKFLOW)
         cls.pin = cls.commit("test(ci): active policy fixture", "2026-01-05T12:00:00+00:00")
+        # Preparation imports policy for both active and staged callees. Keep
+        # staged files in the candidate checkout without changing the active
+        # pin or its independently verified main ancestry.
+        for staged in (ROOT / ".github/workflows").glob("fleet-ci-v*.yml"):
+            if staged.name != CALLEE:
+                (workflows / staged.name).write_bytes(staged.read_bytes())
         (workflows / "ci.yml").write_text(CALLER.replace(PIN, cls.pin))
         scripts = cls.origin / "scripts"
         scripts.mkdir()
