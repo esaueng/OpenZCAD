@@ -26,13 +26,13 @@ function metrics(
 }
 
 describe('kernel WASM size policy', () => {
-  it('holds the approved ceiling step 1 thresholds', () => {
+  it('holds the approved ceiling step 2 thresholds', () => {
     const MIB = 1024 * 1024;
     expect(KERNEL_WASM_POLICY).toEqual({
-      rawReviewBytes: 11 * MIB,
-      rawHardBytes: 12 * MIB,
-      gzipHardBytes: 4.5 * MIB,
-      brotliReviewBytes: 3 * MIB,
+      rawReviewBytes: 15 * MIB,
+      rawHardBytes: 16 * MIB,
+      gzipHardBytes: 6 * MIB,
+      brotliReviewBytes: 4 * MIB,
       brotliQuality: 11,
       pinRawGrowthReviewBytes: 256 * 1024,
       pinRawGrowthReviewRatio: 0.03
