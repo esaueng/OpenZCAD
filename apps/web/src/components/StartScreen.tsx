@@ -531,6 +531,13 @@ export function StartScreen({
     }
   }, [name, units]);
   const [initialView] = useState(readLibraryView);
+  // The status the library opened with belongs to the project just closed —
+  // a modeling refusal, say — and is already in the activity log. Only
+  // news set while the library is showing earns the card's line.
+  const [carriedStatus, setCarriedStatus] = useState<string | null>(status);
+  if (carriedStatus !== null && status !== carriedStatus) {
+    setCarriedStatus(null);
+  }
   const [query, setQuery] = useState(initialView.query);
   const [shelf, setShelf] = useState<ProjectStatus>(initialView.shelf);
   const [filter, setFilter] = useState<ShelfFilter>(initialView.filter);
@@ -2422,7 +2429,11 @@ export function StartScreen({
   // A run's outcome is in the sentence, and the startup mode texts restate
   // what the sentence already says; anything else is news worth a line.
   const statusLine =
-    !loading && !syncRun && status && !isLibraryModeStatus(status)
+    !loading &&
+    !syncRun &&
+    status &&
+    status !== carriedStatus &&
+    !isLibraryModeStatus(status)
       ? status
       : '';
 
@@ -3430,7 +3441,11 @@ export function StartScreen({
                     ))}
                   </ul>
                 )}
-                {statusLine && <p className="start-status">{statusLine}</p>}
+                {statusLine && (
+                  <p className="start-status" title={statusLine}>
+                    {statusLine}
+                  </p>
+                )}
               </div>
             )}
           </div>

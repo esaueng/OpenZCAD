@@ -945,6 +945,21 @@ describe('StartScreen library shell', () => {
     );
   });
 
+  it("leaves the closed project's status out and keeps news to one line", () => {
+    const carried =
+      'Chamfer could not be created on 1 selected edge with distance 1. The modeling engine could not join this chamfer to the existing fillet or chamfer.';
+    const props = startScreenProps({ status: carried });
+    const { rerender } = render(<StartScreen {...props} />);
+    expect(document.querySelector('.start-status')).toBeNull();
+    expect(screen.queryByText(/Chamfer could not/)).toBeNull();
+
+    const news = 'Could not import part.openzcad: the file is not a backup.';
+    rerender(<StartScreen {...props} status={news} />);
+    const line = document.querySelector('.start-status');
+    expect(line).toHaveTextContent(news);
+    expect(line).toHaveAttribute('title', news);
+  });
+
   it('turns the sentence over to a save run and its failures', () => {
     const onRetrySync = vi.fn();
     const onDismissSyncRun = vi.fn();
