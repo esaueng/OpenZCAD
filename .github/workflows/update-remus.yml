@@ -142,9 +142,12 @@ jobs:
           # A consumer may pin an upstream PR fix before it reaches main.
           # Never replace that fix with a main commit that does not contain it.
           contains() {
-            local status
-            status="$(gh api "repos/esaueng/remus/compare/$1...$2" --jq .status)"
-            [[ "$status" == ahead || "$status" == identical ]]
+            local comparison
+            comparison="$(gh api "repos/esaueng/remus/compare/$1...$2" --jq .status)"
+            case "$comparison" in
+              ahead|identical) ;;
+              *) return 1 ;;
+            esac
           }
           if ! contains "$old_sha" "$upstream_sha"; then
             # Remus squash-merges, so a pin taken from a PR branch is never an
