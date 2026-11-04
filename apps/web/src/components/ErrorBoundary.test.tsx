@@ -1,6 +1,10 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ErrorBoundary } from './ErrorBoundary';
+import {
+  ErrorBoundary,
+  PANEL_AUTO_RETRY_DELAY_MS,
+  PANEL_AUTO_RETRY_WINDOW_MS
+} from './ErrorBoundary';
 
 function Throws({ error }: { error: Error }): never {
   throw error;
@@ -8,6 +12,7 @@ function Throws({ error }: { error: Error }): never {
 
 describe('ErrorBoundary', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -65,8 +70,93 @@ describe('ErrorBoundary', () => {
   });
 
   it('stays an inline panel fallback by default', () => {
+    vi.useFakeTimers();
     const { container } = renderFailing(new Error('boom'));
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
+    });
     expect(container.querySelector('.error-boundary')).not.toBeNull();
     expect(container.querySelector('.error-page')).toBeNull();
+  });
+
+  /** Throws while `failures.left` is positive, then renders. */
+  function Flaky({ failures }: { failures: { left: number } }) {
+    if (failures.left > 0) {
+      failures.left -= 1;
+      throw new Error('transient');
+    }
+    return <p>panel content</p>;
+  }
+
+  function renderFlaky(left: number) {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const failures = { left };
+    render(
+      <ErrorBoundary label="3D viewer">
+        <Flaky failures={failures} />
+      </ErrorBoundary>
+    );
+    return failures;
+  }
+
+  it('remounts a crashed panel once on its own, without a reload', () => {
+    // React renders a throwing child twice before giving up on it.
+    renderFlaky(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
+    });
+    expect(screen.getByText('panel content')).toBeTruthy();
+  });
+
+  it('leaves a persistent crash to the user and retries it in place', () => {
+    const failures = renderFlaky(Number.POSITIVE_INFINITY);
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '3D viewer could not be rendered.'
+    );
+    // No second automatic attempt inside the window.
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_WINDOW_MS);
+    });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Reload workspace' })
+    ).toBeTruthy();
+    failures.left = 0;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(screen.getByText('panel content')).toBeTruthy();
+  });
+
+  it('does not promise an in-place retry for a failed chunk download', () => {
+    vi.useFakeTimers();
+    renderFailing(
+      new TypeError('Failed to fetch dynamically imported module: /a.js')
+    );
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Check your connection'
+    );
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Reload workspace' })
+    ).toBeTruthy();
+  });
+
+  it('keeps the whole-app fallback on a reload', () => {
+    vi.useFakeTimers();
+    renderFailing(new Error('boom'), 'page');
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
+    });
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Reload workspace' })
+    ).toBeTruthy();
   });
 });

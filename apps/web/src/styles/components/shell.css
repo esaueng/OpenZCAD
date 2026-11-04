@@ -103,7 +103,8 @@
   container: viewer-area / inline-size;
 }
 
-.viewer-area .viewer-shell {
+.viewer-area .viewer-shell,
+.viewer-area > .error-boundary {
   flex: 1;
 }
 
