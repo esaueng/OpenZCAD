@@ -945,8 +945,13 @@ button.save-state:focus-visible,
 }
 
 /* The save status ends the identity island (TopBar.tsx). As a label it is
-   quiet, and its padding would otherwise double the island's gap. */
+   quiet, and its padding would otherwise double the island's gap. It never
+   shrinks below its label: squeezed, the centred label spilled out of both
+   sides, over the units and past the island's edge (at 970px "Save to my
+   account" printed across both). The name gives way instead, which marks
+   the bar tight and folds the status to its glyph (below). */
 .topbar-identity > .save-state {
+  flex: none;
   margin-inline: -5px;
 }
 
@@ -964,10 +969,10 @@ button.save-state:focus-visible,
    bare glyph rather than a boxed square, its words in the tooltip and the
    accessible name. A readout ("Saved", "Local only") goes first, below
    1200px with the wordmark; a status that asks for a click ("Save to my
-   account", "Edit not applied") keeps its words until every label in the
-   bar goes, below 960px. Wider, a name too long to show beside the words
-   takes the same room (TopBar.tsx). Glyph and colour still change with the
-   state. */
+   account", "Edit not applied") keeps its words until the name is cut even
+   without the wordmark, and goes with every other label below 960px. A
+   name too long to show beside the words takes the same room (TopBar.tsx).
+   Glyph and colour still change with the state. */
 .topbar[data-name-room='tight'] .topbar-identity > .save-state.is-readout {
   width: 18px;
   flex: 0 0 18px;
@@ -985,6 +990,31 @@ button.save-state:focus-visible,
   > .save-state.is-readout
   .stable-label-text {
   gap: 0;
+}
+
+/* Where the name is still cut once the wordmark and a readout's words have
+   gone, an actionable status folds as well (TopBar.tsx). Below 960px every
+   chip is already its glyph (below), and the phone bar sets its own
+   margins, so this stops at the compact row. */
+@media (min-width: 960px) {
+  .topbar[data-save-room='glyph'] .topbar-identity > .save-state {
+    width: 18px;
+    flex: 0 0 18px;
+    gap: 0;
+    margin-left: -8px;
+    margin-right: -3px;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    font-size: 0;
+  }
+
+  .topbar[data-save-room='glyph']
+    .topbar-identity
+    > .save-state
+    .stable-label-text {
+    gap: 0;
+  }
 }
 
 @media (max-width: 1199px) {
