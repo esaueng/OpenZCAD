@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -15,6 +16,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from policy_test_tools import bash_executable, git_command
 SOURCE = ROOT / "scripts/merge_queue_policy.py"
 spec = importlib.util.spec_from_file_location("queue_policy", SOURCE)
 POLICY = importlib.util.module_from_spec(spec)
@@ -105,12 +108,12 @@ def previous_workflow():
     if previous.exists():
         return previous.read_text()
     # Activation retires the old file; keep comparing its immutable main bytes.
-    command = ["git", "show", f"{pin}:{path}"]
+    command = git_command("show", f"{pin}:{path}")
     try:
-        return subprocess.check_output(command, cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+        return subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8", stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
-        subprocess.run(["git", "fetch", "--quiet", "--no-tags", "--depth=1", "origin", pin], cwd=ROOT, check=True)
-        return subprocess.check_output(command, cwd=ROOT, text=True)
+        subprocess.run(git_command("fetch", "--quiet", "--no-tags", "--depth=1", "origin", pin), cwd=ROOT, check=True)
+        return subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8")
 
 
 OLD = previous_workflow()
@@ -293,7 +296,7 @@ class QueueWorkflowTests(unittest.TestCase):
     def test_embedded_shell_syntax(self):
         for block in re.findall(r"        run: \|\n((?:          [^\n]*\n|\n)+)", TEXT):
             script = "\n".join(line[10:] if line.startswith("          ") else line for line in block.splitlines())
-            result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+            result = subprocess.run([bash_executable(), "-n"], input=script, text=True, encoding="utf-8", capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_immutable_probe_embeds_policy_and_never_executes_candidate_code(self):
@@ -383,7 +386,7 @@ class QueueWorkflowTests(unittest.TestCase):
             block = jobs(TEXT)["validate"]
             command = block.split("        run: |\n", 1)[1]
             for quality in ("success", "failure", "cancelled", "skipped"):
-                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
+                result = subprocess.run([bash_executable(), "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
                     env=dict(os.environ, QUALITY_RESULT=quality, UNIT_RESULT="success", VALIDATION_RESULT="success"),
                     capture_output=True)
                 self.assertEqual(result.returncode == 0, quality == "success")
@@ -393,7 +396,7 @@ class QueueWorkflowTests(unittest.TestCase):
             for result in ("success", "failure", "cancelled", "skipped"):
                 needs = {"queue-trust": {"result": probe}, "changes": {"result": "success"},
                          "repo-policy": {"result": result}, "secrets-scan": {"result": "success"}}
-                status = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
+                status = subprocess.run([bash_executable(), "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
                     env=dict(os.environ, NEEDS=json.dumps(needs), HEAVY="false", DOCS="false",
                              FULL="false", WASM="false", EVENT="merge_group"), capture_output=True)
                 self.assertEqual(status.returncode == 0, result == "success")

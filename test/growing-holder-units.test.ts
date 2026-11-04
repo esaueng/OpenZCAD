@@ -199,6 +199,24 @@ describe(
       );
       expect(preflight.candidate.derived.warnings).toEqual([]);
       expect(preflight.candidate.derived.exportableBodyIds).toHaveLength(1);
+      expect(holderOf(preflight.candidate).bbox.min.x).toBeCloseTo(0, 6);
+      expect(holderOf(preflight.candidate).bbox.max.x).toBeCloseTo(
+        60 / MM_PER_INCH,
+        6
+      );
+      const native = new RemusKernel();
+      try {
+        const resultId = preflight.candidate.derived.exportableBodyIds[0]!;
+        const solids = buildDocumentHistory(
+          native,
+          preflight.candidate
+        ).shapes.get(resultId)?.solids;
+        expect(solids).toHaveLength(1);
+        expect(native.validateSolid(solids![0]!)).toBe(0);
+        expect(native.getSolidShells(solids![0]!)).toHaveLength(1);
+      } finally {
+        native.free();
+      }
     });
 
     it('grows by an inch expression and exports the same metal as the millimetre document', async () => {

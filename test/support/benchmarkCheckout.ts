@@ -14,14 +14,21 @@ export function benchmarkCheckout({
 } = {}): BenchmarkCheckout {
   const git = (args: string[]) =>
     execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
-  const root = git(['rev-parse', '--show-toplevel']);
+  const [root, sourceCommit] = git([
+    'rev-parse',
+    '--show-toplevel',
+    '--verify',
+    'HEAD'
+  ]).split('\n');
+  if (!root || !sourceCommit)
+    throw new Error('Cannot identify the benchmark checkout.');
   if (
     requireClean &&
     git(['status', '--porcelain=v1', '--untracked-files=normal'])
   )
     throw new Error('H02 matched benchmarks require a clean source checkout.');
   return {
-    sourceCommit: git(['rev-parse', 'HEAD']),
+    sourceCommit,
     lockfileSha256: createHash('sha256')
       .update(readFileSync(resolve(root, 'pnpm-lock.yaml')))
       .digest('hex')

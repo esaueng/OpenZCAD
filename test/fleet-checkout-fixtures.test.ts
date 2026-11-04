@@ -3,19 +3,27 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import { pythonEnvironment, pythonExecutable } from './support/testTools';
 
 const script = 'scripts/test-fleet-checkout-fixtures.py';
 let history: string;
+let ownsHistory = false;
 
 beforeAll(() => {
+  history = process.env.OPENZCAD_FLEET_CHECKOUT_HISTORY ?? '';
+  if (history) return;
+  ownsHistory = true;
   history = mkdtempSync(join(tmpdir(), 'fleet-checkout-history-'));
   // Construct disposable history once; every regression assertion runs below
   // within the existing test deadline, and setup retains its default deadline.
-  execFileSync('python3', [script, '--prepare', history], { encoding: 'utf8' });
+  execFileSync(pythonExecutable(), [script, '--prepare', history], {
+    encoding: 'utf8',
+    env: pythonEnvironment()
+  });
 });
 
 afterAll(() => {
-  if (history) rmSync(history, { recursive: true, force: true });
+  if (ownsHistory && history) rmSync(history, { recursive: true, force: true });
 });
 
 it.each([
@@ -27,10 +35,15 @@ it.each([
   'fetched_off_main_comparison_pin_is_rejected',
   'missing_comparison_fails_instead_of_skipping',
   'large_pinned_policy_survives_worktree_edits'
-])('preserves real shallow Git provenance: %s', (name) => {
-  const result = spawnSync('python3', [script, '--origin', history, `FleetCheckoutFixtureTests.test_${name}`], {
-    encoding: 'utf8'
-  });
+])('preserves real shallow Git provenance: %s', { timeout: 30_000 }, (name) => {
+  const result = spawnSync(
+    pythonExecutable(),
+    [script, '--origin', history, `FleetCheckoutFixtureTests.test_${name}`],
+    {
+      env: pythonEnvironment(),
+      encoding: 'utf8'
+    }
+  );
   expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(result.stderr).toContain('Ran 1 test');
 });

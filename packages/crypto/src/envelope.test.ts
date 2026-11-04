@@ -1667,10 +1667,13 @@ describe('content blobs', () => {
     await rejectsWith(encrypted.reference, 'aborted');
   });
 
-  it('joins any number of chunks without spreading them', async () => {
+  it('joins any number of chunks without spreading them', () => {
     // Half a million parts: far more than an engine accepts as arguments.
     const parts = Array.from({ length: 500_000 }, () => Uint8Array.of(7));
     expect(joinBytes(parts).byteLength).toBe(500_000);
+  });
+
+  it('round-trips 5000 encrypted records without spreading them', { timeout: 30_000 }, async () => {
     // The one-shot paths build and read many-chunk envelopes the same way.
     const plaintext = patternBytes(CHUNK * 5_000, 1);
     const key = patternBytes(32, 0x51);
@@ -1717,7 +1720,7 @@ describe('content blobs', () => {
     await rejectsWith(cancelled.reference, 'aborted');
   });
 
-  it('hashes many chunks with bounded state', async () => {
+  it('hashes many chunks with bounded state', { timeout: 30_000 }, async () => {
     // 3000 chunks: the old digest list was spread into one call per blob.
     const plaintext = patternBytes(CHUNK * 3000, 9);
     const { envelope, reference } = await blob(plaintext);

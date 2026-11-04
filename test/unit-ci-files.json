@@ -137,7 +137,10 @@
     "test/kernel-prose-matching.test.ts",
     "test/partial-revolve.test.ts",
     "test/recovery-snapshot.test.ts",
-    "test/synthetic-holder-fixtures.test.ts"
+    "test/synthetic-holder-fixtures.test.ts",
+    "test/e2ee-runtime-budget.test.ts",
+    "test/test-tools.test.ts",
+    "test/unit-runtime-budget.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",
