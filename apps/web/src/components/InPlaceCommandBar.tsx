@@ -160,7 +160,9 @@ export function InPlaceCommandBar({
           ?.focus({ preventScroll: true });
     };
   }, [title]);
-  const refusalSummary = refusal ? modelingRefusalSummary(refusal) : null;
+  const refusalSummary = refusal
+    ? modelingRefusalSummary(refusal, title)
+    : null;
   const shown =
     refusalSummary ??
     refusal?.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, '') ??

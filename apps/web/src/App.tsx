@@ -2980,7 +2980,12 @@ export function App() {
   const setStatus = useCallback(
     (
       text: string,
-      options?: { sticky?: boolean; detail?: string; unlogged?: boolean }
+      options?: {
+        sticky?: boolean;
+        detail?: string;
+        unlogged?: boolean;
+        immediate?: boolean;
+      }
     ) => {
       const at = Date.now();
       lastStatusAtRef.current = at;
@@ -2989,7 +2994,8 @@ export function App() {
         ...(options?.detail ? { detail: options.detail } : {}),
         ...(options?.unlogged ? { unlogged: true } : {}),
         at,
-        sticky: options?.sticky ?? false
+        sticky: options?.sticky ?? false,
+        ...(options?.immediate || options?.sticky ? { immediate: true } : {})
       });
     },
     []
@@ -11337,7 +11343,7 @@ export function App() {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       persistSectionView(undefined);
       clearSectionOutline();
-      setStatus('Section view off.');
+      setStatus('Section view off.', { immediate: true });
       return;
     }
     // Switching the cut on brings its controls back, even when they were
@@ -11352,6 +11358,10 @@ export function App() {
       setViewerSettings((current) => ({ ...current, sectionView: remembered }));
       persistSectionView(remembered);
       void requestExactSection(remembered);
+      setStatus(
+        `Section view on: ${remembered.plane} plane · the model is untouched.`,
+        { immediate: true }
+      );
     } else {
       setSectionPlane('XY');
     }
@@ -11372,7 +11382,9 @@ export function App() {
     persistSectionView(section);
     // The panel beside the rail carries the slider and the tooltip says the
     // cut is display-only; the lane line only names the plane.
-    setStatus(`Section view: ${plane} plane · the model is untouched.`);
+    setStatus(`Section view on: ${plane} plane · the model is untouched.`, {
+      immediate: true
+    });
     void requestExactSection(section);
   }
 
@@ -31492,7 +31504,7 @@ export function App() {
                 }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
-                onStatus={(message) => setStatus(message)}
+                onStatus={(message, options) => setStatus(message, options)}
                 onAssistantSource={handleDrawingAssistantSource}
                 previewAnnotations={drawingPreview}
               />
@@ -31532,6 +31544,7 @@ export function App() {
           <WorkspaceReadout
             status={visibleStatus}
             statusAt={statusEntry.at}
+            statusImmediate={Boolean(statusEntry.immediate)}
             statusSticky={
               statusEntry.sticky ||
               (parameterPreview !== null && !exactGeometryReady)

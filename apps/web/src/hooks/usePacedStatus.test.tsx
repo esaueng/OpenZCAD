@@ -26,6 +26,31 @@ describe('usePacedStatus', () => {
     vi.useRealTimers();
   });
 
+  it('replaces an obsolete tool state immediately and never replays its pending message', () => {
+    const { result, rerender } = renderHook(
+      ({ status, immediate }) =>
+        usePacedStatus<Tone>(status, 'ready', true, undefined, immediate),
+      { initialProps: { status: 'Note placement started.', immediate: false } }
+    );
+    rerender({ status: 'Drawing updated.', immediate: false });
+    expect(result.current.status).toBe('Note placement started.');
+    rerender({
+      status: 'Placement canceled. Drawing properties opened.',
+      immediate: true
+    });
+    expect(result.current.status).toBe(
+      'Placement canceled. Drawing properties opened.'
+    );
+    act(() => {
+      vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+    });
+    expect(result.current.status).toBe(
+      'Placement canceled. Drawing properties opened.'
+    );
+    rerender({ status: 'Note added.', immediate: true });
+    expect(result.current.status).toBe('Note added.');
+  });
+
   it('shows a message at once when the last one has had its dwell', () => {
     const { result, rerender } = renderPaced();
     expect(result.current).toEqual({

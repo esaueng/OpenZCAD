@@ -4769,6 +4769,7 @@ test('a refused boolean never lands in history and says why in the form', { tag:
   await expect(
     intersectBar.getByRole('button', { name: /Done/ })
   ).toBeDisabled();
+  await expect(intersectBar.getByRole('status')).toContainText('Intersect would leave no solid.');
   await expect(featureRows).toHaveCount(before);
   await expect(
     page.locator('.feature-row', { hasText: 'Intersect' })

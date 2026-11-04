@@ -33,6 +33,7 @@ interface WorkspaceReadoutProps {
   status: string;
   statusAt?: number;
   statusSticky?: boolean;
+  statusImmediate?: boolean;
   /**
    * The exact-geometry line while the model is not ready: the worker phase
    * and what the viewport shows meanwhile. A state rather than a message, it
@@ -102,6 +103,7 @@ export function WorkspaceReadout({
   status,
   statusAt,
   statusSticky,
+  statusImmediate = false,
   geometryStatus = null,
   tone,
   muted = false,
@@ -236,7 +238,13 @@ export function WorkspaceReadout({
   const quiet = geometryStatus === null && expired;
   const shown = !quiet && !muted && line !== '';
   // The log keeps every message; the toast holds each long enough to read.
-  const paced = usePacedStatus(line, tone, shown, isNotableStatus);
+  const paced = usePacedStatus(
+    line,
+    tone,
+    shown,
+    isNotableStatus,
+    statusImmediate
+  );
   // Only what the user would go back for earns a counter: rebuild stages
   // and saves passed over in a burst are routine, and "10 more in log"
   // after adding one box sent people looking for a problem there was not.

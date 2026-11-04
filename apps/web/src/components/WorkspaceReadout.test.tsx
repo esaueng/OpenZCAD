@@ -25,6 +25,31 @@ const SUMMARY = {
 };
 
 describe('WorkspaceReadout', () => {
+  it('announces a tool-state change without retaining the previous state for its dwell', () => {
+    const { rerender } = render(
+      <WorkspaceReadout
+        {...SUMMARY}
+        status="Section view off."
+        tone="ready"
+        onOpenLog={vi.fn()}
+      />
+    );
+    rerender(
+      <WorkspaceReadout
+        {...SUMMARY}
+        status="Section view on: XY plane."
+        statusImmediate
+        tone="ready"
+        onOpenLog={vi.fn()}
+      />
+    );
+    expect(document.querySelector('.workspace-toast-body')).toHaveTextContent(
+      'Section view on: XY plane.'
+    );
+    expect(
+      document.querySelector('.workspace-toast-body')
+    ).not.toHaveTextContent('Section view off.');
+  });
   it('distinguishes committed body counts from an unapplied preview', () => {
     render(
       <WorkspaceReadout

@@ -499,6 +499,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
               .click();
             await expect(drawing.locator('.drawing-tool-hint')).toBeHidden();
             await expect(
+              page.locator('.workspace-toast:not(.hidden)')
+            ).toContainText('Placement canceled. Drawing properties opened.');
+            await expect(
               tools.getByRole('button', { name: 'Note', exact: true })
             ).toHaveAttribute('aria-pressed', 'false');
             await capture(
@@ -532,6 +535,13 @@ for (const colorScheme of ['light', 'dark'] as const) {
             );
           }
           await drawing.locator('.drawing-tool-hint-cancel').click();
+          await expect(
+            page
+              .locator(
+                '.workspace-toast:not(.hidden) .workspace-toast-body > span'
+              )
+              .first()
+          ).toHaveText('Placement canceled.');
           // Compact properties change the available canvas height. Wait for
           // the SVG's measured pixel scale, rather than capturing between a
           // ResizeObserver delivery and the label-size render it schedules.
@@ -575,6 +585,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await expect(drawing.locator('.drawing-texts')).toContainText(
           'REVIEW NOTE'
         );
+        await expect(
+          page.locator('.workspace-toast:not(.hidden)')
+        ).toContainText('Note added.');
         await expect
           .poll(
             async () =>
@@ -710,6 +723,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
             exact: true
           });
           await expect(section).toBeVisible();
+          await expect(
+            page.locator('.workspace-toast:not(.hidden)')
+          ).toContainText('Section view on:');
           // Reduced motion must not introduce a tiny translate transition:
           // the clamp reads placement again during the same layout delivery.
           const sameFrameMove = await section.evaluate((element) => {
@@ -1038,7 +1054,21 @@ for (const colorScheme of ['light', 'dark'] as const) {
             .getBoundingClientRect();
           const expectedY = Math.max(
             8,
-            Math.min(trigger.top, innerHeight - r.height - 8)
+            Math.min(
+              trigger.top,
+              (innerWidth <= 600
+                ? Math.min(
+                    document
+                      .querySelector('.workspace-toast:not(.hidden)')
+                      ?.getBoundingClientRect().top ?? innerHeight,
+                    document
+                      .querySelector('.command-bar-lane')
+                      ?.getBoundingClientRect().top ?? innerHeight
+                  )
+                : innerHeight) -
+                r.height -
+                8
+            )
           );
           return (
             r.left >= 8 &&
@@ -1053,6 +1083,14 @@ for (const colorScheme of ['light', 'dark'] as const) {
         flyout.getByRole('button', { name: 'Circular pattern', exact: true })
       );
       await capture(page, testInfo, '320px-sketch-modify');
+      const search = page.getByRole('combobox', { name: 'Search commands' });
+      const status = page.locator(
+        '.workspace-toast:not(.hidden) .workspace-toast-body'
+      );
+      await reachable(search);
+      await reachable(status);
+      expect((await search.boundingBox())!.width).toBeGreaterThan(160);
+      expect((await status.boundingBox())!.width).toBeGreaterThan(160);
       await checkDialogStack();
       const scroller = page.locator('.workspace-column-tools');
       const bounds = (await scroller.boundingBox())!;

@@ -5163,3 +5163,36 @@ button.model-panel-grip[aria-expanded='true'] {
 .command-bar-lane:has(.workspace-hint-help[open]) {
   z-index: var(--z-popover);
 }
+
+/* Sketch input and feedback each get a whole row above Snap/Grid. Three
+   icon rails cannot also share the narrow strip beside that readout. */
+@media (max-width: 600px) {
+  .workspace.column-layout:has(.sketch-rail) .command-bar-lane {
+    left: var(--island-gap);
+    right: var(--island-gap);
+    bottom: calc(var(--readout-h) + var(--island-gap) * 2);
+  }
+
+  .workspace.column-layout:has(.sketch-rail) .workspace-toast,
+  .workspace.column-layout:has(.sketch-rail) .activity-lane {
+    left: var(--island-gap);
+    right: var(--island-gap);
+    bottom: calc(
+      var(--readout-h) + var(--command-bar-h) + var(--island-gap) * 3 + 8px
+    );
+    z-index: var(--z-popover);
+  }
+
+  .workspace.column-layout:has(.sketch-rail) .workspace-column-float {
+    top: var(--stage-top);
+    transform: none;
+    max-height: calc(
+      100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
+        var(--island-gap) * 4 - 64px
+    );
+  }
+
+  .workspace.column-layout:has(.sketch-rail) .viewport-scale-indicator {
+    visibility: hidden;
+  }
+}

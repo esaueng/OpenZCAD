@@ -249,7 +249,7 @@ export interface DrawingWorkspaceProps {
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
-  onStatus: (message: string) => void;
+  onStatus: (message: string, options?: { immediate?: boolean }) => void;
   /**
    * D06: the sheet on screen as the assistant reads it, or null when there
    * is none. Called whenever what it measures changes.
@@ -2306,7 +2306,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setHover(null);
     if (next) {
       setPropertiesOpen(false);
-      props.onStatus(`${ANNOTATION_TOOL_LABELS[next.kind]} placement started.`);
+      props.onStatus(
+        `${ANNOTATION_TOOL_LABELS[next.kind]} placement started.`,
+        { immediate: true }
+      );
+    } else if (tool || sectionTool) {
+      props.onStatus('Placement canceled.', { immediate: true });
     }
     if (next) canvasRef.current?.focus();
   };
@@ -2318,11 +2323,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
     if (event.key === 'Escape') {
-      if (sectionTool) setSectionTool(null);
+      if (sectionTool) chooseTool(null);
       else if (shownAutoPlan) setAutoPlan(null);
       else if (tool) {
-        setTool(null);
-        setHover(null);
+        chooseTool(null);
       } else if (selectedViewId || selectedAnnotationId) {
         setSelectedViewId(null);
         setSelectedAnnotationId(null);
@@ -3022,6 +3026,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setSelectedAnnotationId(annotation.annotationId);
       setSelectedViewId(null);
       if (finished.kind === 'note') setPropertiesOpen(true);
+      props.onStatus(
+        finished.kind === 'note'
+          ? 'Note added. Edit its text in Properties.'
+          : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+        { immediate: true }
+      );
       // A note is placed and then typed; dimensions keep their tool for the
       // next one.
       setTool(
@@ -3108,7 +3118,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       : 'Add a front, top or side view to cut a section from.';
   function toggleSectionTool() {
     if (sectionTool) {
-      setSectionTool(null);
+      chooseTool(null);
       return;
     }
     if (!canSection) {
@@ -3119,7 +3129,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setHover(null);
     setPropertiesOpen(false);
     setSectionTool({ drag: null, line: null, pointer: null });
-    props.onStatus('Section view placement started.');
+    props.onStatus('Section view placement started.', { immediate: true });
     canvasRef.current?.focus();
   }
   const sectionSource = (line: SectionLine | null) =>
@@ -3660,7 +3670,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 if (!propertiesOpen && (tool || sectionTool)) {
                   chooseTool(null);
                   props.onStatus(
-                    'Placement canceled. Drawing properties opened.'
+                    'Placement canceled. Drawing properties opened.',
+                    { immediate: true }
+                  );
+                } else {
+                  props.onStatus(
+                    propertiesOpen
+                      ? 'Drawing properties closed.'
+                      : 'Drawing properties opened.',
+                    { immediate: true }
                   );
                 }
                 setPropertiesOpen((open) => !open);
@@ -4227,7 +4245,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               <button
                 type="button"
                 className="drawing-tool-hint-cancel"
-                onClick={() => setSectionTool(null)}
+                onClick={() => chooseTool(null)}
               >
                 Cancel
               </button>
