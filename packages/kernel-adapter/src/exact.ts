@@ -3663,7 +3663,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           !hiddenBodies.has(bodyId) &&
           measured.valid &&
           feature !== undefined &&
+          // Imports report their own source-file diagnostics, and an imported
+          // sheet or single facet is legitimately open.
           feature.featureKind !== 'imported-step' &&
+          feature.featureKind !== 'imported-mesh' &&
           !hasRefusingFeatureWarning(build, feature.featureId) &&
           !isClosedConsistentlyOrientedMesh(
             inspectDisplayMeshClosure(measured.vertices, measured.indices)
