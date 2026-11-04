@@ -59,6 +59,17 @@ export function deleteFeatureToastMessage(
     : `Deleted ${name} · ${countLabel(dependentCount, 'feature', 'features')} depended on it`;
 }
 
+/** The History selection's batch delete, worded for the steps as a group. */
+export function deleteFeaturesToastMessage(
+  count: number,
+  dependentCount: number
+): string {
+  const deleted = `Deleted ${countLabel(count, 'feature', 'features')}`;
+  return dependentCount === 0
+    ? deleted
+    : `${deleted} · ${countLabel(dependentCount, 'feature', 'features')} depended on them`;
+}
+
 /**
  * Suppressing a feature rebuilds everything after it, and a later feature
  * that referenced its faces or body quietly drops to "needs repair". The

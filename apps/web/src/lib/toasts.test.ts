@@ -2,9 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   countLabel,
   deleteFeatureToastMessage,
+  deleteFeaturesToastMessage,
   statusRepeatedByToast,
   suppressFeatureToastMessage
 } from './toasts';
+
+describe('deleteFeaturesToastMessage', () => {
+  it('counts the deleted steps and what rested on them', () => {
+    expect(deleteFeaturesToastMessage(3, 0)).toBe('Deleted 3 features');
+    expect(deleteFeaturesToastMessage(2, 1)).toBe(
+      'Deleted 2 features · 1 feature depended on them'
+    );
+  });
+});
 
 describe('deleteFeatureToastMessage', () => {
   it('names the feature and stays quiet when nothing depended on it', () => {

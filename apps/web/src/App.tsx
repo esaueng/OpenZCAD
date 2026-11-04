@@ -1646,6 +1646,7 @@ import {
 import {
   countLabel,
   deleteFeatureToastMessage,
+  deleteFeaturesToastMessage,
   statusRepeatedByToast,
   UNDO_FLOOR_TRIMMED_NOTICE,
   UNDO_FLOOR_TRIMMED_REASON,
@@ -2715,6 +2716,8 @@ export function App() {
     featureId: FeatureId;
     name: string;
     dependents: string[];
+    /** A History multi-selection deleted together, in history order. */
+    batch?: FeatureId[];
   } | null>(null);
   /** A refused suppression, asking whether to pause its dependents too. */
   const [pendingSuppression, setPendingSuppression] = useState<{
@@ -25900,6 +25903,104 @@ export function App() {
       finish();
   }
 
+  /**
+   * Deletes a History multi-selection (shift- or Ctrl/⌘-click) as one
+   * undoable step. Like a single delete it confirms first when later steps
+   * rest on the selection, naming only those outside it.
+   */
+  function handleDeleteFeatures(featureIds: readonly FeatureId[]) {
+    if (!doc || featureIds.length === 0) return;
+    if (featureIds.length === 1) {
+      const only = findFeature(doc, featureIds[0]!);
+      if (only) handleDeleteFeature(only.featureId, only.name);
+      return;
+    }
+    const ids = new Set(featureIds);
+    const history = featureHistory(doc);
+    const dependentIds = new Set<FeatureId>();
+    for (const id of featureIds) {
+      for (const dependent of history.downstream(id)) {
+        if (!ids.has(dependent.featureId))
+          dependentIds.add(dependent.featureId);
+      }
+    }
+    const dependents = history.features.filter((feature) =>
+      dependentIds.has(feature.featureId)
+    );
+    if (
+      dependents.length > 0 &&
+      appSettings.general.confirmDestructiveActions
+    ) {
+      setPendingFeatureDelete({
+        featureId: featureIds[0]!,
+        name: countLabel(featureIds.length, 'feature', 'features'),
+        dependents: dependents.map((dependent) => dependent.name),
+        batch: [...featureIds]
+      });
+      return;
+    }
+    commitDeleteFeatures(featureIds, dependents.length);
+  }
+
+  function commitDeleteFeatures(
+    featureIds: readonly FeatureId[],
+    dependentCount: number
+  ) {
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!manager || !base) return;
+    const ids = new Set(featureIds);
+    const message = deleteFeaturesToastMessage(
+      featureIds.length,
+      dependentCount
+    );
+    const finish = () => {
+      if (modelingEditFeature && ids.has(modelingEditFeature.featureId))
+        closeFeaturePanel();
+      const editing = inPlaceRef.current.editing;
+      if (editing && ids.has(editing.featureId)) {
+        inPlaceRef.current.cancel(true);
+      }
+      clearSelection();
+      announce(
+        message,
+        { label: 'Undo', run: handleUndo },
+        { repeatsStatusAt: lastStatusAtRef.current }
+      );
+    };
+    void import('./lib/featureDeletion')
+      .then(({ batchFeatureDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the features again before deleting them.'
+          );
+          return;
+        }
+        const removal = batchFeatureDeletion(current, featureIds);
+        if (removal.validateDerived) {
+          void validatedFeature.runTransaction(removal.commands, {
+            label: removal.label,
+            targets: [],
+            validateDerived: removal.validateDerived,
+            validatingMessage: `Checking removal of ${countLabel(featureIds.length, 'feature', 'features')}…`,
+            successMessage: message,
+            onFailure: (failure) => announce(failure),
+            onSuccess: finish
+          });
+          return;
+        }
+        if (executeTransaction(removal.label, removal.commands)) finish();
+      })
+      .catch((error: unknown) =>
+        setStatus(errorMessage(error, 'Could not delete these features.'))
+      );
+  }
+
   function handleRenameFeature(featureId: FeatureId, name: string) {
     const current = managerRef.current?.document;
     const live = current && findFeature(current, featureId);
@@ -27157,13 +27258,18 @@ export function App() {
       {
         item: {
           id: 'delete',
-          label: 'Delete',
+          label: row?.deleteSelection
+            ? `Delete ${countLabel(row.deleteSelection.count, 'feature', 'features')}`
+            : 'Delete',
           icon: <Trash2 size={13} aria-hidden="true" />,
           shortcut: 'Del',
           danger: true,
           section: true
         },
-        run: () => handleDeleteFeature(feature.featureId, feature.name)
+        run: () =>
+          row?.deleteSelection
+            ? row.deleteSelection.run()
+            : handleDeleteFeature(feature.featureId, feature.name)
       }
     ];
     // The heading names the feature these actions touch, and names the menu.
@@ -29347,6 +29453,7 @@ export function App() {
       onRollbackAfterFeature={handleRollbackAfterFeature}
       onResumeHistory={handleResumeHistory}
       onRenameFeature={handleRenameFeature}
+      onDeleteFeatures={editDisabledReason ? undefined : handleDeleteFeatures}
       units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
@@ -31731,12 +31838,15 @@ export function App() {
           {pendingFeatureDelete && doc && (
             <DeleteFeatureDialog
               name={pendingFeatureDelete.name}
+              count={pendingFeatureDelete.batch?.length}
               dependents={pendingFeatureDelete.dependents}
               onCancel={() => setPendingFeatureDelete(null)}
               onDelete={() => {
-                const { featureId, name, dependents } = pendingFeatureDelete;
+                const { featureId, name, dependents, batch } =
+                  pendingFeatureDelete;
                 setPendingFeatureDelete(null);
-                commitDeleteFeature(featureId, name, dependents.length);
+                if (batch) commitDeleteFeatures(batch, dependents.length);
+                else commitDeleteFeature(featureId, name, dependents.length);
               }}
             />
           )}

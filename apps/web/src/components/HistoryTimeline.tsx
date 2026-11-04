@@ -31,7 +31,9 @@ import {
   RotateCw,
   Search,
   SquareDashed,
-  Torus
+  Torus,
+  Trash2,
+  X
 } from 'lucide-react';
 import {
   isFeatureManuallySuppressed,
@@ -162,6 +164,12 @@ export interface HistoryTimelineProps {
   reorderBusy?: boolean;
   /** Renames a feature in place. Without it the row offers no rename. */
   onRenameFeature?(featureId: FeatureId, name: string): void;
+  /**
+   * Deletes several steps as one undoable step. With it, Shift-click picks a
+   * range of rows and Ctrl/⌘-click adds or drops one; without it a row
+   * selects alone.
+   */
+  onDeleteFeatures?(featureIds: readonly FeatureId[]): void;
 }
 
 /**
@@ -180,6 +188,11 @@ export interface HistoryRowActions {
   rollBack(): void;
   resume(): void;
   rename?(): void;
+  /**
+   * Present when the row is part of a multi-row History selection: its
+   * menu's Delete removes every selected step, not this one alone.
+   */
+  deleteSelection?: { count: number; run(): void };
 }
 
 function sketchIdOf(feature: FeatureNode): string | null {
@@ -365,13 +378,19 @@ export function HistoryTimeline({
   onResumeHistory,
   onReorderFeature,
   reorderBusy = false,
-  onRenameFeature
+  onRenameFeature,
+  onDeleteFeatures
 }: HistoryTimelineProps) {
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<FeatureId | null>(null);
   const [dropFeatureId, setDropFeatureId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [relatedOnly, setRelatedOnly] = useState(false);
+  // The multi-row selection, kept here rather than in the workspace: the
+  // viewport and the edit card follow one feature, and a batch only feeds
+  // the batch actions. The anchor is where a Shift-click range starts.
+  const [batch, setBatch] = useState<ReadonlySet<FeatureId>>(() => new Set());
+  const batchAnchor = useRef<FeatureId | null>(null);
   // Where the handle sits while it is being dragged or stepped from the
   // keyboard, before that position is committed to the document.
   const [previewEnd, setPreviewEnd] = useState<number | null>(null);
@@ -506,6 +525,12 @@ export function HistoryTimeline({
           (summaries[index] ?? '').toLowerCase().includes(needle))
     );
   const filtering = needle.length > 0 || related !== null;
+  // Only rows on screen act: a step a filter hides is never deleted unseen.
+  const batchIds = onDeleteFeatures
+    ? visible
+        .filter(({ feature }) => batch.has(feature.featureId))
+        .map(({ feature }) => feature.featureId)
+    : [];
 
   useEffect(() => {
     if (!findOpen) {
@@ -513,6 +538,24 @@ export function HistoryTimeline({
       setRelatedOnly(false);
     }
   }, [findOpen]);
+
+  // A step deleted or undone away leaves the batch, so an undo that brings
+  // it back does not bring it back selected.
+  useEffect(() => {
+    setBatch((current) => {
+      if (current.size === 0) return current;
+      const present = new Set(features.map((feature) => feature.featureId));
+      const kept = [...current].filter((id) => present.has(id));
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [features]);
+
+  // A single selection made anywhere (a plain click, the viewport, the
+  // arrow keys) replaces the batch.
+  useEffect(() => {
+    if (selectedFeatureNodeId)
+      setBatch((current) => (current.size ? new Set() : current));
+  }, [selectedFeatureNodeId]);
 
   // Clearing the selection turns Related off for good, so the next selection
   // does not silently re-filter behind a toggle that read as off.
@@ -693,8 +736,54 @@ export function HistoryTimeline({
       resume: resumeNow,
       ...(onRenameFeature
         ? { rename: () => setRenamingId(feature.featureId) }
+        : {}),
+      ...(batchIds.length > 1 && batchIds.includes(feature.featureId)
+        ? { deleteSelection: { count: batchIds.length, run: deleteBatch } }
         : {})
     };
+  }
+
+  function clearBatch() {
+    setBatch((current) => (current.size ? new Set() : current));
+  }
+
+  function deleteBatch() {
+    if (batchIds.length > 0) onDeleteFeatures?.(batchIds);
+  }
+
+  /**
+   * Shift-click selects the visible rows from the anchor to `feature`;
+   * Ctrl/⌘-click adds or drops `feature` and moves the anchor to it. The
+   * single selection, when there is one, seeds the batch and then steps
+   * aside, so the edit card is not left editing one step of several.
+   */
+  function extendBatch(feature: FeatureNode, range: boolean) {
+    const order = visible.map((row) => row.feature.featureId);
+    const single = features.find(
+      (candidate) => candidate.id === selectedFeatureNodeId
+    );
+    const next = new Set(batchIds);
+    if (next.size === 0 && single && order.includes(single.featureId)) {
+      next.add(single.featureId);
+    }
+    if (range) {
+      const anchorId =
+        [batchAnchor.current, single?.featureId].find(
+          (id): id is FeatureId => !!id && order.includes(id)
+        ) ?? feature.featureId;
+      const from = order.indexOf(anchorId);
+      const to = order.indexOf(feature.featureId);
+      next.clear();
+      for (const id of order.slice(Math.min(from, to), Math.max(from, to) + 1))
+        next.add(id);
+      batchAnchor.current = anchorId;
+    } else {
+      if (next.has(feature.featureId)) next.delete(feature.featureId);
+      else next.add(feature.featureId);
+      batchAnchor.current = feature.featureId;
+    }
+    setBatch(next);
+    if (single) onSelectFeature(single.id);
   }
 
   function moveEndTo(target: number) {
@@ -779,7 +868,41 @@ export function HistoryTimeline({
   }
 
   // ↑/↓ walk the selection row by row; ⇧↑/⇧↓ move the end of history.
+  // With rows batched, Delete removes them all and Escape lets them go;
+  // Ctrl/⌘+A on a row batches every visible row.
   function onListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const onRow = (event.target as HTMLElement).closest('.feature-row-main');
+    if (onRow && onDeleteFeatures && !event.altKey) {
+      if (
+        (event.key === 'a' || event.key === 'A') &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        visible.length > 0
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        const single = features.find(
+          (candidate) => candidate.id === selectedFeatureNodeId
+        );
+        setBatch(new Set(visible.map(({ feature }) => feature.featureId)));
+        if (single) onSelectFeature(single.id);
+        return;
+      }
+      if (batchIds.length > 0 && !event.metaKey && !event.ctrlKey) {
+        if (event.key === 'Delete' || event.key === 'Backspace') {
+          event.preventDefault();
+          event.stopPropagation();
+          deleteBatch();
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          clearBatch();
+          return;
+        }
+      }
+    }
     if (
       (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') ||
       event.altKey ||
@@ -939,6 +1062,35 @@ export function HistoryTimeline({
           </button>
         </div>
       )}
+      {batchIds.length > 0 && (
+        <div
+          className="history-batch"
+          role="toolbar"
+          aria-label="Selected steps"
+        >
+          <span className="history-batch-count" aria-live="polite">
+            {batchIds.length} selected
+          </span>
+          <button
+            type="button"
+            className="history-batch-delete"
+            title={`Delete ${batchIds.length === 1 ? 'the selected step' : `all ${batchIds.length} selected steps`} (Del)`}
+            onClick={deleteBatch}
+          >
+            <Trash2 size={12} aria-hidden="true" />
+            Delete
+          </button>
+          <button
+            type="button"
+            className="history-batch-clear"
+            title="Clear the selection (Esc)"
+            aria-label="Clear the selection"
+            onClick={clearBatch}
+          >
+            <X size={12} aria-hidden="true" />
+          </button>
+        </div>
+      )}
       <div
         ref={listRef}
         data-end={end}
@@ -994,6 +1146,7 @@ export function HistoryTimeline({
             sketchId !== null &&
             brokenProjectionSketchIds?.has(sketchId) === true;
           const selected = selectedFeatureNodeId === feature.id;
+          const inBatch = batchIds.includes(feature.featureId);
           const value = manual
             ? 'suppressed'
             : paused
@@ -1014,7 +1167,7 @@ export function HistoryTimeline({
               data-node-id={feature.id}
               data-history-index={index}
               style={{ '--history-delay': `${delay}ms` } as CSSProperties}
-              className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
+              className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${inBatch ? ' in-batch' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
               onContextMenu={(event) => {
                 event.preventDefault();
                 onFeatureContextMenu(
@@ -1137,8 +1290,27 @@ export function HistoryTimeline({
                 <button
                   type="button"
                   className="feature-row-main"
-                  aria-pressed={selected}
+                  aria-pressed={selected || inBatch}
+                  onMouseDown={(event) => {
+                    // Shift-click would otherwise also select page text.
+                    if (onDeleteFeatures && event.shiftKey)
+                      event.preventDefault();
+                  }}
                   onClick={(event) => {
+                    // Ahead of the multi-click guard: quick Shift- or
+                    // Ctrl-clicks down the list count up `detail` too.
+                    if (
+                      onDeleteFeatures &&
+                      (event.shiftKey || event.metaKey || event.ctrlKey)
+                    ) {
+                      extendBatch(feature, event.shiftKey);
+                      // Safari does not focus a clicked button, and Delete
+                      // has to reach the list rather than the workspace.
+                      event.currentTarget.focus();
+                      return;
+                    }
+                    if (batchIds.length > 0) clearBatch();
+                    batchAnchor.current = feature.featureId;
                     // A pointer's first click: Enter and Space report 0.
                     if (event.detail === 1) {
                       holdMultiClickToRow(event.currentTarget);

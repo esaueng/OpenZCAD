@@ -47,6 +47,23 @@ describe('DeleteFeatureDialog', () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it('titles a History batch by its count and words the dependents for them', () => {
+    render(
+      <DeleteFeatureDialog
+        name="3 features"
+        count={3}
+        dependents={['Union', 'Fillet']}
+        onCancel={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('alertdialog', { name: 'Delete 3 features?' })
+    ).toHaveTextContent(
+      '2 later features build on them and will rebuild without them:'
+    );
+  });
+
   it('uses the singular for one dependent', () => {
     render(
       <DeleteFeatureDialog
