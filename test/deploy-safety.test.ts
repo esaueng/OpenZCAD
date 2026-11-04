@@ -254,6 +254,23 @@ describe('CI gates cannot silently stop testing', () => {
     expect(ci).toContain('Kernel pin unchanged at $head.');
   });
 
+  it('advances a squash-merged kernel pin only from its exact merged PR head', () => {
+    // Remus squash-merges, so a pin taken from a PR branch is never an
+    // ancestor of main once that PR lands, and the updater refused every
+    // release after one (2026-11-04). The relaxation must stay this narrow: a
+    // pin that is not the final head of a merged PR, or whose merge commit the
+    // release does not contain, can be an upstream fix the release drops.
+    const updater = readFileSync('.github/workflows/update-remus.yml', 'utf8');
+    expect(updater).toContain(
+      'Current Remus pin is not an ancestor of the latest paired package release.'
+    );
+    expect(updater).toContain('repos/esaueng/remus/commits/$old_sha/pulls');
+    expect(updater).toContain(
+      'select(.merged_at != null and .head.sha == \\"$old_sha\\")'
+    );
+    expect(updater).toContain('contains "$merge_sha" "$upstream_sha"');
+  });
+
   it('keeps the kernel resolved to exactly one commit', () => {
     // Two different resolutions in one lockfile would mean two kernels in one
     // build, and the guard above compares a single SHA.

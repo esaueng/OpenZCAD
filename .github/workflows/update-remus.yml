@@ -141,11 +141,26 @@ jobs:
           upstream_sha="$RELEASE_SHA"
           # A consumer may pin an upstream PR fix before it reaches main.
           # Never replace that fix with a main commit that does not contain it.
-          comparison="$(gh api "repos/esaueng/remus/compare/$old_sha...$upstream_sha" --jq .status)"
-          case "$comparison" in
-            ahead|identical) ;;
-            *) echo "::error title=Kernel fix not in release::Current Remus pin is not an ancestor of the latest paired package release. Merge the upstream fix before updating."; exit 1 ;;
-          esac
+          contains() {
+            local status
+            status="$(gh api "repos/esaueng/remus/compare/$1...$2" --jq .status)"
+            [[ "$status" == ahead || "$status" == identical ]]
+          }
+          if ! contains "$old_sha" "$upstream_sha"; then
+            # Remus squash-merges, so a pin taken from a PR branch is never an
+            # ancestor of main even once that PR has landed. Accept it only
+            # when it is exactly the final head of a merged PR whose merge
+            # commit the release contains; any other pin keeps the refusal.
+            merge_sha="$(
+              gh api "repos/esaueng/remus/commits/$old_sha/pulls" \
+                --jq "[.[] | select(.merged_at != null and .head.sha == \"$old_sha\") | .merge_commit_sha][0] // empty"
+            )"
+            if [[ ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]] || ! contains "$merge_sha" "$upstream_sha"; then
+              echo "::error title=Kernel fix not in release::Current Remus pin is not an ancestor of the latest paired package release. Merge the upstream fix before updating."
+              exit 1
+            fi
+            echo "Current pin $old_sha is the head of a merged Remus PR, landed as $merge_sha, which the release contains." >> "$GITHUB_STEP_SUMMARY"
+          fi
           node scripts/pin-remus.mjs "$upstream_sha"
           pnpm update remus-wasm remus-wasm-io --filter @openzcad/kernel-adapter --lockfile-only
 
