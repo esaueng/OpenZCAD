@@ -61,9 +61,12 @@ export interface AssemblyViewModel {
 type ViewRuntime = Pick<
   AssemblyRuntimeState,
   'overrides' | 'placementOverrides' | 'selectedJointId' | 'jointTool'
->;
+> &
+  Partial<Pick<AssemblyRuntimeState, 'motionSetup'>>;
 
 export const TOOL_PREVIEW_JOINT_ID = '__joint_tool_preview__';
+/** The joint Set up motion previews before Create. */
+export const MOTION_SETUP_PREVIEW_JOINT_ID = '__motion_setup_preview__';
 
 /**
  * The joint the tool would create from its picks. As-built when the two
@@ -160,6 +163,28 @@ export function buildAssemblyView(
     const preview = jointFromTool(base, tool, TOOL_PREVIEW_JOINT_ID, 'Preview');
     if (preview) set = { ...set, joints: [...set.joints, preview.joint] };
   }
+  const setupPreview = runtime.motionSetup?.preview;
+  if (setupPreview) {
+    const baseId = setupPreview.parent.componentId;
+    // Create fixes a floating base before adding the joint. Preview the
+    // same grounding without mutating the saved assembly; otherwise the
+    // solver can anchor an earlier-listed moving part and move the base.
+    const groundBase = solveAssembly(set).roles.get(baseId) === 'free';
+    set = {
+      ...set,
+      components: groundBase
+        ? set.components.map((component) =>
+            component.id === baseId
+              ? { ...component, grounded: true }
+              : component
+          )
+        : set.components,
+      joints: [
+        ...set.joints,
+        { ...setupPreview, id: MOTION_SETUP_PREVIEW_JOINT_ID }
+      ]
+    };
+  }
   const solution = solveAssembly(set, runtime.overrides);
   const bodyByComponent = assemblyComponentBodies(
     { ...document, assembly: set },
@@ -187,7 +212,8 @@ export function buildAssemblyView(
       kind: joint.kind,
       selected:
         joint.id === runtime.selectedJointId ||
-        joint.id === TOOL_PREVIEW_JOINT_ID,
+        joint.id === TOOL_PREVIEW_JOINT_ID ||
+        joint.id === MOTION_SETUP_PREVIEW_JOINT_ID,
       unsolved: solution.unsolved.get(joint.id) ?? null,
       frame: frames.parent,
       values: solution.values.get(joint.id) ?? [...joint.values],

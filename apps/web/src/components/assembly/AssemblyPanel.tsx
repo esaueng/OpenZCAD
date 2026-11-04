@@ -1,5 +1,13 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
-import { Link2, Pause, Pin, Play, Plus, TriangleAlert } from 'lucide-react';
+import {
+  Link2,
+  MoveVertical,
+  Pause,
+  Pin,
+  Play,
+  Plus,
+  TriangleAlert
+} from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
 import {
   ASSEMBLY_JOINT_DOFS,
@@ -36,6 +44,8 @@ import {
 } from './AssemblyStudiesSection';
 import { JointKindIcon } from './JointKindIcon';
 import { JointToolCard } from './JointToolCard';
+import { MotionSetupCard, openMotionSetup } from './MotionSetupCard';
+import type { MotionSetupBounds } from '../../lib/assembly/motionSetup';
 import { useAssemblyModel } from './useAssemblyModel';
 
 export interface AssemblyPanelProps {
@@ -46,6 +56,10 @@ export interface AssemblyPanelProps {
   onAnnounce?(message: string): void;
   /** Replaces the Motion section (tests). */
   studies?: ReactNode;
+  /** Body boxes in modelled coordinates, for Set up motion's axis and range. */
+  bodyBounds?: MotionSetupBounds;
+  /** Set up motion opens with its preview paused. */
+  reducedMotion?: boolean;
 }
 
 type MenuTarget =
@@ -61,11 +75,19 @@ type MenuTarget =
 export function AssemblyPanel(props: AssemblyPanelProps) {
   const { document, execute, onStatus, onAnnounce } = props;
   const tool = useAssemblyRuntime((s) => s.jointTool !== null);
+  const setup = useAssemblyRuntime((s) => s.motionSetup !== null);
   const hasParts = (document.assembly?.components.length ?? 0) > 0;
   return (
     <aside className="assembly-panel" aria-label="Assembly">
       {tool ? (
         <JointToolCard document={document} />
+      ) : setup ? (
+        <MotionSetupCard
+          document={document}
+          execute={execute}
+          onStatus={onStatus}
+          {...(props.bodyBounds ? { bounds: props.bodyBounds } : {})}
+        />
       ) : hasParts ? (
         <AssemblyLists {...props} />
       ) : (
@@ -110,7 +132,9 @@ function AssemblyLists({
   document,
   execute,
   onStatus,
-  studies
+  studies,
+  bodyBounds,
+  reducedMotion
 }: AssemblyPanelProps) {
   const model = useAssemblyModel(document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
@@ -154,6 +178,16 @@ function AssemblyLists({
           ? `Added ${bodies[0]?.name ?? 'the part'}. Press J to join it.`
           : `Added ${bodies.length} parts. Press J to join them.`
       );
+  };
+
+  const startMotionSetup = () => {
+    if (
+      openMotionSetup(document, {
+        ...(bodyBounds ? { bounds: bodyBounds } : {}),
+        reducedMotion: reducedMotion ?? false
+      })
+    )
+      onStatus('Set up motion · choose what moves and how.');
   };
 
   const openJointTool = () => {
@@ -241,6 +275,18 @@ function AssemblyLists({
         >
           {chip.label}
         </span>
+        {/* With no joints yet, the Joints section offers Set up motion. */}
+        {set.joints.length > 0 ? (
+          <button
+            type="button"
+            className="assembly-tool-button"
+            title="Make another part slide or turn"
+            onClick={startMotionSetup}
+          >
+            <MoveVertical size={13} aria-hidden="true" />
+            Motion
+          </button>
+        ) : null}
         <button
           type="button"
           className="assembly-tool-button"
@@ -432,11 +478,27 @@ function AssemblyLists({
           }
         >
           {set.joints.length === 0 ? (
-            <p className="assembly-muted">
-              {set.components.length < 2
-                ? 'Add a second part to join it.'
-                : 'Join two parts so one can move: press J, or Add.'}
-            </p>
+            set.components.length < 2 ? (
+              <p className="assembly-muted">Add a second part to join it.</p>
+            ) : (
+              <div className="assembly-setup-cta">
+                <p className="assembly-muted">
+                  Make one part slide or turn against a fixed one, with its
+                  range and cycle, and play it.
+                </p>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={startMotionSetup}
+                >
+                  <MoveVertical size={13} aria-hidden="true" />
+                  Set up motion
+                </button>
+                <p className="assembly-muted">
+                  Or press J to join on picked holes, faces or edges.
+                </p>
+              </div>
+            )
           ) : (
             <ul className="assembly-list">
               {set.joints.map((joint) => {
