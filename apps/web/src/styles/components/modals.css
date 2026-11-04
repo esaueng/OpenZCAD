@@ -1649,10 +1649,11 @@
 
 .shortcuts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-4) var(--sp-5);
-  padding: var(--sp-4);
+  padding: var(--sp-4) var(--sp-4) 40px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 /* The list is a focusable region so the keyboard can scroll it; the
@@ -1670,7 +1671,7 @@
 .shortcuts-grid dl {
   margin: 0;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 300px);
   gap: 5px var(--sp-3);
 }
 
@@ -1683,11 +1684,23 @@
 
 .shortcut-row dt {
   min-width: 0;
+  font-size: var(--fs-sm);
 }
 
 .shortcut-key-sequence {
   display: flex;
   gap: 3px;
+  flex-wrap: wrap;
+}
+
+.shortcuts-scroll-cue {
+  flex: none;
+  margin: 0;
+  padding: 8px 16px;
+  border-top: var(--border-thin);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-align: center;
 }
 
 .shortcut-key-sequence kbd {

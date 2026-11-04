@@ -4471,7 +4471,8 @@ function edgeReferences(
 
 function edgeHint(slots: InPlaceSlots, what: string, drag: string): string {
   const count = slots.edges.length;
-  if (count === 0) return `Click the edges to ${what}`;
+  if (count === 0)
+    return `Click the edges to ${what} · Options sets the ${what === 'fillet' ? 'radius' : 'distance'}`;
   return `${count} ${count === 1 ? 'edge' : 'edges'} · drag the ${drag}`;
 }
 

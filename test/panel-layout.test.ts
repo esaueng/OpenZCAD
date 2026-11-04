@@ -24,6 +24,7 @@ import {
   hitTest,
   isDragStart,
   isFloatCovered,
+  isPanelCoveredByInspection,
   loadPanelLayout,
   matchingPreset,
   migratePanelState,
@@ -3495,6 +3496,70 @@ describe('the unpinned slot beside the right lane', () => {
   // gap) and the 330px card width the lane keeps.
   const insets = { rail: 40, gap: 10 };
   const stage = (width: number) => ({ width, height: 720, insets });
+
+  it('borrows the right dock footprint without mutating the saved layout', () => {
+    const layout = deepFreeze({
+      ...essentials(),
+      unpinned: 'history' as const
+    });
+    const geometry = computePanelGeometry(layout, stage(1280));
+    expect(geometry.panels.history?.x).toBe(geometry.panels.parameters?.x);
+    expect(geometry.panels.history?.mode).toBe('unpinned');
+    expect(geometry.panels.history?.w).toBe(
+      geometry.columns.find((column) => column.side === 'right')?.w
+    );
+    expect(isPanelCoveredByInspection(layout, 'parameters', geometry)).toBe(
+      true
+    );
+    expect(layout.right).toEqual([['parameters']]);
+    expect(layout.left).toEqual([['bodies']]);
+    expect(geometry.dockWidth).toEqual({ left: 300, right: 300 });
+  });
+
+  it('brings a covered column back from its rail and from search, including after Hide all', () => {
+    const layout = { ...essentials(), unpinned: 'history' as const };
+    for (const current of [layout, setOption(layout, 'hidden', true)]) {
+      for (const restore of [togglePanel, presentPanel]) {
+        const next = restore(current, 'parameters', stage(1280));
+        expect(next.unpinned).toBeNull();
+        expect(next.options.hidden).toBe(false);
+        expect(next.right).toEqual(layout.right);
+        expect(next.left).toEqual(layout.left);
+      }
+    }
+  });
+
+  it('fits a short inspection to content and uses the left dock if it is alone', () => {
+    const layout = layoutWith({ left: [['bodies']], unpinned: 'revisions' });
+    const geometry = computePanelGeometry(layout, {
+      ...stage(900),
+      naturals: { revisions: 240 }
+    });
+    expect(geometry.panels.revisions?.x).toBe(geometry.panels.bodies?.x);
+    expect(geometry.panels.revisions?.h).toBe(240);
+  });
+
+  it('preserves independent open panels when a spare column fits', () => {
+    const layout = deepFreeze(
+      layoutWith({ right: [['bodies', 'history']], unpinned: 'parameters' })
+    );
+    const geometry = computePanelGeometry(layout, stage(1600));
+    expect(geometry.panels.parameters?.x).not.toBe(geometry.panels.bodies?.x);
+    expect(isPanelCoveredByInspection(layout, 'bodies', geometry)).toBe(false);
+    expect(isPanelCoveredByInspection(layout, 'history', geometry)).toBe(false);
+  });
+
+  it('retains a bounded temporary panel when there is no dock to borrow', () => {
+    const geometry = computePanelGeometry(
+      layoutWith({ unpinned: 'history' }),
+      stage(1440)
+    );
+    expect(geometry.panels.history?.x).toBeGreaterThan(0);
+    expect(
+      geometry.panels.history!.x + geometry.panels.history!.w
+    ).toBeLessThan(1440);
+    expect(geometry.columns).toEqual([]);
+  });
 
   it('reserves its width while the lane keeps a full card beside it', () => {
     // 60 (rail and gaps) + 306 (dock) + 306 (slot) + 10 + 330 = 1012.

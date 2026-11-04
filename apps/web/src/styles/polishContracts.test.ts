@@ -71,12 +71,12 @@ describe('keycaps', () => {
     }
   });
 
-  it('shares one key column per group so labels line up beside one-line bindings', () => {
+  it('aligns settings bindings and gives reference groups one consistent key track', () => {
     expect(rule(sheet('settings.css'), '.settings-control-group dl')).toMatch(
       /grid-template-columns:\s*max-content/
     );
     expect(rule(sheet('modals.css'), '.shortcuts-grid dl')).toMatch(
-      /grid-template-columns:\s*max-content/
+      /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(180px,\s*300px\)/
     );
   });
 });

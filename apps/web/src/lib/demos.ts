@@ -89,14 +89,25 @@ class DemoBuilder {
   }
 }
 
-function params(values: Record<string, number>): AnyCommand[] {
-  return Object.entries(values).map(([name, value]) =>
+function params(
+  values: Record<string, number>,
+  descriptions: Record<string, string> = {}
+): AnyCommand[] {
+  return Object.entries(values).flatMap(([name, value]) => [
     commandFactories.setParameter({
       name,
       expression: String(value),
       ids: createParameterIds()
-    })
-  );
+    }),
+    ...(descriptions[name]
+      ? [
+          commandFactories.setParameterDescription({
+            name,
+            description: descriptions[name]
+          })
+        ]
+      : [])
+  ]);
 }
 
 interface P3 {
@@ -231,17 +242,27 @@ async function buildBracket(
   const builder = new DemoBuilder(definition.name, ownerUserId);
 
   builder.stage('Define parameters', 'Parameters', [
-    ...params({
-      width: 80,
-      depth: 40,
-      plate_t: 8,
-      wall_h: 32,
-      boss_r: 10,
-      hole_r: 4,
-      mount_r: 3,
-      mount_inset: 16,
-      fillet_r: 3
-    })
+    ...params(
+      {
+        width: 80,
+        depth: 40,
+        plate_t: 8,
+        wall_h: 32,
+        boss_r: 10,
+        hole_r: 4,
+        mount_r: 3,
+        mount_inset: 16,
+        fillet_r: 3
+      },
+      {
+        plate_t: 'Plate thickness',
+        wall_h: 'Wall height',
+        boss_r: 'Boss radius',
+        hole_r: 'Hole radius',
+        mount_r: 'Mount radius',
+        fillet_r: 'Fillet radius'
+      }
+    )
   ]);
 
   const base = createBodyFeatureIds();

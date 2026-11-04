@@ -13,6 +13,7 @@ const LEGACY_HEIGHT = 'plate_t + wall_h / 2';
 const FEATURE_COUNT = 17;
 const SEED_COMMANDS = new Set([
   'parameter.set',
+  'parameter.describe',
   'primitive.add',
   'feature.transform',
   'feature.boolean',
@@ -75,7 +76,9 @@ function nonModelingPatches(entry: DocumentHistoryEntry): boolean {
       return [...change.before, ...change.after].every(
         (command) =>
           record(command) &&
-          (command.kind === 'parameter.set' || command.kind === 'node.rename')
+          (command.kind === 'parameter.set' ||
+            command.kind === 'parameter.describe' ||
+            command.kind === 'node.rename')
       );
     }
     return false;

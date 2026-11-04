@@ -209,4 +209,14 @@ describe('a handle chip under a model panel', () => {
       dy: 0
     });
   });
+
+  it('lifts an active value above a lower phone sheet', () => {
+    const phone = { left: 0, top: 0, right: 390, bottom: 844 };
+    const sheet = { left: 10, top: 410, right: 380, bottom: 750 };
+    const start = chip(200, 500);
+    const after = moved(start, chipPanelDodge(start, [sheet], phone, 10, 102));
+    expect(covered(after, sheet)).toBe(false);
+    expect(after.bottom).toBeLessThanOrEqual(402);
+    expect(after.top).toBeGreaterThanOrEqual(102);
+  });
 });

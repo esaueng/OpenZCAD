@@ -53,7 +53,7 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
     title: 'Create your first feature',
     body: (keyLabel) => {
       const boxKey = keyLabel('tool-box');
-      return `Pick a tool from the rail on the left — click Box (the cube)${boxKey ? `, or press ${boxKey},` : ''} then press Enter to create it. Its tools stay in place whatever you pick; More tools at its foot opens the rest.`;
+      return `Pick a tool from the rail on the left — click Box (the cube)${boxKey ? `, or press ${boxKey},` : ''} then press Enter to create it. Its tools stay in place whatever you pick; Tools at its foot opens the rest.`;
     },
     targetSelector: '.tool-palette',
     isComplete: (signals) => signals.featureCount > 0

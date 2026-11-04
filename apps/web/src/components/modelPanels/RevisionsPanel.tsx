@@ -95,7 +95,8 @@ function revisionTime(createdAt: string): string {
   return created.toDateString() === new Date().toDateString()
     ? created.toLocaleTimeString(undefined, {
         hour: 'numeric',
-        minute: '2-digit'
+        minute: '2-digit',
+        hour12: false
       })
     : created.toLocaleDateString();
 }

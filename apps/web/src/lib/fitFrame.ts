@@ -14,10 +14,52 @@ import { SELECTION_CALLOUT_OBSTACLES } from './selectionCalloutView';
  * the whole canvas.
  */
 export function measureFitFrame(canvas: HTMLElement): NdcFrame | undefined {
-  return clearStageFrame(
-    canvas.getBoundingClientRect(),
-    panelsOver(canvas, SELECTION_CALLOUT_OBSTACLES)
+  const bounds = canvas.getBoundingClientRect();
+  const panels = panelsOver(
+    canvas,
+    `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .view-flyouts`
   );
+  const width = bounds.width;
+  const height = bounds.height;
+  if (!(width > 0) || !(height > 0)) return undefined;
+  let top = bounds.top;
+  let bottom = bounds.bottom;
+  const topbar = canvas.closest('.app-shell')?.querySelector('.topbar');
+  if (topbar)
+    top = Math.max(
+      top,
+      topbar.getBoundingClientRect().bottom + STAGE_FRAME_GAP_PX
+    );
+  // Wide lower sheets reserve height, while narrow rails reserve width.
+  // Keep this UI projection local: the viewport package's side-band API
+  // remains available unchanged to other consumers.
+  for (const panel of panels) {
+    if (
+      panel.width <= width / 2 ||
+      panel.height >= height / 2 ||
+      panel.height <= 0
+    )
+      continue;
+    if ((panel.top + panel.bottom) / 2 >= bounds.top + height / 2)
+      bottom = Math.min(bottom, panel.top - STAGE_FRAME_GAP_PX);
+    else top = Math.max(top, panel.bottom + STAGE_FRAME_GAP_PX);
+  }
+  if (bottom <= top) return undefined;
+  const verticalBounds = {
+    left: bounds.left,
+    right: bounds.right,
+    top,
+    bottom
+  };
+  const sides = clearStageFrame(verticalBounds, panels);
+  if (!sides && top === bounds.top && bottom === bounds.bottom)
+    return undefined;
+  return {
+    minX: sides?.minX ?? -1,
+    maxX: sides?.maxX ?? 1,
+    minY: 1 - ((bottom - bounds.top) / height) * 2,
+    maxY: 1 - ((top - bounds.top) / height) * 2
+  };
 }
 
 /**
@@ -39,7 +81,16 @@ function panelsOver(canvas: HTMLElement, selector: string): DOMRect[] {
     ...(canvas
       .closest('.viewer-area')
       ?.querySelectorAll<HTMLElement>(selector) ?? [])
-  ].map((panel) => panel.getBoundingClientRect());
+  ]
+    .filter((panel) => {
+      const style = getComputedStyle(panel);
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        !panel.closest('[inert]')
+      );
+    })
+    .map((panel) => panel.getBoundingClientRect());
 }
 
 /**

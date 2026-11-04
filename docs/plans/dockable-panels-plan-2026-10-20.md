@@ -38,11 +38,21 @@ it.
 - **States:** closed, **unpinned**, **docked**, **floating**.
   - **Unpinned.** A rail click opens the panel unpinned, beside the inner edge
     of the right rail.
+    - **November design polish:** if another column would consume the
+      model's minimum stage share, a temporary panel borrows the nearest
+      right column (or the left column when there is no right dock).
+      Independent panels remain alongside their dock when space permits.
+      Its content sets its height up to the
+      available stage height. The covered column stays mounted and retains
+      its layout, but is hidden and inert until inspection closes. Opening
+      a temporary panel therefore preserves usable model space.
     - Only one panel can be unpinned at a time; opening another replaces it.
     - Clicking the model does not close it. It stays until its rail button is
       pressed again.
-    - Its footer reads "Unpinned — the next panel you open replaces it" and
-      offers Pin.
+    - Its footer explains that it is temporary and offers Pin to keep it
+      alongside the other panels. The phone projection offers Hide panels
+      to clear the shared lane without rearranging saved docks. Docking is
+      offered only in a wider window.
   - **Docked.** Pinning docks the panel.
   - **Floating.** Pop-out floats the panel.
 - **Close remembers where the panel was** (dock side, column and index, or its

@@ -45,7 +45,7 @@ const PARTS_LIST_FOOTNOTE: Record<PartsListMode, string> = {
   view: 'Visibility only — geometry is locked in View mode.',
   // The lane already says the design stays locked in Tweak; saying it here
   // and in the Parameters panel as well put it on screen three times.
-  tweak: 'Visibility only.'
+  tweak: 'Show or hide parts here. Change dimensions in Parameters.'
 };
 
 /**

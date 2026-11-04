@@ -342,7 +342,10 @@ export function PanelDock({
   const leftWidth = docked ? docked.dockWidth.left : 0;
   const rightWidth = docked ? docked.dockWidth.right : 0;
   const slotWidth =
-    resting && !resting.phone && restingSlot
+    resting &&
+    !resting.phone &&
+    restingSlot &&
+    !resting.columns.some((column) => column.x === restingSlot.x)
       ? resting.columnWidth + resting.insets.gap
       : 0;
   // Judged against the resting docks, both of them: the lane keeps its card
@@ -1036,7 +1039,9 @@ export function PanelDock({
       onMove: (itemId) => move(id, itemId),
       onGripKey: (event) => gripKey(id, event),
       ...(alone ? {} : { onPopOut: () => popOut(id) }),
-      ...(placement === 'docked'
+      ...(placement === 'docked' ||
+      placement === 'unpinned' ||
+      placement === 'revealed'
         ? { onNaturalHeight: (height: number) => reportNatural(id, height) }
         : {})
     };
@@ -1147,7 +1152,9 @@ export function PanelDock({
 
   const renderColumn = (column: ColumnGeometry) => (
     <div
-      className={`panel-column${column.overflowing ? ' is-scrolling' : ''}`}
+      className={`panel-column${column.overflowing ? ' is-scrolling' : ''}${slot && !dragView && slot.x === column.x ? ' is-inspecting' : ''}`}
+      inert={slot && !dragView && slot.x === column.x ? true : undefined}
+      aria-hidden={slot && !dragView && slot.x === column.x ? true : undefined}
       data-side={column.side}
       style={{
         left: column.x,
@@ -1178,6 +1185,7 @@ export function PanelDock({
    * down to the dock's foot (or double-click it) to fill the dock again.
    */
   const renderColumnFoot = (column: ColumnGeometry) => {
+    if (slot && !dragView && slot.x === column.x) return null;
     const { dockHeight, drawn, reach, panels, enabled } = columnFoot(column);
     if (panels.length === 0) return null;
     const percent = (value: number) =>
@@ -1251,7 +1259,14 @@ export function PanelDock({
       {slot && slot.id !== PANEL_SLOT && (
         <div
           className={`panel-unpinned${slot.mode === 'revealed' ? ' is-revealed' : ''}`}
-          style={{ width: slot.w }}
+          style={{
+            left: slot.x,
+            top: slot.y,
+            width: slot.w,
+            height: slot.h,
+            right: 'auto',
+            bottom: 'auto'
+          }}
         >
           {panelElement(
             slot.id,

@@ -917,8 +917,23 @@
 .history-timeline .feature-row-main {
   /* The name is the row's identity: it keeps its length, up to most of the
      row, and the value gives way first. */
-  flex: 1 0 auto;
-  max-width: 60%;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.history-timeline .feature-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: var(--lh-normal);
+}
+
+.parameter-feedback .activity-log-link {
+  display: block;
+  margin: 6px 0 0;
+  padding: 0;
+  min-height: 24px;
+  text-align: left;
 }
 
 .history-row-tail {

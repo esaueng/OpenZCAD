@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import type { ParameterNode } from '@openzcad/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { TweakPanel } from './TweakPanel';
@@ -15,9 +16,14 @@ const width = {
   value: 80
 } as ParameterNode;
 
-function renderPanel(parameters: ParameterNode[]) {
-  return render(
+function renderPanel(
+  parameters: ParameterNode[],
+  onLayoutChange?: () => void,
+  strict = false
+) {
+  const panel = (
     <TweakPanel
+      onLayoutChange={onLayoutChange}
       parameters={parameters}
       parameterValues={{ width: 80 }}
       canExport
@@ -31,9 +37,21 @@ function renderPanel(parameters: ParameterNode[]) {
       onTogglePanel={vi.fn()}
     />
   );
+  return render(strict ? <StrictMode>{panel}</StrictMode> : panel);
 }
 
 describe('TweakPanel', () => {
+  it('announces its mounted layout so a late lazy sheet can reframe the model', () => {
+    const onLayoutChange = vi.fn();
+    renderPanel([width], onLayoutChange);
+    expect(onLayoutChange).toHaveBeenCalledOnce();
+    expect(onLayoutChange).toHaveBeenCalledWith('mount');
+  });
+  it('does not mistake Strict Mode mounting for a chosen layout change', () => {
+    const onLayoutChange = vi.fn();
+    renderPanel([width], onLayoutChange, true);
+    expect(onLayoutChange.mock.calls).toEqual([['mount'], ['mount']]);
+  });
   /*
     A model with no parameters used to get the how-to intro ("Change a value
     and press Enter…") over an empty table and a two-sentence empty state:
@@ -71,6 +89,36 @@ describe('TweakPanel mesh export', () => {
 });
 
 describe('TweakPanel refusals', () => {
+  it('keeps the restored value valid while explaining the rejected edit', async () => {
+    const user = userEvent.setup();
+    render(
+      <TweakPanel
+        parameters={[width]}
+        parameterValues={{ width: 80 }}
+        canExport
+        exportScope={null}
+        onSetParameter={async () => 'Unknown identifier abc.'}
+        onViewActivityLog={vi.fn()}
+        onExportStep={vi.fn()}
+        onOpenMeshExport={vi.fn()}
+        share={null}
+        panelOpen
+        onTogglePanel={vi.fn()}
+        units="mm"
+      />
+    );
+    const field = screen.getByRole('textbox', { name: 'Expression for width' });
+    await user.clear(field);
+    await user.type(field, 'abc{Enter}');
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Unknown identifier abc. No change applied.'
+      )
+    );
+    expect(field).toHaveValue('80');
+    expect(field).not.toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Model units: mm')).toBeVisible();
+  });
   function parameter(name: string, expression: string): ParameterNode {
     return {
       ...width,
