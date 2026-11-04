@@ -72,6 +72,9 @@ for (const all of [false, true]) {
         mimeType: 'application/json',
         buffer: backup
       });
+      await expect(
+        page.getByRole('group', { name: 'Workspace status' })
+      ).toBeVisible({ timeout: 60_000 });
       await expectBodyCount(page, 1);
       await expect.poll(() => visibleFaceCounts(page)).toEqual([13]);
       await page
