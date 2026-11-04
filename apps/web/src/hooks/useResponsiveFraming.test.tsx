@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
 import { useResponsiveFraming } from './useResponsiveFraming';
 import {
   defaultPanelLayout,
@@ -21,12 +22,17 @@ describe('responsive camera framing', () => {
       enabled: true,
       onFit
     };
-    const { rerender, unmount } = renderHook(useResponsiveFraming, {
-      initialProps: props
+    const { result, rerender, unmount } = renderHook(useResponsiveFraming, {
+      initialProps: props,
+      wrapper: StrictMode
     });
     await act(() => vi.advanceTimersByTime(200));
     expect(onFit).not.toHaveBeenCalled();
+    act(() => result.current.mounted());
+    await act(() => vi.advanceTimersByTime(200));
+    expect(onFit).not.toHaveBeenCalled();
     rerender({ ...props, mode: 'tweak' });
+    act(() => result.current.mounted());
     await act(() => vi.advanceTimersByTime(200));
     expect(onFit).toHaveBeenCalledTimes(1);
     await act(() => window.dispatchEvent(new Event('resize')));
@@ -131,7 +137,7 @@ describe('responsive camera framing', () => {
       enabled: true,
       onFit
     };
-    const { rerender } = renderHook(useResponsiveFraming, {
+    const { result, rerender } = renderHook(useResponsiveFraming, {
       initialProps: props
     });
     rerender({ ...props, mode: 'tweak' });
@@ -140,6 +146,7 @@ describe('responsive camera framing', () => {
     await act(() =>
       canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     );
+    act(() => result.current.mounted());
     await act(() => vi.advanceTimersByTime(200));
     expect(onFit).not.toHaveBeenCalled();
     canvas.remove();

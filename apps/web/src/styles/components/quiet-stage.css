@@ -2604,13 +2604,25 @@ button.command-rail.is-suggested {
   min-width: 0;
   min-height: 0;
   max-height: 100%;
-  overflow-y: auto;
+  overflow: clip;
   scrollbar-width: none;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
   animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.tweak-panel-heading,
+.tweak-panel-intro {
+  flex: none;
+}
+
+.tweak-panel-params {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .tweak-flyouts > .tweak-panel::-webkit-scrollbar {

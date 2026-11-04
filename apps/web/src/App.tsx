@@ -29748,7 +29748,11 @@ export function App() {
       sidebar={
         viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
-            onLayoutChange={() => prepareResponsiveFrame.request()}
+            onLayoutChange={(reason) =>
+              reason === 'mount'
+                ? prepareResponsiveFrame.mounted()
+                : prepareResponsiveFrame.request()
+            }
             units={doc?.units}
             modelError={parameterModelError}
             parameters={exposedParameters}

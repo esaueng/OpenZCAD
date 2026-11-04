@@ -23,6 +23,8 @@ export function useResponsiveFraming({
   const pendingLayout = useRef(false);
   const resume = useRef<(() => void) | null>(null);
   const framedProject = useRef<string | null>(null);
+  const layoutChosen = useRef(false);
+  const previousLayout = useRef<string | null>(null);
   // Focusing another docked panel changes recency, not the clear stage. Keep
   // a person's chosen zoom unless the visible arrangement actually changes.
   const layoutKey = JSON.stringify({
@@ -38,8 +40,12 @@ export function useResponsiveFraming({
       window.innerWidth <= PANEL_PHONE_MAX_WIDTH ? layout.recent : undefined
   });
   useEffect(() => {
+    const identity = JSON.stringify([projectId, mode, layoutKey, panels]);
+    const repeatedMount = previousLayout.current === identity;
+    previousLayout.current = identity;
     const projectChanged = framedProject.current !== projectId;
     framedProject.current = projectId;
+    if (projectChanged) layoutChosen.current = false;
     if (!projectId) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let frame = 0;
@@ -72,10 +78,14 @@ export function useResponsiveFraming({
       cancelAnimationFrame(frame);
       cancelAnimationFrame(nextFrame);
       pendingLayout.current = false;
+      layoutChosen.current = false;
     };
     // The viewer owns initial framing and remembered camera restoration.
     // This hook only reacts to subsequent workspace layout choices.
-    if (!projectChanged) schedule(true);
+    if (!projectChanged && !repeatedMount) {
+      layoutChosen.current = true;
+      schedule(true);
+    }
     window.addEventListener('resize', resize);
     window.addEventListener('pointerdown', userNavigation, true);
     window.addEventListener('wheel', userNavigation, {
@@ -106,6 +116,11 @@ export function useResponsiveFraming({
     },
     request() {
       resume.current?.();
+    },
+    mounted() {
+      // A lazy panel can arrive after a chosen layout was already framed.
+      // Merely restoring a project must keep its remembered camera instead.
+      if (layoutChosen.current) resume.current?.();
     }
   };
 }

@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import type { ParameterNode } from '@openzcad/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { TweakPanel } from './TweakPanel';
@@ -15,8 +16,12 @@ const width = {
   value: 80
 } as ParameterNode;
 
-function renderPanel(parameters: ParameterNode[], onLayoutChange?: () => void) {
-  return render(
+function renderPanel(
+  parameters: ParameterNode[],
+  onLayoutChange?: () => void,
+  strict = false
+) {
+  const panel = (
     <TweakPanel
       onLayoutChange={onLayoutChange}
       parameters={parameters}
@@ -32,6 +37,7 @@ function renderPanel(parameters: ParameterNode[], onLayoutChange?: () => void) {
       onTogglePanel={vi.fn()}
     />
   );
+  return render(strict ? <StrictMode>{panel}</StrictMode> : panel);
 }
 
 describe('TweakPanel', () => {
@@ -39,6 +45,12 @@ describe('TweakPanel', () => {
     const onLayoutChange = vi.fn();
     renderPanel([width], onLayoutChange);
     expect(onLayoutChange).toHaveBeenCalledOnce();
+    expect(onLayoutChange).toHaveBeenCalledWith('mount');
+  });
+  it('does not mistake Strict Mode mounting for a chosen layout change', () => {
+    const onLayoutChange = vi.fn();
+    renderPanel([width], onLayoutChange, true);
+    expect(onLayoutChange.mock.calls).toEqual([['mount'], ['mount']]);
   });
   /*
     A model with no parameters used to get the how-to intro ("Change a value

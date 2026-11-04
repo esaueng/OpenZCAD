@@ -11,7 +11,7 @@ import { parameterDisplayName } from '../lib/parameterDisplayName';
 const MESH_FORMATS = '3MF, STL, OBJ, glTF or PLY';
 
 interface TweakPanelProps {
-  onLayoutChange?(): void;
+  onLayoutChange?(reason: 'mount' | 'change'): void;
   units?: UnitSystem;
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
@@ -111,11 +111,16 @@ export function TweakPanel({
     panelOpen && (!phone || selectedPhonePanel === 'parameters');
   const showParts = partsOpen && (!phone || selectedPhonePanel === 'parts');
   const layoutChange = useRef(onLayoutChange);
+  const previousLayout = useRef({ phone, panel: selectedPhonePanel });
   layoutChange.current = onLayoutChange;
   useEffect(() => {
     // This panel is lazy. A mode change can finish framing before its chunk
     // mounts, so announce the actual sheet as well as later tab changes.
-    layoutChange.current?.();
+    const changed =
+      previousLayout.current.phone !== phone ||
+      previousLayout.current.panel !== selectedPhonePanel;
+    layoutChange.current?.(changed ? 'change' : 'mount');
+    previousLayout.current = { phone, panel: selectedPhonePanel };
   }, [phone, selectedPhonePanel]);
   const exportTitle = (format: string) =>
     canExport
