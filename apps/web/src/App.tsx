@@ -5972,47 +5972,7 @@ export function App() {
       }
     });
     cloudProjectAutosaveRef.current = controller;
-    // A room acknowledgement can publish Saved while an older account
-    // fallback is still settling. E2E journeys separate that handoff from
-    // subsequent room-only edits using the same drain as normal departures.
-    const drainAccountSaves = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        projectId?: string;
-        resolve?: (settled: boolean) => void;
-      }>).detail;
-      const resolve = detail?.resolve;
-      if (typeof resolve !== 'function') return;
-      const projectId = detail.projectId;
-      if (!projectId || managerRef.current?.document.projectId !== projectId) {
-        resolve(false);
-        return;
-      }
-      void controller.flushPending().then(
-        () =>
-          resolve(
-            cloudProjectAutosaveRef.current === controller &&
-              managerRef.current?.document.projectId === projectId
-          ),
-        () => resolve(false)
-      );
-    };
-    if (
-      (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
-    ) {
-      window.addEventListener(
-        'openzcad:e2e-drain-account-saves',
-        drainAccountSaves
-      );
-    }
     return () => {
-      if (
-        (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
-      ) {
-        window.removeEventListener(
-          'openzcad:e2e-drain-account-saves',
-          drainAccountSaves
-        );
-      }
       controller.dispose();
       if (cloudProjectAutosaveRef.current === controller) {
         cloudProjectAutosaveRef.current = null;

@@ -14,13 +14,17 @@ Regression coverage checks refusal and unchanged MLS epoch with a stale
 directory even when its observer throws, recovery with a complete verified
 directory, signed account-view advancement, concurrent refresh, and
 unchanged or refused authority. The real two-browser encrypted-room journey
-joins the browser CI selection, keeps its default-view choice active for a
-delayed resume prompt, and records UI-only handoff diagnostics. It checks
-the automatic enrollment handoff, rendered two- and three-body results,
+joins the browser CI selection and keeps its default-view choice active for
+a delayed resume prompt. It checks the automatic enrollment handoff,
+rendered two- and three-body results,
 and a subsequent steady room edit without a duplicate account write. This is
 engineering regression evidence; it does not change production activation
 or outside-review status.
-The E2E build exposes the existing account-save drain so the journey waits
-for enrollment fallback requests before measuring the next room-only edit.
-Its zero-extra-write assertion remains unchanged; production builds omit
-the event listener.
+After a verified account-view reconnect, unsent local work retains the
+fresh room head as its merge base when history/lineage proves descent or
+the freshly verified head matches the previously acknowledged pinned base
+for the same account, project and storage format. This includes an empty
+project’s first edit. The real codec still refuses a missing base;
+the hook stub enforces that refusal too. Independent sibling edits refuse
+even when their local version counter leads, preserving divergence guards.
+An account change cannot borrow the previous account’s acknowledged base.

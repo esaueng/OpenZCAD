@@ -181,16 +181,22 @@ const withBox = (document: ProjectDocument, name: string) =>
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal('WebSocket', FakeWebSocket);
-  codec.encode.mockImplementation(async (document, baseVersion) => ({
-    kind: 'sealed',
-    version: Math.max(document.version, (baseVersion ?? 0) + 1),
-    submission: {
-      envelope: 'ZW52ZWxvcGU',
-      signature: 'c2ln',
-      wrappedVersionKey: 'd3JhcA',
-      signerDeviceId: 'device_laptop'
-    }
-  }));
+  codec.encode.mockImplementation(async (document, baseVersion) => {
+    // The real codec refuses a missing verified head. Permitting null here
+    // masked reconnects that retained an edit but dropped its merge base.
+    if (baseVersion === null)
+      throw new Error('A verified room base is required.');
+    return {
+      kind: 'sealed',
+      version: Math.max(document.version, baseVersion + 1),
+      submission: {
+        envelope: 'ZW52ZWxvcGU',
+        signature: 'c2ln',
+        wrappedVersionKey: 'd3JhcA',
+        signerDeviceId: 'device_laptop'
+      }
+    };
+  });
   codec.decode.mockImplementation(async (raw) => fakeDecode(raw));
   codec.catchUp.mockResolvedValue(undefined);
   codec.restoreBlobs.mockResolvedValue(undefined);
@@ -211,11 +217,17 @@ async function connectedOwner(base: ProjectDocument, encrypted = true) {
   const onConflict = vi.fn();
   const onAccountVersion = vi.fn();
   const hook = renderHook(
-    ({ document }: { document: ProjectDocument }) =>
+    ({
+      document,
+      userId = base.ownerUserId
+    }: {
+      document: ProjectDocument;
+      userId?: string;
+    }) =>
       useCollaboration({
         enabled: true,
         document,
-        session: session(base.ownerUserId),
+        session: session(userId),
         onRemoteDocument,
         onConflict,
         encrypted,
@@ -322,7 +334,7 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
           featureOrder: local.featureOrder
         }),
         // A new codec uses its freshly verified head as the base.
-        null
+        base.version
       );
       expect(
         fresh.frames().some((frame) => frame.type === 'e2ee-document')
@@ -332,6 +344,91 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
       hook.unmount();
     }
   );
+
+  it.each([false, true])(
+    'does not rebase divergent edits on a reconnect head (local counter ahead=%s)',
+    async (ahead) => {
+      const base = withBox(
+        createProjectDocument('Divergent reconnect', toUserId('owner')),
+        'Original'
+      );
+      let local = withBox(base, 'Local edit');
+      if (ahead) local = withBox(local, 'Another local edit');
+      const remote = withBox(base, 'Independent edit');
+      const hook = await connectedOwner(base);
+      hook.rerender({ document: local });
+      act(() => encryptionStateChanged(base.ownerUserId));
+      await flush();
+      const fresh = FakeWebSocket.instances[1]!;
+      act(() => fresh.open());
+      fresh.receive({
+        type: 'e2ee-state',
+        members: [],
+        role: 'owner',
+        lease: null,
+        head: { plain: remote }
+      });
+      await flush();
+      try {
+        fresh.receive({
+          type: 'lease-granted',
+          lease: {
+            leaseId: 'fresh_lease',
+            projectId: base.projectId,
+            clientId: fresh.frames()[0]!.clientId!,
+            userId: base.ownerUserId,
+            expiresAt: Date.now() + 30_000
+          }
+        });
+        await flush();
+        expect(codec.encode).not.toHaveBeenCalled();
+        expect(
+          fresh.frames().some((frame) => frame.type === 'e2ee-document')
+        ).toBe(false);
+        expect(hook.onRemoteDocument).not.toHaveBeenCalled();
+        expect(hook.result.current.status).toBe('conflict');
+        expect(hook.result.current.conflict?.localDocument.nodes).toEqual(
+          local.nodes
+        );
+        expect(hook.result.current.conflict?.remoteDocument.nodes).toEqual(
+          remote.nodes
+        );
+      } finally {
+        hook.unmount();
+      }
+    }
+  );
+
+  it('does not borrow another account’s acknowledged reconnect base', async () => {
+    const base = createProjectDocument('Account changed', toUserId('owner'));
+    const local = withBox(base, 'Unsent work');
+    const hook = await connectedOwner(base);
+    hook.rerender({ document: local, userId: 'other_editor' });
+    await flush();
+    const fresh = FakeWebSocket.instances[1]!;
+    act(() => fresh.open());
+    fresh.receive({
+      type: 'e2ee-state',
+      members: [],
+      role: 'editor',
+      lease: null,
+      head: { plain: base }
+    });
+    await flush();
+    expect(codec.encode).not.toHaveBeenCalled();
+    expect(fresh.frames().some((frame) => frame.type === 'e2ee-document')).toBe(
+      false
+    );
+    expect(hook.onRemoteDocument).not.toHaveBeenCalled();
+    expect(hook.result.current.status).toBe('conflict');
+    expect(hook.result.current.conflict?.localDocument.nodes).toEqual(
+      local.nodes
+    );
+    expect(hook.result.current.conflict?.remoteDocument.nodes).toEqual(
+      base.nodes
+    );
+    hook.unmount();
+  });
 
   it('does not decode after a codec download completes for a disposed room', async () => {
     const base = createProjectDocument(
@@ -672,18 +769,15 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
           expect(hook.result.current.status).toBe('live');
         } else {
           // A divergent head is never silently adopted as our merge base.
-          // Its fenced submission must still go through the room's reply.
-          expect(sent).toHaveLength(1);
-          if (encrypted) expect(codec.encode.mock.calls.at(-1)![1]).toBeNull();
-          else
+          // Encrypted rooms expose it before sealing on an unknown head;
+          // plaintext rooms retain their fenced-submission conflict reply.
+          expect(sent).toHaveLength(encrypted ? 0 : 1);
+          if (!encrypted) {
             expect(
               (sent[0] as unknown as { baseVersion: number | null }).baseVersion
             ).toBeNull();
-          replacement.receive(
-            encrypted
-              ? { type: 'e2ee-conflict', latest: { plain: head } }
-              : { type: 'conflict', document: head }
-          );
+            replacement.receive({ type: 'conflict', document: head });
+          }
           await flush();
           expect(hook.result.current.status).toBe('conflict');
           expect(hook.result.current.conflict?.localDocument.nodes).toEqual(

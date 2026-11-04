@@ -1,5 +1,4 @@
 import type { BrowserContext, Page } from '@playwright/test';
-import { decodeE2eeFrame } from '@openzcad/shared';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import {
   installWorkerSocketGlobals,
@@ -57,8 +56,7 @@ async function browserOf(
   context: BrowserContext,
   server: E2eeServer,
   rooms: ReturnType<typeof encryptedRooms>,
-  serverSockets: FakeWebSocket[],
-  onConnect: () => void
+  serverSockets: FakeWebSocket[]
 ): Promise<Page> {
   const page = await context.newPage();
   // stubApi replaces the page's WebSocket with a static stand-in; this
@@ -84,12 +82,8 @@ async function browserOf(
     })
   );
   await installE2eeServer(context, server);
-  await context.routeWebSocket(
-    /\/api\/projects\/[^/]+\/collaboration/,
-    (ws) => {
-      onConnect();
-      return rooms.connect(ws, serverSockets);
-    }
+  await context.routeWebSocket(/\/api\/projects\/[^/]+\/collaboration/, (ws) =>
+    rooms.connect(ws, serverSockets)
   );
   await page.route('**/api/projects', async (route) => {
     if (route.request().method() !== 'GET') {
@@ -119,46 +113,6 @@ async function addBox(page: Page) {
   await createPrimitiveInPlace(page, 'box');
 }
 
-/** UI-only diagnostics: never include envelope contents or key material. */
-async function handoffUi(page: Page) {
-  return page.evaluate(() => {
-    const group = document.querySelector(
-      '[role="group"][aria-label="Workspace status"]'
-    );
-    const summary = group?.querySelector(
-      '[aria-label*=" · "][aria-label*=". Sync "]'
-    );
-    const bounds = summary?.getBoundingClientRect();
-    return {
-      summary: summary?.getAttribute('aria-label') ?? null,
-      hidden: Boolean(summary?.closest('[inert], [aria-hidden="true"]')),
-      displayed: Boolean(bounds?.width && bounds.height),
-      renderedBodies:
-        document.querySelector<HTMLCanvasElement>('.viewer-host canvas')
-          ?.dataset.e2eRenderedBodies ?? null,
-      room:
-        document
-          .querySelector('[aria-label^="Open project sharing"]')
-          ?.getAttribute('aria-label') ?? null,
-      dialogs: [...document.querySelectorAll('[role="dialog"]')]
-        .filter((dialog) => {
-          const box = dialog.getBoundingClientRect();
-          return box.width > 0 && box.height > 0;
-        })
-        .map((dialog) => {
-          const labelledBy = dialog.getAttribute('aria-labelledby');
-          return (
-            dialog.getAttribute('aria-label') ??
-            (labelledBy
-              ? document.getElementById(labelledBy)?.textContent
-              : null) ??
-            'dialog'
-          );
-        })
-    };
-  });
-}
-
 /**
  * ADR-024 Phase 4, slice 4-9: two browsers of one owner, under personal
  * sync, edit an end-to-end encrypted project live. Each browser's real
@@ -178,46 +132,8 @@ test(
       const contextA = await browser.newContext();
       const contextB = await browser.newContext();
       const errors: string[] = [];
-      const connections = { a: 0, b: 0 };
-      const a = await browserOf(
-        contextA,
-        server,
-        rooms,
-        globals.serverSockets,
-        () => {
-          connections.a += 1;
-        }
-      );
-      const b = await browserOf(
-        contextB,
-        server,
-        rooms,
-        globals.serverSockets,
-        () => {
-          connections.b += 1;
-        }
-      );
-      let resumePromptsHandled = 0;
-      async function expectReplicatedBodies(count: number) {
-        try {
-          await expectBodyCount(b, count);
-        } finally {
-          const views = await Promise.allSettled([handoffUi(a), handoffUi(b)]);
-          console.info(
-            'ENCRYPTED_ROOM_HANDOFF',
-            JSON.stringify({
-              expectedBodies: count,
-              resumePromptsHandled,
-              connections,
-              views: views.map((result) =>
-                result.status === 'fulfilled'
-                  ? result.value
-                  : { unavailable: true }
-              )
-            })
-          );
-        }
-      }
+      const a = await browserOf(contextA, server, rooms, globals.serverSockets);
+      const b = await browserOf(contextB, server, rooms, globals.serverSockets);
       for (const page of [a, b]) {
         page.on('pageerror', (error) => errors.push(error.message));
       }
@@ -268,7 +184,6 @@ test(
       await b.addLocatorHandler(
         resume,
         async () => {
-          resumePromptsHandled += 1;
           await resume
             .getByRole('button', { name: 'Open with default view' })
             .click();
@@ -286,33 +201,10 @@ test(
       await expect(b.getByText(/from another of your devices/)).toBeVisible({
         timeout: SYNC_BUDGET_MS
       });
-      await expectReplicatedBodies(2);
+      await expectBodyCount(b, 2);
       await expect(
         a.getByRole('status', { name: 'Saved', exact: true })
       ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-      // Saved can come from the room before an enrollment fallback finishes
-      // sealing its account request. Drain that earlier phase before counting
-      // writes attributable to the next edit; no requests are filtered out.
-      expect(
-        await a.evaluate(
-          ({ projectId, budget }) =>
-            new Promise<boolean>((resolve) => {
-              const timer = window.setTimeout(() => resolve(false), budget);
-              window.dispatchEvent(
-                new CustomEvent('openzcad:e2e-drain-account-saves', {
-                  detail: {
-                    projectId,
-                    resolve: (settled: boolean) => {
-                      window.clearTimeout(timer);
-                      resolve(settled);
-                    }
-                  }
-                })
-              );
-            }),
-          { projectId, budget: SYNC_BUDGET_MS }
-        )
-      ).toBe(true);
       for (const page of [a, b]) {
         await expect(
           page.getByRole('button', {
@@ -332,7 +224,6 @@ test(
           .get(projectId) as { v: number }
       ).v;
       const accountWritesFromA: string[] = [];
-      const writeDiagnostics: Promise<void>[] = [];
       a.on('request', (request) => {
         const path = new URL(request.url()).pathname;
         if (
@@ -340,47 +231,17 @@ test(
           /^\/api\/e2ee\/projects\/[^/]+\/(document|revisions)$/.test(path)
         ) {
           accountWritesFromA.push(`${request.method()} ${path}`);
-          // Only the public numeric fence is diagnostic. Never log the
-          // frame's envelope, signing metadata or decrypted document.
-          let expectedVersion: number | null = null;
-          try {
-            const bytes = request.postDataBuffer();
-            const metadata = bytes
-              ? (decodeE2eeFrame(bytes).metadata as {
-                  version?: { expectedVersion?: unknown };
-                })
-              : null;
-            if (typeof metadata?.version?.expectedVersion === 'number') {
-              expectedVersion = metadata.version.expectedVersion;
-            }
-          } catch {
-            // The unchanged request-count assertion still catches bad frames.
-          }
-          writeDiagnostics.push(
-            handoffUi(a).then((view) => {
-              console.info(
-                'ENCRYPTED_ROOM_ACCOUNT_WRITE',
-                JSON.stringify({
-                  baselineVersion: versionsBefore,
-                  expectedVersion,
-                  connections,
-                  view
-                })
-              );
-            })
-          );
         }
       });
       await addBox(a);
       await expect(b.getByText(/from another of your devices/)).toBeVisible({
         timeout: SYNC_BUDGET_MS
       });
-      await expectReplicatedBodies(3);
+      await expectBodyCount(b, 3);
       await expect(
         a.getByRole('status', { name: 'Saved', exact: true })
       ).toBeVisible({ timeout: SYNC_BUDGET_MS });
       // The room wrote A's live edit to the account; A's autosave stood down.
-      await Promise.all(writeDiagnostics);
       expect(accountWritesFromA).toEqual([]);
       const head = server.db
         .prepare(
