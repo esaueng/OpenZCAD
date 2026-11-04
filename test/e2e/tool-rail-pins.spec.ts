@@ -36,7 +36,7 @@ async function drag(page: Page, source: Locator, target: Locator, y = 4) {
 }
 
 async function openFreshDevice(page: Page) {
-  // A new device: the drawer closed, simple and listing what fits.
+  // A new device: the drawer is closed and starts with the complete catalog.
   await stubApi(page, { commandFoldClosed: true });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Pinned Rail');
@@ -52,6 +52,10 @@ test(
     await openFreshDevice(page);
     await page.getByRole('button', { name: /^More tools/ }).click();
     const drawer = page.locator('.command-flyout');
+    await expect(drawer).toHaveClass(/is-advanced/);
+    await drawer
+      .getByRole('button', { name: 'Simple view', exact: true })
+      .click();
     await expect(drawer).toHaveClass(/is-simple/);
     // Simple: no search, and nothing the rail already carries.
     await expect(drawer.getByRole('searchbox')).toHaveCount(0);
@@ -81,6 +85,10 @@ test(
 
     await page.reload();
     await expect.poll(() => pinnedTools(page)).toContain('sphere');
+    await expect(
+      page.getByRole('button', { name: /^More tools/ })
+    ).toHaveAttribute('aria-expanded', 'true');
+    await expect(drawer).toHaveClass(/is-simple/);
   }
 );
 
@@ -89,7 +97,6 @@ test('reorders a pin along the rail and unpins one dropped on the drawer', async
 }) => {
   await openFreshDevice(page);
   await page.getByRole('button', { name: /^More tools/ }).click();
-  await page.getByRole('button', { name: /^All tools & pins/ }).click();
   const drawer = page.locator('.command-flyout');
   await expect(drawer).toHaveClass(/is-advanced/);
 
