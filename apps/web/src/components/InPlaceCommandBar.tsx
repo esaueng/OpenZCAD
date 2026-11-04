@@ -230,6 +230,7 @@ export function InPlaceCommandBar({
             ) : (
               <MoreHorizontal size={14} aria-hidden="true" />
             )}
+            <span>Options</span>
           </summary>
           <div className="in-place-command-options-panel in-place-params">
             {picks && picks.items.length > 0 ? (

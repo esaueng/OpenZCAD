@@ -212,7 +212,7 @@ interface ViewerShellProps {
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
   onViewSettled(view: ViewportCameraState): void;
-  onGeometryPresented?(durationMs: number): void;
+  onGeometryPresented?(durationMs: number, visible: boolean): void;
   geometryTrace?: {
     projectId: string;
     version: number;

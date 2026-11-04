@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import {
   liveKeyboardGroups,
@@ -22,6 +22,25 @@ interface ShortcutsOverlayProps {
  */
 export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [moreBelow, setMoreBelow] = useState(false);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () =>
+      setMoreBelow(list.scrollHeight - list.scrollTop > list.clientHeight + 2);
+    measure();
+    list.addEventListener('scroll', measure, { passive: true });
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(list);
+    return () => {
+      list.removeEventListener('scroll', measure);
+      observer?.disconnect();
+    };
+  }, []);
   // The keys as the user has them, remaps included.
   const keyboardGroups = liveKeyboardGroups(useKeymap());
 
@@ -63,6 +82,7 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
             Page Down could not reach the half of the list below the fold. */}
         <div
           className="shortcuts-grid"
+          ref={listRef}
           tabIndex={0}
           role="region"
           aria-label="Controls list"
@@ -74,19 +94,29 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
                 {group.items.map((item) => (
                   <div key={item.id} className="shortcut-row">
                     <dt>
+                      {item.action}
+                      {item.id === 'move'
+                        ? ' (Build mode)'
+                        : item.id === 'measure'
+                          ? ' (View / Tweak)'
+                          : ''}
+                    </dt>
+                    <dd>
                       <span className="shortcut-key-sequence">
                         {item.keys.length > 0
                           ? item.keys.map((key) => <kbd key={key}>{key}</kbd>)
                           : 'Unassigned'}
                       </span>
-                    </dt>
-                    <dd>{item.action}</dd>
+                    </dd>
                   </div>
                 ))}
               </dl>
             </section>
           ))}
         </div>
+        {moreBelow && (
+          <p className="shortcuts-scroll-cue">Scroll for more controls ↓</p>
+        )}
       </div>
     </div>
   );

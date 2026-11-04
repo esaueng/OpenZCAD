@@ -427,8 +427,8 @@
 /* Nothing has moved and no hand is on the handle: the chip is only a tap
    target for exact entry, so it recedes rather than announcing "+0". */
 .handle-value-chip[data-engaged='false'] {
-  color: #c9d2e4;
-  background: rgba(16, 19, 22, 0.55);
+  color: #dbe3f5;
+  background: rgba(16, 19, 22, 0.9);
   border-color: color-mix(in srgb, var(--hud-accent-border) 45%, transparent);
   box-shadow: none;
 }

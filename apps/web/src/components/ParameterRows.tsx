@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { BodyId, ParameterKind, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
@@ -157,6 +157,14 @@ export function ParameterRow({
     detailsAvailable: boolean;
   } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const feedbackRef = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    if (error || renameError)
+      feedbackRef.current?.scrollIntoView?.({
+        block: 'nearest',
+        inline: 'nearest'
+      });
+  }, [error, renameError]);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(parameter.name);
   const [pending, setPending] = useState(false);
@@ -527,6 +535,7 @@ export function ParameterRow({
       </div>
       {(renameError || error || pending || minimum !== undefined) && (
         <p
+          ref={feedbackRef}
           id={`parameter-feedback-${parameter.parameterId}`}
           className={`parameter-feedback${renameError || error ? ' error' : ''}`}
           role={renameError || error ? 'alert' : 'status'}

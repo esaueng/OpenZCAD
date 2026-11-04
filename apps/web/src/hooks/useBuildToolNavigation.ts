@@ -7,16 +7,21 @@ export function useBuildToolNavigation({
   projectId,
   canBuild,
   onSwitch,
-  onLaunch
+  onLaunch,
+  onPrepare,
+  onExpired
 }: {
   mode: string;
   projectId: string | null;
   canBuild: boolean;
   onSwitch(): void;
   onLaunch(tool: ToolId): void;
+  /** Frame the newly rendered workspace before the tool owns its camera. */
+  onPrepare?(): void;
+  onExpired?(): void;
 }) {
-  const launch = useRef(onLaunch);
-  launch.current = onLaunch;
+  const callbacks = useRef({ onLaunch, onPrepare, onExpired });
+  callbacks.current = { onLaunch, onPrepare, onExpired };
   const [pending, setPending] = useState<{
     projectId: string;
     tool: ToolId;
@@ -32,15 +37,27 @@ export function useBuildToolNavigation({
     ) {
       setPending(null);
     } else if (mode === 'build') {
-      // Launch only after the new mode's edit guards and availability render.
-      setPending(null);
-      launch.current(pending.tool);
+      // First render and frame the destination; then let the tool take over.
+      // Launching in this effect skipped responsive framing under the new
+      // tool's camera guard, leaving the model behind Build's panels.
+      let launchFrame = 0;
+      const prepareFrame = requestAnimationFrame(() => {
+        callbacks.current.onPrepare?.();
+        launchFrame = requestAnimationFrame(() => {
+          setPending(null);
+          callbacks.current.onLaunch(pending.tool);
+        });
+      });
+      return () => {
+        cancelAnimationFrame(prepareFrame);
+        cancelAnimationFrame(launchFrame);
+      };
     } else {
       // A refused switch must not arm a tool for a later, unrelated visit.
-      const timeout = setTimeout(
-        () => setPending((current) => (current === pending ? null : current)),
-        1000
-      );
+      const timeout = setTimeout(() => {
+        setPending((current) => (current === pending ? null : current));
+        callbacks.current.onExpired?.();
+      }, 1000);
       return () => clearTimeout(timeout);
     }
   }, [canBuild, mode, pending, projectId]);

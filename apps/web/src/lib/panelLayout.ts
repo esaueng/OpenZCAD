@@ -2396,11 +2396,19 @@ export function computePanelGeometry(
       : null;
   const slot = revealed ?? layout.unpinned;
   if (slot) {
-    // Inspect in space already reserved for panels before covering the part.
-    // The stored dock is unchanged and returns as soon as this panel closes.
-    const inspectionColumn =
-      geometry.columns.find((column) => column.side === 'right') ??
-      geometry.columns.find((column) => column.side === 'left');
+    // Keep independent panels side by side when they fit. Borrow an existing
+    // column only when another would consume the model's minimum stage share.
+    const needsRoom =
+      geometry.dockWidth.left +
+        geometry.dockWidth.right +
+        columnWidth +
+        insets.gap * 3 +
+        insets.rail * 2 >
+      stage.width * PANEL_DOCK_CAP;
+    const inspectionColumn = needsRoom
+      ? (geometry.columns.find((column) => column.side === 'right') ??
+        geometry.columns.find((column) => column.side === 'left'))
+      : undefined;
     const naturalHeight = stage.naturals?.[slot];
     geometry.panels[slot] = {
       id: slot,

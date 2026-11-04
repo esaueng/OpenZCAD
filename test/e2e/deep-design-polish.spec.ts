@@ -8,6 +8,87 @@ import {
 } from './openzcad-fixtures';
 
 test(
+  'cross-mode Fillet frames the whole model between Build rails',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await enableFullRender(page);
+    await stubAnonymousApi(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    await page
+      .getByRole('button', { name: /Open demo: Mounting Bracket/ })
+      .click();
+    await expect(
+      page.getByRole('button', { name: 'Tweak', exact: true })
+    ).toBeVisible({ timeout: 90_000 });
+    await revealModelPanel(page, 'Revisions');
+    await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+    await page.keyboard.press('ControlOrMeta+k');
+    await page
+      .getByRole('combobox', { name: 'Search commands', exact: true })
+      .fill('fillet');
+    await page.getByRole('option', { name: /Fillet.*Switch to Build/ }).click();
+    await expect(
+      page.getByRole('group', { name: 'Fillet command', exact: true })
+    ).toBeVisible();
+    await expect
+      .poll(
+        () =>
+          page.locator('.viewer-host canvas').evaluate(async (canvas) => {
+            const state = await new Promise<{
+              bodyFaces: {
+                visible: boolean;
+                worldBounds?: { min: number[]; max: number[] };
+              }[];
+            }>((resolve) =>
+              canvas.dispatchEvent(
+                new CustomEvent('openzcad:e2e-render-policy', {
+                  detail: { resolve }
+                })
+              )
+            );
+            const boxes = state.bodyFaces
+              .filter((face) => face.visible && face.worldBounds)
+              .map((face) => face.worldBounds!);
+            if (!boxes.length) return false;
+            const min = [0, 1, 2].map((axis) =>
+              Math.min(...boxes.map((box) => box.min[axis]!))
+            );
+            const max = [0, 1, 2].map((axis) =>
+              Math.max(...boxes.map((box) => box.max[axis]!))
+            );
+            const points = [min[0], max[0]].flatMap((x) =>
+              [min[1], max[1]].flatMap((y) =>
+                [min[2], max[2]].map((z) => [x, y, z])
+              )
+            );
+            const projected = await new Promise<{
+              points: { x: number; y: number }[];
+            }>((resolve) =>
+              canvas.dispatchEvent(
+                new CustomEvent('openzcad:e2e-project-points', {
+                  detail: { points, resolve }
+                })
+              )
+            );
+            const left = document
+              .querySelector('.command-rail')!
+              .getBoundingClientRect().right;
+            const right = document
+              .querySelector('.instrument-rail')!
+              .getBoundingClientRect().left;
+            return projected.points.every(
+              (point) => point.x > left + 8 && point.x < right - 8
+            );
+          }),
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+  }
+);
+
+test(
   'fillet value stays reachable after resizing during edge selection',
   { tag: '@ci-smoke' },
   async ({ page }) => {
@@ -75,139 +156,197 @@ test(
   }
 );
 
-test(
-  'phone editing keeps real model pixels visible and every parameter reachable',
-  { tag: '@ci-smoke' },
-  async ({ page }) => {
-    test.setTimeout(180_000);
-    const errors: string[] = [];
-    page.on('pageerror', (error) => errors.push(error.message));
-    await page.setViewportSize({ width: 390, height: 844 });
-    await enableFullRender(page);
-    await stubAnonymousApi(page);
-    await page.goto('/');
-    await page
-      .getByRole('button', { name: /Open demo: Mounting Bracket/ })
-      .click();
-    await expect(
-      page.getByRole('button', { name: 'Tweak', exact: true })
-    ).toBeVisible({ timeout: 90_000 });
-    await page.keyboard.press('ControlOrMeta+k');
-    await page
-      .getByRole('combobox', { name: 'Search commands', exact: true })
-      .fill('Plate thickness');
-    await expect(
-      page.getByRole('option', { name: /plate_t = 8/ })
-    ).toBeVisible();
-    await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'Tweak', exact: true }).click();
-    const panel = page.getByRole('complementary', {
-      name: 'Parameters',
-      exact: true
-    });
-    await expect(panel).toBeVisible({ timeout: 30_000 });
-    await expect(
-      page.getByRole('button', { name: 'Show the parts list', exact: true })
-    ).toHaveAttribute('aria-expanded', 'false');
-    // Check painted face pixels, not just a canvas or body count. An opaque
-    // scroll-card backdrop used to cover this entire region above the sheet.
-    await expect
-      .poll(
-        async () => {
-          const screenshot = await page.screenshot({ animations: 'disabled' });
-          return page.evaluate(async (base64) => {
-            const image = new Image();
-            image.src = `data:image/png;base64,${base64}`;
-            await image.decode();
-            const sample = document.createElement('canvas');
-            sample.width = image.naturalWidth;
-            sample.height = image.naturalHeight;
-            const context = sample.getContext('2d')!;
-            context.drawImage(image, 0, 0);
-            const top = document
-              .querySelector('.topbar')!
-              .getBoundingClientRect().bottom;
-            const bottom = document
-              .querySelector('.tweak-flyouts')!
-              .getBoundingClientRect().top;
-            const { data } = context.getImageData(
-              60,
-              Math.ceil(top),
-              270,
-              Math.floor(bottom - top)
-            );
-            let painted = 0;
-            for (let index = 0; index < data.length; index += 4) {
-              const [red, green, blue] = [
-                data[index]!,
-                data[index + 1]!,
-                data[index + 2]!
-              ];
-              if (red > 120 && red > green + 15 && green > blue + 30) painted++;
-            }
-            return painted;
-          }, screenshot.toString('base64'));
-        },
-        {
-          timeout: 20_000,
-          message: 'The bracket must remain painted above the editing sheet'
+test.describe('touch editing', () => {
+  test.use({ hasTouch: true, isMobile: true });
+  test(
+    'phone editing keeps real model pixels visible and every parameter reachable',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.setViewportSize({ width: 390, height: 844 });
+      await enableFullRender(page);
+      await stubAnonymousApi(page);
+      // Let the mode render before its lazy sheet, as on a cold connection.
+      // The sheet's mount must reframe even if the mode's first fit ran early.
+      await page.route(
+        /\/(?:src\/components\/TweakPanel\.tsx|assets\/TweakPanel-[^/]+\.js)(?:\?.*)?$/,
+        async (route) => {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          await route.continue();
         }
-      )
-      .toBeGreaterThan(3000);
-    const last = panel.getByRole('textbox', {
-      name: 'Expression for fillet_r',
-      exact: true
-    });
-    await last.scrollIntoViewIfNeeded();
-    const inputBounds = await last.boundingBox();
-    const sheetBounds = await page.locator('.tweak-flyouts').boundingBox();
-    expect(inputBounds!.y + inputBounds!.height).toBeLessThan(
-      sheetBounds!.y + sheetBounds!.height
-    );
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await last.fill('unknown_parameter');
-      await last.press('Enter');
-      await expect(panel.getByRole('alert')).toContainText(
-        'No change applied.'
       );
-      await expect(last).toHaveValue('3');
-      await expect(last).not.toHaveAttribute('aria-invalid', 'true');
-    }
-    const switcher = page.getByRole('group', {
-      name: 'Tweak panels',
-      exact: true
-    });
-    await switcher.getByRole('button', { name: 'Parts', exact: true }).click();
-    await expect(
-      page.getByRole('button', { name: 'Hide the parts list', exact: true })
-    ).toHaveAttribute('aria-expanded', 'true');
-    await expect(
-      page
-        .getByRole('toolbar', { name: 'Tweak tools', exact: true })
+      await page.goto('/');
+      await page
+        .getByRole('button', { name: /Open demo: Mounting Bracket/ })
+        .click();
+      await expect(
+        page.getByRole('button', { name: 'Tweak', exact: true })
+      ).toBeVisible({ timeout: 90_000 });
+      await page.keyboard.press('ControlOrMeta+k');
+      await page
+        .getByRole('combobox', { name: 'Search commands', exact: true })
+        .fill('Plate thickness');
+      await expect(
+        page.getByRole('option', { name: /plate_t = 8/ })
+      ).toBeVisible();
+      await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+      const panel = page.getByRole('complementary', {
+        name: 'Parameters',
+        exact: true
+      });
+      await expect(panel).toBeVisible({ timeout: 30_000 });
+      await expect(
+        page.getByRole('button', { name: 'Show the parts list', exact: true })
+      ).toHaveAttribute('aria-expanded', 'false');
+      // Check painted face pixels, not just a canvas or body count. An opaque
+      // scroll-card backdrop used to cover this entire region above the sheet.
+      await expect
+        .poll(
+          async () => {
+            const screenshot = await page.screenshot({
+              animations: 'disabled'
+            });
+            return page.evaluate(async (base64) => {
+              const image = new Image();
+              image.src = `data:image/png;base64,${base64}`;
+              await image.decode();
+              const sample = document.createElement('canvas');
+              sample.width = image.naturalWidth;
+              sample.height = image.naturalHeight;
+              const context = sample.getContext('2d')!;
+              context.drawImage(image, 0, 0);
+              const top = document
+                .querySelector('.topbar')!
+                .getBoundingClientRect().bottom;
+              const bottom = document
+                .querySelector('.tweak-flyouts')!
+                .getBoundingClientRect().top;
+              const { data } = context.getImageData(
+                60,
+                Math.ceil(top),
+                270,
+                Math.floor(bottom - top)
+              );
+              let painted = 0;
+              for (let index = 0; index < data.length; index += 4) {
+                const [red, green, blue] = [
+                  data[index]!,
+                  data[index + 1]!,
+                  data[index + 2]!
+                ];
+                if (red > 120 && red > green + 15 && green > blue + 30)
+                  painted++;
+              }
+              return painted;
+            }, screenshot.toString('base64'));
+          },
+          {
+            timeout: 20_000,
+            message: 'The bracket must remain painted above the editing sheet'
+          }
+        )
+        .toBeGreaterThan(3000);
+      const last = panel.getByRole('textbox', {
+        name: 'Expression for fillet_r',
+        exact: true
+      });
+      await last.scrollIntoViewIfNeeded();
+      const inputBounds = await last.boundingBox();
+      const sheetBounds = await page.locator('.tweak-flyouts').boundingBox();
+      expect(inputBounds!.y + inputBounds!.height).toBeLessThan(
+        sheetBounds!.y + sheetBounds!.height
+      );
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await last.fill('unknown_parameter');
+        await last.press('Enter');
+        await expect(panel.getByRole('alert')).toContainText(
+          'No change applied.'
+        );
+        await expect(last).toHaveValue('3');
+        await expect(last).not.toHaveAttribute('aria-invalid', 'true');
+        const feedback = panel.getByRole('alert');
+        const feedbackBounds = await feedback.boundingBox();
+        expect(feedbackBounds!.y + feedbackBounds!.height).toBeLessThanOrEqual(
+          sheetBounds!.y + sheetBounds!.height
+        );
+        const details = feedback.getByRole('button', {
+          name: 'View details',
+          exact: true
+        });
+        await expect(details).toBeInViewport({ ratio: 1 });
+        const toast = page.locator('.workspace-toast:not(.hidden)');
+        await expect(toast).toContainText(
+          'Parameter Fillet radius was not changed.'
+        );
+        expect((await toast.boundingBox())!.y).toBeGreaterThanOrEqual(
+          sheetBounds!.y + sheetBounds!.height + 6
+        );
+      }
+      const switcher = page.getByRole('group', {
+        name: 'Tweak panels',
+        exact: true
+      });
+      await switcher
+        .getByRole('button', { name: 'Parts', exact: true })
+        .click();
+      await expect(
+        page.getByRole('button', { name: 'Hide the parts list', exact: true })
+      ).toHaveAttribute('aria-expanded', 'true');
+      await expect(
+        page
+          .getByRole('toolbar', { name: 'Tweak tools', exact: true })
+          .getByRole('button', { name: 'Parameters', exact: true })
+      ).toHaveAttribute('aria-expanded', 'false');
+      await expect(
+        page.getByRole('complementary', { name: 'Parts', exact: true })
+      ).toBeVisible();
+      const part = page.getByRole('button', {
+        name: 'Mounting Bracket',
+        exact: true
+      });
+      await expect(part).toBeVisible();
+      expect((await part.boundingBox())!.height).toBeGreaterThanOrEqual(24);
+      await page
+        .getByRole('button', { name: 'Close Tweak panel', exact: true })
+        .click();
+      await expect(
+        page.getByRole('complementary', { name: 'Parts', exact: true })
+      ).toHaveCount(0);
+      await expect(panel).toHaveCount(0);
+      await expect(
+        page.getByRole('button', { name: 'Parameters', exact: true })
+      ).toBeFocused();
+      await page.setViewportSize({ width: 1024, height: 768 });
+      await page
         .getByRole('button', { name: 'Parameters', exact: true })
-    ).toHaveAttribute('aria-expanded', 'false');
-    await expect(
-      page.getByRole('complementary', { name: 'Parts', exact: true })
-    ).toBeVisible();
-    const part = page.getByRole('button', {
-      name: 'Mounting Bracket',
-      exact: true
-    });
-    await expect(part).toBeVisible();
-    expect((await part.boundingBox())!.height).toBeGreaterThanOrEqual(24);
-    await page
-      .getByRole('button', { name: 'Close Tweak panel', exact: true })
-      .click();
-    await expect(
-      page.getByRole('complementary', { name: 'Parts', exact: true })
-    ).toHaveCount(0);
-    await expect(panel).toHaveCount(0);
-    await expect(
-      page.getByRole('button', { name: 'Parameters', exact: true })
-    ).toBeFocused();
-    expect(errors).toEqual([]);
-  }
-);
+        .click();
+      const laptopLast = page.getByRole('textbox', {
+        name: 'Expression for fillet_r',
+        exact: true
+      });
+      await laptopLast.fill('unknown_parameter');
+      await laptopLast.press('Enter');
+      const laptopFeedback = page.getByRole('alert');
+      await expect(laptopFeedback).toContainText('No change applied.');
+      const laptopDetails = laptopFeedback.getByRole('button', {
+        name: 'View details',
+        exact: true
+      });
+      await expect(laptopDetails).toBeInViewport({ ratio: 1 });
+      await expect(
+        page.getByRole('button', { name: 'Close parameters', exact: true })
+      ).toBeInViewport({ ratio: 1 });
+      await laptopDetails.click();
+      await expect(
+        page.getByRole('heading', { name: 'Activity log', exact: true })
+      ).toBeVisible();
+      expect(errors).toEqual([]);
+    }
+  );
+});
 
 for (const width of [1440, 390]) {
   test(

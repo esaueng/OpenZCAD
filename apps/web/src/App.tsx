@@ -844,6 +844,7 @@ import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { useResponsiveFraming } from './hooks/useResponsiveFraming';
+import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
@@ -3494,6 +3495,11 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  const [presentedGeometry, setPresentedGeometry] = useState<{
+    projectId: string;
+    generation: number;
+    visible: boolean;
+  } | null>(null);
   /**
    * What the section view is currently showing. The clipped preview owns the
    * drag; the kernel's exact section is asked for once the plane rests, and
@@ -5492,7 +5498,12 @@ export function App() {
     projectId: doc?.projectId ?? null,
     canBuild: canNavigateToBuild,
     onSwitch: () => handleWorkspaceMode('build'),
-    onLaunch: launchTool
+    onLaunch: launchTool,
+    onPrepare: () => prepareResponsiveFrame.prepare(),
+    onExpired: () =>
+      setStatus(
+        'Unable to open Build. Switch to Build and choose the tool again.'
+      )
   });
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
@@ -7981,6 +7992,12 @@ export function App() {
         };
       }
       const label = topologySelectionLabelSegments(namingBody, namingTopology);
+      if (
+        geometry?.featureType === 'blend' &&
+        geometry.blendRadius !== undefined
+      ) {
+        return { label, detail: `R ${round(geometry.blendRadius)} ${units}` };
+      }
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -20480,7 +20497,10 @@ export function App() {
         parameterEditRequest.current === request &&
         managerRef.current === manager
       )
-        setStatus(`Parameter ${name} was not changed.`, { detail: message });
+        setStatus(
+          `Parameter ${parameterDisplayName(name, listParameters(manager.document).find((parameter) => parameter.name === name)?.description)} was not changed.`,
+          { detail: message }
+        );
       return message;
     };
     const moved =
@@ -21543,12 +21563,16 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
-  useResponsiveFraming({
+  const prepareResponsiveFrame = useResponsiveFraming({
     projectId: doc?.projectId ?? null,
     mode: resolvedWorkspaceMode,
     layout: panelLayout,
     panels: `${panelState.tweakPanelOpen}:${panelState.viewModeRailOpen}`,
     enabled:
+      displayedGeometryComplete &&
+      presentedGeometry?.projectId === doc?.projectId &&
+      presentedGeometry?.generation === resumeViewGeneration &&
+      presentedGeometry?.visible === true &&
       !tool &&
       !inPlace.active &&
       interaction.mode === 'idle' &&
@@ -29613,6 +29637,7 @@ export function App() {
       sidebar={
         viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
+            onLayoutChange={() => prepareResponsiveFrame.request()}
             units={doc?.units}
             modelError={parameterModelError}
             parameters={exposedParameters}
@@ -29875,8 +29900,20 @@ export function App() {
             initialView={initialView}
             onViewChange={handleViewportChange}
             onViewSettled={handleViewportSettled}
-            onGeometryPresented={(ms) => {
+            onGeometryPresented={(ms, visible) => {
               previewPresentationMs.current = ms;
+              if (doc)
+                setPresentedGeometry((current) =>
+                  current?.projectId === doc.projectId &&
+                  current.generation === resumeViewGeneration &&
+                  current.visible === visible
+                    ? current
+                    : {
+                        projectId: doc.projectId,
+                        generation: resumeViewGeneration,
+                        visible
+                      }
+                );
             }}
             onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}
             onWheelDeviceLearned={handleWheelDeviceLearned}

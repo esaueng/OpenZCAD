@@ -958,7 +958,7 @@ export interface ModelViewerProps {
   onViewChange(view: ViewportCameraState): void;
   /** Final camera pose emitted after navigation or a camera glide settles. */
   onViewSettled(view: ViewportCameraState): void;
-  onGeometryPresented?(durationMs: number): void;
+  onGeometryPresented?(durationMs: number, visible: boolean): void;
   geometryTrace?: {
     projectId: string;
     version: number;
@@ -12739,7 +12739,14 @@ export function ModelViewer({
         detail: { renderChanged: renderChanged ? 1 : 0 }
       });
       if (renderChanged) pendingTracedFrameRef.current = true;
-      onGeometryPresentedRef.current?.(installationMs);
+      onGeometryPresentedRef.current?.(
+        installationMs,
+        [
+          ...context.bodyGroup.children,
+          ...(parameterPreviewController.current?.group.children ?? []),
+          ...(regionGroupRef.current?.children ?? [])
+        ].some((child) => child.visible)
+      );
     }
   }, [
     bodies,

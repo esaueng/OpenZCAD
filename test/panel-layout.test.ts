@@ -3532,11 +3532,21 @@ describe('the unpinned slot beside the right lane', () => {
   it('fits a short inspection to content and uses the left dock if it is alone', () => {
     const layout = layoutWith({ left: [['bodies']], unpinned: 'revisions' });
     const geometry = computePanelGeometry(layout, {
-      ...stage(1440),
+      ...stage(900),
       naturals: { revisions: 240 }
     });
     expect(geometry.panels.revisions?.x).toBe(geometry.panels.bodies?.x);
     expect(geometry.panels.revisions?.h).toBe(240);
+  });
+
+  it('preserves independent open panels when a spare column fits', () => {
+    const layout = deepFreeze(
+      layoutWith({ right: [['bodies', 'history']], unpinned: 'parameters' })
+    );
+    const geometry = computePanelGeometry(layout, stage(1600));
+    expect(geometry.panels.parameters?.x).not.toBe(geometry.panels.bodies?.x);
+    expect(isPanelCoveredByInspection(layout, 'bodies', geometry)).toBe(false);
+    expect(isPanelCoveredByInspection(layout, 'history', geometry)).toBe(false);
   });
 
   it('retains a bounded temporary panel when there is no dock to borrow', () => {

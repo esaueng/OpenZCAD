@@ -260,7 +260,7 @@ export const KEYBOARD_CONTROL_GROUPS = [
         ...bound('view-measure'),
         action: 'Measure',
         detail:
-          'In View mode only. Records what you pick; Escape stops recording and keeps the results.'
+          'In View and Tweak modes. Records what you pick; Escape stops recording and keeps the results.'
       },
       {
         id: 'measure-delete',

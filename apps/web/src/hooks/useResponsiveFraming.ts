@@ -20,6 +20,9 @@ export function useResponsiveFraming({
 }) {
   const latest = useRef({ enabled, onFit });
   latest.current = { enabled, onFit };
+  const pendingLayout = useRef(false);
+  const resume = useRef<(() => void) | null>(null);
+  const framedProject = useRef<string | null>(null);
   // Focusing another docked panel changes recency, not the clear stage. Keep
   // a person's chosen zoom unless the visible arrangement actually changes.
   const layoutKey = JSON.stringify({
@@ -35,11 +38,14 @@ export function useResponsiveFraming({
       window.innerWidth <= PANEL_PHONE_MAX_WIDTH ? layout.recent : undefined
   });
   useEffect(() => {
+    const projectChanged = framedProject.current !== projectId;
+    framedProject.current = projectId;
     if (!projectId) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let frame = 0;
     let nextFrame = 0;
-    const schedule = () => {
+    const schedule = (layoutChange: boolean) => {
+      if (layoutChange) pendingLayout.current = true;
       clearTimeout(timer);
       cancelAnimationFrame(frame);
       cancelAnimationFrame(nextFrame);
@@ -47,18 +53,59 @@ export function useResponsiveFraming({
         // Rails and phone sheets finish their responsive layout first.
         frame = requestAnimationFrame(() => {
           nextFrame = requestAnimationFrame(() => {
-            if (latest.current.enabled) latest.current.onFit();
+            if (
+              latest.current.enabled &&
+              (!layoutChange || pendingLayout.current)
+            ) {
+              pendingLayout.current = false;
+              latest.current.onFit();
+            }
           });
         });
       }, 120);
     };
-    schedule();
-    window.addEventListener('resize', schedule);
+    resume.current = () => schedule(true);
+    const resize = () => schedule(false);
+    const userNavigation = (event: Event) => {
+      if (!(event.target instanceof HTMLCanvasElement)) return;
+      clearTimeout(timer);
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(nextFrame);
+      pendingLayout.current = false;
+    };
+    // The viewer owns initial framing and remembered camera restoration.
+    // This hook only reacts to subsequent workspace layout choices.
+    if (!projectChanged) schedule(true);
+    window.addEventListener('resize', resize);
+    window.addEventListener('pointerdown', userNavigation, true);
+    window.addEventListener('wheel', userNavigation, {
+      capture: true,
+      passive: true
+    });
     return () => {
       clearTimeout(timer);
       cancelAnimationFrame(frame);
       cancelAnimationFrame(nextFrame);
-      window.removeEventListener('resize', schedule);
+      window.removeEventListener('resize', resize);
+      window.removeEventListener('pointerdown', userNavigation, true);
+      window.removeEventListener('wheel', userNavigation, true);
+      resume.current = null;
+      pendingLayout.current = false;
     };
   }, [projectId, mode, layoutKey, panels]);
+  useEffect(() => {
+    if (enabled && pendingLayout.current) resume.current?.();
+  }, [enabled]);
+  // An explicit cross-mode tool launch can frame immediately after the
+  // destination renders, then retire its pending automatic layout request.
+  return {
+    prepare() {
+      if (!latest.current.enabled) return;
+      pendingLayout.current = false;
+      latest.current.onFit();
+    },
+    request() {
+      resume.current?.();
+    }
+  };
 }

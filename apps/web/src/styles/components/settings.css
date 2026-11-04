@@ -1148,8 +1148,15 @@
 }
 
 .keymap-chip .icon-button {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
+}
+
+@media (pointer: coarse) {
+  .keymap-chip .icon-button {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .keymap-editor .settings-control-group dl {
@@ -1456,7 +1463,7 @@
   }
 
   /* The way back keeps its arrow; its label would crowd out the title. */
-  .settings-close {
+  .settings-head .settings-close {
     justify-content: center;
     width: 28px;
     padding: 0;

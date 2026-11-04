@@ -1091,7 +1091,10 @@
 .workspace.column-layout {
   /* The lane's foot, 8px over the search bar, and its sides: the bottom
      lanes' own insets, which the tour card below can narrow. */
-  --lane-base: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+  --lane-base: calc(
+    var(--island-gap) + var(--command-bar-h) +
+      var(--workspace-guidance-h, 0px) + 8px
+  );
   --notice-start: var(--lane-inset);
   /* The tour card starts where the lanes would without a left dock, and
      with one it stands over the dock's column at the screen's edge instead
@@ -2273,17 +2276,17 @@ button.command-rail.is-suggested {
    the commands were there, but read as missing. It goes once they are in
    view. */
 .command-flyout-more {
-  position: sticky;
-  bottom: -4px;
+  position: static;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
   min-height: 26px;
   margin-top: 2px;
-  padding: 10px 7px 3px;
+  padding: 4px 7px;
   color: var(--color-text);
-  background: linear-gradient(transparent, var(--color-surface) 45%);
+  background: var(--color-surface);
   border: 0;
   border-radius: 0;
   font-size: var(--fs-xs);
@@ -2587,7 +2590,8 @@ button.command-rail.is-suggested {
   width: min(300px, calc(100vw - var(--rail-w) * 2 - var(--island-gap) * 4));
   display: flex;
   flex-direction: column;
-  transform: translateY(-50%);
+  max-height: calc(100dvh - var(--stage-top) - var(--lane-base, 52px) - 44px);
+  transform: translateY(calc(-50% - 8px));
   pointer-events: none;
 }
 
@@ -2598,7 +2602,8 @@ button.command-rail.is-suggested {
 .tweak-flyouts > .tweak-panel {
   flex: 0 1 auto;
   min-width: 0;
-  max-height: calc(100vh - var(--stage-top) - var(--island-gap) * 2);
+  min-height: 0;
+  max-height: 100%;
   overflow-y: auto;
   scrollbar-width: none;
   background: var(--color-surface);
@@ -2623,7 +2628,7 @@ button.command-rail.is-suggested {
     .viewer-area
     .workspace-column-float:has(> .tweak-rail) {
     top: var(--stage-top);
-    bottom: calc(var(--island-gap) * 2 + var(--readout-reserve));
+    bottom: calc(var(--lane-base) + 36px);
     max-height: none;
     transform: none;
   }
@@ -3160,9 +3165,9 @@ button.command-rail.is-suggested {
   .viewer-area .stage-right:has(> .panel-lane-float) {
     z-index: calc(var(--z-inspector-float) + 2);
     top: auto;
-    right: var(--island-gap);
+    right: calc(var(--island-gap) * 2 + var(--rail-w));
     bottom: calc(var(--lane-base) + 40px);
-    left: var(--island-gap);
+    left: calc(var(--island-gap) * 2 + var(--rail-w));
     max-height: min(
       40dvh,
       calc(100% - var(--stage-top) - var(--lane-base) - 40px)
@@ -4289,6 +4294,8 @@ button.model-panel-grip[aria-expanded='true'] {
   justify-content: center;
   min-width: 28px;
   min-height: 28px;
+  gap: 5px;
+  padding-inline: 6px;
   list-style: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -4774,7 +4781,7 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 .workspace-hint-help summary {
   position: absolute;
-  right: 52px;
+  right: 8px;
   pointer-events: auto;
   display: grid;
   place-items: center;
@@ -4824,7 +4831,107 @@ button.model-panel-grip[aria-expanded='true'] {
   display: none;
 }
 .workspace-hint {
-  padding-right: 84px;
+  padding-right: 116px;
+}
+
+/* Instructions have their own hit area after the shortcut badge. */
+.command-bar-lane:has(> .workspace-hint-help) .command-bar:not(.open) {
+  padding-right: 40px;
+}
+
+.workspace-hint.is-selection {
+  position: static;
+  width: 100%;
+  max-width: var(--command-bar-w);
+  align-self: center;
+  height: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  white-space: normal;
+  line-height: var(--lh-normal);
+  transform: none;
+}
+
+.workspace-hint.is-selection .workspace-hint-text {
+  flex: 1 0 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.workspace.column-layout
+  .command-bar-lane.has-guidance:has(.workspace-hint.is-selection)
+  .command-bar:not(.open)
+  .command-bar-input::placeholder {
+  color: var(--color-text-subtle);
+}
+
+@media (min-width: 960px) and (max-width: 1199px) {
+  .topbar .account-state > .stable-label {
+    display: none;
+  }
+  .topbar > .topbar-actions-island {
+    margin-left: 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .workspace.column-layout:has(.tweak-flyouts.is-open),
+  .workspace.column-layout:has(.panel-lane-float) {
+    --lane-start: var(--island-gap);
+    --lane-right: var(--island-gap);
+    --notice-start: var(--island-gap);
+    --notice-end: var(--island-gap);
+  }
+
+  .workspace.column-layout:has(.tweak-flyouts.is-open)
+    .viewport-scale-indicator {
+    display: none;
+  }
+
+  .command-bar-lane:has(.workspace-hint-help)
+    .workspace-hint:not(.is-selection) {
+    padding-right: 44px;
+  }
+  .command-bar-lane:has(.workspace-hint-help)
+    .command-bar:not(.open)
+    .command-bar-input {
+    padding-right: 0;
+  }
+  .topbar .topbar-identity > .save-state {
+    margin-left: 8px;
+    margin-right: 0;
+  }
+  .topbar[data-name-room] .topbar-identity > .save-state.is-readout {
+    margin-left: 8px;
+    margin-right: 0;
+  }
+  .topbar .topbar-identity > .save-state.is-readout {
+    margin-left: 8px;
+    margin-right: 0;
+  }
+  .viewer-area:has(.panel-lane-float) .viewport-scale-indicator {
+    display: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .workspace-hint-help {
+    display: none;
+  }
+  .command-bar-lane:has(> .workspace-hint-help) .command-bar:not(.open) {
+    padding-right: 8px;
+  }
+  .command-bar-lane:has(.workspace-hint-help)
+    .workspace-hint:not(.is-selection) {
+    padding-right: 12px;
+  }
 }
 
 /* The expanded instructions stand over model panels, as the palette does. */

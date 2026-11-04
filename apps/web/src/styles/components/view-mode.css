@@ -99,11 +99,15 @@
 }
 
 .tweak-panel-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding-right: var(--sp-2);
   border-bottom: var(--border-thin);
+  background: var(--color-surface);
 }
 
 .tweak-panel-heading .sidebar-label {
@@ -125,6 +129,15 @@
 
 .tweak-panel-params {
   padding: 10px;
+  padding-bottom: 20px;
+}
+
+.parameter-feedback.error {
+  scroll-margin-block: 8px;
+}
+
+.parameter-feedback .activity-log-link {
+  padding-inline: 0;
 }
 
 /* Tweak shows neither the curation toggle nor delete: the row gives both

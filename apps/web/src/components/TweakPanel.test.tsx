@@ -15,9 +15,10 @@ const width = {
   value: 80
 } as ParameterNode;
 
-function renderPanel(parameters: ParameterNode[]) {
+function renderPanel(parameters: ParameterNode[], onLayoutChange?: () => void) {
   return render(
     <TweakPanel
+      onLayoutChange={onLayoutChange}
       parameters={parameters}
       parameterValues={{ width: 80 }}
       canExport
@@ -34,6 +35,11 @@ function renderPanel(parameters: ParameterNode[]) {
 }
 
 describe('TweakPanel', () => {
+  it('announces its mounted layout so a late lazy sheet can reframe the model', () => {
+    const onLayoutChange = vi.fn();
+    renderPanel([width], onLayoutChange);
+    expect(onLayoutChange).toHaveBeenCalledOnce();
+  });
   /*
     A model with no parameters used to get the how-to intro ("Change a value
     and press Enter…") over an empty table and a two-sentence empty state:

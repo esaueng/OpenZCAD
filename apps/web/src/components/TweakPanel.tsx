@@ -11,6 +11,7 @@ import { parameterDisplayName } from '../lib/parameterDisplayName';
 const MESH_FORMATS = '3MF, STL, OBJ, glTF or PLY';
 
 interface TweakPanelProps {
+  onLayoutChange?(): void;
   units?: UnitSystem;
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
@@ -65,6 +66,7 @@ interface TweakPanelProps {
  * never have to answer.
  */
 export function TweakPanel({
+  onLayoutChange,
   units,
   parameters,
   parameterValues,
@@ -108,6 +110,13 @@ export function TweakPanel({
   const showParameters =
     panelOpen && (!phone || selectedPhonePanel === 'parameters');
   const showParts = partsOpen && (!phone || selectedPhonePanel === 'parts');
+  const layoutChange = useRef(onLayoutChange);
+  layoutChange.current = onLayoutChange;
+  useEffect(() => {
+    // This panel is lazy. A mode change can finish framing before its chunk
+    // mounts, so announce the actual sheet as well as later tab changes.
+    layoutChange.current?.();
+  }, [phone, selectedPhonePanel]);
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`
@@ -254,7 +263,12 @@ export function TweakPanel({
                 type="button"
                 className="model-panel-action"
                 aria-label="Close parameters"
-                onClick={onTogglePanel}
+                onClick={() => {
+                  onTogglePanel();
+                  requestAnimationFrame(() =>
+                    parametersButtonRef.current?.focus({ preventScroll: true })
+                  );
+                }}
               >
                 <X size={16} aria-hidden="true" />
               </button>

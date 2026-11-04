@@ -617,41 +617,39 @@ export function CommandCard({
                         : 'Everything that fits is on the rail'}
                   </p>
                 )}
-                {below.length > 0 && (
-                  // A short window hides whole groups (Pattern, under
-                  // Bodies) past a fold only a 10px shade marked (F017).
-                  // This names them and scrolls the first into view. The
-                  // keyboard needs no stop of its own: a focused row already
-                  // scrolls into view.
-                  <button
-                    type="button"
-                    className="command-flyout-more"
-                    tabIndex={-1}
-                    aria-label={`Scroll to ${below.join(', ')}`}
-                    onClick={() => {
-                      const list = listRef.current;
-                      const heading = Array.from(
-                        list?.querySelectorAll<HTMLElement>(
-                          '.command-flyout-heading'
-                        ) ?? []
-                      ).find(
-                        (candidate) => candidate.dataset.group === below[0]
-                      );
-                      if (!list || !heading) return;
-                      list.scrollTo({
-                        top: heading.offsetTop - 4,
-                        behavior: 'smooth'
-                      });
-                    }}
-                  >
-                    <span>
-                      More: {below[0]}
-                      {below.length > 1 && ` +${below.length - 1}`}
-                      <ChevronDown size={12} aria-hidden="true" />
-                    </span>
-                  </button>
-                )}
               </div>
+              {below.length > 0 && (
+                // A short window hides whole groups (Pattern, under
+                // Bodies) past a fold only a 10px shade marked (F017).
+                // This names them and scrolls the first into view. The
+                // keyboard needs no stop of its own: a focused row already
+                // scrolls into view.
+                <button
+                  type="button"
+                  className="command-flyout-more"
+                  tabIndex={-1}
+                  aria-label={`Scroll to ${below.join(', ')}`}
+                  onClick={() => {
+                    const list = listRef.current;
+                    const heading = Array.from(
+                      list?.querySelectorAll<HTMLElement>(
+                        '.command-flyout-heading'
+                      ) ?? []
+                    ).find((candidate) => candidate.dataset.group === below[0]);
+                    if (!list || !heading) return;
+                    list.scrollTo({
+                      top: heading.offsetTop - 4,
+                      behavior: 'smooth'
+                    });
+                  }}
+                >
+                  <span>
+                    More: {below[0]}
+                    {below.length > 1 && ` +${below.length - 1}`}
+                    <ChevronDown size={12} aria-hidden="true" />
+                  </span>
+                </button>
+              )}
               {/* The switch between the views stands at the foot's left in
                   both, so it is under the pointer to switch straight back. */}
               <div className="command-flyout-foot">
