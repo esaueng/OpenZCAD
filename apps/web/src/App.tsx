@@ -5476,13 +5476,18 @@ export function App() {
   const modelingLocked = viewMode || tweakMode || drawingMode || assembleMode;
   // AS01: the Assemble workspace's runtime, commit handlers and playback.
   // Every saved assembly change runs through `executeCommand`.
+  const activeDemo = DEMO_DEFINITIONS.find(
+    (demo) => demo.projectId === doc?.projectId
+  );
   const assembleApp = {
     document: doc,
     initialJointId:
-      DEMO_DEFINITIONS.find((demo) => demo.projectId === doc?.projectId)
-        ?.initialWorkspace === 'assemble'
+      activeDemo?.initialWorkspace === 'assemble'
         ? doc?.assembly?.joints[0]?.id
         : undefined,
+    initialPlayback: appSettings.appearance.reducedMotion
+      ? undefined
+      : activeDemo?.initialPlayback,
     execute: (command: AnyCommand) => executeCommand(command),
     onStatus: (message: string) => setStatus(message)
   };

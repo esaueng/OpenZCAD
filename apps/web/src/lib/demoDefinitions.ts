@@ -23,6 +23,8 @@ export interface DemoDefinition {
   revisions: [] | [string, string, string];
   /** Open an assembly example with its first joint ready to try. */
   initialWorkspace?: 'assemble';
+  /** A transient demonstration when this assembly example opens. */
+  initialPlayback?: 'ping-pong';
 }
 
 export const DEMO_DEFINITIONS: DemoDefinition[] = [
@@ -61,7 +63,8 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     tagline: 'Scissors assembly with a working revolute pivot',
     summary: 'Three parts, limited pivot motion',
     revisions: [],
-    initialWorkspace: 'assemble'
+    initialWorkspace: 'assemble',
+    initialPlayback: 'ping-pong'
   }
 ];
 
