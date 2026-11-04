@@ -9,15 +9,16 @@ kB.
 
 | Control            |                         Threshold | CI behavior                           |
 | ------------------ | --------------------------------: | ------------------------------------- |
-| Raw review         |         11 MiB (11,534,336 bytes) | Warning; mandatory kernel-size review |
-| Raw hard limit     |         12 MiB (12,582,912 bytes) | Failure above the limit               |
-| Gzip hard limit    |         4.5 MiB (4,718,592 bytes) | Failure above the limit               |
-| Brotli review      |           3 MiB (3,145,728 bytes) | Warning; mandatory kernel-size review |
+| Raw review         |         15 MiB (15,728,640 bytes) | Warning; mandatory kernel-size review |
+| Raw hard limit     |         16 MiB (16,777,216 bytes) | Failure above the limit               |
+| Gzip hard limit    |           6 MiB (6,291,456 bytes) | Failure above the limit               |
+| Brotli review      |           4 MiB (4,194,304 bytes) | Warning; mandatory kernel-size review |
 | Per-pin raw growth | More than 256 KiB or more than 3% | Mandatory kernel-size review          |
 
-These are the step 1 values of October 2026; the previous ceiling was 9 MiB
-raw review, 10 MiB raw hard, 3.5 MiB gzip hard and 2.5 MiB Brotli review. The
-evidence for the change is recorded under
+These are the step 2 values of November 2026. Step 1 (October 2026) was
+11 MiB raw review, 12 MiB raw hard, 4.5 MiB gzip hard and 3 MiB Brotli
+review; before it, 9, 10, 3.5 and 2.5 MiB. The evidence is recorded under
+[Ceiling change 2026-11 (step 2)](#ceiling-change-2026-11-step-2) and
 [Ceiling change 2026-10 (step 1)](#ceiling-change-2026-10-step-1). Remus
 mirrors the same values in its `scripts/wasm-size-policy.mjs`, which
 `cargo xtask wasm-build` evaluates on every kernel it builds.
@@ -469,3 +470,97 @@ The raw hard limit binds first, at about four weeks. Step 1 therefore buys
 time for the Remus size reductions (W3) and lazy modules (W4), not room for
 unreviewed growth. The next raise (16 MiB raw / 6 MiB gzip) stays deferred and
 needs the same evidence.
+
+## Ceiling change 2026-11 (step 2)
+
+Approved by the owner on 2026-11-04 as step 2 of the Remus browser-kernel
+size plan (Remus `docs/design/kernel-wasm-size-architecture.md`, workstream
+W7). The plan had deferred this step until the H4/H5 capabilities land; the
+owner approved it early. It is paired with the identical change in Remus
+`scripts/wasm-size-policy.mjs`. Like step 1 it is a separate change, not part
+of a pin update, and it leaves the per-pin growth review (256 KiB or 3%) and
+the load-time budgets unchanged.
+
+| Control         | Before                    | After                     |
+| --------------- | ------------------------- | ------------------------- |
+| Raw review      | 11 MiB (11,534,336 bytes) | 15 MiB (15,728,640 bytes) |
+| Raw hard limit  | 12 MiB (12,582,912 bytes) | 16 MiB (16,777,216 bytes) |
+| Gzip hard limit | 4.5 MiB (4,718,592 bytes) | 6 MiB (6,291,456 bytes)   |
+| Brotli review   | 3 MiB (3,145,728 bytes)   | 4 MiB (4,194,304 bytes)   |
+| Per-pin growth  | 256 KiB or 3%             | 256 KiB or 3% (unchanged) |
+
+W7 named only the hard limits. The review limits keep step 1's spacing: raw
+review 1 MiB below the hard limit, Brotli review at two thirds of the gzip
+hard limit.
+
+The kernel measured is Remus main's committed `remus-wasm` 2026.1.116:
+12,088,063 raw / 4,531,152 gzip / 3,240,072 Brotli bytes, 187,440 bytes under
+the step 1 gzip hard limit. It was growing about 0.8 MB raw and 0.32 MB gzip
+per week. The seven items of
+[Raising the hard ceiling](#raising-the-hard-ceiling) follow.
+
+**1. Toolchains.** Unchanged from step 1: Rust 1.96.0, `wasm-bindgen`
+0.2.126, `wasm-pack` 0.15.0 (Binaryen version_117), and Node `zlib` for both
+compressed measurements.
+
+**2. Optimized against `--skip-opt`.** The attribution build of Remus
+`84bf696` measured 15,802,150 bytes as the cargo artifact and 12,053,275 raw
+/ 4,526,738 gzip / 3,238,707 Brotli bytes after wasm-bindgen 0.2.126 and
+`wasm-opt -Oz --enable-simd`. That build used Binaryen version_123, not
+version_117, and is within 0.3% of the committed package.
+
+**3. Attribution.** Remus
+`docs/performance/evidence/kernel-size-attribution-2026-11-04/` attributes
+the six days from 2026.1.86 to `84bf696`: +1,079,070 raw / +447,433 gzip
+bytes. Gears and threads (P-Class gear and thread work) account for about
+330 KB, and blends, chamfers and blend edits for about 530 KB. Almost all of
+it is new single-caller feature code, not duplication.
+
+**4. Load measurements.** `measure-remus-wasm-load.mjs --package`, 20
+alternated samples, kernel-ready only, comparing 2026.1.116 with 2026.1.58 (the
+package the load budgets were set from), on a Linux container slower than the
+2026-10-13 baseline host:
+
+| Profile           | 2026.1.58 p50 / p95 | 2026.1.116 p50 / p95 | Review budget |
+| ----------------- | ------------------: | -------------------: | ------------: |
+| Desktop cold      |    129.6 / 163.4 ms |     156.7 / 177.4 ms |        110 ms |
+| Desktop warm      |     98.8 / 115.7 ms |     126.1 / 147.8 ms |        110 ms |
+| Mobile-class cold |    3,773 / 3,972 ms |     4,782 / 4,908 ms |      3,800 ms |
+| Mobile-class warm |        463 / 709 ms |       625 / 1,515 ms |        150 ms |
+
+**The load-time budgets are not green.** On this host even 2026.1.58 exceeds
+the desktop budgets, so the desktop rows show relative growth only (+21% cold
+p50). The mobile-class cold result is transfer-bound and so less dependent on
+the host. It exceeds its budget by about 1.1 s at p95 and grew 27% at p50
+since step 1. The rule above lets a ceiling rise only while these budgets
+stay green; **this raise is an explicit owner exception to that rule.** At
+about 89 ms per additional 100 KB of gzip, filling the new 6 MiB gzip ceiling
+would add roughly 1.5 s more to mobile-class cold load.
+
+**5. Alternatives considered.** Remus closed its remaining std-sort
+duplication (−22,281 raw / −8,409 gzip bytes); no larger duplication remains.
+The lazy-module review is unchanged from step 1, except that gear and thread
+construction (about 330 KB) is a new candidate for a lazy module. It is not
+yet split.
+
+**6. Why the code stays in the initial kernel.** Thread cutting, teeth on an
+existing cylinder, and the blend and chamfer growth edit live session bodies
+and their construction history, so they belong in the core under the Remus
+tier rule. Standalone gear construction creates a new body and could move to
+a lazy module that returns an arena document; that has not been done.
+
+**7. Raw, gzip and Brotli reviewed separately.** Runway from 2026.1.116 at the
+2026-10-13 to 2026-11-04 average growth (804 KB raw, 319 KB gzip, 229 KB
+Brotli per week):
+
+| Control             | Headroom (bytes) | Runway    | Kind     |
+| ------------------- | ---------------: | --------- | -------- |
+| Mobile load review  |         exceeded | —         | Review   |
+| Brotli review 4 MiB |          954,232 | 4.2 weeks | Review   |
+| Raw review 15 MiB   |        3,640,577 | 4.5 weeks | Review   |
+| Gzip hard 6 MiB     |        1,760,304 | 5.5 weeks | **Hard** |
+| Raw hard 16 MiB     |        4,689,153 | 5.8 weeks | Hard     |
+
+The gzip hard limit binds first, at about five and a half weeks. Unless
+growth slows or capabilities move to lazy modules, the next ceiling review
+comes in early to mid December 2026.
