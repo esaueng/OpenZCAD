@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getActivityLogSnapshot,
+  resetActivityLogForTests
+} from '../lib/activityLog';
+import {
   ErrorBoundary,
   PANEL_AUTO_RETRY_DELAY_MS,
   PANEL_AUTO_RETRY_WINDOW_MS
@@ -158,5 +162,21 @@ describe('ErrorBoundary', () => {
     expect(
       screen.getByRole('button', { name: 'Reload workspace' })
     ).toBeTruthy();
+  });
+
+  it('names what broke on the card and in the activity log', () => {
+    resetActivityLogForTests();
+    renderFlaky(Number.POSITIVE_INFINITY);
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
+    });
+    expect(screen.getByText('Error details')).toBeTruthy();
+    expect(screen.getByText('transient')).toBeTruthy();
+    const crashes = getActivityLogSnapshot().entries.filter(
+      (entry) => entry.message === '3D viewer crashed: transient'
+    );
+    // The first crash, which the automatic remount hid, is recorded too.
+    expect(crashes.length).toBeGreaterThanOrEqual(2);
+    expect(crashes[0]).toMatchObject({ level: 'error', source: 'error' });
   });
 });

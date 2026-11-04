@@ -261,6 +261,38 @@ export function installRuntimeErrorCapture(
   };
 }
 
+/**
+ * Records a render crash an error boundary caught. React reports caught
+ * errors only to the console, so without this a panel that fell over left
+ * no trace in the log a user can copy.
+ */
+export function recordCaughtError(
+  label: string,
+  error: unknown,
+  componentStack?: string | null
+): void {
+  const message =
+    error instanceof Error
+      ? error.message || error.name
+      : typeof error === 'string'
+        ? error
+        : 'Unknown error';
+  const components = componentStack
+    ?.split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8)
+    .join('\n');
+  recordActivity({
+    level: 'error',
+    source: 'error',
+    message: `${label} crashed: ${message}`,
+    ...optionalDetail(
+      [errorDetail(error), components].filter(Boolean).join('\n') || undefined
+    )
+  });
+}
+
 function optionalDetail(detail: string | undefined): { detail?: string } {
   return detail ? { detail } : {};
 }

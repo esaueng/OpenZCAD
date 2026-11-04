@@ -8,6 +8,7 @@ import {
   getActivityLogSnapshot,
   installRuntimeErrorCapture,
   recordActivity,
+  recordCaughtError,
   resetActivityLogForTests,
   setActivityContext,
   subscribeActivityLog
@@ -189,5 +190,34 @@ describe('installRuntimeErrorCapture', () => {
     expect(
       getActivityLogSnapshot().entries.map((entry) => entry.message)
     ).toEqual(['Unhandled rejection: network down']);
+  });
+});
+
+describe('recordCaughtError', () => {
+  beforeEach(() => resetActivityLogForTests());
+
+  it('records a boundary-caught crash with its stack and component path', () => {
+    const error = new TypeError('Cannot read properties of undefined');
+    recordCaughtError(
+      '3D viewer',
+      error,
+      '\n    at Viewport (viewer.js:1:1)\n    at ViewerShell (viewer.js:2:2)\n'
+    );
+    const [entry] = getActivityLogSnapshot().entries;
+    expect(entry).toMatchObject({
+      level: 'error',
+      source: 'error',
+      message: '3D viewer crashed: Cannot read properties of undefined'
+    });
+    expect(entry!.detail).toContain('TypeError');
+    expect(entry!.detail).toContain('at Viewport (viewer.js:1:1)');
+    expect(entry!.detail).toContain('at ViewerShell (viewer.js:2:2)');
+  });
+
+  it('keeps a crash thrown as a bare value', () => {
+    recordCaughtError('Inspector', 'not an error');
+    expect(getActivityLogSnapshot().entries[0]).toMatchObject({
+      message: 'Inspector crashed: not an error'
+    });
   });
 });
