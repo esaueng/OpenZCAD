@@ -262,6 +262,29 @@ test(
       await expect(
         a.getByRole('status', { name: 'Saved', exact: true })
       ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      // Saved can come from the room before an enrollment fallback finishes
+      // sealing its account request. Drain that earlier phase before counting
+      // writes attributable to the next edit; no requests are filtered out.
+      expect(
+        await a.evaluate(
+          ({ projectId, budget }) =>
+            new Promise<boolean>((resolve) => {
+              const timer = window.setTimeout(() => resolve(false), budget);
+              window.dispatchEvent(
+                new CustomEvent('openzcad:e2e-drain-account-saves', {
+                  detail: {
+                    projectId,
+                    resolve: (settled: boolean) => {
+                      window.clearTimeout(timer);
+                      resolve(settled);
+                    }
+                  }
+                })
+              );
+            }),
+          { projectId, budget: SYNC_BUDGET_MS }
+        )
+      ).toBe(true);
       for (const page of [a, b]) {
         await expect(
           page.getByRole('button', {

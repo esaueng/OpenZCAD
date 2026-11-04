@@ -20,3 +20,7 @@ the automatic enrollment handoff, rendered two- and three-body results,
 and a subsequent steady room edit without a duplicate account write. This is
 engineering regression evidence; it does not change production activation
 or outside-review status.
+The E2E build exposes the existing account-save drain so the journey waits
+for enrollment fallback requests before measuring the next room-only edit.
+Its zero-extra-write assertion remains unchanged; production builds omit
+the event listener.

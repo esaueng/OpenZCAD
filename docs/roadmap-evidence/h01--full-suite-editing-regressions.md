@@ -51,3 +51,7 @@ reopening assertions retain their original storage and request checks.
 Legacy demo fixtures release their live workspace save owner before rewriting
 IndexedDB. They prove the old record exists and await the parameter, repaired
 placement and repair revision together in one committed snapshot.
+Sweep path clicks reframe after the staged sketch arrives and after each
+exact preview, checking projected points stay on the canvas and each path
+segment becomes valid before continuing. Panel drag picks wait for camera
+rest and the current hover frame instead of accepting a stale cursor.
