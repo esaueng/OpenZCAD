@@ -145,6 +145,30 @@ test(
         return canvas.getAttribute('data-e2e-handle-x');
       })
       .not.toBeNull();
+    const instructions = page.locator('.workspace-hint-help p');
+    const value = page.getByTestId('direct-manipulation-value');
+    await expect(value).toContainText('Ø');
+    await expect(instructions).toContainText(
+      'adjust the diameter, or type an exact diameter'
+    );
+    await page.getByRole('button', { name: 'Switch to radius entry' }).click();
+    await expect(value).toContainText('R');
+    await expect(instructions).toContainText(
+      'adjust the radius, or type an exact radius'
+    );
+    await page
+      .getByRole('button', { name: 'Switch to diameter entry' })
+      .click();
+    await expect(value).toContainText('Ø');
+    await expect(instructions).toContainText(
+      'adjust the diameter, or type an exact diameter'
+    );
+    await page.getByLabel('Operation instructions').click();
+    await expect(instructions).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath('hole-diameter-help.png')
+    });
+    await page.getByLabel('Operation instructions').click();
     const renderedSlopes = () =>
       canvas.evaluate(
         (element) =>

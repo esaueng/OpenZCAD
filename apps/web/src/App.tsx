@@ -25194,7 +25194,7 @@ export function App() {
     selectionCallout?.anchor === 'selection' &&
     selectedBodyIds.length > 0 &&
     (interaction.mode === 'face' || interaction.mode === 'edges')
-      ? toolCardFor(interaction)
+      ? toolCardFor(interaction, cylinderDimensionMode)
       : null;
   const calloutEdgeCount =
     interaction.mode === 'edges' && edgeModifierBody?.topology
@@ -28722,7 +28722,7 @@ export function App() {
     (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
-  const baseToolCard = toolCardFor(interaction);
+  const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
       ? (sketchOptions.find(
@@ -28798,7 +28798,7 @@ export function App() {
           ? viewModeHint
           : tweakMode
             ? tweakModeHint
-            : (commandPromptText(interaction) ??
+            : (commandPromptText(interaction, cylinderDimensionMode) ??
               (tool === 'sketch'
                 ? [
                     'Drag to draw',
