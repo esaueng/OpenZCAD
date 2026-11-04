@@ -2454,6 +2454,75 @@ describe('DrawingWorkspace dimension check (D06)', () => {
     }
   });
 
+  it('clips long findings and body names on a many-body sheet until asked', async () => {
+    // A large assembly listed every finding and every body name in full,
+    // burying the panel under hundreds of rows.
+    const ids = [bodyId, ...[1, 2, 3, 4].map((n) => `body_part${n}` as BodyId)];
+    const bodies = Object.fromEntries(
+      ids.map((id, index) => [
+        id,
+        { ...cube(10, true), bodyId: id, name: `Part ${index + 1}` }
+      ])
+    );
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: ids,
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, ids)!
+    });
+    render(
+      <DrawingWorkspace
+        document={{
+          ...createProjectDocument('Bracket', toUserId('test')),
+          bodyOrder: ids,
+          drawings: { sheets: [sheet] }
+        }}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={ids}
+        requestTessellation={displayTessellation(bodies)}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    const missing = await screen.findByRole('list', {
+      name: 'Missing dimensions'
+    });
+    expect(screen.getByText('Missing · 15')).toBeTruthy();
+    expect(within(missing).getAllByRole('listitem')).toHaveLength(5);
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Show all 15 missing dimensions' })
+    );
+    expect(
+      within(
+        screen.getByRole('list', { name: 'Missing dimensions' })
+      ).getAllByRole('listitem')
+    ).toHaveLength(15);
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Show fewer missing dimensions' })
+    );
+    expect(
+      within(
+        screen.getByRole('list', { name: 'Missing dimensions' })
+      ).getAllByRole('listitem')
+    ).toHaveLength(5);
+
+    const names = screen.getByLabelText('Sheet bodies');
+    expect(names).toHaveTextContent(
+      'Bodies · 5: Part 1, Part 2, Part 3 and 2 more'
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Show all 5 body names' })
+    );
+    expect(names).toHaveTextContent(
+      'Bodies · 5: Part 1, Part 2, Part 3, Part 4, Part 5'
+    );
+  });
+
   it('calls a position no dimension can name unplaceable, not missing', async () => {
     // As on a mirrored part, the edges that mark x = 10 share their hash
     // with another edge, so neither a pick nor Auto-dimension can name one:
