@@ -298,6 +298,24 @@ export function conflictFromDocuments(
 }
 
 /**
+ * The same question, asked about the document now on screen. When a re-check
+ * cannot reach the remote, the open question must not keep citing the local
+ * copy from before an intervening choice: "Keep mine" would then write that
+ * superseded copy back. The remote side and its version fence stay as last
+ * seen, so a stale remote still cannot be overwritten blindly.
+ */
+export function reaskConflict(
+  conflict: ProjectConflict,
+  localDocument: ProjectDocument
+): ProjectConflict {
+  if (localDocument.projectId !== conflict.projectId) return conflict;
+  return {
+    ...conflict,
+    localDocument: structuredClone(localDocument)
+  };
+}
+
+/**
  * Resolve only the user's chosen version on the original project. No automatic
  * copy is made. Keep both durably copies the local work before adopting remote;
  * retries reuse that copy while version fencing and room authorization remain.
