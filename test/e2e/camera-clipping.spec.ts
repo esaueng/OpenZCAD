@@ -326,6 +326,7 @@ test(
     await page.goto('/');
     await expect(page).toHaveTitle('OpenZCAD');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    const canvas = page.locator('.viewer-host canvas');
     await page
       .getByRole('button', { name: 'Import project', exact: true })
       .click();
@@ -333,6 +334,9 @@ test(
       name: 'close-up-pivot.openzcad',
       mimeType: 'application/json',
       buffer: closeUpAssemblyBackup()
+    });
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '3', {
+      timeout: 60_000
     });
     await expectBodyCount(page, 3);
     await page.getByRole('button', { name: 'Assemble', exact: true }).click();
@@ -363,12 +367,14 @@ test(
       localStorage.setItem(key, JSON.stringify(session));
     }, WORKSPACE_SESSION_STORAGE_KEY);
     await page.reload();
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '3', {
+      timeout: 60_000
+    });
     await expectBodyCount(page, 3);
     await waitForStillViewport(page);
     const assembly = page.getByRole('complementary', { name: 'Assembly' });
     await assembly.getByRole('button', { name: /^Pivot -30.0°$/ }).click();
     const angle = assembly.getByRole('textbox', { name: 'Angle', exact: true });
-    const canvas = page.locator('.viewer-host canvas');
     const distance = await canvas.getAttribute('data-e2e-camera-distance');
     expect(Number(distance)).toBeCloseTo(Math.hypot(65, 30 - 2.425), 6);
     for (const value of [0, -55, -15, -45, -30, 0]) {
@@ -381,30 +387,54 @@ test(
       await waitForStillViewport(page);
       await expectCloseUpSurfaces(page, value);
     }
-    await assembly.getByRole('button', { name: 'Play', exact: true }).click();
-    let nearestY = Infinity;
-    let furthestY = -Infinity;
-    const started = Date.now();
-    do {
-      const maxY = await canvas.evaluate(
-        (element) =>
-          new Promise<number>((resolve) => {
-            element.dispatchEvent(
-              new CustomEvent('openzcad:e2e-render-policy', {
-                detail: {
-                  resolve: (state: {
-                    bodyFaces: { worldBounds: { max: number[] } }[];
-                  }) => resolve(state.bodyFaces[1]!.worldBounds.max[1]!)
-                }
-              })
-            );
+    // Screenshots are slow on SwiftShader and can repeatedly sample the same
+    // playback phase. Observe every presented frame independently instead.
+    const motion = await canvas.evaluateHandle((element) => {
+      const coverage = { nearestY: Infinity, furthestY: -Infinity, frames: 0 };
+      const sample = () => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              resolve: (state: {
+                bodyFaces: { worldBounds: { max: number[] } }[];
+              }) => {
+                const maxY = state.bodyFaces[1]!.worldBounds.max[1]!;
+                coverage.nearestY = Math.min(coverage.nearestY, maxY);
+                coverage.furthestY = Math.max(coverage.furthestY, maxY);
+                coverage.frames++;
+              }
+            }
           })
-      );
-      nearestY = Math.min(nearestY, maxY);
-      furthestY = Math.max(furthestY, maxY);
-      await expectCloseUpSurfaces(page);
-    } while (Date.now() - started < 3500);
+        );
+      };
+      element.addEventListener('openzcad:e2e-camera-frame', sample);
+      return {
+        coverage,
+        stop: () =>
+          element.removeEventListener('openzcad:e2e-camera-frame', sample)
+      };
+    });
+    await assembly.getByRole('button', { name: 'Play', exact: true }).click();
+    await expect
+      .poll(
+        async () => {
+          await expectCloseUpSurfaces(page);
+          return motion.evaluate(
+            ({ coverage }) =>
+              coverage.nearestY < 15 &&
+              coverage.furthestY > 65 &&
+              coverage.frames > 2
+          );
+        },
+        { timeout: 15_000, intervals: [50] }
+      )
+      .toBe(true);
     await assembly.getByRole('button', { name: 'Pause', exact: true }).click();
+    const { nearestY, furthestY } = await motion.evaluate((value) => {
+      value.stop();
+      return value.coverage;
+    });
+    await motion.dispose();
     // The moving AABB crossed the camera's Y plane during actual playback.
     expect(nearestY).toBeLessThan(15);
     expect(furthestY).toBeGreaterThan(65);
