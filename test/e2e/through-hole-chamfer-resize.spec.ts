@@ -330,12 +330,23 @@ test(
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Diameter value' });
     await keypad.getByRole('textbox').fill('4.2');
-    await keypad.getByRole('textbox').press('Enter');
-    await expect(keypad).toBeHidden();
     radius = 2.1;
+    // Typing streams through the same exact preview as dragging, before Enter.
     await expect
       .poll(async () => (await bore())?.diameter, { timeout: 60_000 })
       .toBeCloseTo(4.2, 6);
+    expect(await renderedSlopes()).toMatchObject({
+      cones: 2,
+      planes: 6,
+      cylinders: 1
+    });
+    expect((await renderedSlopes()).maxError).toBeLessThan(1e-4);
+    await expectBoreHighlight();
+    await keypad.getByRole('textbox').press('Enter');
+    await expect(keypad).toBeHidden();
+    await expect(value).toBeEnabled();
+    await expectBoreHighlight();
+    expect((await renderedSlopes()).maxError).toBeLessThan(1e-4);
     // Measuring the new wall length distinguishes an extended cone from the
     // old cylindrical sleeve, even when both show the requested diameter.
     await expect
@@ -390,17 +401,48 @@ test(
     await page.screenshot({
       path: testInfo.outputPath('chamfer-enlarged.png')
     });
-    // Past the old outer rim, the through cut consumes the conical mouths
-    // cleanly rather than retaining the old inner ring above a larger bore.
+    // Typed enlargement rebuilds the same chamfer and retains the bore pick.
     await bore(true);
     await page.getByTestId('direct-manipulation-value').click();
-    await keypad.getByRole('textbox').fill('10.4');
+    await keypad.getByRole('textbox').fill('7.2');
+    radius = 3.6;
+    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(7.2, 6);
+    await expect
+      .poll(async () => (await bore())?.axialLength)
+      .toBeCloseTo(beforeLength + 1.2, 6);
+    expect(await renderedSlopes()).toMatchObject({
+      cones: 2,
+      planes: 6,
+      cylinders: 1
+    });
+    expect((await renderedSlopes()).maxError).toBeLessThan(1e-4);
+    await expectBoreHighlight();
     await keypad.getByRole('textbox').press('Enter');
     await expect(keypad).toBeHidden();
+    await expect(value).toBeEnabled();
+    await expectBoreHighlight();
+    expect(await renderedSlopes()).toMatchObject({
+      cones: 2,
+      planes: 6,
+      cylinders: 1
+    });
+    expect((await renderedSlopes()).maxError).toBeLessThan(1e-4);
+    await page.screenshot({
+      path: testInfo.outputPath('typed-diameter-enlarged.png')
+    });
+    // Past the old outer rim, the through cut consumes the conical mouths
+    // cleanly rather than retaining the old inner ring above a larger bore.
+    await value.click();
+    await keypad.getByRole('textbox').fill('10.4');
     radius = 5.2;
     await expect
       .poll(async () => (await bore())?.diameter)
       .toBeCloseTo(10.4, 6);
+    await expectBoreHighlight();
+    await keypad.getByRole('textbox').press('Enter');
+    await expect(keypad).toBeHidden();
+    await expect(value).toBeEnabled();
+    await expectBoreHighlight();
     await expect
       .poll(async () => (await bore())?.axialLength)
       .toBeCloseTo(beforeLength + 2, 6);
@@ -414,8 +456,8 @@ test(
       path: testInfo.outputPath('chamfer-consumed.png')
     });
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
-    radius = 3.5;
-    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(7, 6);
+    radius = 3.6;
+    await expect.poll(async () => (await bore())?.diameter).toBeCloseTo(7.2, 6);
     expect(await renderedSlopes()).toMatchObject({ cones: 2, planes: 6 });
     await page.getByRole('button', { name: 'Redo', exact: true }).click();
     radius = 5.2;
