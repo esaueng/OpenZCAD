@@ -22,7 +22,7 @@ spec.loader.exec_module(POLICY)
 REMUS = POLICY.REPOSITORY == "esaueng/remus"
 JANE_LABEL = "ci-server-jane" if REMUS else "ci-server-jane-5gb"
 STAGED = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS
-                 else ".github/workflows/fleet-ci-v5.yml")
+                 else ".github/workflows/fleet-ci-v6.yml")
 TEXT = STAGED.read_text()
 # fleet-ci-v4 (#836, #878): every shard installs browser binaries only, and
 # merge-queue candidates run no e2e shards, which the e2e gate then accepts.
@@ -86,6 +86,14 @@ APPROVED_STEP_CHANGES = [] if REMUS else [
     ("              echo 'No shard ran; pull-request shards start only after quality passes.' >&2\n",
      "              echo 'No shard ran.' >&2\n"),
 ]
+# fleet-ci-v6 stages only these exact action revisions. Keep every other
+# application command and security boundary identical to the approved baseline.
+APPROVED_ACTION_UPDATES = [] if REMUS else [
+    ("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7",
+     "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7", 4),
+    ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+     "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2", 2),
+]
 # Dependencies an approved change removed: v5's PR shards no longer wait for
 # `quality`, which still gates `validate` and every queue candidate.
 APPROVED_DROPPED_NEEDS = {} if REMUS else {"e2e-tests-pr": {"quality"}}
@@ -96,6 +104,10 @@ def approved(text):
         # A replacement that matches nothing would silently approve nothing.
         if text.count(old) != 1:
             raise AssertionError(f"Approved change no longer matches once: {old.splitlines()[0]}")
+        text = text.replace(old, new)
+    for old, new, count in APPROVED_ACTION_UPDATES:
+        if text.count(old) != count:
+            raise AssertionError(f"Approved action revision must match {count} times: {old}")
         text = text.replace(old, new)
     return text
 def previous_workflow():

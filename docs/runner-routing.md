@@ -35,6 +35,13 @@ Change it in two PRs, as Remus does:
 
 Old pinned commits stay on main, so earlier runs can still be re-run.
 
+PR #1118 stages `fleet-ci-v6.yml` with `actions/setup-node` v7.1.0 and
+`actions/upload-artifact` v7.0.2. Its only differences from v5 are those
+immutable action pins. The active v5 file and `ci.yml` stay unchanged until
+PR #1120 activates v6 at #1118's landed squash commit. Fleet routing remains
+disabled during this update; approving a new self-hosted runner-group entry is
+a separate rollout step.
+
 <a id="staged-merge-queue-overflow"></a>
 
 ## Trusted merge-queue overflow
