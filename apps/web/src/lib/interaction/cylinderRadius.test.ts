@@ -4,6 +4,7 @@ import {
   cylinderRadiusTolerance,
   cylinderRadialFrame,
   findResizedCylinderFace,
+  findHistoryBoreFace,
   isUnchangedCylinderRadius,
   isValidCylinderRadius,
   radiusFromRadialDelta,
@@ -380,6 +381,66 @@ describe('hole diameter drag', () => {
       }
     }
   );
+});
+
+describe('hole history selection', () => {
+  const start = { x: 0, y: 0, z: 1 };
+  const end = { x: 0, y: 0, z: 9 };
+  const bore = (id: string, radius: number, x = 0, z = 0) =>
+    face(id, 'cylinder', {
+      radius,
+      axisStart: { x, y: 0, z },
+      axisEnd: { x, y: 0, z: z + 10 }
+    });
+  const historyFace = (
+    faces: FaceTopology[],
+    from = start,
+    to = end,
+    bosses: string[] = []
+  ) => {
+    const body = bodyWithFaces(faces);
+    const vertices: number[] = [];
+    const indices: number[] = [];
+    faces.forEach((face, i) => {
+      face.triangleStart = i;
+      const origin = face.geometry!.axisStart!;
+      const x = origin.x + face.geometry!.radius!;
+      vertices.push(x, -1, origin.z, x, -1, origin.z + 10, x, 1, origin.z);
+      indices.push(
+        i * 3,
+        i * 3 + (bosses.includes(face.topologyId) ? 2 : 1),
+        i * 3 + (bosses.includes(face.topologyId) ? 1 : 2)
+      );
+    });
+    body.mesh.vertices = Float32Array.from(vertices);
+    body.mesh.indices = Uint32Array.from(indices);
+    return findHistoryBoreFace(body, from, to);
+  };
+  it('distinguishes a bore from its coaxial outer stock and rejects a deleted bore', () => {
+    const inner = bore('inner', 3);
+    const outer = bore('outer', 12);
+    expect(historyFace([outer, inner], start, end, ['outer'])).toBe(inner);
+    expect(historyFace([outer], start, end, ['outer'])).toBeNull();
+  });
+  it('finds the restored wall at a different diameter and chamfer span', () => {
+    const restored = bore('restored', 3.6);
+    expect(historyFace([bore('elsewhere', 2, 20), restored], end, start)).toBe(
+      restored
+    );
+  });
+  it('refuses ambiguous coaxial walls even when their radii differ', () => {
+    expect(
+      historyFace([bore('inner', 3), bore('outer', 10)], start, end)
+    ).toBeNull();
+    expect(
+      historyFace([bore('a', 3), bore('b', 3), bore('outer', 10)], start, end)
+    ).toBeNull();
+  });
+  it('does not restore a displaced or disjoint wall', () => {
+    expect(
+      historyFace([bore('shifted', 3, 20), bore('far', 3, 0, 20)], start, end)
+    ).toBeNull();
+  });
 });
 
 describe('hole radius handle', () => {
