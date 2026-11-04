@@ -3,6 +3,7 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
   rotateVector,
+  solveAssembly,
   toUserId,
   transformPoint,
   type AssemblyFrame,
@@ -10,11 +11,13 @@ import {
 } from '@openzcad/shared';
 import {
   buildAssemblyView,
+  MOTION_SETUP_PREVIEW_JOINT_ID,
   jointFromTool,
   nextJointName
 } from './assemblyView';
 import { playbackFrame } from './assemblyPlayback';
 import type { AssemblyJointToolState } from './assemblyRuntime';
+import { defaultMotionSetup, motionSetupJoint } from './motionSetup';
 
 const PIVOT: AssemblyFrame = {
   origin: { x: 0, y: 0, z: 0 },
@@ -54,6 +57,61 @@ const runtime = {
 };
 
 describe('assembly view model', () => {
+  it('previews a floating base exactly like Create, regardless of part order', () => {
+    const { manager } = scissors();
+    manager.execute(
+      commandFactories.updateAssemblyComponent({
+        componentId: 'comp_a',
+        grounded: false
+      })
+    );
+    const document = manager.document;
+    const set = document.assembly!;
+    const context = {
+      set,
+      solution: solveAssembly(set),
+      bodyOf: () => null
+    };
+    const draft = {
+      ...defaultMotionSetup(context),
+      baseId: 'comp_b',
+      movingId: 'comp_a'
+    };
+    const result = motionSetupJoint(
+      context,
+      draft,
+      MOTION_SETUP_PREVIEW_JOINT_ID
+    );
+    if ('error' in result) throw new Error(result.error);
+    expect(result.groundBase).toBe(true);
+    const savedBefore = JSON.stringify(document.assembly);
+    const preview = buildAssemblyView(document, {
+      ...runtime,
+      overrides: new Map([[MOTION_SETUP_PREVIEW_JOINT_ID, [25]]]),
+      motionSetup: { draft, preview: result.joint, previewing: true }
+    })!;
+    // The later-listed base stays still; the earlier-listed part lifts.
+    expect(preview.solution.poses.get('comp_b')!.t.z).toBeCloseTo(0, 9);
+    expect(preview.solution.poses.get('comp_a')!.t.z).toBeCloseTo(25, 9);
+    expect(JSON.stringify(document.assembly)).toBe(savedBefore);
+    manager.execute(
+      commandFactories.updateAssemblyComponent({
+        componentId: 'comp_b',
+        grounded: true
+      })
+    );
+    manager.execute(commandFactories.addAssemblyJoint({ joint: result.joint }));
+    const committed = buildAssemblyView(manager.document, {
+      ...runtime,
+      overrides: new Map([[MOTION_SETUP_PREVIEW_JOINT_ID, [25]]])
+    })!;
+    expect([...preview.solution.poses]).toEqual([...committed.solution.poses]);
+    // Cancel drops the preview and restores the saved floating poses.
+    const cancelled = buildAssemblyView(document, runtime)!;
+    expect(cancelled.solution.poses.get('comp_a')!.t.z).toBeCloseTo(0, 9);
+    expect(cancelled.set.components.every((c) => !c.grounded)).toBe(true);
+  });
+
   it('creates an as-built joint from two coincident picks and previews it', () => {
     const { manager, a, b } = scissors();
     const tool: AssemblyJointToolState = {

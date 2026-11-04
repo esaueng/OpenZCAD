@@ -1753,6 +1753,7 @@ import {
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
 import { AssemblyPanel } from './components/assembly/AssemblyPanel';
+import { meshBoundsLookup } from './lib/assembly/motionSetup';
 import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 import { AssemblyPlayer } from './components/assembly/AssemblyPlayer';
 import {
@@ -7136,6 +7137,11 @@ export function App() {
   const representations = useMemo(
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
+  );
+  // Set up motion centres its axis on, and sizes its slide from, these boxes.
+  const assemblyBodyBounds = useMemo(
+    () => meshBoundsLookup(representations),
+    [representations]
   );
   const visibleCommittedBodyCount = useMemo(
     () =>
@@ -30995,6 +31001,8 @@ export function App() {
                 execute={assembleApp.execute}
                 onStatus={assembleApp.onStatus}
                 onAnnounce={(message) => announce(message)}
+                bodyBounds={assemblyBodyBounds}
+                reducedMotion={appSettings.appearance.reducedMotion}
               />
             </div>
           </ErrorBoundary>

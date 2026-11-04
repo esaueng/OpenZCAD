@@ -354,3 +354,63 @@ test('drags a part about its joint and soft-stops at the limit (AS02)', async ({
   await page.keyboard.press('ControlOrMeta+z');
   await expect(joints).toContainText('25.0°');
 });
+
+test(
+  'sets up a lift-out motion from the sidebar and plays it back and forth (AS02/AS06)',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const loose = blades('Assembly motion setup', false);
+    const [a, b] = loose.bodyOrder as [BodyId, BodyId];
+    await openDocument(
+      page,
+      addAssemblyComponents(loose, {
+        components: [
+          { componentId: 'comp_a', name: 'Blade A', bodyId: a, grounded: true },
+          { componentId: 'comp_b', name: 'Blade B', bodyId: b, grounded: false }
+        ]
+      })
+    );
+    await assemble(page);
+    const joints = panel(page).getByRole('region', { name: 'Joints' });
+    const canvas = page.locator('canvas').first();
+    const before = await canvas.screenshot();
+    await joints.getByRole('button', { name: 'Set up motion' }).click();
+
+    const setup = panel(page).getByRole('region', { name: 'Set up motion' });
+    await expect(
+      setup.getByRole('combobox', { name: 'Part that stays put' })
+    ).toHaveValue('comp_a');
+    await expect(
+      setup.getByRole('combobox', { name: 'Part that moves' })
+    ).toHaveValue('comp_b');
+    await expect(setup.getByRole('combobox', { name: 'Cycle' })).toHaveValue(
+      'ping-pong'
+    );
+    // The preview moves the part on screen before anything is saved.
+    await expect
+      .poll(async () => Buffer.compare(await canvas.screenshot(), before) !== 0)
+      .toBe(true);
+    const to = setup.getByRole('textbox', { name: 'Slide to' });
+    await to.fill('30');
+    await to.press('Enter');
+    await setup.getByRole('button', { name: 'Create and play' }).click();
+
+    await expect(setup).toHaveCount(0);
+    await expect(joints).toContainText('Blade B slide');
+    const shown = new Set<string>();
+    await expect
+      .poll(async () => {
+        shown.add((await joints.textContent()) ?? '');
+        return shown.size;
+      })
+      .toBeGreaterThan(2);
+    await joints
+      .getByRole('button', { name: 'Pause Blade B slide', exact: true })
+      .click();
+    await expect(joints).toContainText('0.0 mm');
+    // Playback saved nothing: one undo removes the motion it set up.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(joints).not.toContainText('Blade B slide');
+  }
+);

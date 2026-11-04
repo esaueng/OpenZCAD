@@ -91,6 +91,18 @@ joint graph changes.
   make an as-built joint; otherwise the moving part snaps, with Flip and
   Rotate 90°. Optional limits use the joint's own units. A second joint on the
   same pair is refused.
+- **Set up motion:** the quick path when no geometry needs picking. One
+  card asks what stays put (the fixed part), what moves (the first part
+  not joined yet), Slide or Turn along world X, Y or Z (Reverse flips it),
+  the range and the cycle (once, loop, back and forth; slow, normal or fast),
+  and previews that exact sweep while it is open. Create makes an ordinary
+  as-built slider or revolute joint on that axis through the moving part's
+  box centre, so nothing jumps and the current pose is 0. It fixes a
+  floating base first (its own undo step) and then plays the joint. The
+  default slide is the base's size along the axis, rounded up to 5 mm, so a
+  part resting in a holder lifts clear of it. It refuses a fixed moving part,
+  an empty range, and a part that already moves on another joint (that
+  would close a loop). "Pick on the model" hands over to the Joint tool.
 - **Drag:** the nearest movable joint between the dragged part and the ground
   takes the drag; turns use the angle rig about the joint axis, slides project
   onto it; the value soft-stops at its limits.

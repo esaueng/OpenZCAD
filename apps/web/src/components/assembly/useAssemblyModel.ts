@@ -27,7 +27,13 @@ export function useAssemblyModel(
     () =>
       buildAssemblyView(
         document,
-        { overrides, placementOverrides, selectedJointId, jointTool: null },
+        {
+          overrides,
+          placementOverrides,
+          selectedJointId,
+          jointTool: null,
+          motionSetup: null
+        },
         (bodyId) => isLiveBody(document, bodyId)
       ),
     [document, overrides, placementOverrides, selectedJointId]

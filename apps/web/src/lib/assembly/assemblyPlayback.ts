@@ -12,9 +12,13 @@ import {
   getAssemblyRuntime,
   subscribeAssemblyRuntime,
   type AssemblyJointToolState,
+  type AssemblyMotionSetupState,
   type AssemblyPlaybackState
 } from './assemblyRuntime';
-import { TOOL_PREVIEW_JOINT_ID } from './assemblyView';
+import {
+  MOTION_SETUP_PREVIEW_JOINT_ID,
+  TOOL_PREVIEW_JOINT_ID
+} from './assemblyView';
 
 /**
  * AS06/AS07 playback. Every frame is computed from elapsed time alone
@@ -75,6 +79,26 @@ export function toolPreviewValues(
 }
 
 /**
+ * Set up motion's preview: the exact sweep Create will play, through the
+ * draft's range and cycle. "Once" repeats here so the preview stays visible.
+ */
+export function motionSetupPreviewValues(
+  setup: AssemblyMotionSetupState,
+  elapsedS: number
+): number[] | null {
+  const joint = setup.preview;
+  if (!setup.previewing || !joint) return null;
+  const range = jointSweepRange(joint, 0);
+  if (!range) return null;
+  const mode = setup.draft.mode === 'once' ? 'loop' : setup.draft.mode;
+  return [jointSweepValue(range, mode, setup.draft.sweepS, elapsedS).value];
+}
+
+function motionSetupRunning(setup: AssemblyMotionSetupState | null): boolean {
+  return setup?.previewing === true && setup.preview !== null;
+}
+
+/**
  * Drives playback and the joint tool preview while either runs: one
  * requestAnimationFrame loop writing transient overrides into the runtime.
  * Mount once where the assembly is shown.
@@ -119,6 +143,19 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
             return;
           }
           assemblyRuntime.setOverride(TOOL_PREVIEW_JOINT_ID, values);
+        } else if (runtime.motionSetup) {
+          if (!previewStart) previewStart = now;
+          const values = motionSetupPreviewValues(
+            runtime.motionSetup,
+            (now - previewStart) / 1000
+          );
+          if (!values) {
+            previewStart = 0;
+            if (runtime.overrides.has(MOTION_SETUP_PREVIEW_JOINT_ID))
+              assemblyRuntime.setOverride(MOTION_SETUP_PREVIEW_JOINT_ID, null);
+            return;
+          }
+          assemblyRuntime.setOverride(MOTION_SETUP_PREVIEW_JOINT_ID, values);
         } else {
           previewStart = 0;
           return;
@@ -133,7 +170,8 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
       const running =
         runtime.playback !== null ||
         (runtime.jointTool?.preview === true &&
-          runtime.jointTool.step === 'review');
+          runtime.jointTool.step === 'review') ||
+        motionSetupRunning(runtime.motionSetup);
       if (running && !frame && !ticking) frame = requestAnimationFrame(tick);
     };
     const unsubscribe = subscribeAssemblyRuntime(kick);

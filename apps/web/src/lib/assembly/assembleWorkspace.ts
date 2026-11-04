@@ -24,6 +24,11 @@ import {
   sweepDof,
   sweepUnavailableReason
 } from './assemblyUi';
+import {
+  motionSetupJoint,
+  type MotionSetupContext,
+  type MotionSetupDraft
+} from './motionSetup';
 
 /**
  * The Assemble workspace's wiring into the app (AS01/AS02/AS06): the
@@ -95,6 +100,45 @@ export function createJointFromTool(
     return false;
   assemblyRuntime.selectJoint(result.joint.id);
   return true;
+}
+
+/**
+ * Set up motion's Create: fixes the base first when nothing places it (its
+ * own undo step), adds the as-built joint with the draft's range, and plays
+ * it with the draft's cycle and speed. Playback stays transient.
+ */
+export function createMotionFromSetup(
+  app: AssembleWorkspaceApp,
+  context: MotionSetupContext,
+  draft: MotionSetupDraft,
+  options: { play?: boolean } = {}
+): string | null {
+  const id = createId<'AssemblyJoint'>('joint');
+  const result = motionSetupJoint(context, draft, id);
+  if ('error' in result) {
+    app.onStatus(result.error);
+    return null;
+  }
+  if (
+    result.groundBase &&
+    draft.baseId &&
+    !app.execute(
+      commandFactories.updateAssemblyComponent(
+        { componentId: draft.baseId, grounded: true },
+        'Fix base in place'
+      )
+    )
+  )
+    return null;
+  if (!app.execute(commandFactories.addAssemblyJoint({ joint: result.joint })))
+    return null;
+  assemblyRuntime.closeMotionSetup();
+  assemblyRuntime.selectJoint(id);
+  setAnimatePrefs({ mode: draft.mode, sweepS: draft.sweepS });
+  if (options.play !== false)
+    assemblyRuntime.startJointSweep(id, 0, draft.mode, draft.sweepS);
+  app.onStatus(`${result.joint.name} is ready. Space plays it; Esc stops.`);
+  return id;
 }
 
 /** Ground or unground a component: one undo step. */
@@ -191,6 +235,10 @@ export function runAssembleKey(
     case 'escape':
       if (runtime.jointTool) {
         assemblyRuntime.closeJointTool();
+        return true;
+      }
+      if (runtime.motionSetup) {
+        assemblyRuntime.closeMotionSetup();
         return true;
       }
       if (runtime.playback) {

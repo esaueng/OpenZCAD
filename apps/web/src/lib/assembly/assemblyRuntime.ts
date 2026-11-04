@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type {
   AssemblyDofLimit,
+  AssemblyJoint,
   AssemblyFrame,
   AssemblyFrameSource,
   AssemblyJointKind,
@@ -8,6 +9,7 @@ import type {
   AssemblyPlayback,
   BodyId
 } from '@openzcad/shared';
+import type { MotionSetupDraft } from './motionSetup';
 
 /**
  * The Assemble workspace's transient state (AS01/AS02/AS06/AS07): what is
@@ -71,6 +73,15 @@ export type AssemblyPlaybackState =
       startedAtMs: number;
     };
 
+/** Set up motion's draft while its card is open (never saved until Create). */
+export interface AssemblyMotionSetupState {
+  draft: MotionSetupDraft;
+  /** The joint Create would add, shown and swept in the viewport; null when invalid. */
+  preview: AssemblyJoint | null;
+  /** Sweeps the preview joint through the draft's range and cycle. */
+  previewing: boolean;
+}
+
 export interface AssemblyRuntimeState {
   /** True while the Assemble workspace (or a playing View) shows the assembly. */
   active: boolean;
@@ -85,6 +96,7 @@ export interface AssemblyRuntimeState {
   /** The motion study playhead, seconds, while a study is open. */
   studyTimeS: number;
   jointTool: AssemblyJointToolState | null;
+  motionSetup: AssemblyMotionSetupState | null;
 }
 
 /** Commits the app performs on the store's behalf (registered by App). */
@@ -107,7 +119,8 @@ const INITIAL: AssemblyRuntimeState = {
   placementOverrides: new Map(),
   playback: null,
   studyTimeS: 0,
-  jointTool: null
+  jointTool: null,
+  motionSetup: null
 };
 
 let state: AssemblyRuntimeState = INITIAL;
@@ -178,7 +191,8 @@ export const assemblyRuntime = {
             playback: null,
             overrides: new Map(),
             placementOverrides: new Map(),
-            jointTool: null
+            jointTool: null,
+            motionSetup: null
           }
     );
   },
@@ -291,6 +305,7 @@ export const assemblyRuntime = {
     patch({
       playback: null,
       overrides: new Map(),
+      motionSetup: null,
       jointTool: {
         step: 'child',
         parent: null,
@@ -333,5 +348,44 @@ export const assemblyRuntime = {
   },
   closeJointTool(): void {
     if (state.jointTool) patch({ jointTool: null, overrides: new Map() });
+  },
+  /** Opens Set up motion with a starting draft; stops playback and the joint tool. */
+  openMotionSetup(draft: MotionSetupDraft, previewing = true): void {
+    patch({
+      playback: null,
+      overrides: new Map(),
+      jointTool: null,
+      motionSetup: { draft, preview: null, previewing }
+    });
+  },
+  updateMotionSetup(
+    partial: Partial<MotionSetupDraft>,
+    previewing?: boolean
+  ): void {
+    const setup = state.motionSetup;
+    if (!setup) return;
+    patch({
+      motionSetup: {
+        ...setup,
+        draft: { ...setup.draft, ...partial },
+        previewing: previewing ?? setup.previewing
+      }
+    });
+  },
+  /** The card publishes the joint its draft makes, for the viewport. */
+  setMotionSetupPreview(preview: AssemblyJoint | null): void {
+    const setup = state.motionSetup;
+    // Compared by content: the card rebuilds the same joint on every render.
+    if (
+      !setup ||
+      setup.preview === preview ||
+      JSON.stringify(setup.preview) === JSON.stringify(preview)
+    )
+      return;
+    const overrides = preview ? state.overrides : new Map();
+    patch({ motionSetup: { ...setup, preview }, overrides });
+  },
+  closeMotionSetup(): void {
+    if (state.motionSetup) patch({ motionSetup: null, overrides: new Map() });
   }
 };

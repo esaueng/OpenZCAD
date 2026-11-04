@@ -149,6 +149,7 @@
   "web": [
     "src/components/DrawingWorkspace.test.tsx",
     "src/components/assembly/AssemblyPanel.test.tsx",
+    "src/components/assembly/MotionSetupCard.test.tsx",
     "src/components/ExportDialog.test.tsx",
     "src/components/FeatureHistoryPanel.test.tsx",
     "src/components/FileDropTarget.test.tsx",
@@ -181,6 +182,8 @@
     "src/lib/artifactUpload.test.ts",
     "src/lib/assembly/assembleWorkspace.test.ts",
     "src/lib/assembly/assemblyPlayback.test.ts",
+    "src/lib/assembly/assemblyView.test.ts",
+    "src/lib/assembly/motionSetup.test.ts",
     "src/lib/cloudConfigurationReads.test.ts",
     "src/lib/commandContext.test.ts",
     "src/lib/commandOutcome.test.ts",

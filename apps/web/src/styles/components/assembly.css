@@ -884,3 +884,76 @@
 .assembly-tool-limits[open] > summary {
   margin-bottom: var(--sp-2);
 }
+
+/* ── Set up motion (takes the sidebar while open) ────────── */
+
+.assembly-setup-field {
+  gap: var(--sp-1);
+}
+
+.assembly-setup-field > .assembly-select {
+  width: 100%;
+}
+
+.assembly-setup-axis,
+.assembly-setup-cycle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.assembly-setup-axis > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.assembly-segmented {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.assembly-segmented > button {
+  min-width: 32px;
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.assembly-segmented > button:hover:not(.is-active) {
+  color: var(--color-text);
+}
+
+.assembly-segmented > button.is-active {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+}
+
+.assembly-setup-pick {
+  flex: 1 0 100%;
+  justify-content: flex-start;
+}
+
+.assembly-setup-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+}
+
+.assembly-setup-cta > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
