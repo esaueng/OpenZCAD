@@ -36,7 +36,10 @@ const selectionOf = (bodyIds: string[] = []) => ({
 });
 
 const holeDiameters = (document: ProjectDocument, bodyId: string) =>
-  (document.derived.bodyRepresentations[toBodyId(bodyId)]?.topology?.faces ?? [])
+  (
+    document.derived.bodyRepresentations[toBodyId(bodyId)]?.topology?.faces ??
+    []
+  )
     .filter((face) => face.geometry?.featureType === 'through-hole')
     .map((face) => ({
       diameter: face.geometry!.diameter!,
@@ -136,10 +139,16 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
     // Each resize sits right before its side's base piece is carved.
     const order = preflight.candidate.featureOrder;
     const at = (featureId: string) => order.indexOf(featureId as never);
-    expect(at(controls[0]!.featureId)).toBe(at(history.negativeEnd.featureId) - 1);
-    expect(at(controls[1]!.featureId)).toBe(at(history.positiveEnd.featureId) - 1);
+    expect(at(controls[0]!.featureId)).toBe(
+      at(history.negativeEnd.featureId) - 1
+    );
+    expect(at(controls[1]!.featureId)).toBe(
+      at(history.positiveEnd.featureId) - 1
+    );
     // A second offer is withheld once the control exists.
-    expect(createGrowingHolderHoleProposal(preflight.candidate, selectionOf())).toBeNull();
+    expect(
+      createGrowingHolderHoleProposal(preflight.candidate, selectionOf())
+    ).toBeNull();
 
     for (const [width, diameter] of [
       [44, 6],
@@ -169,16 +178,36 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
     // refuses the widening cut even when it runs through the whole arm.
     // (The hammer's countersinks sit inside its base and widen fine; see the
     // opt-in test.) Shrinking adds a ring inside the bore and always works.
-    const proposal = createGrowingHolderHoleProposal(countersunk, selectionOf());
+    const proposal = createGrowingHolderHoleProposal(
+      countersunk,
+      selectionOf()
+    );
     expect(proposal).not.toBeNull();
-    const preflight = await preflightCadPatch(countersunk, proposal!, (candidate) =>
-      adapter.syncDocument(candidate)
+    const preflight = await preflightCadPatch(
+      countersunk,
+      proposal!,
+      (candidate) => adapter.syncDocument(candidate)
     );
     expect(preflight.candidate.derived.warnings).toEqual([]);
     const shrunk = await adapter.syncDocument(
-      setParameter(preflight.candidate, { name: 'hole_diameter', expression: '4' })
+      setParameter(preflight.candidate, {
+        name: 'hole_diameter',
+        expression: '4'
+      })
     );
     expect(shrunk.warnings).toEqual([]);
+    const before =
+      preflight.candidate.derived.bodyRepresentations[
+        preflight.candidate.derived.exportableBodyIds[0]!
+      ]!;
+    const after = shrunk.bodyRepresentations[shrunk.exportableBodyIds[0]!]!;
+    // Two r2.5 -> r2 bores with 18 mm cylindrical walls and 45-degree mouths.
+    // Integrate the changed bore and conical sliver independently of the kernel.
+    const oneHoleAdded =
+      Math.PI * (2.5 ** 2 - 2 ** 2) * 18 -
+      (Math.PI * (2.5 - 2) ** 2 * (2.5 + 2 * 2)) / 3;
+    expect(after.volume - before.volume).toBeCloseTo(2 * oneHoleAdded, 6);
+    expect(after.faceCount).toBe(before.faceCount);
     expect(
       holeDiameters(
         { ...preflight.candidate, derived: shrunk },
@@ -186,7 +215,10 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
       ).map((h) => h.diameter)
     ).toEqual([4, 4]);
     const widened = await adapter.syncDocument(
-      setParameter(preflight.candidate, { name: 'hole_diameter', expression: '6' })
+      setParameter(preflight.candidate, {
+        name: 'hole_diameter',
+        expression: '6'
+      })
     );
     expect(widened.warnings).toHaveLength(2);
     expect(widened.warnings[0]).toMatch(/does not fit this body/);
@@ -194,16 +226,24 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
 
   it('binds at any opening, not only the source width', async () => {
     // The browser failure: a proposal made after the opening was edited.
-    const grown = setParameter(holder, { name: 'opening_width', expression: '60' });
+    const grown = setParameter(holder, {
+      name: 'opening_width',
+      expression: '60'
+    });
     const document = { ...grown, derived: await adapter.syncDocument(grown) };
     const proposal = createGrowingHolderHoleProposal(document, selectionOf());
     expect(proposal).not.toBeNull();
-    const preflight = await preflightCadPatch(document, proposal!, (candidate) =>
-      adapter.syncDocument(candidate)
+    const preflight = await preflightCadPatch(
+      document,
+      proposal!,
+      (candidate) => adapter.syncDocument(candidate)
     );
     expect(preflight.candidate.derived.warnings).toEqual([]);
     const widened = await adapter.syncDocument(
-      setParameter(preflight.candidate, { name: 'hole_diameter', expression: '6' })
+      setParameter(preflight.candidate, {
+        name: 'hole_diameter',
+        expression: '6'
+      })
     );
     expect(widened.warnings).toEqual([]);
     const holes = holeDiameters(
@@ -218,7 +258,8 @@ describe('growing-holder mounting-hole control', { timeout: 300_000 }, () => {
   it('refuses bores the document did not measure', () => {
     const proposal = createGrowingHolderHoleProposal(holder, selectionOf())!;
     const operation = proposal.operations[0]!;
-    if (operation.kind !== 'add_growing_holder_hole_control') throw new Error('kind');
+    if (operation.kind !== 'add_growing_holder_hole_control')
+      throw new Error('kind');
     const edited = {
       ...proposal,
       operations: [

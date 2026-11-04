@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from policy_test_tools import git_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +33,7 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
 
     def git(*args, env=clean_env):
         return subprocess.check_output([GIT, *args], cwd=ROOT, env=env,
-                                       text=True, stderr=subprocess.PIPE).strip()
+                                       text=True, encoding="utf-8", stderr=subprocess.PIPE).strip()
 
     objects = Path(git("rev-parse", "--git-path", "objects"))
     if not objects.is_absolute():
@@ -51,7 +52,7 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
         git("init", str(checkout))
         info = checkout / ".git/objects/info"
         info.mkdir(parents=True, exist_ok=True)
-        (info / "alternates").write_text(str(objects.resolve()) + "\n")
+        (info / "alternates").write_text(str(objects.resolve()) + "\n", newline="\n")
         # Borrow real objects, initially hiding ancestry behind a depth-one
         # boundary. A local fetch fixture restores their prepared boundary.
         shallow = Path(git("rev-parse", "--git-path", "shallow"))
@@ -61,7 +62,7 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
         boundaries = set(shallow.read_text().splitlines()) if shallow.exists() else set()
         if head != main:
             boundaries.add(head)
-        prepared_boundary.write_text("".join(boundary + "\n" for boundary in sorted(boundaries)))
+        prepared_boundary.write_text("".join(boundary + "\n" for boundary in sorted(boundaries)), newline="\n")
         env = dict(clean_env, GIT_DIR=str(checkout / ".git"), GIT_WORK_TREE=str(ROOT))
         git("config", "user.name", "petertoday", env=env)
         git("config", "user.email", "171875562+petertoday@users.noreply.github.com", env=env)
@@ -69,7 +70,7 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
         # Model an Actions depth-one PR merge ref, independent of real main.
         # A prepared main fetch can leave that synthetic HEAD boundary intact.
         git("update-ref", "HEAD", head, env=env)
-        (checkout / ".git/shallow").write_text(head + "\n")
+        (checkout / ".git/shallow").write_text(head + "\n", newline="\n")
 
         binaries = directory / "bin"
         binaries.mkdir()
@@ -100,7 +101,7 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
             f"    subprocess.run([{GIT!r}, 'update-ref', 'refs/remotes/origin/main', os.environ['OPENZCAD_FIXTURE_MAIN']], check=True)\n"
             "    Path(os.environ['OPENZCAD_FIXTURE_PINS_READY']).touch()\n"
             "    sys.exit(0)\n"
-            f"os.execv({GIT!r}, [{GIT!r}, *sys.argv[1:]])\n"
+            f"sys.exit(subprocess.call([{GIT!r}, *sys.argv[1:]]))\n"
         )
         # Ordinary Git reads must not start another Python interpreter. This
         # fixture is exercised repeatedly inside the unchanged five-second
@@ -120,6 +121,7 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
         wrapper.chmod(0o755)
         log = directory / "fetch.log"
         env.update(PATH=str(binaries) + os.pathsep + clean_env["PATH"],
+                   **({"OPENZCAD_FIXTURE_GIT_WRAPPER": str(fetch_wrapper)} if os.name == "nt" else {}),
                    OPENZCAD_FIXTURE_MAIN=main,
                    OPENZCAD_FIXTURE_MISSING_PINS="1" if missing_pins else "0",
                    OPENZCAD_FIXTURE_PINS_READY=str(ready),
@@ -131,7 +133,7 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
 
 def run_script(script, env, *tests):
     return subprocess.run([sys.executable, str(ROOT / "scripts" / script), *tests],
-                          cwd=ROOT, env=env, capture_output=True, text=True)
+                          cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8")
 
 
 class FleetFixtureTests(unittest.TestCase):
@@ -150,9 +152,13 @@ class FleetFixtureTests(unittest.TestCase):
                 env["OPENZCAD_FIXTURE_MISSING_PINS"] = "1"
                 comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())["esaueng/OpenZCAD"]
                 previous_pin = comparison["pin"]
-                for revision, path in ((pin, ".github/workflows/fleet-ci-v5.yml"),
+                active_path = re.search(
+                    r"(\.github/workflows/fleet-ci(?:-v[0-9]+)?\.yml)@",
+                    (ROOT / ".github/workflows/ci.yml").read_text(),
+                )[1]
+                for revision, path in ((pin, active_path),
                                        (previous_pin, ".github/workflows/fleet-ci.yml")):
-                    absent = subprocess.run(["git", "show", f"{revision}:{path}"],
+                    absent = subprocess.run(git_command("show", f"{revision}:{path}", env=env),
                                             cwd=ROOT, env=env, capture_output=True)
                     self.assertNotEqual(absent.returncode, 0)
                 env["OPENZCAD_FIXTURE_FETCH_BLOCKED"] = "0"
@@ -205,18 +211,24 @@ def deadline_evidence():
                     [node, str(ROOT / "node_modules/vitest/vitest.mjs"), "run",
                      "--config", "vitest.fixture.config.ts",
                      str(path.relative_to(ROOT)), "-t", "retires the orphan OIDC workflow",
-                     "--maxWorkers=1"], cwd=ROOT, env=env, text=True,
+                     "--maxWorkers=1"], cwd=ROOT, env=env, text=True, encoding="utf-8",
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
                 try:
-                    stdout, stderr = process.communicate(timeout=9)
+                    # Keep Vitest's 5s assertion and 10s setup deadlines. This
+                    # outer cap also includes native Windows process startup.
+                    stdout, stderr = process.communicate(timeout=25)
                 except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    if os.name == "nt":
+                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                       capture_output=True)
+                    else:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                     stdout, stderr = process.communicate()
-                    raise AssertionError(f"{name} exceeded the existing setup deadline")
-                output = stdout + stderr
+                    raise AssertionError(f"{name} child did not finish its bounded Vitest run")
+                output = (stdout or "") + (stderr or "")
                 return name, {"exit_code": process.returncode,
                               "five_second_timeout": "Test timed out in 5000ms" in output,
                               "fetches": len(log.read_text().splitlines()) if log.exists() else 0}

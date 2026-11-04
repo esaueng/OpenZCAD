@@ -34,7 +34,7 @@ PREPARED_DIRECTORY = None
 
 def git(repo, *args, env=None):
     return subprocess.check_output(
-        ["git", *args], cwd=repo, env=env or ENV, text=True, stderr=subprocess.PIPE,
+        ["git", *args], cwd=repo, env=env or ENV, text=True, encoding="utf-8", stderr=subprocess.PIPE,
     ).strip()
 
 
@@ -72,11 +72,17 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         (workflows / "fleet-ci.yml").unlink()
         (workflows / CALLEE).write_text(WORKFLOW)
         cls.pin = cls.commit("test(ci): active policy fixture", "2026-01-05T12:00:00+00:00")
+        # Preparation imports policy for both active and staged callees. Keep
+        # staged files in the candidate checkout without changing the active
+        # pin or its independently verified main ancestry.
+        for staged in (ROOT / ".github/workflows").glob("fleet-ci-v*.yml"):
+            if staged.name != CALLEE:
+                (workflows / staged.name).write_bytes(staged.read_bytes())
         (workflows / "ci.yml").write_text(CALLER.replace(PIN, cls.pin))
         scripts = cls.origin / "scripts"
         scripts.mkdir()
         for name in ("test-direct-fleet.py", "test-merge-queue-routing.py",
-                     "prepare-fleet-test-fixtures.py", "merge_queue_policy.py"):
+                     "prepare-fleet-test-fixtures.py", "merge_queue_policy.py", "policy_test_tools.py"):
             (scripts / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         comparisons = json.loads(json.dumps(COMPARISONS))
         comparisons["esaueng/OpenZCAD"]["pin"] = cls.previous
@@ -124,7 +130,7 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
 
     def run_script(self, name, *args):
         return subprocess.run([sys.executable, "scripts/" + name, *args],
-                              cwd=self.checkout, env=self.env, capture_output=True, text=True)
+                              cwd=self.checkout, env=self.env, capture_output=True, text=True, encoding="utf-8")
 
     def provenance(self):
         return self.run_script("test-direct-fleet.py",
@@ -137,7 +143,7 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
     def fetches(self):
         return [event["argv"] for line in self.trace.read_text().splitlines()
                 if (event := json.loads(line)).get("event") == "start"
-                and event.get("argv") and Path(event["argv"][0]).name == "git"
+                and event.get("argv") and Path(event["argv"][0]).name.lower() in ("git", "git.exe")
                 and "fetch" in event["argv"]]
 
     def comparison_pin(self, pin):
@@ -199,7 +205,7 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         # Retain the synthetic candidate boundary independently of origin/main.
         shallow = self.checkout / ".git/shallow"
         boundaries = set(shallow.read_text().splitlines()) if shallow.exists() else set()
-        shallow.write_text("".join(value + "\n" for value in sorted(boundaries | {candidate})))
+        shallow.write_text("".join(value + "\n" for value in sorted(boundaries | {candidate})), newline="\n")
         self.assertEqual(git(self.checkout, "rev-parse", "--is-shallow-repository"), "true")
         git(self.checkout, "remote", "set-url", "origin", (self.root / "unavailable").as_uri())
         self.prepare()
@@ -241,7 +247,7 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         (self.checkout / ".github/workflows" / CALLEE).write_text("untrusted worktree policy\n")
         result = subprocess.run(
             [sys.executable, "-c", "import runpy; print(runpy.run_path('scripts/test-direct-fleet.py')['TEXT'], end='')"],
-            cwd=self.checkout, env=self.env, capture_output=True, text=True,
+            cwd=self.checkout, env=self.env, capture_output=True, text=True, encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, WORKFLOW)

@@ -11,6 +11,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import type { ProjectDocument } from '@openzcad/shared';
 import { borePreviewProfile } from '../apps/web/src/lib/interaction/cylinderRadius';
+import { drillHole } from '../packages/kernel-adapter/src/exact-cylinder-ops';
 
 const BORE = 3;
 const HEIGHT = 10;
@@ -83,6 +84,66 @@ function volume(radius: number, mouths: number) {
 }
 
 describe('through-hole resizing extends its existing chamfer angle', () => {
+  it.each([4, 3.6])(
+    'shrinks a countersink broken out through both sides to diameter %s with unchanged outer trims',
+    (diameter) => {
+      const kernel = new RemusKernel();
+      try {
+        const solid = drillHole(kernel, kernel.makeBox(8, 30, 20), {
+          surfacePoint: { x: 4, y: 15, z: 20 },
+          axis: { x: 0, y: 0, z: -1 },
+          radius: 2.5,
+          depth: 20,
+          entryExtension: 0.2,
+          exitExtension: 0.2,
+          style: 'countersink',
+          countersinkRadius: 4.5,
+          countersinkAngle: Math.PI / 2
+        });
+        expect(kernel.validateSolid(solid)).toBe(0);
+        const sourceBytes = kernel.serializeSolids(Uint32Array.of(solid));
+        const before = steppedArena(kernel, solid);
+        const oldVolume = kernel.volume(solid, 1e-5);
+        const resized = resize(kernel, solid, diameter);
+        const radius = diameter / 2;
+        const added =
+          Math.PI * (2.5 ** 2 - radius ** 2) * 18 -
+          (Math.PI * (2.5 - radius) ** 2 * (2.5 + 2 * radius)) / 3;
+        expect(kernel.validateSolid(resized)).toBe(0);
+        expect(kernel.volume(resized, 1e-5) - oldVolume).toBeCloseTo(added, 6);
+        const after = steppedArena(kernel, resized);
+        expect(after.faces).toHaveLength(before.faces.length);
+        for (const [i, face] of before.faces.entries()) {
+          expect(after.faces[i]).toEqual(
+            face.surface.Cylinder
+              ? {
+                  ...face,
+                  surface: { Cylinder: { ...face.surface.Cylinder, radius } }
+                }
+              : face
+          );
+        }
+        expect(after.wires).toEqual(before.wires);
+        expect(after.boundary_authority).toEqual(before.boundary_authority);
+        const moved = new Set(
+          before.vertices.flatMap((vertex, i) =>
+            JSON.stringify(vertex) === JSON.stringify(after.vertices[i])
+              ? []
+              : [i]
+          )
+        );
+        for (const [i, edge] of before.edges.entries())
+          if (!moved.has(edge.start) && !moved.has(edge.end))
+            expect(after.edges[i]).toEqual(edge);
+        expect(kernel.serializeSolids(Uint32Array.of(solid))).toEqual(
+          sourceBytes
+        );
+      } finally {
+        kernel.free();
+      }
+    }
+  );
+
   it.each([1, 2] as const)(
     'shrinks a bore with %i chamfered mouth(s) without a flat shelf',
     (mouths) => {

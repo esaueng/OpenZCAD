@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   RemusKernel,
-  loadRemusTranslators
+  loadRemusTranslators,
+  remusTranslators
 } from '../packages/kernel-adapter/src/remus-runtime';
 import { syntheticHolderStep } from './support/synthetic-holder';
 
@@ -37,6 +38,31 @@ describe('synthetic holder STEP fixtures', { timeout: 120_000 }, () => {
         syntheticHolderStep(kernel, options)
       );
       if (process.env.OPENZCAD_WRITE_HOLDER_FIXTURES === '1') {
+        // A serializer refresh must not silently change the acceptance model.
+        const oldBytes = new TextEncoder().encode(
+          await readFile(fixturePath(file), 'utf8')
+        );
+        const [oldSolid] = kernel.deserializeSolids(
+          remusTranslators().importStep(oldBytes)
+        );
+        const [newSolid] = kernel.deserializeSolids(
+          remusTranslators().importStep(new TextEncoder().encode(exported))
+        );
+        expect(oldSolid).toBeDefined();
+        expect(newSolid).toBeDefined();
+        expect(kernel.validateSolid(oldSolid!)).toBe(0);
+        expect(kernel.validateSolid(newSolid!)).toBe(0);
+        expect(kernel.getSolidFaces(newSolid!).length).toBe(
+          kernel.getSolidFaces(oldSolid!).length
+        );
+        const oldBounds = kernel.boundingBox(oldSolid!);
+        [...kernel.boundingBox(newSolid!)].forEach((value, i) =>
+          expect(value).toBeCloseTo(oldBounds[i]!, 9)
+        );
+        expect(kernel.volume(newSolid!, 1e-5)).toBeCloseTo(
+          kernel.volume(oldSolid!, 1e-5),
+          5
+        );
         await writeFile(fixturePath(file), exported);
       }
       const committed = await readFile(fixturePath(file), 'utf8');

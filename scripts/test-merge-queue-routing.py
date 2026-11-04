@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -15,6 +16,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from policy_test_tools import bash_executable, git_command
 SOURCE = ROOT / "scripts/merge_queue_policy.py"
 spec = importlib.util.spec_from_file_location("queue_policy", SOURCE)
 POLICY = importlib.util.module_from_spec(spec)
@@ -22,7 +25,7 @@ spec.loader.exec_module(POLICY)
 REMUS = POLICY.REPOSITORY == "esaueng/remus"
 JANE_LABEL = "ci-server-jane" if REMUS else "ci-server-jane-5gb"
 STAGED = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS
-                 else ".github/workflows/fleet-ci-v5.yml")
+                 else ".github/workflows/fleet-ci-v6.yml")
 TEXT = STAGED.read_text()
 # fleet-ci-v4 (#836, #878): every shard installs browser binaries only, and
 # merge-queue candidates run no e2e shards, which the e2e gate then accepts.
@@ -86,6 +89,14 @@ APPROVED_STEP_CHANGES = [] if REMUS else [
     ("              echo 'No shard ran; pull-request shards start only after quality passes.' >&2\n",
      "              echo 'No shard ran.' >&2\n"),
 ]
+# fleet-ci-v6 stages only these exact action revisions. Keep every other
+# application command and security boundary identical to the approved baseline.
+APPROVED_ACTION_UPDATES = [] if REMUS else [
+    ("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7",
+     "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7", 4),
+    ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+     "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2", 2),
+]
 # Dependencies an approved change removed: v5's PR shards no longer wait for
 # `quality`, which still gates `validate` and every queue candidate.
 APPROVED_DROPPED_NEEDS = {} if REMUS else {"e2e-tests-pr": {"quality"}}
@@ -97,6 +108,10 @@ def approved(text):
         if text.count(old) != 1:
             raise AssertionError(f"Approved change no longer matches once: {old.splitlines()[0]}")
         text = text.replace(old, new)
+    for old, new, count in APPROVED_ACTION_UPDATES:
+        if text.count(old) != count:
+            raise AssertionError(f"Approved action revision must match {count} times: {old}")
+        text = text.replace(old, new)
     return text
 def previous_workflow():
     comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[POLICY.REPOSITORY]
@@ -105,12 +120,12 @@ def previous_workflow():
     if previous.exists():
         return previous.read_text()
     # Activation retires the old file; keep comparing its immutable main bytes.
-    command = ["git", "show", f"{pin}:{path}"]
+    command = git_command("show", f"{pin}:{path}")
     try:
-        return subprocess.check_output(command, cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+        return subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8", stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
-        subprocess.run(["git", "fetch", "--quiet", "--no-tags", "--depth=1", "origin", pin], cwd=ROOT, check=True)
-        return subprocess.check_output(command, cwd=ROOT, text=True)
+        subprocess.run(git_command("fetch", "--quiet", "--no-tags", "--depth=1", "origin", pin), cwd=ROOT, check=True)
+        return subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8")
 
 
 OLD = previous_workflow()
@@ -293,7 +308,7 @@ class QueueWorkflowTests(unittest.TestCase):
     def test_embedded_shell_syntax(self):
         for block in re.findall(r"        run: \|\n((?:          [^\n]*\n|\n)+)", TEXT):
             script = "\n".join(line[10:] if line.startswith("          ") else line for line in block.splitlines())
-            result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+            result = subprocess.run([bash_executable(), "-n"], input=script, text=True, encoding="utf-8", capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_immutable_probe_embeds_policy_and_never_executes_candidate_code(self):
@@ -383,7 +398,7 @@ class QueueWorkflowTests(unittest.TestCase):
             block = jobs(TEXT)["validate"]
             command = block.split("        run: |\n", 1)[1]
             for quality in ("success", "failure", "cancelled", "skipped"):
-                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
+                result = subprocess.run([bash_executable(), "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
                     env=dict(os.environ, QUALITY_RESULT=quality, UNIT_RESULT="success", VALIDATION_RESULT="success"),
                     capture_output=True)
                 self.assertEqual(result.returncode == 0, quality == "success")
@@ -393,7 +408,7 @@ class QueueWorkflowTests(unittest.TestCase):
             for result in ("success", "failure", "cancelled", "skipped"):
                 needs = {"queue-trust": {"result": probe}, "changes": {"result": "success"},
                          "repo-policy": {"result": result}, "secrets-scan": {"result": "success"}}
-                status = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
+                status = subprocess.run([bash_executable(), "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
                     env=dict(os.environ, NEEDS=json.dumps(needs), HEAVY="false", DOCS="false",
                              FULL="false", WASM="false", EVENT="merge_group"), capture_output=True)
                 self.assertEqual(status.returncode == 0, result == "success")

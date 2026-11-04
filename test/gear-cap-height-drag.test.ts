@@ -69,7 +69,7 @@ describe('teeth cut along a cylinder', { timeout: 60_000 }, () => {
     expect(derived.warnings).toEqual([]);
     document.derived = derived;
     gear = derived.bodyRepresentations[gearBodyId]!;
-  });
+  }, 60_000);
 
   afterAll(() => adapter.dispose());
 

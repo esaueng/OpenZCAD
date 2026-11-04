@@ -611,6 +611,8 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
     }
   });
 
+  // Exercise all 1,024 real replays; this is ownership/retirement coverage,
+  // rather than a wall-clock performance assertion.
   it('retires a replayed kernel before export and sync without serving stale handles', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -665,7 +667,7 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
       adapter.dispose();
       ownership(adapter, 0);
     }
-  });
+  }, 300_000);
 
   it.each([0, -1, 2.5, NaN, Infinity])(
     'preserves disabled and integer count semantics for limit %s',
@@ -1011,10 +1013,22 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         await equivalent(next, actual);
         expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1 });
         const ids = actual.exportableBodyIds;
-        const step = await adapter.exportStep(next, ids);
-        ownership(adapter, 2);
-        expect(step).toContain('MANIFOLD_SOLID_BREP');
-        expect(await adapter.exportStep(next, ids)).toBe(step);
+        const metadata = { timestamp: '2026-01-01T00:00:00Z' };
+        const clock = new Date();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+          vi.setSystemTime(clock);
+          const step = await adapter.exportStep(next, ids, metadata);
+          ownership(adapter, 2);
+          expect(step).toContain('MANIFOLD_SOLID_BREP');
+          expect(step).toContain(`'${metadata.timestamp}'`);
+          // STEP defaults to the current time. Hold the caller's metadata
+          // fixed while crossing a second; compare every byte, header included.
+          vi.setSystemTime(new Date(clock.getTime() + 1_000));
+          expect(await adapter.exportStep(next, ids, metadata)).toBe(step);
+        } finally {
+          vi.useRealTimers();
+        }
         const stl = await adapter.exportStl(next, ids);
         expect(await adapter.exportStl(next, ids)).toBe(stl);
         ownership(adapter, 2);
