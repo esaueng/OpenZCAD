@@ -5195,4 +5195,13 @@ button.model-panel-grip[aria-expanded='true'] {
   .workspace.column-layout:has(.sketch-rail) .viewport-scale-indicator {
     visibility: hidden;
   }
+
+  .workspace.column-layout:has(.sketch-rail)
+    .instrument-rail
+    > .sketch-relations {
+    max-height: calc(
+      100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
+        var(--island-gap) * 4 - 64px
+    );
+  }
 }

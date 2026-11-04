@@ -1094,6 +1094,17 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await reachable(status);
         expect((await search.boundingBox())!.width).toBeGreaterThan(160);
         expect((await status.boundingBox())!.width).toBeGreaterThan(160);
+        await toggle.press('Escape');
+        await expect(flyout).toHaveCount(0);
+        const relations = page.getByRole('toolbar', {
+          name: 'Relations',
+          exact: true
+        });
+        for (const button of await relations.getByRole('button').all())
+          await reachable(button);
+        await reachable(status);
+        await capture(page, testInfo, '320px-sketch-relations');
+        await toggle.click();
         await checkDialogStack();
         const scroller = page.locator('.workspace-column-tools');
         const bounds = (await scroller.boundingBox())!;
