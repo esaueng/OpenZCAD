@@ -59,6 +59,7 @@
     "test/boolean-refusal-reporting.test.ts",
     "test/boolean-result-validation.test.ts",
     "test/bundle-size-policy.test.ts",
+    "test/chamfer-curved-chain.test.ts",
     "test/chamfer-fillet-corner.test.ts",
     "test/chamfer-rounded-block.test.ts",
     "test/chamfer-rounded-edge.test.ts",
