@@ -717,6 +717,78 @@
   border-left-color: transparent;
 }
 
+/* Batched rows (Shift/Ctrl-click) are tinted in place: the gliding
+   highlight follows the one selection, never several rows at once. */
+.history-timeline .feature-row.in-batch {
+  background: var(--color-accent-dim);
+}
+
+.history-timeline .feature-row.in-batch .feature-row-main {
+  color: var(--color-text);
+}
+
+.history-timeline .feature-row.in-batch .feature-icon {
+  color: var(--color-accent);
+}
+
+.history-timeline .feature-row.in-batch .history-dot {
+  background: var(--color-accent);
+}
+
+.history-batch {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-size: var(--fs-xs);
+  animation: oz-rise var(--dur-fast) var(--ease-out);
+}
+
+.history-batch-count {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text);
+}
+
+.history-batch-delete,
+.history-batch-clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-mini);
+}
+
+.history-batch-delete {
+  padding: 2px 10px;
+  color: var(--color-error-text);
+  border: 1px solid currentColor;
+}
+
+.history-batch-delete:hover {
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+.history-batch-clear {
+  justify-content: center;
+  width: 24px;
+  padding: 0;
+  color: var(--color-text-subtle);
+}
+
+.history-batch-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
 /* The grip only shows on hover, but reserves its whole pointer target so
    reaching it never covers the adjacent feature-selection button. */
 .history-timeline .feature-row-grip {
@@ -845,8 +917,23 @@
 .history-timeline .feature-row-main {
   /* The name is the row's identity: it keeps its length, up to most of the
      row, and the value gives way first. */
-  flex: 1 0 auto;
-  max-width: 60%;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.history-timeline .feature-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: var(--lh-normal);
+}
+
+.parameter-feedback .activity-log-link {
+  display: block;
+  margin: 6px 0 0;
+  padding: 0;
+  min-height: 24px;
+  text-align: left;
 }
 
 .history-row-tail {

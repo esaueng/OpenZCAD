@@ -5,6 +5,8 @@ import { useModalFocus } from '../lib/useModalFocus';
 export interface DeleteFeatureDialogProps {
   /** The feature about to be deleted. */
   name: string;
+  /** How many features a History batch deletes; one names `name` instead. */
+  count?: number;
   /** Names of the later features that build on it, in history order. */
   dependents: readonly string[];
   onCancel(): void;
@@ -26,6 +28,7 @@ const NAMED_DEPENDENTS = 6;
  */
 export function DeleteFeatureDialog({
   name,
+  count = 1,
   dependents,
   onCancel,
   onDelete
@@ -56,13 +59,11 @@ export function DeleteFeatureDialog({
       >
         <h2 id="delete-feature-dialog-title">
           <Trash2 size={16} aria-hidden="true" />
-          Delete “{name}”?
+          {count > 1 ? `Delete ${count} features?` : `Delete “${name}”?`}
         </h2>
         <div id="delete-feature-dialog-body" className="delete-feature-body">
           <p>
-            {dependents.length === 1
-              ? '1 later feature builds on it and will rebuild without it:'
-              : `${dependents.length} later features build on it and will rebuild without it:`}
+            {`${dependents.length === 1 ? '1 later feature builds' : `${dependents.length} later features build`} on ${count > 1 ? 'them' : 'it'} and will rebuild without ${count > 1 ? 'them' : 'it'}:`}
           </p>
           <ul className="delete-feature-dependents">
             {named.map((dependent, index) => (

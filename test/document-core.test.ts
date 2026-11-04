@@ -86,6 +86,11 @@ describe('document-core', () => {
     expect(migrated.assets).toEqual({});
     expect(migrated.checkpoints).toHaveLength(1);
     expect(migrated.checkpoints[0]?.reason).toBe('Migrated save point');
+    // Regression: a random id made two normalizations of one legacy copy
+    // disagree, so identical copies raised a conflict on every open.
+    expect(normalizeDocument(legacy as typeof current).checkpoints).toEqual(
+      migrated.checkpoints
+    );
   });
 
   it('refuses documents from a newer client instead of stamping them', () => {

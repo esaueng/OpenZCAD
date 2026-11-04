@@ -98,7 +98,9 @@ joint graph changes.
   on a loop or back and forth; time-pure, so dropped frames never change the
   motion.
 - **Motion studies (AS07):** a timeline of keys per joint value with scrub,
-  key-at-playhead, easing, speed and loop modes; playable in View mode.
+  easing, speed and loop modes. While a study is open, moving a part keys it
+  at the playhead (a new study opens at its end). Playable in View mode,
+  which plays each joint's Animate sweep when a project has no studies.
 
 ## Limits and follow-ups
 

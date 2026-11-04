@@ -161,9 +161,12 @@ describe('a refusal in the command strip (F014)', () => {
     ).join('\n');
     expect(refused).toMatch(/white-space:\s*normal/);
     expect(refused).toMatch(/-webkit-line-clamp:\s*3/);
-    // A plain hint stays one quiet line.
+    // Ordinary guidance also stays complete when the command strip is narrow.
     expect(rules(css, '.in-place-command-hint').join('\n')).toMatch(
-      /white-space:\s*nowrap/
+      /white-space:\s*normal/
+    );
+    expect(rules(css, '.in-place-command-hint').join('\n')).toMatch(
+      /flex:\s*1 0 100%/
     );
   });
 });

@@ -212,7 +212,7 @@ interface ViewerShellProps {
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
   onViewSettled(view: ViewportCameraState): void;
-  onGeometryPresented?(durationMs: number): void;
+  onGeometryPresented?(durationMs: number, visible: boolean): void;
   geometryTrace?: {
     projectId: string;
     version: number;
@@ -695,6 +695,7 @@ export function ViewerShell({
     <section
       className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
       aria-label="3D viewport"
+      tabIndex={-1}
       data-selection-filter={selectionFilter}
       data-selection-filter-source={
         selectionFilterAutomatic ? 'tool' : 'manual'

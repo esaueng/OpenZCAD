@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { ProjectDocument } from '@openzcad/shared';
 import { ChevronRight, Cloud, Copy, Monitor, Pause } from 'lucide-react';
 import type {
@@ -7,6 +7,10 @@ import type {
 } from '../lib/conflictRecovery';
 import { useModalFocus } from '../lib/useModalFocus';
 import { errorMessage } from '../lib/errors';
+import {
+  projectWorkDifferences,
+  type ProjectWorkDifference
+} from '../lib/localProjectStore';
 
 export interface ProjectConflictDialogProps {
   conflict: ProjectConflict;
@@ -29,6 +33,37 @@ function lastModified(document: ProjectDocument): string {
   return editTime && modifiedTime(editTime) !== null
     ? editTime
     : document.derived.updatedAt;
+}
+
+const DIFFERENCE_LABELS: Record<ProjectWorkDifference, string> = {
+  model: 'the model',
+  name: 'the project name',
+  units: 'the units',
+  drawings: 'the drawings',
+  referenceImages: 'the reference images',
+  objectFolders: 'the object folders',
+  assembly: 'the assembly',
+  edits: 'the edit history',
+  savePoints: 'the save points',
+  undoHistory: 'the undo history',
+  fileFormat: 'the file format version'
+};
+
+function listLabels(labels: readonly string[]): string {
+  if (labels.length <= 1) return labels.join('');
+  return `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
+}
+
+/** Rows that match in every shown detail still differ somewhere; say where. */
+function differenceSummary(
+  local: ProjectDocument,
+  remote: ProjectDocument
+): string | null {
+  const differences = projectWorkDifferences(local, remote);
+  if (differences.length === 0) return null;
+  return `They differ in ${listLabels(
+    differences.map((difference) => DIFFERENCE_LABELS[difference])
+  )}.`;
 }
 
 function ModifiedAt({ value }: { value: string }) {
@@ -59,10 +94,22 @@ export function ProjectConflictDialog({
   onClose
 }: ProjectConflictDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Not a version row: the first enabled row depends on lease timing, so the
+  // highlight moved between choices and Enter meant different things. The
+  // non-destructive action is the same target in every dialog.
+  const decideLaterRef = useRef<HTMLButtonElement>(null);
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const working = busy || resolving;
-  useModalFocus(dialogRef, { autoFocus: true });
+  useModalFocus(dialogRef, {
+    autoFocus: true,
+    initialFocusRef: decideLaterRef
+  });
+  const { localDocument, remoteDocument } = conflict;
+  const difference = useMemo(
+    () => differenceSummary(localDocument, remoteDocument),
+    [localDocument, remoteDocument]
+  );
   const other = conflict.source === 'account' ? 'Cloud' : 'Live session';
   const localModified = lastModified(conflict.localDocument);
   const remoteModified = lastModified(conflict.remoteDocument);
@@ -115,6 +162,7 @@ export function ProjectConflictDialog({
         <h2 id="project-conflict-title">Choose a version to keep</h2>
         <p id="project-conflict-consequence">
           Using one version replaces the other.
+          {difference && ` ${difference}`}
         </p>
         <div
           className="conflict-dialog-actions"
@@ -208,6 +256,7 @@ export function ProjectConflictDialog({
           </p>
         )}
         <button
+          ref={decideLaterRef}
           type="button"
           className="secondary"
           aria-disabled={working || undefined}

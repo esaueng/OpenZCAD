@@ -11,6 +11,7 @@ import {
   createParameterIds,
   createProjectDocument,
   createSketchFeatureIds,
+  normalizeDocument,
   type BodyFeatureIds,
   type SketchFeatureIds
 } from '@openzcad/document-core';
@@ -35,12 +36,13 @@ export {
 };
 
 /**
- * Design revision demos: three seeded projects that each tell a three-stage
+ * Design revision demos tell a three-stage
  * design story (Rev A → Rev B → Rev C) through real parametric feature
  * history. Demos are built with ordinary commands, so every feature remains
  * editable, replayable, and undoable — and the finishing stages (fillet /
  * chamfer) reference exact edge hashes resolved through a live kernel sync,
- * exactly like an interactive edge pick.
+ * exactly like an interactive edge pick. Supplied sample projects retain
+ * their editable model and assembly state without inventing design stages.
  */
 
 export type ExactSyncFn = (document: ProjectDocument) => Promise<DerivedState>;
@@ -87,14 +89,25 @@ class DemoBuilder {
   }
 }
 
-function params(values: Record<string, number>): AnyCommand[] {
-  return Object.entries(values).map(([name, value]) =>
+function params(
+  values: Record<string, number>,
+  descriptions: Record<string, string> = {}
+): AnyCommand[] {
+  return Object.entries(values).flatMap(([name, value]) => [
     commandFactories.setParameter({
       name,
       expression: String(value),
       ids: createParameterIds()
-    })
-  );
+    }),
+    ...(descriptions[name]
+      ? [
+          commandFactories.setParameterDescription({
+            name,
+            description: descriptions[name]
+          })
+        ]
+      : [])
+  ]);
 }
 
 interface P3 {
@@ -229,17 +242,27 @@ async function buildBracket(
   const builder = new DemoBuilder(definition.name, ownerUserId);
 
   builder.stage('Define parameters', 'Parameters', [
-    ...params({
-      width: 80,
-      depth: 40,
-      plate_t: 8,
-      wall_h: 32,
-      boss_r: 10,
-      hole_r: 4,
-      mount_r: 3,
-      mount_inset: 16,
-      fillet_r: 3
-    })
+    ...params(
+      {
+        width: 80,
+        depth: 40,
+        plate_t: 8,
+        wall_h: 32,
+        boss_r: 10,
+        hole_r: 4,
+        mount_r: 3,
+        mount_inset: 16,
+        fillet_r: 3
+      },
+      {
+        plate_t: 'Plate thickness',
+        wall_h: 'Wall height',
+        boss_r: 'Boss radius',
+        hole_r: 'Hole radius',
+        mount_r: 'Mount radius',
+        fillet_r: 'Fillet radius'
+      }
+    )
   ]);
 
   const base = createBodyFeatureIds();
@@ -788,6 +811,28 @@ async function buildHeatSink(
   return builder.finish(await syncExact(builder.document));
 }
 
+async function buildScissors(
+  definition: DemoDefinition,
+  ownerUserId: UserId,
+  syncExact: ExactSyncFn
+): Promise<DemoSeed> {
+  // Keep the supplied model out of the launcher and the other demo builds.
+  // Clone the module's template so separate users never share mutable nodes.
+  const { default: template } = await import('./demoModels/scissors.json');
+  const document = createCheckpoint(
+    normalizeDocument({
+      ...(structuredClone(template) as unknown as ProjectDocument),
+      ownerUserId,
+      name: definition.name
+    }),
+    'Scissors — Revolute pivot assembly'
+  );
+  return {
+    document: attachDerivedState(document, await syncExact(document)),
+    saveStates: [document]
+  };
+}
+
 const DEMO_BUILDERS: Record<
   string,
   (
@@ -799,6 +844,7 @@ const DEMO_BUILDERS: Record<
   bracket: buildBracket,
   flange: buildFlange,
   heatsink: buildHeatSink,
+  scissors: buildScissors,
   'visual-selection-acceptance': buildVisualSelectionAcceptance
 };
 

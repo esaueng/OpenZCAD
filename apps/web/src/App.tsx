@@ -712,6 +712,7 @@ import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
   findResizedCylinderFace,
+  findHistoryBoreFace,
   isUnchangedCylinderRadius,
   isValidCylinderRadius,
   sameCylinderAxis,
@@ -842,6 +843,9 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
+import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
+import { useResponsiveFraming } from './hooks/useResponsiveFraming';
+import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
@@ -1221,6 +1225,9 @@ const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
     default: module.UnappliedCardDialog
   }))
 );
+/** Longest an account conflict waits for the project's room to connect. */
+const ROOM_SETTLE_TIMEOUT_MS = 5000;
+
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectConflictDialog').then((module) => ({
     default: module.ProjectConflictDialog
@@ -1645,6 +1652,7 @@ import {
 import {
   countLabel,
   deleteFeatureToastMessage,
+  deleteFeaturesToastMessage,
   statusRepeatedByToast,
   UNDO_FLOOR_TRIMMED_NOTICE,
   UNDO_FLOOR_TRIMMED_REASON,
@@ -1661,6 +1669,7 @@ import type {
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
+  reaskConflict,
   hasUnresolvedConflict,
   conflictCopyNote,
   resolveProjectConflict,
@@ -1711,6 +1720,7 @@ import {
   applyPreset,
   closePanel,
   computePanelGeometry,
+  isPanelCoveredByInspection,
   isPanelOpen,
   loadPanelLayout,
   matchingPreset,
@@ -2714,6 +2724,8 @@ export function App() {
     featureId: FeatureId;
     name: string;
     dependents: string[];
+    /** A History multi-selection deleted together, in history order. */
+    batch?: FeatureId[];
   } | null>(null);
   /** A refused suppression, asking whether to pause its dependents too. */
   const [pendingSuppression, setPendingSuppression] = useState<{
@@ -3261,6 +3273,8 @@ export function App() {
     baseVersion: number;
     selectionKey: string;
     geometry: GeometryReadyState;
+    /** Radius of this published cylinder frame, which can lag the handle. */
+    radius?: number;
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const checkpointRoomRef = useRef<{
@@ -3491,6 +3505,11 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  const [presentedGeometry, setPresentedGeometry] = useState<{
+    projectId: string;
+    generation: number;
+    visible: boolean;
+  } | null>(null);
   /**
    * What the section view is currently showing. The clipped preview owns the
    * drag; the kernel's exact section is asked for once the plane rests, and
@@ -3885,6 +3904,14 @@ export function App() {
     projectId: string;
     version: number;
   } | null>(null);
+  // An active hole follows a history rebuild only in this exact revision.
+  // Explicit clearing cancels the handoff; a new pick takes precedence.
+  const pendingCylinderHistorySelectionRef = useRef<{
+    projectId: string;
+    version: number;
+    target: FaceTarget;
+    mode: DimensionMode;
+  } | null>(null);
   const geometry = useGeometryWorker({
     onGeometryReady: (geometry, projectId, version) => {
       const committed = committedDerivedRef.current;
@@ -3925,6 +3952,7 @@ export function App() {
         recordFeatureAttribution(validated, derived);
         setParameterPreviewBase({ ...validated, derived });
         setDoc(validated);
+        restoreCylinderHistorySelection(validated);
         // Fresh meshes now reflect the document (worker results are dropped
         // unless their version matches), so any held Move pose must release
         // in this same batch — one render later would double-transform.
@@ -4113,6 +4141,12 @@ export function App() {
    */
   const [accountConflict, setAccountConflict] =
     useState<ProjectConflict | null>(null);
+  const accountConflictRef = useRef(accountConflict);
+  accountConflictRef.current = accountConflict;
+  /** Hides an account question while it is being re-asked after a room choice. */
+  const [accountRecheckProjectId, setAccountRecheckProjectId] = useState<
+    string | null
+  >(null);
   /**
    * The save-to-account run currently on screen, one entry per project in
    * attempt order. Deliberately not cleared when the loop finishes: the
@@ -5282,9 +5316,11 @@ export function App() {
           : `Applied revision ${remoteDocument.version} from another of your devices.`
       );
     },
-    onConflict(remoteDocument) {
+    onConflict() {
+      // Not the room's version number: the dialog counts edits, and the two
+      // numbers read as a contradiction side by side.
       setStatus(
-        `Collaboration conflict at revision ${remoteDocument.version}; local edits were preserved.`
+        'This project changed in the live session too. Nothing has been discarded — choose which version to keep.'
       );
     }
   });
@@ -5474,8 +5510,18 @@ export function App() {
   const modelingLocked = viewMode || tweakMode || drawingMode || assembleMode;
   // AS01: the Assemble workspace's runtime, commit handlers and playback.
   // Every saved assembly change runs through `executeCommand`.
+  const activeDemo = DEMO_DEFINITIONS.find(
+    (demo) => demo.projectId === doc?.projectId
+  );
   const assembleApp = {
     document: doc,
+    initialJointId:
+      activeDemo?.initialWorkspace === 'assemble'
+        ? doc?.assembly?.joints[0]?.id
+        : undefined,
+    initialPlayback: appSettings.appearance.reducedMotion
+      ? undefined
+      : activeDemo?.initialPlayback,
     execute: (command: AnyCommand) => executeCommand(command),
     onStatus: (message: string) => setStatus(message)
   };
@@ -5483,6 +5529,19 @@ export function App() {
   // The activity log is a Settings page; every "details" link opens it there.
   const openActivityLog = () => openSettingsAt('activity');
   workspaceModeRef.current = resolvedWorkspaceMode;
+  const canNavigateToBuild = !shareSession && buildModeDisabledReason === null;
+  const navigateToBuildTool = useBuildToolNavigation({
+    mode: resolvedWorkspaceMode,
+    projectId: doc?.projectId ?? null,
+    canBuild: canNavigateToBuild,
+    onSwitch: () => handleWorkspaceMode('build'),
+    onLaunch: launchTool,
+    onPrepare: () => prepareResponsiveFrame.prepare(),
+    onExpired: () =>
+      setStatus(
+        'Unable to open Build. Switch to Build and choose the tool again.'
+      )
+  });
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
   // collaboration seat locks parameters as firmly as features.
@@ -5878,6 +5937,32 @@ export function App() {
     } finally {
       setBusy(false);
     }
+    // The account question waiting behind this one compared the copy that was
+    // on screen before the choice. Ask it again about the document the choice
+    // left; otherwise one divergence asks twice, the second time about a
+    // browser copy that no longer exists.
+    const pendingAccount = accountConflictRef.current;
+    if (pendingAccount?.projectId === conflict.projectId) {
+      const kept =
+        resolution === 'keep-mine'
+          ? conflict.localDocument
+          : conflict.remoteDocument;
+      setAccountRecheckProjectId(conflict.projectId);
+      raiseAccountConflict(
+        conflict.projectId,
+        managerRef.current?.document.projectId === conflict.projectId
+          ? managerRef.current.document
+          : kept,
+        null,
+        {
+          conflict: pendingAccount,
+          onSettled: () =>
+            setAccountRecheckProjectId((current) =>
+              current === conflict.projectId ? null : current
+            )
+        }
+      );
+    }
   }
 
   // "Decide later" on a room conflict. The hook re-raises the conflict on
@@ -5889,6 +5974,30 @@ export function App() {
   const roomConflictKey = collaboration.conflict
     ? `${collaboration.conflict.projectId}:${collaboration.conflict.localDocument.version}:${collaboration.conflict.expectedRemoteVersion}`
     : null;
+  // The account answers at startup before the room has connected. Showing its
+  // question first and swapping it for the room's when the room's arrives
+  // flipped one dialog between "Cloud" and "Live session" under the pointer.
+  // Hold the account question until this project's room has settled once
+  // (or plainly is not coming); it is kept, not dropped.
+  const [roomSettledProjectId, setRoomSettledProjectId] = useState<
+    string | null
+  >(null);
+  const roomConnectingForProject =
+    collaboration.status === 'connecting' &&
+    roomSettledProjectId !== openProjectId;
+  useEffect(() => {
+    if (!roomConnectingForProject) {
+      if (collaboration.status !== 'connecting') {
+        setRoomSettledProjectId(openProjectId);
+      }
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setRoomSettledProjectId(openProjectId),
+      ROOM_SETTLE_TIMEOUT_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [roomConnectingForProject, collaboration.status, openProjectId]);
   const roomKeepMineDisabledReason: string | null = !collaboration.conflict
     ? null
     : collaboration.role === 'viewer'
@@ -7048,7 +7157,8 @@ export function App() {
    * Exact regeneration may assign a new topology ID to an edited face. Keep
    * selection attached through operation-specific immutable identity: exact
    * fillet evolution lineage, the translated source plane for offsets, or the
-   * fixed axis for cylinder radii.
+   * coaxial wall at the displayed radius for cylinder edits. Chamfered mouths
+   * move the wall's endpoints as their shared boundary is rebuilt.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology && !currentFaceGeometryPreview) {
@@ -7155,21 +7265,14 @@ export function App() {
       y: interaction.target.axisEnd[1],
       z: interaction.target.axisEnd[2]
     };
-    const candidates = faces.filter((face) => {
-      const geometry = face.geometry;
-      return (
-        geometry?.surfaceType === 'cylinder' &&
-        geometry.axisStart !== undefined &&
-        geometry.axisEnd !== undefined &&
-        sameCylinderAxis(
-          axisStart,
-          axisEnd,
-          geometry.axisStart,
-          geometry.axisEnd
-        )
-      );
-    });
-    const regenerated = candidates.length === 1 ? candidates[0] : null;
+    // Use the radius that produced the visible mesh, not the newest pointer
+    // value: completed worker frames can arrive while the hand moves ahead.
+    const radius =
+      currentFaceGeometryPreview?.radius ?? interaction.target.radius;
+    const regenerated =
+      radius === undefined
+        ? null
+        : findResizedCylinderFace(faces, axisStart, axisEnd, radius);
     return regenerated
       ? {
           bodyId: selectedTopology.bodyId,
@@ -7970,6 +8073,12 @@ export function App() {
         };
       }
       const label = topologySelectionLabelSegments(namingBody, namingTopology);
+      if (
+        geometry?.featureType === 'blend' &&
+        geometry.blendRadius !== undefined
+      ) {
+        return { label, detail: `R ${round(geometry.blendRadius)} ${units}` };
+      }
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -10931,6 +11040,7 @@ export function App() {
   }
 
   function clearSelection() {
+    pendingCylinderHistorySelectionRef.current = null;
     const current = interactionRef.current;
     if (
       isOperationState(current) &&
@@ -12945,6 +13055,8 @@ export function App() {
       if (!isCurrent()) return;
       if (existing) {
         hydrateDocument(existing, { activeProjectSince });
+        if (definition.initialWorkspace)
+          setWorkspaceMode(definition.initialWorkspace);
         setStatus(`Opened ${existing.name}.`);
         return;
       }
@@ -12964,13 +13076,17 @@ export function App() {
       await saveLocalProject(document);
       if (!isCurrent()) return;
       hydrateDocument(document, { activeProjectSince });
+      if (definition.initialWorkspace)
+        setWorkspaceMode(definition.initialWorkspace);
       setCloudAvailable(false);
       setProjects((current) => [
         summarizeLocalDocument(document),
         ...current.filter((project) => project.projectId !== document.projectId)
       ]);
       setStatus(
-        `${definition.name} ready — three revisions in the feature history.`
+        definition.revisions.length > 0
+          ? 'Demo ready · Try Tweak to change a value'
+          : `${definition.name} ready — explore its parts and pivot in Assemble.`
       );
     } catch (error) {
       if (isCurrent())
@@ -14299,10 +14415,27 @@ export function App() {
     }
   }
 
+  function captureHoleHistorySelection() {
+    const current = interactionRef.current;
+    if (
+      current.mode === 'face' &&
+      current.op === 'resize-cylinder-radius' &&
+      current.target.concavity === 'hole'
+    ) {
+      return { target: current.target, mode: cylinderDimensionMode };
+    }
+    const pending = pendingCylinderHistorySelectionRef.current;
+    return pending?.projectId === managerRef.current?.document.projectId
+      ? pending
+      : null;
+  }
+
   function handleUndo() {
     if (!managerRef.current) {
       return;
     }
+    // A spent history shortcut must leave an armed hole alone.
+    if (!managerRef.current.canUndo && captureHoleHistorySelection()) return;
     // Tweak mode locks modeling, not parameters: an undo entry that touched
     // parameter sets only is Tweak's own vocabulary and stays available, so
     // a typo made seconds ago is one keypress away. Anything else — a
@@ -14323,6 +14456,10 @@ export function App() {
     if (parametersOnly && !ensureCanEditParameters('undo')) {
       return;
     }
+    const cylinderSelection =
+      drawingOnly || folderOnly || imageOnly || assemblyOnly
+        ? null
+        : captureHoleHistorySelection();
     const label = managerRef.current.undoLabel;
     // A spent ⌘Z still lands here and leaves the history where it was; only
     // the undo that steps off the last kept entry reaches the floor.
@@ -14344,6 +14481,14 @@ export function App() {
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
+    if (cylinderSelection) {
+      const restored = managerRef.current.document;
+      pendingCylinderHistorySelectionRef.current = {
+        ...cylinderSelection,
+        projectId: restored.projectId,
+        version: restored.version
+      };
+    }
     if (undid && managerRef.current.undoFloorTrimmed) {
       // Panels are Build's alone: Tweak, View and Draw render none, so the
       // action goes to Build first. Where Build is locked (a shared link, a
@@ -14371,6 +14516,8 @@ export function App() {
     if (!managerRef.current) {
       return;
     }
+    // A spent history shortcut must leave an armed hole alone.
+    if (!managerRef.current.canRedo && captureHoleHistorySelection()) return;
     // Same split as undo: redoing a parameter-only step is a parameter edit,
     // redoing anything else is modeling. Redo applies the entry at the
     // cursor, so its kinds decide — not the undo entry below it.
@@ -14389,6 +14536,10 @@ export function App() {
     if (parametersOnly && !ensureCanEditParameters('redo')) {
       return;
     }
+    const cylinderSelection =
+      drawingOnly || folderOnly || imageOnly || assemblyOnly
+        ? null
+        : captureHoleHistorySelection();
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
@@ -14404,6 +14555,14 @@ export function App() {
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
+    if (cylinderSelection) {
+      const restored = managerRef.current.document;
+      pendingCylinderHistorySelectionRef.current = {
+        ...cylinderSelection,
+        projectId: restored.projectId,
+        version: restored.version
+      };
+    }
     setToast(null);
     setStatus(label ? `Redo ${label}` : 'Redo');
   }
@@ -14419,18 +14578,50 @@ export function App() {
   function raiseAccountConflict(
     projectId: string,
     localDocument: ProjectDocument,
-    accountVersion: number | null
+    accountVersion: number | null,
+    recheck: { conflict: ProjectConflict; onSettled(): void } | null = null
   ) {
-    setStatus(
-      accountVersion === null
-        ? 'This project changed elsewhere. Your work is saved on this device.'
-        : `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
-    );
+    if (!recheck) {
+      setStatus(
+        accountVersion === null
+          ? 'This project changed elsewhere. Your work is saved on this device.'
+          : `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
+      );
+    }
+    // A re-check replaces an open account question rather than raising a new
+    // one: an outcome that needs no decision retires it and its marker. Only
+    // that exact question — one raised meanwhile (a 409 on a manual save) is
+    // still owed to the user.
+    const retireOpenConflict = () => {
+      if (!recheck) return;
+      if (accountConflictRef.current !== recheck.conflict) return;
+      clearUnresolvedConflict(projectId, 'account');
+      setAccountConflict((current) =>
+        current === recheck.conflict ? null : current
+      );
+    };
     void (async () => {
+      try {
+        await reconcile();
+      } finally {
+        recheck?.onSettled();
+      }
+    })();
+    async function reconcile() {
       let remote: ProjectDocument;
       try {
         remote = await api.loadProject(projectId);
       } catch (error) {
+        // Unanswered, the question still stands, but about this document:
+        // re-showing the copy from before the room choice let "Keep mine"
+        // write that superseded copy over the account.
+        if (recheck) {
+          setAccountConflict((current) =>
+            current === recheck.conflict
+              ? reaskConflict(current, localDocument)
+              : current
+          );
+        }
         if (isProjectDocumentUnavailableError(error)) {
           accountDocumentUnavailableProjectIdRef.current = projectId;
           setCloudAvailable(false);
@@ -14463,12 +14654,15 @@ export function App() {
       );
       if (outcome.choice === 'remote') {
         await acceptAccountDocument(outcome.document, localDocument);
+        retireOpenConflict();
         setSaveState('synced');
-        setStatus(
-          outcome.document.version === localDocument.version
-            ? 'Your account already holds this version.'
-            : 'Opened the newer copy from your account.'
-        );
+        if (!recheck) {
+          setStatus(
+            outcome.document.version === localDocument.version
+              ? 'Your account already holds this version.'
+              : 'Opened the newer copy from your account.'
+          );
+        }
         return;
       }
       if (outcome.choice === 'local') {
@@ -14490,8 +14684,9 @@ export function App() {
             },
             localDocument
           );
+          retireOpenConflict();
           setSaveState('synced');
-          setStatus('Synced with your account.');
+          if (!recheck) setStatus('Synced with your account.');
           return;
         } catch (error) {
           if (!(error instanceof ApiError && error.status === 409)) {
@@ -14508,7 +14703,7 @@ export function App() {
       setAccountConflict(
         conflictFromDocuments(localDocument, remote, 'account')
       );
-    })();
+    }
   }
 
   async function retryUnavailableAccountProject(
@@ -20471,7 +20666,10 @@ export function App() {
         parameterEditRequest.current === request &&
         managerRef.current === manager
       )
-        setStatus(`Parameter ${name} was not changed.`, { detail: message });
+        setStatus(
+          `Parameter ${parameterDisplayName(name, listParameters(manager.document).find((parameter) => parameter.name === name)?.description)} was not changed.`,
+          { detail: message }
+        );
       return message;
     };
     const moved =
@@ -21534,6 +21732,22 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  const prepareResponsiveFrame = useResponsiveFraming({
+    projectId: doc?.projectId ?? null,
+    mode: resolvedWorkspaceMode,
+    layout: panelLayout,
+    panels: `${panelState.tweakPanelOpen}:${panelState.viewModeRailOpen}`,
+    enabled:
+      displayedGeometryComplete &&
+      presentedGeometry?.projectId === doc?.projectId &&
+      presentedGeometry?.generation === resumeViewGeneration &&
+      presentedGeometry?.visible === true &&
+      !tool &&
+      !inPlace.active &&
+      interaction.mode === 'idle' &&
+      !parameterDraftActive,
+    onFit: () => setFitSignal((value) => value + 1)
+  });
   // Every open edit: an in-place command's, and the in-place Extrude's.
   cancelInPlaceRef.current = () => {
     inPlaceRef.current.cancel(true);
@@ -23530,6 +23744,101 @@ export function App() {
     dispatchInteraction({ type: 'reset-value' });
   }
 
+  function reselectCylinderWall(
+    target: FaceTarget,
+    radius: number,
+    mode: DimensionMode,
+    document: ProjectDocument
+  ) {
+    if (!target.axisStart || !target.axisEnd || target.radius === undefined)
+      return;
+    const vector = (value: readonly [number, number, number]) => ({
+      x: value[0],
+      y: value[1],
+      z: value[2]
+    });
+    const bodyId = target.bodyId as BodyId;
+    const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces;
+    const wall = faces
+      ? findResizedCylinderFace(
+          faces,
+          vector(target.axisStart),
+          vector(target.axisEnd),
+          radius
+        )
+      : null;
+    const geometry = wall?.geometry;
+    if (!wall || !geometry?.axisStart || !geometry.axisEnd) return;
+    const radial = target.radialDirection ?? target.normal;
+    const delta = radius - target.radius;
+    const { reference: _staleReference, ...stableTarget } = target;
+    const triple = (value: {
+      x: number;
+      y: number;
+      z: number;
+    }): [number, number, number] => [value.x, value.y, value.z];
+    const nextTarget: FaceTarget = {
+      ...stableTarget,
+      topologyId: wall.topologyId,
+      hash: wall.hash,
+      ...(wall.reference ? { reference: wall.reference } : {}),
+      point: target.point.map(
+        (component, axis) => component + radial[axis]! * delta
+      ) as [number, number, number],
+      surfaceCenter: triple(geometry.center),
+      radius,
+      axisStart: triple(geometry.axisStart),
+      axisEnd: triple(geometry.axisEnd),
+      ...(geometry.axialLength !== undefined
+        ? { axialLength: geometry.axialLength }
+        : {}),
+      ...(geometry.diameter !== undefined
+        ? { diameter: geometry.diameter }
+        : {})
+    };
+    setSelectedTopology({
+      bodyId,
+      kind: 'face',
+      topologyId: wall.topologyId,
+      hash: wall.hash,
+      ...(wall.reference ? { reference: wall.reference } : {})
+    });
+    setSelectedBodyIds([bodyId]);
+    carriedCylinderModeRef.current = {
+      key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
+      mode
+    };
+    dispatchInteraction({ type: 'select-face', target: nextTarget });
+  }
+
+  function restoreCylinderHistorySelection(document: ProjectDocument) {
+    const pending = pendingCylinderHistorySelectionRef.current;
+    if (
+      !pending ||
+      pending.projectId !== document.projectId ||
+      pending.version !== document.version
+    )
+      return;
+    pendingCylinderHistorySelectionRef.current = null;
+    if (interactionRef.current.mode !== 'idle') return;
+    const { target, mode } = pending;
+    if (!target.axisStart || !target.axisEnd) return;
+    const vector = (value: readonly [number, number, number]) => ({
+      x: value[0],
+      y: value[1],
+      z: value[2]
+    });
+    const body = document.derived.bodyRepresentations[target.bodyId as BodyId];
+    if (!body) return;
+    const wall = findHistoryBoreFace(
+      body,
+      vector(target.axisStart),
+      vector(target.axisEnd)
+    );
+    if (wall?.geometry?.radius === undefined) return;
+    reselectCylinderWall(target, wall.geometry.radius, mode, document);
+  }
+
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
     if (!requireDisplayedGeometryComplete()) {
       return false;
@@ -23597,66 +23906,14 @@ export function App() {
       // as a moved face does: falling back to the whole body swapped the
       // hole's card for the body's Move/Rotate card the moment it applied.
       () => {
-        if (!target.axisStart || !target.axisEnd) return;
-        const vector = (value: readonly [number, number, number]) => ({
-          x: value[0],
-          y: value[1],
-          z: value[2]
-        });
-        const bodyId = target.bodyId as BodyId;
-        const faces =
-          managerRef.current?.document.derived.bodyRepresentations[bodyId]
-            ?.topology?.faces;
-        const wall = faces
-          ? findResizedCylinderFace(
-              faces,
-              vector(target.axisStart),
-              vector(target.axisEnd),
-              radius
-            )
-          : null;
-        const geometry = wall?.geometry;
-        if (!wall || !geometry?.axisStart || !geometry.axisEnd) return;
-        const radial = target.radialDirection ?? target.normal;
-        const delta = radius - sourceRadius;
-        const { reference: _staleReference, ...stableTarget } = target;
-        const triple = (value: {
-          x: number;
-          y: number;
-          z: number;
-        }): [number, number, number] => [value.x, value.y, value.z];
-        const nextTarget: FaceTarget = {
-          ...stableTarget,
-          topologyId: wall.topologyId,
-          hash: wall.hash,
-          ...(wall.reference ? { reference: wall.reference } : {}),
-          point: target.point.map(
-            (component, axis) => component + radial[axis]! * delta
-          ) as [number, number, number],
-          surfaceCenter: triple(geometry.center),
-          radius,
-          axisStart: triple(geometry.axisStart),
-          axisEnd: triple(geometry.axisEnd),
-          ...(geometry.axialLength !== undefined
-            ? { axialLength: geometry.axialLength }
-            : {}),
-          ...(geometry.diameter !== undefined
-            ? { diameter: geometry.diameter }
-            : {})
-        };
-        setSelectedTopology({
-          bodyId,
-          kind: 'face',
-          topologyId: wall.topologyId,
-          hash: wall.hash,
-          ...(wall.reference ? { reference: wall.reference } : {})
-        });
-        setSelectedBodyIds([bodyId]);
-        carriedCylinderModeRef.current = {
-          key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
-          mode: cylinderDimensionMode
-        };
-        dispatchInteraction({ type: 'select-face', target: nextTarget });
+        const committed = managerRef.current?.document;
+        if (committed)
+          reselectCylinderWall(
+            target,
+            radius,
+            cylinderDimensionMode,
+            committed
+          );
       },
       plan.sourceFeatureId
         ? affectedFeatureTargets(
@@ -25194,7 +25451,7 @@ export function App() {
     selectionCallout?.anchor === 'selection' &&
     selectedBodyIds.length > 0 &&
     (interaction.mode === 'face' || interaction.mode === 'edges')
-      ? toolCardFor(interaction)
+      ? toolCardFor(interaction, cylinderDimensionMode)
       : null;
   const calloutEdgeCount =
     interaction.mode === 'edges' && edgeModifierBody?.topology
@@ -25789,6 +26046,104 @@ export function App() {
       )
     )
       finish();
+  }
+
+  /**
+   * Deletes a History multi-selection (shift- or Ctrl/⌘-click) as one
+   * undoable step. Like a single delete it confirms first when later steps
+   * rest on the selection, naming only those outside it.
+   */
+  function handleDeleteFeatures(featureIds: readonly FeatureId[]) {
+    if (!doc || featureIds.length === 0) return;
+    if (featureIds.length === 1) {
+      const only = findFeature(doc, featureIds[0]!);
+      if (only) handleDeleteFeature(only.featureId, only.name);
+      return;
+    }
+    const ids = new Set(featureIds);
+    const history = featureHistory(doc);
+    const dependentIds = new Set<FeatureId>();
+    for (const id of featureIds) {
+      for (const dependent of history.downstream(id)) {
+        if (!ids.has(dependent.featureId))
+          dependentIds.add(dependent.featureId);
+      }
+    }
+    const dependents = history.features.filter((feature) =>
+      dependentIds.has(feature.featureId)
+    );
+    if (
+      dependents.length > 0 &&
+      appSettings.general.confirmDestructiveActions
+    ) {
+      setPendingFeatureDelete({
+        featureId: featureIds[0]!,
+        name: countLabel(featureIds.length, 'feature', 'features'),
+        dependents: dependents.map((dependent) => dependent.name),
+        batch: [...featureIds]
+      });
+      return;
+    }
+    commitDeleteFeatures(featureIds, dependents.length);
+  }
+
+  function commitDeleteFeatures(
+    featureIds: readonly FeatureId[],
+    dependentCount: number
+  ) {
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!manager || !base) return;
+    const ids = new Set(featureIds);
+    const message = deleteFeaturesToastMessage(
+      featureIds.length,
+      dependentCount
+    );
+    const finish = () => {
+      if (modelingEditFeature && ids.has(modelingEditFeature.featureId))
+        closeFeaturePanel();
+      const editing = inPlaceRef.current.editing;
+      if (editing && ids.has(editing.featureId)) {
+        inPlaceRef.current.cancel(true);
+      }
+      clearSelection();
+      announce(
+        message,
+        { label: 'Undo', run: handleUndo },
+        { repeatsStatusAt: lastStatusAtRef.current }
+      );
+    };
+    void import('./lib/featureDeletion')
+      .then(({ batchFeatureDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the features again before deleting them.'
+          );
+          return;
+        }
+        const removal = batchFeatureDeletion(current, featureIds);
+        if (removal.validateDerived) {
+          void validatedFeature.runTransaction(removal.commands, {
+            label: removal.label,
+            targets: [],
+            validateDerived: removal.validateDerived,
+            validatingMessage: `Checking removal of ${countLabel(featureIds.length, 'feature', 'features')}…`,
+            successMessage: message,
+            onFailure: (failure) => announce(failure),
+            onSuccess: finish
+          });
+          return;
+        }
+        if (executeTransaction(removal.label, removal.commands)) finish();
+      })
+      .catch((error: unknown) =>
+        setStatus(errorMessage(error, 'Could not delete these features.'))
+      );
   }
 
   function handleRenameFeature(featureId: FeatureId, name: string) {
@@ -27048,13 +27403,18 @@ export function App() {
       {
         item: {
           id: 'delete',
-          label: 'Delete',
+          label: row?.deleteSelection
+            ? `Delete ${countLabel(row.deleteSelection.count, 'feature', 'features')}`
+            : 'Delete',
           icon: <Trash2 size={13} aria-hidden="true" />,
           shortcut: 'Del',
           danger: true,
           section: true
         },
-        run: () => handleDeleteFeature(feature.featureId, feature.name)
+        run: () =>
+          row?.deleteSelection
+            ? row.deleteSelection.run()
+            : handleDeleteFeature(feature.featureId, feature.name)
       }
     ];
     // The heading names the feature these actions touch, and names the menu.
@@ -28105,7 +28465,9 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied/i.test(status)
+        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+              status
+            )
           ? 'warning'
           : 'ready';
 
@@ -28210,6 +28572,10 @@ export function App() {
   const panelShowing = (id: PanelId) =>
     !panelsHidden &&
     isPanelOpen(panelLayout, id) &&
+    !(
+      panelGeometry &&
+      isPanelCoveredByInspection(panelLayout, id, panelGeometry)
+    ) &&
     (panelGeometry === null ||
       (panelGeometry.phone
         ? phonePanel === id
@@ -28259,7 +28625,22 @@ export function App() {
       setPanelLayout(next);
     },
     onUnpin: () => setPanelLayout((current) => unpinPanel(current, id)),
-    onClose: () => setPanelLayout((current) => closePanel(current, id)),
+    onClose: () => {
+      setPanelLayout((current) => closePanel(current, id));
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLButtonElement>(`[data-model-panel-rail="${id}"]`)
+          ?.focus({ preventScroll: true })
+      );
+    },
+    onHidePanels: () => {
+      setPanelLayout((current) => setOption(current, 'hidden', true));
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLButtonElement>(`[data-model-panel-rail="${id}"]`)
+          ?.focus({ preventScroll: true })
+      );
+    },
     onUse: () => setPanelLayout((current) => notePanelUsed(current, id))
   });
   // Only the row Ctrl+Shift+M would land on carries it as its shortcut.
@@ -28279,26 +28660,29 @@ export function App() {
   const commandContext = commandContextFor(commandSelection);
   // No two rows share a name: a repeated one is numbered.
   const paletteCommands = withDistinctLabels<PaletteCommand>([
-    // Modeling tools leave the palette entirely in the reading workspaces
-    // rather than appearing greyed out: a list of things you cannot do is
-    // not a menu.
-    ...(modelingLocked
-      ? []
-      : TOOL_GROUPS.flatMap((group) =>
-          group.tools.map((toolId): PaletteCommand => {
-            const meta = TOOL_META[toolId];
-            return {
-              id: `tool-${toolId}`,
-              label: meta.label,
-              group: group.label,
-              shortcut: keymap.label(toolCommandId(toolId)),
-              icon: meta.icon,
-              disabledReason: toolDisabledReason(toolId, shownAvailability),
-              offPick: !toolApplies(commandContext, toolId),
-              run: () => launchTool(toolId)
-            };
-          })
-        )),
+    // Typed search reaches tools across modes, with the destination stated
+    // before the choice. Empty browsing still lists this workspace's actions.
+    ...TOOL_GROUPS.flatMap((group) =>
+      group.tools.map((toolId): PaletteCommand => {
+        const meta = TOOL_META[toolId];
+        return {
+          id: `tool-${toolId}`,
+          label: meta.label,
+          group: group.label,
+          shortcut: keymap.label(toolCommandId(toolId)),
+          icon: meta.icon,
+          disabledReason:
+            modelingLocked && !canNavigateToBuild
+              ? (buildModeDisabledReason ?? 'Make a copy to use modeling tools')
+              : modelingLocked
+                ? null
+                : toolDisabledReason(toolId, shownAvailability),
+          modeHint: modelingLocked ? 'Switch to Build' : undefined,
+          offPick: !toolApplies(commandContext, toolId),
+          run: () => navigateToBuildTool(toolId)
+        };
+      })
+    ),
     {
       // Measuring is reading, so it stays in every workspace — Build included,
       // where the palette used to have no way to it at all.
@@ -28684,6 +29068,12 @@ export function App() {
               ({
                 id: `parameter-${parameter.parameterId}`,
                 label: `${parameter.name} = ${parameter.expression}`,
+                keywords: [
+                  ...(parameter.description?.split(/\s+/) ?? []),
+                  ...parameter.name
+                    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+                    .split(/[_\s]+/)
+                ],
                 group: 'Parameter',
                 icon: <SlidersHorizontal size={16} aria-hidden="true" />,
                 run: () => {
@@ -28722,7 +29112,7 @@ export function App() {
     (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
-  const baseToolCard = toolCardFor(interaction);
+  const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
       ? (sketchOptions.find(
@@ -28785,7 +29175,7 @@ export function App() {
   const tweakModeHint = measuring
     ? viewModeHint
     : parameters.length > 0
-      ? 'Edit a parameter and press Enter · the model rebuilds exactly'
+      ? 'Edit parameters'
       : 'This model has no parameters · Build mode is where they are defined';
   // Measuring writes the lane in Build too: it is the command of the moment.
   const readingHints = viewMode || measuring;
@@ -28798,7 +29188,7 @@ export function App() {
           ? viewModeHint
           : tweakMode
             ? tweakModeHint
-            : (commandPromptText(interaction) ??
+            : (commandPromptText(interaction, cylinderDimensionMode) ??
               (tool === 'sketch'
                 ? [
                     'Drag to draw',
@@ -29238,6 +29628,7 @@ export function App() {
       onRollbackAfterFeature={handleRollbackAfterFeature}
       onResumeHistory={handleResumeHistory}
       onRenameFeature={handleRenameFeature}
+      onDeleteFeatures={editDisabledReason ? undefined : handleDeleteFeatures}
       units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
@@ -29562,6 +29953,12 @@ export function App() {
       sidebar={
         viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
+            onLayoutChange={(reason) =>
+              reason === 'mount'
+                ? prepareResponsiveFrame.mounted()
+                : prepareResponsiveFrame.request()
+            }
+            units={doc?.units}
             modelError={parameterModelError}
             parameters={exposedParameters}
             parameterValues={parameterScope.scope}
@@ -29591,10 +29988,16 @@ export function App() {
               }))
             }
             parts={{
-              buttons: <PartsRailButtons {...partsProps} />,
-              list: panelState.viewModeRailOpen ? (
-                <PartsList {...partsProps} />
-              ) : null
+              buttons: (open, onOpenChange) => (
+                <PartsRailButtons
+                  {...partsProps}
+                  open={open}
+                  onOpenChange={onOpenChange}
+                />
+              ),
+              list: <PartsList {...partsProps} />,
+              open: panelState.viewModeRailOpen,
+              onOpenChange: partsProps.onOpenChange
             }}
           />
         ) : (
@@ -29730,6 +30133,7 @@ export function App() {
                         type="button"
                         className={`rail-button${showing ? ' active' : ''}${parked ? ' parked' : ''}`}
                         aria-label={`${label} panel`}
+                        data-model-panel-rail={id}
                         aria-pressed={showing}
                         title={
                           badge > 0
@@ -29816,8 +30220,20 @@ export function App() {
             initialView={initialView}
             onViewChange={handleViewportChange}
             onViewSettled={handleViewportSettled}
-            onGeometryPresented={(ms) => {
+            onGeometryPresented={(ms, visible) => {
               previewPresentationMs.current = ms;
+              if (doc)
+                setPresentedGeometry((current) =>
+                  current?.projectId === doc.projectId &&
+                  current.generation === resumeViewGeneration &&
+                  current.visible === visible
+                    ? current
+                    : {
+                        projectId: doc.projectId,
+                        generation: resumeViewGeneration,
+                        visible
+                      }
+                );
             }}
             onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}
             onWheelDeviceLearned={handleWheelDeviceLearned}
@@ -31622,12 +32038,15 @@ export function App() {
           {pendingFeatureDelete && doc && (
             <DeleteFeatureDialog
               name={pendingFeatureDelete.name}
+              count={pendingFeatureDelete.batch?.length}
               dependents={pendingFeatureDelete.dependents}
               onCancel={() => setPendingFeatureDelete(null)}
               onDelete={() => {
-                const { featureId, name, dependents } = pendingFeatureDelete;
+                const { featureId, name, dependents, batch } =
+                  pendingFeatureDelete;
                 setPendingFeatureDelete(null);
-                commitDeleteFeature(featureId, name, dependents.length);
+                if (batch) commitDeleteFeatures(batch, dependents.length);
+                else commitDeleteFeature(featureId, name, dependents.length);
               }}
             />
           )}
@@ -31711,7 +32130,9 @@ export function App() {
             )}
           {accountConflict &&
             accountConflict.projectId === doc.projectId &&
-            !collaboration.conflict && (
+            !collaboration.conflict &&
+            !roomConnectingForProject &&
+            accountRecheckProjectId !== doc.projectId && (
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}

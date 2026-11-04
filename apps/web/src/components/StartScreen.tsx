@@ -531,6 +531,13 @@ export function StartScreen({
     }
   }, [name, units]);
   const [initialView] = useState(readLibraryView);
+  // The status the library opened with belongs to the project just closed —
+  // a modeling refusal, say — and is already in the activity log. Only
+  // news set while the library is showing earns the card's line.
+  const [carriedStatus, setCarriedStatus] = useState<string | null>(status);
+  if (carriedStatus !== null && status !== carriedStatus) {
+    setCarriedStatus(null);
+  }
   const [query, setQuery] = useState(initialView.query);
   const [shelf, setShelf] = useState<ProjectStatus>(initialView.shelf);
   const [filter, setFilter] = useState<ShelfFilter>(initialView.filter);
@@ -2422,7 +2429,11 @@ export function StartScreen({
   // A run's outcome is in the sentence, and the startup mode texts restate
   // what the sentence already says; anything else is news worth a line.
   const statusLine =
-    !loading && !syncRun && status && !isLibraryModeStatus(status)
+    !loading &&
+    !syncRun &&
+    status &&
+    status !== carriedStatus &&
+    !isLibraryModeStatus(status)
       ? status
       : '';
 
@@ -3143,9 +3154,20 @@ export function StartScreen({
                   <>
                     <strong>No projects yet</strong>
                     <span>
-                      Name one and press New project, or open a demo to see a
-                      project walk through its revisions.
+                      Start a design of your own, or explore a working demo
+                      below.
                     </span>
+                    <div className="start-empty-actions">
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={!canCreate}
+                        onClick={createPart}
+                      >
+                        <Plus size={16} aria-hidden="true" />
+                        Create your first project
+                      </button>
+                    </div>
                   </>
                 ) : shelf === 'archived' ? (
                   <>
@@ -3225,7 +3247,7 @@ export function StartScreen({
         <div className="start-learn-head">
           <h2 id="start-demos-title">Learn by example</h2>
           <span className="start-section-note">
-            each demo walks a project through revisions A → C
+            explore editable parts, design revisions and assemblies
           </span>
         </div>
         <div className="demo-list">
@@ -3260,19 +3282,21 @@ export function StartScreen({
                       </span>
                     </span>
                   </span>
-                  <span className="demo-card-revs">
-                    {demo.revisions.map((revision) => {
-                      const [letter, ...rest] = revision.split(' — ');
-                      return (
-                        <span key={revision} className="demo-rev">
-                          <span className="demo-rev-letter">{letter}</span>
-                          <span className="demo-rev-label">
-                            {rest.join(' — ') || revision}
+                  {demo.revisions.length > 0 && (
+                    <span className="demo-card-revs">
+                      {demo.revisions.map((revision) => {
+                        const [letter, ...rest] = revision.split(' — ');
+                        return (
+                          <span key={revision} className="demo-rev">
+                            <span className="demo-rev-letter">{letter}</span>
+                            <span className="demo-rev-label">
+                              {rest.join(' — ') || revision}
+                            </span>
                           </span>
-                        </span>
-                      );
-                    })}
-                  </span>
+                        );
+                      })}
+                    </span>
+                  )}
                   <span className="demo-card-cta">
                     Open demo
                     <ArrowRight size={13} aria-hidden="true" />
@@ -3428,7 +3452,11 @@ export function StartScreen({
                     ))}
                   </ul>
                 )}
-                {statusLine && <p className="start-status">{statusLine}</p>}
+                {statusLine && (
+                  <p className="start-status" title={statusLine}>
+                    {statusLine}
+                  </p>
+                )}
               </div>
             )}
           </div>

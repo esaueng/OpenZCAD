@@ -4,6 +4,7 @@ import {
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   MAX_PROJECT_CHECKPOINTS,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   type ArtifactId,
   type ImportedSourceReference,
   type ProjectCheckpoint,
@@ -1891,8 +1892,8 @@ export function projectsHaveSameCanonicalContent(
   remote: ProjectDocument
 ): boolean {
   return jsonValuesEqual(
-    syncComparableDocument(local),
-    syncComparableDocument(remote)
+    syncComparableDocument(comparableDocument(local)),
+    syncComparableDocument(comparableDocument(remote))
   );
 }
 
@@ -1967,8 +1968,8 @@ export function projectsHaveSameRebuildInputs(
   right: ProjectDocument
 ): boolean {
   return jsonValuesEqual(
-    projectRebuildInputs(left),
-    projectRebuildInputs(right)
+    projectRebuildInputs(comparableDocument(left)),
+    projectRebuildInputs(comparableDocument(right))
   );
 }
 
@@ -1997,11 +1998,32 @@ function checkpointsPreserveLocalWork(
   );
 }
 
+/**
+ * The form a copy takes once opened. Copies saved by an older build keep their
+ * schema stamp (and any collection `normalizeDocument` would fill) until they
+ * pass through a normalizing path, and the account, the room and IndexedDB do
+ * not all normalize. Comparing raw copies made one unchanged project at v53
+ * and v54 look like two divergent ones after every schema bump. Only older
+ * copies pay for the migration; a refused one is compared as written.
+ */
+function comparableDocument(document: ProjectDocument): ProjectDocument {
+  if ((document.schemaVersion ?? 0) >= PROJECT_DOCUMENT_SCHEMA_VERSION) {
+    return document;
+  }
+  try {
+    return normalizeDocument(document);
+  } catch {
+    return document;
+  }
+}
+
 /** A metadata-only room update must retain local history within its save window. */
 export function projectPreservesLocalWork(
-  local: ProjectDocument,
-  remote: ProjectDocument
+  localInput: ProjectDocument,
+  remoteInput: ProjectDocument
 ): boolean {
+  const local = comparableDocument(localInput);
+  const remote = comparableDocument(remoteInput);
   return (
     projectsHaveSameRebuildInputs(local, remote) &&
     checkpointsPreserveLocalWork(local.checkpoints, remote.checkpoints) &&
@@ -2013,6 +2035,86 @@ export function projectPreservesLocalWork(
         )
     )
   );
+}
+
+export type ProjectWorkDifference =
+  | 'name'
+  | 'units'
+  | 'model'
+  | 'drawings'
+  | 'referenceImages'
+  | 'objectFolders'
+  | 'assembly'
+  | 'undoHistory'
+  | 'fileFormat'
+  | 'edits'
+  | 'savePoints';
+
+const WORK_DIFFERENCE_BY_KEY: Partial<Record<string, ProjectWorkDifference>> = {
+  name: 'name',
+  units: 'units',
+  drawings: 'drawings',
+  referenceImages: 'referenceImages',
+  objectFolders: 'objectFolders',
+  assembly: 'assembly',
+  editHistory: 'undoHistory',
+  schemaVersion: 'fileFormat'
+};
+
+/**
+ * Which parts of the content `projectPreservesLocalWork` compares differ, in a
+ * stable order. Display only: two copies can match in every count and
+ * timestamp a conflict dialog shows and still differ here, and the user needs
+ * to see where. Never used to pick a winner.
+ */
+export function projectWorkDifferences(
+  localInput: ProjectDocument,
+  remoteInput: ProjectDocument
+): ProjectWorkDifference[] {
+  return listWorkDifferences(
+    comparableDocument(localInput),
+    comparableDocument(remoteInput)
+  );
+}
+
+function listWorkDifferences(
+  local: ProjectDocument,
+  remote: ProjectDocument
+): ProjectWorkDifference[] {
+  const found = new Set<ProjectWorkDifference>();
+  const localInputs = projectRebuildInputs(local) as Record<string, unknown>;
+  const remoteInputs = projectRebuildInputs(remote) as Record<string, unknown>;
+  for (const key of new Set([
+    ...Object.keys(localInputs),
+    ...Object.keys(remoteInputs)
+  ])) {
+    if (!jsonValuesEqual(localInputs[key], remoteInputs[key])) {
+      found.add(WORK_DIFFERENCE_BY_KEY[key] ?? 'model');
+    }
+  }
+  if (
+    !jsonValuesEqual(local.revisions, remote.revisions) ||
+    !jsonValuesEqual(local.commandLog, remote.commandLog)
+  ) {
+    found.add('edits');
+  }
+  if (!jsonValuesEqual(local.checkpoints, remote.checkpoints)) {
+    found.add('savePoints');
+  }
+  const order: ProjectWorkDifference[] = [
+    'model',
+    'name',
+    'units',
+    'drawings',
+    'referenceImages',
+    'objectFolders',
+    'assembly',
+    'edits',
+    'savePoints',
+    'undoHistory',
+    'fileFormat'
+  ];
+  return order.filter((difference) => found.has(difference));
 }
 
 /**
@@ -2030,8 +2132,8 @@ export function withMatchingLocalDerived(
   // document, and the local ones still describe its model exactly.
   if (
     !jsonValuesEqual(
-      projectGeometryInputs(local),
-      projectGeometryInputs(remote)
+      projectGeometryInputs(comparableDocument(local)),
+      projectGeometryInputs(comparableDocument(remote))
     )
   ) {
     return remote;

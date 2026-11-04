@@ -778,7 +778,7 @@ export function ObjectsPanel({
           <input
             type="search"
             aria-label="Find an object by name"
-            placeholder="Find an object"
+            placeholder="Find objects"
             value={objectQuery}
             onChange={(event) => setObjectQuery(event.target.value)}
             onKeyDown={(event) => {

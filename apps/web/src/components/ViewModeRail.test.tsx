@@ -94,7 +94,7 @@ describe('ViewModeRail', () => {
     );
     const list = screen.getByRole('complementary', { name: 'Parts' });
     expect(list.querySelector('.view-mode-rail-foot')).toHaveTextContent(
-      'Visibility only.'
+      'Show or hide parts here. Change dimensions in Parameters.'
     );
     // Said once, by the lane, not again by every Tweak panel.
     expect(list).not.toHaveTextContent(/stays locked/);

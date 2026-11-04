@@ -100,6 +100,9 @@ describe('PanelFrame in a dock', () => {
     const region = renderFrame({ ...frame(), placement: 'phone' });
     expect(region.queryByRole('button', { name: 'Move History' })).toBeNull();
     expect(region.queryByRole('button', { name: /Pop out/ })).toBeNull();
+    expect(region.queryByRole('button', { name: 'Pin panel' })).toBeNull();
+    expect(region.queryByRole('button', { name: 'Pin History' })).toBeNull();
+    expect(region.getByText('Panels share this space.')).toBeVisible();
   });
 });
 

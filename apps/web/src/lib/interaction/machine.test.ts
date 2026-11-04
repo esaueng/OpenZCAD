@@ -1039,6 +1039,27 @@ describe('escape chain', () => {
 });
 
 describe('toolCardFor', () => {
+  it.each(['diameter', 'radius'] as const)(
+    'matches a hole’s %s control in its help text',
+    (mode) => {
+      const state = interactionReducer(IDLE, {
+        type: 'select-face',
+        target: face({
+          surfaceType: 'cylindrical',
+          radius: 4,
+          diameter: 8,
+          featureType: 'through-hole',
+          concavity: 'hole'
+        })
+      });
+      const card = toolCardFor(state, mode);
+      expect(card?.title).toBe('Resize Hole');
+      expect(card?.hint).toBe(
+        `Drag the radial handle or tap the value to set the ${mode}.`
+      );
+    }
+  );
+
   it('names a far-cap offset after the extrude it edits', () => {
     const state = interactionReducer(IDLE, {
       type: 'select-face',
@@ -1077,7 +1098,7 @@ describe('toolCardFor', () => {
     // A bare cylindrical face is neither a hole nor a boss, so it is named
     // for what it is rather than for the parameter that defines it.
     expect(holeCard?.title).toBe('Resize Cylinder');
-    expect(holeCard?.hint).toContain('radius');
+    expect(holeCard?.hint).toContain('diameter');
     let edges = interactionReducer(IDLE, {
       type: 'select-edge',
       selection: edge(1),

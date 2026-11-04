@@ -1567,6 +1567,12 @@ export function togglePanel(
   id: PanelId,
   stage?: PanelStage
 ): PanelLayout {
+  if (stage && inspectionCovers(layout, id, stage)) {
+    return notePanelUsed(
+      setOption({ ...layout, unpinned: null, revealed: null }, 'hidden', false),
+      id
+    );
+  }
   if (
     stage &&
     !layout.options.hidden &&
@@ -1643,6 +1649,9 @@ export function presentPanel(
   stage?: PanelStage
 ): PanelLayout {
   let next: PanelLayout = layout;
+  if (stage && inspectionCovers(layout, id, stage)) {
+    next = { ...layout, unpinned: null, revealed: null };
+  }
   if (!isPanelOpen(layout, id)) {
     next = openUnpinned(layout, id);
   } else if (stage && isPanelParked(layout, id, stage)) {
@@ -2387,16 +2396,69 @@ export function computePanelGeometry(
       : null;
   const slot = revealed ?? layout.unpinned;
   if (slot) {
+    // Keep independent panels side by side when they fit. Borrow an existing
+    // column only when another would consume the model's minimum stage share.
+    const needsRoom =
+      geometry.dockWidth.left +
+        geometry.dockWidth.right +
+        columnWidth +
+        insets.gap * 3 +
+        insets.rail * 2 >
+      stage.width * PANEL_DOCK_CAP;
+    const inspectionColumn = needsRoom
+      ? (geometry.columns.find((column) => column.side === 'right') ??
+        geometry.columns.find((column) => column.side === 'left'))
+      : undefined;
+    const naturalHeight = stage.naturals?.[slot];
     geometry.panels[slot] = {
       id: slot,
       mode: revealed ? 'revealed' : 'unpinned',
-      x: Math.max(insets.gap, rails.right.x - insets.gap - columnWidth),
+      x:
+        inspectionColumn?.x ??
+        Math.max(insets.gap, rails.right.x - insets.gap - columnWidth),
       y: dock.top,
-      w: columnWidth,
-      h: dockHeight
+      w: inspectionColumn?.w ?? columnWidth,
+      h:
+        naturalHeight === undefined
+          ? dockHeight
+          : Math.min(dockHeight, Math.max(PANEL_MIN_HEIGHT, naturalHeight))
     };
   }
   return geometry;
+}
+
+/** An inspection temporarily covers a saved dock column without closing it. */
+function inspectionCovers(
+  layout: PanelLayout,
+  id: PanelId,
+  stage: PanelStage
+): boolean {
+  const shown = layout.options.hidden
+    ? setOption(layout, 'hidden', false)
+    : layout;
+  return isPanelCoveredByInspection(
+    shown,
+    id,
+    computePanelGeometry(shown, stage)
+  );
+}
+
+export function isPanelCoveredByInspection(
+  layout: PanelLayout,
+  id: PanelId,
+  geometry: PanelGeometry
+): boolean {
+  if (geometry.phone || (!layout.unpinned && !layout.revealed)) return false;
+  const slot = Object.values(geometry.panels).find(
+    (rect) => rect?.mode === 'unpinned' || rect?.mode === 'revealed'
+  );
+  return Boolean(
+    slot &&
+    slot.id !== id &&
+    geometry.columns.some(
+      (column) => column.x === slot.x && column.panels.includes(id)
+    )
+  );
 }
 
 // ── Hit-testing ────────────────────────────────────────────

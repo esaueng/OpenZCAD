@@ -632,10 +632,13 @@ describe('durable room checkpoints', () => {
       );
       vi.stubGlobal('fetch', fetch);
       const hook = setup(document);
+      // `hook.edit(later)` arms the 500 ms edit debounce, which could publish
+      // `later` after the save fails and before the no-write assertion.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const saving = hook.result.current
         .saveCheckpoint(document, 'Clicked model', hook.options)
         .catch((error: unknown) => error);
-      await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
       const later = addPrimitiveFeature(document, {
         name: 'Buffered cylinder',
         primitiveKind: 'cylinder',
@@ -1211,6 +1214,10 @@ describe('durable room checkpoints', () => {
           )
       );
     vi.stubGlobal('fetch', fetch);
+    // The hook arms its 500 ms edit debounce at mount (the prop differs from
+    // the room). On real timers it can fire once the save settles and submit
+    // the stale prop as a third request; only the named save is measured here.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const hook = setup(document, base);
     let saving!: Promise<ProjectDocument>;
     act(() => {
@@ -1869,6 +1876,9 @@ describe('durable room checkpoints', () => {
       if (refusal === 'expired lease') {
         vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
       } else hook.leave();
+      // Only the save's own flush is under test; the ordinary 500 ms debounce
+      // that `hook.edit` arms must not race the no-write assertion.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       hook.edit(clicked);
       let outcome: unknown;
       const saving = hook.result.current

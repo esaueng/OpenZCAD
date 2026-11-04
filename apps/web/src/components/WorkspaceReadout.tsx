@@ -22,7 +22,8 @@ import type { StatusTone } from './StatusActivityLog';
  * A message worth going back to the log for: a warning, or a refusal worded
  * as one ("Cannot use Box: …", "Not created — …") whatever its tone.
  */
-const REFUSAL_PATTERN = /refus|cannot|can't|not created|not applied|no change/i;
+const REFUSAL_PATTERN =
+  /refus|cannot|can't|not created|not applied|not changed|no change/i;
 
 function isNotableStatus(status: string, tone: StatusTone): boolean {
   return tone === 'warning' || REFUSAL_PATTERN.test(status);
@@ -118,10 +119,11 @@ export function WorkspaceReadout({
 }: WorkspaceReadoutProps) {
   const laneRef = useRef<HTMLDivElement>(null);
   const hasCommandRow = commandRow !== null;
+  const hasSelectionGuidance = !hasCommandRow && pick !== null;
   useLayoutEffect(() => {
     const lane = laneRef.current;
     const viewer = lane?.closest<HTMLElement>('.viewer-area');
-    if (!lane || !viewer || !hasCommandRow) return;
+    if (!lane || !viewer || (!hasCommandRow && !hasSelectionGuidance)) return;
     const measure = () => {
       const command = lane.querySelector<HTMLElement>('.in-place-command');
       const height = command?.getBoundingClientRect().height ?? 0;
@@ -131,6 +133,13 @@ export function WorkspaceReadout({
           `${Math.ceil(height)}px`
         );
       }
+      const guidance = lane.querySelector<HTMLElement>(
+        '.workspace-hint.is-selection'
+      );
+      viewer.style.setProperty(
+        '--workspace-guidance-h',
+        `${guidance ? Math.ceil(guidance.getBoundingClientRect().height) + 8 : 0}px`
+      );
     };
     measure();
     // Watching the lane also handles a lazy command replacing its fallback,
@@ -143,8 +152,9 @@ export function WorkspaceReadout({
     return () => {
       observer?.disconnect();
       viewer.style.removeProperty('--in-place-command-h');
+      viewer.style.removeProperty('--workspace-guidance-h');
     };
-  }, [hasCommandRow]);
+  }, [hasCommandRow, hasSelectionGuidance]);
   const sticky = statusSticky ?? false;
   // A message already past its lifetime when the readout mounts — entering
   // the workspace long after it was set — is not news, and stays gone.
@@ -260,7 +270,7 @@ export function WorkspaceReadout({
       >
         {commandRow ??
           ((prompt && !shown) || pick ? (
-            <p className="workspace-hint">
+            <p className={`workspace-hint${pick ? ' is-selection' : ''}`}>
               {pick}
               {prompt && !shown ? (
                 <span className="workspace-hint-text" aria-hidden="true">

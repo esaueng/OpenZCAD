@@ -97,6 +97,30 @@ describe('demo parameter tweaks', () => {
     }
   }, 120_000);
 
+  it('preserves an authored parameter description and its pending Redo during repair', () => {
+    const manager = new CommandManager(legacyBracket(bracket));
+    manager.runTransaction('Describe the wall', [
+      commandFactories.setParameterDescription({
+        name: 'wall_h',
+        description: 'Custom wall height'
+      })
+    ]);
+    manager.undo();
+    const original = structuredClone(manager.document);
+    delete original.editHistory!.entries.at(-1)!.commandKinds;
+    const repaired = repairLegacyBracketDemo(original);
+    expect(repaired).not.toBe(original);
+    expect(legacyBracket(repaired).editHistory).toEqual(original.editHistory);
+    const restored = new CommandManager(repaired);
+    expect(restored.redoLabel).toBe('Describe the wall');
+    restored.redo();
+    expect(
+      Object.values(restored.document.nodes).find(
+        (node) => node.kind === 'parameter' && node.name === 'wall_h'
+      )
+    ).toMatchObject({ description: 'Custom wall height' });
+  });
+
   it.each([
     ['wall_h', '26'],
     ['boss_r', '14']

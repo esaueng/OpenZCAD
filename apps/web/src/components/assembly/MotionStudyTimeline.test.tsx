@@ -8,7 +8,8 @@ import {
 import type { AssemblyStudySetInput } from '@openzcad/document-core';
 import {
   assemblyRuntime,
-  getAssemblyRuntime
+  getAssemblyRuntime,
+  registerAssemblyCommitHandlers
 } from '../../lib/assembly/assemblyRuntime';
 import { MotionStudyTimeline } from './MotionStudyTimeline';
 import { pivotProject } from './motionTestFixture';
@@ -86,11 +87,11 @@ describe('MotionStudyTimeline', () => {
       name: 'Motion study Motion 1'
     });
     expect(timeline).toBeTruthy();
-    expect(screen.getByLabelText('Playhead').textContent).toBe('0.00 / 2.00 s');
+    expect(screen.getByLabelText('Playhead').textContent).toBe('0.00');
     expect(
-      screen.getByRole<HTMLSelectElement>('combobox', { name: 'Playback' })
-        .value
-    ).toBe('loop');
+      screen.getByLabelText<HTMLInputElement>('Duration in seconds').value
+    ).toBe('2');
+    expect(screen.getByRole('button', { name: 'Playback: Loop' })).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Track Pivot' })).toBeTruthy();
     expect(
       screen.getAllByRole('button', { name: /^Key at [0-9]/ })
@@ -112,7 +113,7 @@ describe('MotionStudyTimeline', () => {
     fireEvent.pointerUp(row, { pointerId: 1 });
     fireEvent.pointerMove(row, { clientX: 20, pointerId: 1 });
     expect(getAssemblyRuntime().studyTimeS).toBe(1.5);
-    expect(screen.getByLabelText('Playhead').textContent).toBe('1.50 / 2.00 s');
+    expect(screen.getByLabelText('Playhead').textContent).toBe('1.50');
     expect(screen.getByText('67.5°')).toBeTruthy();
   });
 
@@ -123,9 +124,7 @@ describe('MotionStudyTimeline', () => {
     fireEvent.pointerUp(ruler, { pointerId: 1 });
     // A pose dragged in the viewport is what gets keyed.
     act(() => assemblyRuntime.setOverride('j_pivot', [30]));
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Key at playhead (K)' })
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Key at playhead' }));
     expect(executed).toHaveLength(1);
     expect(lastStudy(executed).tracks[0]?.keys).toEqual([
       { t: 0, value: 0, easing: 'linear' },
@@ -154,7 +153,7 @@ describe('MotionStudyTimeline', () => {
     act(() => {
       assemblyRuntime.setStudyTime(0.84);
     });
-    expect(screen.getByLabelText('Playhead').textContent).toBe('0.84 / 2.00 s');
+    expect(screen.getByLabelText('Playhead').textContent).toBe('0.84');
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     expect(getAssemblyRuntime().playback).toBeNull();
     expect(getAssemblyRuntime().studyTimeS).toBe(0.84);
@@ -162,9 +161,8 @@ describe('MotionStudyTimeline', () => {
       37.8
     );
     // Space toggles while the timeline has focus; 2× restarts at that speed.
-    fireEvent.change(screen.getByRole('combobox', { name: 'Speed' }), {
-      target: { value: '2' }
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'Speed 1×' }));
+    expect(screen.getByRole('button', { name: 'Speed 2×' })).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('region'), { key: ' ' });
     expect(start).toHaveBeenLastCalledWith('study_1', 2, 0.84);
   });
@@ -198,8 +196,11 @@ describe('MotionStudyTimeline', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Key at 2.00 s, 90°' }));
     const editor = screen.getByRole('group', { name: 'Selected key' });
     expect(editor).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'Ease in-out' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ease' }));
     expect(lastStudy(executed).tracks[0]?.keys[1]?.easing).toBe('ease');
+    expect(
+      screen.getByRole('button', { name: 'Ease' }).getAttribute('aria-pressed')
+    ).toBe('true');
     const value = screen.getByLabelText('Key value');
     fireEvent.change(value, { target: { value: '120' } });
     fireEvent.keyDown(value, { key: 'Enter' });
@@ -217,11 +218,14 @@ describe('MotionStudyTimeline', () => {
     fireEvent.blur(duration);
     expect(lastStudy(executed).durationS).toBe(1);
     expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.t)).toEqual([0, 1]);
-    fireEvent.change(screen.getByRole('combobox', { name: 'Playback' }), {
-      target: { value: 'ping-pong' }
-    });
+    // The playback button steps once → loop → back and forth.
+    fireEvent.click(screen.getByRole('button', { name: 'Playback: Loop' }));
     expect(lastStudy(executed).playback).toBe('ping-pong');
-    expect(executed).toHaveLength(2);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Playback: Back and forth' })
+    );
+    expect(lastStudy(executed).playback).toBe('once');
+    expect(executed).toHaveLength(3);
   });
 
   it('adds a track for an untracked joint motion from the menu', () => {
@@ -231,13 +235,13 @@ describe('MotionStudyTimeline', () => {
       commandFactories.setAssemblyStudy({ study: { ...study, tracks: [] } })
     );
     const { executed } = mount(manager);
-    expect(screen.getByText(/No tracks yet/)).toBeTruthy();
+    expect(screen.getByText('Add a joint to animate')).toBeTruthy();
     expect(
       screen
-        .getByRole('button', { name: 'Key at playhead (K)' })
+        .getByRole('button', { name: 'Key at playhead' })
         .hasAttribute('disabled')
     ).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Add joint track' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add track' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Pivot/ }));
     expect(lastStudy(executed).tracks).toEqual([
       {
@@ -247,11 +251,86 @@ describe('MotionStudyTimeline', () => {
       }
     ]);
     // Every motion now has a track: nothing left to add.
-    expect(
-      screen
-        .getByRole('button', { name: 'Add joint track' })
-        .hasAttribute('disabled')
-    ).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Add track' })).toBeNull();
+  });
+
+  it('keys a moved part at the playhead instead of saving the rest pose', () => {
+    const commitPose = vi.fn();
+    registerAssemblyCommitHandlers({ commitPose, createJoint: vi.fn() });
+    const { executed } = mount();
+    const ruler = lane(screen.getByTestId('motion-ruler'));
+    fireEvent.pointerDown(ruler, { clientX: 100, pointerId: 1, button: 0 });
+    fireEvent.pointerUp(ruler, { pointerId: 1 });
+    // A drag (or the joint's value) ends with commitOverrides.
+    act(() => {
+      assemblyRuntime.setOverride('j_pivot', [10]);
+      assemblyRuntime.commitOverrides();
+    });
+    expect(commitPose).not.toHaveBeenCalled();
+    expect(executed).toHaveLength(1);
+    expect(lastStudy(executed).tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' },
+      { t: 1, value: 10, easing: 'linear' },
+      { t: 2, value: 90, easing: 'linear' }
+    ]);
+    expect(getAssemblyRuntime().overrides.get('j_pivot')).toEqual([10]);
+    // A pose the study already shows adds nothing and saves nothing.
+    act(() => assemblyRuntime.commitOverrides());
+    expect(executed).toHaveLength(1);
+    expect(commitPose).not.toHaveBeenCalled();
+    registerAssemblyCommitHandlers(null);
+  });
+
+  it('leaves pose commits alone read-only or once closed', () => {
+    const commitPose = vi.fn();
+    registerAssemblyCommitHandlers({ commitPose, createJoint: vi.fn() });
+    const manager = pivotProject();
+    const view = render(
+      <MotionStudyTimeline
+        assembly={manager.document.assembly}
+        execute={() => true}
+        readOnly
+      />
+    );
+    act(() => {
+      assemblyRuntime.setOverride('j_pivot', [10]);
+      assemblyRuntime.commitOverrides();
+    });
+    expect(commitPose).toHaveBeenCalledTimes(1);
+    view.unmount();
+    const { executed } = mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Close motion study' }));
+    act(() => {
+      assemblyRuntime.setOverride('j_pivot', [20]);
+      assemblyRuntime.commitOverrides();
+    });
+    expect(executed).toHaveLength(0);
+    expect(commitPose).toHaveBeenCalledTimes(2);
+    registerAssemblyCommitHandlers(null);
+  });
+
+  it('hints until the study moves and plays from the start at the end', () => {
+    const start = vi.spyOn(assemblyRuntime, 'startStudy');
+    const manager = pivotProject();
+    const study = manager.document.assembly!.studies[0]!;
+    manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          ...study,
+          tracks: [{ ...study.tracks[0]!, keys: [study.tracks[0]!.keys[0]!] }]
+        }
+      })
+    );
+    act(() => assemblyRuntime.setStudyTime(2));
+    mount(manager);
+    expect(screen.getByText('Move a part to key it here')).toBeTruthy();
+    act(() => {
+      assemblyRuntime.setOverride('j_pivot', [40]);
+      assemblyRuntime.commitOverrides();
+    });
+    expect(screen.queryByText('Move a part to key it here')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    expect(start).toHaveBeenCalledWith('study_1', 1, 0);
   });
 
   it('closes: stops playback, deselects the study and reports it', () => {

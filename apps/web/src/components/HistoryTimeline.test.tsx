@@ -901,6 +901,124 @@ describe('HistoryTimeline', () => {
     expect(onRenameFeature).toHaveBeenCalledTimes(1);
   });
 
+  describe('multi-row selection', () => {
+    const rowButton = (name: string) =>
+      row(name).querySelector('.feature-row-main') as HTMLElement;
+
+    it('selects a range with Shift-click and deletes it with Delete', () => {
+      const onDeleteFeatures = vi.fn();
+      const { props } = renderTimeline({ onDeleteFeatures });
+      fireEvent.click(rowButton('Feature 1'));
+      expect(props.onSelectFeature).toHaveBeenLastCalledWith('node-1');
+      fireEvent.click(rowButton('Feature 3'), { shiftKey: true });
+      expect(
+        screen.getByRole('toolbar', { name: 'Selected steps' })
+      ).toHaveTextContent('3 selected');
+      expect(row('Feature 2')).toHaveClass('in-batch');
+      expect(row('Feature 4')).not.toHaveClass('in-batch');
+      fireEvent.keyDown(rowButton('Feature 3'), { key: 'Delete' });
+      expect(onDeleteFeatures).toHaveBeenCalledWith([
+        'feature-1',
+        'feature-2',
+        'feature-3'
+      ]);
+    });
+
+    it('seeds the batch from the single selection and releases it', () => {
+      const onSelectFeature = vi.fn();
+      renderTimeline({
+        onDeleteFeatures: vi.fn(),
+        selectedFeatureNodeId: 'node-2',
+        onSelectFeature
+      });
+      fireEvent.click(rowButton('Feature 4'), { shiftKey: true });
+      // Toggling the selected row clears it, so no edit card stays open
+      // on one step of several.
+      expect(onSelectFeature).toHaveBeenCalledWith('node-2');
+      expect(
+        ['Feature 2', 'Feature 3', 'Feature 4'].every((name) =>
+          row(name).classList.contains('in-batch')
+        )
+      ).toBe(true);
+    });
+
+    it('adds and drops rows with Ctrl/⌘-click and deletes from the bar', () => {
+      const onDeleteFeatures = vi.fn();
+      renderTimeline({ onDeleteFeatures });
+      fireEvent.click(rowButton('Feature 1'), { ctrlKey: true });
+      fireEvent.click(rowButton('Feature 4'), { metaKey: true });
+      fireEvent.click(rowButton('Feature 3'), { ctrlKey: true });
+      fireEvent.click(rowButton('Feature 4'), { ctrlKey: true });
+      fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+      expect(onDeleteFeatures).toHaveBeenCalledWith(['feature-1', 'feature-3']);
+    });
+
+    it('offers the whole batch in the row menu', () => {
+      const onDeleteFeatures = vi.fn();
+      const { props } = renderTimeline({ onDeleteFeatures });
+      fireEvent.click(rowButton('Feature 1'), { ctrlKey: true });
+      fireEvent.click(rowButton('Feature 2'), { ctrlKey: true });
+      fireEvent.contextMenu(row('Feature 2'));
+      const actions = vi.mocked(props.onFeatureContextMenu).mock.calls[0]![2]!;
+      expect(actions.deleteSelection?.count).toBe(2);
+      actions.deleteSelection!.run();
+      expect(onDeleteFeatures).toHaveBeenCalledWith(['feature-1', 'feature-2']);
+      fireEvent.contextMenu(row('Feature 3'));
+      expect(
+        vi.mocked(props.onFeatureContextMenu).mock.calls[1]![2]!.deleteSelection
+      ).toBeUndefined();
+    });
+
+    it('clears on Escape, a plain click, or a selection made elsewhere', () => {
+      const { rerender, props } = renderTimeline({
+        onDeleteFeatures: vi.fn()
+      });
+      const toolbar = () =>
+        screen.queryByRole('toolbar', { name: 'Selected steps' });
+      fireEvent.click(rowButton('Feature 1'), { ctrlKey: true });
+      fireEvent.keyDown(rowButton('Feature 1'), { key: 'Escape' });
+      expect(toolbar()).toBeNull();
+      fireEvent.click(rowButton('Feature 1'), { ctrlKey: true });
+      fireEvent.click(rowButton('Feature 2'));
+      expect(toolbar()).toBeNull();
+      fireEvent.click(rowButton('Feature 1'), { ctrlKey: true });
+      rerender(<HistoryTimeline {...props} selectedFeatureNodeId="node-3" />);
+      expect(toolbar()).toBeNull();
+    });
+
+    it('batches every visible row with Ctrl/⌘+A', () => {
+      renderTimeline({ onDeleteFeatures: vi.fn() });
+      fireEvent.keyDown(rowButton('Feature 1'), { key: 'a', ctrlKey: true });
+      expect(
+        screen.getByRole('toolbar', { name: 'Selected steps' })
+      ).toHaveTextContent('4 selected');
+    });
+
+    it('drops a deleted step so undo does not bring it back selected', () => {
+      const { rerender, props } = renderTimeline({
+        onDeleteFeatures: vi.fn()
+      });
+      fireEvent.click(rowButton('Feature 1'), { ctrlKey: true });
+      rerender(
+        <HistoryTimeline
+          {...props}
+          features={[feature(2), feature(3), feature(4)]}
+        />
+      );
+      rerender(<HistoryTimeline {...props} />);
+      expect(row('Feature 1')).not.toHaveClass('in-batch');
+    });
+
+    it('selects one row at a time without a batch delete', () => {
+      const { props } = renderTimeline();
+      fireEvent.click(rowButton('Feature 2'), { shiftKey: true });
+      expect(props.onSelectFeature).toHaveBeenCalledWith('node-2');
+      expect(
+        screen.queryByRole('toolbar', { name: 'Selected steps' })
+      ).toBeNull();
+    });
+  });
+
   it('keeps a Show button on a hidden sketch', async () => {
     const user = userEvent.setup();
     const { props } = renderTimeline({

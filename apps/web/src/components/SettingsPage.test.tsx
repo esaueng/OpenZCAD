@@ -824,7 +824,9 @@ describe('settings controls section', () => {
       screen.getByRole('button', { name: 'Reset all shortcuts' })
     ).toBeDisabled();
     // The banner's guidance lives on beside the one header.
-    expect(headers[1]).toHaveTextContent(/Paused while you type/);
+    expect(headers[1]).toHaveTextContent(
+      'Workspace shortcuts pause while you type in a field'
+    );
   });
 });
 

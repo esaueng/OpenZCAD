@@ -567,6 +567,43 @@ export function selectionTouchesBlendFace(
     )
   );
 }
+
+/**
+ * The radii of the body's round blend faces (cylinders and tori), distinct
+ * and largest first.
+ *
+ * A fillet whose tangent chain runs onto an earlier round can roll no larger
+ * ball than that round's own, and the chain can reach a round several edges
+ * away, so after a refusal these are the sizes worth asking the kernel
+ * about: the plain ladder's halves and eighths step right past them.
+ */
+export function blendFaceRadii(
+  kernel: RemusKernel,
+  solid: number,
+  counts: (face: number) => boolean = () => true
+): number[] {
+  const radii: number[] = [];
+  for (const face of kernel.getSolidFaces(solid)) {
+    const surfaceType = surfaceTypeOf(kernel, face);
+    if (surfaceType !== 'cylinder' && surfaceType !== 'torus') {
+      continue;
+    }
+    if (!isBlendFace(kernel, solid, face) || !counts(face)) {
+      continue;
+    }
+    // Exact on analytic faces: a cylinder's radius, a torus's tube radius.
+    const radius = kernel.getFaceMinRadius(face);
+    if (
+      Number.isFinite(radius) &&
+      radius > GEOMETRY_EPSILON &&
+      !radii.some((known) => Math.abs(known - radius) <= GEOMETRY_EPSILON)
+    ) {
+      radii.push(radius);
+    }
+  }
+  return radii.sort((left, right) => right - left);
+}
+
 export function faceVertexCentroid(kernel: RemusKernel, face: number): Vec3 | null {
   const vertices = kernel.getFaceVertices(face);
   if (vertices.length === 0) {

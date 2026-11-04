@@ -59,6 +59,8 @@ export interface PanelControls {
   onPin(): void;
   onUnpin(): void;
   onClose(): void;
+  /** Phone panels share one lane; clear it without rearranging saved docks. */
+  onHidePanels?(): void;
   /** Pressed or focused: the panel becomes the most recently used. */
   onUse(): void;
   dock?: PanelDockControls;
@@ -140,12 +142,48 @@ export function PanelFrame({
     measuresNaturalHeight,
     fallbackMeasure
   ]);
+  useLayoutEffect(() => {
+    if (
+      controls.placement === 'unpinned' ||
+      controls.placement === 'revealed' ||
+      controls.placement === 'phone'
+    ) {
+      const active = document.activeElement;
+      const fromRail = active?.matches(`[data-model-panel-rail="${id}"]`);
+      const fromCoveredColumn = active?.closest('.panel-column.is-inspecting');
+      const lostFocus =
+        active === document.body &&
+        !document.querySelector('.in-place-command');
+      if (fromRail || fromCoveredColumn || lostFocus)
+        sectionRef.current?.focus({ preventScroll: true });
+    }
+  }, [id, controls.placement]);
   return (
     <section
       ref={sectionRef}
       className={`model-panel model-panel-${id} is-${controls.placement}${controls.compact ? ' is-compact' : ''}`}
       aria-label={title}
       data-panel={id}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (
+          event.key !== 'Escape' ||
+          event.defaultPrevented ||
+          !['unpinned', 'revealed', 'phone'].includes(controls.placement)
+        )
+          return;
+        // An active command owns Escape before a temporary inspection does.
+        if (document.querySelector('.in-place-command')) return;
+        if (
+          (event.target as HTMLElement).closest(
+            'input, textarea, select, [contenteditable="true"]'
+          )
+        )
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        controls.onClose();
+      }}
       onPointerDownCapture={controls.onUse}
       onFocusCapture={controls.onUse}
     >
@@ -197,22 +235,24 @@ export function PanelFrame({
           )}
         </h2>
         {actions}
-        <button
-          type="button"
-          className={`model-panel-action model-panel-pin${pinned ? ' is-pinned' : ''}`}
-          aria-label={`Pin ${title}`}
-          aria-pressed={pinned}
-          title={
-            pinned ? `Pinned · unpin ${title}` : `Pin ${title} · keep it open`
-          }
-          onClick={pinned ? controls.onUnpin : controls.onPin}
-        >
-          <Pin
-            size={14}
-            fill={pinned ? 'currentColor' : 'none'}
-            aria-hidden="true"
-          />
-        </button>
+        {controls.placement !== 'phone' && (
+          <button
+            type="button"
+            className={`model-panel-action model-panel-pin${pinned ? ' is-pinned' : ''}`}
+            aria-label={`Pin ${title}`}
+            aria-pressed={pinned}
+            title={
+              pinned ? `Pinned · unpin ${title}` : `Pin ${title} · keep it open`
+            }
+            onClick={pinned ? controls.onUnpin : controls.onPin}
+          >
+            <Pin
+              size={14}
+              fill={pinned ? 'currentColor' : 'none'}
+              aria-hidden="true"
+            />
+          </button>
+        )}
         {dock?.onPopOut && (
           <button
             type="button"
@@ -240,16 +280,31 @@ export function PanelFrame({
           {children}
         </div>
       </div>
-      {controls.status === 'unpinned' && (
+      {(controls.status === 'unpinned' || controls.placement === 'phone') && (
         <footer className="model-panel-footer">
-          <span>Unpinned — the next panel you open replaces it</span>
-          <button
-            type="button"
-            className="model-panel-footer-pin"
-            onClick={controls.onPin}
-          >
-            Pin
-          </button>
+          <span>
+            {controls.placement === 'phone'
+              ? 'Panels share this space.'
+              : 'Temporary panel. Pin to keep it alongside your other panels.'}
+          </span>
+          {controls.placement !== 'phone' && (
+            <button
+              type="button"
+              className="model-panel-footer-pin"
+              onClick={controls.onPin}
+            >
+              Pin
+            </button>
+          )}
+          {controls.placement === 'phone' && controls.onHidePanels && (
+            <button
+              type="button"
+              className="model-panel-footer-pin"
+              onClick={controls.onHidePanels}
+            >
+              Hide panels
+            </button>
+          )}
         </footer>
       )}
       {/* In the body, so the menu stands over every island rather than

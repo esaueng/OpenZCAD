@@ -13,7 +13,10 @@ import {
   listFeaturesInOrder,
   transformBody
 } from '@openzcad/document-core';
-import { nativeFeatureDeletion } from '../apps/web/src/lib/featureDeletion';
+import {
+  batchFeatureDeletion,
+  nativeFeatureDeletion
+} from '../apps/web/src/lib/featureDeletion';
 import {
   selectedFeatureFaces,
   selectionSetFeature
@@ -219,6 +222,63 @@ describe('picked native details', () => {
         )
       ).warnings.length
     ).toBeGreaterThan(0);
+  });
+
+  it('deletes two stacked holes together, reconnecting a later move to the block', async () => {
+    const first = await nativeDetail(adapter, 'hole');
+    const derived = await adapter.syncDocument(first.document);
+    const top = derived.bodyRepresentations[first.bodyId]!.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'primitive.box.face.z-max'
+    )!;
+    const second = holeBody(first.document, {
+      name: 'Second hole',
+      targetBodyId: first.bodyId,
+      faceHash: top.hash,
+      faceReference: top.reference,
+      style: 'simple',
+      diameter: 4,
+      depthMode: 'through',
+      position: { u: 8, v: 0 }
+    });
+    const moved = transformBody(second.document, {
+      name: 'Move',
+      targetBodyId: second.bodyId,
+      translation: { x: 5, y: 0, z: 0 }
+    }).document;
+    expect((await adapter.syncDocument(moved)).warnings).toEqual([]);
+    const secondHole = listFeaturesInOrder(moved).find(
+      (entry) => entry.name === 'Second hole'
+    )!;
+    const removal = batchFeatureDeletion(moved, [
+      first.feature.featureId,
+      secondHole.featureId
+    ]);
+    expect(removal.label).toBe('Delete 2 features');
+    expect(removal.dependents.map((entry) => entry.name)).toEqual(['Move']);
+    const candidate = new CommandManager(moved).runTransaction(
+      removal.label,
+      removal.commands
+    );
+    const result = await adapter.syncDocument(candidate);
+    removal.validateDerived!(result);
+    expect(result.warnings).toEqual([]);
+    expect(listFeaturesInOrder(candidate).map((entry) => entry.name)).toEqual([
+      'Block',
+      'Move'
+    ]);
+    const move = listFeaturesInOrder(candidate).find(
+      (entry) => entry.name === 'Move'
+    )!;
+    const block = listFeaturesInOrder(candidate).find(
+      (entry) => entry.name === 'Block'
+    )!;
+    expect((move.data as { targetBodyId: string }).targetBodyId).toBe(
+      block.bodyId
+    );
+    expect(result.bodyRepresentations[block.bodyId!]!.volume).toBeCloseTo(
+      30 * 24 * 18,
+      4
+    );
   });
 
   it('highlights an entire two-edge chamfer and preserves an in-place move when it is deleted', async () => {

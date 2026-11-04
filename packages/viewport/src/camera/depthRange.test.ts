@@ -101,6 +101,70 @@ describe('camera depth range', () => {
     expect(new THREE.Vector3(0, 0, 1).project(camera).z).toBeGreaterThan(1);
   });
 
+  it.each([0.01, 1, 1000])(
+    'resolves the blade clearance throughout close-up assembly motion at scale %s',
+    (scale) => {
+      const camera = new THREE.PerspectiveCamera(45, 1.44, 0.1, 4000);
+      const target = new THREE.Vector3(0, 0, 2.425).multiplyScalar(scale);
+      camera.up.set(0, 0, 1);
+      camera.position.set(0, 65 * scale, 30 * scale);
+      camera.lookAt(target);
+      const position = camera.position.clone();
+      const orientation = camera.quaternion.clone();
+      const focusDistance = position.distanceTo(target);
+      const lower = new THREE.Box3(
+        new THREE.Vector3(-88, -45, 0).multiplyScalar(scale),
+        new THREE.Vector3(96, 16, 2.4).multiplyScalar(scale)
+      );
+      const upper = new THREE.Box3(
+        new THREE.Vector3(-86, -16, 2.45).multiplyScalar(scale),
+        new THREE.Vector3(96, 43, 4.85).multiplyScalar(scale)
+      );
+      const depthSteps = 2 ** 24 - 1;
+      for (const angle of [0, -15, -30, -55, -30, 0]) {
+        const bounds = lower
+          .clone()
+          .union(
+            upper
+              .clone()
+              .applyMatrix4(
+                new THREE.Matrix4().makeRotationZ(
+                  THREE.MathUtils.degToRad(angle)
+                )
+              )
+          );
+        updateCameraClipping(camera, bounds, focusDistance);
+        // A physical 0.05 mm gap must occupy distinct depth-buffer samples,
+        // even when the moving body's coarse AABB reaches behind the camera.
+        const depths = [2.4, 2.45].map((z) => {
+          const ndc = new THREE.Vector3(0, 0, z * scale).project(camera).z;
+          expect(ndc).toBeGreaterThan(-1);
+          expect(ndc).toBeLessThan(1);
+          return Math.round(((ndc + 1) / 2) * depthSteps);
+        });
+        expect(
+          Math.abs(depths[0]! - depths[1]!),
+          `joint ${angle}°`
+        ).toBeGreaterThan(2);
+        expect(camera.position.equals(position)).toBe(true);
+        expect(camera.quaternion.equals(orientation)).toBe(true);
+      }
+    }
+  );
+
+  it('still permits a genuinely microscopic inspection distance', () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+    const bounds = new THREE.Box3(
+      new THREE.Vector3(-10, -10, -10),
+      new THREE.Vector3(10, 10, 10)
+    );
+    updateCameraClipping(camera, bounds, 0.001);
+    expect(new THREE.Vector3(0, 0, -0.001).project(camera).z).toBeGreaterThan(
+      -1
+    );
+    expect(camera.near).toBeGreaterThan(0);
+  });
+
   it('allows orthographic depth on both sides of the camera', () => {
     const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, -2000, 4000);
     const bounds = new THREE.Box3(

@@ -576,15 +576,12 @@ describe('ModelPanel', () => {
   });
 
   it('never unpins a docked panel shown in the phone lane', async () => {
-    const user = userEvent.setup();
     const frame = controls({ placement: 'phone' });
     renderPanels(['history'], {}, frame);
-    const pin = within(
-      screen.getByRole('region', { name: 'History' })
-    ).getByRole('button', { name: 'Pin History' });
-    expect(pin).toHaveAttribute('aria-pressed', 'false');
-    await user.click(pin);
-    expect(frame.onPin).toHaveBeenCalledTimes(1);
+    const region = within(screen.getByRole('region', { name: 'History' }));
+    expect(region.queryByRole('button', { name: 'Pin History' })).toBeNull();
+    expect(region.getByText('Panels share this space.')).toBeVisible();
+    expect(frame.onPin).not.toHaveBeenCalled();
     expect(frame.onUnpin).not.toHaveBeenCalled();
   });
 
@@ -594,7 +591,9 @@ describe('ModelPanel', () => {
     renderPanels(['parameters'], {}, frame);
     const region = within(screen.getByRole('region', { name: 'Parameters' }));
     expect(
-      region.getByText('Unpinned — the next panel you open replaces it')
+      region.getByText(
+        'Temporary panel. Pin to keep it alongside your other panels.'
+      )
     ).toBeVisible();
     expect(
       region.getByRole('button', { name: 'Pin Parameters' })
@@ -657,7 +656,8 @@ describe('ModelPanel', () => {
     expect(times).toEqual([
       today.toLocaleTimeString(undefined, {
         hour: 'numeric',
-        minute: '2-digit'
+        minute: '2-digit',
+        hour12: false
       }),
       older.toLocaleDateString()
     ]);

@@ -9,6 +9,7 @@ import {
   conflictFromDocuments,
   hasUnresolvedConflict,
   readUnresolvedConflict,
+  reaskConflict,
   rememberUnresolvedConflict,
   resolveProjectConflict,
   type ConflictResolutionHandlers
@@ -405,5 +406,49 @@ describe('collaboration conflict recovery', () => {
       )
     ).rejects.toMatchObject({ code: 'LEASE_REQUIRED' });
     expect(recoveryHandlers.saveLocalAsCopy).not.toHaveBeenCalled();
+  });
+});
+
+describe('reaskConflict', () => {
+  // Regression: when the account could not be reached after a live-session
+  // choice, the old question came back citing the copy from before it, and
+  // "Keep mine" wrote that superseded copy over the account.
+  it('keeps the remote fence but asks about the document now on screen', async () => {
+    const base = createProjectDocument('Re-ask', owner);
+    const superseded = edited(base, 4, 'before the room choice');
+    const account = edited(base, 5, 'in the account');
+    const onScreen = edited(base, 6, 'from the live session');
+    const stale = conflictFromDocuments(superseded, account, 'account');
+
+    const reasked = reaskConflict(stale, onScreen);
+    expect(reasked.localDocument).toEqual(onScreen);
+    expect(reasked.remoteDocument).toEqual(stale.remoteDocument);
+    expect(reasked.expectedRemoteVersion).toBe(5);
+
+    const calls = handlers();
+    await resolveProjectConflict(
+      reasked,
+      'keep-mine',
+      { role: 'owner', lease: null, leasesEnforced: false },
+      calls
+    );
+    expect(calls.keepMyVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: onScreen,
+        expectedRemoteVersion: 5
+      }),
+      expect.anything()
+    );
+  });
+
+  it('leaves a conflict for another project alone', () => {
+    const base = createProjectDocument('Mine', owner);
+    const stale = conflictFromDocuments(
+      edited(base, 2, 'a'),
+      edited(base, 3, 'b'),
+      'account'
+    );
+    const other = createProjectDocument('Other', owner);
+    expect(reaskConflict(stale, other)).toBe(stale);
   });
 });

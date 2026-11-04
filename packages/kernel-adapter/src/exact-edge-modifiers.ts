@@ -14,7 +14,11 @@ import {
   type BlendOperation
 } from './exact-blend-refusal';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
-import { countBlendFaces, selectionTouchesBlendFace } from './exact-brep';
+import {
+  countBlendFaces,
+  blendFaceRadii,
+  selectionTouchesBlendFace
+} from './exact-brep';
 import {
   applyVariableRadiusFillet,
   type VariableFilletSpec
@@ -535,6 +539,73 @@ export function acceptedEdgeModifierProbe(
   return null;
 }
 
+/** Most earlier-round radii {@link acceptedBlendRadiusProbe} asks about. */
+export const BLEND_RADIUS_PROBES = 3;
+
+/**
+ * The largest radius of an earlier round on the body that is accepted as an
+ * exact fillet of this selection, above `accepted` and below the refused
+ * `size`, or `null` when none is.
+ *
+ * A fillet whose tangent chain runs onto a smaller earlier round can roll no
+ * ball larger than that round's, so its own radius is often the most the
+ * selection carries — and the ladder's halves and eighths step past it. On a
+ * box whose top edges were rounded at r1 down its sides, the bottom edge
+ * refuses r3, and the ladder quoted 0.375 while r1 builds exactly. Like the
+ * ladder, only a size the kernel built is returned.
+ */
+export function acceptedBlendRadiusProbe(
+  kernel: RemusKernel,
+  target: number,
+  selected: number[],
+  size: number,
+  accepted: number | null,
+  /** Which blend-shaped faces an earlier fillet or chamfer made. */
+  priorBlendFace?: (face: number) => boolean
+): number | null {
+  const floor = accepted ?? 0;
+  let radii: number[];
+  try {
+    radii = blendFaceRadii(kernel, target, priorBlendFace);
+  } catch {
+    // Without the body's rounds there is nothing more to ask about.
+    return null;
+  }
+  const candidates = radii
+    .map(probeSize)
+    .filter(
+      (radius) =>
+        Number.isFinite(radius) &&
+        radius > floor + GEOMETRY_EPSILON &&
+        radius < size - GEOMETRY_EPSILON
+    )
+    .slice(0, BLEND_RADIUS_PROBES);
+  for (const radius of candidates) {
+    try {
+      if (
+        applyEdgeModifier(
+          kernel,
+          target,
+          selected,
+          'fillet',
+          radius,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          true
+        ) !== null
+      ) {
+        return radius;
+      }
+    } catch {
+      // A throw is a refusal like any other.
+    }
+  }
+  return null;
+}
+
 /** Most kernel calls spent raising a probed size toward the refused one. */
 export const EDGE_MODIFIER_REFINE_STEPS = 6;
 
@@ -715,7 +786,7 @@ export function edgeModifierFailureMessage(
   // throws still cannot fall back to advising a smaller size.
   let smallerSizesRefused = false;
   try {
-    const accepted = acceptedEdgeModifierProbe(
+    const laddered = acceptedEdgeModifierProbe(
       kernel,
       target,
       selected,
@@ -724,6 +795,18 @@ export function edgeModifierFailureMessage(
       cliffLimit,
       chamferAngleRadians
     );
+    const banded =
+      featureKind === 'fillet'
+        ? acceptedBlendRadiusProbe(
+            kernel,
+            target,
+            selected,
+            size,
+            laddered,
+            priorBlendFace
+          )
+        : null;
+    const accepted = banded ?? laddered;
     if (accepted !== null) {
       const quoted = refineAcceptedEdgeModifierSize(
         kernel,
