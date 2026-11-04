@@ -4,7 +4,12 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { normalizeDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import {
+  solveAssembly,
+  toUserId,
+  transformPoint,
+  type Vector3
+} from '@openzcad/shared';
 import {
   buildDemoSeed,
   DEMO_DEFINITIONS,
@@ -60,8 +65,8 @@ describe('shared scissors sample', () => {
     expect(document.assembly?.joints).toHaveLength(1);
     expect(document.assembly?.joints[0]).toMatchObject({
       kind: 'revolute',
-      values: [-30],
-      limits: [{ min: -55, max: 0 }]
+      values: [30],
+      limits: [{ min: 0, max: 55 }]
     });
     expect(definition.revisions).toEqual([]);
     expect(saveStates).toHaveLength(1);
@@ -87,13 +92,57 @@ describe('shared scissors sample', () => {
     expect(seed.document.ownerUserId).toBe('user_sample');
     expect(seed.saveStates[0]?.ownerUserId).toBe('user_sample');
     expect(next.document.ownerUserId).toBe('user_local_browser');
-    next.document.assembly!.joints[0]!.values[0] = -10;
-    expect(seed.document.assembly!.joints[0]!.values).toEqual([-30]);
+    next.document.assembly!.joints[0]!.values[0] = 10;
+    expect(seed.document.assembly!.joints[0]!.values).toEqual([30]);
     const reset = await buildDemoSeed(
       definition,
       toUserId('user_sample'),
       async () => seed.document.derived
     );
-    expect(reset.document.assembly!.joints[0]!.values).toEqual([-30]);
+    expect(reset.document.assembly!.joints[0]!.values).toEqual([30]);
+  });
+
+  it('opens the blades by spreading the finger loops, never crossing them', () => {
+    const set = seed.document.assembly!;
+    const joint = set.joints[0]!;
+    const { min, max } = joint.limits[0]!;
+    // The blades lie along +x from the pivot; the loops are on the -x side.
+    // Mean of each loop part's vertices behind the pivot, in modelled space.
+    function loopCentre(componentId: string): Vector3 {
+      const component = set.components.find((c) => c.id === componentId)!;
+      const { vertices } =
+        seed.document.derived.bodyRepresentations[component.bodyId]!.mesh;
+      const sum = { x: 0, y: 0, z: 0 };
+      let count = 0;
+      for (let i = 0; i < vertices.length; i += 3) {
+        if (vertices[i]! >= -10) continue;
+        sum.x += vertices[i]!;
+        sum.y += vertices[i + 1]!;
+        sum.z += vertices[i + 2]!;
+        count += 1;
+      }
+      expect(count).toBeGreaterThan(0);
+      return { x: sum.x / count, y: sum.y / count, z: sum.z / count };
+    }
+    const finger = joint.parent.componentId;
+    const thumb = joint.child.componentId;
+    const fingerLoop = loopCentre(finger);
+    const thumbLoop = loopCentre(thumb);
+    function gap(value: number): number {
+      const poses = solveAssembly(set, new Map([[joint.id, [value]]])).poses;
+      const a = transformPoint(poses.get(finger)!, fingerLoop);
+      const b = transformPoint(poses.get(thumb)!, thumbLoop);
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+    // Closed at 0: the loops sit apart, and opening only spreads them.
+    expect(min).toBe(0);
+    const steps = 11;
+    let previous = gap(min);
+    for (let step = 1; step <= steps; step += 1) {
+      const next = gap(min + ((max - min) * step) / steps);
+      expect(next).toBeGreaterThan(previous);
+      previous = next;
+    }
+    expect(gap(max)).toBeGreaterThan(gap(min) * 1.5);
   });
 });

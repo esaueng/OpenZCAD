@@ -3002,8 +3002,8 @@
           "values": [0],
           "limits": [
             {
-              "min": -55,
-              "max": 0
+              "min": 0,
+              "max": 55
             }
           ]
         }
@@ -3016,7 +3016,7 @@
       "kind": "assembly.pose.set",
       "payload": {
         "values": {
-          "joint_ea1c3a16-ea0d-4a5a-8868-8982f7e0ff89": [-30]
+          "joint_ea1c3a16-ea0d-4a5a-8868-8982f7e0ff89": [30]
         }
       },
       "replayVersion": 1,
@@ -3148,11 +3148,11 @@
         },
         "limits": [
           {
-            "min": -55,
-            "max": 0
+            "min": 0,
+            "max": 55
           }
         ],
-        "values": [-30]
+        "values": [30]
       }
     ],
     "positions": [],
