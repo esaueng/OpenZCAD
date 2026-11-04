@@ -101,8 +101,10 @@ test(
 
     // Across the bore: a drag sideways through the front view, a little off
     // its middle height so the line snaps onto it (z = 15).
-    const front = await viewBox(canvas, 'front');
     await tools.getByRole('button', { name: 'Section view' }).click();
+    // Tool guidance takes its own row on short workspaces. Measure the
+    // rendered view after entering the tool, as the user sees it now.
+    const front = await viewBox(canvas, 'front');
     const y = front.centreY + 0.6 * front.pxPerMm;
     await page.mouse.move(front.left + 2 * front.pxPerMm, y);
     await page.mouse.down();
@@ -144,10 +146,14 @@ test(
     // A dimension on the section's own edge: the bore, cut square to its
     // axis, is a Ø12 circle at the section's middle.
     await tools.getByRole('button', { name: 'Diameter' }).click();
-    await page.mouse.click(placed.centreX + 6 * placed.pxPerMm, placed.centreY);
+    const dimensionView = await viewBox(canvas, 'section-A');
     await page.mouse.click(
-      placed.centreX + 20 * placed.pxPerMm,
-      placed.top - 8 * placed.pxPerMm
+      dimensionView.centreX + 6 * dimensionView.pxPerMm,
+      dimensionView.centreY
+    );
+    await page.mouse.click(
+      dimensionView.centreX + 20 * dimensionView.pxPerMm,
+      dimensionView.top - 8 * dimensionView.pxPerMm
     );
     const diameter = canvas.getByRole('button', {
       name: /^Diameter dimension .*12$/

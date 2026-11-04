@@ -1504,7 +1504,7 @@ test('resumes a workspace on another device and carries undo and redo back acros
     await expect(prompt).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await a.getByRole('button', { name: 'Open with default view' }).click();
     await expect(
-      a.getByRole('region', { name: 'Getting started' })
+      a.getByRole('region', { name: 'Modeling guide' })
     ).toHaveCount(0);
     await expect(
       a.getByRole('button', { name: 'Redo', exact: true })

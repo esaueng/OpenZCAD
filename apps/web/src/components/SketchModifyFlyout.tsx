@@ -36,9 +36,21 @@ export function SketchModifyFlyout({
           8,
           Math.min(anchor.right + 10, window.innerWidth - panel.width - 8)
         );
+        const stage = anchorRef.current?.closest('.viewer-area');
+        const footerTop =
+          window.innerWidth <= 600
+            ? Math.min(
+                stage
+                  ?.querySelector('.workspace-toast:not(.hidden)')
+                  ?.getBoundingClientRect().top ?? window.innerHeight,
+                stage
+                  ?.querySelector('.command-bar-lane')
+                  ?.getBoundingClientRect().top ?? window.innerHeight
+              )
+            : window.innerHeight;
         const y = Math.max(
           8,
-          Math.min(anchor.top, window.innerHeight - panel.height - 8)
+          Math.min(anchor.top, footerTop - panel.height - 8)
         );
         if (`${x},${y}` !== placed) {
           placed = `${x},${y}`;

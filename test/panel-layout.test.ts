@@ -92,7 +92,12 @@ function stageFitting(columns: number): number {
 }
 
 function essentials(): PanelLayout {
-  return applyPreset(defaultPanelLayout(), 'essentials');
+  // These geometry scenarios exercise a right-hand panel in use. Parking
+  // follows that explicit activity; fresh-device priority is tested below.
+  return notePanelUsed(
+    applyPreset(defaultPanelLayout(), 'essentials'),
+    'parameters'
+  );
 }
 
 function modelOnly(): PanelLayout {
@@ -2147,6 +2152,28 @@ describe('gaps between panels', () => {
 });
 
 describe('the dock footprint cap', () => {
+  it('keeps Objects on a fresh narrow workspace and follows explicit dock activity', () => {
+    const initial = applyPreset(defaultPanelLayout(), 'essentials');
+    const stage = { width: 1000, height: 800 };
+    expect(
+      computePanelGeometry(initial, stage).columns.map(
+        (column) => column.panels
+      )
+    ).toEqual([['bodies']]);
+    const parametersUsed = notePanelUsed(initial, 'parameters');
+    expect(
+      computePanelGeometry(parametersUsed, stage).columns.map(
+        (column) => column.panels
+      )
+    ).toEqual([['parameters']]);
+    const objectsUsed = notePanelUsed(parametersUsed, 'bodies');
+    expect(
+      computePanelGeometry(objectsUsed, stage).columns.map(
+        (column) => column.panels
+      )
+    ).toEqual([['bodies']]);
+    expect(computePanelGeometry(objectsUsed, STAGE).columns).toHaveLength(2);
+  });
   it('counts both rails and every gap', () => {
     // 60px a side, a column and the 4px dock gap 300px, Essentials 720px.
     expect(SIDE_COST).toBe(60);
@@ -2233,10 +2260,11 @@ describe('the dock footprint cap', () => {
     ]);
   });
 
-  it('parks every left column before any right one, outermost first', () => {
+  it('keeps recently used right columns, parking outermost columns first', () => {
     const layout = layoutWith({
       left: [['bodies'], ['history']],
-      right: [['parameters'], ['revisions'], ['diagnostics']]
+      right: [['parameters'], ['revisions'], ['diagnostics']],
+      recent: ['diagnostics', 'revisions', 'parameters', 'bodies', 'history']
     });
     const dockedAt = (columns: number) =>
       computePanelGeometry(layout, {
@@ -2475,7 +2503,8 @@ describe('parked panels in the unpinned slot', () => {
   it('lets a layout past the cap consolidate columns', () => {
     const layout = layoutWith({
       left: [['bodies']],
-      right: [['parameters'], ['revisions']]
+      right: [['parameters'], ['revisions']],
+      recent: ['revisions', 'parameters']
     });
     const stage: PanelStage = {
       width: Math.ceil(stageFitting(2)),
@@ -2704,7 +2733,7 @@ describe('phone-width stages', () => {
 
   it('shows the most recently used open panel', () => {
     const phoneStage: PanelStage = { width: 390, height: 844 };
-    let layout = essentials();
+    let layout = applyPreset(defaultPanelLayout(), 'essentials');
     layout = notePanelUsed(layout, 'bodies');
     expect(computePanelGeometry(layout, phoneStage).phonePanel).toBe('bodies');
     // A rail press, an open and a focus all count as a use.
@@ -3232,7 +3261,10 @@ describe('panel layout persistence', () => {
       }).recent
     ).toEqual(['history', 'bodies']);
     expect(normalizePanelLayout({ recent: 'history' }).recent).toEqual([]);
-    let layout = notePanelUsed(essentials(), 'bodies');
+    let layout = notePanelUsed(
+      applyPreset(defaultPanelLayout(), 'essentials'),
+      'bodies'
+    );
     layout = notePanelUsed(layout, 'revisions');
     expect(layout.recent).toEqual(['revisions', 'bodies']);
     const storage = memoryStorage();

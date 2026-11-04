@@ -106,11 +106,19 @@ export function SectionToolbox({
       if (!panel) return;
       panel.style.translate = '';
       const box = panel.getBoundingClientRect();
-      const x = Math.max(8, Math.min(box.x, window.innerWidth - box.width - 8));
-      const y = Math.max(
-        8,
-        Math.min(box.y, window.innerHeight - box.height - 8)
-      );
+      const stage = panel.closest('.viewer-area');
+      const rail = panel.closest('.instrument-rail')?.getBoundingClientRect();
+      const footer = stage
+        ?.querySelector('.command-bar-lane')
+        ?.getBoundingClientRect();
+      const stageTop =
+        Number.parseFloat(
+          getComputedStyle(panel).getPropertyValue('--stage-top')
+        ) || 8;
+      const right = rail?.left ?? window.innerWidth;
+      const bottom = footer?.top ?? window.innerHeight;
+      const x = Math.max(8, Math.min(box.x, right - box.width - 8));
+      const y = Math.max(stageTop, Math.min(box.y, bottom - box.height - 48));
       panel.style.translate = `${x - box.x}px ${y - box.y}px`;
     }
     function schedulePlacement() {

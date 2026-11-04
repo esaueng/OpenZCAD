@@ -243,7 +243,7 @@ export function buildSketchModeRig(
     new THREE.MeshBasicMaterial({
       color: TINT_COLOR,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.14,
       depthWrite: false,
       side: THREE.DoubleSide
     })
@@ -548,7 +548,8 @@ export function buildSketchModeRig(
 
       const visual = createSketchCurve(vertices, {
         color,
-        linewidth: SKETCH_LINE_WIDTH,
+        linewidth:
+          SKETCH_LINE_WIDTH + (state.selectedObjectId === object.id ? 1.2 : 0),
         opacity,
         depthTest: true,
         closed: polyline.closed,

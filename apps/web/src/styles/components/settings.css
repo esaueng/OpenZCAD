@@ -1294,6 +1294,32 @@
 }
 
 @media (max-width: 580px) {
+  .settings-page .settings-head .settings-save-message {
+    flex: 1 0 100%;
+    white-space: normal;
+    overflow: visible;
+    order: 2;
+    padding-bottom: 6px;
+  }
+
+  .settings-segmented[aria-label='Library card size'] {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .settings-segmented[aria-label='Library card size'] label,
+  .settings-segmented[aria-label='Library card size'] span {
+    min-width: 0;
+  }
+
+  .settings-segmented[aria-label='Library card size'] span {
+    width: 100%;
+    padding-inline: 5px;
+    box-sizing: border-box;
+  }
+
   .settings-layout {
     --settings-inline: var(--sp-3);
     grid-template-columns: calc(var(--island-gap) + 56px) minmax(0, 1fr);

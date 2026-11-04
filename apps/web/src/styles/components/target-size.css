@@ -29,6 +29,61 @@
   position: relative;
 }
 
+/* Larger touch targets need a second column before they run out of height.
+   Keep the toolboxes outside the scrolling surface so their popovers can
+   still extend into the viewport. */
+@media (pointer: coarse) and (max-height: 900px) {
+  .instrument-rail > .viewer-rail {
+    display: grid;
+    grid-template-columns: repeat(2, 40px);
+    justify-content: center;
+    width: calc(var(--rail-w) * 2 - 8px);
+  }
+
+  .instrument-rail .rail-divider {
+    grid-column: 1 / -1;
+    justify-self: center;
+  }
+
+  .workspace.column-layout {
+    --lane-end: calc(
+      var(--rail-w) * 2 + var(--island-gap) * 2 + var(--right-panels-w)
+    );
+  }
+}
+
+@media (pointer: coarse) and (max-height: 540px) {
+  .workspace.column-layout {
+    --lane-end: calc(
+      var(--rail-w) * 4 + var(--island-gap) * 3 + var(--right-panels-w)
+    );
+  }
+}
+
+@media (pointer: fine) and (min-height: 541px) and (max-height: 600px) {
+  .instrument-rail > .viewer-rail {
+    display: grid;
+    grid-template-columns: repeat(2, 30px);
+    justify-content: center;
+    width: calc(var(--rail-w) * 2 - 8px);
+  }
+
+  .workspace.column-layout .instrument-rail .rail-button {
+    height: 30px;
+  }
+
+  .instrument-rail .rail-divider {
+    grid-column: 1 / -1;
+    justify-self: center;
+  }
+
+  .workspace.column-layout {
+    --lane-end: calc(
+      var(--rail-w) * 2 + var(--island-gap) * 2 + var(--right-panels-w)
+    );
+  }
+}
+
 :where(
   button.brand,
   button.section-title,
@@ -38,4 +93,32 @@
   content: '';
   position: absolute;
   inset: min(0px, calc((100% - 24px) / 2));
+}
+/* Touch input needs a larger visible target, rather than overlapping
+   invisible hit areas. The rails and their columns grow together. */
+@media (pointer: coarse) {
+  .workspace.column-layout {
+    --rail-w: 48px;
+  }
+
+  button.command-rail,
+  .instrument-rail .rail-button,
+  .drawing-rail-button {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .command-tile-pin {
+    width: 40px;
+    height: 40px;
+    opacity: 1;
+  }
+
+  .in-place-command-cancel,
+  .in-place-command-done,
+  .in-place-command-options > summary {
+    min-height: 40px;
+  }
 }

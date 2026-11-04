@@ -808,7 +808,7 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
 
   await page.keyboard.press('?');
   await expect(paletteInput).toHaveValue('');
-  const shortcuts = page.getByRole('dialog', { name: 'Controls', exact: true });
+  const shortcuts = page.getByRole('dialog', { name: 'Help & controls', exact: true });
   await expect(shortcuts).toHaveAttribute('aria-modal', 'true');
   // Focus used to stay on BODY, leaving the dialog unreachable by keyboard.
   await expect(shortcuts.locator(':focus')).toHaveCount(1);

@@ -115,7 +115,7 @@ test('all seven standard views agree between keyboard and command palette', asyn
   await page.keyboard.press('Escape');
 
   await page.keyboard.press('?');
-  const controls = page.getByRole('dialog', { name: 'Controls' });
+  const controls = page.getByRole('dialog', { name: 'Help & controls' });
   for (const view of STANDARD_VIEWS) {
     await expect(
       controls.locator('.shortcut-row', { hasText: view.label }).locator('kbd')
@@ -184,7 +184,7 @@ test('a remapped back-view key reaches the same view after reopen', async ({
   await page.keyboard.press('?');
   await expect(
     page
-      .getByRole('dialog', { name: 'Controls' })
+      .getByRole('dialog', { name: 'Help & controls' })
       .locator('.shortcut-row', { hasText: 'Back view' })
       .locator('kbd')
   ).toHaveText('8');

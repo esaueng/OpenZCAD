@@ -160,8 +160,13 @@ export function InPlaceCommandBar({
           ?.focus({ preventScroll: true });
     };
   }, [title]);
-  const refusalSummary = refusal ? modelingRefusalSummary(refusal) : null;
-  const shown = refusalSummary ?? refusal;
+  const refusalSummary = refusal
+    ? modelingRefusalSummary(refusal, title)
+    : null;
+  const shown =
+    refusalSummary ??
+    refusal?.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, '') ??
+    null;
   const hintRef = useRef<HTMLSpanElement>(null);
   const hintId = useId();
   // A refusal wraps to three lines; one longer than that offers the rest
@@ -202,6 +207,9 @@ export function InPlaceCommandBar({
       }}
     >
       <span className="in-place-command-title">{title}</span>
+      <span className="in-place-command-state">
+        {locked ? 'Applying…' : refusal ? 'Needs attention' : 'Preview'}
+      </span>
       <span
         ref={hintRef}
         id={hintId}
@@ -235,7 +243,7 @@ export function InPlaceCommandBar({
       {onPreciseValues && (
         <button
           type="button"
-          className="in-place-command-cancel"
+          className="in-place-command-cancel in-place-command-precise"
           onClick={onPreciseValues}
           disabled={locked}
         >
@@ -246,7 +254,7 @@ export function InPlaceCommandBar({
       values.length > 0 ||
       actions.length > 0 ||
       picks ? (
-        <details className="in-place-command-options">
+        <details className="in-place-command-options in-place-command-parameters">
           <summary aria-label={`${title} options`} title="Options">
             {options.length > 0 || values.length > 0 ? (
               <SlidersHorizontal size={14} aria-hidden="true" />
@@ -732,9 +740,18 @@ function ValueField({
   // The text being typed, while the field has focus; else what is held.
   const [draft, setDraft] = useState<string | null>(null);
   const [refused, setRefused] = useState(false);
+  const errorId = useId();
   // Escape's blur drops the draft rather than committing it.
   const dropOnBlur = useRef(false);
   const shown = draft ?? field.text;
+  const number = Number(shown);
+  const suffix = field.suffix ? ` ${field.suffix}` : '';
+  const rule =
+    Number.isFinite(number) && field.min !== undefined && number < field.min
+      ? `${label} must be at least ${field.min}${suffix}.`
+      : Number.isFinite(number) && field.max !== undefined && number > field.max
+        ? `${label} must be at most ${field.max}${suffix}.`
+        : `${label} was not applied.`;
   const commit = (text: string): boolean => {
     if (text.trim() === field.text.trim()) {
       setRefused(false);
@@ -769,6 +786,7 @@ function ValueField({
         autoComplete="off"
         aria-label={spokenValueName(label)}
         aria-invalid={refused || undefined}
+        aria-describedby={refused ? errorId : undefined}
         value={shown}
         disabled={locked}
         onFocus={(event) => {
@@ -816,6 +834,12 @@ function ValueField({
           {field.suffix}
         </span>
       ) : null}
+      {refused && (
+        <span id={errorId} className="in-place-param-error" role="alert">
+          {rule} Correct it or press Esc to restore {field.text}
+          {suffix}.
+        </span>
+      )}
     </span>
   );
 }

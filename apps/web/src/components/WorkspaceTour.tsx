@@ -4,7 +4,7 @@ import {
   useState,
   type FocusEvent as ReactFocusEvent
 } from 'react';
-import { X } from 'lucide-react';
+import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import {
   advanceThroughCompleted,
   tourStepBody,
@@ -18,6 +18,8 @@ import { StableLabel } from './StableLabel';
 interface WorkspaceTourProps extends WorkspaceTourSignals {
   /** Fired on skip AND on finishing the last step — either way it is over. */
   onDismiss(): void;
+  minimized?: boolean;
+  onMinimizedChange?(value: boolean): void;
 }
 
 /**
@@ -31,9 +33,13 @@ export function WorkspaceTour({
   featureCount,
   hasSelection,
   exportSeen,
-  onDismiss
+  onDismiss,
+  minimized: minimizedProp,
+  onMinimizedChange
 }: WorkspaceTourProps) {
   const keymap = useKeymap();
+  const [localMinimized, setLocalMinimized] = useState(false);
+  const minimized = minimizedProp ?? localMinimized;
   const [index, setIndex] = useState(() =>
     advanceThroughCompleted(0, { featureCount, hasSelection, exportSeen })
   );
@@ -141,11 +147,30 @@ export function WorkspaceTour({
   return (
     <section
       ref={cardRef}
-      className="workspace-tour"
-      aria-label="Getting started"
+      className={`workspace-tour${minimized ? ' is-minimized' : ''}`}
+      aria-label="Modeling guide"
       onFocus={rememberReturn}
     >
       <header className="workspace-tour-head">
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={
+            minimized ? 'Expand modeling guide' : 'Minimize modeling guide'
+          }
+          aria-expanded={!minimized}
+          onClick={() => {
+            setLocalMinimized(!minimized);
+            onMinimizedChange?.(!minimized);
+          }}
+        >
+          {minimized ? (
+            <ChevronUp size={14} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={14} aria-hidden="true" />
+          )}
+        </button>
+        <span>Modeling guide</span>
         <span className="workspace-tour-progress" aria-hidden="true">
           {WORKSPACE_TOUR_STEPS.map((entry, dot) => (
             <span
@@ -172,9 +197,15 @@ export function WorkspaceTour({
           <X size={14} aria-hidden="true" />
         </button>
       </header>
+      {minimized && (
+        <span className="visually-hidden" role="status" aria-live="polite">
+          Modeling guide, step {index + 1} of {WORKSPACE_TOUR_STEPS.length}:{' '}
+          {step.title}
+        </span>
+      )}
       {/* A step can change on its own (it advances when its action
           happens), so the new step is announced. */}
-      <div aria-live="polite" aria-atomic="true">
+      <div hidden={minimized} aria-live="polite" aria-atomic="true">
         <h2 className="workspace-tour-title">{step.title}</h2>
         <p className="workspace-tour-body">
           {tourStepBody(step, (id) => {
@@ -183,7 +214,7 @@ export function WorkspaceTour({
           })}
         </p>
       </div>
-      <footer className="workspace-tour-actions">
+      <footer hidden={minimized} className="workspace-tour-actions">
         <button
           type="button"
           className="workspace-tour-next"

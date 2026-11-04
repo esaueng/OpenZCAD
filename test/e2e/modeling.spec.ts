@@ -4725,7 +4725,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
 
 test('a refused boolean never lands in history and says why in the form', { tag: '@ci-smoke' }, async ({
   page
-}) => {
+}, testInfo) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refused Boolean');
@@ -4769,12 +4769,14 @@ test('a refused boolean never lands in history and says why in the form', { tag:
   await expect(
     intersectBar.getByRole('button', { name: /Done/ })
   ).toBeDisabled();
+  await expect(intersectBar.getByRole('status')).toContainText('Intersect would leave no solid.');
   await expect(featureRows).toHaveCount(before);
   await expect(
     page.locator('.feature-row', { hasText: 'Intersect' })
   ).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expectBodyCount(page, 2);
+  await page.screenshot({ path: testInfo.outputPath('boolean-refused.png') });
 });
 
 test('an open sketch chain does not light the profile tools', async ({

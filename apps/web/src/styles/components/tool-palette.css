@@ -58,3 +58,21 @@
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
 }
+/* Tool names and prerequisites remain readable without hover, including
+   unavailable commands discovered through the complete catalog. */
+.command-tile-description {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  white-space: normal;
+}
+
+.command-tile-description small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  font-weight: var(--fw-normal);
+}

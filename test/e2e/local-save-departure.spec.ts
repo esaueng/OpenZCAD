@@ -319,7 +319,7 @@ for (const connectivity of ['online', 'offline edit'] as const) {
 
 test('keeps the failed workspace open on internal departure and retries before reload', async ({
   page
-}) => {
+}, testInfo) => {
   const name = 'Failed local departure';
   await prepareLocalBox(page, name);
   // Fail the browser's real document write, without replacing the app's save
@@ -362,6 +362,9 @@ test('keeps the failed workspace open on internal departure and retries before r
     page.getByRole('status', { name: 'Not saved', exact: true })
   ).toBeVisible();
   const failuresBeforeLeaving = await writeFailures();
+  await page.screenshot({
+    path: testInfo.outputPath('local-save-refused.png')
+  });
 
   // An internal departure must await the failed retry and leave the only
   // unsaved document in place rather than replacing it with the project shelf.
@@ -395,6 +398,9 @@ test('keeps the failed workspace open on internal departure and retries before r
   await expect(
     page.getByRole('status', { name: 'Local only', exact: true })
   ).toBeVisible({ timeout: SAVE_BUDGET_MS });
+  await page.screenshot({
+    path: testInfo.outputPath('local-save-recovered.png')
+  });
   expect((await storedProject(page))?.featureOrder).toHaveLength(2);
   expect(await attemptReload(page)).toBe(false);
   await expectBoxAndSphere(page);
