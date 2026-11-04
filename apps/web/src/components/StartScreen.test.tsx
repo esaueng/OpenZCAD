@@ -9,6 +9,7 @@ import {
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
+import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
@@ -1753,6 +1754,19 @@ describe('StartScreen permanent deletion', () => {
 
 describe('StartScreen sample reset and folders', () => {
   afterEach(() => localStorage.clear());
+
+  it('offers the scissors assembly without promising unavailable design revisions', () => {
+    const onOpenDemo = vi.fn();
+    renderStartScreen({ demos: DEMO_DEFINITIONS, signedIn: false, onOpenDemo });
+    const card = screen.getByRole('button', { name: /^Open demo: Scissors/ });
+    expect(card).toBeEnabled();
+    expect(within(card).getByText('Scissors')).toBeInTheDocument();
+    expect(card.querySelector('.demo-card-revs')).toBeNull();
+    fireEvent.click(card);
+    expect(onOpenDemo).toHaveBeenCalledWith(
+      DEMO_DEFINITIONS.find((demo) => demo.key === 'scissors')
+    );
+  });
 
   it('takes a reset sample out of any folder that still lists it', async () => {
     const onResetDemo = vi.fn<() => Promise<boolean>>();

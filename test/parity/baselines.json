@@ -26,5 +26,22 @@
       "volume": 34673.60481847148,
       "faceCount": 11
     }
+  ],
+  "scissors": [
+    {
+      "name": "Lower blade & finger loop",
+      "volume": 5903.794610895325,
+      "faceCount": 18
+    },
+    {
+      "name": "Upper blade & thumb loop",
+      "volume": 5774.419710872446,
+      "faceCount": 19
+    },
+    {
+      "name": "Captive pivot pin",
+      "volume": 368.03757936804425,
+      "faceCount": 7
+    }
   ]
 }

@@ -122,6 +122,7 @@
     "test/rollback-insertion.test.ts",
     "test/rotational-direct-edits.test.ts",
     "test/schema-admission-storage-matrix.test.ts",
+    "test/scissors-demo.test.ts",
     "test/security-boundary-regressions.test.ts",
     "test/security-workflow.test.ts",
     "test/sketch-constraint-set.test.ts",
