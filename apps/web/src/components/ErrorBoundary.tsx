@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { recordCaughtError } from '../lib/activityLog';
 import { isChunkLoadError, STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
 import { BrandMark } from './BrandMark';
 
@@ -51,6 +52,7 @@ export class ErrorBoundary extends Component<
 
   override componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(`${this.props.label} crashed:`, error, info.componentStack);
+    recordCaughtError(this.props.label, error, info.componentStack);
     // A failed chunk download stays cached in the module map until
     // navigation, so a remount cannot fix it. Remounting the whole app would
     // rerun its startup, which a reload does more reliably.
@@ -117,6 +119,12 @@ export class ErrorBoundary extends Component<
         <button type="button" className="secondary" onClick={reload}>
           Reload workspace
         </button>
+        {this.state.message ? (
+          <details className="error-page-details">
+            <summary>Error details</summary>
+            <code>{this.state.message}</code>
+          </details>
+        ) : null}
       </section>
     );
   }
