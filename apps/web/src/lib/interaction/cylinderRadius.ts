@@ -76,12 +76,12 @@ export function sameCylinderAxis(
 }
 
 /**
- * The cylindrical face a committed radius edit left on the same axis at the
- * new radius, overlapping the source wall's span along it: what stays
- * selected once a drag applies, so the bore keeps its handle instead of the
- * selection falling back to the whole body. A separate band of a stepped or
- * grooved part can share the axis and radius; the overlap keeps it out. Null
- * when no face, or more than one, fits.
+ * The cylindrical face a radius edit leaves on the same axis at the new
+ * radius, overlapping the source wall's span along it. Keeps selection on the
+ * bore during preview frames and after commit instead of falling back to the
+ * whole body. A separate band of a stepped or grooved part can share the axis
+ * and radius; the overlap keeps it out. Null when no face, or more than one,
+ * fits.
  */
 export function findResizedCylinderFace(
   faces: readonly FaceTopology[],

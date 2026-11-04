@@ -3261,6 +3261,8 @@ export function App() {
     baseVersion: number;
     selectionKey: string;
     geometry: GeometryReadyState;
+    /** Radius of this published cylinder frame, which can lag the handle. */
+    radius?: number;
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const checkpointRoomRef = useRef<{
@@ -7048,7 +7050,8 @@ export function App() {
    * Exact regeneration may assign a new topology ID to an edited face. Keep
    * selection attached through operation-specific immutable identity: exact
    * fillet evolution lineage, the translated source plane for offsets, or the
-   * fixed axis for cylinder radii.
+   * coaxial wall at the displayed radius for cylinder edits. Chamfered mouths
+   * move the wall's endpoints as their shared boundary is rebuilt.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology && !currentFaceGeometryPreview) {
@@ -7155,21 +7158,14 @@ export function App() {
       y: interaction.target.axisEnd[1],
       z: interaction.target.axisEnd[2]
     };
-    const candidates = faces.filter((face) => {
-      const geometry = face.geometry;
-      return (
-        geometry?.surfaceType === 'cylinder' &&
-        geometry.axisStart !== undefined &&
-        geometry.axisEnd !== undefined &&
-        sameCylinderAxis(
-          axisStart,
-          axisEnd,
-          geometry.axisStart,
-          geometry.axisEnd
-        )
-      );
-    });
-    const regenerated = candidates.length === 1 ? candidates[0] : null;
+    // Use the radius that produced the visible mesh, not the newest pointer
+    // value: completed worker frames can arrive while the hand moves ahead.
+    const radius =
+      currentFaceGeometryPreview?.radius ?? interaction.target.radius;
+    const regenerated =
+      radius === undefined
+        ? null
+        : findResizedCylinderFace(faces, axisStart, axisEnd, radius);
     return regenerated
       ? {
           bodyId: selectedTopology.bodyId,
