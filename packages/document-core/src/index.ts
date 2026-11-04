@@ -1010,7 +1010,16 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     : fallbackRevision
       ? [
           {
-            checkpointId: createId('checkpoint'),
+            // Derived, not random: a copy that is normalized on every open
+            // (an unsaved legacy copy, or two copies of one project compared
+            // for a conflict) must yield the same save point each time, or
+            // identical copies never compare equal. The bound is the
+            // checkpoint id limit `isProjectCheckpoint` enforces.
+            checkpointId:
+              `checkpoint_migrated_${fallbackRevision.revisionId}`.slice(
+                0,
+                200
+              ),
             revisionId: fallbackRevision.revisionId,
             documentVersion: document.version ?? 1,
             createdAt: fallbackRevision.createdAt,
