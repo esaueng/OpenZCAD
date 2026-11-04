@@ -20,6 +20,8 @@ import {
   getAssemblyRuntime,
   type AssemblyJointToolState
 } from './assemblyRuntime';
+import { getAnimatePrefs, setAnimatePrefs } from './assemblyUi';
+import { playbackFrame } from './assemblyPlayback';
 
 function tool(a: BodyId, b: BodyId): AssemblyJointToolState {
   return {
@@ -47,6 +49,140 @@ function tool(a: BodyId, b: BodyId): AssemblyJointToolState {
 afterEach(() => {
   assemblyRuntime.reset();
   assemblyRuntime.setActive(false);
+  setAnimatePrefs({ mode: 'ping-pong', sweepS: 1.5 });
+  vi.restoreAllMocks();
+});
+
+describe('Assemble workspace sample autoplay', () => {
+  it('sweeps back and forth through the limits without writing the saved pose', () => {
+    const { manager } = scissorsManager({ joint: true });
+    manager.execute(
+      commandFactories.updateAssemblyJoint({
+        jointId: 'joint_pin',
+        limits: [{ min: -55, max: 0 }]
+      })
+    );
+    manager.execute(
+      commandFactories.setAssemblyPose({ values: { joint_pin: [-30] } })
+    );
+    const document = manager.document;
+    const saved = JSON.stringify(document);
+    const { commands, execute } = recordingExecute(manager);
+    setAnimatePrefs({ mode: 'once', sweepS: 0.75 });
+    vi.spyOn(performance, 'now').mockReturnValue(1000);
+    renderHook(() =>
+      useAssembleWorkspace(true, {
+        document,
+        initialJointId: 'joint_pin',
+        initialPlayback: 'ping-pong',
+        execute,
+        onStatus: vi.fn()
+      })
+    );
+    const playback = getAssemblyRuntime().playback;
+    expect(playback).toMatchObject({
+      kind: 'joint',
+      jointId: 'joint_pin',
+      mode: 'ping-pong',
+      sweepS: 0.75
+    });
+    expect(getAnimatePrefs()).toEqual({ mode: 'ping-pong', sweepS: 0.75 });
+    expect(
+      [1000, 1750, 2500].map(
+        (now) =>
+          playbackFrame(document.assembly!, playback!, now)?.overrides.get(
+            'joint_pin'
+          )?.[0]
+      )
+    ).toEqual([-55, 0, -55]);
+    expect(commands).toEqual([]);
+    expect(JSON.stringify(manager.document)).toBe(saved);
+  });
+
+  it('keeps Pause stopped through later saved edits', () => {
+    const { manager } = scissorsManager({ joint: true });
+    const { execute } = recordingExecute(manager);
+    const app = (): AssembleWorkspaceApp => ({
+      document: manager.document,
+      initialJointId: 'joint_pin',
+      initialPlayback: 'ping-pong',
+      execute,
+      onStatus: vi.fn()
+    });
+    const { rerender } = renderHook(
+      (app: AssembleWorkspaceApp) => useAssembleWorkspace(true, app),
+      { initialProps: app() }
+    );
+    expect(getAssemblyRuntime().playback?.kind).toBe('joint');
+    act(() => {
+      assemblyRuntime.stop();
+      execute(
+        commandFactories.setAssemblyPose({ values: { joint_pin: [30] } })
+      );
+    });
+    rerender(app());
+    expect(getAssemblyRuntime().playback).toBeNull();
+    expect(getAssemblyRuntime().overrides.size).toBe(0);
+    expect(manager.document.assembly?.joints[0]?.values).toEqual([30]);
+  });
+
+  it('stops on leaving Assemble and does not restart on a workspace switch', () => {
+    const { manager } = scissorsManager({ joint: true });
+    const app: AssembleWorkspaceApp = {
+      document: manager.document,
+      initialJointId: 'joint_pin',
+      initialPlayback: 'ping-pong',
+      execute: vi.fn(() => true),
+      onStatus: vi.fn()
+    };
+    const { rerender } = renderHook(
+      (active: boolean) => useAssembleWorkspace(active, app),
+      { initialProps: true }
+    );
+    expect(getAssemblyRuntime().playback?.kind).toBe('joint');
+    rerender(false);
+    expect(getAssemblyRuntime().playback).toBeNull();
+    rerender(true);
+    expect(getAssemblyRuntime().playback).toBeNull();
+  });
+
+  it('does not arm hidden autoplay when opened outside Assemble', () => {
+    const { manager } = scissorsManager({ joint: true });
+    const app: AssembleWorkspaceApp = {
+      document: manager.document,
+      initialJointId: 'joint_pin',
+      initialPlayback: 'ping-pong',
+      execute: vi.fn(() => true),
+      onStatus: vi.fn()
+    };
+    const { rerender } = renderHook(
+      (active: boolean) => useAssembleWorkspace(active, app),
+      { initialProps: false }
+    );
+    expect(getAssemblyRuntime().playback).toBeNull();
+    rerender(true);
+    expect(getAssemblyRuntime().playback).toBeNull();
+  });
+
+  it('does not autoplay a joint whose moving part has been fixed', () => {
+    const { manager } = scissorsManager({ joint: true });
+    manager.execute(
+      commandFactories.updateAssemblyComponent({
+        componentId: 'comp_b',
+        grounded: true
+      })
+    );
+    renderHook(() =>
+      useAssembleWorkspace(true, {
+        document: manager.document,
+        initialJointId: 'joint_pin',
+        initialPlayback: 'ping-pong',
+        execute: vi.fn(() => true),
+        onStatus: vi.fn()
+      })
+    );
+    expect(getAssemblyRuntime().playback).toBeNull();
+  });
 });
 
 describe('Assemble workspace launch selection', () => {
@@ -63,6 +199,7 @@ describe('Assemble workspace launch selection', () => {
       })
     );
     expect(getAssemblyRuntime().selectedJointId).toBe('joint_pin');
+    expect(getAssemblyRuntime().playback).toBeNull();
     expect(commands).toEqual([]);
     expect(manager.document).toBe(document);
   });
@@ -106,11 +243,18 @@ describe('Assemble workspace launch selection', () => {
     });
     const { rerender } = renderHook(
       (app: AssembleWorkspaceApp) => useAssembleWorkspace(true, app),
-      { initialProps: app(first.manager.document, 'joint_pin') }
+      {
+        initialProps: {
+          ...app(first.manager.document, 'joint_pin'),
+          initialPlayback: 'ping-pong'
+        }
+      }
     );
     expect(getAssemblyRuntime().selectedJointId).toBe('joint_pin');
+    expect(getAssemblyRuntime().playback?.kind).toBe('joint');
     rerender(app(second.manager.document));
     expect(getAssemblyRuntime().selectedJointId).toBeNull();
+    expect(getAssemblyRuntime().playback).toBeNull();
   });
 
   it('leaves an ordinary project or a missing initial joint unselected', () => {

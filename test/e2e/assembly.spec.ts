@@ -6,11 +6,13 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import {
+  DEFAULT_APP_SETTINGS,
   toUserId,
   type AssemblyFrame,
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
+import { APP_SETTINGS_STORAGE_KEY } from '../../apps/web/src/lib/appSettings';
 import {
   createProject,
   expect,
@@ -98,7 +100,7 @@ const panel = (page: Page) =>
 
 for (const width of [1440, 390]) {
   test(
-    `scissors opens ready to try its pivot at ${width}px`,
+    `scissors opens with back-and-forth pivot motion at ${width}px`,
     { tag: '@ci-smoke' },
     async ({ page }) => {
       test.setTimeout(120_000);
@@ -127,8 +129,24 @@ for (const width of [1440, 390]) {
         await expect(
           page.getByRole('button', { name: 'Assemble', exact: true })
         ).toHaveAttribute('aria-pressed', 'true');
-        await expect(angle).toHaveValue(value);
         await expect(angle).toBeInViewport();
+        const pause = panel(page).getByRole('button', {
+          name: 'Pause',
+          exact: true
+        });
+        await expect(pause).toBeInViewport();
+        await expect(
+          panel(page).getByRole('combobox', { name: 'Playback' })
+        ).toHaveValue('ping-pong');
+        const shown = new Set<string>();
+        await expect
+          .poll(async () => {
+            shown.add(await angle.inputValue());
+            return shown.size;
+          })
+          .toBeGreaterThan(2);
+        await pause.click();
+        await expect(angle).toHaveValue(value);
         await expect(
           panel(page).getByRole('button', { name: 'Play', exact: true })
         ).toBeInViewport();
@@ -143,6 +161,9 @@ for (const width of [1440, 390]) {
       await expect(
         panel(page).getByRole('region', { name: 'Joints' })
       ).toContainText('-45.0°');
+      await panel(page)
+        .getByRole('combobox', { name: 'Playback' })
+        .selectOption('once');
 
       // An edited local copy still opens in the sample's workspace, even
       // after the user changed modes and collapsed its pivot controls.
@@ -170,6 +191,50 @@ for (const width of [1440, 390]) {
     }
   );
 }
+
+test(
+  'Reduce motion leaves the scissors paused with manual Play available',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page);
+    await page.route('**/api/session', (route) =>
+      route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+    );
+    await page.addInitScript(
+      ({ key, defaults }) => {
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            settings: {
+              ...defaults,
+              appearance: { ...defaults.appearance, reducedMotion: true }
+            },
+            syncedRevision: null
+          })
+        );
+      },
+      { key: APP_SETTINGS_STORAGE_KEY, defaults: DEFAULT_APP_SETTINGS }
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: /^Open demo: Scissors/ }).click();
+    await expect(
+      page.getByRole('group', { name: 'Workspace mode' })
+    ).toBeVisible({ timeout: 30_000 });
+    const angle = panel(page).getByRole('textbox', {
+      name: 'Angle',
+      exact: true
+    });
+    await expect(angle).toHaveValue('-30');
+    await panel(page)
+      .getByRole('button', { name: 'Play', exact: true })
+      .click();
+    await panel(page)
+      .getByRole('button', { name: 'Pause', exact: true })
+      .click();
+    await expect(angle).toHaveValue('-30');
+  }
+);
 
 test(
   'turns bodies into parts from the first run in the sidebar (AS01)',
