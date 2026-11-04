@@ -12970,7 +12970,9 @@ export function App() {
         ...current.filter((project) => project.projectId !== document.projectId)
       ]);
       setStatus(
-        `${definition.name} ready — three revisions in the feature history.`
+        definition.revisions.length > 0
+          ? `${definition.name} ready — three revisions in the feature history.`
+          : `${definition.name} ready — explore its parts and pivot in Assemble.`
       );
     } catch (error) {
       if (isCurrent())

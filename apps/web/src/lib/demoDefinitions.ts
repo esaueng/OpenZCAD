@@ -4,10 +4,10 @@ import { toProjectId, type ProjectId } from '@openzcad/shared';
  * What the launcher needs to *offer* a demo, separated from what building one
  * costs.
  *
- * The three demo tiles are on screen before any project is open, but the
+ * The demo tiles are on screen before any project is open, but the
  * builders behind them are several hundred lines of command construction that
  * reach into the command system and the exact kernel. Keeping both in one
- * module put all of that in the launcher chunk to render three names and three
+ * module put all of that in the launcher chunk to render names and
  * taglines. The catalogue lives here and is imported eagerly; `demos.ts` holds
  * the builders and is imported when a demo is actually opened.
  */
@@ -19,7 +19,8 @@ export interface DemoDefinition {
   tagline: string;
   /** The tagline cut to its operations, for the narrow column list. */
   summary?: string;
-  revisions: [string, string, string];
+  /** Stored design stages; empty for samples supplied as a finished project. */
+  revisions: [] | [string, string, string];
 }
 
 export const DEMO_DEFINITIONS: DemoDefinition[] = [
@@ -50,6 +51,14 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     tagline: 'Extruded base with a parametric fin field',
     summary: 'Extrude, fin field, fillets',
     revisions: ['A — Base extrusion', 'B — Fin field', 'C — Corner fillets']
+  },
+  {
+    key: 'scissors',
+    projectId: toProjectId('proj_demo_scissors'),
+    name: 'Demo · Scissors',
+    tagline: 'Scissors assembly with a working revolute pivot',
+    summary: 'Three parts, limited pivot motion',
+    revisions: []
   }
 ];
 

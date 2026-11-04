@@ -3143,8 +3143,8 @@ export function StartScreen({
                   <>
                     <strong>No projects yet</strong>
                     <span>
-                      Name one and press New project, or open a demo to see a
-                      project walk through its revisions.
+                      Name one and press New project, or open a demo to explore
+                      an editable model.
                     </span>
                   </>
                 ) : shelf === 'archived' ? (
@@ -3225,7 +3225,7 @@ export function StartScreen({
         <div className="start-learn-head">
           <h2 id="start-demos-title">Learn by example</h2>
           <span className="start-section-note">
-            each demo walks a project through revisions A → C
+            explore editable parts, design revisions and assemblies
           </span>
         </div>
         <div className="demo-list">
@@ -3260,19 +3260,21 @@ export function StartScreen({
                       </span>
                     </span>
                   </span>
-                  <span className="demo-card-revs">
-                    {demo.revisions.map((revision) => {
-                      const [letter, ...rest] = revision.split(' — ');
-                      return (
-                        <span key={revision} className="demo-rev">
-                          <span className="demo-rev-letter">{letter}</span>
-                          <span className="demo-rev-label">
-                            {rest.join(' — ') || revision}
+                  {demo.revisions.length > 0 && (
+                    <span className="demo-card-revs">
+                      {demo.revisions.map((revision) => {
+                        const [letter, ...rest] = revision.split(' — ');
+                        return (
+                          <span key={revision} className="demo-rev">
+                            <span className="demo-rev-letter">{letter}</span>
+                            <span className="demo-rev-label">
+                              {rest.join(' — ') || revision}
+                            </span>
                           </span>
-                        </span>
-                      );
-                    })}
-                  </span>
+                        );
+                      })}
+                    </span>
+                  )}
                   <span className="demo-card-cta">
                     Open demo
                     <ArrowRight size={13} aria-hidden="true" />

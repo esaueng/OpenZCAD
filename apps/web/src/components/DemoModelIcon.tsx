@@ -1,4 +1,4 @@
-import { GraduationCap } from 'lucide-react';
+import { GraduationCap, Scissors } from 'lucide-react';
 
 /**
  * A line drawing of the part each demo builds, so the entry is recognisable
@@ -18,6 +18,8 @@ export function DemoModelIcon({ demoKey }: { demoKey: string }) {
     'aria-hidden': true
   };
   switch (demoKey) {
+    case 'scissors':
+      return <Scissors size={20} strokeWidth={1.4} aria-hidden="true" />;
     case 'bracket':
       return (
         <svg {...common}>
