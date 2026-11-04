@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 
 import { FLEET_CI_PATH } from './fleet-workflow';
+import { bashExecutable } from './support/testTools';
 
 const workflow = readFileSync(FLEET_CI_PATH, 'utf8');
 const alignment =
@@ -28,7 +29,7 @@ it('keeps the reviewed runner isolation step byte for byte', () => {
 const profile = workflow.match(/case "\$RUNNER_NAME" in\n[\s\S]*?\besac/)![0];
 function evaluateProfile(name: string): string {
   return execFileSync(
-    'bash',
+    bashExecutable(),
     [
       '-eu',
       '-c',

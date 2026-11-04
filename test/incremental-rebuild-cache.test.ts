@@ -668,11 +668,12 @@ describe('exports on the history kernel', { timeout: 120_000 }, () => {
 
       // Exports mutate the kernel (unit-scaling copies, tessellation) and
       // must restore it afterwards: running the same export twice from the
-      // same checkpoint has to be byte-identical, or the first export leaked
-      // state into the second.
-      const step = await adapter.exportStep(document, bodyIds);
+      // same checkpoint with identical metadata has to be byte-identical,
+      // or the first export leaked state into the second.
+      const metadata = { timestamp: '2026-01-01T00:00:00Z' };
+      const step = await adapter.exportStep(document, bodyIds, metadata);
       expect(step).toContain('MANIFOLD_SOLID_BREP');
-      expect(await adapter.exportStep(document, bodyIds)).toBe(step);
+      expect(await adapter.exportStep(document, bodyIds, metadata)).toBe(step);
       const stl = await adapter.exportStl(document, bodyIds);
       expect(await adapter.exportStl(document, bodyIds)).toBe(stl);
       const quality = await adapter.meshQuality(document, bodyIds, 0.08);

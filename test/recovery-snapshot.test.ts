@@ -1,14 +1,22 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
+import { recoveryTestCommand } from './support/testTools';
 import worker, {
   type RestoreEnvironment
 } from '../scripts/recovery/restore-worker.mjs';
 
 it('verifies paired recovery snapshots, encrypted readback and refusal boundaries', () => {
   const output = execFileSync(
-    'python3',
-    ['-m', 'unittest', 'discover', '-s', 'scripts/recovery', '-p', 'test_*.py'],
+    ...recoveryTestCommand([
+      '-m',
+      'unittest',
+      'discover',
+      '-s',
+      'scripts/recovery',
+      '-p',
+      'test_*.py'
+    ]),
     {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       encoding: 'utf8',

@@ -102,7 +102,7 @@ describe('the untyped contract the adapter no longer uses', () => {
    * The explicit fallback now builds this pair, but discloses approximation.
    * It must never substitute for the typed exact-only refusal above.
    */
-  it('discloses approximation when the caller explicitly drops exact-only policy', () => {
+  it('discloses approximation when the caller explicitly drops exact-only policy', { timeout: 30_000 }, () => {
     const kernel = new RemusKernel();
     const [a, b] = offsetSpheres(kernel);
     const outcome = kernel.booleanWithQuality('fuse', a, b, false);

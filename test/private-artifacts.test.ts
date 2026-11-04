@@ -1,5 +1,6 @@
 import {
   appendFileSync,
+  existsSync,
   linkSync,
   mkdtempSync,
   mkdirSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -20,6 +21,25 @@ import {
 } from './support/privateArtifacts';
 
 const directories: string[] = [];
+const directoryLink = (target: string, alias: string) =>
+  symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+
+/** Real filesystem aliases, without requiring Windows Developer Mode/admin. */
+function fileLink(target: string, alias: string): string {
+  if (process.platform !== 'win32') {
+    symlinkSync(target, alias);
+    return alias;
+  }
+  // A junction in the parent resolves the very same file and inode. A broken
+  // junction retains the dangling-reparse-point case (lstat succeeds, realpath fails).
+  if (!existsSync(target)) {
+    directoryLink(target, alias);
+    return alias;
+  }
+  const parent = `${alias}.parent`;
+  directoryLink(dirname(target), parent);
+  return join(parent, basename(target));
+}
 function fixture() {
   const directory = realpathSync(
     mkdtempSync(join(tmpdir(), 'h02-private-paths-'))
@@ -39,7 +59,7 @@ afterEach(() => {
 it('keeps external samples and nested new artifacts in their canonical directory', () => {
   const { directory, repository, outside } = fixture();
   const alias = join(directory, 'external-alias');
-  symlinkSync(outside, alias, 'dir');
+  directoryLink(outside, alias);
   const paths = privateArtifactPaths(
     join(alias, 'new', 'session.jsonl'),
     repository
@@ -56,8 +76,10 @@ it('rejects a repository sample symlink even when its target is external', () =>
   const { repository, outside } = fixture();
   const destination = join(outside, 'session.jsonl');
   writeFileSync(destination, 'dummy sample');
-  const output = join(repository, 'external-output.jsonl');
-  symlinkSync(destination, output);
+  const output = fileLink(
+    destination,
+    join(repository, 'external-output.jsonl')
+  );
   expect(() => privateArtifactPaths(output, repository)).toThrow(
     'outside the repository'
   );
@@ -82,12 +104,12 @@ it('rejects output and parent symlinks into the repository', () => {
   const target = join(repository, 'source.jsonl');
   writeFileSync(target, 'dummy source');
   const output = join(outside, 'session.jsonl');
-  symlinkSync(target, output);
-  expect(() => privateArtifactPaths(output, repository)).toThrow(
+  const linkedOutput = fileLink(target, output);
+  expect(() => privateArtifactPaths(linkedOutput, repository)).toThrow(
     'outside the repository'
   );
   const alias = join(directory, 'repo-alias');
-  symlinkSync(repository, alias, 'dir');
+  directoryLink(repository, alias);
   expect(() =>
     privateArtifactPaths(join(alias, 'new', 'sample.jsonl'), repository)
   ).toThrow('outside the repository');
@@ -99,8 +121,7 @@ it('resolves a valid external output-file symlink before deriving artifacts', ()
   mkdirSync(targetDirectory);
   const destination = join(targetDirectory, 'session.jsonl');
   writeFileSync(destination, 'dummy sample');
-  const output = join(outside, 'linked-session.jsonl');
-  symlinkSync(destination, output);
+  const output = fileLink(destination, join(outside, 'linked-session.jsonl'));
   const paths = privateArtifactPaths(output, repository);
   expect(paths.output).toBe(destination);
   expect(paths.artifact('private-session.openzcad')).toBe(
@@ -116,10 +137,13 @@ it('rejects derived artifact symlinks and dangling links before writing', () => 
   );
   const target = join(repository, 'source.openzcad');
   writeFileSync(target, 'dummy source');
-  symlinkSync(target, join(outside, 'private-session.openzcad'));
-  symlinkSync(repository, join(outside, 'browser-artifacts'), 'dir');
-  symlinkSync(join(repository, 'missing'), join(outside, 'dangling'));
-  expect(() => paths.artifact('private-session.openzcad')).toThrow(
+  const artifactAlias = fileLink(
+    target,
+    join(outside, 'private-session.openzcad')
+  );
+  directoryLink(repository, join(outside, 'browser-artifacts'));
+  fileLink(join(repository, 'missing'), join(outside, 'dangling'));
+  expect(() => paths.artifact(relative(outside, artifactAlias))).toThrow(
     'outside the repository'
   );
   expect(() => paths.artifact('browser-artifacts/nested/error.json')).toThrow(
@@ -137,7 +161,7 @@ it('rejects cleanup targets that contain the checkout while permitting shared sa
     join(directory, 'samples.jsonl'),
     repository
   );
-  symlinkSync(outside, join(directory, 'h02-artifacts'), 'dir');
+  directoryLink(outside, join(directory, 'h02-artifacts'));
   expect(() => paths.artifact('h02-artifacts')).toThrow(
     'overlap the repository'
   );
@@ -203,9 +227,9 @@ it.each(['same-path', 'symlink', 'hard-link'])(
     const source = join(outside, 'source.step');
     const original = Buffer.from('dummy private STEP input\n');
     writeFileSync(source, original);
-    const output =
+    let output =
       alias === 'same-path' ? source : join(outside, 'samples.jsonl');
-    if (alias === 'symlink') symlinkSync(source, output);
+    if (alias === 'symlink') output = fileLink(source, output);
     if (alias === 'hard-link') linkSync(source, output);
     expect(() => {
       const paths = privateArtifactPaths(output, repository, [source]);
@@ -222,11 +246,11 @@ it.each(['same-path', 'symlink', 'hard-link'])(
     const source = join(outside, 'source.step');
     const original = Buffer.from('dummy private STEP input\n');
     writeFileSync(source, original);
-    const target =
+    let target =
       alias === 'same-path'
         ? source
         : join(outside, 'private-session.openzcad');
-    if (alias === 'symlink') symlinkSync(source, target);
+    if (alias === 'symlink') target = fileLink(source, target);
     if (alias === 'hard-link') linkSync(source, target);
     const paths = privateArtifactPaths(
       join(outside, 'samples.jsonl'),
@@ -234,12 +258,7 @@ it.each(['same-path', 'symlink', 'hard-link'])(
       [source]
     );
     expect(() => {
-      writeFileSync(
-        paths.artifact(
-          alias === 'same-path' ? 'source.step' : 'private-session.openzcad'
-        ),
-        'replacement'
-      );
+      writeFileSync(paths.artifact(relative(outside, target)), 'replacement');
     }).toThrow('source input');
     expect(readFileSync(source)).toEqual(original);
   }
@@ -252,7 +271,7 @@ it('rejects cleanup ancestors of an input, including derived-directory symlinks'
   const source = join(sourceDirectory, 'source.step');
   const original = Buffer.from('dummy private STEP input\n');
   writeFileSync(source, original);
-  symlinkSync(sourceDirectory, join(outside, 'h02-build-enabled'), 'dir');
+  directoryLink(sourceDirectory, join(outside, 'h02-build-enabled'));
   const paths = privateArtifactPaths(
     join(outside, 'samples.jsonl'),
     repository,
@@ -263,8 +282,7 @@ it('rejects cleanup ancestors of an input, including derived-directory symlinks'
   expect(() =>
     privateArtifactPaths(sourceDirectory, repository, [source])
   ).toThrow('source input');
-  const alias = join(directory, 'source-alias.step');
-  symlinkSync(source, alias);
+  const alias = fileLink(source, join(directory, 'source-alias.step'));
   expect(
     privateArtifactPaths(join(outside, 'samples.jsonl'), repository, [alias])
       .inputs
@@ -276,8 +294,7 @@ it('rejects cleanup ancestors of an input, including derived-directory symlinks'
 it('fails closed on missing or dangling declared source inputs', () => {
   const { repository, outside } = fixture();
   const source = join(outside, 'missing.step');
-  const alias = join(outside, 'dangling.step');
-  symlinkSync(source, alias);
+  const alias = fileLink(source, join(outside, 'dangling.step'));
   for (const input of [source, alias])
     expect(() =>
       privateArtifactPaths(join(outside, 'samples.jsonl'), repository, [input])
@@ -341,7 +358,7 @@ it.each(['directory', 'worktree-file'])(
     expect(() =>
       privateArtifactPaths(join(unrelated, 'new', 'samples.jsonl'), repository)
     ).toThrow('outside Git checkouts');
-    symlinkSync(unrelated, join(outside, 'linked-repo'), 'dir');
+    directoryLink(unrelated, join(outside, 'linked-repo'));
     const paths = privateArtifactPaths(
       join(outside, 'samples.jsonl'),
       repository

@@ -2,15 +2,17 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FLEET_CI_PATH } from './fleet-workflow';
+import { pythonEnvironment, pythonExecutable } from './support/testTools';
 
 describe('superseded CI recovery', () => {
   const workflow = readFileSync('.github/workflows/ci-recovery.yml', 'utf8');
 
   it('exercises the actual recovery script against current heads, races and queue candidates', () => {
     const result = spawnSync(
-      'python3',
+      pythonExecutable(),
       ['.github/ci-recovery/test_recovery.py'],
       {
+        env: pythonEnvironment(),
         encoding: 'utf8'
       }
     );

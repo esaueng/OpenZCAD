@@ -2,6 +2,11 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { FLEET_CI_PATH, FLEET_CI_PIN } from './fleet-workflow';
+import {
+  bashExecutable,
+  pythonEnvironment,
+  pythonExecutable
+} from './support/testTools';
 
 const workflow = readFileSync(FLEET_CI_PATH, 'utf8');
 
@@ -24,29 +29,45 @@ describe('required validation gate', () => {
     // A depth-one CI checkout needs immutable Git objects and main history.
     // Obtain fixtures in setup; every policy assertion still runs below
     // under the unchanged test deadline, with fetch failures remaining fatal.
-    execFileSync('python3', ['scripts/prepare-fleet-test-fixtures.py'], {
-      encoding: 'utf8'
-    });
+    execFileSync(
+      pythonExecutable(),
+      ['scripts/prepare-fleet-test-fixtures.py'],
+      {
+        env: pythonEnvironment(),
+        encoding: 'utf8'
+      }
+    );
   });
 
   it('retires the orphan OIDC workflow and exercises immutable fleet routing', () => {
     expect(existsSync('.github/workflows/trusted-pr.yml')).toBe(false);
-    const result = spawnSync('python3', ['scripts/test-direct-fleet.py'], {
-      encoding: 'utf8'
-    });
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it('prepares cold Git evidence without bypassing offline or stale-pin assertions', () => {
     const result = spawnSync(
-      'python3',
-      ['scripts/test-fleet-test-fixtures.py'],
+      pythonExecutable(),
+      ['scripts/test-direct-fleet.py'],
       {
-        encoding: 'utf8'
+        env: pythonEnvironment(),
+        encoding: 'utf8',
+        timeout: 25_000
       }
     );
     expect(result.status, result.stderr).toBe(0);
   });
+
+  it(
+    'prepares cold Git evidence without bypassing offline or stale-pin assertions',
+    { timeout: 30_000 },
+    () => {
+      const result = spawnSync(
+        pythonExecutable(),
+        ['scripts/test-fleet-test-fixtures.py'],
+        {
+          env: pythonEnvironment(),
+          encoding: 'utf8'
+        }
+      );
+      expect(result.status, result.stderr).toBe(0);
+    }
+  );
   const caller = readFileSync('.github/workflows/ci.yml', 'utf8');
   const ci = workflow;
 
@@ -90,7 +111,7 @@ describe('required validation gate', () => {
     'requires quality %s, unit %s and validation %s',
     (quality, unit, validation, status) => {
       const result = spawnSync(
-        'bash',
+        bashExecutable(),
         ['-e', '-c', stepScript('Require all validation checks', ci)],
         {
           env: {
@@ -157,7 +178,7 @@ describe('required validation gate', () => {
     'requires one green shard set on %s: direct %s, pull request %s',
     (event, direct, pr, status) => {
       const result = spawnSync(
-        'bash',
+        bashExecutable(),
         ['-e', '-c', stepScript('Require one green shard set', ci)],
         {
           env: {
@@ -205,17 +226,20 @@ describe('routing fixture deadlines', () => {
     fixture_delay_seconds: number;
   };
 
+  // This outer harness starts two Vitest processes. Their setup/test deadlines
+  // remain 10s/5s; allow acquisition and native process startup outside them.
   beforeAll(() => {
     evidence = JSON.parse(
       execFileSync(
-        'python3',
+        pythonExecutable(),
         ['scripts/test-fleet-test-fixtures.py', '--deadline-evidence'],
         {
+          env: pythonEnvironment(),
           encoding: 'utf8'
         }
       )
     ) as typeof evidence;
-  });
+  }, 30_000);
 
   it('keeps a six-second fixture fetch outside the five-second policy test', () => {
     expect(evidence.fixture_delay_seconds).toBe(6);

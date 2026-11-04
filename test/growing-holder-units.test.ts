@@ -23,6 +23,7 @@ import {
   remusTranslators
 } from '../packages/kernel-adapter/src/remus-runtime';
 import { syntheticHolderSolid } from './support/synthetic-holder';
+import { buildDocumentHistory } from '../packages/kernel-adapter/src/exact-build-loop';
 
 /**
  * H01 "equivalent units": the same STEP source, parameterized in an inch
@@ -117,12 +118,7 @@ describe(
       );
     });
 
-    // Known limit at Remus pin 325c5bc3, tracked under ROADMAP K07 (scale
-    // bands): the recipe's bridge union is refused exactly once the holder's
-    // coordinates are inch-sized. This pins that the refusal is named and no
-    // approximate body ships; when the union succeeds this test fails, and the
-    // grow/export acceptance below it is what should then be asserted.
-    it('refuses the inch recipe by name at this pin instead of shipping an approximate bridge', async () => {
+    it('preflights the inch recipe as one exact body', async () => {
       const inch = await imported('inch');
       const proposal = createGrowingHolderProposal(inch, selection);
       expect(proposal).not.toBeNull();
@@ -132,14 +128,33 @@ describe(
         parseCadPatchProposal(structuredClone(proposal!), digest),
         digest
       );
-      await expect(
-        preflightCadPatch(inch, parsed, (candidate) =>
-          adapter.syncDocument(candidate)
-        )
-      ).rejects.toThrow(/bridge Body" could not be combined exactly/);
+      const preflight = await preflightCadPatch(inch, parsed, (candidate) =>
+        adapter.syncDocument(candidate)
+      );
+      expect(preflight.candidate.derived.warnings).toEqual([]);
+      expect(preflight.candidate.derived.exportableBodyIds).toHaveLength(1);
+      expect(holderOf(preflight.candidate).bbox.min.x).toBeCloseTo(0, 6);
+      expect(holderOf(preflight.candidate).bbox.max.x).toBeCloseTo(
+        60 / MM_PER_INCH,
+        6
+      );
+      const native = new RemusKernel();
+      try {
+        const resultId = preflight.candidate.derived.exportableBodyIds[0]!;
+        const solids = buildDocumentHistory(
+          native,
+          preflight.candidate
+        ).shapes.get(resultId)?.solids;
+        expect(solids).toHaveLength(1);
+        expect(native.validateSolid(solids![0]!)).toBe(0);
+        expect(native.getSolidShells(solids![0]!)).toHaveLength(1);
+      } finally {
+        native.free();
+      }
     });
 
-    it.skip('grows by an inch expression and exports the same metal as the millimetre document (blocked by the refusal above)', async () => {
+    // K07: the source-width recipe builds, but its two-inch union still refuses.
+    it.skip('grows by an inch expression and exports the same metal as the millimetre document (blocked by exact union refusal)', async () => {
       const inch = await imported('inch');
       const proposal = createGrowingHolderProposal(inch, selection);
       const digest = createCadDocumentDigest(inch, selection);
@@ -153,8 +168,8 @@ describe(
       expect(preflight.candidate.derived.warnings).toEqual([]);
       expect(preflight.candidate.derived.exportableBodyIds).toHaveLength(1);
       const applied = holderOf(preflight.candidate);
-      expect(applied.bbox.min.x).toBeCloseTo(-0.5 / MM_PER_INCH, 6);
-      expect(applied.bbox.max.x).toBeCloseTo(60.5 / MM_PER_INCH, 6);
+      expect(applied.bbox.min.x).toBeCloseTo(0, 6);
+      expect(applied.bbox.max.x).toBeCloseTo(60 / MM_PER_INCH, 6);
 
       // Two inches is 50.8 mm: the opening grows 6.8 mm, 3.4 mm per side.
       const grown = setParameter(preflight.candidate, {
@@ -165,8 +180,8 @@ describe(
       expect(derived.warnings).toEqual([]);
       const inchHolder =
         derived.bodyRepresentations[derived.exportableBodyIds[0]!]!;
-      expect(inchHolder.bbox.min.x).toBeCloseTo(-3.9 / MM_PER_INCH, 6);
-      expect(inchHolder.bbox.max.x).toBeCloseTo(63.9 / MM_PER_INCH, 6);
+      expect(inchHolder.bbox.min.x).toBeCloseTo(-3.4 / MM_PER_INCH, 6);
+      expect(inchHolder.bbox.max.x).toBeCloseTo(63.4 / MM_PER_INCH, 6);
 
       // The exported STEP is in millimetres again: reimported into a millimetre
       // document it measures 50.8 across the opening and the same outer span.
@@ -176,8 +191,8 @@ describe(
       );
       const reimported = await imported('mm', exported);
       const mmHolder = holderOf(reimported);
-      expect(mmHolder.bbox.min.x).toBeCloseTo(-3.9, 4);
-      expect(mmHolder.bbox.max.x).toBeCloseTo(63.9, 4);
+      expect(mmHolder.bbox.min.x).toBeCloseTo(-3.4, 4);
+      expect(mmHolder.bbox.max.x).toBeCloseTo(63.4, 4);
       const reopening = mmHolder.topology?.recognizedOpening;
       expect(reopening?.status).toBe('recognized');
       if (reopening?.status === 'recognized')
