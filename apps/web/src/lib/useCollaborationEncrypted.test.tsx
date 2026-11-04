@@ -216,6 +216,9 @@ async function connectedOwner(base: ProjectDocument, encrypted = true) {
   const onRemoteDocument = vi.fn();
   const onConflict = vi.fn();
   const onAccountVersion = vi.fn();
+  const initialProps: { document: ProjectDocument; userId?: string } = {
+    document: base
+  };
   const hook = renderHook(
     ({
       document,
@@ -233,7 +236,7 @@ async function connectedOwner(base: ProjectDocument, encrypted = true) {
         encrypted,
         onAccountVersion
       }),
-    { initialProps: { document: base } }
+    { initialProps }
   );
   const socket = FakeWebSocket.instances[0]!;
   act(() => socket.open());
