@@ -5,21 +5,6 @@
 
 /* ── Study list (Assembly panel) ─────────────────────────── */
 
-.assembly-studies {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 0;
-}
-
-.assembly-studies-empty {
-  margin: 0;
-  padding: 4px 6px;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
-  line-height: var(--lh-tight);
-}
-
 .assembly-studies-list {
   display: flex;
   flex-direction: column;
@@ -121,32 +106,6 @@
   color: var(--color-text);
 }
 
-.assembly-studies-new {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 5px;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-muted);
-  font: inherit;
-  font-size: var(--fs-xs);
-  cursor: pointer;
-}
-
-.assembly-studies-new:hover:not(:disabled) {
-  border-color: var(--color-accent-border);
-  color: var(--color-text);
-}
-
-.assembly-studies-new:disabled {
-  cursor: default;
-  opacity: var(--opacity-disabled);
-}
-
 /* ── Timeline dock (Assemble) ────────────────────────────── */
 
 .motion-timeline {
@@ -183,8 +142,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: 4px;
+  padding: 4px 6px;
   border-bottom: var(--border-thin);
 }
 
@@ -221,56 +180,79 @@
 }
 
 .motion-time {
-  min-width: 92px;
+  min-width: 34px;
   color: var(--color-text);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
 }
 
-.motion-segmented {
-  display: inline-flex;
-  flex: none;
-  padding: 2px;
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-2);
-}
-
-.motion-segment {
-  min-height: 22px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-muted);
-  font: inherit;
+.motion-time-of {
+  color: var(--color-text-subtle);
   font-size: var(--fs-xs);
-  white-space: nowrap;
-  cursor: pointer;
 }
 
-.motion-segment:hover:not(:disabled) {
-  color: var(--color-text);
-}
-
-.motion-segment[aria-checked='true'] {
-  background: var(--color-accent-dim);
-  color: var(--color-selected-text);
-}
-
-.motion-segment:disabled {
+.motion-icon-button:disabled {
   cursor: default;
   opacity: var(--opacity-disabled);
 }
 
-.motion-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.motion-icon-button:disabled:hover {
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.motion-speed,
+.motion-toggle {
+  flex: none;
+  min-width: 34px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.motion-toggle {
+  font-family: inherit;
+}
+
+.motion-speed:hover,
+.motion-toggle:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.motion-toggle[aria-pressed='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-selected-text);
+}
+
+.motion-toggle:disabled {
+  cursor: default;
+  opacity: var(--opacity-disabled);
+}
+
+/* Pushes the trailing actions (key, close) to the row's end. */
+.motion-timeline-end {
+  margin-left: auto;
+}
+
+/* Until the study first moves: what to do next. */
+.motion-timeline-hint {
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .motion-number {
@@ -288,7 +270,7 @@
 }
 
 .motion-number-input {
-  width: 58px;
+  width: 44px;
   height: 22px;
   padding: 0 4px 0 6px;
   border: 0;
@@ -309,33 +291,6 @@
   font-size: var(--fs-mini);
 }
 
-.motion-text-button {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 0 8px;
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-2);
-  color: var(--color-text);
-  font: inherit;
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.motion-text-button:hover:not(:disabled) {
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
-.motion-text-button:disabled {
-  cursor: default;
-  opacity: var(--opacity-disabled);
-}
-
 .motion-timeline-note {
   min-width: 0;
   overflow: hidden;
@@ -345,13 +300,9 @@
   white-space: nowrap;
 }
 
-.motion-timeline-close {
-  margin-left: auto;
-}
-
 .motion-timeline-grid {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 150px minmax(0, 1fr);
   min-height: 0;
   overflow-y: auto;
 }
@@ -373,14 +324,7 @@
 
 .motion-ruler-label {
   min-height: 24px;
-  overflow: hidden;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: var(--ls-eyebrow);
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
+  padding-left: 6px;
 }
 
 .motion-track-label-selected {
@@ -534,24 +478,19 @@
   cursor: grabbing;
 }
 
-.motion-timeline-empty {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding: 10px;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
-}
-
 .motion-track-add {
   position: relative;
-  grid-column: 1 / -1;
-  padding: 6px 10px;
+}
+
+.motion-track-add-button {
+  width: 22px;
+  height: 22px;
 }
 
 .motion-track-menu {
   position: absolute;
-  bottom: calc(100% - 2px);
-  left: 10px;
+  bottom: calc(100% + 2px);
+  left: 0;
   z-index: var(--z-popover);
   display: flex;
   flex-direction: column;
@@ -594,19 +533,11 @@
 }
 
 .motion-key-editor {
-  display: flex;
-  flex-wrap: wrap;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-top: var(--border-thin);
-  background: var(--color-surface-2);
-}
-
-.motion-key-editor-title {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: var(--border-thin);
 }
 
 /* ── View mode player island ─────────────────────────────── */
@@ -711,7 +642,12 @@
 
 @media (max-width: 620px) {
   .motion-timeline-grid {
-    grid-template-columns: 120px minmax(0, 1fr);
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+
+  /* The sidebar sits above it here, not beside it: use the full width. */
+  .motion-timeline-floating {
+    left: var(--island-gap);
   }
 
   .assembly-player {
@@ -723,9 +659,4 @@
   .assembly-player-name {
     max-width: 96px;
   }
-}
-
-/* The transport's playback and speed menus: the Assemble sidebar's select. */
-.motion-select {
-  flex: 0 0 auto;
 }

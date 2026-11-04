@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play, Repeat, Square } from 'lucide-react';
 import {
   motionStudyValues,
@@ -12,10 +12,17 @@ import {
   getAssemblyRuntime,
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
-import { formatStudyTime } from '../../lib/assembly/motionStudy';
+import { getAnimatePrefs } from '../../lib/assembly/assemblyUi';
+import {
+  formatStudyTime,
+  jointSweepStudy
+} from '../../lib/assembly/motionStudy';
 
 export interface AssemblyPlayerProps {
-  /** The open document's assembly section; the player hides without studies. */
+  /**
+   * The open document's assembly section; the player hides when it has
+   * neither studies nor a joint with a range to play.
+   */
   assembly: AssemblySet | undefined;
 }
 
@@ -29,7 +36,8 @@ function effectivePlayback(
 
 /**
  * AS07 View mode player: a floating island that plays the project's motion
- * studies for someone who only looks — the owner in View, or a visitor on a
+ * studies (or, in a project without any, each joint's Animate sweep) for
+ * someone who only looks — the owner in View, or a visitor on a
  * shared link (it renders in the same View mode overlay). It runs its own
  * clock and writes only the runtime's transient joint values, never a
  * command: nothing a viewer does here is saved, and the study's own
@@ -43,7 +51,14 @@ function effectivePlayback(
  * the runtime off ends it; the player only turns off what it turned on.
  */
 export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
-  const studies = assembly?.studies ?? [];
+  const studies = useMemo(() => {
+    if (!assembly) return [];
+    if (assembly.studies.length > 0) return assembly.studies;
+    const { sweepS } = getAnimatePrefs();
+    return assembly.joints.flatMap(
+      (joint) => jointSweepStudy(joint, sweepS) ?? []
+    );
+  }, [assembly]);
   const [chosenId, setChosenId] = useState<string | null>(null);
   const study = studies.find((s) => s.id === chosenId) ?? studies[0];
   const [playing, setPlaying] = useState(false);

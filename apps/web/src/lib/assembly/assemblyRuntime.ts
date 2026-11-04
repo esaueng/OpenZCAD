@@ -114,6 +114,13 @@ let state: AssemblyRuntimeState = INITIAL;
 const listeners = new Set<() => void>();
 let handlers: AssemblyCommitHandlers | null = null;
 
+/**
+ * Takes a joint pose commit while a motion study is open, keying it at the
+ * playhead instead of saving the rest pose. True when it took the pose.
+ */
+export type StudyPoseSink = (values: Record<string, number[]>) => boolean;
+let studyPoseSink: StudyPoseSink | null = null;
+
 function emit(next: AssemblyRuntimeState): void {
   if (next === state) return;
   state = next;
@@ -148,6 +155,11 @@ export function registerAssemblyCommitHandlers(
   next: AssemblyCommitHandlers | null
 ): void {
   handlers = next;
+}
+
+/** The open motion study timeline registers itself while it can edit. */
+export function registerStudyPoseSink(next: StudyPoseSink | null): void {
+  studyPoseSink = next;
 }
 
 export const assemblyRuntime = {
@@ -210,16 +222,26 @@ export const assemblyRuntime = {
       return;
     patch({ overrides: new Map(), placementOverrides: new Map() });
   },
-  /** Saves the transient values as one undo step and clears them. */
+  /**
+   * Saves the transient values as one undo step and clears them. While a
+   * motion study is open its timeline keys them at the playhead instead and
+   * the study then shows them.
+   */
   commitOverrides(): void {
-    if (
-      !handlers ||
-      (state.overrides.size === 0 && state.placementOverrides.size === 0)
-    )
+    if (state.overrides.size === 0 && state.placementOverrides.size === 0)
       return;
     const values = Object.fromEntries(
       [...state.overrides].map(([id, v]) => [id, [...v]])
     );
+    // A free part's placement is not part of a study: that pose saves.
+    if (
+      studyPoseSink &&
+      state.selectedStudyId &&
+      state.placementOverrides.size === 0 &&
+      studyPoseSink(values)
+    )
+      return;
+    if (!handlers) return;
     const placements = Object.fromEntries(state.placementOverrides);
     handlers.commitPose(
       values,

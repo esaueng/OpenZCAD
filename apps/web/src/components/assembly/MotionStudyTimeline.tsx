@@ -6,12 +6,23 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { Pause, Play, Plus, SkipBack, X } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  ArrowRight,
+  DiamondPlus,
+  Pause,
+  Play,
+  Plus,
+  Repeat,
+  SkipBack,
+  Trash2,
+  X,
+  type LucideIcon
+} from 'lucide-react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
   evaluateTrack,
   motionStudyValues,
-  type AssemblyEasing,
   type AssemblyMotionStudy,
   type AssemblyPlayback,
   type AssemblySet
@@ -19,6 +30,7 @@ import {
 import {
   assemblyRuntime,
   getAssemblyRuntime,
+  registerStudyPoseSink,
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
 import {
@@ -30,6 +42,7 @@ import {
   formatDofValue,
   formatStudyTime,
   keyIndexAt,
+  keyPoseAt,
   keyValueY,
   moveKey,
   nextKeyTime,
@@ -60,18 +73,17 @@ export interface MotionStudyTimelineProps {
   floating?: boolean;
 }
 
-const PLAYBACK_MODES: { mode: AssemblyPlayback; label: string }[] = [
-  { mode: 'once', label: 'Once' },
-  { mode: 'loop', label: 'Loop' },
-  { mode: 'ping-pong', label: 'Back and forth' }
+const PLAYBACK_MODES: {
+  mode: AssemblyPlayback;
+  label: string;
+  Icon: LucideIcon;
+}[] = [
+  { mode: 'once', label: 'Play once', Icon: ArrowRight },
+  { mode: 'loop', label: 'Loop', Icon: Repeat },
+  { mode: 'ping-pong', label: 'Back and forth', Icon: ArrowLeftRight }
 ];
 
 const SPEEDS = [0.5, 1, 2] as const;
-
-const EASINGS: { easing: AssemblyEasing; label: string }[] = [
-  { easing: 'linear', label: 'Linear' },
-  { easing: 'ease', label: 'Ease in-out' }
-];
 
 interface KeySelection {
   trackIndex: number;
@@ -114,8 +126,10 @@ function showAt(set: AssemblySet, study: AssemblyMotionStudy, t: number) {
 
 /**
  * AS07 motion study timeline: the bottom dock the Assemble workspace shows
- * while a study is selected. Transport, a ruler, and one row per joint
- * motion with its value curve and keys. Every edit is one
+ * while a study is selected. One compact transport row, a ruler, and one
+ * row per joint motion with its value curve and keys. While it is open,
+ * moving a part (a viewport drag or the joint's value) keys the new pose at
+ * the playhead instead of saving the rest pose. Every edit is one
  * `assembly.study.set` command; playing and scrubbing only move the
  * runtime's transient values and are never saved. Its shortcuts (Space,
  * K, [ and ], Delete) act only while focus is inside it.
@@ -171,6 +185,17 @@ export function MotionStudyTimeline({
   // saved values.
   useEffect(() => () => assemblyRuntime.stop(), []);
 
+  // Moving a part keys it at the playhead. Read through refs so the sink
+  // registered once always sees the latest study and handlers.
+  const poseRef = useRef<(values: Record<string, number[]>) => boolean>(
+    () => false
+  );
+  useEffect(() => {
+    if (readOnly) return;
+    registerStudyPoseSink((values) => poseRef.current(values));
+    return () => registerStudyPoseSink(null);
+  }, [readOnly]);
+
   // A selection that no longer exists (key deleted elsewhere) clears.
   useEffect(() => {
     if (
@@ -182,7 +207,10 @@ export function MotionStudyTimeline({
       setSelectedTrack(null);
   }, [saved, selection, selectedTrack]);
 
-  if (!assembly || !saved) return null;
+  if (!assembly || !saved) {
+    poseRef.current = () => false;
+    return null;
+  }
   const set = assembly;
   const base: AssemblyMotionStudy = saved;
   const study = draft ?? saved;
@@ -191,6 +219,11 @@ export function MotionStudyTimeline({
   const ticks = rulerTicks(duration);
   const jointById = new Map(set.joints.map((j) => [j.id, j]));
   const untracked = untrackedMotions(set, saved);
+  const moves = saved.tracks.some((track) => track.keys.length > 1);
+  const mode =
+    PLAYBACK_MODES.find((m) => m.mode === saved.playback) ?? PLAYBACK_MODES[1]!;
+  const nextMode =
+    PLAYBACK_MODES[(PLAYBACK_MODES.indexOf(mode) + 1) % PLAYBACK_MODES.length]!;
 
   function commit(
     next: AssemblyMotionStudy | null,
@@ -219,7 +252,8 @@ export function MotionStudyTimeline({
 
   function play() {
     let from = Math.min(getAssemblyRuntime().studyTimeS, base.durationS);
-    if (base.playback === 'once' && from >= base.durationS - 1e-6) from = 0;
+    // From the end every mode would start by wrapping or stopping: restart.
+    if (from >= base.durationS - 1e-6) from = 0;
     assemblyRuntime.startStudy(base.id, speed, from);
   }
 
@@ -292,6 +326,17 @@ export function MotionStudyTimeline({
       );
     }
   }
+
+  function keyPose(values: Record<string, number[]>): boolean {
+    const at = Math.min(getAssemblyRuntime().studyTimeS, base.durationS);
+    const { study: keyed, changed } = keyPoseAt(set, base, at, values);
+    if (!changed) return true;
+    if (!commit(keyed, 'Key pose', 'This study holds as many keys as it can.'))
+      // Refused: the parts go back to what the study shows.
+      showAt(set, base, at);
+    return true;
+  }
+  poseRef.current = keyPose;
 
   function removeSelectedKey() {
     if (readOnly || !selection) return;
@@ -425,6 +470,13 @@ export function MotionStudyTimeline({
     ? jointById.get(selectedKeyTrack.jointId)
     : undefined;
 
+  const keyUnit = selectedKeyTrack
+    ? dofUnit(selectedKeyJoint?.kind ?? 'revolute', selectedKeyTrack.dof) ===
+      'deg'
+      ? '°'
+      : 'mm'
+    : '';
+
   return (
     <section
       className={
@@ -460,86 +512,180 @@ export function MotionStudyTimeline({
           )}
         </button>
         <span className="motion-time" aria-label="Playhead">
-          {formatStudyTime(t)} / {formatStudyTime(duration)} s
+          {formatStudyTime(t)}
         </span>
-        <select
-          className="assembly-select motion-select"
-          aria-label="Playback"
-          value={saved.playback}
+        <span className="motion-time-of" aria-hidden="true">
+          /
+        </span>
+        <NumberField
+          key={`duration-${saved.durationS}`}
+          value={saved.durationS}
+          unit="s"
           disabled={readOnly}
-          onChange={(event) => {
-            const mode = event.currentTarget.value as AssemblyPlayback;
-            if (saved.playback !== mode)
+          ariaLabel="Duration in seconds"
+          onCommit={(value) => {
+            const next = setStudyDuration(saved, value);
+            if (
               commit(
-                { ...saved, playback: mode },
-                'Change motion playback',
-                ''
-              );
+                next,
+                'Change motion duration',
+                'Use a duration above 0 s and up to an hour that leaves room for every key.'
+              ) &&
+              getAssemblyRuntime().studyTimeS > value
+            )
+              seek(value);
           }}
-        >
-          {PLAYBACK_MODES.map(({ mode, label }) => (
-            <option key={mode} value={mode}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          className="assembly-select motion-select"
-          aria-label="Speed"
-          value={speed}
-          onChange={(event) => changeSpeed(Number(event.currentTarget.value))}
-        >
-          {SPEEDS.map((value) => (
-            <option key={value} value={value}>
-              {value}× speed
-            </option>
-          ))}
-        </select>
-        <label className="motion-field">
-          <span>Duration</span>
-          <NumberField
-            key={`duration-${saved.durationS}`}
-            value={saved.durationS}
-            unit="s"
-            disabled={readOnly}
-            ariaLabel="Duration in seconds"
-            onCommit={(value) => {
-              const next = setStudyDuration(saved, value);
-              if (
-                commit(
-                  next,
-                  'Change motion duration',
-                  'Use a duration above 0 s and up to an hour that leaves room for every key.'
-                ) &&
-                getAssemblyRuntime().studyTimeS > value
-              )
-                seek(value);
-            }}
-          />
-        </label>
+        />
         <button
           type="button"
-          className="motion-text-button"
-          disabled={readOnly || saved.tracks.length === 0}
-          title={
-            selection || selectedTrack !== null
-              ? 'Key the selected track at the playhead (K)'
-              : 'Key every track at the playhead (K)'
+          className="motion-icon-button"
+          aria-label={`Playback: ${mode.label}`}
+          title={`${mode.label} · click for ${nextMode.label.toLowerCase()}`}
+          disabled={readOnly}
+          onClick={() =>
+            commit(
+              { ...saved, playback: nextMode.mode },
+              'Change motion playback',
+              ''
+            )
           }
-          onClick={keyAtPlayhead}
         >
-          Key at playhead (K)
+          <mode.Icon size={14} aria-hidden="true" />
         </button>
+        <button
+          type="button"
+          className="motion-speed"
+          aria-label={`Speed ${speed}×`}
+          title="Playback speed"
+          onClick={() =>
+            changeSpeed(
+              SPEEDS[
+                ((SPEEDS as readonly number[]).indexOf(speed) + 1) %
+                  SPEEDS.length
+              ]!
+            )
+          }
+        >
+          {speed}×
+        </button>
+
+        {selection && selectedKey && selectedKeyTrack && (
+          <div
+            className="motion-key-editor"
+            role="group"
+            aria-label="Selected key"
+            title={selectedKeyJoint?.name ?? 'Missing joint'}
+          >
+            <NumberField
+              key={`t-${selection.trackIndex}-${selection.keyIndex}-${selectedKey.t}`}
+              value={selectedKey.t}
+              unit="s"
+              disabled={readOnly}
+              ariaLabel="Key time in seconds"
+              onCommit={(value) => {
+                const moved = moveKey(
+                  saved,
+                  selection.trackIndex,
+                  selection.keyIndex,
+                  value
+                );
+                commit(
+                  moved?.study ?? null,
+                  'Move key',
+                  'Use a time in the study.'
+                );
+              }}
+            />
+            <NumberField
+              key={`v-${selection.trackIndex}-${selection.keyIndex}-${selectedKey.value}`}
+              value={selectedKey.value}
+              unit={keyUnit}
+              disabled={readOnly}
+              ariaLabel="Key value"
+              onCommit={(value) =>
+                commit(
+                  updateKey(saved, selection.trackIndex, selection.keyIndex, {
+                    value
+                  }),
+                  'Change key value',
+                  'Use a finite value.'
+                )
+              }
+            />
+            <button
+              type="button"
+              className="motion-toggle"
+              aria-pressed={selectedKey.easing === 'ease'}
+              title="Ease into this key"
+              disabled={readOnly}
+              onClick={() =>
+                commit(
+                  updateKey(saved, selection.trackIndex, selection.keyIndex, {
+                    easing: selectedKey.easing === 'ease' ? 'linear' : 'ease'
+                  }),
+                  'Change key easing',
+                  ''
+                )
+              }
+            >
+              Ease
+            </button>
+            <button
+              type="button"
+              className="motion-icon-button"
+              aria-label="Delete key"
+              title={
+                selectedKeyTrack.keys.length <= 1
+                  ? 'A track keeps at least one key'
+                  : 'Delete key (Delete)'
+              }
+              disabled={readOnly || selectedKeyTrack.keys.length <= 1}
+              onClick={removeSelectedKey}
+            >
+              <Trash2 size={13} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+
+        {!note &&
+          !selection &&
+          (study.tracks.length === 0 || (!moves && !readOnly)) && (
+            <span className="motion-timeline-hint">
+              {study.tracks.length === 0
+                ? 'Add a joint to animate'
+                : 'Move a part to key it here'}
+            </span>
+          )}
         {note && (
           <span className="motion-timeline-note" role="status">
             {note}
           </span>
         )}
+        {!readOnly && (
+          <button
+            type="button"
+            className="motion-icon-button motion-timeline-end"
+            aria-label="Key at playhead"
+            title={
+              selection || selectedTrack !== null
+                ? 'Key the selected track here (K)'
+                : 'Key every track here (K)'
+            }
+            disabled={saved.tracks.length === 0}
+            onClick={keyAtPlayhead}
+          >
+            <DiamondPlus size={14} aria-hidden="true" />
+          </button>
+        )}
         <button
           type="button"
-          className="motion-icon-button motion-timeline-close"
+          className={
+            readOnly
+              ? 'motion-icon-button motion-timeline-end'
+              : 'motion-icon-button'
+          }
           aria-label="Close motion study"
-          title="Close motion study"
+          title="Close"
           onClick={close}
         >
           <X size={14} aria-hidden="true" />
@@ -548,7 +694,60 @@ export function MotionStudyTimeline({
 
       <div className="motion-timeline-grid">
         <div className="motion-track-label motion-ruler-label">
-          {saved.name}
+          {!readOnly && untracked.length > 0 && (
+            <div className="motion-track-add">
+              <button
+                type="button"
+                className="motion-icon-button motion-track-add-button"
+                aria-label="Add track"
+                aria-haspopup="menu"
+                aria-expanded={addOpen}
+                title="Animate another joint motion"
+                onClick={() => setAddOpen((open) => !open)}
+              >
+                <Plus size={12} aria-hidden="true" />
+              </button>
+              {addOpen && (
+                <div
+                  className="motion-track-menu"
+                  role="menu"
+                  aria-label="Joint motions"
+                >
+                  {untracked.map(({ joint, dof }) => (
+                    <button
+                      key={`${joint.id}/${dof}`}
+                      type="button"
+                      role="menuitem"
+                      className="motion-track-menu-item"
+                      onClick={() => {
+                        setAddOpen(false);
+                        const value = currentJointValue(
+                          joint,
+                          dof,
+                          getAssemblyRuntime().overrides
+                        );
+                        if (
+                          commit(
+                            addTrack(set, saved, joint.id, dof, value),
+                            'Add motion track',
+                            'This study cannot take another track.'
+                          )
+                        )
+                          setSelectedTrack(saved.tracks.length);
+                      }}
+                    >
+                      {joint.values.length > 1
+                        ? `${joint.name} · ${dofName(joint.kind, dof)}`
+                        : joint.name}
+                      <span className="motion-track-menu-unit">
+                        {dofUnit(joint.kind, dof) === 'deg' ? '°' : 'mm'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div
           className="motion-ruler"
@@ -695,175 +894,7 @@ export function MotionStudyTimeline({
             </div>
           );
         })}
-
-        {study.tracks.length === 0 && (
-          <p className="motion-timeline-empty">
-            No tracks yet. Add a joint track to animate it.
-          </p>
-        )}
-
-        {!readOnly && (
-          <div className="motion-track-add">
-            <button
-              type="button"
-              className="motion-text-button"
-              aria-haspopup="menu"
-              aria-expanded={addOpen}
-              disabled={untracked.length === 0}
-              title={
-                untracked.length === 0
-                  ? 'Every joint motion already has a track'
-                  : 'Animate another joint motion'
-              }
-              onClick={() => setAddOpen((open) => !open)}
-            >
-              <Plus size={12} aria-hidden="true" />
-              Add joint track
-            </button>
-            {addOpen && untracked.length > 0 && (
-              <div
-                className="motion-track-menu"
-                role="menu"
-                aria-label="Joint motions"
-              >
-                {untracked.map(({ joint, dof }) => (
-                  <button
-                    key={`${joint.id}/${dof}`}
-                    type="button"
-                    role="menuitem"
-                    className="motion-track-menu-item"
-                    onClick={() => {
-                      setAddOpen(false);
-                      const value = currentJointValue(
-                        joint,
-                        dof,
-                        getAssemblyRuntime().overrides
-                      );
-                      if (
-                        commit(
-                          addTrack(set, saved, joint.id, dof, value),
-                          'Add motion track',
-                          'This study cannot take another track.'
-                        )
-                      )
-                        setSelectedTrack(saved.tracks.length);
-                    }}
-                  >
-                    {joint.values.length > 1
-                      ? `${joint.name} · ${dofName(joint.kind, dof)}`
-                      : joint.name}
-                    <span className="motion-track-menu-unit">
-                      {dofUnit(joint.kind, dof) === 'deg' ? '°' : 'mm'}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
-
-      {selection && selectedKey && selectedKeyTrack && (
-        <div
-          className="motion-key-editor"
-          role="group"
-          aria-label="Selected key"
-        >
-          <span className="motion-key-editor-title">
-            Key · {selectedKeyJoint?.name ?? 'Missing joint'}
-          </span>
-          <label className="motion-field">
-            <span>Time</span>
-            <NumberField
-              key={`t-${selection.trackIndex}-${selection.keyIndex}-${selectedKey.t}`}
-              value={selectedKey.t}
-              unit="s"
-              disabled={readOnly}
-              ariaLabel="Key time in seconds"
-              onCommit={(value) => {
-                const moved = moveKey(
-                  saved,
-                  selection.trackIndex,
-                  selection.keyIndex,
-                  value
-                );
-                commit(
-                  moved?.study ?? null,
-                  'Move key',
-                  'Use a time in the study.'
-                );
-              }}
-            />
-          </label>
-          <label className="motion-field">
-            <span>Value</span>
-            <NumberField
-              key={`v-${selection.trackIndex}-${selection.keyIndex}-${selectedKey.value}`}
-              value={selectedKey.value}
-              unit={
-                dofUnit(
-                  selectedKeyJoint?.kind ?? 'revolute',
-                  selectedKeyTrack.dof
-                ) === 'deg'
-                  ? '°'
-                  : 'mm'
-              }
-              disabled={readOnly}
-              ariaLabel="Key value"
-              onCommit={(value) =>
-                commit(
-                  updateKey(saved, selection.trackIndex, selection.keyIndex, {
-                    value
-                  }),
-                  'Change key value',
-                  'Use a finite value.'
-                )
-              }
-            />
-          </label>
-          <div
-            className="motion-segmented"
-            role="radiogroup"
-            aria-label="Easing into this key"
-          >
-            {EASINGS.map(({ easing, label }) => (
-              <button
-                key={easing}
-                type="button"
-                role="radio"
-                aria-checked={selectedKey.easing === easing}
-                className="motion-segment"
-                disabled={readOnly}
-                onClick={() =>
-                  selectedKey.easing !== easing &&
-                  commit(
-                    updateKey(saved, selection.trackIndex, selection.keyIndex, {
-                      easing
-                    }),
-                    'Change key easing',
-                    ''
-                  )
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="motion-text-button"
-            disabled={readOnly || selectedKeyTrack.keys.length <= 1}
-            title={
-              selectedKeyTrack.keys.length <= 1
-                ? 'A track keeps at least one key'
-                : 'Delete key (Delete)'
-            }
-            onClick={removeSelectedKey}
-          >
-            Delete key
-          </button>
-        </div>
-      )}
     </section>
   );
 }
