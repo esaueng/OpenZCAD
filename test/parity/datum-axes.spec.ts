@@ -23,14 +23,10 @@ import {
   type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
-import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
 /**
- * R01 datum axes resolve the same line in the Remus build and the OCCT
- * parity reference — through two points, where two planes meet, along a
- * block edge re-found through each kernel's own lineage, and along a
- * cylinder's axis — and each consumer (revolve, circular pattern, Move)
- * turns about it to the analytic result in both kernels.
+ * Datum-axis consumers resolve their source geometry and reach their analytic
+ * revolve, circular-pattern and Move results in Remus.
  */
 
 const xz = {
@@ -86,23 +82,21 @@ function verticalEdge(
   return edge!.reference!;
 }
 
-describe('datum axes across exact kernels', () => {
+describe('datum axes with the Remus kernel', () => {
   let remus: ExactKernelAdapter;
-  let occt: OcctStepKernelAdapter;
+
   beforeAll(async () => {
     remus = await createExactKernelAdapter();
-    occt = await OcctStepKernelAdapter.create();
   });
   afterAll(() => {
     remus.dispose();
-    occt.dispose();
   });
 
-  async function inBoth(
+  async function checkDocument(
     document: ProjectDocument,
     check: (derived: DerivedState) => void
   ) {
-    for (const adapter of [remus, occt]) {
+    for (const adapter of [remus]) {
       const built = await adapter.syncDocument(document);
       expect(built.warnings).toEqual([]);
       check(built);
@@ -138,7 +132,7 @@ describe('datum axes across exact kernels', () => {
       axis: 'horizontal',
       axisRef: axisRef(crossing.featureId)
     });
-    await inBoth(revolved.document, (derived) => {
+    await checkDocument(revolved.document, (derived) => {
       const ring = derived.bodyRepresentations[revolved.bodyId]!;
       expect(ring.volume).toBeCloseTo(Math.PI * (14 ** 2 - 10 ** 2) * 6, 2);
       expect(ring.bbox.min.x).toBeCloseTo(-14, 5);
@@ -159,7 +153,7 @@ describe('datum axes across exact kernels', () => {
       axis: 'horizontal',
       axisRef: axisRef(axis.featureId)
     });
-    await inBoth(revolved.document, (derived) => {
+    await checkDocument(revolved.document, (derived) => {
       const ring = derived.bodyRepresentations[revolved.bodyId]!;
       expect(ring.volume).toBeCloseTo(Math.PI * (10 ** 2 - 6 ** 2) * 6, 2);
       expect(ring.bbox.min.x).toBeCloseTo(10, 5);
@@ -194,7 +188,7 @@ describe('datum axes across exact kernels', () => {
       angleDeg: 360,
       axisRef: axisRef(axis.featureId)
     });
-    await inBoth(ringed.document, (built) => {
+    await checkDocument(ringed.document, (built) => {
       const ring = built.bodyRepresentations[ringed.bodyId]!;
       expect(ring.volume).toBeCloseTo(4 * 8, 5);
       expect(ring.bbox.min.x).toBeCloseTo(0, 5);
@@ -230,7 +224,7 @@ describe('datum axes across exact kernels', () => {
     // Half a turn about the vertical line (cx, cy) maps x ↦ 2cx − x.
     const cx = axisStart!.x;
     const cy = axisStart!.y;
-    await inBoth(moved.document, (built) => {
+    await checkDocument(moved.document, (built) => {
       const turned = built.bodyRepresentations[seed.bodyId]!.bbox;
       expect(turned.min.x).toBeCloseTo(2 * cx - 2, 5);
       expect(turned.max.x).toBeCloseTo(2 * cx, 5);
@@ -239,7 +233,7 @@ describe('datum axes across exact kernels', () => {
     });
   });
 
-  it('refuses parallel planes in both kernels', async () => {
+  it('refuses parallel planes in Remus', async () => {
     const lid = addDatumPlane(blank(), {
       name: 'Lid',
       definition: {
@@ -255,7 +249,7 @@ describe('datum axes across exact kernels', () => {
         { type: 'datum', datumFeatureId: lid.featureId }
       ]
     });
-    for (const adapter of [remus, occt]) {
+    for (const adapter of [remus]) {
       const built = await adapter.syncDocument(parallel.document);
       expect(built.warnings.join('\n')).toMatch(/these are parallel/);
     }

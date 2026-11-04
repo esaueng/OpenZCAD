@@ -81,7 +81,8 @@ describe('project share links (persistence)', () => {
       projectId,
       mode: 'tweak',
       createdAt: now,
-      revokedAt: null
+      revokedAt: null,
+      label: null
     });
 
     await expect(
@@ -715,7 +716,10 @@ describe('project share links (worker helpers)', () => {
     expect(() => parseCreateShareLink(null)).toThrow(
       'Sharing request must be a JSON object.'
     );
-    expect(parseCreateShareLink({ mode: 'view' })).toEqual({ mode: 'view' });
+    expect(parseCreateShareLink({ mode: 'view' })).toEqual({
+      mode: 'view',
+      label: null
+    });
     expect(parseShareLinkToken('a'.repeat(43))).toBe('a'.repeat(43));
     expect(parseShareLinkToken('short')).toBeNull();
     expect(parseShareLinkToken(`${'a'.repeat(42)}!`)).toBeNull();

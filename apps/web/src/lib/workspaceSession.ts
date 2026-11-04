@@ -58,6 +58,38 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
+/**
+ * The reopen pointer belongs to a tab; project views remain device-wide.
+ * Seed a new tab from the existing device pointer once, then keep even an
+ * explicit null (the library) across reloads, regardless of other tabs.
+ */
+function defaultActiveProjectStorage(): StorageLike | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const storage = window.sessionStorage;
+    if (storage.getItem(WORKSPACE_SESSION_STORAGE_KEY) === null) {
+      const { activeProjectId, pointerRevision } =
+        readSession(defaultStorage());
+      if (
+        !writeSession(
+          { ...emptySession(), activeProjectId, pointerRevision },
+          storage
+        )
+      )
+        return null;
+    }
+    return storage;
+  } catch {
+    return null;
+  }
+}
+
+/** Keep the last-opened fallback for new tabs and older clients. */
+function rememberDeviceProject(projectId: string | null): void {
+  const storage = defaultStorage();
+  writeSession(withPointer(readSession(storage), projectId), storage);
+}
+
 function emptySession(): WorkspaceSession {
   return {
     version: WORKSPACE_SESSION_VERSION,
@@ -257,7 +289,7 @@ function withPointer(
 }
 
 export function loadActiveProjectId(
-  storage: StorageLike | null = defaultStorage()
+  storage: StorageLike | null = defaultActiveProjectStorage()
 ): string | null {
   return readSession(storage).activeProjectId;
 }
@@ -265,8 +297,7 @@ export function loadActiveProjectId(
 /**
  * What the active-project pointer held when an open began. Opening a project
  * awaits storage and the network before it records itself, and in that time
- * another tab (or a test seeding the session) may have pointed the session
- * somewhere newer.
+ * another navigation in this tab may have pointed its session somewhere newer.
  */
 export interface ActiveProjectSnapshot {
   readonly activeProjectId: string | null;
@@ -274,7 +305,7 @@ export interface ActiveProjectSnapshot {
 }
 
 export function snapshotActiveProject(
-  storage: StorageLike | null = defaultStorage()
+  storage: StorageLike | null = defaultActiveProjectStorage()
 ): ActiveProjectSnapshot {
   const { activeProjectId, pointerRevision } = readSession(storage);
   return { activeProjectId, pointerRevision };
@@ -287,49 +318,65 @@ export function snapshotActiveProject(
  */
 export function rememberActiveProject(
   projectId: string,
-  storage: StorageLike | null = defaultStorage(),
+  storage?: StorageLike | null,
   since?: ActiveProjectSnapshot
 ): boolean {
-  const session = readSession(storage);
+  const pointerStorage =
+    storage === undefined ? defaultActiveProjectStorage() : storage;
+  const session = readSession(pointerStorage);
   if (pointerMovedSince(session, since)) {
     // Already pointing here is success, but rewriting it would bump the
     // revision and make a newer open's snapshot look stale.
     return session.activeProjectId === projectId;
   }
-  return writeSession(withPointer(session, projectId), storage);
+  const saved = writeSession(withPointer(session, projectId), pointerStorage);
+  if (saved && storage === undefined) rememberDeviceProject(projectId);
+  return saved;
 }
 
 /** With a snapshot, keeps a pointer written since it, as remembering does. */
 export function clearActiveProject(
-  storage: StorageLike | null = defaultStorage(),
+  storage?: StorageLike | null,
   since?: ActiveProjectSnapshot
 ): boolean {
-  const session = readSession(storage);
+  const pointerStorage =
+    storage === undefined ? defaultActiveProjectStorage() : storage;
+  const session = readSession(pointerStorage);
   if (pointerMovedSince(session, since)) {
     return false;
   }
-  return writeSession(withPointer(session, null), storage);
+  const saved = writeSession(withPointer(session, null), pointerStorage);
+  if (saved && storage === undefined) rememberDeviceProject(null);
+  return saved;
 }
 
 /** Transfers device view state without changing its recorded camera or time. */
 export function rekeyWorkspaceProject(
   sourceProjectId: string,
   targetProjectId: string,
-  storage: StorageLike | null = defaultStorage(),
+  storage?: StorageLike | null,
   preserveSource = false
 ): boolean {
-  const session = readSession(storage);
+  const viewStorage = storage === undefined ? defaultStorage() : storage;
+  // Capture this before moving the shared fallback: a tab without a pointer
+  // must seed from the old identity, so it too follows an account adoption.
+  const activeProjectId = storage === undefined ? loadActiveProjectId() : null;
+  const session = readSession(viewStorage);
   const views = { ...session.views };
   if (views[sourceProjectId]) {
     views[targetProjectId] = views[sourceProjectId];
     if (!preserveSource) delete views[sourceProjectId];
   }
-  return writeSession(
+  const saved = writeSession(
     session.activeProjectId === sourceProjectId
       ? { ...withPointer(session, targetProjectId), views }
       : { ...session, views },
-    storage
+    viewStorage
   );
+  if (storage === undefined && activeProjectId === sourceProjectId) {
+    rememberActiveProject(targetProjectId);
+  }
+  return saved;
 }
 
 export function loadProjectView(

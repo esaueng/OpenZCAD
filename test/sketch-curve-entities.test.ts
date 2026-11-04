@@ -487,8 +487,25 @@ describe('spline regions', () => {
     };
     const denseCrosses = (points: CurvePoint[]) => {
       const n = points.length - 1;
+      // Disjoint closed bounding boxes cannot contain a proper crossing.
+      // Cull only those pairs; retain all 4,000 chords and the exact predicate.
+      const bounds = points.slice(1).map((point, index) => ({
+        minX: Math.min(points[index]!.x, point.x),
+        maxX: Math.max(points[index]!.x, point.x),
+        minY: Math.min(points[index]!.y, point.y),
+        maxY: Math.max(points[index]!.y, point.y)
+      }));
       for (let i = 0; i < n; i += 1) {
         for (let j = i + 2; j < n; j += 1) {
+          const a = bounds[i]!;
+          const b = bounds[j]!;
+          if (
+            a.maxX < b.minX ||
+            b.maxX < a.minX ||
+            a.maxY < b.minY ||
+            b.maxY < a.minY
+          )
+            continue;
           const a0 = points[i]!;
           const a1 = points[i + 1]!;
           const b0 = points[j]!;

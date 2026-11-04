@@ -4,6 +4,7 @@
  * and the user-facing failure message. Kernel-mutating, but stateless.
  */
 import type { FaceEvolutionPayloadV1, RemusKernel } from './remus-runtime';
+import { displayOnlyBlendsActive } from './display-only-blends';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import {
@@ -353,6 +354,9 @@ export function applyEdgeModifier(
     // generous radius-2r tube plus one radius-2r ball per selected edge. This
     // scales as volume, allows concave as well as convex blends, and rejects
     // topology duplication that bounds and relaxed validation cannot see.
+    // A display-only build (a drag frame) skips this measurement, as the
+    // kernel skips its own; the checked rebuild at rest and on release runs
+    // it. See `display-only-blends`.
     const neighbourhoodRadius =
       Math.max(size, variableRadius?.endRadius ?? 0) * 2;
     const selectedLength = selected.reduce(
@@ -362,14 +366,16 @@ export function applyEdgeModifier(
     const volumeEnvelope =
       Math.PI * neighbourhoodRadius ** 2 * selectedLength +
       selected.length * ((4 / 3) * Math.PI * neighbourhoodRadius ** 3);
-    const targetVolume = kernel.volume(target, MEASUREMENT_DEFLECTION);
-    const modifiedVolume = kernel.volume(modified, MEASUREMENT_DEFLECTION);
-    const volumeTolerance = Math.max(1, Math.abs(targetVolume)) * 1e-6;
-    if (
-      Math.abs(modifiedVolume - targetVolume) >
-      volumeEnvelope + volumeTolerance
-    ) {
-      return null;
+    if (!displayOnlyBlendsActive()) {
+      const targetVolume = kernel.volume(target, MEASUREMENT_DEFLECTION);
+      const modifiedVolume = kernel.volume(modified, MEASUREMENT_DEFLECTION);
+      const volumeTolerance = Math.max(1, Math.abs(targetVolume)) * 1e-6;
+      if (
+        Math.abs(modifiedVolume - targetVolume) >
+        volumeEnvelope + volumeTolerance
+      ) {
+        return null;
+      }
     }
 
     // A fillet that came back as a chamfer is not a fillet. Remus used to
@@ -646,10 +652,9 @@ export function refineAcceptedEdgeModifierSize(
 /**
  * Turns the kernel's own blend refusal into the sentence a user can act on.
  *
- * The kernel reports how many of the named edges it could not blend and how
- * many would round on their own. That count is the whole remedy — deselect
- * the ones it named — and no amount of inspecting the selection afterwards
- * recovers it, so it is relayed rather than re-derived.
+ * Older kernels labelled every non-planar seed as unblendable after a mixed
+ * selection failed, without testing that subset. Those counts do not prove
+ * that an edge fails on its own or that the planar subset succeeds.
  */
 export function blendSubsetRemedy(
   reported: string | null,
@@ -665,12 +670,7 @@ export function blendSubsetRemedy(
   if (!refused || !roundable) {
     return null;
   }
-  const verb = featureKind === 'fillet' ? 'round' : 'chamfer';
-  return (
-    `${refused[1]} of them cannot be blended where two rounds would meet at a corner, ` +
-    `and the kernel will not quietly drop them. The other ${roundable[1]} ${verb} on their own — ` +
-    `deselect those ${refused[1]} and try again.`
-  );
+  return `The kernel could not build these edges together. Try the adjoining edge groups in separate ${featureKind} features.`;
 }
 
 export function edgeModifierFailureMessage(
@@ -701,6 +701,9 @@ export function edgeModifierFailureMessage(
   // Used to aim the ladder only — see the size-bound branch below for why it
   // is never quoted.
   const cliffLimit = blendCliffLimit(reported);
+  // Set once every rung of the ladder has refused, so a later diagnosis that
+  // throws still cannot fall back to advising a smaller size.
+  let smallerSizesRefused = false;
   try {
     const accepted = acceptedEdgeModifierProbe(
       kernel,
@@ -738,6 +741,7 @@ export function edgeModifierFailureMessage(
       // 10 builds symmetrically on a 30x18x24 box and is refused at 80°.
       return `${prefix} Try a smaller ${dimension}: ${dimension} ${quoted} builds here.`;
     }
+    smallerSizesRefused = true;
     // Named before the topology causes because it explains the whole body
     // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
     // degree wedge refuses all 12 of its edges at every radius from 0.4 down
@@ -759,13 +763,23 @@ export function edgeModifierFailureMessage(
       return `${prefix} ${subsetRemedy}`;
     }
     if (blendReportIsVertexBlend(reported)) {
-      return `${prefix} Two of these rounds would run into each other at a shared corner, which the kernel cannot blend yet — ${featureKind} the edges in smaller groups that do not meet.`;
+      return `${prefix} The kernel could not build the shared corner for this complete selection. Try the adjoining edge groups in separate ${featureKind} features.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected, priorBlendFace)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
     }
   } catch {
     // Diagnosis is best-effort; fall through to the generic message.
+  }
+  if (smallerSizesRefused) {
+    // No cause was named, but the ladder proved the size is not it: telling
+    // the user to shrink the value sent them round the same refusal.
+    const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
+    if (selected.length === 1) {
+      return `${prefix} Smaller ${sizes} were refused too. The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.`;
+    }
+    const gerund = featureKind === 'fillet' ? 'rounding' : 'chamfering';
+    return `${prefix} Smaller ${sizes} were refused too, so the size is not the cause. Try ${gerund} fewer edges at once, or different edges.`;
   }
   return `${prefix} Try a smaller ${dimension}.`;
 }

@@ -35,7 +35,8 @@ import {
   sphereGlyph,
   splitGlyph,
   sweepGlyph,
-  thickenGlyph
+  thickenGlyph,
+  threadGlyph
 } from './toolIcons';
 import { platformShortcutLabel } from './platformShortcut';
 
@@ -69,6 +70,7 @@ export type ToolId =
   | 'hole'
   | 'gear'
   | 'gear-teeth'
+  | 'thread'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -129,19 +131,19 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     label: 'Plane',
     icon: planeGlyph,
     group: 'create',
-    hint: 'Offset plane or midplane to sketch, split or mirror on'
+    hint: 'A plane to sketch, split or mirror on'
   },
   'datum-axis': {
     label: 'Axis',
     icon: icon(<Axis3d size={16} aria-hidden="true" />),
     group: 'create',
-    hint: 'Axis through points, along an edge or cylinder, or where planes meet'
+    hint: 'Axis along an edge, cylinder or two points'
   },
   'reference-image': {
     label: 'Image',
     icon: icon(<ImagePlus size={16} aria-hidden="true" />),
     group: 'create',
-    hint: 'Place a PNG or JPEG on a plane or face to trace over'
+    hint: 'A picture to trace over'
   },
   box: {
     label: 'Box',
@@ -193,20 +195,20 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     label: 'Loft',
     icon: loftGlyph,
     group: 'from-sketch',
-    hint: 'Blend through two or more closed sketch profiles'
+    hint: 'Blend through two or more profiles'
   },
   sweep: {
     label: 'Sweep',
     icon: sweepGlyph,
     group: 'from-sketch',
-    hint: 'Carry a closed profile along a sketch path'
+    hint: 'Carry a profile along a path'
   },
   'helical-sweep': {
     label: 'Helical sweep',
     short: 'Helical',
     icon: helicalSweepGlyph,
     group: 'from-sketch',
-    hint: 'Carry a closed profile around a parametric helix'
+    hint: 'Coil a profile around an axis'
   },
   fillet: {
     label: 'Fillet',
@@ -224,44 +226,50 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     label: 'Hole',
     icon: icon(<Drill size={16} aria-hidden="true" />),
     group: 'edges-faces',
-    hint: 'Drill a simple, counterbore, or countersink hole into a face'
+    hint: 'Drill a hole into a flat face'
   },
   gear: {
     label: 'Gear',
     icon: icon(<Cog size={16} aria-hidden="true" />),
     group: 'create',
-    hint: 'Add an involute spur gear, internal gear or rack on a plane'
+    hint: 'Add a gear, rack or worm'
   },
   'gear-teeth': {
     label: 'Gear teeth',
     icon: gearTeethGlyph,
     group: 'edges-faces',
-    hint: 'Cut gear teeth along a cylindrical boss or bore'
+    hint: 'Cut teeth on a boss or bore'
+  },
+  thread: {
+    label: 'Thread',
+    icon: threadGlyph,
+    group: 'edges-faces',
+    hint: 'Model a screw thread on a boss or in a bore, sized for printing'
   },
   shell: {
     label: 'Shell',
     icon: shellGlyph,
     group: 'edges-faces',
-    hint: 'Open selected faces and add an inward wall thickness'
+    hint: 'Hollow a body, opening faces'
   },
   draft: {
     label: 'Draft',
     icon: draftGlyph,
     group: 'edges-faces',
-    hint: 'Taper selected faces along a pull direction'
+    hint: 'Taper faces along a pull direction'
   },
   thicken: {
     label: 'Thicken',
     icon: thickenGlyph,
     group: 'edges-faces',
-    hint: 'Turn one exact face into a solid wall'
+    hint: 'Turn a face into a solid wall'
   },
   'solid-offset': {
     label: 'Solid offset',
     short: 'Offset',
     icon: solidOffsetGlyph,
     group: 'edges-faces',
-    hint: 'Offset every face outward with sharp joins'
+    hint: 'Grow a whole body outward'
   },
   transform: {
     label: 'Move',
@@ -274,26 +282,26 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     label: 'Scale',
     icon: icon(<Scaling size={16} aria-hidden="true" />),
     group: 'bodies',
-    hint: 'Uniformly resize a body about the origin'
+    hint: 'Resize a body uniformly'
   },
   'axis-rotate': {
     label: 'Rotate about axis',
     short: 'Rotate',
     icon: icon(<Rotate3d size={16} aria-hidden="true" />),
     group: 'bodies',
-    hint: 'Turn a body, or a copy of it, about a datum axis'
+    hint: 'Turn a body about an axis'
   },
   mirror: {
     label: 'Mirror',
     icon: icon(<FlipHorizontal2 size={16} aria-hidden="true" />),
     group: 'bodies',
-    hint: 'Create a separate reflected copy of a body'
+    hint: 'Reflect a copy of a body'
   },
   split: {
     label: 'Split',
     icon: splitGlyph,
     group: 'bodies',
-    hint: 'Cut a body into two along a plane'
+    hint: 'Cut a body in two along a plane'
   },
   union: {
     label: 'Union',
@@ -365,6 +373,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'fillet',
         'chamfer',
         'hole',
+        'thread',
         'gear-teeth',
         'shell',
         'draft',
@@ -439,6 +448,7 @@ export function toolDisabledReason(
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
+      tool === 'thread' ||
       tool === 'gear-teeth') &&
     !avail.exactGeometryReady
   ) {
@@ -479,6 +489,7 @@ export function toolDisabledReason(
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
+      tool === 'thread' ||
       tool === 'gear-teeth') &&
     avail.liveBodyCount < 1
   ) {

@@ -8,7 +8,12 @@ import {
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   createProjectDocument
@@ -166,6 +171,9 @@ function setup(
     exactFaces?: boolean;
     editDisabledReason?: string | null;
     geometryPending?: boolean;
+    previewAnnotations?: Parameters<
+      typeof DrawingWorkspace
+    >[0]['previewAnnotations'];
   } = {}
 ) {
   const base = createProjectDocument('Bracket', toUserId('test'));
@@ -182,6 +190,7 @@ function setup(
       document={document}
       bodies={bodies}
       geometryPending={options.geometryPending ?? false}
+      previewAnnotations={options.previewAnnotations}
       defaultBodyIds={[bodyId]}
       requestTessellation={displayTessellation(bodies)}
       editDisabledReason={options.editDisabledReason ?? null}
@@ -1037,7 +1046,7 @@ describe('DrawingWorkspace', () => {
     const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
     try {
       const base = createProjectDocument('Bracket', toUserId('test'));
-      render(
+      const workspace = (
         <DrawingWorkspace
           document={{
             ...base,
@@ -1053,6 +1062,7 @@ describe('DrawingWorkspace', () => {
           onStatus={vi.fn()}
         />
       );
+      const firstMount = render(workspace);
       const settled = (name: string) =>
         waitFor(() =>
           expect(
@@ -1065,7 +1075,19 @@ describe('DrawingWorkspace', () => {
       await settled('Sheet 1');
       await userEvent.click(within(tabs).getByRole('tab', { name: 'Sheet 2' }));
       await settled('Sheet 2');
-      await userEvent.click(within(tabs).getByRole('tab', { name: 'Sheet 1' }));
+      expect(screen.getByLabelText('Sheet bodies')).toHaveTextContent(
+        'Small cube'
+      );
+      expect(screen.getByText(/keeps its saved bodies/)).toBeVisible();
+      firstMount.unmount();
+      render(workspace);
+      await settled('Sheet 2');
+      const reopenedTabs = screen.getByRole('tablist', {
+        name: 'Drawing sheets'
+      });
+      await userEvent.click(
+        within(reopenedTabs).getByRole('tab', { name: 'Sheet 1' })
+      );
       await settled('Sheet 1');
       // One request per sheet: going back to the first reuses its views.
       expect(project).toHaveBeenCalledTimes(2);
@@ -1073,6 +1095,61 @@ describe('DrawingWorkspace', () => {
       project.mockRestore();
     }
   });
+
+  it.each([false, true])(
+    'opens the isolated body sheet without requesting the reference mesh (cold: %s)',
+    async (cold) => {
+      const otherId = 'body_finished' as BodyId;
+      const bodies = {
+        [bodyId]: { ...cube(), name: 'STL reference' },
+        [otherId]: { ...cube(4), bodyId: otherId, name: 'Finished part' }
+      };
+      const first = starter(drawingSourceFingerprint(bodies, [bodyId])!);
+      const second = createStarterSheet({
+        name: 'Finished drawing',
+        bodyIds: [otherId],
+        bodies,
+        units: 'mm',
+        paper: { size: 'A3', orientation: 'landscape' },
+        projectionAngle: 'first',
+        fingerprint: drawingSourceFingerprint(bodies, [otherId])!
+      });
+      const requestTessellation = vi.fn(displayTessellation(bodies));
+      const document = {
+        ...createProjectDocument('Isolated part', toUserId('test')),
+        bodyOrder: [bodyId, otherId],
+        drawings: { sheets: [first, second] }
+      };
+      const workspace = (pending: boolean) => (
+        <DrawingWorkspace
+          document={document}
+          bodies={pending ? {} : bodies}
+          geometryPending={pending}
+          defaultBodyIds={pending ? [] : [otherId]}
+          requestTessellation={requestTessellation}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const rendered = render(workspace(cold));
+      if (cold) {
+        expect(requestTessellation).not.toHaveBeenCalled();
+        rendered.rerender(workspace(false));
+      }
+      await waitFor(() => expect(requestTessellation).toHaveBeenCalledTimes(1));
+      expect(requestTessellation.mock.calls[0]![1]).toEqual([otherId]);
+      expect(
+        screen.getByRole('tab', { name: 'Finished drawing' })
+      ).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByLabelText('Sheet bodies')).toHaveTextContent(
+        'Finished part'
+      );
+      expect(first.views.every((view) => view.bodyIds[0] === bodyId)).toBe(
+        true
+      );
+    }
+  );
 
   it('offers the large-model scales, so a fitted 1:500 can be picked again', () => {
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
@@ -1462,6 +1539,154 @@ describe('DrawingWorkspace', () => {
         screen.getByRole<HTMLButtonElement>('button', { name: 'Horizontal' })
           .disabled
       ).toBe(true);
+    });
+
+    it('deletes only broken annotations on this sheet, with one undo, redo and replay', async () => {
+      const sheet = dimensioned(999);
+      const broken = sheet.annotations![0]!;
+      const healthy: DrawingAnnotation = {
+        ...dimensioned().annotations![0]!,
+        viewId: sheet.views[0]!.viewId,
+        annotationId: 'dann_healthy' as DrawingAnnotationId
+      };
+      const note: DrawingAnnotation = {
+        kind: 'note',
+        annotationId: 'dann_note' as DrawingAnnotationId,
+        placementMm: { x: 20, y: 20 },
+        text: 'Keep this note'
+      };
+      sheet.annotations = [
+        broken,
+        healthy,
+        note,
+        {
+          ...note,
+          annotationId: 'dann_leader' as DrawingAnnotationId,
+          viewId: sheet.views[0]!.viewId,
+          leader: { bodyId, hash: 999 }
+        }
+      ];
+      const other = dimensioned(999);
+      other.name = 'Sheet 2';
+      other.annotations![0]!.annotationId = 'dann_other' as DrawingAnnotationId;
+      const initial: ProjectDocument = {
+        ...createProjectDocument('Bracket', toUserId('test')),
+        bodyOrder: [bodyId],
+        drawings: { sheets: [sheet, other] }
+      };
+      const manager = new CommandManager(initial);
+      const bodies = { [bodyId]: cube() };
+      const onCommand = vi.fn((command: AnyCommand) => {
+        manager.execute(command);
+        return true;
+      });
+      const workspace = () => (
+        <DrawingWorkspace
+          document={manager.document}
+          bodies={bodies}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation(bodies)}
+          editDisabledReason={null}
+          onCommand={onCommand}
+          onStatus={vi.fn()}
+        />
+      );
+      const { rerender } = render(workspace());
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      await waitFor(() => expect(cleanup).toBeEnabled());
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension 10' })
+      );
+      await userEvent.click(cleanup);
+      expect(onCommand).toHaveBeenCalledTimes(1);
+      expect(manager.document.drawings!.sheets[0]!.annotations).toEqual([
+        healthy,
+        note
+      ]);
+      expect(manager.document.drawings!.sheets[1]).toEqual(other);
+      expect(manager.undoIsDrawingOnly).toBe(true);
+      const deleted = manager.document;
+      expect(replayCommands(initial, deleted.commandLog).drawings).toEqual(
+        deleted.drawings
+      );
+      rerender(workspace());
+      expect(
+        screen.queryByRole('button', { name: 'Delete all broken' })
+      ).toBeNull();
+      expect(screen.getByRole('button', { name: 'Export PDF' })).toBeEnabled();
+      expect(
+        screen.getByRole('option', { name: 'Horizontal dimension 10' })
+      ).toHaveAttribute('aria-selected', 'true');
+      manager.undo();
+      rerender(workspace());
+      expect(manager.document.drawings).toEqual(initial.drawings);
+      expect(
+        screen.getByRole('button', { name: 'Delete all broken' })
+      ).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
+      manager.redo();
+      rerender(workspace());
+      expect(manager.document.drawings).toEqual(deleted.drawings);
+      expect(screen.getByRole('button', { name: 'Export PDF' })).toBeEnabled();
+    });
+
+    it('removes the last broken annotation without leaving an empty list', async () => {
+      const sheet = dimensioned(999);
+      const { onCommand } = setup({ sheet });
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      await waitFor(() => expect(cleanup).toBeEnabled());
+      await userEvent.click(cleanup);
+      const doc = {
+        ...createProjectDocument('Bracket', toUserId('test')),
+        drawings: { sheets: [sheet] }
+      };
+      const next = onCommand.mock.calls[0]![0].apply(doc);
+      expect(next.drawings!.sheets[0]!.annotations).toBeUndefined();
+    });
+
+    it('disables cleanup for read-only drawings', async () => {
+      const { onCommand } = setup({
+        sheet: dimensioned(999),
+        editDisabledReason: 'This shared project is read-only'
+      });
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      expect(cleanup).toBeDisabled();
+      await userEvent.click(cleanup);
+      expect(onCommand).not.toHaveBeenCalled();
+    });
+
+    it('waits for projections before deleting unresolved section references or leaders', async () => {
+      const project = vi
+        .spyOn(DrawingProjectionClient.prototype, 'project')
+        .mockImplementation(() => new Promise(() => {}));
+      try {
+        const { onCommand } = setup({ sheet: dimensioned(999) });
+        const cleanup = screen.getByRole('button', {
+          name: 'Delete all broken'
+        });
+        expect(cleanup).toBeDisabled();
+        await userEvent.click(cleanup);
+        expect(onCommand).not.toHaveBeenCalled();
+      } finally {
+        project.mockRestore();
+      }
+    });
+
+    it('does not delete saved annotations based on a proposal preview', async () => {
+      const sheet = dimensioned();
+      const preview = dimensioned(999).annotations!.map((annotation) => ({
+        ...annotation,
+        viewId: sheet.views[0]!.viewId
+      }));
+      const { onCommand } = setup({
+        sheet,
+        previewAnnotations: { sheetId: sheet.sheetId, annotations: preview }
+      });
+      const cleanup = screen.getByRole('button', { name: 'Delete all broken' });
+      expect(cleanup).toBeDisabled();
+      await userEvent.click(cleanup);
+      expect(onCommand).not.toHaveBeenCalled();
     });
 
     it("ends a tool when another sheet takes the active one's place", async () => {
@@ -2175,6 +2400,129 @@ describe('DrawingWorkspace dimension check (D06)', () => {
       'Z: nothing locates the face at z = 10 from the face at z = 0.'
     ]);
     expect(screen.getByText('0 of 3 stated')).toBeTruthy();
+  });
+
+  it('keys findings that read alike apart, so no stale row outlives its finding', async () => {
+    // Two like bodies word their findings identically; keyed by message,
+    // React kept an orphan row ("Missing · 1" over two bullets).
+    const twinId = 'body_twin' as BodyId;
+    const bodies = {
+      [bodyId]: cube(10, true),
+      [twinId]: { ...cube(10, true), bodyId: twinId, name: 'Twin' }
+    };
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [bodyId, twinId],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, [bodyId, twinId])!
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <DrawingWorkspace
+          document={{
+            ...createProjectDocument('Bracket', toUserId('test')),
+            bodyOrder: [bodyId, twinId],
+            drawings: { sheets: [sheet] }
+          }}
+          bodies={bodies}
+          geometryPending={false}
+          defaultBodyIds={[bodyId, twinId]}
+          requestTessellation={displayTessellation(bodies)}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const missing = await screen.findByRole('list', {
+        name: 'Missing dimensions'
+      });
+      const items = within(missing).getAllByRole('listitem');
+      expect(items).toHaveLength(6);
+      expect(new Set(items.map((item) => item.textContent)).size).toBe(3);
+      expect(screen.getByText('Missing · 6')).toBeTruthy();
+      expect(
+        error.mock.calls.some((call) =>
+          call.some((part) => String(part).includes('same key'))
+        )
+      ).toBe(false);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('calls a position no dimension can name unplaceable, not missing', async () => {
+    // As on a mirrored part, the edges that mark x = 10 share their hash
+    // with another edge, so neither a pick nor Auto-dimension can name one:
+    // the check used to list it missing, an Auto-dimension run never closed.
+    const base = cube(10, true);
+    const shared = (points: readonly number[]) =>
+      points[0] === 10 && points[3] === 10
+        ? 999
+        : points[1] === points[4] && points[2] === points[5]
+          ? 998
+          : null;
+    const body: BodyRepresentation = {
+      ...base,
+      topology: {
+        ...base.topology!,
+        edges: base.topology!.edges.map((edge) => ({
+          ...edge,
+          hash: shared(edge.points) ?? edge.hash
+        }))
+      }
+    };
+    const bodies = { [bodyId]: body };
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [bodyId],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, [bodyId])!
+    });
+    render(
+      <DrawingWorkspace
+        document={{
+          ...createProjectDocument('Bracket', toUserId('test')),
+          bodyOrder: [bodyId],
+          drawings: { sheets: [sheet] }
+        }}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation(bodies)}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    const missing = await screen.findByRole('list', {
+      name: 'Missing dimensions'
+    });
+    expect(
+      within(missing)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'Y: nothing locates the face at y = 10 from the face at y = 0.',
+      'Z: nothing locates the face at z = 10 from the face at z = 0.'
+    ]);
+    expect(
+      within(
+        screen.getByRole('list', {
+          name: 'Requirements no dimension can state yet'
+        })
+      )
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toContain(
+      'X: nothing locates the face at x = 10 from the face at x = 0: every edge that marks it shares its identity with another edge, so no dimension can name it.'
+    );
   });
 
   it('selects a repeated dimension from the check', async () => {

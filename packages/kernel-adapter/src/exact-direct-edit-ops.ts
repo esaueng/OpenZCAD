@@ -5,6 +5,7 @@ import {
 } from './exact-operation-lineage';
 import {
   cylinderCarrier,
+  moveFacesJournalFaceMap,
   planeCarrier,
   sameAnalyticCarrier
 } from './exact-lineage-builders';
@@ -85,9 +86,11 @@ import {
 import {
   createRemusSemanticLineage,
   createRemusModifierEvolutionLineage,
+  decodeRemusMoveFacesJournal,
   deriveRemusMoveFacesDirectEditLineage,
   mergeRemusLineageStates,
   propagateRemusUnchangedDirectEditLineage,
+  type RemusMoveFacesJournal,
   type RemusLineageState
 } from './remus-lineage';
 import {
@@ -104,6 +107,7 @@ import {
 import { preparedFaceMove } from './exact-prepared-face-move';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
+import { shrinkChamferedThroughHole } from './exact-chamfered-hole';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -230,7 +234,8 @@ function offsetCompoundFace(
   kernel: RemusKernel,
   target: ExactShape,
   operation: Extract<DirectEditOperation, { kind: 'offset-face' }>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  onAdvisory?: (message: string) => void
 ): ExactShape {
   if (operation.faceReference && !target.lineage) {
     throw new Error(
@@ -259,7 +264,10 @@ function offsetCompoundFace(
       ...(ownerLineage ? { lineage: ownerLineage } : {})
     },
     operation,
-    scope
+    scope,
+    undefined,
+    false,
+    onAdvisory
   );
   const solids = target.solids.flatMap((solid, index) =>
     index === ownerIndex ? edited.solids : [solid]
@@ -689,20 +697,30 @@ export function resizeThroughHole(
         output = cut.solid;
         boundedCutter = cut.boundedCutter;
       } else {
-        output = exactFuse(
+        const chamfered = shrinkChamferedThroughHole(
           kernel,
           solid,
-          exactCut(
-            kernel,
-            cylinderAlongAxis(
-              kernel,
-              geometry.axisStart,
-              geometry.axisEnd,
-              geometry.radius
-            ),
-            newBore
-          )
+          face,
+          geometry,
+          radius,
+          rimTolerance
         );
+        output =
+          chamfered ??
+          exactFuse(
+            kernel,
+            solid,
+            exactCut(
+              kernel,
+              cylinderAlongAxis(
+                kernel,
+                geometry.axisStart,
+                geometry.axisEnd,
+                geometry.radius
+              ),
+              newBore
+            )
+          );
       }
     } catch (error) {
       throw new Error(
@@ -1630,11 +1648,12 @@ export function applyDirectEdit(
   operation: DirectEditOperation,
   scope: Record<string, number>,
   producingFeatureId?: FeatureId,
-  deferOutputLineage = false
+  deferOutputLineage = false,
+  onAdvisory?: (message: string) => void
 ): ExactShape {
   assertDirectEditOperation(operation);
   if (operation.kind === 'offset-face' && target.solids.length > 1) {
-    return offsetCompoundFace(kernel, target, operation, scope);
+    return offsetCompoundFace(kernel, target, operation, scope, onAdvisory);
   }
   const solid = collapseShape(kernel, target);
   const resolved =
@@ -1859,7 +1878,8 @@ export function applyDirectEdit(
             solid,
             faces,
             offset,
-            deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null
+            deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null,
+            true
           ))
         : { solid: analytic, relation: null };
     const output = moved.solid;
@@ -1876,6 +1896,11 @@ export function applyDirectEdit(
     });
     if (facetFallback) {
       throw new Error(facetFallback);
+    }
+    if ('approximateCapJoin' in moved && moved.approximateCapJoin) {
+      onAdvisory?.(
+        'The upper rim was rebuilt with approximate corner surfaces.'
+      );
     }
     // The exact operation, recorded-face guards, validation and analytic
     // carrier census above still run. Only naming the disposable output waits.
@@ -2106,17 +2131,33 @@ export function applyDirectEdit(
   // sweeps back through material — so growing and shrinking are the same
   // call. The recorded `concavity` is now only a record of what the gesture
   // meant, and shrinking no longer has to fail closed.
-  const output = resizeCylindricalFaceExactly(
-    kernel,
-    solid,
-    face,
-    geometry.radius,
-    newRadius,
-    geometry.axisStart,
-    axisDir,
-    axisTolerance,
-    operation.concavity
-  );
+  const sourceCandidates = deferOutputLineage
+    ? []
+    : topologyCandidatesForSolid(kernel, solid);
+  let journal: RemusMoveFacesJournal | null = null;
+  if (!deferOutputLineage) {
+    try {
+      journal = decodeRemusMoveFacesJournal(
+        kernel.resizeCylindricalFaceJournaled(solid, face, newRadius)
+      );
+    } catch {
+      // Older or unqualified resize constructions can still use the exact
+      // sleeve route. That route makes no construction identity claim.
+    }
+  }
+  const output =
+    journal?.solid ??
+    resizeCylindricalFaceExactly(
+      kernel,
+      solid,
+      face,
+      geometry.radius,
+      newRadius,
+      geometry.axisStart,
+      axisDir,
+      axisTolerance,
+      operation.concavity
+    );
   if (kernel.validateSolidRelaxed(output) !== 0) {
     throw new Error(
       `Resizing the face to radius ${newRadius} does not produce a valid solid.`
@@ -2148,7 +2189,34 @@ export function applyDirectEdit(
         : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
     );
   }
-  return { solids: [output] };
+  if (deferOutputLineage || !journal) return { solids: [output] };
+  const relation = moveFacesJournalFaceMap(
+    kernel,
+    journal.op,
+    Array.from(kernel.getSolidFaces(solid)),
+    Array.from(kernel.getSolidFaces(output))
+  );
+  const lineage = relation
+    ? deriveRemusMoveFacesDirectEditLineage({
+        source: target.lineage,
+        sourceCandidates,
+        resultCandidates: topologyCandidatesForSolid(kernel, output),
+        relation
+      })
+    : undefined;
+  return {
+    solids: [output],
+    ...(lineage && producingFeatureId
+      ? {
+          lineage: withBoundaryEdgeLineage(
+            kernel,
+            output,
+            producingFeatureId,
+            lineage
+          )
+        }
+      : {})
+  };
 }
 
 /** Relative change below which the kernel's resize sleeve may be refused. */
@@ -2193,9 +2261,7 @@ function resizeCylindricalFaceExactly(
       (factor) => factor * Math.max(fromRadius, toRadius)
     );
     const waypoints =
-      concavity === 'hole'
-        ? [...inward, ...outward]
-        : [...outward, ...inward];
+      concavity === 'hole' ? [...inward, ...outward] : [...outward, ...inward];
     for (const waypoint of waypoints) {
       try {
         const via = kernel.resizeCylindricalFace(solid, face, waypoint);

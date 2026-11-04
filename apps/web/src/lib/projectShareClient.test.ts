@@ -73,6 +73,48 @@ describe('project share link client', () => {
     expect(fetcher.mock.calls[3]![1]).toMatchObject({ credentials: 'omit' });
   });
 
+  it('names a link at creation and renames it with PATCH', async () => {
+    const shareLink = {
+      shareLinkId: 'share_1',
+      projectId: 'project/one',
+      mode: 'tweak',
+      createdAt: 1,
+      revokedAt: null,
+      label: 'Forum post'
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ shareLink, token: 'secret' }, 201))
+      .mockResolvedValueOnce(jsonResponse({ shareLink }))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: 'Too long.', code: 'SHARE_LINK_LABEL_INVALID' },
+          400
+        )
+      );
+    const client = createProjectShareLinkClient(fetcher);
+
+    await client.createProjectShareLink('project/one', 'tweak', 'Forum post');
+    await expect(
+      client.renameProjectShareLink('project/one', 'share/1', 'Forum post')
+    ).resolves.toEqual(shareLink);
+    await expect(
+      client.renameProjectShareLink('project/one', 'share/1', 'x'.repeat(61))
+    ).rejects.toMatchObject({ status: 400, code: 'SHARE_LINK_LABEL_INVALID' });
+
+    expect(fetcher.mock.calls[0]![1]).toMatchObject({
+      body: JSON.stringify({ mode: 'tweak', label: 'Forum post' })
+    });
+    expect(fetcher.mock.calls[1]![0]).toBe(
+      '/api/projects/project%2Fone/share-links/share%2F1'
+    );
+    expect(fetcher.mock.calls[1]![1]).toMatchObject({
+      method: 'PATCH',
+      credentials: 'same-origin',
+      body: JSON.stringify({ label: 'Forum post' })
+    });
+  });
+
   it('resolves null for unknown or revoked share tokens and throws otherwise', async () => {
     const fetcher = vi
       .fn<typeof fetch>()

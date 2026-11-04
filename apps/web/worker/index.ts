@@ -42,10 +42,6 @@ import {
   markApiRateLimitSpent,
   publicRequestBucket
 } from './apiRateLimit';
-import {
-  FREECAD_WORKER_PATH,
-  serveFreecadWorkerAsset
-} from './freecadWorkerAsset';
 import { serveAssetFallback } from './assetFallback';
 import { JsonComplexityGuard } from '@openzcad/shared';
 import { accountEntitlements } from '@openzcad/cloudflare-adapters';
@@ -168,6 +164,7 @@ import {
   hashProjectInvitationToken,
   parseCreateInvitation,
   parseProjectMemberRole,
+  parseRenameShareLink,
   parseShareLinkToken,
   sendProjectInvitationEmail,
   SharingRequestError
@@ -1992,6 +1989,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     });
   }
 
+  if (request.method === 'PATCH' && shareLinkMatch) {
+    const { label } = parseRenameShareLink(await readJsonBody(request));
+    return json({
+      shareLink: await persistence.renameProjectShareLink(
+        userId,
+        shareLinkMatch[1]!,
+        shareLinkMatch[2]!,
+        label
+      )
+    });
+  }
+
   if (request.method === 'DELETE' && shareLinkMatch) {
     await persistence.revokeProjectShareLink(
       userId,
@@ -2585,11 +2594,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleAppRequest(request: Request, env: Env): Promise<Response> {
-  if (FREECAD_WORKER_PATH.test(new URL(request.url).pathname)) {
-    if (!env.ASSETS)
-      return new Response('Asset service unavailable.', { status: 503 });
-    return serveFreecadWorkerAsset(request, env.ASSETS);
-  }
   const fallback = await serveAssetFallback(request, () => env.ASSETS);
   if (fallback) return fallback;
   if (new URL(request.url).pathname === '/healthz') {

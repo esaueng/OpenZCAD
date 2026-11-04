@@ -15,30 +15,30 @@
       "witnessedFaces": 10,
       "witnessedEdges": 24,
       "lineageNames": [
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_fillet\\\",\\\"modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.426c91a5\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · fillet on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
         "import.step.face.0c7f072b",
         "import.step.face.426c91a5",
         "import.step.face.58bf7705",
@@ -62,34 +62,6 @@
         "exportedSolidCount": 1,
         "exportedVoids": false
       }
-    },
-    "occt": {
-      "status": "imported",
-      "warnings": [],
-      "bodyCount": 1,
-      "volume": 9522.74333882308,
-      "faceCount": 10,
-      "edgeCount": 24,
-      "seamEdgeCount": 0,
-      "surfaceTypes": {
-        "plane": 6,
-        "cylinder": 4
-      },
-      "witnessedFaces": 0,
-      "witnessedEdges": 0,
-      "lineageNames": [],
-      "faceHashDigest": "b563a24b",
-      "edgeHashDigest": "26f53b2e",
-      "bbox": [-4.440892098500626e-16, -4.440892098500626e-16, 0, 40, 24, 10],
-      "roundTrip": {
-        "status": "ok",
-        "warnings": [],
-        "volumeRelativeDelta": 7.831626128295643e-15,
-        "faceCountDelta": 0,
-        "edgeCountDelta": 0,
-        "exportedSolidCount": 1,
-        "exportedVoids": false
-      }
     }
   },
   "chamfer-on-import": {
@@ -104,54 +76,47 @@
       "surfaceTypes": {
         "plane": 10
       },
-      "witnessedFaces": 6,
-      "witnessedEdges": 8,
+      "witnessedFaces": 10,
+      "witnessedEdges": 24,
       "lineageNames": [
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.426c91a5\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
-        "boundary.edge.[\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity \u00b7 chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_chamfer\\\",\\\"modifier.chamfer.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.426c91a5\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.58bf7705\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.62e02c7d\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.0c7f072b\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.ac22b2bd\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.426c91a5\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.58bf7705\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.62e02c7d\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
+        "boundary.edge.[\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.ac22b2bd\\\"]\",\"[\\\"feat_parity_import_Parity · chamfer on import\\\",\\\"import.step.face.d3a10e97\\\"]\"]",
         "import.step.face.0c7f072b",
         "import.step.face.426c91a5",
         "import.step.face.58bf7705",
         "import.step.face.62e02c7d",
         "import.step.face.ac22b2bd",
-        "import.step.face.d3a10e97"
+        "import.step.face.d3a10e97",
+        "modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705",
+        "modifier.chamfer.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d",
+        "modifier.chamfer.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd",
+        "modifier.chamfer.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd"
       ],
       "faceHashDigest": "68988513",
       "edgeHashDigest": "9389207a",
       "bbox": [0, 0, 0, 40, 24, 10],
-      "roundTrip": {
-        "status": "ok",
-        "warnings": [],
-        "volumeRelativeDelta": 0,
-        "faceCountDelta": 0,
-        "edgeCountDelta": 0,
-        "exportedSolidCount": 1,
-        "exportedVoids": false
-      }
-    },
-    "occt": {
-      "status": "imported",
-      "warnings": [],
-      "bodyCount": 1,
-      "volume": 9420,
-      "faceCount": 10,
-      "edgeCount": 24,
-      "seamEdgeCount": 0,
-      "surfaceTypes": {
-        "plane": 10
-      },
-      "witnessedFaces": 0,
-      "witnessedEdges": 0,
-      "lineageNames": [],
-      "faceHashDigest": "68988513",
-      "edgeHashDigest": "9389207a",
-      "bbox": [-2.220446049250313e-16, -2.220446049250313e-16, 0, 40, 24, 10],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -211,37 +176,6 @@
         "exportedSolidCount": 1,
         "exportedVoids": false
       }
-    },
-    "occt": {
-      "status": "imported",
-      "warnings": [],
-      "bodyCount": 1,
-      "volume": 8814.601836602551,
-      "faceCount": 7,
-      "edgeCount": 15,
-      "seamEdgeCount": 1,
-      "surfaceTypes": {
-        "plane": 6,
-        "cylinder": 1
-      },
-      "witnessedFaces": 0,
-      "witnessedEdges": 0,
-      "lineageNames": [],
-      "faceHashDigest": "278af479",
-      "edgeHashDigest": "a850d842",
-      "bbox": [
-        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
-        24.000000100000005, 10.000000100000003
-      ],
-      "roundTrip": {
-        "status": "ok",
-        "warnings": [],
-        "volumeRelativeDelta": 3.095413900590246e-15,
-        "faceCountDelta": 0,
-        "edgeCountDelta": 0,
-        "exportedSolidCount": 1,
-        "exportedVoids": false
-      }
     }
   },
   "boss-crossing-a-wall": {
@@ -293,37 +227,6 @@
         "exportedSolidCount": 1,
         "exportedVoids": false
       }
-    },
-    "occt": {
-      "status": "imported",
-      "warnings": [],
-      "bodyCount": 1,
-      "volume": 10952.079901041901,
-      "faceCount": 9,
-      "edgeCount": 21,
-      "seamEdgeCount": 1,
-      "surfaceTypes": {
-        "plane": 8,
-        "cylinder": 1
-      },
-      "witnessedFaces": 0,
-      "witnessedEdges": 0,
-      "lineageNames": [],
-      "faceHashDigest": "d6b0bb14",
-      "edgeHashDigest": "17a9b608",
-      "bbox": [
-        -3.000000100000004, -1e-7, -1.0000000355271367e-7, 40.0000001,
-        24.000000100000005, 20.000000100000005
-      ],
-      "roundTrip": {
-        "status": "ok",
-        "warnings": [],
-        "volumeRelativeDelta": 3.4878103355353562e-15,
-        "faceCountDelta": 0,
-        "edgeCountDelta": 0,
-        "exportedSolidCount": 1,
-        "exportedVoids": false
-      }
     }
   },
   "pattern-boolean-with-import": {
@@ -364,37 +267,6 @@
         "exportedSolidCount": 1,
         "exportedVoids": false
       }
-    },
-    "occt": {
-      "status": "imported",
-      "warnings": [],
-      "bodyCount": 1,
-      "volume": 9010.951377451911,
-      "faceCount": 9,
-      "edgeCount": 21,
-      "seamEdgeCount": 3,
-      "surfaceTypes": {
-        "plane": 6,
-        "cylinder": 3
-      },
-      "witnessedFaces": 0,
-      "witnessedEdges": 0,
-      "lineageNames": [],
-      "faceHashDigest": "4aaa8306",
-      "edgeHashDigest": "e46dc99a",
-      "bbox": [
-        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
-        24.000000100000005, 10.000000100000003
-      ],
-      "roundTrip": {
-        "status": "ok",
-        "warnings": [],
-        "volumeRelativeDelta": 1.4130501088578256e-15,
-        "faceCountDelta": 0,
-        "edgeCountDelta": 0,
-        "exportedSolidCount": 1,
-        "exportedVoids": false
-      }
     }
   },
   "shell-on-import": {
@@ -415,36 +287,6 @@
       "faceHashDigest": "f9176a10",
       "edgeHashDigest": "c1a08708",
       "bbox": [0, 0, 0, 40, 24, 10],
-      "roundTrip": {
-        "status": "ok",
-        "warnings": [],
-        "volumeRelativeDelta": 0,
-        "faceCountDelta": 0,
-        "edgeCountDelta": 0,
-        "exportedSolidCount": 1,
-        "exportedVoids": false
-      }
-    },
-    "occt": {
-      "status": "imported",
-      "warnings": [],
-      "bodyCount": 1,
-      "volume": 3840,
-      "faceCount": 11,
-      "edgeCount": 24,
-      "seamEdgeCount": 0,
-      "surfaceTypes": {
-        "plane": 11
-      },
-      "witnessedFaces": 0,
-      "witnessedEdges": 0,
-      "lineageNames": [],
-      "faceHashDigest": "f9176a10",
-      "edgeHashDigest": "c1a08708",
-      "bbox": [
-        -1.0000000355271367e-7, -1e-7, -1.0000000355271367e-7, 40.0000001,
-        24.000000100000005, 10.000000100000003
-      ],
       "roundTrip": {
         "status": "ok",
         "warnings": [],
@@ -512,38 +354,6 @@
         "status": "ok",
         "warnings": [],
         "volumeRelativeDelta": 0,
-        "faceCountDelta": 0,
-        "edgeCountDelta": 0,
-        "exportedSolidCount": 1,
-        "exportedVoids": false
-      }
-    },
-    "occt": {
-      "status": "imported",
-      "warnings": [],
-      "bodyCount": 1,
-      "volume": 9546.002960523074,
-      "faceCount": 10,
-      "edgeCount": 24,
-      "seamEdgeCount": 0,
-      "surfaceTypes": {
-        "plane": 6,
-        "bspline": 3,
-        "cylinder": 1
-      },
-      "witnessedFaces": 0,
-      "witnessedEdges": 0,
-      "lineageNames": [],
-      "faceHashDigest": "c1cead63",
-      "edgeHashDigest": "fea0548c",
-      "bbox": [
-        -1.0606602717798208, -1.0606602717798224, -1.0606602717798224,
-        41.060660271779824, 25.06066027177982, 11.060660271779822
-      ],
-      "roundTrip": {
-        "status": "ok",
-        "warnings": [],
-        "volumeRelativeDelta": 1.1432990819727453e-15,
         "faceCountDelta": 0,
         "edgeCountDelta": 0,
         "exportedSolidCount": 1,

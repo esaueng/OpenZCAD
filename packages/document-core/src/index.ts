@@ -55,6 +55,7 @@ export * from './sketch-projections';
 export * from './document-content-schema';
 export * from './drawings';
 export * from './object-folders';
+export * from './assembly';
 export * from './reference-images';
 export {
   constantRigidTransform,
@@ -81,6 +82,7 @@ import {
   deepClone,
   assertDrawingSet,
   assertObjectFolderSet,
+  assertAssemblySet,
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
@@ -551,6 +553,18 @@ export type GearInput = Omit<
   bodyName?: string;
 };
 
+/**
+ * Schema v53: a thread feature's input — its {@link FeatureData} fields plus
+ * the command's name and optional preallocated ids.
+ */
+export type ThreadInput = Omit<
+  Extract<FeatureData, { featureKind: 'thread' }>,
+  'featureKind'
+> & {
+  name: string;
+  ids?: BodyFeatureIds;
+};
+
 export interface SplitInput {
   name: string;
   /** Consumed, unless `keepOriginal`: the two halves replace it. */
@@ -665,6 +679,8 @@ export interface ImportedMeshInput {
    * store. This is also what the `import.mesh` command log entry carries.
    */
   meshPayloadRef?: ImportedSourceReference;
+  /** The unit a file that stated none was read in (v52); see the feature. */
+  assumedUnits?: UnitSystem;
   ids?: BodyFeatureIds;
 }
 
@@ -758,6 +774,11 @@ export interface FeatureUpdateInput {
 
 export interface FeatureDeleteInput {
   featureId: FeatureId;
+  /** Bypass a removed hole/edge modifier's result with its input body.
+   * Callers must exact-preflight all dependents; topology is never rebound.
+   * Omitted on legacy commands to preserve their replay semantics.
+   */
+  reconnectInput?: boolean;
 }
 
 export interface NodeRenameInput {
@@ -966,6 +987,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   assertReferenceImageSet(document.referenceImages);
   // Schema v34 Objects folders: validated as written, never synthesized.
   assertObjectFolderSet(document.objectFolders);
+  // Schema v54 assemblies: the same.
+  assertAssemblySet(document.assembly);
   assertDocumentContentSchema(document);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
@@ -3435,6 +3458,7 @@ function addBodyResultFeature(
     | 'mirror'
     | 'hole'
     | 'gear'
+    | 'thread'
     | 'shell'
     | 'solid-offset'
     | 'loft'
@@ -3452,6 +3476,7 @@ function addBodyResultFeature(
         | 'mirror'
         | 'hole'
         | 'gear'
+        | 'thread'
         | 'shell'
         | 'solid-offset'
         | 'loft'
@@ -3609,6 +3634,24 @@ export function gearBody(
     deepClone({ featureKind: 'gear', ...parameters }),
     ids,
     bodyName
+  );
+}
+
+/**
+ * Schema v53: adds a screw thread on `targetBodyId`'s cylindrical face, which
+ * consumes that body.
+ */
+export function threadBody(
+  document: ProjectDocument,
+  input: ThreadInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, ids, ...parameters } = input;
+  return addBodyResultFeature(
+    document,
+    name,
+    'thread',
+    deepClone({ featureKind: 'thread', ...parameters }),
+    ids
   );
 }
 
@@ -3824,7 +3867,8 @@ export function importMeshBody(
       triangleCount: input.triangleCount,
       ...(input.meshPayloadRef
         ? { meshPayloadRef: { ...input.meshPayloadRef } }
-        : { vertices: input.vertices!, indices: input.indices! })
+        : { vertices: input.vertices!, indices: input.indices! }),
+      ...(input.assumedUnits ? { assumedUnits: input.assumedUnits } : {})
     }
   };
 
@@ -4586,6 +4630,28 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   mirror: ['targetBodyId', 'plane'],
   'datum-plane': ['definition'],
   'datum-axis': ['definition'],
+  thread: [
+    'targetBodyId',
+    'faceHash',
+    'faceReference',
+    'profile',
+    'majorDiameter',
+    'pitch',
+    'depth',
+    'crestWidth',
+    'upperFlankAngleDeg',
+    'lowerFlankAngleDeg',
+    'clearance',
+    'starts',
+    'hand',
+    'length',
+    'offset',
+    'anchor',
+    'phaseDeg',
+    'chamferStart',
+    'chamferEnd',
+    'chamferAngleDeg'
+  ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
   hole: [
@@ -4695,7 +4761,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'triangleCount',
     'vertices',
     'indices',
-    'meshPayloadRef'
+    'meshPayloadRef',
+    'assumedUnits'
   ]
 };
 
@@ -4723,6 +4790,29 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   revolve: ['axisRef', 'profile'],
   pattern: ['axisRef'],
   transform: ['axisRotation'],
+  // Schema v53: every size and placement field falls back to the face or its
+  // documented default; the custom-profile fields may go only off a custom
+  // profile, which the thread validation enforces. A face picked again
+  // without a lineage name drops the old face's reference.
+  thread: [
+    'faceReference',
+    'majorDiameter',
+    'pitch',
+    'depth',
+    'crestWidth',
+    'upperFlankAngleDeg',
+    'lowerFlankAngleDeg',
+    'clearance',
+    'starts',
+    'hand',
+    'length',
+    'offset',
+    'anchor',
+    'phaseDeg',
+    'chamferStart',
+    'chamferEnd',
+    'chamferAngleDeg'
+  ],
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and
   // `mateTeeth` and `diameterFactor` only off the gear kinds that need them,
@@ -5256,6 +5346,37 @@ export function deleteFeature(
   }
 
   const removedNodeIds = new Set<string>([feature.id]);
+
+  if (input.reconnectInput) {
+    const data = feature.data;
+    if (
+      !feature.bodyId ||
+      (data.featureKind !== 'hole' &&
+        data.featureKind !== 'fillet' &&
+        data.featureKind !== 'chamfer')
+    ) {
+      throw new Error(
+        'Only a hole, fillet or chamfer can reconnect its input on removal.'
+      );
+    }
+    const after = listFeaturesInOrder(next).slice(
+      next.featureOrder.indexOf(feature.featureId) + 1
+    );
+    for (const dependent of after) {
+      const parameters = dependent.data;
+      if (
+        'targetBodyId' in parameters &&
+        parameters.targetBodyId === feature.bodyId
+      ) {
+        parameters.targetBodyId = data.targetBodyId;
+      }
+      if (parameters.featureKind === 'boolean') {
+        parameters.targetBodyIds = parameters.targetBodyIds.map((id) =>
+          id === feature.bodyId ? data.targetBodyId : id
+        );
+      }
+    }
+  }
 
   for (const body of listNodesByKind(next, 'body')) {
     if (body.featureId === feature.featureId) {

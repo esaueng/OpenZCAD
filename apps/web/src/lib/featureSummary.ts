@@ -153,6 +153,24 @@ export function featureValueSummary(
         ? `${teeth} teeth`
         : `${teeth} teeth, ${helix}° ${data.hand ?? 'right'} ${data.herringbone ? 'herringbone' : 'helix'}`;
     }
+    case 'thread': {
+      const profile =
+        data.profile === 'printable'
+          ? 'printable'
+          : data.profile === 'iso-metric'
+            ? 'ISO'
+            : 'custom';
+      const major =
+        data.majorDiameter === undefined ? null : num(data.majorDiameter);
+      const pitch = data.pitch === undefined ? null : num(data.pitch);
+      const size =
+        major !== null && pitch !== null
+          ? `⌀ ${major} × ${pitch} ${unit}`
+          : pitch !== null
+            ? `pitch ${pitch} ${unit}`
+            : 'fits the face';
+      return `${size}, ${profile}`;
+    }
     case 'hole': {
       const diameter = num(data.diameter);
       if (diameter === null) {

@@ -72,7 +72,7 @@ async function preciseHole(page: Page) {
   await keypad.locator('input').press('Enter');
   await expect(bar).toBeVisible();
   await bar.getByLabel('Hole options').click();
-  await bar.getByRole('radio', { name: 'Typed (U, V)', exact: true }).click();
+  await bar.getByRole('radio', { name: 'Typed', exact: true }).click();
   await bar.getByLabel('Hole options').click();
   await enterCommandValue(page, 'positionU', '0');
   await enterCommandValue(page, 'positionV', '0');
@@ -89,7 +89,7 @@ test('read-only imported mesh details keep History visible', async ({
   await page.route('**/api/session', (route) => route.fulfill({ json: null }));
   await createProject(page, 'Read-only feature details');
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles('samples/simple-block.stl');
   await page
     .getByRole('dialog', { name: 'Units for simple-block.stl' })
@@ -104,23 +104,34 @@ test('read-only imported mesh details keep History visible', async ({
   await expect(inspector(page)).toContainText('Measurements');
   await expect(inspector(page)).not.toContainText('last applied');
   await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('mesh-history-details.png') });
+  await page.screenshot({
+    path: testInfo.outputPath('mesh-history-details.png')
+  });
 });
 
-test('an explicit panel release survives choosing a sketch plane', async ({ page }) => {
+test('open panels survive choosing and reopening a sketch plane', async ({
+  page
+}) => {
   await plate(page);
+  const panelCount = await page.locator('.model-panel').count();
+  expect(panelCount).toBeGreaterThan(0);
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await expect(page.locator('.model-panel')).toHaveCount(0);
+  await expect(page.locator('.model-panel')).toHaveCount(panelCount);
   await revealModelPanel(page, 'History');
   const history = page.getByRole('heading', { name: 'History 1' });
   await expect(history).toBeVisible();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
-  await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toBeVisible();
+  await expect(
+    page.getByRole('toolbar', { name: 'Sketch tools' })
+  ).toBeVisible();
   await expect(history).toBeVisible();
-  await page.getByRole('button', { name: 'Finish Sketch', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
   await expect(history).toBeVisible();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await expect(page.locator('.model-panel')).toHaveCount(0);
+  await expect(page.locator('.model-panel')).toHaveCount(panelCount);
+  await expect(history).toBeVisible();
 });
 
 test('precise hole creation, honest properties, recoverable errors and compact editing', async ({

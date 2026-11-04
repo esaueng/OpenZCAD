@@ -53,10 +53,15 @@ export type DrawnBodyObjects = ReadonlyMap<string, THREE.Object3D>;
  * geometry that is not on screen.
  */
 export function bodyDrawnAsBuilt(object: THREE.Object3D): boolean {
+  if (object.userData.moveCopyPreview || !object.visible) return false;
+  // An object posed by its matrix (an assembly component, AS02) ignores its
+  // position and rotation fields, so the matrix is what the frame draws.
+  if (!object.matrixAutoUpdate) {
+    const e = object.matrix.elements;
+    return e.every((value, index) => value === (index % 5 === 0 ? 1 : 0));
+  }
   const { position, quaternion, scale } = object;
   return (
-    !object.userData.moveCopyPreview &&
-    object.visible &&
     position.x === 0 &&
     position.y === 0 &&
     position.z === 0 &&

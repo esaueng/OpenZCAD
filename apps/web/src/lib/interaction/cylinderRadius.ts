@@ -457,6 +457,8 @@ export function cylinderPreviewProfile(
  * of a round on either rim. A rim round is a coaxial torus centred at the
  * wall's end whose tube sits outside the bore (major − minor = radius); the
  * exact resize carries it outward with the wall, so the projection does too.
+ * Chamfers use the exact preview instead: their bore intersections also move
+ * along the axis, which this radial-only projection cannot represent.
  */
 export function borePreviewProfile(
   body: BodyRepresentation | undefined,
@@ -472,6 +474,38 @@ export function borePreviewProfile(
   const axis = normalized(difference);
   const tolerance = Math.max(radius, span, 1) * 1e-6;
   if (!axis || !(radius > tolerance) || !(span > tolerance)) return null;
+  const faces = body?.topology?.faces ?? [];
+  const walls = new Set(
+    faces
+      .filter(
+        ({ geometry }) =>
+          geometry?.surfaceType === 'cylinder' &&
+          geometry.radius !== undefined &&
+          Math.abs(geometry.radius - radius) <= tolerance &&
+          geometry.axisStart &&
+          geometry.axisEnd &&
+          sameCylinderAxis(
+            geometry.axisStart,
+            geometry.axisEnd,
+            axisStart,
+            axisEnd
+          )
+      )
+      .map((face) => face.hash)
+  );
+  const cones = new Set(
+    faces
+      .filter((face) => face.geometry?.surfaceType === 'cone')
+      .map((face) => face.hash)
+  );
+  if (
+    body?.topology?.edges.some(
+      (edge) =>
+        edge.adjacentFaceHashes?.some((hash) => walls.has(hash)) &&
+        edge.adjacentFaceHashes.some((hash) => cones.has(hash))
+    )
+  )
+    return null;
   let rimStart = 0;
   let rimEnd = 0;
   for (const face of body?.topology?.faces ?? []) {

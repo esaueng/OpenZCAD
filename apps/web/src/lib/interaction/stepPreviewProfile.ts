@@ -93,7 +93,10 @@ export function stepPreviewProfile(
     }
     return known;
   };
+  const depths = new Map<FaceInfo, { low: number; high: number }>();
   const depthOf = (info: FaceInfo) => {
+    const known = depths.get(info);
+    if (known) return known;
     let low = Infinity,
       high = -Infinity;
     for (const index of info.vertices) {
@@ -101,7 +104,9 @@ export function stepPreviewProfile(
       if (s < low) low = s;
       if (s > high) high = s;
     }
-    return { low, high };
+    const depth = { low, high };
+    depths.set(info, depth);
+    return depth;
   };
   // The blends on the face's own edges set how deep the region may reach;
   // corner blends between them stay inside that band. A blend deeper than it
@@ -216,6 +221,24 @@ export function stepPreviewProfile(
     }
   }
   if (!(span > tolerance) || !(reach > tolerance)) return null;
+  // Edge polylines and face triangles sample curved boundaries independently.
+  // Every sample on an edge of the rigid region must travel with that region,
+  // including the selected rim's samples absent from the triangle mesh.
+  const movingFaces = new Set([...moving].map((info) => info.face.hash));
+  for (const edge of body.topology!.edges) {
+    if (!edge.adjacentFaceHashes?.some((hash) => movingFaces.has(hash)))
+      continue;
+    for (let i = 0; i + 2 < edge.points.length; i += 3) {
+      const key = stepPreviewKey(
+        edge.points[i]!,
+        edge.points[i + 1]!,
+        edge.points[i + 2]!,
+        origin,
+        quantum
+      );
+      if (key >= 0) movingKeys.add(key);
+    }
+  }
   return { normal, origin, quantum, movingKeys, span, reach, planarFaces };
 }
 
@@ -337,12 +360,45 @@ function prepare(body: BodyRepresentation): Prepared | null {
   return prepared;
 }
 
-/** Every triangle of `face` contains the drag direction. */
+/** The face's carrier contains the drag direction. */
 function ruledAlong(
   body: BodyRepresentation,
   face: FaceTopology,
   normal: Vector3
 ): boolean {
+  const geometry = face.geometry;
+  // Use the exact carrier before sampled triangle normals. Float32 slivers
+  // beside a trimmed round can point away from its cylinder's true normal;
+  // treating that ruled wall as a moving blend then reaches the unrelated
+  // junction and incorrectly disables the whole immediate preview.
+  if (geometry?.surfaceType === 'plane' && geometry.normal) {
+    const n = geometry.normal;
+    const length = Math.hypot(n.x, n.y, n.z);
+    return (
+      length > 1e-9 &&
+      Math.abs(n.x * normal.x + n.y * normal.y + n.z * normal.z) / length < 1e-6
+    );
+  }
+  if (
+    geometry?.surfaceType === 'cylinder' &&
+    geometry.axisStart &&
+    geometry.axisEnd
+  ) {
+    const x = geometry.axisEnd.x - geometry.axisStart.x;
+    const y = geometry.axisEnd.y - geometry.axisStart.y;
+    const z = geometry.axisEnd.z - geometry.axisStart.z;
+    const length = Math.hypot(x, y, z);
+    return (
+      length > 1e-9 &&
+      Math.hypot(
+        y * normal.z - z * normal.y,
+        z * normal.x - x * normal.z,
+        x * normal.y - y * normal.x
+      ) /
+        length <
+        1e-6
+    );
+  }
   const { vertices, indices } = body.mesh;
   const end = (face.triangleStart + face.triangleCount) * 3;
   for (let t = face.triangleStart * 3; t < end; t += 3) {

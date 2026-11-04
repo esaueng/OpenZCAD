@@ -107,6 +107,14 @@ export const gearTeethGlyph = glyph(
   </>
 );
 
+/** A boss in profile with its thread's slanted crests. */
+export const threadGlyph = glyph(
+  <>
+    <path d="M7 3v18M17 3v18" />
+    <path d="M7 6l10-2M7 11l10-2M7 16l10-2M7 21l10-2" />
+  </>
+);
+
 /** A solid hollowed to an open cup. */
 export const shellGlyph = glyph(
   <>

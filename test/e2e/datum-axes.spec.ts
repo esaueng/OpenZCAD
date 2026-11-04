@@ -163,7 +163,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   // Axis runs in place; the two ghost planes are clicked in that order.
   await page.getByRole('button', { name: /^Axis — / }).click();
   const axisBar = page.getByRole('group', { name: 'Axis command' });
-  await expect(axisBar).toContainText('Pick a straight edge');
+  await expect(axisBar).toContainText('Pick an edge, cylinder');
   await clickWorldPoint(page, [3, 0, 3]);
   await expect(axisBar).toContainText('Pick the second plane');
   await clickWorldPoint(page, [0, -3, 3]);
@@ -218,7 +218,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
       );
       return revolveBar.textContent();
     })
-    .toContain('Pick the axis');
+    .toContain('Pick an axis');
   const [onAxis] = await canvas.evaluate(
     (element) =>
       new Promise<{ x: number; y: number }[]>((resolve) => {
@@ -271,7 +271,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   await expectBodyCount(page, 2);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: /^Axis — / }).click();
-  await expect(axisBar).toContainText('Pick a straight edge');
+  await expect(axisBar).toContainText('Pick an edge, cylinder');
   await setSelectionFilter(page, 'Edge');
   await clickWorldPoint(page, [2, 2, 1]);
   await expect(axisBar).toContainText('Along the edge');
@@ -301,7 +301,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   const rotateBar = page.getByRole('group', {
     name: 'Rotate about axis command'
   });
-  await expect(rotateBar).toContainText('datum axis');
+  await expect(rotateBar).toContainText('or datum');
   await clickWorldPoint(page, [10, 0, 6]);
   await expect(rotateBar).toContainText('Drag the angle');
   await enterCommandValue(page, 'angle', '180');
@@ -334,9 +334,9 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   const patternBar = page.getByRole('group', {
     name: 'Circular pattern command'
   });
-  await expect(patternBar).toContainText('Pick the axis');
+  await expect(patternBar).toContainText('Pick an axis');
   await clickWorldPoint(page, [10, 0, 6]);
-  await expect(patternBar).toContainText('Drag the total angle');
+  await expect(patternBar).toContainText('Drag the angle');
   await enterCommandValue(page, 'count', '4');
   await finishInPlaceCommand(page, 'Circular pattern');
   await expect(

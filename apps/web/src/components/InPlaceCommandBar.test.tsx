@@ -303,6 +303,33 @@ describe('InPlaceCommandBar', () => {
     expect(screen.getByText('Not exact surfaces.')).toBeTruthy();
   });
 
+  it('keeps a tip-only choice terse: its explanation is the tooltip', () => {
+    render(
+      <InPlaceCommandBar
+        title="Thread"
+        hint="Pick a face"
+        canFinish={false}
+        options={[
+          {
+            id: 'fit',
+            label: 'Fit',
+            value: 'print',
+            choices: [
+              { value: 'print', label: 'Print', tip: '0.1 mm radial gap' },
+              { value: 'exact', label: 'Exact' }
+            ]
+          }
+        ]}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('radio', { name: 'Print' }).getAttribute('title')
+    ).toBe('0.1 mm radial gap');
+    expect(screen.queryByText('0.1 mm radial gap')).toBeNull();
+  });
+
   it('puts exact numbers behind Options, each opening entry where it sits', () => {
     const onValue = vi.fn();
     render(
@@ -324,6 +351,47 @@ describe('InPlaceCommandBar', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Corner X' }));
     expect(onValue).toHaveBeenCalledWith('x', { x: 0, y: 0 });
+  });
+
+  it('names glyph-labelled values in words, keeping the glyph on screen', () => {
+    const { unmount } = render(
+      <InPlaceCommandBar
+        title="Hole"
+        hint="Click a flat face"
+        canFinish
+        values={[
+          { id: 'diameter', label: '⌀', text: '6 mm' },
+          { id: 'counterboreDiameter', label: 'Counterbore ⌀', text: '10.8 mm' }
+        ]}
+        onValue={vi.fn()}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Diameter' }).textContent).toBe(
+      '6 mm'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Counterbore diameter' })
+    ).toBeTruthy();
+    // The glyph stays visible beside the value.
+    expect(screen.getByText('⌀')).toBeTruthy();
+    unmount();
+
+    render(
+      <InPlaceCommandBar
+        title="Fillet"
+        hint="Drag the radius"
+        canFinish
+        values={[
+          { id: 'radius', label: 'R', text: '2', value: 2, step: 0.5, min: 0 }
+        ]}
+        onValueCommit={vi.fn(() => true)}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('2');
   });
 
   it('types a value in place, with its own unit beside it', () => {
@@ -487,6 +555,7 @@ describe('InPlaceCommandBar', () => {
           {
             label: 'Tooth form',
             collapsed: true,
+            compact: true,
             rows: [{ kind: 'value', id: 'backlash' }]
           }
         ]}
@@ -509,6 +578,9 @@ describe('InPlaceCommandBar', () => {
     expect(fold).toHaveAttribute('aria-expanded', 'false');
     expect(folded.hidden).toBe(true);
     expect(folded.textContent).toContain('Backlash');
+    // A compact section pairs its numbers; the others keep the label column.
+    expect(folded.classList.contains('is-compact')).toBe(true);
+    expect(document.querySelectorAll('.is-compact')).toHaveLength(1);
     expect(document.querySelectorAll('summary')).toHaveLength(1);
     fireEvent.click(fold);
     expect(fold).toHaveAttribute('aria-expanded', 'true');

@@ -583,6 +583,13 @@ function innerEndCapFilletCut(R: number, r: number, h: number): number {
   return (h / 2) * (r * x - (Math.PI * r * r) / 2 + (r * r - R * R) * angle);
 }
 
+/** Green's theorem over the outer carrier and tangent fillet circle arcs. */
+function outerEndCapFilletCut(R: number, r: number, h: number): number {
+  const x = Math.sqrt(R * R - 2 * R * r);
+  const angle = Math.asin(r / (R - r));
+  return (h / 2) * (-r * x - (Math.PI * r * r) / 2 + (R * R - r * r) * angle);
+}
+
 function expectStrictSolid(document: ProjectDocument, bodyId: BodyId): void {
   const native = new RemusKernel();
   try {
@@ -598,7 +605,7 @@ function expectStrictSolid(document: ProjectDocument, bodyId: BodyId): void {
 }
 
 describe('partial revolve and edge modifiers', () => {
-  it('rounds both inner end-cap edges and explains the remaining wedge refusals', async () => {
+  it('rounds all four vertical end-cap edges with analytic removed volumes and explains the remaining wedge refusals', async () => {
     const { document, body } = await buildRevolve(annulusProfile(1), 90);
     const bodyId = getLatestBodyId(document)!;
     const edges = body!.topology!.edges;
@@ -627,7 +634,17 @@ describe('partial revolve and edge modifiers', () => {
                 PROFILE_INNER_RADIUS
             ) < 1e-9
         );
-      if (innerEndCap) {
+      const outerEndCap =
+        edge.curve?.type === 'LINE' &&
+        Math.abs(edge.length! - PROFILE_HEIGHT) < 1e-9 &&
+        [0, edge.points.length - 3].every(
+          (start) =>
+            Math.abs(
+              Math.hypot(edge.points[start]!, edge.points[start + 1]!) -
+                PROFILE_OUTER_RADIUS
+            ) < 1e-9
+        );
+      if (innerEndCap || outerEndCap) {
         accepted += 1;
         expect(derived.warnings).toEqual([]);
         const rounded = derived.bodyRepresentations[candidate.bodyId]!;
@@ -638,8 +655,10 @@ describe('partial revolve and edge modifiers', () => {
         expectSoundSolid(rounded, 2);
         expect(meshSignedVolume(rounded.mesh)).toBeGreaterThan(0);
         expectStrictSolid(candidate.document, candidate.bodyId);
-        const removed = innerEndCapFilletCut(
-          PROFILE_INNER_RADIUS,
+        const removed = (
+          innerEndCap ? innerEndCapFilletCut : outerEndCapFilletCut
+        )(
+          innerEndCap ? PROFILE_INNER_RADIUS : PROFILE_OUTER_RADIUS,
           0.1,
           PROFILE_HEIGHT
         );
@@ -662,8 +681,8 @@ describe('partial revolve and edge modifiers', () => {
       }
       expect(JSON.stringify(document)).toBe(source);
     }
-    expect(accepted).toBe(2);
-    expect(refused).toBe(10);
+    expect(accepted).toBe(4);
+    expect(refused).toBe(8);
   }, 300_000);
 
   /** The latest kernel must refuse or return a plausibly sized blend. */
@@ -699,9 +718,11 @@ describe('partial revolve and edge modifiers', () => {
         const filleted = derived.bodyRepresentations[resultId]!;
         expect(filleted.volume / WEDGE).toBeGreaterThan(0.9);
         expect(filleted.volume / WEDGE).toBeLessThan(1.1);
+        expectSoundSolid(filleted, 2);
+        expectStrictSolid(candidate, resultId);
       }
     }
-    expect(refused).toBeGreaterThanOrEqual(10);
+    expect(refused).toBe(8);
   }, 300_000);
 
   it('leaves the full revolve able to round four of its six edges', async () => {

@@ -984,9 +984,10 @@
 }
 
 /* ── Project sharing popover ───────────────────────────────
-   Anchored under the top bar's sharing chip rather than centred:
-   the link block first, one people list with the invite composer
-   as its last row, one status line as the footer. ── */
+   Anchored under the top bar's sharing chip rather than centred. Order
+   follows what people open it for: the invite field, then who has access,
+   then general (link) access, then the live status footer. The encryption
+   state code is a disclosure behind the header's Encrypted chip. ── */
 
 .sharing-backdrop {
   justify-content: flex-end;
@@ -1001,7 +1002,7 @@
 }
 
 .sharing-popover {
-  width: min(380px, 100%);
+  width: min(400px, 100%);
   max-height: calc(100vh - var(--topbar-h) - var(--sp-5));
   display: flex;
   flex-direction: column;
@@ -1020,31 +1021,78 @@
 .sharing-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: var(--sp-2);
   padding: 6px var(--sp-2) 6px var(--sp-3);
   border-bottom: var(--border-thin);
 }
 
-.sharing-header h2 {
+.sharing-title {
+  flex: 1;
+  min-width: 0;
   margin: 0;
-  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
   font-weight: var(--fw-medium);
 }
 
-/* No flex gap here: the empty status line must take no space, so
-   separation comes from sibling margins it can opt out of. */
+.sharing-title-project {
+  color: var(--color-text-muted);
+  font-weight: normal;
+  font-size: var(--fs-sm);
+}
+
+.sharing-encrypted-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--color-success) 40%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-success);
+  font-size: var(--fs-mini);
+}
+
+.sharing-encrypted-chip:hover,
+.sharing-encrypted-chip[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
 .sharing-body {
-  padding: 0 0 var(--sp-2);
   overflow-y: auto;
 }
 
-.sharing-body > * + * {
-  margin-top: var(--sp-2);
+.sharing-section {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+}
+
+.sharing-section + .sharing-section {
+  border-top: var(--border-thin);
+}
+
+.sharing-section-label {
+  margin: 0;
+  color: var(--color-text-dim);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sharing-hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
 }
 
 .sharing-status-line {
-  margin: 0 var(--sp-3);
-  border-radius: var(--radius-sm);
+  margin: 0;
   font-size: var(--fs-xs);
 }
 
@@ -1052,13 +1100,12 @@
    tree or later error/busy insertions are never announced. */
 .sharing-status-line:empty {
   height: 0;
-  margin-top: 0;
   overflow: hidden;
 }
 
 .sharing-status-line:not(:empty) {
-  margin-top: var(--sp-2);
-  padding: 6px var(--sp-2);
+  padding: 6px var(--sp-3);
+  border-bottom: var(--border-thin);
 }
 
 .sharing-status-line[data-tone='error'] {
@@ -1071,98 +1118,113 @@
   background: var(--color-surface-2);
 }
 
-.sharing-tag {
-  color: var(--color-text-subtle);
+.sharing-state-code {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: all;
   font-family: var(--font-mono);
-  font-size: var(--fs-mini);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
 }
 
-/* Link block: the reason most people open this popover, so it is first. */
-.sharing-link {
-  padding: var(--sp-2) var(--sp-3) var(--sp-3);
-  border-bottom: var(--border-thin);
+.sharing-owner-note {
+  padding: 0 var(--sp-3) var(--sp-3);
 }
 
-.sharing-link-head {
+.sharing-local h3 {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.sharing-local .primary {
+  justify-self: end;
+}
+
+/* The invite composer: one bordered field holding email, role and the
+   submit, so it reads as the popover's main action. */
+.sharing-invite {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  color: var(--color-accent-hi);
+  gap: var(--sp-1);
+  min-height: 34px;
+  padding: 3px 3px 3px var(--sp-2);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
 }
 
-.sharing-link-text {
+.sharing-invite:focus-within {
+  border-color: var(--color-accent-border);
+}
+
+.sharing-invite input {
   flex: 1;
   min-width: 0;
-  display: grid;
-  gap: 1px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--color-text);
-}
-
-.sharing-link-title {
   font-size: var(--fs-sm);
 }
 
-.sharing-share-hint {
-  margin: var(--sp-2) 0 0;
+.sharing-invite input:focus {
+  outline: none;
+  box-shadow: none;
+  border: none;
+}
+
+/* Borderless by design, but never without a focus mark: the rule above
+   removed all three, so a keyboard user could not see the field they had
+   tabbed into. */
+.sharing-invite input:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--color-accent);
+}
+
+.sharing-invite select,
+.sharing-role-select {
+  height: 26px;
+  padding: 1px 4px;
+  font-size: var(--fs-xs);
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-muted);
+}
+
+.sharing-invite select:hover,
+.sharing-invite select:focus,
+.sharing-role-select:hover,
+.sharing-role-select:focus {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.sharing-invite .primary,
+.sharing-access .primary,
+.sharing-access .secondary,
+.sharing-rename .primary,
+.sharing-rename .secondary,
+.sharing-confirm-actions .secondary,
+.sharing-verify,
+.sharing-row-copy,
+.sharing-share-copy {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+}
+
+.sharing-invite-sent {
+  margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
-  line-height: 1.5;
-}
-
-/* Every control in the sharing rows is 28px; they ran 20, 24, 26 and 28
-   side by side. */
-.sharing-share-create {
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 2px 10px;
-  font-size: var(--fs-xs);
-}
-
-/* The minted link appears exactly once; the row keeps it selectable next to
-   its copy affordance without pretending to be part of the link list. */
-.sharing-share-output {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--sp-1) var(--sp-2);
-  align-items: center;
-  margin-top: var(--sp-2);
-}
-
-.sharing-share-url {
-  min-width: 0;
-  height: 28px;
-  padding: 0 var(--sp-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-
-.sharing-share-copy {
-  min-height: 28px;
-  padding: 2px 10px;
-  font-size: var(--fs-xs);
-}
-
-.sharing-share-once {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--color-success);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-}
-
-.sharing-link .sharing-list {
-  margin-top: var(--sp-1);
-}
-
-.sharing-people {
-  padding: 0 var(--sp-2);
 }
 
 .sharing-list {
-  margin: 0;
+  display: grid;
+  gap: 2px;
+  margin: 0 calc(-1 * var(--sp-1));
   padding: 0;
   list-style: none;
 }
@@ -1172,12 +1234,16 @@
   align-items: center;
   gap: 10px;
   min-height: 32px;
-  padding: 0 var(--sp-1);
+  padding: 2px var(--sp-1);
   border-radius: var(--radius-md);
 }
 
 .sharing-list > li:hover {
   background: var(--color-surface-hover);
+}
+
+.sharing-list > li.sharing-confirm-row:hover {
+  background: none;
 }
 
 .sharing-list > li.sharing-pending .sharing-member-id {
@@ -1187,8 +1253,8 @@
 .sharing-avatar {
   position: relative;
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   border-radius: 50%;
@@ -1216,14 +1282,16 @@
   background: var(--color-success);
 }
 
-.sharing-avatar-link {
-  color: var(--color-accent-hi);
-}
-
 .sharing-avatar-pending {
-  background: var(--color-surface-2);
+  background: transparent;
   color: var(--color-text-subtle);
   border: 1px dashed var(--color-border-strong);
+}
+
+.sharing-row-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
 }
 
 .sharing-member-id {
@@ -1233,6 +1301,25 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-sm);
+}
+
+.sharing-row-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sharing-row-detail[data-status='waiting-for-verification'],
+.sharing-row-detail[data-status='needs-confirming'] {
+  color: var(--color-warning);
+}
+
+.sharing-kind {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
 }
 
 .sharing-presence {
@@ -1253,33 +1340,12 @@
 
 .sharing-presence[data-status='active']::before {
   background: var(--color-success);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 45%, transparent);
-}
-
-.sharing-role-select {
-  height: 28px;
-  padding: 1px 4px;
-  font-size: var(--fs-xs);
-  background: transparent;
-  border-color: transparent;
-}
-
-.sharing-role-select:hover,
-.sharing-role-select:focus {
-  border-color: var(--color-border);
-}
-
-.sharing-kind {
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  white-space: nowrap;
 }
 
 /* Only actions inside list rows reveal on hover. Standalone confirmation
    and recovery actions must stay discoverable without hover or focus. */
 .sharing-row-action {
-  min-height: 24px;
+  min-height: 26px;
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
@@ -1287,12 +1353,19 @@
   opacity: 1;
 }
 
+.sharing-row-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  padding: 0;
+}
+
 .sharing-list > li .sharing-row-action {
   opacity: 0;
 }
 
 .sharing-list > li:hover .sharing-row-action,
-.sharing-list > li .sharing-row-action:focus-visible {
+.sharing-list > li:focus-within .sharing-row-action {
   opacity: 1;
 }
 
@@ -1303,139 +1376,185 @@
 }
 
 .sharing-row-action:hover:not(:disabled) {
-  color: var(--color-error);
+  color: var(--color-error-text);
   background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
-/* The invite composer is the people list's last row, not a form above it. */
-.sharing-invite {
-  display: flex;
-  align-items: center;
+/* An inline confirmation replaces the row it acts on, so the consequence is
+   read where the decision is made. */
+.sharing-confirm {
+  display: grid;
   gap: 6px;
-  margin: var(--sp-1) var(--sp-1) 0;
-  padding: var(--sp-2) 0 0 var(--sp-1);
-  border-top: var(--border-thin);
-  color: var(--color-text-subtle);
-}
-
-.sharing-invite input {
-  flex: 1;
-  min-width: 0;
-  height: 28px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--color-text);
-  font-size: var(--fs-sm);
-}
-
-.sharing-invite input:focus {
-  outline: none;
-  box-shadow: none;
-  border: none;
-}
-
-/* Borderless by design, but never without a focus mark: the rule above
-   removed all three, so a keyboard user could not see the field they had
-   tabbed into. */
-.sharing-invite input:focus-visible {
-  box-shadow: inset 0 -2px 0 var(--color-accent);
-}
-
-.sharing-invite select {
-  height: 28px;
-  padding: 1px 4px;
-  font-size: var(--fs-xs);
-  background: transparent;
-  border-color: transparent;
-}
-
-.sharing-invite select:hover,
-.sharing-invite select:focus {
-  border-color: var(--color-border);
-}
-
-.sharing-invite button {
-  min-height: 28px;
-  padding: 2px 10px;
-  font-size: var(--fs-xs);
-}
-
-.sharing-invite-sent {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-  margin: var(--sp-2) var(--sp-1) 0;
+  width: 100%;
   padding: var(--sp-2);
-  border: 1px dashed var(--color-accent-border);
-  border-radius: var(--radius-md);
-  background: var(--color-accent-dim);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
 }
 
-.sharing-empty {
+.sharing-confirm-title {
   margin: 0;
-  padding: 0 var(--sp-3);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
-}
-
-.sharing-state-comparison {
-  padding: 0 var(--sp-3);
-}
-
-.sharing-state-comparison h3 {
-  margin: 0;
+  overflow-wrap: anywhere;
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
-.sharing-state-comparison .sharing-empty {
-  padding: 0;
-}
-
-.sharing-state-code {
-  display: block;
-  margin-block: 8px;
-  overflow-wrap: anywhere;
-  user-select: all;
-  font-family: monospace;
-  font-size: var(--fs-xs);
-  line-height: 1.5;
-}
-
-.sharing-local {
-  padding: 0 var(--sp-3);
-}
-
-/* Leaving an encrypted project (slice 5-5): a member's own action, with
-   its consequence stated before it is confirmed. */
-.sharing-leave-row,
-.sharing-leave {
+.sharing-confirm-actions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3) 0;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
-.sharing-leave p {
-  flex-basis: 100%;
+/* General access: one summary line, then the links under it. */
+.sharing-access {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--sp-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-2);
+}
+
+.sharing-access-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-accent-border);
+  border-radius: 50%;
+  background: var(--color-accent-dim);
+  color: var(--color-accent-hi);
+}
+
+.sharing-access-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.sharing-access-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.sharing-access-detail {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* A just-created link: optional name, the URL shown once, and Copy. */
+.sharing-share-output {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: var(--sp-2);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+}
+
+.sharing-share-name {
+  grid-column: 1 / -1;
+}
+
+.sharing-share-name,
+.sharing-share-url,
+.sharing-rename input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-url {
+  font-family: var(--font-mono);
+}
+
+.sharing-share-once {
+  grid-column: 1 / -1;
   margin: 0;
-  color: var(--color-text-subtle);
+  color: var(--color-warning);
+  font-size: var(--fs-xs);
+}
+
+/* The link's name is its rename control: clicking it opens the field. */
+.sharing-link-name {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  cursor: text;
+}
+
+.sharing-link-name[data-unnamed] {
+  color: var(--color-text-muted);
+}
+
+.sharing-link-name:hover:not(:disabled) {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.sharing-rename {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sharing-rename input {
+  flex: 1;
+}
+
+.sharing-row-copy {
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+/* Encrypted share links (slice 5-10): the owner's confirmation and the
+   reissue offers, each a notice with its actions inside General access. */
+.sharing-share-hint {
+  margin: 0;
+  color: var(--color-error-text);
   font-size: var(--fs-xs);
   line-height: 1.5;
 }
 
-/* Encrypted share links (slice 5-10): each link's state on its row, and
-   the owner's confirmation or a reissue offer stated above the list. */
+.sharing-tag {
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
 .sharing-share-notice,
 .sharing-share-confirm {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
-  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
 }
 
+.sharing-share-notice .sharing-tag,
 .sharing-share-confirm .sharing-tag,
 .sharing-share-confirm .sharing-share-url {
   flex-basis: 100%;
@@ -1447,36 +1566,61 @@
   gap: var(--sp-2);
 }
 
-.sharing-share-row-text {
+/* Leaving an encrypted project (slice 5-5): a member's own action, with
+   its consequence stated before it is confirmed. */
+.sharing-leave-row {
   display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
+  justify-content: flex-end;
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+
+.sharing-leave {
+  margin: 0 var(--sp-3) var(--sp-3);
+  width: auto;
+}
+
+.sharing-leave-button {
+  min-height: 26px;
+  padding: 2px 8px;
+  border: none;
+  background: none;
+  color: var(--color-error-text);
   font-size: var(--fs-xs);
 }
 
-.sharing-share-row-text [data-status='needs-confirming'] {
-  color: var(--color-warning);
-}
-
-.sharing-local h3 {
-  margin: 0 0 var(--sp-1);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-}
-
-.sharing-local .sharing-empty {
-  padding: 0;
-  margin-bottom: var(--sp-2);
-  line-height: 1.5;
+.sharing-leave-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
 .sharing-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 6px var(--sp-2);
   padding: 6px var(--sp-3) 8px;
   border-top: var(--border-thin);
+  background: var(--color-bg);
+}
+
+.sharing-footer-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sharing-footer-action {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: var(--fs-xs);
+}
+
+.sharing-footer-notice {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
 }
 
 .sharing-room-dot {
@@ -1492,7 +1636,8 @@
   box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 45%, transparent);
 }
 
-.sharing-room-dot[data-state='connecting'] {
+.sharing-room-dot[data-state='connecting'],
+.sharing-room-dot[data-state='offline'] {
   background: var(--color-warning);
 }
 

@@ -173,8 +173,8 @@ test('Revolve turns about a body edge in its sketch plane', async ({
       );
       return bar.textContent();
     })
-    .toContain('Pick the axis');
-  await expect(bar).toContainText('an edge');
+    .toContain('Pick an axis');
+  await expect(bar).toContainText('edge or cylinder');
   await setSelectionFilter(page, 'Edge');
   await clickWorldPoint(page, [6, 0, 3]);
   await expect(bar).toContainText('Drag the angle');
@@ -242,7 +242,7 @@ test('Rotate about axis turns a body about a cylinder, no datum made first', asy
   );
   const bar = await startTool(page, /^Rotate about axis/, 'Rotate about axis');
   await pickObjectsBody(page, 'Block');
-  await expect(bar).toContainText('a cylinder');
+  await expect(bar).toContainText('cylinder');
   // The post's side, in front of the block's corner it stands on.
   await setSelectionFilter(page, 'Face');
   await clickWorldPoint(page, [0, -5, 5]);
@@ -341,7 +341,7 @@ test('Circular pattern rings copies about an edge at a fixed step', async ({
   await setSelectionFilter(page, 'Edge');
   // The block's front right edge, up Z at x = 10.
   await clickWorldPoint(page, [10, 0, 5]);
-  await expect(bar).toContainText('Drag the total angle');
+  await expect(bar).toContainText('Drag the angle');
   // Fixed step: each copy turns 90° from the one before.
   await bar.locator('summary').click();
   await bar.getByRole('radio', { name: 'Fixed step' }).click();
@@ -378,7 +378,7 @@ test('Linear pattern repeats along a picked face normal', async ({ page }) => {
   );
   const bar = await startTool(page, /^Linear pattern/, 'Linear pattern');
   await pickObjectsBody(page, 'Block');
-  await expect(bar).toContainText('sets the direction');
+  await expect(bar).toContainText('aim it');
   // The front face: its normal points down −Y, which no world axis is.
   await setSelectionFilter(page, 'Face');
   await clickWorldPoint(page, [5, 0, 5]);

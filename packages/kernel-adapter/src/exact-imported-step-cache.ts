@@ -1,4 +1,5 @@
 import type { CachedImportedStep, ImportedStepStore } from './exact-build-loop';
+import type { ImportedMeshCache } from './exact-imported-mesh-cache';
 import type { ImportedStepDiagnostics } from './exact-types';
 
 /** Bounded optional reuse of the translator's existing exact arena bytes. */
@@ -6,7 +7,10 @@ export class ImportedStepCache implements ImportedStepStore {
   private readonly entries = new Map<string, CachedImportedStep>();
   private bytes = 0;
 
-  constructor(private readonly maxBytes: number) {}
+  constructor(
+    private readonly maxBytes: number,
+    readonly meshes?: ImportedMeshCache
+  ) {}
 
   lookup(checksum: string): CachedImportedStep | undefined {
     return this.entries.get(checksum);
@@ -64,5 +68,6 @@ export class ImportedStepCache implements ImportedStepStore {
   clear(): void {
     this.entries.clear();
     this.bytes = 0;
+    this.meshes?.clear();
   }
 }

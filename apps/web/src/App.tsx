@@ -60,10 +60,6 @@ import type {
 } from '@openzcad/shared';
 import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
-import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
-import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
-import { gearHeightPreviewProfile } from './lib/interaction/gearHeightPreviewProfile';
-import { stepPreviewProfile } from './lib/interaction/stepPreviewProfile';
 import {
   parameterMinimums,
   parameterInputError,
@@ -178,6 +174,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
+  isAssemblyCommandKind,
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
@@ -383,6 +380,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
+import { commandChipName } from './lib/inPlace/chipNames';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
@@ -548,6 +546,8 @@ import {
   WorkspaceReadout
 } from './components/WorkspaceReadout';
 import { StatusActivityLog } from './components/StatusActivityLog';
+import { recordActivity } from './lib/activityLog';
+import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { createLazyPanel } from './components/LazyPanel';
@@ -620,6 +620,12 @@ import type {
 import type { ViewportImageSource } from './components/viewer/viewportImage';
 import type { ShaprImportDialogPhase } from './components/ShaprImportDialog';
 import type { GeometryWorkerState } from './worker/geometryWorker';
+
+function workspaceModeLabel(mode: WorkspaceMode): string {
+  return (
+    WORKSPACE_MODE_OPTIONS.find((option) => option.mode === mode)?.label ?? mode
+  );
+}
 
 /** The export dialog's progress stage for one geometry-worker state. */
 function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
@@ -696,7 +702,9 @@ import {
   deleteKeyRemovesFeature,
   resolveSelectionTopology,
   selectionFeature,
-  selectionSetFeature
+  selectionSetFeature,
+  isRemovableDetail,
+  selectedFeatureFaces
 } from './lib/selectionFeature';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import {
@@ -713,8 +721,7 @@ import {
 import {
   primitiveBoxFaceAncestor,
   primitiveCylinderRadiusAncestor,
-  primitiveCylinderScale,
-  primitiveCylinderHeightAncestor
+  primitiveCylinderScale
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
 import {
@@ -776,7 +783,6 @@ import type {
   SketchOffsetPick
 } from './lib/sketch/edits';
 import {
-  faceOffsetBaseline,
   planFaceOffset,
   withFaceTravelHint
 } from './lib/interaction/faceOffsetPlan';
@@ -804,6 +810,7 @@ import {
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
+import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
@@ -1566,6 +1573,7 @@ import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
   canReuseBlendPreview,
+  geometryPreviewSelectionKey,
   newBlendValidationTarget
 } from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
@@ -1579,6 +1587,7 @@ import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
+  VALIDATED_FEATURE_BUSY_STATUS,
   type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
@@ -1686,10 +1695,10 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
-import { usePanelSuspension } from './hooks/usePanelSuspension';
+import { useCommandFold } from './hooks/useCommandFold';
 import { sketchObjectLabels } from './lib/sketch/objectLabels';
 import {
-  commandSuspendsPanels,
+  commandFoldsTools,
   loadPanelState,
   savePanelState,
   type PanelState,
@@ -1705,7 +1714,6 @@ import {
   loadPanelLayout,
   matchingPreset,
   notePanelUsed,
-  openPanel,
   panelStatus,
   pinPanel,
   presentPanel,
@@ -1733,6 +1741,14 @@ import {
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
+import { AssemblyPanel } from './components/assembly/AssemblyPanel';
+import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
+import { AssemblyPlayer } from './components/assembly/AssemblyPlayer';
+import {
+  assembleKeyFor,
+  runAssembleKey,
+  useAssembleWorkspace
+} from './lib/assembly/assembleWorkspace';
 
 const START_SCREEN_DEMOS =
   (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
@@ -1817,6 +1833,10 @@ const PANEL_PENDING_DELAY_MS = 400;
 const TOOLS_WAITING_DELAY_MS = 400;
 /** How long a hole's radius handle rests before the kernel checks the size. */
 const CYLINDER_RADIUS_REST_MS = 250;
+/** How long a fillet or chamfer handle rests before its complete rebuild. */
+const EDGE_BLEND_REST_MS = 250;
+/** Check a generic face's viewport deformation once the hand rests. */
+const OFFSET_FACE_REST_MS = 250;
 /**
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
@@ -1860,7 +1880,7 @@ interface OffsetEditPlan {
   successMessage: string;
   validationTargets?: AffectedFeatureTarget[];
   preflightRejection?: string;
-  travelHint?: string;
+  travelHint?: () => string | undefined;
 }
 
 interface OffsetPreviewCandidate {
@@ -1878,7 +1898,7 @@ interface OffsetPreviewCandidate {
   /** A refusal known before any rebuild; the preview reports it unbuilt. */
   preflightRejection?: string;
   /** Mesh estimate used only after an exact collision refusal. */
-  travelHint?: string;
+  travelHint?: () => string | undefined;
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -2480,7 +2500,7 @@ export function App() {
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
   // One read gives both the project to restore and the compare-and-set guard
-  // for it, so a write from another tab cannot fall between them.
+  // for it, so a newer navigation in this tab cannot fall between them.
   const [{ startupPointer, startupProjectId }] = useState(() => {
     const pointer = snapshotActiveProject();
     return {
@@ -2979,6 +2999,7 @@ export function App() {
     ) => {
       toastIdRef.current += 1;
       const id = toastIdRef.current;
+      recordActivity({ level: 'ready', source: 'notice', message });
       const repeats =
         options?.repeatsStatusAt === undefined
           ? {}
@@ -3072,9 +3093,12 @@ export function App() {
    * out. (The lock's `busy` still gates the editor surfaces above.)
    */
   const [geometryBusy, setGeometryBusy] = useState(false);
+  /** Whether a validated exact operation holds the commit lock. */
+  const [validatedBusy, setValidatedBusy] = useState(false);
   const handleValidatedBusy = useCallback((next: boolean) => {
     setBusy(next);
     setGeometryBusy(next);
+    setValidatedBusy(next);
   }, []);
   /**
    * The import the progress card is reporting, or null for none. The card
@@ -3285,7 +3309,8 @@ export function App() {
         // The synced resume record predates the Draw workspace and other
         // devices validate it; a drawing session resumes in Build there.
         workspaceMode:
-          panelState.workspaceMode === 'drawing'
+          panelState.workspaceMode === 'drawing' ||
+          panelState.workspaceMode === 'assemble'
             ? 'build'
             : panelState.workspaceMode,
         panels: {
@@ -4465,6 +4490,15 @@ export function App() {
     })
   ).current;
 
+  const offsetRestTimer = useRef<number | null>(null);
+  const stopOffsetRestCheck = useCallback(() => {
+    if (offsetRestTimer.current !== null) {
+      window.clearTimeout(offsetRestTimer.current);
+      offsetRestTimer.current = null;
+    }
+  }, []);
+  useEffect(() => stopOffsetRestCheck, [stopOffsetRestCheck]);
+
   /**
    * Preview and commit resolve the same command choice. Automatic uses exact
    * overlap; an explicit operation never falls back to another operation.
@@ -5369,6 +5403,11 @@ export function App() {
   const drawingModeDisabledReason = shareSession
     ? 'Drawings are not available on a shared link'
     : null;
+  // AS01: Assemble edits the document's assembly section, so whatever locks
+  // Build locks it too; a shared link carries no assembly to edit.
+  const assembleModeDisabledReason = shareSession
+    ? 'Assemblies are not available on a shared link'
+    : buildModeDisabledReason;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
     ? panelState.workspaceMode === 'view' || shareLinkViewOnly
       ? 'view'
@@ -5381,9 +5420,10 @@ export function App() {
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
+  const assembleMode = resolvedWorkspaceMode === 'assemble';
   const drawingModeRef = useRef(drawingMode);
   drawingModeRef.current = drawingMode;
-  // Ctrl+Shift+M steps View → Tweak → Build → Draw past whatever the project
+  // Ctrl+Shift+M steps View → Tweak → Build → Assemble → Draw past whatever the project
   // locks. The shortcut and the palette row that advertises it both read
   // this, so the row always names where the key goes.
   const workspaceModeLock = (mode: WorkspaceMode): string | null =>
@@ -5393,9 +5433,11 @@ export function App() {
         ? tweakModeDisabledReason
         : mode === 'drawing'
           ? drawingModeDisabledReason
-          : null;
+          : mode === 'assemble'
+            ? assembleModeDisabledReason
+            : null;
   const nextWorkspaceMode: WorkspaceMode | null =
-    [1, 2, 3]
+    [1, 2, 3, 4]
       .map(
         (step) =>
           WORKSPACE_MODE_ORDER[
@@ -5408,13 +5450,18 @@ export function App() {
   // live only for a parameter-only entry — the one that command would apply.
   // Computed at render from the manager's tracked kinds — unknown (pre-kind
   // histories) reads as unavailable, matching handleUndo and handleRedo.
-  // The Draw workspace undoes its own sheet edits only.
+  // The Draw workspace undoes its own sheet edits only, and Assemble its own
+  // assembly edits only.
   const undoAvailable = drawingMode
     ? (managerRef.current?.undoIsDrawingOnly ?? false)
-    : (managerRef.current?.canUndoIn(tweakMode) ?? false);
+    : assembleMode
+      ? (managerRef.current?.undoIsAssemblyOnly ?? false)
+      : (managerRef.current?.canUndoIn(tweakMode) ?? false);
   const redoAvailable = drawingMode
     ? (managerRef.current?.redoIsDrawingOnly ?? false)
-    : (managerRef.current?.canRedoIn(tweakMode) ?? false);
+    : assembleMode
+      ? (managerRef.current?.redoIsAssemblyOnly ?? false)
+      : (managerRef.current?.canRedoIn(tweakMode) ?? false);
   // Undo is spent, but only because older steps were dropped to keep the
   // history within its limits: the toolbar and palette say so rather than
   // "Nothing to undo". Dropping a step is not news while modeling — it only
@@ -5423,12 +5470,17 @@ export function App() {
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
-  const modelingLocked = viewMode || tweakMode || drawingMode;
-  // The activity log in the column layout: opened from the dock's button or
-  // the toast; the panel itself is App's so both can reach it.
-  const [activityLogOpen, setActivityLogOpen] = useState(false);
-  const activityLogTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const activityLogId = 'workspace-activity-log';
+  const modelingLocked = viewMode || tweakMode || drawingMode || assembleMode;
+  // AS01: the Assemble workspace's runtime, commit handlers and playback.
+  // Every saved assembly change runs through `executeCommand`.
+  const assembleApp = {
+    document: doc,
+    execute: (command: AnyCommand) => executeCommand(command),
+    onStatus: (message: string) => setStatus(message)
+  };
+  useAssembleWorkspace(assembleMode, assembleApp);
+  // The activity log is a Settings page; every "details" link opens it there.
+  const openActivityLog = () => openSettingsAt('activity');
   workspaceModeRef.current = resolvedWorkspaceMode;
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
@@ -5484,13 +5536,22 @@ export function App() {
         ? 'Tweak mode adjusts parameters only — switch to Build to edit'
         : drawingMode
           ? 'Draw mode edits drawing sheets only — switch to Build to model'
-          : projectEditDisabledReason;
+          : assembleMode
+            ? 'Assemble mode edits the assembly only — switch to Build to model'
+            : projectEditDisabledReason;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
   // must not edit sheets either.
   const drawingEditDisabledReason =
-    !projectOpenElsewhere && (viewMode || tweakMode)
+    !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
+      ? editDisabledReason
+      : projectEditDisabledReason;
+  // AS01 assembly edits answer to the project's own locks in Assemble and
+  // Build, and to every other workspace's lock elsewhere, so an
+  // assembly-only undo cannot move parts from View, Tweak or Draw.
+  const assemblyEditDisabledReason =
+    !projectOpenElsewhere && !assembleMode
       ? editDisabledReason
       : projectEditDisabledReason;
   // The parameter guard: the same chain, except Tweak deliberately passes —
@@ -5504,7 +5565,9 @@ export function App() {
         ? // Draw edits sheets only; a parameter-only undo or redo would
           // otherwise change the model from there.
           'Draw mode edits drawing sheets only — switch to Tweak or Build to change parameters'
-        : projectEditDisabledReason;
+        : assembleMode
+          ? 'Assemble mode edits the assembly only — switch to Tweak or Build to change parameters'
+          : projectEditDisabledReason;
   const ownsOpenProject = Boolean(
     doc &&
     (doc.ownerUserId === session?.userId ||
@@ -5529,6 +5592,8 @@ export function App() {
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
   const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
   drawingEditDisabledReasonRef.current = drawingEditDisabledReason;
+  const assemblyEditDisabledReasonRef = useRef(assemblyEditDisabledReason);
+  assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
@@ -5586,11 +5651,31 @@ export function App() {
     return false;
   }
 
+  function ensureCanEditAssembly(action = 'edit this assembly'): boolean {
+    const reason = assemblyEditDisabledReasonRef.current;
+    if (!reason) {
+      return true;
+    }
+    setStatus(
+      projectOpenElsewhereRef.current
+        ? PROJECT_OPEN_ELSEWHERE_NOTICE
+        : `Cannot ${action}: ${reason}.`
+    );
+    return false;
+  }
+
   function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
     // A batch of drawing-sheet commands never touches the model, so it
     // passes in the Draw workspace on the project's own locks alone.
     if (commands.length > 0 && commands.every(isDrawingCommand)) {
       return ensureCanEditDrawings(action);
+    }
+    // Assembly commands move parts, never the model (AS01): Assemble's own.
+    if (
+      commands.length > 0 &&
+      commands.every((command) => isAssemblyCommandKind(command.kind))
+    ) {
+      return ensureCanEditAssembly(action);
     }
     const parametersOnly =
       commands.length > 0 &&
@@ -6941,11 +7026,16 @@ export function App() {
     faceGeometryPreview &&
     faceGeometryPreview.baseProjectId === doc?.projectId &&
     faceGeometryPreview.baseVersion === doc?.version &&
-    interaction.mode === 'face' &&
     faceGeometryPreview.selectionKey ===
-      `${interaction.op}:${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
+      geometryPreviewSelectionKey(interaction)
       ? faceGeometryPreview
       : null;
+  // A face drag's preview stands in for the picked face, so the panels and
+  // edge picks wait for it. A blend drag's picks are the edges it rounds:
+  // they stay shown, as they did while blend frames were complete rebuilds.
+  const geometryPreviewHoldsPicks =
+    currentFaceGeometryPreview !== null &&
+    blendPreviewSelectionKey(interaction) === null;
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   const { autoFrame, recordLocalCommit, clearAutoFrame } = useLocalAutoFrame(
@@ -7714,7 +7804,8 @@ export function App() {
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
         exportable:
-          (body.exportableStep || body.meshReference === true) && !body.consumed,
+          (body.exportableStep || body.meshReference === true) &&
+          !body.consumed,
         hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
@@ -8205,7 +8296,31 @@ export function App() {
   // The focus faces are drawn as a selected face is, not with the accent
   // fill of a blend preview that does not exist yet.
   // A box sweep's faces draw the same way: several faces lit as one pick.
-  const focusFaces = historyFocus?.focus.faces ?? boxSelectedFaces ?? undefined;
+  const pickedDetailFaces = useMemo(() => {
+    if (
+      !doc ||
+      !selectedFeature ||
+      featureSelectionSource !== 'inferred' ||
+      tool !== null ||
+      !isRemovableDetail(selectedFeature) ||
+      (isOperationState(interaction) && interaction.phase !== 'armed')
+    )
+      return undefined;
+    const faces = selectedFeatureFaces(doc, representations, selectedFeature);
+    return faces.length ? faces : undefined;
+  }, [
+    doc,
+    selectedFeature,
+    featureSelectionSource,
+    tool,
+    interaction,
+    representations
+  ]);
+  const focusFaces =
+    historyFocus?.focus.faces ??
+    pickedDetailFaces ??
+    boxSelectedFaces ??
+    undefined;
 
   /**
    * The imported face whose own card (resize a hole, remove a blend) the
@@ -8434,7 +8549,12 @@ export function App() {
       return null;
     }
     return {
-      label: selectionSummary.label,
+      label:
+        selectedFeature &&
+        featureSelectionSource === 'inferred' &&
+        isRemovableDetail(selectedFeature)
+          ? textLabelSegments(selectedFeature.name)
+          : selectionSummary.label,
       // Several bodies are counted in the name; the verbs say what they
       // are for.
       ...(selectionSummary.detail && selectedBodyIds.length < 2
@@ -8453,6 +8573,8 @@ export function App() {
     historyFocus,
     boxSelectedFaces,
     selectionSummary,
+    selectedFeature,
+    featureSelectionSource,
     selectedBodyIds,
     calloutVerbsKey,
     calloutPickKey,
@@ -8785,7 +8907,8 @@ export function App() {
       if (
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
-        isObjectFolderCommandKind(command.kind)
+        isObjectFolderCommandKind(command.kind) ||
+        isAssemblyCommandKind(command.kind)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {
@@ -9590,6 +9713,7 @@ export function App() {
   /** The in-place command and seed for a stored feature, from `current`. */
   function inPlaceEditSeedFor(current: ProjectDocument, feature: FeatureNode) {
     return inPlaceEditSeed(feature, {
+      units: current.units,
       evaluate: (value) =>
         evalParamValue(value, parameterScope.scope, current.units),
       profile: (sketchId, reference) => {
@@ -10357,7 +10481,7 @@ export function App() {
     cancelDirectManipulationRef.current?.();
     if (liveInteraction.mode !== 'idle') {
       cylinderRadiusPreview.clear();
-      edgePreview.clear();
+      clearEdgePreview();
       dispatchInteraction({ type: 'clear' });
       setKeypad(null);
     }
@@ -10550,7 +10674,12 @@ export function App() {
   function handleWorkspaceMode(mode: WorkspaceMode) {
     if (mode !== workspaceModeRef.current)
       trackUsage(mode === 'build' ? 'workflow_model' : 'workflow_setup');
-    if (mode === 'view' || mode === 'tweak' || mode === 'drawing') {
+    if (
+      mode === 'view' ||
+      mode === 'tweak' ||
+      mode === 'drawing' ||
+      mode === 'assemble'
+    ) {
       // The sheet covers the viewport, so nothing can be measured there, and
       // a measurement selected before would stay a hidden Delete target.
       if (mode === 'drawing') {
@@ -10559,7 +10688,7 @@ export function App() {
       }
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
-      edgePreview.clear();
+      clearEdgePreview();
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
       closeFeaturePanel();
@@ -13057,9 +13186,10 @@ export function App() {
         phase: 'error',
         title: 'This share link is incomplete',
         message:
-          'The link is incomplete or has been changed, so the shared model cannot be opened.',
+          'Part of the link is missing or was changed, so the model can’t be opened.',
         guidance:
-          'Ask the owner to send the full link again. Copy everything, including the part after #share=.'
+          'Ask the owner to send it again, and copy everything after #share=.',
+        retryable: false
       });
       return;
     }
@@ -13111,9 +13241,9 @@ export function App() {
             phase: 'error',
             title: 'This share link is unavailable',
             message:
-              'This share link is no longer available. It may have expired, been revoked, or the owner may have removed the model.',
-            guidance:
-              'Ask the owner to check sharing and send you a working link.'
+              'It may have expired or been revoked, or the owner may have removed the model.',
+            guidance: 'Ask the owner for a new link.',
+            retryable: false
           });
           return;
         }
@@ -13153,7 +13283,8 @@ export function App() {
               ? describeFailure(error)
               : errorMessage(error, 'Could not open the share link.'),
             guidance:
-              'Check your connection and try again. If it still won’t open, ask the owner to check the link and its sharing settings.'
+              'Check your connection and try again. If it keeps failing, ask the owner to check the link.',
+            retryable: true
           });
         }
       } finally {
@@ -14177,8 +14308,11 @@ export function App() {
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
     const imageOnly = managerRef.current.undoIsReferenceImageOnly;
+    const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
+    } else if (assemblyOnly) {
+      if (!ensureCanEditAssembly('undo')) return;
     } else if (!parametersOnly && !ensureCanEdit('undo')) {
       return;
     }
@@ -14191,7 +14325,7 @@ export function App() {
     const undid = managerRef.current.canUndo;
     try {
       const next = managerRef.current.undo();
-      if (drawingOnly || folderOnly || imageOnly)
+      if (drawingOnly || folderOnly || imageOnly || assemblyOnly)
         geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
@@ -14240,8 +14374,11 @@ export function App() {
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
     const imageOnly = managerRef.current.redoIsReferenceImageOnly;
+    const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
+    } else if (assemblyOnly) {
+      if (!ensureCanEditAssembly('redo')) return;
     } else if (!parametersOnly && !ensureCanEdit('redo')) {
       return;
     }
@@ -14251,7 +14388,7 @@ export function App() {
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
-      if (drawingOnly || folderOnly || imageOnly)
+      if (drawingOnly || folderOnly || imageOnly || assemblyOnly)
         geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
@@ -15147,82 +15284,6 @@ export function App() {
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
 
-    if (lowerName.endsWith('.fcstd')) {
-      const abort = startImportAbort();
-      const progress = createImportProgressSink();
-      progress.start({
-        fileName: file.name,
-        phases: ['reading', 'building'],
-        cancellable: true
-      });
-      try {
-        const { convertFreecadFile } =
-          await import('./lib/freecadImportWorkerClient');
-        const converted = await convertFreecadFile(file, {
-          units: doc.units,
-          signal: abort.signal,
-          onProgress: (message) => {
-            progress.update({ phase: 'building', fraction: null });
-            setStatus(message);
-          }
-        });
-        if (managerRef.current !== importManager) {
-          progress.finish({
-            tone: 'warning',
-            message: 'the project changed during conversion'
-          });
-          setStatus('The project changed while the FreeCAD import finished.');
-          return;
-        }
-        const { runStepImport } = await stepImportRun();
-        const result = await runStepImport({
-          file: converted.stepFile,
-          inspectSolids: async (source, signal) => {
-            const { inspectStepSolidsInWorker } =
-              await import('./lib/stepImportWorkerClient');
-            const indices = await inspectStepSolidsInWorker(source, signal);
-            if (indices.length !== converted.solidCount) {
-              throw new Error(
-                'ZCAD could not validate every saved FreeCAD solid. No bodies were imported.'
-              );
-            }
-            if (managerRef.current !== importManager) {
-              throw new Error(
-                'The project changed while the FreeCAD import finished.'
-              );
-            }
-            return indices;
-          },
-          contentType: 'model/step',
-          archive: archiveArtifact,
-          validatedFeature,
-          signal: abort.signal,
-          status: { setStatus, setFeatureFormError },
-          progress,
-          marks: importMarks(),
-          currentDocument: () => managerRef.current?.document ?? null,
-          editDisabledReason: () => editDisabledReasonRef.current,
-          newId: () => crypto.randomUUID(),
-          validatingMessage: 'Validating the saved FreeCAD solids…',
-          successMessage: ({ archived }) =>
-            `Imported ${file.name}: ${converted.solidCount} saved solid${converted.solidCount === 1 ? '' : 's'}. FreeCAD sketches and feature history were not transferred.` +
-            (archived ? '' : ' Converted geometry saved on this device only.')
-        });
-        if (result.outcome === 'declined')
-          progress.finish({ tone: 'warning', message: 'nothing was added' });
-      } catch (error) {
-        const cancelled = abort.signal.aborted;
-        const message = cancelled
-          ? 'FreeCAD import cancelled; nothing was added.'
-          : errorMessage(error, 'FreeCAD import failed.');
-        progress.finish({ tone: cancelled ? 'cancelled' : 'error', message });
-        setStatus(message);
-        if (!cancelled) setFeatureFormError(message);
-      } finally {
-        finishImportAbort(abort);
-      }
-      return;
-    }
     if (lowerName.endsWith('.shapr')) {
       setStatus(
         'Shapr3D migration requires selecting one .shapr project and its companion .step file together.'
@@ -15394,7 +15455,7 @@ export function App() {
           try {
             outcome = await validatedFeature.run(
               meshImport.importedMeshCommand(
-                parsed,
+                { ...parsed, assumedUnits: reading },
                 hold.form,
                 `artifact_local_${crypto.randomUUID()}`,
                 previewIds
@@ -15455,7 +15516,7 @@ export function App() {
                     );
                   }
                   return meshImport.importedMeshCommand(
-                    parsed,
+                    { ...parsed, assumedUnits: reading },
                     hold.form,
                     archived.artifactId,
                     previewIds
@@ -15564,6 +15625,7 @@ export function App() {
           setStatus(`${file.name} was not imported: you cancelled it.`);
           return;
         }
+        mesh = { ...mesh, assumedUnits: reading };
         if (reading !== 'mm') {
           // A uniform enlargement: the worker's rebuild check, run on the
           // millimetre reading, still holds for every larger unit.
@@ -15628,6 +15690,8 @@ export function App() {
       indices: number[];
       /** Set when the file declared a unit that was converted to millimetres. */
       sourceUnit?: string;
+      /** The unit a file that stated none was read in. */
+      assumedUnits?: UnitSystem;
     };
   }): Promise<void> {
     const { file, contentType, artifactKind, importManager, mesh } = input;
@@ -15798,9 +15862,7 @@ export function App() {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus(
-          'Select one FreeCAD, STEP or mesh file, or one .shapr + STEP pair.'
-        );
+        setStatus('Select one STEP or mesh file, or one .shapr + STEP pair.');
         return;
       }
       await handleImportFile(files[0]!);
@@ -18000,7 +18062,7 @@ export function App() {
     (interaction.mode === 'face' && interaction.op === 'edit-fillet');
   useEffect(() => {
     if (!edgePreviewInteraction) {
-      edgePreview.clear();
+      clearEdgePreview();
       setLastValidPreview(null);
     }
   }, [edgePreviewInteraction]);
@@ -21036,6 +21098,9 @@ export function App() {
           ...(request.gear.targetBodyId === undefined ? { bodyName } : {}),
           ...request.gear
         });
+      case 'thread':
+        // The threaded body keeps the name of the body it replaces.
+        return commandFactories.threadBody({ name, ...request.thread });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation
         // run in place is validated and stored exactly as the card's was.
@@ -21481,15 +21546,14 @@ export function App() {
   }, [extrudeSessionKey]);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
-  // Creation commands take the stage; edits of an existing feature leave the
-  // panels open (see `commandSuspendsPanels`). Read the active command rather
-  // than inferring it from the selected feature.
+  // Creation commands fold More tools; model panels keep their layout.
+  // Read the active command rather than inferring it from the selected feature.
   // Plane selection and the entered sketch belong to one editing session.
   const sketchPanelSession = interaction.mode === 'sketch' || tool === 'sketch';
-  const panels = usePanelSuspension(panelState, {
+  const toolFold = useCommandFold(panelState, {
     workspaceMode: resolvedWorkspaceMode,
     sketching: sketchPanelSession,
-    editing: commandSuspendsPanels({
+    editing: commandFoldsTools({
       inPlace: { active: inPlace.active, editing: inPlaceEditing !== null },
       extrude: {
         active: extrudeSessionKey !== null,
@@ -21503,7 +21567,7 @@ export function App() {
         'active'
       : inPlace.sessionId !== null
         ? // Picks, options and preview updates keep the same release; even
-          // restarting the same command gets a fresh suspension.
+          // restarting the same command folds More tools again.
           `command:${inPlace.sessionId}`
         : extrudeSessionKey !== null
           ? `extrude:${extrudeSessionKey}:${extrudeCreateGeneration}`
@@ -21867,7 +21931,9 @@ export function App() {
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
           ...(valueSpec?.max === undefined ? {} : { max: valueSpec.max }),
-          format
+          format,
+          describe: (value: number) =>
+            commandChipName(label, round(value), valueSpec?.unit, inPlaceUnits)
         };
       }),
     // The viewer keys its rigs on `key`, so a value change here only moves
@@ -23109,106 +23175,13 @@ export function App() {
     };
   }, [interaction]);
 
-  const offsetHandleTarget = useMemo(() => {
-    // Validation keeps the handle, locked where it was let go: retiring it
-    // there and building a new one after the commit faded the arrow out and
-    // back in around every release.
-    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
-      return null;
-    }
-    const target = interaction.target;
-    if (target.surfaceType !== 'planar') {
-      return null;
-    }
-    const total =
-      doc && target.hash !== undefined && !target.localFaceOffset
-        ? faceOffsetBaseline(
-            doc,
-            target.bodyId as BodyId,
-            { reference: target.reference },
-            target.hash
-          )
-        : undefined;
-    const profile =
-      doc &&
-      target.hash !== undefined &&
-      primitiveCylinderHeightAncestor(
-        doc,
-        target.bodyId as BodyId,
-        target.reference,
-        target.hash
-      )
-        ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
-        : null;
-    const boxProfile =
-      doc &&
-      !target.localFaceOffset &&
-      target.hash !== undefined &&
-      primitiveBoxFaceAncestor(
-        doc,
-        target.bodyId as BodyId,
-        target.reference,
-        target.hash
-      )
-        ? boxPreviewProfile(representations[target.bodyId as BodyId], {
-            x: target.normal[0],
-            y: target.normal[1],
-            z: target.normal[2]
-          })
-        : null;
-    const body = representations[target.bodyId as BodyId];
-    const pickedFace = body?.topology?.faces.find(
-      (face) =>
-        face.topologyId === target.topologyId && face.hash === target.hash
-    );
-    // A cached pick must still name the exact face installed for this revision.
-    if (!pickedFace?.geometry) return null;
-    const gearProfile =
-      !profile && !boxProfile && doc
-        ? gearHeightPreviewProfile(doc, body, pickedFace)
-        : null;
-    const terminalProfile =
-      !profile && !boxProfile && !gearProfile
-        ? capPreviewProfile(body, pickedFace)
-        : null;
-    const linearProfile = boxProfile ?? terminalProfile;
-    // Any other planar face: move it with its blends and stretch the walls
-    // they meet, when that is what the exact move would do.
-    const stepProfile =
-      !profile && !linearProfile && !gearProfile && !E2E_EXACT_FACE_DRAG
-        ? stepPreviewProfile(body, pickedFace)
-        : null;
-    return {
-      ...(gearProfile ? { gearHeightProfilePreview: gearProfile } : {}),
-      ...(linearProfile ? { linearProfilePreview: linearProfile } : {}),
-      ...(stepProfile ? { stepProfilePreview: stepProfile } : {}),
-      ...(profile ? { profilePreview: profile } : {}),
-      bodyId: target.bodyId,
-      topologyId: target.topologyId,
-      point: {
-        x: target.point[0],
-        y: target.point[1],
-        z: target.point[2]
-      },
-      normal: {
-        x: target.normal[0],
-        y: target.normal[1],
-        z: target.normal[2]
-      },
-      initialValue:
-        renderedOffsetPreview ??
-        offsetPreviewValueRef.current ??
-        interaction.lastValue ??
-        0,
-      ...(total === undefined
-        ? {}
-        : { totalBaseline: total.total, totalSense: total.sense }),
-      ...(interaction.phase === 'validating' ? { locked: true } : {}),
-      // Keypad entry: typed values drive the handle, its ghost and the
-      // preview; landing exact frames must not rebuild them under the hand.
-      ...(interaction.phase === 'exact-entry' ? { entry: true } : {})
-    };
-  }, [doc, interaction, renderedOffsetPreview, representations]);
+  const offsetHandleTarget = useOffsetFaceHandle(
+    doc,
+    representations,
+    interaction,
+    renderedOffsetPreview ?? offsetPreviewValueRef.current,
+    E2E_EXACT_FACE_DRAG
+  );
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     // Validation keeps the handle, locked where it was let go, as the offset
@@ -23696,94 +23669,125 @@ export function App() {
    * absent: it used to give up for the rest of the gesture after one slow
    * frame, which also swallowed every later value — including the oversize
    * radius whose refusal the card was waiting to show.
+   *
+   * Drag frames rebuild geometry only. A complete rebuild also proves every
+   * planar face-pair distance for later edits, which was two thirds of each
+   * frame on a seam fillet (155 ms against 50); `edgeRestCheck` runs that
+   * once the hand rests, and a release commits from it.
    */
   const reusableEdgePreview = useRef<{
     candidate: EdgePreviewCandidate;
     derived: ProjectDocument['derived'];
   } | null>(null);
+  /** The size the edge handle holds right now; see `cylinderRadiusHandValue`. */
+  const edgeHandValue = useRef<number | null>(null);
+  const edgeBlendExact = {
+    build: (size: number): EdgePreviewCandidate | null => {
+      const base = managerRef.current?.document;
+      const command = base ? buildEdgeModifierCommand(size, base) : null;
+      if (!command || !base) {
+        return null;
+      }
+      const current = interactionRef.current;
+      const selectionKey = blendPreviewSelectionKey(current);
+      if (selectionKey === null) return null;
+      // Removing a fillet consumes its body on purpose; only a blend that
+      // is meant to produce a body is judged on producing one.
+      let target: AffectedFeatureTarget | null = null;
+      if (current.mode === 'face' && current.op === 'edit-fillet') {
+        target = editFilletPreviewTarget(base, current.target.filletFeatureId);
+      } else if (current.mode === 'edges') {
+        target = newBlendValidationTarget(command);
+      }
+      return {
+        command,
+        selectionKey,
+        document: command.apply(base),
+        size,
+        label: command.label,
+        judge: target !== null && size > 1e-9,
+        ...(target ? { target } : {}),
+        baseProjectId: base.projectId,
+        baseVersion: base.version
+      };
+    },
+    isCurrent: (candidate: EdgePreviewCandidate) =>
+      canReuseBlendPreview(
+        candidate,
+        managerRef.current?.document,
+        interactionRef.current,
+        candidate.size
+      ),
+    acceptValue: (size: number) => {
+      const current = interactionRef.current;
+      return (
+        Number.isFinite(size) &&
+        (current.mode === 'face' && current.op === 'edit-fillet'
+          ? size >= 0
+          : size > 0)
+      );
+    }
+  };
+  function edgePreviewRejection(
+    candidate: EdgePreviewCandidate,
+    derived: GeometryReadyState | ProjectDocument['derived']
+  ): CommandDiagnostic | null {
+    if (!candidate.judge || !candidate.target) return null;
+    return offsetPreviewRejection({
+      label: candidate.label,
+      bodyId: candidate.target.resultBodyId,
+      validationTargets: [candidate.target],
+      derived,
+      documentMoved: !previewBaseIsCurrent(candidate)
+    });
+  }
   const edgePreview = useRef(
-    new LivePreview<EdgePreviewCandidate, OffsetPreviewResult>({
-      build: (size) => {
-        const base = managerRef.current?.document;
-        const command = base ? buildEdgeModifierCommand(size, base) : null;
-        if (!command || !base) {
-          return null;
-        }
-        const current = interactionRef.current;
-        const selectionKey = blendPreviewSelectionKey(current);
-        if (selectionKey === null) return null;
-        // Removing a fillet consumes its body on purpose; only a blend that
-        // is meant to produce a body is judged on producing one.
-        let target: AffectedFeatureTarget | null = null;
-        if (current.mode === 'face' && current.op === 'edit-fillet') {
-          target = editFilletPreviewTarget(
-            base,
-            current.target.filletFeatureId
-          );
-        } else if (current.mode === 'edges') {
-          target = newBlendValidationTarget(command);
-        }
-        return {
-          command,
-          selectionKey,
-          document: command.apply(base),
-          size,
-          label: command.label,
-          judge: target !== null && size > 1e-9,
-          ...(target ? { target } : {}),
-          baseProjectId: base.projectId,
-          baseVersion: base.version
-        };
-      },
-      derive: async (candidate) => {
-        const derived = await previewRebuilds.start(candidate, () =>
-          geometry.syncOnce(candidate.document)
+    new LivePreview<
+      EdgePreviewCandidate,
+      { geometry: GeometryReadyState; rejection: CommandDiagnostic | null }
+    >({
+      ...edgeBlendExact,
+      derive: async (candidate, signal) => {
+        const geometryReady = await geometry.previewGeometry(
+          candidate.document,
+          { signal }
         );
-        if (!candidate.judge || !candidate.target) {
-          return { derived, rejection: null };
-        }
-        const live = managerRef.current;
-        const documentMoved =
-          !live ||
-          live.document.projectId !== candidate.baseProjectId ||
-          live.document.version !== candidate.baseVersion;
-        const rejection = offsetPreviewRejection({
-          label: candidate.label,
-          bodyId: candidate.target.resultBodyId,
-          validationTargets: [candidate.target],
-          derived,
-          documentMoved
-        });
-        return { derived, rejection };
+        return {
+          geometry: geometryReady,
+          rejection: edgePreviewRejection(candidate, geometryReady)
+        };
       },
       publish: (preview) => {
         if (!preview) {
-          reusableEdgePreview.current = null;
           setPreviewDoc(null);
+          setFaceGeometryPreview(null);
           setPreviewBlendFaces([]);
           return;
         }
         if (preview.derived.rejection) {
-          reusableEdgePreview.current = null;
+          // A complete rebuild of a refused size would only refuse it again.
+          if (preview.document.size === edgeHandValue.current) {
+            stopEdgeRestCheck();
+          }
           reportPreviewFailure(
             preview.derived.rejection.message,
             preview.document.size
           );
           return;
         }
-        reusableEdgePreview.current = {
-          candidate: preview.document,
-          derived: preview.derived.derived
-        };
-        setPreviewDoc({
-          ...preview.document.document,
-          derived: preview.derived.derived
+        setPreviewDoc(null);
+        setFaceGeometryPreview({
+          document: preview.document.document,
+          baseProjectId: preview.document.baseProjectId,
+          baseVersion: preview.document.baseVersion,
+          selectionKey: preview.document.selectionKey,
+          geometry: preview.derived.geometry
         });
         const current = interactionRef.current;
         const base = managerRef.current?.document;
         setPreviewBlendFaces(
           current.mode === 'edges' && current.op === 'fillet' && base
-            ? newBlendFaceSelections(base, preview.derived.derived)
+            ? newBlendFaceSelections(base, preview.derived.geometry)
             : []
         );
         setLastValidPreview(preview.document.size);
@@ -23791,26 +23795,9 @@ export function App() {
         setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
       onFailure: ({ error, value }) => {
-        reusableEdgePreview.current = null;
         reportPreviewFailure(
           errorMessage(error, 'Exact blend preview failed.'),
           value
-        );
-      },
-      isCurrent: (candidate) =>
-        canReuseBlendPreview(
-          candidate,
-          managerRef.current?.document,
-          interactionRef.current,
-          candidate.size
-        ),
-      acceptValue: (size) => {
-        const current = interactionRef.current;
-        return (
-          Number.isFinite(size) &&
-          (current.mode === 'face' && current.op === 'edit-fillet'
-            ? size >= 0
-            : size > 0)
         );
       },
       continueAfterSlow: true,
@@ -23820,6 +23807,85 @@ export function App() {
       onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
+  /**
+   * Once the edge handle rests, rebuild its size completely off screen: the
+   * verdict a release would give, reported while the hand still holds that
+   * size, and the rebuild the release then commits from.
+   */
+  const edgeRestCheck = useRef(
+    new LivePreview<EdgePreviewCandidate, OffsetPreviewResult>({
+      ...edgeBlendExact,
+      derive: async (candidate) => {
+        const derived = await previewRebuilds.start(candidate, () =>
+          geometry.syncOnce(candidate.document)
+        );
+        return { derived, rejection: edgePreviewRejection(candidate, derived) };
+      },
+      publish: (preview) => {
+        if (!preview || preview.derived.rejection) {
+          reusableEdgePreview.current = null;
+          if (
+            preview?.derived.rejection &&
+            preview.document.size === edgeHandValue.current
+          ) {
+            reportPreviewFailure(
+              preview.derived.rejection.message,
+              preview.document.size
+            );
+          }
+          return;
+        }
+        reusableEdgePreview.current = {
+          candidate: preview.document,
+          derived: preview.derived.derived
+        };
+      },
+      onFailure: ({ error, value }) => {
+        reusableEdgePreview.current = null;
+        if (value !== edgeHandValue.current) return;
+        reportPreviewFailure(
+          errorMessage(error, 'Exact blend preview failed.'),
+          value
+        );
+      },
+      ...GEOMETRY_PREVIEW_SCHEDULING
+    })
+  ).current;
+  const edgeRestTimer = useRef<number | null>(null);
+  function stopEdgeRestCheck() {
+    if (edgeRestTimer.current !== null) {
+      window.clearTimeout(edgeRestTimer.current);
+      edgeRestTimer.current = null;
+    }
+    edgeRestCheck.stop();
+  }
+  function queueEdgeRestCheck(size: number) {
+    edgeRestTimer.current = window.setTimeout(() => {
+      edgeRestTimer.current = null;
+      if (edgeHandValue.current !== size) return;
+      // The worker runs one job at a time: let the drag frame land first.
+      if (edgePreview.running) queueEdgeRestCheck(size);
+      else edgeRestCheck.request(size);
+    }, EDGE_BLEND_REST_MS);
+  }
+  /** A new size from the edge handle or its keypad. */
+  function requestEdgePreview(size: number) {
+    edgeHandValue.current = size;
+    stopEdgeRestCheck();
+    reusableEdgePreview.current = null;
+    if (edgePreview.request(size)) queueEdgeRestCheck(size);
+  }
+  /** Ends the drag's work; what is on screen stays until `clearEdgePreview`. */
+  function stopEdgePreview() {
+    stopEdgeRestCheck();
+    edgePreview.stop();
+  }
+  function clearEdgePreview() {
+    edgeHandValue.current = null;
+    stopEdgeRestCheck();
+    reusableEdgePreview.current = null;
+    edgePreview.clear();
+  }
 
   /** The fillet feature an edit-fillet preview is judged by, if it is live. */
   function editFilletPreviewTarget(
@@ -23981,7 +24047,7 @@ export function App() {
       exact === undefined
         ? previewRebuilds.reusable(
             reusableEdgePreview.current,
-            edgePreview.running?.document,
+            edgeRestCheck.running?.document,
             (candidate) =>
               canReuseBlendPreview(
                 candidate,
@@ -23999,13 +24065,13 @@ export function App() {
       !('targetBodyId' in command.payload) ||
       !('edgeHashes' in command.payload)
     ) {
-      edgePreview.clear();
+      clearEdgePreview();
       return;
     }
     // The blend on screen stays while it is checked; the commit or the
     // refusal takes it down. Clearing it here showed the sharp edges for the
     // whole validation whenever the release outran its preview.
-    edgePreview.stop();
+    stopEdgePreview();
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
@@ -24020,7 +24086,7 @@ export function App() {
       `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
       rounded,
       () => {
-        edgePreview.clear();
+        clearEdgePreview();
         if (op === 'fillet') {
           pendingBlendRearmRef.current = {
             bodyId: resultBodyId,
@@ -24037,7 +24103,7 @@ export function App() {
           }
         : undefined
     ).then((committed) => {
-      if (!committed) edgePreview.clear();
+      if (!committed) clearEdgePreview();
     });
   }
 
@@ -24064,7 +24130,7 @@ export function App() {
   }
 
   function handleEdgeCancel() {
-    edgePreview.clear();
+    clearEdgePreview();
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
     // late preview too — the same latch the offset cancel already releases.
     setPreviewDeferred(false);
@@ -24113,7 +24179,7 @@ export function App() {
     if (target.hash === undefined || blends.length === 0) {
       return;
     }
-    edgePreview.stop();
+    stopEdgePreview();
     void executeValidatedDirectEdit(
       commandFactories.directEditBody({
         name: 'Remove All Imported Blends',
@@ -24128,7 +24194,7 @@ export function App() {
       bodyId,
       `Removed ${blends.length} imported ${blends.length === 1 ? 'blend' : 'blends'}.`,
       0,
-      () => edgePreview.clear()
+      () => clearEdgePreview()
     );
   }
 
@@ -24166,7 +24232,7 @@ export function App() {
       exact === undefined
         ? previewRebuilds.reusable(
             reusableEdgePreview.current,
-            edgePreview.running?.document,
+            edgeRestCheck.running?.document,
             (candidate) => canReuseBlendPreview(candidate, base, current, size)
           )
         : null;
@@ -24176,7 +24242,7 @@ export function App() {
       return;
     }
     // As for a new blend: the preview stays until the commit or a refusal.
-    edgePreview.stop();
+    stopEdgePreview();
     const removing = size <= 1e-9;
     const sourceFace = base.derived.bodyRepresentations[
       current.target.bodyId as BodyId
@@ -24211,9 +24277,9 @@ export function App() {
         : `Set ${feature?.name ?? 'imported blend'} radius to R ${formatNumber(size)} ${base.units}.`,
       size,
       removing
-        ? () => edgePreview.clear()
+        ? () => clearEdgePreview()
         : () => {
-            edgePreview.clear();
+            clearEdgePreview();
             const committed = managerRef.current?.document;
             const faces =
               committed?.derived.bodyRepresentations[
@@ -24331,7 +24397,7 @@ export function App() {
           }
         : undefined
     ).then((committed) => {
-      if (!committed) edgePreview.clear();
+      if (!committed) clearEdgePreview();
     });
   }
 
@@ -24441,6 +24507,7 @@ export function App() {
   }
 
   function handleOffsetPreview(offset: number, exactGeometry = true) {
+    stopOffsetRestCheck();
     const current = interactionRef.current;
     // The arrow rig is shared: in region mode its value is an extrude height.
     if (current.mode === 'region') {
@@ -24468,6 +24535,21 @@ export function App() {
       offsetPreview.clear();
       setPreviewDeferred(false);
       recoverPreviewInteraction();
+      if (offsetHandleTarget?.stepProfilePreview && Math.abs(offset) > 1e-9) {
+        const target = current.target;
+        offsetRestTimer.current = window.setTimeout(() => {
+          offsetRestTimer.current = null;
+          const live = interactionRef.current;
+          if (
+            live.mode === 'face' &&
+            live.op === 'offset-face' &&
+            live.phase !== 'validating' &&
+            live.target === target &&
+            offsetPreviewValueRef.current === offset
+          )
+            offsetPreview.request(offset);
+        }, OFFSET_FACE_REST_MS);
+      }
       return;
     }
     if (Math.abs(offset) <= 1e-9) {
@@ -24481,6 +24563,7 @@ export function App() {
   }
 
   function handleOffsetCancel() {
+    stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
@@ -24512,6 +24595,7 @@ export function App() {
    * refused value with its change band still drawn.
    */
   const clearDirectEditPreviews = useCallback(() => {
+    stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
     cylinderRadiusPreview.clear();
@@ -24521,6 +24605,13 @@ export function App() {
       cylinderRadiusRestTimer.current = null;
     }
     cylinderRadiusHandValue.current = null;
+    edgeRestCheck.clear();
+    if (edgeRestTimer.current !== null) {
+      window.clearTimeout(edgeRestTimer.current);
+      edgeRestTimer.current = null;
+    }
+    edgeHandValue.current = null;
+    reusableEdgePreview.current = null;
     edgePreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
@@ -24535,7 +24626,9 @@ export function App() {
     offsetPreview,
     cylinderRadiusPreview,
     cylinderRadiusRestCheck,
-    edgePreview
+    edgePreview,
+    edgeRestCheck,
+    stopOffsetRestCheck
   ]);
 
   // A preview must never outlive the command that made it. Whatever returns
@@ -24679,7 +24772,7 @@ export function App() {
       interaction.mode === 'edges' &&
       (action === 'fillet' || action === 'chamfer')
     ) {
-      edgePreview.clear();
+      clearEdgePreview();
       dispatchInteraction({ type: 'set-edge-op', op: action });
     }
   }
@@ -24778,6 +24871,7 @@ export function App() {
     exact?: ParamValue,
     options?: { keepingLastValid?: boolean }
   ): OffsetCommitOutcome {
+    stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
     if (interaction.mode === 'region') {
       handleRegionExtrudeCommit(offset, exact);
@@ -25100,7 +25194,7 @@ export function App() {
   // refills the chip.
   const calloutOperationActions = {
     onEditCulprit: handleEditCulpritFeature,
-    onViewDetails: () => setActivityLogOpen(true),
+    onViewDetails: openActivityLog,
     onKeepLastValid: () => keepLastValid?.keep(),
     onSelectAllEdges: () => {
       if (edgeModifierBody) handleSelectAllEdges(edgeModifierBody);
@@ -25554,6 +25648,49 @@ export function App() {
     });
   }
 
+  function handleDeleteImportedFace(selection: TopologySelection) {
+    // A pick may demand lineage while a complete validated body is already
+    // displayed. The candidate rebuild re-resolves its face before healing.
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!base) return;
+    void import('./lib/featureDeletion')
+      .then(({ importedFaceDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the face again before deleting it.'
+          );
+          return;
+        }
+        const removal = importedFaceDeletion(current, selection);
+        void validatedFeature.runTransaction([removal.command], {
+          label: removal.command.label,
+          targets: [removal.target],
+          validatingMessage: 'Checking imported feature removal…',
+          successMessage: removal.successMessage,
+          onFailure: (message) => announce(message),
+          onSuccess: () => {
+            clearSelection();
+            announce(removal.successMessage, {
+              label: 'Undo',
+              run: handleUndo
+            });
+          }
+        });
+      })
+      .catch((error: unknown) =>
+        setStatus(
+          errorMessage(error, 'Could not remove this imported feature.')
+        )
+      );
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
@@ -25582,11 +25719,7 @@ export function App() {
     name: string,
     dependentCount: number
   ) {
-    if (
-      executeCommand(
-        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
-      )
-    ) {
+    const finish = () => {
       // A reopened modeling form outlives the selection (its tool is still
       // running), so it has to be closed with the feature it was editing;
       // so does an in-place edit of it.
@@ -25600,7 +25733,48 @@ export function App() {
         { label: 'Undo', run: handleUndo },
         { repeatsStatusAt: lastStatusAtRef.current }
       );
+    };
+    const manager = managerRef.current;
+    const base = manager?.document;
+    const feature = base && findFeature(base, featureId);
+    if (base && feature && isRemovableDetail(feature)) {
+      void import('./lib/featureDeletion')
+        .then(({ nativeFeatureDeletion }) => {
+          const current = manager.document;
+          if (
+            managerRef.current !== manager ||
+            current.projectId !== base.projectId ||
+            current.version !== base.version
+          ) {
+            setStatus(
+              'The model changed. Select the feature again before deleting it.'
+            );
+            return;
+          }
+          // A geometry-only echo may replace the document object while the
+          // module loads. Its project/revision still owns this deletion.
+          const removal = nativeFeatureDeletion(current, feature);
+          void validatedFeature.runTransaction([removal.command], {
+            label: `Delete ${name}`,
+            targets: [],
+            validateDerived: removal.validateDerived,
+            validatingMessage: `Checking removal of ${name}…`,
+            successMessage: deleteFeatureToastMessage(name, dependentCount),
+            onFailure: (message) => announce(message),
+            onSuccess: finish
+          });
+        })
+        .catch((error: unknown) =>
+          setStatus(errorMessage(error, 'Could not remove this feature.'))
+        );
+      return;
     }
+    if (
+      executeCommand(
+        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
+      )
+    )
+      finish();
   }
 
   function handleRenameFeature(featureId: FeatureId, name: string) {
@@ -25765,9 +25939,12 @@ export function App() {
       geometryReady: (document) => geometry.isReadyFor(document)
     });
     if (plan.kind === 'direct') executeCommand(command);
+    // A refused reorder is a notice, not a status line: the status line
+    // expires while the History row still sits where it was, and the user
+    // pressing the arrow again needs to know why nothing moved.
     if (plan.kind === 'pending')
-      setStatus(
-        'Exact geometry is still rebuilding. Reorder once it finishes.'
+      announce(
+        `${label} not applied. Exact geometry is still rebuilding; reorder once it finishes.`
       );
     if (plan.kind !== 'validate') return;
     let failed = '';
@@ -25775,24 +25952,31 @@ export function App() {
       featureAttribution && featureAttribution.derived === base?.derived
         ? featureAttribution.featureWarnings
         : undefined;
-    void validatedFeature.runTransaction([command], {
-      label,
-      // Compared with the current model in `reorderRefusal`, so a failure the
-      // design already has does not block the move.
-      targets: [],
-      validateDerived: (derived) => {
-        const refusal =
-          base &&
-          reorderRefusal(base, derived, featureId, toIndex, attribution);
-        if (!refusal) return;
-        failed = `: ${refusal.featureName} would not rebuild`;
-        throw refusal;
-      },
-      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
-      successMessage: commandOutcomeMessage(label),
-      onFailure: (message) =>
-        announce(`${label} not applied${failed}. ${message}`)
-    });
+    void validatedFeature
+      .runTransaction([command], {
+        label,
+        // Compared with the current model in `reorderRefusal`, so a failure the
+        // design already has does not block the move.
+        targets: [],
+        validateDerived: (derived) => {
+          const refusal =
+            base &&
+            reorderRefusal(base, derived, featureId, toIndex, attribution);
+          if (!refusal) return;
+          failed = `: ${refusal.featureName} would not rebuild`;
+          throw refusal;
+        },
+        validatingMessage: `Checking features after ${name ?? 'the move'}…`,
+        successMessage: commandOutcomeMessage(label),
+        onFailure: (message) =>
+          announce(`${label} not applied${failed}. ${message}`)
+      })
+      .then((outcome) => {
+        // `busy` goes to the host's feature-form sink, and History has no
+        // form open, so it is said here instead.
+        if (outcome === 'busy')
+          announce(`${label} not applied. ${VALIDATED_FEATURE_BUSY_STATUS}`);
+      });
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
@@ -26986,9 +27170,6 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        // The log is a sheet over the prompt's lane: left open, it kept
-        // covering the field this focuses, so typing went somewhere unseen.
-        setActivityLogOpen(false);
         setPaletteOpen((open) => !open);
         return;
       }
@@ -27110,6 +27291,27 @@ export function App() {
         event.preventDefault();
         openSaveNameDialog();
         return;
+      }
+
+      // AS01: Assemble's own keys (J, G, Space, Escape, Enter) come before
+      // the model's, which they shadow there.
+      if (assembleMode && !typing) {
+        const assembleKey = assembleKeyFor(
+          chord ? keymap.commandFor(chord, ['assemble'])?.id : undefined,
+          meta || event.altKey ? '' : event.key
+        );
+        const onControl =
+          target instanceof Element &&
+          target.closest('button, a, select, [role="menu"]') !== null;
+        if (
+          assembleKey &&
+          !(assembleKey === 'enter' && onControl) &&
+          !event.repeat &&
+          runAssembleKey(assembleApp, assembleKey)
+        ) {
+          event.preventDefault();
+          return;
+        }
       }
 
       // The command the key means outside a sketch, if any. In a reading
@@ -27424,6 +27626,29 @@ export function App() {
               setActiveMeasurementId(null);
               setStatus('Measurement removed.');
             }
+            return;
+          }
+          // A STEP face is healed by a replayable direct edit. Its import
+          // history row is never deleted by a viewport face pick.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            features.some(
+              (feature) =>
+                feature.bodyId === selectedTopology.bodyId &&
+                feature.data.featureKind === 'imported-step'
+            )
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology);
             return;
           }
           // A drag or a commit still in flight owns the selection; Delete
@@ -27793,6 +28018,17 @@ export function App() {
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
         />
+        <StatusActivityLog
+          status={status}
+          {...(statusEntry.detail ? { detail: statusEntry.detail } : {})}
+          logged={!statusEntry.unlogged}
+          tone={
+            /fail|error|invalid|unable|denied/i.test(status)
+              ? 'warning'
+              : 'ready'
+          }
+          workspace="Projects"
+        />
         {settingsOverlay}
         <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
@@ -27953,7 +28189,7 @@ export function App() {
   const panelGeometry = panelStage
     ? computePanelGeometry(panelLayout, panelStage)
     : null;
-  const panelsHidden = panels.panelsHidden || panelLayout.options.hidden;
+  const panelsHidden = panelLayout.options.hidden;
   const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
   /** Whether a panel is on screen right now, for its rail button. */
   const panelShowing = (id: PanelId) =>
@@ -27963,33 +28199,21 @@ export function App() {
       (panelGeometry.phone
         ? phonePanel === id
         : !panelGeometry.parked[id] || panelLayout.revealed === id));
-  /**
-   * A rail press. While a sketch or command has the panels stepped aside it is
-   * the user asking for them back: the pressed panel opens (or comes forward)
-   * and the suspension is released for the rest of that mode, instead of
-   * closing a panel nobody can see.
-   */
+  /** Panel controls work the same way during and between tool sessions. */
   const pressRailPanel = (id: PanelId) => {
-    const suspended = panels.panelsHidden;
     setPanelLayout((current) =>
-      suspended
-        ? openPanel(current, id, panelStageOrUndefined)
-        : togglePanel(current, id, panelStageOrUndefined)
+      togglePanel(current, id, panelStageOrUndefined)
     );
-    if (suspended) panels.release('panels');
   };
   /**
    * Brings History, Parameters or Revisions into view by name, as the
    * palette's feature and parameter results and the undo-floor notice do:
-   * unpinned if it was closed, forward if it was open. Asking for it by name
-   * mid-sketch or mid-command releases the suspension for the rest of that
-   * session, like a rail press.
+   * unpinned if it was closed, forward if it was open.
    */
   const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
     );
-    panels.release('panels');
   };
   const panelControls = (
     id: PanelId,
@@ -28526,7 +28750,7 @@ export function App() {
   // The readout at the head of the line already names the face.
   const faceSelectedHint = [
     railPick ? null : 'Face selected',
-    keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
+    keyHint(keymap, 'view-normal-to-face', 'views it head-on')
   ]
     .filter(Boolean)
     .join(' — ');
@@ -29023,7 +29247,7 @@ export function App() {
           : Promise.resolve(`Parameter ${name} does not exist.`);
       }}
       parameterQuantitySuggestions={parameterQuantitySuggestions}
-      onViewActivityLog={() => setActivityLogOpen(true)}
+      onViewActivityLog={openActivityLog}
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
       }
@@ -29038,6 +29262,7 @@ export function App() {
       }
       exposedParameterNames={exposedParameterNames}
       onReorderFeature={handleReorderFeature}
+      reorderBusy={validatedBusy}
       onRestoreCheckpoint={(checkpoint) =>
         void handleRestoreSaveState(checkpoint)
       }
@@ -29114,16 +29339,16 @@ export function App() {
         onDrawerViewChange={(toolDrawerView) =>
           setPanelState((current) => ({ ...current, toolDrawerView }))
         }
-        moreOpen={panels.commandFoldOpen}
+        moreOpen={toolFold.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
           // keeps it open for the rest of the command.
-          const hidden = panels.foldHidden;
+          const hidden = toolFold.foldHidden;
           setPanelState((current) => ({
             ...current,
             commandFoldOpen: hidden || !current.commandFoldOpen
           }));
-          if (hidden) panels.release('fold');
+          if (hidden) toolFold.release();
         }}
       />
     );
@@ -29188,7 +29413,7 @@ export function App() {
               ? lastDirectEditFailure.message
               : null
           }
-          onReviewEditFailure={() => setActivityLogOpen(true)}
+          onReviewEditFailure={openActivityLog}
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
@@ -29250,6 +29475,7 @@ export function App() {
           buildModeDisabledReason={buildModeDisabledReason}
           tweakModeDisabledReason={tweakModeDisabledReason}
           drawingModeDisabledReason={drawingModeDisabledReason}
+          assembleModeDisabledReason={assembleModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
           onSaveAs={openSaveNameDialog}
@@ -29319,7 +29545,7 @@ export function App() {
         ) : null
       }
       sidebar={
-        viewMode || drawingMode ? null : tweakMode ? (
+        viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
             modelError={parameterModelError}
             parameters={exposedParameters}
@@ -29338,7 +29564,7 @@ export function App() {
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
             }
-            onViewActivityLog={() => setActivityLogOpen(true)}
+            onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
             share={shareSession ? { onMakeCopy: requestShareCopy } : null}
@@ -29427,7 +29653,7 @@ export function App() {
             selectedEdges={
               parameterPreview ||
               currentGeometrySnapshot ||
-              currentFaceGeometryPreview
+              geometryPreviewHoldsPicks
                 ? []
                 : selectedEdges
             }
@@ -29525,11 +29751,7 @@ export function App() {
                       )
                     }
                   />
-                  <ActivityLogButton
-                    logOpen={activityLogOpen}
-                    onToggleLog={() => setActivityLogOpen((open) => !open)}
-                    logTriggerRef={activityLogTriggerRef}
-                  />
+                  <ActivityLogButton onOpenLog={openActivityLog} />
                 </div>
                 {panelLayout.options.hidden && (
                   <PanelsHiddenPill
@@ -29628,7 +29850,7 @@ export function App() {
                 ? null
                 : edgeHandleTarget
             }
-            onEdgeRadiusPreview={(size) => edgePreview.request(size)}
+            onEdgeRadiusPreview={(size) => requestEdgePreview(size)}
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
@@ -29969,6 +30191,14 @@ export function App() {
                         : {})}
                     />
                   )}
+                  {viewMode && <AssemblyPlayer assembly={doc.assembly} />}
+                  {assembleMode && (
+                    <MotionStudyTimeline
+                      floating
+                      assembly={doc.assembly}
+                      execute={executeCommand}
+                    />
+                  )}
                   {measurementDock}
                 </>
               ) : inPlace.active ? (
@@ -30094,7 +30324,7 @@ export function App() {
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);
                         } else if (keypad.kind === 'edge') {
-                          edgePreview.request(value);
+                          requestEdgePreview(value);
                         } else {
                           handleOffsetPreview(value);
                         }
@@ -30295,7 +30525,20 @@ export function App() {
         </ErrorBoundary>
       }
       panels={
-        !modelingLocked ? (
+        assembleMode ? (
+          <ErrorBoundary label="Assembly" resetKey={doc.projectId}>
+            {/* One sidebar on the left: parts, joints, motion, the joint
+                tool and the first run all live here (AS01). */}
+            <div className="assembly-panel-float">
+              <AssemblyPanel
+                document={doc}
+                execute={assembleApp.execute}
+                onStatus={assembleApp.onStatus}
+                onAnnounce={(message) => announce(message)}
+              />
+            </div>
+          </ErrorBoundary>
+        ) : !modelingLocked ? (
           <PanelDock
             layout={panelLayout}
             hidden={panelsHidden}
@@ -30354,7 +30597,7 @@ export function App() {
               onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
               onAction={handleSelectionAction}
               onEditCulprit={handleEditCulpritFeature}
-              onViewDetails={() => setActivityLogOpen(true)}
+              onViewDetails={openActivityLog}
               {...(keepLastValid ? { keepLastValid } : {})}
               // Never up in sketch mode (the column header names the
               // sketch), so a close is always a clear.
@@ -30413,7 +30656,7 @@ export function App() {
       }
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
-        inspectorActive ? (
+        assembleMode ? null : inspectorActive ? (
           <ErrorBoundary
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}
@@ -30506,17 +30749,17 @@ export function App() {
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
                 selectedBody={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
+                  currentGeometrySnapshot || geometryPreviewHoldsPicks
                     ? null
                     : selectedBody
                 }
                 selectedTopology={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
+                  currentGeometrySnapshot || geometryPreviewHoldsPicks
                     ? null
                     : renderedSelectedTopology
                 }
                 selectedEdges={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
+                  currentGeometrySnapshot || geometryPreviewHoldsPicks
                     ? []
                     : selectedEdges
                 }
@@ -30843,8 +31086,7 @@ export function App() {
             geometryStatus={geometryStatus}
             tone={tone}
             muted={contextualToolCard !== null && !hideSketchToolCard}
-            logOpen={activityLogOpen}
-            onToggleLog={() => setActivityLogOpen((open) => !open)}
+            onOpenLog={openActivityLog}
             prompt={workspacePrompt}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
@@ -31177,8 +31419,6 @@ export function App() {
             }
           />
           <StatusActivityLog
-            id={activityLogId}
-            open={activityLogOpen}
             status={visibleStatus}
             {...(visibleStatus === status && statusEntry.detail
               ? { detail: statusEntry.detail }
@@ -31186,13 +31426,8 @@ export function App() {
             logged={!(visibleStatus === status && statusEntry.unlogged)}
             geometryStatus={geometryLogLine}
             tone={tone}
-            triggerRef={activityLogTriggerRef}
-            onClose={(restoreFocus) => {
-              setActivityLogOpen(false);
-              if (restoreFocus) {
-                activityLogTriggerRef.current?.focus();
-              }
-            }}
+            workspace={workspaceModeLabel(resolvedWorkspaceMode)}
+            project={doc.name}
           />
         </>
       }
@@ -31247,7 +31482,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
+            accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
@@ -31287,6 +31522,7 @@ export function App() {
             doc && (
               <ProjectSharingDialog
                 projectId={doc.projectId}
+                projectName={doc.name}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName

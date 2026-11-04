@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from policy_test_tools import bash_executable, git_command
 CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
 CALLEE, PIN = re.search(r"\.github/workflows/(fleet-ci(?:-v[0-9]+)?\.yml)@([a-f0-9]{40})", CALLER).groups()
 FIXTURE_REPO = re.search(r"uses: ([^/\s]+/[^/\s]+)/\.github/workflows/", CALLER)[1]
@@ -19,9 +21,9 @@ COMPARISON = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())
 
 
 def snapshots():
-    active = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"],
-                                     cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
-    subprocess.check_output(["git", "show", f"{COMPARISON['pin']}:{COMPARISON['path']}"],
+    active = subprocess.check_output(git_command("show", f"{PIN}:.github/workflows/{CALLEE}"),
+                                     cwd=ROOT, text=True, encoding="utf-8", stderr=subprocess.DEVNULL)
+    subprocess.check_output(git_command("show", f"{COMPARISON['pin']}:{COMPARISON['path']}"),
                             cwd=ROOT, stderr=subprocess.DEVNULL)
     return active
 
@@ -47,7 +49,7 @@ def main_contains(commit):
     """Whether origin/main reaches `commit`, retaining both fixture histories."""
     def contains():
         return subprocess.run(
-            ["git", "merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"],
+            git_command("merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"),
             cwd=ROOT, capture_output=True,
         ).returncode == 0
     if contains():
@@ -116,8 +118,8 @@ def evaluate(expression, github, variables, needs=None):
 class DirectFleetTests(unittest.TestCase):
     def test_staged_merge_queue_routing(self):
         result = subprocess.run(
-            ["python3", str(ROOT / "scripts/test-merge-queue-routing.py")],
-            capture_output=True, text=True,
+            [sys.executable, str(ROOT / "scripts/test-merge-queue-routing.py")],
+            capture_output=True, text=True, encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -342,7 +344,7 @@ class DirectFleetTests(unittest.TestCase):
             script = "\n".join(
                 line[10:] if line.startswith("          ") else line for line in block.splitlines()
             )
-            result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+            result = subprocess.run([bash_executable(), "-n"], input=script, text=True, encoding="utf-8", capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
 

@@ -44,10 +44,13 @@ test('the owner removes a member, who loses access to the project', async ({
   // Alice removes Bob from the sharing dialog: one MLS Commit, mirrored.
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
   const dialog = alice.getByRole('dialog', { name: 'Project sharing' });
-  await expect(
-    dialog.getByText(/Removing someone keeps them out of every later version/)
-  ).toBeVisible();
   await dialog.getByRole('button', { name: /^Remove / }).click();
+  // The consequence is stated in the confirmation, where it is decided.
+  const confirm = dialog.getByRole('group', { name: /^Remove / });
+  await expect(
+    confirm.getByText(/Removing someone keeps them out of every later version/)
+  ).toBeVisible();
+  await confirm.getByRole('button', { name: 'Remove', exact: true }).click();
   await expect
     .poll(() => memberRow(server, projectId), { timeout: COMMIT_BUDGET_MS })
     .toBeUndefined();

@@ -40,6 +40,7 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'gear':
       return data.targetBodyId !== undefined ? [data.targetBodyId] : [];
     case 'hole':
+    case 'thread':
     case 'shell':
     case 'solid-offset':
     case 'draft':

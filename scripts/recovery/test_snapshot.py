@@ -117,7 +117,7 @@ class SnapshotTests(unittest.TestCase):
             complete_snapshot(self.root, SOURCE)
 
     def test_unreviewed_migration_is_refused(self):
-        self.db.execute("INSERT INTO d1_migrations VALUES ('0045_future.sql')")
+        self.db.execute("INSERT INTO d1_migrations VALUES ('0047_future.sql')")
         self.sql()
         with self.assertRaises(SnapshotError):
             complete_snapshot(self.root, SOURCE)

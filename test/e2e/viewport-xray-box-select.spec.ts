@@ -739,7 +739,7 @@ test('a pending Move copy follows X-ray opacity and edge styling', async ({
   await openMoveOptions(controls);
   await controls.getByLabel('Move X in mm').fill('40');
   await controls
-    .getByRole('checkbox', { name: 'Copy (keep the original)' })
+    .getByRole('checkbox', { name: 'Keep original' })
     .check();
   await expect(canvas(page)).toHaveAttribute(
     'data-e2e-move-copy-preview',

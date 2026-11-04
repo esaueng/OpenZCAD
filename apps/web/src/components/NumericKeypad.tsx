@@ -21,6 +21,11 @@ import {
 import { unitLabel } from '../lib/measurements';
 import { MODEL_PANEL_OBSTACLES } from '../lib/selectionCalloutView';
 import { formatNumber } from '../lib/model';
+import {
+  keypadReturnTarget,
+  returnKeypadFocus
+} from '../lib/keypadReturnFocus';
+import { spokenValueName } from '../lib/inPlace/chipNames';
 
 export interface KeypadRequest {
   /** U09: which in-place command value a `command` entry edits. */
@@ -235,6 +240,9 @@ export function NumericKeypad({
     : request.label;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Read on the first render, before the field takes focus below.
+  const [returnTarget] = useState(keypadReturnTarget);
+  useEffect(() => () => returnKeypadFocus(returnTarget), [returnTarget]);
   const selectInitial = useRef(request.selectInitial ?? true);
   const initialPreviewed = useRef(false);
   const untouchedPrefill = useRef(request.selectInitial !== false);
@@ -465,7 +473,8 @@ export function NumericKeypad({
       className="numeric-keypad"
       data-state={commitDisabled ? 'warning' : 'ready'}
       role="dialog"
-      aria-label={`${label} value`}
+      // The visible label may be a glyph ("⌀", "R"); the names are in words.
+      aria-label={`${spokenValueName(label)} value`}
       // The viewport must never see keypad gestures as picks or orbits.
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
@@ -491,7 +500,7 @@ export function NumericKeypad({
         <input
           ref={inputRef}
           className="keypad-value"
-          aria-label={label}
+          aria-label={spokenValueName(label)}
           value={value}
           aria-invalid={commitDisabled || !evaluation.ok}
           spellCheck={false}

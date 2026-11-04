@@ -1,6 +1,7 @@
 import {
   createPersistenceService,
   projectCollaborationRollout,
+  isShareLinkLabelReady,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import {
@@ -36,6 +37,7 @@ export async function exportAccountData(
     ).results?.map((row) => row.name) ?? []
   );
   const owned = 'SELECT id FROM projects WHERE user_id = ?';
+  const shareLinkLabel = (await isShareLinkLabelReady(db)) ? 'label, ' : '';
   const queries: [string, string, unknown[]][] = [
     [
       'users',
@@ -94,7 +96,7 @@ export async function exportAccountData(
     ],
     [
       'project_share_links',
-      `SELECT id, project_id, mode, created_by_user_id, created_at, revoked_at FROM project_share_links WHERE project_id IN (${owned})`,
+      `SELECT id, project_id, mode, ${shareLinkLabel}created_by_user_id, created_at, revoked_at FROM project_share_links WHERE project_id IN (${owned})`,
       [session.userId]
     ],
     [

@@ -166,6 +166,34 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data, ['countersinkAngleDeg'], rewrite, 'angle');
       fields(data.position, ['u', 'v'], rewrite, 'length');
       return;
+    case 'thread':
+      fields(
+        data,
+        [
+          'majorDiameter',
+          'pitch',
+          'depth',
+          'crestWidth',
+          'clearance',
+          'length',
+          'offset'
+        ],
+        rewrite,
+        'length'
+      );
+      fields(
+        data,
+        [
+          'upperFlankAngleDeg',
+          'lowerFlankAngleDeg',
+          'phaseDeg',
+          'chamferAngleDeg'
+        ],
+        rewrite,
+        'angle'
+      );
+      fields(data, ['starts'], rewrite, 'number');
+      return;
     case 'gear':
       // A diametral pitch is teeth per inch of pitch diameter: a number in
       // every unit system. A module or circular pitch is a length.

@@ -1,30 +1,13 @@
+import { useEffect, useRef } from 'react';
 import {
-  Suspense,
-  useEffect,
-  useRef,
-  useState,
-  type LazyExoticComponent,
-  type ReactNode,
-  type RefObject
-} from 'react';
-import { createPortal } from 'react-dom';
-import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
-import { ErrorBoundary } from './ErrorBoundary';
-import type { StatusActivityLogPanel as Panel } from './StatusActivityLogPanel';
+  lastActivity,
+  recordActivity,
+  setActivityContext
+} from '../lib/activityLog';
 
 export type StatusTone = 'ready' | 'warning' | 'running';
 
-export interface StatusLogEntry {
-  id: number;
-  message: string;
-  detail?: string;
-  timestamp: number;
-  tone: StatusTone;
-}
-
 interface StatusActivityLogProps {
-  id: string;
-  open: boolean;
   status: string;
   detail?: string;
   /**
@@ -39,225 +22,77 @@ interface StatusActivityLogProps {
    */
   geometryStatus?: string | null;
   tone: StatusTone;
-  triggerRef: RefObject<HTMLButtonElement | null>;
-  onClose(restoreFocus: boolean): void;
+  /** Where the user is, stamped on every entry recorded from here on. */
+  workspace?: string;
+  project?: string;
 }
-
-// Off the entry chunk: the log records from the start, but its panel is only
-// drawn when someone opens it. Once loaded it is drawn directly; until then
-// each open gets a fresh lazy wrapper, because React.lazy keeps a rejected
-// import for good and a failed load could otherwise never be retried.
-let loadedPanel: typeof Panel | null = null;
-const lazyPanel = () =>
-  lazyWithStaleChunkNotice(() =>
-    import('./StatusActivityLogPanel').then((module) => {
-      loadedPanel = module.StatusActivityLogPanel;
-      return { default: module.StatusActivityLogPanel };
-    })
-  );
 
 /**
- * The panel's frame with a line in place of the list: while its chunk loads,
- * and when it failed. Drawn in the panel's own overlay position, so neither
- * state is a flex item in the stage that pushes the viewport aside, and the
- * toggle's expanded state always has a region to point at.
+ * Records the status line into the session's activity log (lib/activityLog).
+ * It draws nothing: the log is read in Settings › Activity log.
  */
-function LogShell({
-  id,
-  busy,
-  onClose,
-  children
-}: {
-  id: string;
-  busy?: boolean;
-  onClose(restoreFocus: boolean): void;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      id={id}
-      className="status-log-panel"
-      role="region"
-      aria-label="Activity log"
-      aria-busy={busy}
-    >
-      <header className="status-log-header">
-        <div>
-          <strong>Activity log</strong>
-          {children}
-        </div>
-        <button
-          type="button"
-          className="status-log-close"
-          onClick={() => onClose(true)}
-        >
-          Close
-        </button>
-      </header>
-    </section>
-  );
-}
-
-// Status ticks arrive from every hover prompt, save, and rebuild for the life
-// of the session; without a bound a day-long session accumulates thousands of
-// entries and every append reallocates the array.
-const MAX_STATUS_LOG_ENTRIES = 200;
-
 export function StatusActivityLog({
-  id,
-  open,
   status,
   detail,
   logged = true,
   geometryStatus = null,
   tone,
-  triggerRef,
-  onClose
+  workspace,
+  project
 }: StatusActivityLogProps) {
-  const nextEntryIdRef = useRef(geometryStatus ? 2 : 1);
-  const previousStatusRef = useRef({ status, detail, tone, geometryStatus });
-  const [attempt, setAttempt] = useState<{
-    open: boolean;
-    Lazy: LazyExoticComponent<typeof Panel> | null;
-  }>({ open: false, Lazy: null });
-  if (attempt.open !== open) {
-    setAttempt({
-      open,
-      Lazy: open && !loadedPanel ? lazyPanel() : attempt.Lazy
+  // Null until the first effect: what was showing when this mounted.
+  const previousRef = useRef<{
+    status: string;
+    detail: string | undefined;
+    tone: StatusTone;
+    geometryStatus: string | null;
+  } | null>(null);
+
+  // Before the entries below, so they carry where they happened.
+  useEffect(() => {
+    setActivityContext({
+      ...(workspace ? { workspace } : {}),
+      ...(project ? { project } : {})
     });
-  }
-  const [entries, setEntries] = useState<StatusLogEntry[]>(() => [
-    ...(logged
-      ? [
-          {
-            id: 0,
-            message: status,
-            ...(detail ? { detail } : {}),
-            timestamp: Date.now(),
-            tone
-          }
-        ]
-      : []),
-    ...(geometryStatus
-      ? [{ id: 1, message: geometryStatus, timestamp: Date.now(), tone }]
-      : [])
-  ]);
+  }, [project, workspace]);
 
   useEffect(() => {
-    const previous = previousStatusRef.current;
-    previousStatusRef.current = { status, detail, tone, geometryStatus };
-    const added: StatusLogEntry[] = [];
-    // A tone change alone is news only for the message it colours; while the
-    // geometry line comes or goes, the tone is following that instead.
-    if (
-      logged &&
-      (previous.status !== status ||
-        previous.detail !== detail ||
-        (previous.tone !== tone &&
-          geometryStatus === null &&
-          previous.geometryStatus === null))
-    ) {
-      added.push({
-        id: nextEntryIdRef.current++,
+    const previous = previousRef.current;
+    previousRef.current = { status, detail, tone, geometryStatus };
+    let logStatus: boolean;
+    if (previous === null) {
+      // A remount (start screen to workspace and back) carries the same
+      // line over; it is not news a second time.
+      const last = lastActivity('status');
+      logStatus =
+        logged && (last?.message !== status || last.detail !== detail);
+    } else {
+      // A tone change alone is news only for the message it colours; while
+      // the geometry line comes or goes, the tone is following that instead.
+      logStatus =
+        logged &&
+        (previous.status !== status ||
+          previous.detail !== detail ||
+          (previous.tone !== tone &&
+            geometryStatus === null &&
+            previous.geometryStatus === null));
+    }
+    if (logStatus) {
+      recordActivity({
+        level: tone,
+        source: 'status',
         message: status,
-        ...(detail ? { detail } : {}),
-        timestamp: Date.now(),
-        tone
+        ...(detail ? { detail } : {})
       });
     }
-    if (geometryStatus && geometryStatus !== previous.geometryStatus) {
-      added.push({
-        id: nextEntryIdRef.current++,
-        message: geometryStatus,
-        timestamp: Date.now(),
-        tone
+    if (geometryStatus && geometryStatus !== previous?.geometryStatus) {
+      recordActivity({
+        level: tone,
+        source: 'geometry',
+        message: geometryStatus
       });
-    }
-    if (added.length > 0) {
-      setEntries((current) =>
-        [...current, ...added].slice(-MAX_STATUS_LOG_ENTRIES)
-      );
     }
   }, [detail, geometryStatus, logged, status, tone]);
 
-  // Escape and a press outside are answered here, not in the panel: while
-  // its chunk loads (or after it failed) the log must still close — Escape
-  // must not reach the workspace's Escape ladder and cancel the command
-  // behind it, and a click in the workspace must not leave the log to pop up
-  // over that action when the chunk lands. Inside is the log's region, in
-  // whichever state it is drawn (found by id), and the button that toggles it.
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (
-        !document.getElementById(id)?.contains(target) &&
-        !triggerRef.current?.contains(target)
-      ) {
-        onClose(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') {
-        return;
-      }
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      onClose(true);
-    };
-    document.addEventListener('pointerdown', closeOnOutsidePointer);
-    window.addEventListener('keydown', closeOnEscape, true);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      window.removeEventListener('keydown', closeOnEscape, true);
-    };
-  }, [id, onClose, open, triggerRef]);
-
-  const LogPanel = loadedPanel ?? attempt.Lazy;
-  if (!open || !LogPanel) {
-    return null;
-  }
-
-  // Its own boundary: a tab left open across a deploy asks for a chunk that
-  // no longer exists, and that rejection must cost the log, not the
-  // workspace behind it. Closing and reopening the log mounts a fresh
-  // boundary and a fresh import. Both stand-ins are portalled where the
-  // panel itself is drawn.
-  return createPortal(
-    <ErrorBoundary
-      label="Activity log"
-      fallback={
-        <LogShell id={id} onClose={onClose}>
-          <span role="alert">
-            Could not load.{' '}
-            <button
-              type="button"
-              className="status-log-close"
-              onClick={() => window.location.reload()}
-            >
-              Reload workspace
-            </button>
-          </span>
-        </LogShell>
-      }
-    >
-      <Suspense
-        fallback={
-          <LogShell id={id} busy onClose={onClose}>
-            <span>Loading…</span>
-          </LogShell>
-        }
-      >
-        <LogPanel
-          id={id}
-          entries={entries}
-          truncated={nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES}
-          onClose={onClose}
-        />
-      </Suspense>
-    </ErrorBoundary>,
-    document.body
-  );
+  return null;
 }

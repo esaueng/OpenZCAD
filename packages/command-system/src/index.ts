@@ -158,6 +158,8 @@ import {
   type HoleInput,
   gearBody,
   type GearInput,
+  threadBody,
+  type ThreadInput,
   type ImportedMeshInput,
   type ImportedStepInput,
   importMeshBody,
@@ -203,6 +205,28 @@ import {
   renameObjectFolder,
   deleteObjectFolder,
   moveToObjectFolder,
+  addAssemblyComponents,
+  updateAssemblyComponent,
+  deleteAssemblyComponent,
+  addAssemblyJoint,
+  updateAssemblyJoint,
+  deleteAssemblyJoint,
+  setAssemblyPose,
+  saveAssemblyPosition,
+  deleteAssemblyPosition,
+  setAssemblyStudy,
+  deleteAssemblyStudy,
+  type AssemblyComponentsAddInput,
+  type AssemblyComponentUpdateInput,
+  type AssemblyComponentDeleteInput,
+  type AssemblyJointAddInput,
+  type AssemblyJointUpdateInput,
+  type AssemblyJointDeleteInput,
+  type AssemblyPoseSetInput,
+  type AssemblyPositionSaveInput,
+  type AssemblyPositionDeleteInput,
+  type AssemblyStudySetInput,
+  type AssemblyStudyDeleteInput,
   type ObjectFolderCreateInput,
   type ObjectFolderRenameInput,
   type ObjectFolderDeleteInput,
@@ -315,6 +339,7 @@ export type CommandKind =
   | 'feature.datum-axis'
   | 'feature.hole'
   | 'feature.gear'
+  | 'feature.thread'
   | 'feature.shell'
   | 'feature.solid-offset'
   | 'feature.draft'
@@ -347,6 +372,17 @@ export type CommandKind =
   | 'objectFolder.rename'
   | 'objectFolder.delete'
   | 'objectFolder.move'
+  | 'assembly.components.add'
+  | 'assembly.component.update'
+  | 'assembly.component.delete'
+  | 'assembly.joint.add'
+  | 'assembly.joint.update'
+  | 'assembly.joint.delete'
+  | 'assembly.pose.set'
+  | 'assembly.position.save'
+  | 'assembly.position.delete'
+  | 'assembly.study.set'
+  | 'assembly.study.delete'
   | 'drawing.annotation.add'
   | 'drawing.annotation.update'
   | 'drawing.annotation.delete'
@@ -389,6 +425,7 @@ export type AnyCommand =
   | CommandDefinition<SweepInput>
   | CommandDefinition<HelicalSweepInput>
   | CommandDefinition<GearInput>
+  | CommandDefinition<ThreadInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<MirrorInput>
@@ -420,6 +457,17 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderRenameInput>
   | CommandDefinition<ObjectFolderDeleteInput>
   | CommandDefinition<ObjectFolderMoveInput>
+  | CommandDefinition<AssemblyComponentsAddInput>
+  | CommandDefinition<AssemblyComponentUpdateInput>
+  | CommandDefinition<AssemblyComponentDeleteInput>
+  | CommandDefinition<AssemblyJointAddInput>
+  | CommandDefinition<AssemblyJointUpdateInput>
+  | CommandDefinition<AssemblyJointDeleteInput>
+  | CommandDefinition<AssemblyPoseSetInput>
+  | CommandDefinition<AssemblyPositionSaveInput>
+  | CommandDefinition<AssemblyPositionDeleteInput>
+  | CommandDefinition<AssemblyStudySetInput>
+  | CommandDefinition<AssemblyStudyDeleteInput>
   | CommandDefinition<DrawingAnnotationAddInput>
   | CommandDefinition<DrawingAnnotationUpdateInput>
   | CommandDefinition<DrawingAnnotationDeleteInput>
@@ -1059,6 +1107,111 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   }
 }
 
+/** Schema v53: the most thread starts the kernel's thread generator builds. */
+const MAX_THREAD_STARTS = 16;
+/** Schema v53: the steepest flank the kernel's thread generator builds. */
+const MAX_THREAD_FLANK_DEG = 75;
+
+/**
+ * Structural checks for a thread feature. Whether the form fits the picked
+ * face (a boss too small, a root reaching the axis, a span past the face) is
+ * the kernel's call and surfaces as its typed refusal at rebuild.
+ */
+function validateThreadInput(
+  document: ProjectDocument,
+  input: ThreadInput
+): void {
+  validateBodyTarget(document, input.targetBodyId);
+  if (typeof input.faceHash !== 'number') {
+    throw new Error('A thread needs a cylindrical face.');
+  }
+  const value = (label: string, param: ParamValue | undefined) =>
+    param === undefined
+      ? undefined
+      : resolvedModelingValue(document, `thread ${label}`, param);
+  const positive = (label: string, param: ParamValue | undefined) => {
+    const resolved = value(label, param);
+    if (resolved !== undefined && !(resolved > 0)) {
+      throw new Error(`Thread ${label} must resolve to a positive value.`);
+    }
+    return resolved;
+  };
+  const nonNegative = (label: string, param: ParamValue | undefined) => {
+    const resolved = value(label, param);
+    if (resolved !== undefined && !(resolved >= 0)) {
+      throw new Error(`Thread ${label} must not be negative.`);
+    }
+    return resolved;
+  };
+  positive('major diameter', input.majorDiameter);
+  const pitch = positive('pitch', input.pitch);
+  positive('length', input.length);
+  nonNegative('offset', input.offset);
+  nonNegative('clearance', input.clearance);
+  value('phase', input.phaseDeg);
+  const chamfer = value('chamfer angle', input.chamferAngleDeg);
+  if (chamfer !== undefined && !(chamfer > 0 && chamfer < 90)) {
+    throw new Error(
+      'Thread chamfer angle must be strictly between 0 and 90 degrees.'
+    );
+  }
+  const starts = value('starts', input.starts);
+  if (
+    starts !== undefined &&
+    !(Number.isInteger(starts) && starts >= 1 && starts <= MAX_THREAD_STARTS)
+  ) {
+    throw new Error(
+      `Thread starts must be a whole number from 1 to ${MAX_THREAD_STARTS}.`
+    );
+  }
+  const custom = [
+    ['depth', input.depth],
+    ['crest width', input.crestWidth],
+    ['upper flank angle', input.upperFlankAngleDeg],
+    ['lower flank angle', input.lowerFlankAngleDeg]
+  ] as const;
+  if (input.profile !== 'custom') {
+    for (const [label, present] of custom) {
+      if (present !== undefined) {
+        throw new Error(
+          `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
+        );
+      }
+    }
+    return;
+  }
+  if (pitch === undefined) {
+    throw new Error('A custom thread profile needs a pitch.');
+  }
+  for (const [label, present] of custom) {
+    if (present === undefined) {
+      throw new Error(`A custom thread profile needs its ${label}.`);
+    }
+  }
+  const depth = positive('depth', input.depth)!;
+  const crest = nonNegative('crest width', input.crestWidth)!;
+  const angles = [
+    value('upper flank angle', input.upperFlankAngleDeg)!,
+    value('lower flank angle', input.lowerFlankAngleDeg)!
+  ];
+  for (const angle of angles) {
+    if (!(angle >= 0 && angle <= MAX_THREAD_FLANK_DEG)) {
+      throw new Error(
+        `Thread flank angles must be from 0° to ${MAX_THREAD_FLANK_DEG}°.`
+      );
+    }
+  }
+  const flanks = angles.reduce(
+    (sum, angle) => sum + depth * Math.tan((angle * Math.PI) / 180),
+    0
+  );
+  if (crest + flanks > pitch * (1 + 1e-9)) {
+    throw new Error(
+      'The crest and flanks take more than the pitch, leaving no root. Use a smaller depth, crest or flank angle, or a larger pitch.'
+    );
+  }
+}
+
 /** M14: the most teeth the kernel's gear generator builds. */
 const MAX_GEAR_TEETH = 1000;
 /** M14: the steepest helix angle the kernel's gear generator builds. */
@@ -1691,6 +1844,11 @@ function validateModelingFeatureUpdate(
       validateGearInput(preview, { name: feature.name, ...gear });
       break;
     }
+    case 'thread': {
+      const { featureKind: _kind, ...thread } = feature.data;
+      validateThreadInput(preview, { name: feature.name, ...thread });
+      break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -2250,6 +2408,16 @@ export const commandFactories = {
       (document) => validateGearInput(document, withIds)
     );
   },
+  threadBody(payload: ThreadInput): CommandDefinition<ThreadInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.thread',
+      'Add thread',
+      withIds,
+      (document) => threadBody(document, withIds).document,
+      (document) => validateThreadInput(document, withIds)
+    );
+  },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
@@ -2586,6 +2754,119 @@ export const commandFactories = {
       'Delete drawing view',
       payload,
       (document) => deleteDrawingView(document, payload)
+    );
+  },
+  addAssemblyComponents(
+    payload: AssemblyComponentsAddInput
+  ): CommandDefinition<AssemblyComponentsAddInput> {
+    return makeCommand(
+      'assembly.components.add',
+      payload.components.length === 1
+        ? `Add ${payload.components[0]?.name ?? 'component'} to the assembly`
+        : `Add ${payload.components.length} components`,
+      payload,
+      (document) => addAssemblyComponents(document, payload)
+    );
+  },
+  updateAssemblyComponent(
+    payload: AssemblyComponentUpdateInput,
+    label = payload.grounded === true
+      ? 'Ground component'
+      : payload.grounded === false
+        ? 'Unground component'
+        : payload.placement
+          ? 'Move component'
+          : 'Edit component'
+  ): CommandDefinition<AssemblyComponentUpdateInput> {
+    return makeCommand(
+      'assembly.component.update',
+      label,
+      payload,
+      (document) => updateAssemblyComponent(document, payload)
+    );
+  },
+  deleteAssemblyComponent(
+    payload: AssemblyComponentDeleteInput
+  ): CommandDefinition<AssemblyComponentDeleteInput> {
+    return makeCommand(
+      'assembly.component.delete',
+      'Remove component',
+      payload,
+      (document) => deleteAssemblyComponent(document, payload)
+    );
+  },
+  addAssemblyJoint(
+    payload: AssemblyJointAddInput
+  ): CommandDefinition<AssemblyJointAddInput> {
+    return makeCommand(
+      'assembly.joint.add',
+      `Add joint ${payload.joint.name}`,
+      payload,
+      (document) => addAssemblyJoint(document, payload)
+    );
+  },
+  updateAssemblyJoint(
+    payload: AssemblyJointUpdateInput,
+    label = 'Edit joint'
+  ): CommandDefinition<AssemblyJointUpdateInput> {
+    return makeCommand('assembly.joint.update', label, payload, (document) =>
+      updateAssemblyJoint(document, payload)
+    );
+  },
+  deleteAssemblyJoint(
+    payload: AssemblyJointDeleteInput
+  ): CommandDefinition<AssemblyJointDeleteInput> {
+    return makeCommand(
+      'assembly.joint.delete',
+      'Delete joint',
+      payload,
+      (document) => deleteAssemblyJoint(document, payload)
+    );
+  },
+  setAssemblyPose(
+    payload: AssemblyPoseSetInput,
+    label = 'Move joint'
+  ): CommandDefinition<AssemblyPoseSetInput> {
+    return makeCommand('assembly.pose.set', label, payload, (document) =>
+      setAssemblyPose(document, payload)
+    );
+  },
+  saveAssemblyPosition(
+    payload: AssemblyPositionSaveInput
+  ): CommandDefinition<AssemblyPositionSaveInput> {
+    return makeCommand(
+      'assembly.position.save',
+      `Save position ${payload.name}`,
+      payload,
+      (document) => saveAssemblyPosition(document, payload)
+    );
+  },
+  deleteAssemblyPosition(
+    payload: AssemblyPositionDeleteInput
+  ): CommandDefinition<AssemblyPositionDeleteInput> {
+    return makeCommand(
+      'assembly.position.delete',
+      'Delete position',
+      payload,
+      (document) => deleteAssemblyPosition(document, payload)
+    );
+  },
+  setAssemblyStudy(
+    payload: AssemblyStudySetInput,
+    label = 'Edit motion study'
+  ): CommandDefinition<AssemblyStudySetInput> {
+    return makeCommand('assembly.study.set', label, payload, (document) =>
+      setAssemblyStudy(document, payload)
+    );
+  },
+  deleteAssemblyStudy(
+    payload: AssemblyStudyDeleteInput
+  ): CommandDefinition<AssemblyStudyDeleteInput> {
+    return makeCommand(
+      'assembly.study.delete',
+      'Delete motion study',
+      payload,
+      (document) => deleteAssemblyStudy(document, payload)
     );
   },
   createObjectFolder(
@@ -3262,6 +3543,7 @@ class LocalBodyScope {
         case 'chamfer':
         case 'pattern':
         case 'hole':
+        case 'thread':
           this.consumed.set(data.targetBodyId, consumedByHistory);
           break;
         case 'gear':
@@ -4728,6 +5010,16 @@ function drawingOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isDrawingCommandKind, 'drawings');
 }
 
+/** AS01: a command that edits the assembly and never the model. */
+export function isAssemblyCommandKind(kind: string): boolean {
+  return kind.startsWith('assembly.');
+}
+
+/** Whether a history entry edits the assembly section and nothing else. */
+function assemblyOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  return sectionOnly(entry, isAssemblyCommandKind, 'assembly');
+}
+
 /** I05: a command that edits reference images and never the model. */
 export function isReferenceImageCommandKind(kind: string): boolean {
   return kind.startsWith('reference-image.');
@@ -4741,7 +5033,7 @@ function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
 function sectionOnly(
   entry: DocumentHistoryEntry | undefined,
   isSectionKind: (kind: string) => boolean,
-  field: 'drawings' | 'referenceImages'
+  field: 'drawings' | 'referenceImages' | 'assembly'
 ): boolean {
   if (!entry?.commandKinds?.length) return false;
   if (!entry.commandKinds.every(isSectionKind)) return false;
@@ -4935,6 +5227,16 @@ export class CommandManager {
   }
   get redoIsReferenceImageOnly(): boolean {
     return referenceImageOnly(this.history?.entries[this.history.cursor]);
+  }
+  /**
+   * Whether undo would revert assembly edits only (placements, joints,
+   * motion studies), which leave the model and its geometry alone.
+   */
+  get undoIsAssemblyOnly(): boolean {
+    return assemblyOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1]);
+  }
+  get redoIsAssemblyOnly(): boolean {
+    return assemblyOnly(this.history?.entries[this.history.cursor]);
   }
   /**
    * Whether undo is available, in a workspace that allows parameter edits
@@ -5282,6 +5584,9 @@ export function replayCommands(
       case 'feature.gear':
         next = gearBody(next, command.payload as GearInput).document;
         break;
+      case 'feature.thread':
+        next = threadBody(next, command.payload as ThreadInput).document;
+        break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;
         break;
@@ -5421,6 +5726,63 @@ export function replayCommands(
         next = deleteObjectFolder(
           next,
           command.payload as ObjectFolderDeleteInput
+        );
+        break;
+      case 'assembly.components.add':
+        next = addAssemblyComponents(
+          next,
+          command.payload as AssemblyComponentsAddInput
+        );
+        break;
+      case 'assembly.component.update':
+        next = updateAssemblyComponent(
+          next,
+          command.payload as AssemblyComponentUpdateInput
+        );
+        break;
+      case 'assembly.component.delete':
+        next = deleteAssemblyComponent(
+          next,
+          command.payload as AssemblyComponentDeleteInput
+        );
+        break;
+      case 'assembly.joint.add':
+        next = addAssemblyJoint(next, command.payload as AssemblyJointAddInput);
+        break;
+      case 'assembly.joint.update':
+        next = updateAssemblyJoint(
+          next,
+          command.payload as AssemblyJointUpdateInput
+        );
+        break;
+      case 'assembly.joint.delete':
+        next = deleteAssemblyJoint(
+          next,
+          command.payload as AssemblyJointDeleteInput
+        );
+        break;
+      case 'assembly.pose.set':
+        next = setAssemblyPose(next, command.payload as AssemblyPoseSetInput);
+        break;
+      case 'assembly.position.save':
+        next = saveAssemblyPosition(
+          next,
+          command.payload as AssemblyPositionSaveInput
+        );
+        break;
+      case 'assembly.position.delete':
+        next = deleteAssemblyPosition(
+          next,
+          command.payload as AssemblyPositionDeleteInput
+        );
+        break;
+      case 'assembly.study.set':
+        next = setAssemblyStudy(next, command.payload as AssemblyStudySetInput);
+        break;
+      case 'assembly.study.delete':
+        next = deleteAssemblyStudy(
+          next,
+          command.payload as AssemblyStudyDeleteInput
         );
         break;
       case 'objectFolder.move':

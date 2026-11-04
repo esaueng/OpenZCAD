@@ -126,4 +126,23 @@ describe('importedMeshCommand', { timeout: 60_000 }, () => {
     expect(meshInDocumentUnits(parsed, 'mm').vertices).toBe(parsed.vertices);
     expect(body?.bbox?.max.z).toBeCloseTo(25.4, 6);
   });
+
+  it('records the unit a unitless file was read in on the command', () => {
+    const mesh = { name: 'part.stl', triangleCount: 1 };
+    const payload = {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2]
+    };
+    expect(
+      importedMeshCommand(
+        { ...mesh, assumedUnits: 'inch' },
+        payload,
+        'artifact_part'
+      ).payload.assumedUnits
+    ).toBe('inch');
+    expect(
+      'assumedUnits' in
+        importedMeshCommand(mesh, payload, 'artifact_part').payload
+    ).toBe(false);
+  });
 });

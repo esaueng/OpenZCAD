@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { CameraController } from './CameraController';
+import { updateCameraClipping } from './depthRange';
+import { computeFitPose } from '../render/scene';
 
 function fakeElement(width: number, height: number): HTMLElement {
   const root = {
@@ -121,6 +123,39 @@ function drainZoom(controller: CameraController, frameMs = 1000 / 60) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal('window', { setTimeout, clearTimeout });
+});
+
+describe('assembly depth after restoring or switching projection', () => {
+  it.each(['perspective', 'orthographic'] as const)(
+    'draws every cabinet corner after a saved %s view reopens',
+    (projection) => {
+      const object = new THREE.Mesh(new THREE.BoxGeometry(2362.2, 762, 2100));
+      const bounds = new THREE.Box3().setFromObject(object);
+      const first = createController().controller;
+      first.startTween(computeFitPose(first.perspective, [object]));
+      first.applyProjection(projection);
+      const saved = first.capture();
+      first.dispose();
+
+      const reopened = createController().controller;
+      reopened.restore(saved, projection);
+      for (const mode of [projection, 'perspective', 'orthographic'] as const) {
+        reopened.applyProjection(mode);
+        updateCameraClipping(reopened.activeCamera, bounds);
+        for (const x of [bounds.min.x, bounds.max.x])
+          for (const y of [bounds.min.y, bounds.max.y])
+            for (const z of [bounds.min.z, bounds.max.z]) {
+              const point = new THREE.Vector3(x, y, z).project(
+                reopened.activeCamera
+              );
+              expect(point.z).toBeGreaterThan(-1);
+              expect(point.z).toBeLessThan(1);
+            }
+      }
+      reopened.dispose();
+      object.geometry.dispose();
+    }
+  );
 });
 
 afterEach(() => {

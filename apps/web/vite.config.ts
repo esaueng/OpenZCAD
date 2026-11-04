@@ -10,6 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
+import { localRemusPackages } from './build/localRemus';
 import { remusTranslatorRetry } from './build/remusTranslatorRetry';
 import { lazyChunkPrefetch } from './build/lazyChunkPrefetch';
 import {
@@ -43,7 +44,6 @@ const WORKSPACE_PACKAGES = [
   'viewport',
   'io-step',
   'io-shapr',
-  'io-freecad',
   'io-stl',
   'jobs',
   'cloudflare-adapters',
@@ -262,7 +262,8 @@ function pdfjsAssets(): PluginOption {
 }
 
 export default defineConfig(async ({ command, isPreview, mode }) => {
-  const remus = await remusBuildInfo();
+  const localRemus = await localRemusPackages(process.env);
+  const remus = localRemus?.build ?? (await remusBuildInfo());
   const commit = sourceCommit();
   const isDesktop = mode === 'desktop';
   const plugins = [];
@@ -312,12 +313,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     optimizeDeps: {
       // The exact CAD kernel and its file-format translators ship as
       // WebAssembly and must remain runtime assets.
-      exclude: [
-        'remus-wasm',
-        'remus-wasm-io',
-        '@sqlite.org/sqlite-wasm',
-        'occt-wasm'
-      ]
+      exclude: ['remus-wasm', 'remus-wasm-io', '@sqlite.org/sqlite-wasm']
     },
     worker: {
       format: 'es' as const,
@@ -385,6 +381,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     },
     resolve: {
       alias: {
+        ...localRemus?.aliases,
         // Imported dynamically so opentype.js lands in its own chunk instead
         // of the entry bundle. Reaching it through the geometry index would
         // not split — that index is statically imported all over the app.

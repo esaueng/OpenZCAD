@@ -1,3 +1,4 @@
+import type { ImportedMeshStore } from './exact-imported-mesh-cache';
 import { OperationCancellationToken, type RemusKernel } from './remus-runtime';
 import {
   isBuildCancelled,
@@ -60,6 +61,11 @@ export interface CachedImportedStep {
  * writes through this seam; retention and eviction stay with the owner.
  */
 export interface ImportedStepStore {
+  /**
+   * Converted imported-mesh payloads, shared across rebuilds the same way
+   * and cleared with this store (see `ImportedMeshCache`).
+   */
+  readonly meshes?: ImportedMeshStore;
   lookup(checksum: string): CachedImportedStep | undefined;
   store(
     checksum: string,

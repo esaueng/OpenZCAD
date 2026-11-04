@@ -95,7 +95,7 @@ describe('typed blend outcome', { timeout: 60_000 }, () => {
     expect(outcome.refusal.kernelCode).toBe('unsupported-vertex-blend');
   });
 
-  it('refuses a partially blendable selection with the subset code', () => {
+  it('preserves the actual corner refusal instead of inferring a failed subset', () => {
     const kernel = new RemusKernel();
     const host = kernel.makeBox(30, 18, 24);
     const tool = kernel.copySolid(kernel.makeCylinder(14, 28));
@@ -119,7 +119,10 @@ describe('typed blend outcome', { timeout: 60_000 }, () => {
       return;
     }
     expect(outcome.refusal.category).toBe('internal');
-    expect(outcome.refusal.kernelCode).toBe('edges-not-blended');
+    expect(outcome.refusal.kernelCode).toBe('unsupported-vertex-blend');
+    expect(outcome.refusal.kernelMessage).not.toContain(
+      'would round on their own'
+    );
   });
 
   it('refuses malformed requests as invalid_input', () => {
@@ -295,7 +298,7 @@ describe(
         'Fillet could not be created on 12 selected edges with radius 576.'
       );
       expect(message).toContain(
-        'Two of these rounds would run into each other at a shared corner'
+        'The kernel could not build the shared corner for this complete selection'
       );
     });
   }

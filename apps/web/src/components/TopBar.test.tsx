@@ -33,6 +33,7 @@ function renderTopBar(
     onSignIn: vi.fn(),
     onImportFiles: vi.fn(),
     onOpenMeshExport: vi.fn(),
+    onExportStep: vi.fn(),
     onRenameProject: vi.fn(),
     onReviewEditFailure: vi.fn(),
     onWorkspaceMode: vi.fn()
@@ -68,7 +69,6 @@ function renderTopBar(
       canRenameProject
       buildModeDisabledReason={options.buildModeDisabledReason ?? null}
       tweakModeDisabledReason={null}
-      onExportStep={vi.fn()}
       onArchiveLocalSources={vi.fn()}
       onExportDiagnostics={vi.fn()}
       onExportInteractionLog={vi.fn()}
@@ -392,9 +392,13 @@ describe('TopBar File menu', () => {
     // A focusable button now, not a label around a display:none input.
     expect(item.tabIndex).toBe(0);
     const input = screen.getByLabelText<HTMLInputElement>(
-      'Import FreeCAD, STEP or a mesh file…'
+      'Import STEP or a mesh file…'
     );
     expect(input).toHaveAttribute('type', 'file');
+    expect(input).toHaveAttribute(
+      'accept',
+      '.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf'
+    );
     const pick = vi.spyOn(input, 'click');
     fireEvent.click(item);
     expect(pick).toHaveBeenCalledOnce();
@@ -474,6 +478,18 @@ describe('TopBar File menu', () => {
     mesh.focus();
     fireEvent.click(mesh);
     expect(onOpenMeshExport).toHaveBeenCalledOnce();
+    expect(fileMenu().open).toBe(false);
+    expect(summary).toHaveFocus();
+  });
+
+  it('closes before a STEP export so its progress is not hidden behind it', () => {
+    const { onExportStep } = renderTopBar({ canExport: true });
+    const summary = fileMenu().querySelector('summary')!;
+    fileMenu().open = true;
+    const step = screen.getByRole('button', { name: /^Export STEP/ });
+    step.focus();
+    fireEvent.click(step);
+    expect(onExportStep).toHaveBeenCalledOnce();
     expect(fileMenu().open).toBe(false);
     expect(summary).toHaveFocus();
   });

@@ -49,6 +49,7 @@ export const CAD_OPERATIONS = [
   'feature.datum-axis',
   'feature.hole',
   'feature.gear',
+  'feature.thread',
   'feature.shell',
   'feature.solid-offset',
   'feature.draft',
@@ -86,7 +87,18 @@ export const CAD_OPERATIONS = [
   'drawing.annotation.delete',
   'reference-image.add',
   'reference-image.update',
-  'reference-image.delete'
+  'reference-image.delete',
+  'assembly.components.add',
+  'assembly.component.update',
+  'assembly.component.delete',
+  'assembly.joint.add',
+  'assembly.joint.update',
+  'assembly.joint.delete',
+  'assembly.pose.set',
+  'assembly.position.save',
+  'assembly.position.delete',
+  'assembly.study.set',
+  'assembly.study.delete'
 ] as const;
 export const EXPANDED: Readonly<Record<string, readonly string[]>> = {
   feature_operation: CAD_OPERATIONS,

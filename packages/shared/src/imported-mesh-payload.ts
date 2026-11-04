@@ -1,5 +1,6 @@
 import { documentNodesWithHistory } from './document-history';
 import {
+  UNIT_TO_MM,
   isImportedSourceReference,
   type FeatureData,
   type ImportedSourceReference,
@@ -137,6 +138,9 @@ export function isImportedMeshSourceData(
     typeof value.artifactId === 'string' &&
     typeof value.sourceName === 'string' &&
     typeof value.triangleCount === 'number' &&
+    (value.assumedUnits === undefined ||
+      (typeof value.assumedUnits === 'string' &&
+        Object.hasOwn(UNIT_TO_MM, value.assumedUnits))) &&
     (value.meshPayloadRef === undefined
       ? embedded
       : neitherArray && isImportedSourceReference(value.meshPayloadRef))

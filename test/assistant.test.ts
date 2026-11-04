@@ -2146,29 +2146,43 @@ describe('assistant integration', () => {
     ).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
   });
 
-  it('keeps every rollout variant valid for strict structured output', () => {
-    const flags = [
-      'AI_PATCH_DIRECT_EDIT_ENABLED',
-      'AI_PATCH_FACE_SKETCH_ENABLED',
-      'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
-      'AI_PATCH_MIRROR_ENABLED',
-      'AI_PATCH_SHELL_ENABLED',
-      'AI_PATCH_SOLID_OFFSET_ENABLED',
-      'AI_PATCH_DATUM_PLANE_ENABLED',
-      'AI_PATCH_DATUM_GEOMETRY_ENABLED',
-      'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
-    ] as const;
+  const rolloutFlags = [
+    'AI_PATCH_DIRECT_EDIT_ENABLED',
+    'AI_PATCH_FACE_SKETCH_ENABLED',
+    'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
+    'AI_PATCH_MIRROR_ENABLED',
+    'AI_PATCH_SHELL_ENABLED',
+    'AI_PATCH_SOLID_OFFSET_ENABLED',
+    'AI_PATCH_DATUM_PLANE_ENABLED',
+    'AI_PATCH_DATUM_GEOMETRY_ENABLED',
+    'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
+  ] as const;
 
-    for (let mask = 0; mask < 1 << flags.length; mask += 1) {
-      const env = Object.fromEntries(
-        flags.map((flag, index) => [
-          flag,
-          mask & (1 << index) ? 'true' : 'false'
-        ])
-      );
-      assertStrictObjectSchemas(assistantReplySchemaFor(env));
+  const rolloutVariantCount = 1 << rolloutFlags.length;
+  it.each(
+    Array.from(
+      { length: Math.ceil(rolloutVariantCount / 64) },
+      (_, batch) => batch
+    )
+  )(
+    'keeps every rollout variant valid for strict structured output (batch %i)',
+    (batch) => {
+      const start = batch * 64;
+      for (
+        let mask = start;
+        mask < Math.min(start + 64, rolloutVariantCount);
+        mask += 1
+      ) {
+        const env = Object.fromEntries(
+          rolloutFlags.map((flag, index) => [
+            flag,
+            mask & (1 << index) ? 'true' : 'false'
+          ])
+        );
+        assertStrictObjectSchemas(assistantReplySchemaFor(env));
+      }
     }
-  });
+  );
 });
 
 describe('Anthropic Messages provider', () => {

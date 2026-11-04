@@ -1,13 +1,15 @@
 from contextlib import nullcontext
+import hashlib
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+from urllib.parse import unquote
 
 from restore import restore, verified_ingress
-from snapshot import SnapshotError
+from snapshot import SnapshotError, object_path
 from test_snapshot import SOURCE
 
 
@@ -176,6 +178,60 @@ class IngressTests(unittest.TestCase):
                 restore(config,Path('unused-fixture.gpg'))
         self.assertEqual(events,['version','ingress-secret','version'])
         self.provider.opener.open.assert_not_called()
+
+    def test_drill_uploads_standard_and_refuses_other_classes_before_body_readback(self):
+        key='qualification/storage-class/synthetic'
+        body=b'data'
+        manifest={'source':SOURCE,'objects':[{'key':key,'bytes':len(body),
+                  'storedSha256':hashlib.sha256(body).hexdigest()}]}
+        target={**TARGET,'config':'unused-config'}
+        config={'source':SOURCE,'target':target,'passphraseCommand':['password'],
+                'readTokenFile':'synthetic-read-token','exportTokenCommand':['export'],
+                'ingressTokenCommand':['ingress'],'wranglerCommand':['synthetic-command']}
+        runtime={'account_id':target['account'],'name':target['worker'],
+                 'd1_databases':[{'database_id':target['database']}]}
+        def secret(command):
+            return b'{"token":"synthetic-export"}' if command==['export'] else b'synthetic-secret'
+        def extract(archive,root,password):
+            (root/'objects').mkdir(parents=True)
+            object_path(root,key).write_bytes(body)
+            (root/'database.sql').write_text('')
+            return manifest
+        for source_class in ['Standard','InfrequentAccess']:
+            original={'size':len(body),'storage_class':source_class,
+                      'http_metadata':{'contentType':'application/example'},
+                      'custom_metadata':{'fixture':'true'}}
+            for actual_class in ['Standard','InfrequentAccess',None,'unknown']:
+                with self.subTest(source=source_class,restored=actual_class):
+                    provider=Mock()
+                    provider.json.return_value={'result':{'name':target['databaseName']}}
+                    provider.inventory.side_effect=[{}, {key:{**original,'storage_class':actual_class}}]
+                    provider.export.side_effect=lambda root:(root/'database.sql').write_text('')
+                    provider.read_object.return_value=(body,{})
+                    provider.opener.open.return_value=nullcontext(SimpleNamespace(status=201))
+                    with tempfile.TemporaryDirectory() as ram, \
+                         patch('restore.secret_command',side_effect=secret), \
+                         patch('restore.owner_only_file',return_value=b'synthetic-read'), \
+                         patch('restore.unseal',side_effect=extract), \
+                         patch('restore.snapshot_metadata',return_value={key:original}), \
+                         patch('restore.ram_directory',return_value=nullcontext(ram)), \
+                         patch('restore.Source',return_value=provider), \
+                         patch('restore.private_json',return_value=runtime), \
+                         patch('restore.verified_ingress',return_value=target['ingressOrigin']), \
+                         patch('restore.subprocess.run',return_value=SimpleNamespace(returncode=0)):
+                        if actual_class=='Standard':
+                            result=restore(config,Path('unused-fixture.gpg'))
+                            self.assertEqual(result,{'objects':1,'tables':0,'status':'restored-and-verified'})
+                            provider.read_object.assert_called_once_with(key,len(body))
+                        else:
+                            with self.assertRaisesRegex(SnapshotError,'must use Standard'):
+                                restore(config,Path('unused-fixture.gpg'))
+                            provider.read_object.assert_not_called()
+                    request=provider.opener.open.call_args.args[0]
+                    uploaded=json.loads(unquote(request.get_header('X-openzcad-metadata')))
+                    self.assertEqual(uploaded,{**original,'storage_class':'Standard'})
+                    self.assertEqual(request.data,body)
+                    self.assertEqual(original['storage_class'],source_class)
 
 
 if __name__=='__main__':unittest.main()

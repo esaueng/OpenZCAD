@@ -347,6 +347,7 @@ function viewStateBytes(entry: ViewState): number {
  */
 let retainedProjections: {
   projectId: string;
+  selectedSheetId?: DrawingSheetId;
   cache: Map<string, ViewState>;
   kept: Map<DrawingSheetId, KeptDrawing[]>;
 } | null = null;
@@ -1127,8 +1128,8 @@ function AutoDimensionPreview(props: {
             className="drawing-audit-list"
             aria-label="Dimensions Auto-dimension leaves for you"
           >
-            {left.map((finding) => (
-              <li key={finding.message}>{finding.message}</li>
+            {left.map((finding, index) => (
+              <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
             ))}
           </ul>
         </>
@@ -1247,8 +1248,8 @@ function DimensionCheck(props: {
                 className="drawing-audit-list"
                 aria-label="Missing dimensions"
               >
-                {audit.missing.map((finding) => (
-                  <li key={finding.message}>{finding.message}</li>
+                {audit.missing.map((finding, index) => (
+                  <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
                 ))}
               </ul>
             </>
@@ -1274,8 +1275,8 @@ function DimensionCheck(props: {
                 className="drawing-audit-list"
                 aria-label="Requirements no dimension can state yet"
               >
-                {audit.unmeasurable.map((finding) => (
-                  <li key={finding.message}>{finding.message}</li>
+                {audit.unmeasurable.map((finding, index) => (
+                  <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
                 ))}
               </ul>
             </>
@@ -1647,12 +1648,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const { document, bodies, editDisabledReason } = props;
   const sheets = document.drawings?.sheets ?? NO_SHEETS;
   const [selectedSheetId, setSelectedSheetId] = useState<DrawingSheetId | null>(
-    sheets[0]?.sheetId ?? null
+    () => retainedFor(document.projectId).selectedSheetId ?? null
   );
+  // Resolve first entry after geometry is ready too: a project restored in
+  // Draw initially has no visible bodies until its rebuild completes.
+  const initialSheet = useMemo(() => {
+    const visible = new Set(props.defaultBodyIds);
+    const matching =
+      !props.geometryPending && visible.size > 0
+        ? sheets.filter((entry) => {
+            const ids = sheetBodyIds(entry);
+            return (
+              ids.length === visible.size && ids.every((id) => visible.has(id))
+            );
+          })
+        : [];
+    return (matching.length === 1 ? matching[0] : sheets[0]) ?? null;
+  }, [sheets, props.defaultBodyIds, props.geometryPending]);
   const sheet =
-    sheets.find((entry) => entry.sheetId === selectedSheetId) ??
-    sheets[0] ??
-    null;
+    sheets.find((entry) => entry.sheetId === selectedSheetId) ?? initialSheet;
+  // Draw unmounts in Build. Keep the chosen sheet with its projections so
+  // returning does not silently open a different body's sheet and draw it.
+  useEffect(() => {
+    if (props.geometryPending || !sheet) return;
+    retainedFor(document.projectId).selectedSheetId = sheet.sheetId;
+    if (selectedSheetId !== sheet.sheetId) setSelectedSheetId(sheet.sheetId);
+  }, [document.projectId, props.geometryPending, selectedSheetId, sheet]);
   const [selectedViewId, setSelectedViewId] = useState<DrawingViewId | null>(
     null
   );
@@ -2130,6 +2151,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const brokenCount = sheetReady
     ? [...resolutions.values()].filter((entry) => !entry.ok).length
     : 0;
+  // Section references and note leaders cannot be judged until their views
+  // finish drawing. A proposal preview must never delete saved annotations.
+  const canDeleteBroken =
+    editable &&
+    sheetReady &&
+    !props.geometryPending &&
+    drawnViews.length === sheet?.views.length &&
+    props.previewAnnotations?.sheetId !== sheet?.sheetId;
   // Dimensions measure a view's geometry; a note on the paper needs none,
   // so a ready sheet with no views still takes one.
   const canAnnotate = sheetReady && editable && (sheet?.views.length ?? 0) > 0;
@@ -3119,6 +3148,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     )
       setSelectedAnnotationId(null);
   };
+  const deleteBrokenAnnotations = () => {
+    if (!sheet || !canDeleteBroken) return;
+    const broken = (sheet.annotations ?? []).filter(
+      (annotation) => resolutions.get(annotation.annotationId)?.ok === false
+    );
+    if (broken.length === 0) return;
+    if (
+      run(
+        composeCommands(
+          'Delete broken annotations',
+          broken.map((annotation) =>
+            commandFactories.deleteDrawingAnnotation({
+              sheetId: sheet.sheetId,
+              annotationId: annotation.annotationId
+            })
+          )
+        )
+      )
+    ) {
+      if (broken.some((entry) => entry.annotationId === selectedAnnotationId))
+        setSelectedAnnotationId(null);
+      props.onStatus(
+        `Deleted ${broken.length} broken ${broken.length === 1 ? 'annotation' : 'annotations'}. Undo to restore.`
+      );
+    }
+  };
   const moveAnnotation = (
     annotation: DrawingAnnotation,
     placementMm: { x: number; y: number }
@@ -3636,6 +3691,20 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ) : exportBlocked ? (
           <div className="drawing-banner is-blocked" role="status">
             <span>{exportReason}</span>
+            {brokenCount > 0 && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canDeleteBroken}
+                title={
+                  editDisabledReason ??
+                  'Delete all broken dimensions and notes on this sheet. Undo restores them together.'
+                }
+                onClick={deleteBrokenAnnotations}
+              >
+                <Trash2 size={13} aria-hidden="true" /> Delete all broken
+              </button>
+            )}
           </div>
         ) : null}
         <div className="drawing-canvas-area">
@@ -4321,6 +4390,27 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         )}
         <div className="drawing-panel-section">
           <h3>Views · {sheet.views.length}</h3>
+          <p className="drawing-hint" aria-label="Sheet bodies">
+            Bodies:{' '}
+            {sheetBodyIds(sheet)
+              .map(
+                (id) =>
+                  bodies[id]?.name ??
+                  Object.values(document.nodes).find(
+                    (node) => node.kind === 'body' && node.bodyId === id
+                  )?.name ??
+                  'Missing body'
+              )
+              .join(', ')}
+          </p>
+          {sheetBodyIds(sheet).some(
+            (id) => !props.defaultBodyIds.includes(id)
+          ) && (
+            <p className="drawing-hint">
+              This sheet keeps its saved bodies when you hide or isolate in
+              Build. Select a view to change its bodies.
+            </p>
+          )}
           {/* Every view, whether or not it is on the page: a view left off
               the paper (a smaller sheet, an old document) can still be
               picked here, then moved back or deleted. */}

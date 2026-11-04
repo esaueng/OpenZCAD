@@ -130,7 +130,11 @@ export function PartsList({
     hiddenBodyIds.has(body.bodyId)
   ).length;
   return (
-    <aside className="view-mode-rail" aria-label="Parts">
+    <aside
+      className="view-mode-rail"
+      aria-label="Parts"
+      data-viewport-wheel-ignore=""
+    >
       <header className="view-mode-rail-head">
         <h2>Parts</h2>
         <span className="view-mode-rail-count">{bodies.length}</span>

@@ -1,4 +1,10 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
+import {
+  createChipEntryButton,
+  nameCommandChip,
+  prepareCommandChip,
+  spokenChipText
+} from '../lib/inPlace/chipNames';
 import type { FrameStatsSink } from '../lib/frameStats';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
@@ -115,7 +121,8 @@ import {
   chooseRotateSnapStep,
   chooseViewportScale,
   scaleBarAnchor,
-  presentedBoundsCenter,
+  presentedBounds,
+  updateCameraClipping,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
@@ -147,6 +154,7 @@ import {
   applyStagePalette,
   createGradientBackdrop,
   createObjectForBody,
+  applyCoplanarBodyDepthSlots,
   updateObjectForBody,
   updateBodyMaterialOpacity,
   sameBodyProjection,
@@ -384,6 +392,9 @@ import {
   type DatumAxisRig,
   type DatumAxisRigInput
 } from './viewer/datumAxisRig';
+import { AssemblyViewport } from './viewer/assemblyViewport';
+import type { AssemblyViewModel } from '../lib/assembly/assemblyView';
+import { useAssemblyRuntime } from '../lib/assembly/assemblyRuntime';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import {
@@ -752,6 +763,11 @@ export type CommandHandleView = (
   max?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
   format(value: number): string;
+  /**
+   * The chip's accessible name for a value, in words: "Radius 12 mm".
+   * Without it the chip is named by its visible text.
+   */
+  describe?(value: number): string;
 };
 
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
@@ -1329,6 +1345,13 @@ export interface ModelViewerProps {
     y: number,
     selection: TopologySelection | null
   ): void;
+  /**
+   * The Assemble workspace's view (AS02): component bodies drawn at their
+   * solved poses, the rest dimmed, joint glyphs, and the primary button
+   * taken over for dragging components and picking joint frames. Null (or
+   * absent) is the ordinary Build viewport with every body as modelled.
+   */
+  assemblyView?: AssemblyViewModel | null;
 }
 
 /**
@@ -1770,6 +1793,11 @@ const SELECTED_FACE_HIDDEN_OPACITY =
 /** Stable default, so an absent prop does not rerun the bodies pass. */
 const NO_FOCUS_FACES: readonly TopologySelection[] = [];
 /**
+ * Face opacity of a body Assemble shows only as context (not a component),
+ * on top of its own opacity and X-ray.
+ */
+const ASSEMBLY_DIMMED_OPACITY = 0.25;
+/**
  * Scratch vector for the snap projectors. They run once per candidate — every
  * edge endpoint and face centre of every other body — on each frame of a move
  * drag, and each call used to allocate.
@@ -2190,7 +2218,8 @@ export function ModelViewer({
   onMovePreviewChange,
   moveValuesSetterRef,
   viewportImageRef,
-  onContextMenu
+  onContextMenu,
+  assemblyView = null
 }: ModelViewerProps) {
   if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
   const drawingBodiesRef = useRef<
@@ -2203,6 +2232,24 @@ export function ModelViewer({
   }, [suppliedBodies]);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
+  /** The Assemble workspace's posing, glyphs and drags (AS02). */
+  const assemblyViewportRef = useRef<AssemblyViewport | null>(null);
+  /**
+   * Bodies Assemble dims: the live bodies that are not components. A string
+   * so the bodies pass re-runs when the set changes, not on every playback
+   * frame that hands over a new view model.
+   */
+  const assemblyDimmedKey = assemblyView
+    ? assemblyView.otherBodyIds.join('\n')
+    : null;
+  /** The body of the component Assemble has selected, drawn as selected. */
+  const assemblySelectedComponentId = useAssemblyRuntime(
+    (s) => s.selectedComponentId
+  );
+  const assemblySelectedBodyId =
+    assemblyView && assemblySelectedComponentId
+      ? (assemblyView.bodyByComponent.get(assemblySelectedComponentId) ?? null)
+      : null;
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
@@ -3587,6 +3634,38 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    // Assemble (AS02) takes the primary button while its view is shown. Its
+    // own picker ignores the selection filter: a joint frame needs the exact
+    // face or edge under the pointer whatever the filter says, and sketches
+    // and regions are never assembly picks.
+    const assemblyViewport = new AssemblyViewport({
+      host,
+      canvas: renderer.domElement,
+      scene,
+      objectsByBodyId,
+      picker: new PickService({
+        domElement: renderer.domElement,
+        camera: () => cameraRig.activeCamera,
+        regionGroup: new THREE.Group(),
+        sketchGroup: new THREE.Group(),
+        bodyGroup,
+        filter: () => 'any',
+        selectThrough: () => xrayRef.current,
+        clippingPlane: () =>
+          sectionViewRef.current
+            ? sectionClippingPlane(sectionViewRef.current)
+            : null
+      }),
+      camera: () => cameraRig.activeCamera,
+      bodies: () => bodiesRef.current,
+      worldPerPixelAt: (point) => worldPerPixelAt(point),
+      resolution: () => context.fatLineResolution(),
+      requestRender,
+      refreshShadowMap,
+      clearHover: () => selection.applyHover(null),
+      hud
+    });
+    assemblyViewportRef.current = assemblyViewport;
     let offsetBodyProxy: {
       preview: CylinderProfilePreview;
       pending: number | null;
@@ -4147,6 +4226,11 @@ export function ModelViewer({
     });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
+    // The value is its own button rather than the chip: the chip also holds
+    // the radius/diameter switch, and a button may not contain another. A
+    // click on it reaches the chip's handler below like any other.
+    const offsetEntry = createChipEntryButton();
+    offsetChip.append(offsetEntry);
     const dimensionPrefix = document.createElement('button');
     dimensionPrefix.type = 'button';
     dimensionPrefix.className = 'handle-dimension-prefix';
@@ -4290,8 +4374,10 @@ export function ModelViewer({
           (handle) => handle.valueId === valueId
         );
         if (!view) continue;
-        const text = view.format(entry.rig ? entry.rig.value() : view.value);
+        const shownValue = entry.rig ? entry.rig.value() : view.value;
+        const text = view.format(shownValue);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        nameCommandChip(entry.chip, view.describe?.(shownValue));
         entry.chip.hidden = false;
       }
       const chipWidths = new Map(
@@ -4394,6 +4480,7 @@ export function ModelViewer({
             : { dx: 0, dy: 0 };
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        nameCommandChip(entry.chip, view.describe?.(value));
         shown.push({
           valueId,
           entry,
@@ -5707,7 +5794,9 @@ export function ModelViewer({
       }
       const detail = (
         event as CustomEvent<{
+          includeBodies?: boolean;
           resolve?: (value: {
+            bodies?: readonly GeometryBodyRepresentation[];
             offsetWorldObjects: string[];
             sectionCaps: {
               triangles: number;
@@ -5857,6 +5946,9 @@ export function ModelViewer({
         offsetWorldObjects,
         sectionCaps,
         exactSections,
+        ...(detail.includeBodies
+          ? { bodies: context.renderedBodies ?? [] }
+          : {}),
         bodyFaces,
         bodyEdges: lineStates(bodyGroup),
         sketchLines: lineStates(regionGroup)
@@ -6443,6 +6535,8 @@ export function ModelViewer({
 
     const scaleBarForward = new THREE.Vector3();
     const scaleBarModelCenter = new THREE.Vector3();
+    const scaleBarModelBounds = new THREE.Box3();
+    const clippingBounds = new THREE.Box3();
     /** World units spanned by one screen pixel at the given point. */
     function worldPerPixelAt(point: THREE.Vector3): number {
       const height = Math.max(canvasHeight(), 1);
@@ -7313,13 +7407,27 @@ export function ModelViewer({
             ? 'Switch to radius entry'
             : 'Switch to diameter entry'
         );
-        chip.replaceChildren(
-          dimensionPrefix,
+        offsetEntry.replaceChildren(
           ` ${formatNumber(displayValue)}\u00a0`,
           units
         );
+        nameCommandChip(
+          offsetEntry,
+          `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue)} ${unitLabelRef.current}`
+        );
+        // Only when the layout changes: re-inserting a focused button on
+        // every frame would drop its focus.
+        if (
+          chip.firstChild !== dimensionPrefix ||
+          chip.lastChild !== offsetEntry ||
+          chip.childNodes.length !== 2
+        )
+          chip.replaceChildren(dimensionPrefix, offsetEntry);
       } else {
-        renderChipText(chip, text);
+        renderChipText(offsetEntry, text);
+        nameCommandChip(offsetEntry, spokenChipText(text));
+        if (chip.firstChild !== offsetEntry || chip.childNodes.length !== 1)
+          chip.replaceChildren(offsetEntry);
       }
       chip.dataset.variant =
         lineAngle !== null
@@ -10171,7 +10279,14 @@ export function ModelViewer({
           rightClickGesture.markDragged(event.pointerId);
         }
         if (
-          rightClickGesture.end(event.pointerId, event.clientX, event.clientY)
+          rightClickGesture.end(
+            event.pointerId,
+            event.clientX,
+            event.clientY
+          ) &&
+          // Build's pick list and context menu act on topology; Assemble
+          // has neither.
+          !assemblyViewport.active
         ) {
           if (!event.shiftKey && showTopologyPickList(event, true, true)) {
             return;
@@ -10874,6 +10989,7 @@ export function ModelViewer({
         pointerType &&
         pointerType !== 'mouse' &&
         !sketchModeRef.current &&
+        !assemblyViewport.active &&
         showTopologyPickList(event, true, true)
       ) {
         event.stopPropagation();
@@ -11092,6 +11208,7 @@ export function ModelViewer({
           moveGizmoWorldScale(worldPerPixelAt(entry.start)) * 0.55
         );
       }
+      assemblyViewport.beforeRender();
       if (moveGizmoGroup.children.length > 0) {
         const baseScale = Math.max(
           (moveGizmoGroup.userData.baseGizmoScale as number | undefined) ?? 1,
@@ -11161,6 +11278,16 @@ export function ModelViewer({
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.
       updateCommandChips();
+      // Read the current presentation after every preview has posed its meshes.
+      // Reuse the body's bounds for the scale bar, then include sketches in the
+      // camera range without letting grids, axes or HUD decorations set it.
+      presentedBounds(
+        [bodyGroup, parameterPreviewController.current?.group],
+        scaleBarModelBounds
+      );
+      presentedBounds([sketchGroup, regionGroup], clippingBounds);
+      clippingBounds.union(scaleBarModelBounds);
+      updateCameraClipping(context.activeCamera, clippingBounds);
       scaleIndicatorRef.current?.(
         chooseViewportScale(
           worldPerPixelAt(
@@ -11169,10 +11296,9 @@ export function ModelViewer({
               cameraRig.activeCamera.getWorldDirection(scaleBarForward),
               // What is drawn this frame, previews included, so a Move or
               // parameter preview does not leave the bar to jump at commit.
-              presentedBoundsCenter(
-                [bodyGroup, parameterPreviewController.current?.group],
-                scaleBarModelCenter
-              ),
+              scaleBarModelBounds.isEmpty()
+                ? null
+                : scaleBarModelBounds.getCenter(scaleBarModelCenter),
               cameraRig.controls.target
             )
           )
@@ -11593,6 +11719,8 @@ export function ModelViewer({
       offsetGhostClearRef.current = null;
       offsetGhostClipRef.current = null;
       moveGizmoHudRef.current = null;
+      assemblyViewport.dispose();
+      assemblyViewportRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
       }
@@ -11792,6 +11920,11 @@ export function ModelViewer({
         selectedEdges.length > 0 ||
         focusFaces.length > 0 ||
         (focusGhostBodies?.length ?? 0) > 0);
+    // Assemble draws the bodies that are not components faint, so the parts
+    // being jointed read first.
+    const assemblyDimmed = new Set(
+      assemblyDimmedKey ? assemblyDimmedKey.split('\n') : []
+    );
     if (bodiesChanged) mark('viewer.bodies:begin');
     if (renderChanged) {
       context.moveCopyPreview.clear();
@@ -11940,12 +12073,17 @@ export function ModelViewer({
           selectedTopology.bodyId === body.bodyId) ||
         selectedEdges.some((edge) => edge.bodyId === body.bodyId);
       const isSelected =
-        selectedBodyIds.includes(body.bodyId) &&
-        !(selectionRecedes && partPicked);
+        (selectedBodyIds.includes(body.bodyId) &&
+          !(selectionRecedes && partPicked)) ||
+        body.bodyId === assemblySelectedBodyId;
 
       // X-ray scales every body's own opacity, so a body already made
       // translucent by its appearance stays the fainter of the two.
-      const faceOpacity = (body.opacity ?? 1) * xrayFactor;
+      const dimmedForAssembly = assemblyDimmed.has(body.bodyId);
+      const faceOpacity =
+        (body.opacity ?? 1) *
+        xrayFactor *
+        (dimmedForAssembly ? ASSEMBLY_DIMMED_OPACITY : 1);
       forEachMesh(object, (mesh) => {
         if (bodyChanged || mesh.userData.appliedOpacity !== faceOpacity) {
           updateBodyMaterialOpacity(mesh.material, faceOpacity);
@@ -11958,7 +12096,7 @@ export function ModelViewer({
         // selection changes.
         contextBodyColor(
           body.color,
-          !selectionRecedes || isSelected,
+          !dimmedForAssembly && (!selectionRecedes || isSelected),
           mesh.material.color
         );
         if (bodiesChanged) {
@@ -12335,6 +12473,7 @@ export function ModelViewer({
         displayModeRef.current,
         xrayRef.current
       );
+      applyCoplanarBodyDepthSlots(bodies, context.objectsByBodyId);
     }
     context.moveCopyPreview.refreshAppearance(
       displayModeRef.current,
@@ -12604,8 +12743,17 @@ export function ModelViewer({
     sketchMode,
     units,
     xrayFactor,
-    pickLabel
+    pickLabel,
+    assemblyDimmedKey,
+    assemblySelectedBodyId
   ]);
+
+  // Assemble poses component bodies by matrix and draws the joint glyphs.
+  // Declared after the bodies pass so a body object it just replaced is
+  // posed in the same commit; playback frames land here alone.
+  useEffect(() => {
+    assemblyViewportRef.current?.setView(assemblyView);
+  }, [assemblyView, bodies]);
 
   useEffect(() => {
     const context = contextRef.current;
@@ -13805,7 +13953,7 @@ export function ModelViewer({
       const chip = makeChip();
       chip.dataset.testid = `command-handle-${handle.valueId}`;
       const valueId = handle.valueId;
-      chip.addEventListener('click', () => {
+      const openKeypad = () => {
         const entry = commandRigsRef.current.get(valueId);
         const view = commandHandlesRef.current.find(
           (candidate) => candidate.valueId === valueId
@@ -13813,7 +13961,8 @@ export function ModelViewer({
         const value = entry?.rig ? entry.rig.value() : view?.value;
         if (value !== undefined)
           onOpenCommandKeypadRef.current?.(valueId, value);
-      });
+      };
+      prepareCommandChip(chip, openKeypad);
       rigs.set(handle.valueId, {
         key: handle.key,
         rig,

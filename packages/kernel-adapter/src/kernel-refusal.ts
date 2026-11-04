@@ -71,7 +71,7 @@ export const UNENUMERATED_CATEGORIES: readonly MissingCategory[] = [];
  * the two want different sentences.
  */
 export type KernelRefusalFamily =
-  'boolean' | 'validation' | 'healing' | 'import' | 'blend' | 'gear';
+  'boolean' | 'validation' | 'healing' | 'import' | 'blend' | 'gear' | 'thread';
 
 export interface KernelRefusalInit {
   family: KernelRefusalFamily;

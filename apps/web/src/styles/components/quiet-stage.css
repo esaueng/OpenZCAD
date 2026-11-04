@@ -165,9 +165,9 @@
 }
 
 /* A pixel less padding a side gives back the inset and border's 8px: the
-   bar has no width to spare at a laptop's width. (A phone's icon-only
-   options keep their own padding, view-mode.css.) */
-@media (min-width: 621px) {
+   bar has no width to spare at a laptop's width. (The compact bar's
+   icon-only options keep their own padding, view-mode.css.) */
+@media (min-width: 960px) {
   .topbar .mode-switch-option {
     padding-inline: 10px;
   }
@@ -1001,6 +1001,12 @@
   z-index: calc(var(--z-inspector-float) + 2);
 }
 
+/* Options open over the model, where a floating panel may already stand.
+   Keep the active popover clickable without hiding or moving that panel. */
+.command-bar-lane:has(.in-place-command-options[open]) {
+  z-index: var(--z-popover);
+}
+
 /* The list takes the conversation's place rather than floating over it: a
    slash, or words that name a command, typed with the stream up hide the
    stream, and the list stands on the bar where it stood, bar and list one
@@ -1422,11 +1428,18 @@
 
 /* ── Narrow windows ──────────────────────────────────────── */
 
-/* Content-sized flanks: equal ones overran the action icons into the mode
-   switch once the window was too narrow to centre it. */
-@media (max-width: 620px) {
+/* Content-sized flanks: below 760px a centred mode switch leaves the
+   project name under 160px, so the switch joins the actions on the right
+   and the name takes the rest of the bar. (Equal flanks also overran the
+   action icons into the switch on a phone.) */
+@media (max-width: 759px) {
   .app-shell > .topbar {
     grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .app-shell > .topbar {
     gap: var(--sp-1);
   }
 
@@ -1503,9 +1516,10 @@
 
 /* ── The verb rail (U04 slice 3, streamlined) ─────────── */
 
-/* Two rows preserve project navigation at the smallest supported widths;
-   the stage inherits the taller header clearance, including comfortable UI. */
-@media (max-width: 380px) {
+/* Two rows preserve project navigation on a phone: in one row the mode
+   switch and the actions leave the name 26px at 390px and 66px at 430px.
+   The stage inherits the taller header clearance, including comfortable UI. */
+@media (max-width: 479px) {
   .app-shell {
     --stage-top: calc(
       var(--topbar-island-h) * 2 + var(--sp-1) + var(--island-gap) * 2
@@ -1518,10 +1532,12 @@
     grid-template-rows: repeat(2, var(--topbar-island-h));
   }
 
+  /* Sized to its content, as at every other width: stretched across the
+     row, it parked the lock and the save glyph at its far end, away from
+     the name they describe. */
   .topbar > .topbar-identity {
     grid-column: 1;
     grid-row: 1;
-    width: 100%;
     gap: var(--sp-2);
   }
 
@@ -2046,9 +2062,14 @@ button.command-rail.is-suggested {
   max-height: none;
 }
 
+/* The simple list stands on the stage's foot, lifted until its own foot is
+   level with the More tools button (--flyout-lift, measured in
+   CommandCard), but never past the frame's top. */
 .viewer-area .workspace-column-float .command-flyout.is-simple {
   top: auto;
-  bottom: calc(100% - var(--sheet-top) - var(--sheet-h));
+  bottom: calc(
+    100% - var(--sheet-top) - var(--sheet-h) + var(--flyout-lift, 0px)
+  );
   max-height: var(--sheet-h);
 }
 
@@ -4025,7 +4046,10 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .in-place-command-done:disabled {
-  opacity: 0.45;
+  /* Neutral until it can run: a faded accent read as pressable. */
+  color: var(--color-text-muted);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
   cursor: default;
 }
 
@@ -4243,6 +4267,166 @@ button.model-panel-grip[aria-expanded='true'] {
   gap: 4px;
 }
 
+/* `display: grid` would otherwise outrank a folded section's `hidden`. */
+.in-place-params-grid[hidden] {
+  display: none;
+}
+
+/* A boxed section: a tinted group under its label, set apart by spacing
+   and tone rather than a border or rule. */
+.in-place-command-options-panel.in-place-params:has(
+    > .in-place-params-section.is-boxed
+  ) {
+  padding: 6px;
+}
+
+.in-place-params-section.is-boxed {
+  padding: 6px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-params-section.is-boxed + .in-place-params-section,
+.in-place-params-section + .in-place-params-section.is-boxed {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 0;
+}
+
+.in-place-params-section.is-boxed .in-place-param-row {
+  grid-template-columns: 60px minmax(0, 1fr);
+}
+
+/* On the darker group, fields lift to the panel's tone to stay visible. */
+.in-place-params-section.is-boxed .in-place-param-select,
+.in-place-params-section.is-boxed .in-place-param-field,
+.in-place-params-section.is-boxed
+  .in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector) {
+  background: var(--color-surface);
+}
+
+.in-place-params-section.is-boxed
+  .in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  .in-place-param-field {
+  background: transparent;
+}
+
+/* A compact section: choices keep a whole row; each number is one box,
+   named inside it, two to a row. */
+.in-place-params-grid.is-compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.in-place-params-grid.is-compact > * {
+  grid-column: 1 / -1;
+}
+
+.in-place-params-grid.is-compact > .in-place-param-value:not(.is-vector) {
+  display: flex;
+  grid-column: auto;
+  gap: 6px;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 0 6px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  > .in-place-option-label {
+  flex: 0 1 auto;
+  color: var(--color-text-subtle);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  > .in-place-param-fields {
+  flex: 1 0 40px;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  .in-place-param-field {
+  min-height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector)
+  .in-place-param-field
+  input {
+  text-align: right;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector):focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+/* A number typed on the keypad (an Extrude's) sits as the typed ones do:
+   one box, named inside it, two to a row. */
+.in-place-params-grid.is-compact > .in-place-param-row.is-keypad {
+  display: flex;
+  grid-column: auto;
+  gap: 6px;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 0 6px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.in-place-params-section.is-boxed
+  .in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad {
+  background: var(--color-surface);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad
+  > .in-place-option-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad
+  > .in-place-option-value {
+  flex: 1 0 40px;
+  min-height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  text-align: right;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-row.is-keypad:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector):has(.is-refused) {
+  border-color: var(--color-error);
+  box-shadow: 0 0 0 1px var(--color-error);
+}
+
 .in-place-params .in-place-option + .in-place-option {
   margin-top: 0;
 }
@@ -4270,7 +4454,9 @@ button.model-panel-grip[aria-expanded='true'] {
 /* Choices sit joined, as one control, and share the row's width. */
 .in-place-param-segments {
   display: flex;
-  flex-wrap: wrap;
+  /* One line only: a row too long for it becomes a menu (OptionRow). */
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 2px;
   padding: 2px;
   background: var(--color-surface-hover);
@@ -4345,6 +4531,12 @@ button.model-panel-grip[aria-expanded='true'] {
   outline: none;
   font: inherit;
   font-variant-numeric: tabular-nums;
+}
+
+/* The field draws the focus ring; the global input ring would nest a
+   second box inside it. */
+.in-place-param-field input:focus {
+  box-shadow: none;
 }
 
 .in-place-param-axis,

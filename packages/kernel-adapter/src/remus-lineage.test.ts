@@ -12,6 +12,7 @@ import {
   createRemusSemanticLineage,
   createRemusModifierEvolutionLineage,
   decodeVerifiedRemusEvolution,
+  decodeMoveFaceEvolution,
   propagateRemusRigidTransformLineage,
   transformRemusWitness,
   type RemusLineageState
@@ -20,6 +21,51 @@ import { topologyHashOfWitness } from './topology-lineage';
 
 const FEATURE_ID = 'feature_remus' as FeatureId;
 const FILLET_FEATURE_ID = 'feature_fillet' as FeatureId;
+
+describe('topology-changing face move history', () => {
+  it('retains unique survivors while marking splits, merges and deletions ambiguous', () => {
+    const relation = decodeMoveFaceEvolution(
+      {
+        origin: 'construction',
+        modified: { 1: [10], 2: [20, 21], 3: [30], 4: [30] },
+        deleted: [5],
+        generated: { 2: [40], 5: [40] },
+        unresolved: {}
+      },
+      [1, 2, 3, 4, 5],
+      [10, 20, 21, 30, 40]
+    );
+    expect(relation.faceMap).toEqual(new Map([[1, 10]]));
+    expect(relation.conflictedSources).toEqual(new Set([2, 3, 4, 5]));
+  });
+
+  it.each([
+    { modified: { 1: [10] } },
+    { modified: { 1: [10], 2: [99] } },
+    { modified: { 1: [10], 2: [20, 20] } },
+    { generated: { 1: [10] } },
+    { generated: { 99: [30] } },
+    { deleted: [2] },
+    { deleted: [3, 3] },
+    { unresolved: { 1: 'missing' } },
+    { origin: 'inferred' }
+  ])('refuses incomplete or conflicting ancestry: %j', (change) => {
+    expect(() =>
+      decodeMoveFaceEvolution(
+        {
+          origin: 'construction',
+          modified: { 1: [10], 2: [20] },
+          generated: { 2: [30] },
+          deleted: [3],
+          unresolved: {},
+          ...change
+        },
+        [1, 2, 3],
+        [10, 20, 30]
+      )
+    ).toThrow('incomplete construction history');
+  });
+});
 
 const FACE: FaceWitnessV1 = {
   surfaceType: 'plane',

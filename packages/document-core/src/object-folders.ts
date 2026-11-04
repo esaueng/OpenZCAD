@@ -261,6 +261,21 @@ function sourceBodyOf(
 }
 
 /**
+ * The body each body was made from (see {@link sourceBodyOf}); null for a
+ * body that starts from nothing. Shared with assemblies (AS01), whose
+ * components follow a body through the features that remake it.
+ */
+export function bodySourceMap(
+  document: ProjectDocument
+): Map<BodyId, BodyId | null> {
+  const features = featureNodes(document);
+  const sources = new Map<BodyId, BodyId | null>();
+  for (const [bodyId, body] of bodyNodes(document))
+    sources.set(bodyId, sourceBodyOf(body, features));
+  return sources;
+}
+
+/**
  * Every body's folder (null: the top level), resolved once for a document:
  * an explicit placement, else the folder of the body it was made from.
  * Placements that name a missing folder read as the top level.

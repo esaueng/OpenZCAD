@@ -24,6 +24,10 @@ export interface InPlacePanelSectionView {
   label?: string;
   /** Folded shut until opened: rows set once and rarely changed. */
   collapsed?: boolean;
+  /** Numbers two to a row, each named inside its field. */
+  compact?: boolean;
+  /** A tinted group under its label. */
+  boxed?: boolean;
   rows: readonly InPlacePanelRow[];
 }
 
@@ -67,6 +71,16 @@ export function inPlacePanelSections(
   const valueById = new Map<string, ValueSpec>(
     spec.values.map((value) => [value.id, value])
   );
+  // A coordinate's row name and its own: from its `vector` ("Origin", with
+  // its label "X"), else from a label that carries both ("Corner X").
+  const axisOf = (value: ValueSpec): [string, string, string] | null => {
+    const label = labelOf(value);
+    if (value.vector && /^[XYZ]$/u.test(label)) {
+      return [label, value.vector, label];
+    }
+    const match = AXIS_LABEL.exec(label);
+    return match ? [match[0], match[1]!, match[2]!] : null;
+  };
   const shown = (id: string): InPlacePanelRow | null => {
     const option = optionById.get(id);
     if (option) {
@@ -79,8 +93,12 @@ export function inPlacePanelSections(
     if (!value.inOptions && !handled.has(id)) return null;
     return value.when?.(state) === false ? null : { kind: 'value', id };
   };
+  // Without a layout, every row is one tinted group with its numbers two
+  // to a row, as the Thread panel set them out.
   const layout = spec.layout ?? [
     {
+      boxed: true,
+      compact: true,
       items: [
         ...(spec.options ?? []).map((option) => option.id),
         ...spec.values.map((value) => value.id)
@@ -93,7 +111,10 @@ export function inPlacePanelSections(
     ...(spec.options ?? []).map((option) => option.id),
     ...spec.values.map((value) => value.id)
   ].filter((id) => !placed.has(id));
-  const sections = rest.length > 0 ? [...layout, { items: rest }] : layout;
+  const sections =
+    rest.length > 0
+      ? [...layout, { boxed: true, compact: true, items: rest }]
+      : layout;
   const out: InPlacePanelSectionView[] = [];
   for (const section of sections) {
     const rows: InPlacePanelRow[] = [];
@@ -102,11 +123,11 @@ export function inPlacePanelSections(
       if (!row) continue;
       // A point's coordinates, one after another, share one row.
       const value = row.kind === 'value' ? valueById.get(id) : undefined;
-      const axis = value ? AXIS_LABEL.exec(labelOf(value)) : null;
+      const axis = value ? axisOf(value) : null;
       const last = rows.at(-1);
       if (axis) {
-        const prefix = axis[1]!;
-        const name = axis[2]!;
+        const prefix = axis[1];
+        const name = axis[2];
         if (last?.kind === 'vector' && last.label === prefix) {
           rows[rows.length - 1] = {
             ...last,
@@ -117,13 +138,13 @@ export function inPlacePanelSections(
         }
         if (last?.kind === 'value') {
           const previous = valueById.get(last.id);
-          const before = previous ? AXIS_LABEL.exec(labelOf(previous)) : null;
+          const before = previous ? axisOf(previous) : null;
           if (before && before[1] === prefix) {
             rows[rows.length - 1] = {
               kind: 'vector',
               label: prefix,
               ids: [last.id, id],
-              axes: [before[2]!, name]
+              axes: [before[2], name]
             };
             continue;
           }
@@ -135,6 +156,8 @@ export function inPlacePanelSections(
       out.push({
         ...(section.label ? { label: section.label } : {}),
         ...(section.collapsed ? { collapsed: true } : {}),
+        ...(section.compact ? { compact: true } : {}),
+        ...(section.boxed ? { boxed: true } : {}),
         rows
       });
     }

@@ -388,17 +388,17 @@ test('opens long selection-chip diagnostics in the Activity log', async ({
     document.body.append(card);
 
     const log = document.createElement('section');
-    log.className = 'status-log-panel';
+    log.className = 'activity-log';
     log.setAttribute('role', 'region');
     log.setAttribute('aria-label', 'Activity log');
     log.hidden = true;
     log.innerHTML = `
-      <ol class="status-log-list">
-        <li class="status-log-entry current">
-          <i class="warning"></i><time>02:28:17 AM</time>
-          <span class="status-log-copy">
-            <span>The exact kernel could not build this result.</span>
-            <span class="status-log-detail">resize-blend-failed:resize_blend_exact_reconstruction_refused:planar_support_heal_failed:defeature:unsupported_configuration:kept_face_16_is_not_cylinder_surface</span>
+      <ol class="activity-log-list">
+        <li class="activity-log-entry warning current">
+          <i class="warning"></i><time>02:28:17.104 AM</time>
+          <span class="activity-log-copy">
+            <span class="activity-log-message">The exact kernel could not build this result.</span>
+            <span class="activity-log-detail">resize-blend-failed:resize_blend_exact_reconstruction_refused:planar_support_heal_failed:defeature:unsupported_configuration:kept_face_16_is_not_cylinder_surface</span>
           </span>
         </li>
       </ol>

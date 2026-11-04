@@ -37,19 +37,22 @@ export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
  * dimensions can be adjusted and the result exported while the design itself —
  * sketches, features, history — stays locked. `drawing` (D01, labelled Draw)
  * is the drawing workspace: the sheet canvas replaces the viewport, and the
- * only edits it makes are to drawing sheets.
+ * only edits it makes are to drawing sheets. `assemble` (AS01) shows the
+ * document's bodies as assembly components: it grounds, joins and moves them,
+ * and edits the assembly section only, never the model.
  *
  * Named `workspaceMode` rather than "viewer" because that word already means
  * both the 3D viewport (`ViewerShell`) and the collaboration role in this
  * codebase, and a third meaning would make either impossible to grep for.
  */
-export type WorkspaceMode = 'view' | 'tweak' | 'build' | 'drawing';
+export type WorkspaceMode = 'view' | 'tweak' | 'build' | 'assemble' | 'drawing';
 
 /** The order the workspace switch shows the modes and Ctrl+Shift+M cycles them. */
 export const WORKSPACE_MODE_ORDER: readonly WorkspaceMode[] = [
   'view',
   'tweak',
   'build',
+  'assemble',
   'drawing'
 ];
 
@@ -219,6 +222,7 @@ export function normalizePanelState(value: unknown): PanelState {
     root.workspaceMode === 'view' ||
     root.workspaceMode === 'tweak' ||
     root.workspaceMode === 'build' ||
+    root.workspaceMode === 'assemble' ||
     root.workspaceMode === 'drawing'
   ) {
     state.workspaceMode = root.workspaceMode;
@@ -306,34 +310,18 @@ export function defaultPanelState(): PanelState {
   return copyDefaults();
 }
 
-/**
- * A sketch or feature command wants the stage to itself: it suspends every
- * open model panel (docked, floating, unpinned or in the phone lane) and the
- * command card's "More tools" fold, and gives them back when it ends. A
- * direct-manipulation drag does not: the docks sit beside the model, so hiding
- * them mid-gesture only made the panels vanish and the rail jump while the
- * pointer was down. Suspension is not a preference: the stored panel layout
- * and `commandFoldOpen` keep what the user chose. A rail press, or a search that
- * asks for a panel, while suspended releases the panels for the rest of that
- * mode, and toggling the fold releases the fold: their intent wins.
- */
-export interface PanelSuspension {
+/** Temporary folding of More tools never changes the saved preference. */
+export interface CommandFoldSuspension {
   suspended: boolean;
-  panelsReleased: boolean;
-  foldReleased: boolean;
+  released: boolean;
 }
 
-export type SuspendablePanel = 'panels' | 'fold';
-
 /**
- * Whether the running command takes the stage from the model panels.
- *
- * Only creating something does. Editing a feature that already exists is
- * opened from a History or Objects row, and hiding the panel the user just
- * clicked in lost their place: the card sits beside the dock instead. Move
- * runs over the docks as a drag does.
+ * Creating a feature folds More tools until it is requested again. Existing
+ * feature edits, Move and direct drags leave that fold alone. Model panels
+ * always keep the user's visibility and placement, independently of tools.
  */
-export function commandSuspendsPanels(command: {
+export function commandFoldsTools(command: {
   /** The in-place command is running; `editing` when on an existing feature. */
   inPlace: { active: boolean; editing: boolean };
   /** The in-place Extrude bar is up; `editing` when re-armed from History. */
@@ -352,15 +340,11 @@ export function commandSuspendsPanels(command: {
   );
 }
 
-/** What shows, given what the user chose and the mode. */
-export function effectivePanels(
+export function effectiveCommandFold(
   state: Pick<PanelState, 'commandFoldOpen'>,
-  suspension: PanelSuspension
-): { panelsSuspended: boolean; commandFoldOpen: boolean } {
-  return {
-    panelsSuspended: suspension.suspended && !suspension.panelsReleased,
-    commandFoldOpen:
-      state.commandFoldOpen &&
-      (!suspension.suspended || suspension.foldReleased)
-  };
+  suspension: CommandFoldSuspension
+): boolean {
+  return (
+    state.commandFoldOpen && (!suspension.suspended || suspension.released)
+  );
 }

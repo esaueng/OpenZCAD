@@ -485,3 +485,19 @@ principal view. Detail views remain open.
   aligned (stepped) sections; per-body hatch angles; lineage for cut edges so
   a dimension survives an edit that moves them; exact cuts the pinned kernel
   refuses (a Remus robustness ask).
+
+### Drawing entry and visibility (2026-11-01)
+
+Entering Draw without a retained sheet choice prefers the unique saved sheet
+whose body set exactly matches the currently visible result bodies. This is
+resolved after a pending model rebuild as well. Ambiguous or absent matches
+fall back to the first sheet. An explicit sheet choice is retained with the
+project's projection cache while switching between Build and Draw; opening
+another project discards it. Hide/Isolate never changes saved view body IDs,
+fingerprints or annotations. Drawing properties name the sheet bodies and
+explain this distinction when the sheet includes a body hidden in Build.
+
+Canonical tessellation and drawing sections request idle boolean-lineage
+demand. They read geometry rather than demand additional evolution metadata,
+so entering Draw does not upgrade an idle model to an eager probe rebuild.
+Downstream modeling references still force the probes they require.

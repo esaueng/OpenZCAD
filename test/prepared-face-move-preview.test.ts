@@ -52,13 +52,22 @@ const body = (preview: GeometryReadyState, bodyId: string) => {
  */
 it('drag previews through a prepared face move match cold previews', async () => {
   const proto = RemusKernel.prototype as unknown as Record<string, unknown>;
+  const preparedMethod =
+    typeof proto.moveFacesPreparedJournaledWithQuality === 'function'
+      ? 'moveFacesPreparedJournaledWithQuality'
+      : 'moveFacesPreparedJournaled';
   const preparedCalls =
-    typeof proto.moveFacesPreparedJournaled === 'function'
+    typeof proto[preparedMethod] === 'function'
       ? vi.spyOn(
           RemusKernel.prototype as unknown as {
             moveFacesPreparedJournaled: (h: number, d: number) => string;
+            moveFacesPreparedJournaledWithQuality: (
+              h: number,
+              d: number,
+              stations: number
+            ) => string;
           },
-          'moveFacesPreparedJournaled'
+          preparedMethod
         )
       : null;
   const { secondArm } = createNativeHolderStages();

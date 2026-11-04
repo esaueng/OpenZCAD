@@ -121,6 +121,8 @@ export interface ModelPanelSource {
   /** Names currently offered in Tweak, from `listExposedParameters`. */
   exposedParameterNames: ReadonlySet<string>;
   onReorderFeature(featureId: FeatureId, toIndex: number): void;
+  /** An exact operation is running; History holds its reorder grips. */
+  reorderBusy?: boolean;
   onRestoreCheckpoint(checkpoint: ProjectCheckpoint): void;
   onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
 }

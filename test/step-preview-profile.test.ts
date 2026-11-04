@@ -8,6 +8,7 @@ import {
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import { stepPreviewProfile } from '../apps/web/src/lib/interaction/stepPreviewProfile';
 import { roundedPlateDocument } from './support/rounded-plate';
+import { filletedUnion, unionEndFace } from './support/filleted-union';
 
 function side(body: BodyRepresentation, axis: 'x' | 'y', sense: 1 | -1) {
   return body.topology!.faces.find(
@@ -67,6 +68,105 @@ function bounds(vertices: ArrayLike<number>) {
 }
 
 describe('whole-body step previews for planar face offsets', () => {
+  it('moves every independently sampled outline point with its incident moving face', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const { body } = await filletedUnion(adapter);
+      const face = unionEndFace(body);
+      const edge = body.topology!.edges.find((candidate) =>
+        candidate.adjacentFaceHashes?.includes(face.hash)
+      )!;
+      expect(edge.points.length).toBeGreaterThanOrEqual(6);
+      // Wireframe curves are sampled separately from the face triangles.
+      // Put a display sample between two existing points so it is absent
+      // from the triangle mesh's vertex keys.
+      const sample = [0, 1, 2].map(
+        (axis) => (edge.points[axis]! + edge.points[axis + 3]!) / 2
+      );
+      const sampled = {
+        ...body,
+        topology: {
+          ...body.topology!,
+          edges: body.topology!.edges.map((candidate) =>
+            candidate === edge
+              ? {
+                  ...edge,
+                  points: [
+                    ...edge.points.slice(0, 3),
+                    ...sample,
+                    ...edge.points.slice(3)
+                  ]
+                }
+              : candidate
+          )
+        }
+      };
+      const profile = stepPreviewProfile(sampled, face)!;
+      expect(profile).not.toBeNull();
+      const moves = stepPreviewMatcher(profile);
+      expect(moves(sample[0]!, sample[1]!, sample[2]!)).toBe(true);
+      // The opposite end remains fixed.
+      const fixed = body.topology!.faces.find(
+        (candidate) =>
+          candidate.geometry?.normal?.x === -face.geometry!.normal!.x
+      )!.geometry!.center;
+      expect(moves(fixed.x, fixed.y, fixed.z)).toBe(false);
+    } finally {
+      adapter.dispose();
+    }
+  }, 60_000);
+
+  it('stretches a filleted union end without carrying its junction blend', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const { document, body, bodyId } = await filletedUnion(adapter);
+      const face = unionEndFace(body);
+      const profile = stepPreviewProfile(body, face);
+      expect(profile).not.toBeNull();
+      expect(profile!.reach).toBe(Infinity);
+      expect(profile!.span).toBeGreaterThan(2);
+      for (const delta of [5, -2]) {
+        const preview = stretched(body, profile!, delta);
+        const plan = planFaceOffset({
+          document,
+          bodyId,
+          face,
+          faceHash: face.hash,
+          offset: delta
+        })!;
+        expect(plan.kind).toBe('primitive-dimension');
+        const after = await adapter.syncDocument(plan.command.apply(document));
+        expect(after.warnings).toEqual([]);
+        const exact = after.bodyRepresentations[bodyId]!;
+        expect(bounds(preview).min).toEqual(bounds(body.mesh.vertices).min);
+        expect(bounds(preview).max[0]).toBeCloseTo(exact.bbox.max.x, 4);
+        expect(
+          meshVolume(preview, body.mesh.indices) -
+            meshVolume(body.mesh.vertices, body.mesh.indices)
+        ).toBeCloseTo(exact.volume - body.volume, 1);
+        const moves = stepPreviewMatcher(profile!);
+        // The complex junction stays put; only the opposite planar end moves.
+        for (const junction of body.topology!.faces.filter(
+          (candidate) => candidate.geometry?.surfaceType === 'bspline'
+        )) {
+          const end = (junction.triangleStart + junction.triangleCount) * 3;
+          for (let t = junction.triangleStart * 3; t < end; t++) {
+            const index = body.mesh.indices[t]! * 3;
+            expect(
+              moves(
+                body.mesh.vertices[index]!,
+                body.mesh.vertices[index + 1]!,
+                body.mesh.vertices[index + 2]!
+              )
+            ).toBe(false);
+          }
+        }
+      }
+    } finally {
+      adapter.dispose();
+    }
+  }, 60_000);
+
   it.each([
     { axis: 'x' as const, sense: 1 as const, delta: 15 },
     { axis: 'x' as const, sense: -1 as const, delta: 6 },

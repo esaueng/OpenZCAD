@@ -11,6 +11,7 @@ import {
 import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
+import { spokenValueName } from '../lib/inPlace/chipNames';
 
 /**
  * The only chrome an in-place command has: its name, the one-line step it
@@ -26,7 +27,13 @@ export interface InPlaceOption {
   id: string;
   label: string;
   value: string;
-  choices: readonly { value: string; label: string; note?: string }[];
+  choices: readonly {
+    value: string;
+    label: string;
+    note?: string;
+    /** Shown only as the choice's tooltip. */
+    tip?: string;
+  }[];
 }
 
 /** An exact number too rare for a handle (a primitive's position). */
@@ -53,7 +60,7 @@ export interface InPlaceOptionValue {
 
 /**
  * A choice row this long or longer is a menu rather than buttons (a gear's
- * six types); an Extrude's five operations stay one press each.
+ * types); a shorter row that does not fit on one line becomes one too.
  */
 const MENU_CHOICES = 6;
 /** Pixels of scrub per step. */
@@ -267,6 +274,8 @@ export function InPlaceCommandBar({
             {(
               sections ?? [
                 {
+                  boxed: true,
+                  compact: true,
                   rows: [
                     ...options.map((option) => ({
                       kind: 'option' as const,
@@ -284,6 +293,8 @@ export function InPlaceCommandBar({
                 key={section.label ?? `section-${index}`}
                 label={section.label}
                 collapsed={section.collapsed ?? false}
+                compact={section.compact ?? false}
+                boxed={section.boxed ?? false}
               >
                 {section.rows.map((row) => {
                   if (row.kind === 'option') {
@@ -380,12 +391,18 @@ export function InPlaceCommandBar({
 function PanelSection({
   label,
   collapsed,
+  compact,
+  boxed,
   children
 }: {
   label: string | undefined;
   collapsed: boolean;
+  compact: boolean;
+  boxed: boolean;
   children: ReactNode;
 }) {
+  const boxClass = boxed ? ' is-boxed' : '';
+  const gridClass = `in-place-params-grid${compact ? ' is-compact' : ''}`;
   // A button, not a nested <details>: the bar's own Options summary stays
   // the only summary under it.
   const [open, setOpen] = useState(!collapsed);
@@ -393,7 +410,7 @@ function PanelSection({
   if (collapsed && label) {
     return (
       <section
-        className={`in-place-params-section is-foldable${open ? ' is-open' : ''}`}
+        className={`in-place-params-section is-foldable${open ? ' is-open' : ''}${boxClass}`}
         aria-label={label}
       >
         <button
@@ -405,7 +422,7 @@ function PanelSection({
         >
           {label}
         </button>
-        <div className="in-place-params-grid" id={gridId} hidden={!open}>
+        <div className={gridClass} id={gridId} hidden={!open}>
           {children}
         </div>
       </section>
@@ -413,11 +430,11 @@ function PanelSection({
   }
   return (
     <section
-      className="in-place-params-section"
+      className={`in-place-params-section${boxClass}`}
       aria-label={label ?? undefined}
     >
       {label ? <h3 className="in-place-params-heading">{label}</h3> : null}
-      <div className="in-place-params-grid">{children}</div>
+      <div className={gridClass}>{children}</div>
     </section>
   );
 }
@@ -439,7 +456,39 @@ function OptionRow({
   const note = option.choices.find(
     (choice) => choice.value === option.value
   )?.note;
-  const menu = option.choices.length >= MENU_CHOICES;
+  // Buttons that would wrap onto a second line read as two rows of
+  // choices: measured once laid out (the panel opens closed), the row turns
+  // into a menu and stays one.
+  const segments = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const element = segments.current;
+    if (!element || overflows) return;
+    // A closed Options panel is still laid out by Chrome, narrower than it
+    // opens: only the open panel's width counts.
+    const details = element.closest('details');
+    const measure = () => {
+      if (details && !details.open) return;
+      if (
+        element.clientWidth > 0 &&
+        element.scrollWidth > element.clientWidth + 1
+      ) {
+        setOverflows(true);
+      }
+    };
+    measure();
+    details?.addEventListener('toggle', measure);
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => {
+      details?.removeEventListener('toggle', measure);
+      observer?.disconnect();
+    };
+  }, [overflows]);
+  const menu = overflows || option.choices.length >= MENU_CHOICES;
   return (
     <div className="in-place-option in-place-param-row">
       <span className="in-place-option-label" id={labelId}>
@@ -454,13 +503,14 @@ function OptionRow({
           onChange={(event) => onOption?.(option.id, event.target.value)}
         >
           {option.choices.map((choice) => (
-            <option key={choice.value} value={choice.value}>
+            <option key={choice.value} value={choice.value} title={choice.tip}>
               {choice.label}
             </option>
           ))}
         </select>
       ) : (
         <div
+          ref={segments}
           className="in-place-param-segments"
           role="radiogroup"
           aria-label={option.label}
@@ -472,6 +522,7 @@ function OptionRow({
               role="radio"
               aria-checked={choice.value === option.value}
               className="in-place-option-choice"
+              title={choice.tip}
               disabled={locked}
               onClick={() => onOption?.(option.id, choice.value)}
             >
@@ -497,15 +548,16 @@ function KeypadValueRow({
     ((valueId: string, at: { x: number; y: number }) => void) | undefined;
 }) {
   return (
-    <div className="in-place-option in-place-param-row">
-      <span className="in-place-option-label" id={`in-place-value-${value.id}`}>
+    <div className="in-place-option in-place-param-row is-keypad">
+      <span className="in-place-option-label" aria-hidden="true">
         {value.label}
       </span>
       <button
         type="button"
         className="in-place-option-choice in-place-option-value"
         disabled={locked}
-        aria-labelledby={`in-place-value-${value.id}`}
+        // The visible label may be a glyph ("⌀", "R"); the name is in words.
+        aria-label={spokenValueName(value.label)}
         onClick={(event) => {
           const box = event.currentTarget.getBoundingClientRect();
           // Exact entry takes over from Options. Leaving its flyout
@@ -691,7 +743,7 @@ function ValueField({
         inputMode="decimal"
         spellCheck={false}
         autoComplete="off"
-        aria-label={label}
+        aria-label={spokenValueName(label)}
         aria-invalid={refused || undefined}
         value={shown}
         disabled={locked}

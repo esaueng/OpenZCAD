@@ -179,6 +179,32 @@ test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-s
     .locator('.topbar-identity')
     .getByLabel('End-to-end encrypted', { exact: true });
   await expect(lock).toBeVisible();
+  // On a phone the bar takes two rows; the lock still follows the name it
+  // describes rather than the far end of a stretched island.
+  const desktopViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() =>
+      page.locator('.topbar-identity').evaluate((island) => {
+        const name = island.querySelector('.breadcrumb')!;
+        const lockBox = island
+          .querySelector('.encryption-indicator')!
+          .getBoundingClientRect();
+        return Math.round(lockBox.left - name.getBoundingClientRect().right);
+      })
+    )
+    .toBeLessThanOrEqual(12);
+  // At a laptop's 1366px the lock's 28px left the name one pixel short of
+  // whole; the wordmark gives way instead.
+  await page.setViewportSize({ width: 1366, height: 800 });
+  await expect
+    .poll(() =>
+      page
+        .locator('.topbar-identity .breadcrumb strong')
+        .evaluate((name) => name.scrollWidth - name.clientWidth)
+    )
+    .toBe(0);
+  await page.setViewportSize(desktopViewport);
   await lock.click();
   await expect(
     encryptionIndicator(page).getByText('Verified', { exact: true })
@@ -201,6 +227,8 @@ test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-s
     name: 'Project sharing',
     exact: true
   });
+  // The state code is a disclosure behind the header's Encrypted chip.
+  await sharing.getByRole('button', { name: 'Encrypted' }).click();
   await expect(sharing.getByText(fullCode, { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(sharing).toHaveCount(0);

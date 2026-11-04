@@ -37,6 +37,7 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'split',
   'hole',
   'gear',
+  'thread',
   'transform',
   'mirror',
   'shell',
@@ -258,6 +259,9 @@ export function affectedFeatureTargets(
         affected =
           data.targetBodyId !== undefined &&
           affectedBodies.has(data.targetBodyId);
+        break;
+      case 'thread':
+        affected = affectedBodies.has(data.targetBodyId);
         break;
       case 'primitive':
       case 'imported-mesh':

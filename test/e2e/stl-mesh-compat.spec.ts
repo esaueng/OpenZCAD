@@ -48,7 +48,7 @@ for (const fixture of cases) {
         route.fulfill({ json: null })
       );
       await createProject(page, fixture.name);
-      await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+      await page.getByLabel(/^Import STEP or /).setInputFiles({
         name: 'mesh.stl',
         mimeType: 'model/stl',
         buffer: Buffer.from(
@@ -89,6 +89,12 @@ for (const fixture of cases) {
       await expectBodyCount(page, 0);
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expectBodyCount(page, 1);
+      // Reload only once the redone state is saved on this device, as a
+      // person closing the tab would; otherwise the reload can race the
+      // write and reopen the undone document.
+      await expect(page.locator('.save-state')).toHaveClass(
+        /\bis-(?:local|local-source|synced)(?:\s|$)/
+      );
       await page.reload();
       await expectBodyCount(page, 1);
       await expect(
@@ -113,7 +119,7 @@ test('private STL imports through the browser file picker', async ({
   await seedUnitlessImportUnits(page);
   await page.route('**/api/session', (route) => route.fulfill({ json: null }));
   await createProject(page, 'STL qualification');
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'private.stl',
     mimeType: 'model/stl',
     buffer: readFileSync(process.env.OZ_PRIVATE_STL!)

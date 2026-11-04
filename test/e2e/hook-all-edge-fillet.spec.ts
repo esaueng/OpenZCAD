@@ -67,7 +67,7 @@ async function importHookBase(
 ) {
   await page.getByLabel('Project name').fill(projectName);
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'hook-base.step',
     mimeType: 'model/step',
     buffer: Buffer.from(baseBytes)
@@ -305,7 +305,8 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click();
+  // Export STEP closes the menu itself.
+  await expect(fileMenu).not.toHaveAttribute('open');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
@@ -327,7 +328,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   await page.getByRole('button', { name: 'OpenZCAD Beta' }).click();
   await page.getByLabel('Project name').fill('Hook STEP Reimport');
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'hook-filleted.step',
     mimeType: 'model/step',
     buffer: Buffer.from(stepText, 'utf8')

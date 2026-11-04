@@ -8,6 +8,7 @@ import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   documentNodesWithHistory,
   importedSourceReferenceOf,
+  isImportedMeshSourceData,
   toUserId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -111,4 +112,56 @@ describe('reference mesh schema boundary', () => {
       }
     }
   );
+});
+
+describe('assumed units on a unitless mesh import (v52)', () => {
+  function importWith(assumedUnits?: 'mm' | 'inch') {
+    const manager = new CommandManager(
+      createProjectDocument('Unitless mesh', toUserId('user_mesh_units'))
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'Bracket',
+        sourceName: 'bracket.stl',
+        artifactId: 'artifact_bracket',
+        triangleCount: 1,
+        meshPayloadRef: reference,
+        ...(assumedUnits ? { assumedUnits } : {})
+      })
+    );
+    return manager.document;
+  }
+  const meshData = (document: ProjectDocument) =>
+    Object.values(document.nodes).flatMap((node) =>
+      node.kind === 'feature' && node.data.featureKind === 'imported-mesh'
+        ? [node.data]
+        : []
+    )[0]!;
+
+  it('records the reading on the feature, and it survives save and replay', () => {
+    const document = importWith('inch');
+    expect(meshData(document).assumedUnits).toBe('inch');
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(52);
+    const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
+    expect(meshData(normalizeDocument(saved)).assumedUnits).toBe('inch');
+    const manager = new CommandManager(normalizeDocument(saved));
+    manager.undo();
+    manager.redo();
+    expect(meshData(manager.document).assumedUnits).toBe('inch');
+  });
+
+  it('leaves the field out when no reading was assumed', () => {
+    expect('assumedUnits' in meshData(importWith())).toBe(false);
+  });
+
+  it('accepts only a known unit', () => {
+    const data = meshData(importWith('mm'));
+    expect(isImportedMeshSourceData(data)).toBe(true);
+    expect(isImportedMeshSourceData({ ...data, assumedUnits: 'furlong' })).toBe(
+      false
+    );
+    expect(isImportedMeshSourceData({ ...data, assumedUnits: 25.4 })).toBe(
+      false
+    );
+  });
 });

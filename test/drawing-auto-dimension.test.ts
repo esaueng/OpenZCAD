@@ -1,11 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  drawingPaperPerModelUnit,
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingLinearDimension
 } from '@openzcad/shared';
-import { resolveDrawingAnnotation } from '../apps/web/src/lib/drawing/annotations';
+import {
+  annotationAnchor,
+  layoutAnnotation,
+  resolveDrawingAnnotation
+} from '../apps/web/src/lib/drawing/annotations';
 import { planAutoDimensions } from '../apps/web/src/lib/drawing/autoDimension';
 import {
   viewPageBox,
@@ -14,13 +19,16 @@ import {
 import {
   boxOperations,
   buildPart,
+  countersunkPlate,
   flangeOperations,
   footOperations,
   frontId,
   plateOperations,
   roundedOperations,
   sheetOf,
-  stepOperations
+  slopedOperations,
+  stepOperations,
+  topId
 } from './helpers/drawing-dimension-fixtures';
 import {
   autoDimension,
@@ -100,21 +108,32 @@ describe('D06 Auto-dimension: the corpus', () => {
     expectClearLayout(after, views, bodies);
   });
 
-  it('leaves a bolt circle pitch to the report and dimensions the rest', async () => {
+  it('states a bolt circle by a Ø span between two opposite holes', async () => {
     const { bodies, bodyId } = await buildPart(adapter, flangeOperations());
-    const { plan, audit, after, views } = autoDimension(
+    const { before, plan, audit, after, views } = autoDimension(
       sheetOf(bodyId),
       bodies
     );
-    // Since v48 a Ø span between opposite holes states the pitch; the
-    // generator leaves that one to the person and says so.
-    expect(audit).toMatchObject({ redundant: [] });
-    expect(audit.missing.map((entry) => entry.message)).toEqual([
+    expect(before.missing.map((entry) => entry.message)).toContain(
       'Ø20 pitch diameter of the 4× Ø3 bolt circle.'
+    );
+    // Since v48 a Ø span between opposite holes' centres states the pitch.
+    const pitch = plan.annotations.filter(
+      (annotation): annotation is DrawingLinearDimension =>
+        annotation.kind === 'linear' && annotation.diameter === true
+    );
+    expect(pitch).toHaveLength(1);
+    expect([pitch[0]!.from.anchor, pitch[0]!.to.anchor]).toEqual([
+      'center',
+      'center'
     ]);
-    expect(plan.skipped.map((entry) => entry.message)).toEqual([
-      "Ø20 pitch diameter of the 4× Ø3 bolt circle: Auto-dimension does not place pitch diameters yet; add a Ø span between two opposite holes' centres."
-    ]);
+    const view = views.find((v) => v.view.viewId === pitch[0]!.viewId)!.view;
+    expect(
+      resolveDrawingAnnotation(pitch[0]!, view, bodies, 'mm')
+    ).toMatchObject({ ok: true, resolved: { label: 'Ø20' } });
+    expect(plan.skipped).toEqual([]);
+    expect(audit).toMatchObject({ missing: [], redundant: [], unchecked: [] });
+    expect(audit.stated).toBe(audit.required);
     expectClearLayout(after, views, bodies);
   });
 
@@ -127,6 +146,74 @@ describe('D06 Auto-dimension: the corpus', () => {
     expect(kinds(plan.annotations)).toContain('radius');
     expect(audit).toMatchObject({ missing: [], redundant: [] });
     expect(audit.unchecked).toEqual([]);
+    expectClearLayout(after, views, bodies);
+  });
+
+  it('states a slope by its angle and one corner, and derives the rest', async () => {
+    const { bodies, bodyId } = await buildPart(adapter, slopedOperations());
+    const { before, plan, audit, after, views } = autoDimension(
+      sheetOf(bodyId),
+      bodies
+    );
+    expect(before.missing.map((entry) => entry.message)).toContain(
+      '45° slope to X.'
+    );
+    expect(kinds(plan.annotations)).toContain('angle');
+    const angle = plan.annotations.find((a) => a.kind === 'angle')!;
+    expect(angle.viewId).toBe(frontId);
+    const resolved = resolveDrawingAnnotation(
+      angle,
+      views.find((v) => v.view.viewId === frontId)!.view,
+      bodies,
+      'mm'
+    );
+    // Its edges meet at the slope's corner with the top face, 135° inside;
+    // v51 states it outside, on the top face's extension, as 45°.
+    expect(angle).toMatchObject({ kind: 'angle', outside: 1 });
+    expect(resolved.ok && resolved.resolved.kind).toBe('angle');
+    if (resolved.ok && resolved.resolved.kind === 'angle')
+      expect(resolved.resolved.value).toBeCloseTo(45, 6);
+    expect(plan.skipped).toEqual([]);
+    expect(audit).toMatchObject({
+      missing: [],
+      redundant: [],
+      unmeasurable: [],
+      unchecked: []
+    });
+    expect(audit.stated).toBe(audit.required);
+    expectClearLayout(after, views, bodies);
+  });
+
+  it('calls out countersunk holes in one note, not a diameter and a chamfer', async () => {
+    const { bodies, bodyId } = await countersunkPlate(adapter);
+    const { before, plan, audit, after, views } = autoDimension(
+      sheetOf(bodyId, [], ['top', 'front']),
+      bodies
+    );
+    expect(before.missing.map((entry) => entry.message)).toEqual(
+      expect.arrayContaining(['2× Ø6 diameter.', '2× 3 × 45° chamfer.'])
+    );
+    const callouts = plan.annotations.filter(
+      (annotation) =>
+        annotation.kind === 'diameter' && annotation.countersink !== undefined
+    );
+    expect(callouts).toHaveLength(1);
+    expect(kinds(plan.annotations)).not.toContain('chamfer');
+    const top = views.find((v) => v.view.viewId === topId)!.view;
+    expect(
+      resolveDrawingAnnotation(callouts[0]!, top, bodies, 'mm')
+    ).toMatchObject({
+      ok: true,
+      resolved: { label: '2× Ø6 THRU, CSK Ø12 × 90°' }
+    });
+    expect(plan.skipped).toEqual([]);
+    expect(audit).toMatchObject({
+      missing: [],
+      redundant: [],
+      unmeasurable: [],
+      unchecked: []
+    });
+    expect(audit.stated).toBe(audit.required);
     expectClearLayout(after, views, bodies);
   });
 
@@ -271,6 +358,65 @@ describe('D06 Auto-dimension: rules', () => {
       expect.stringMatching(/^Y: .*add a view that shows Y\.$/)
     ]);
     expect(audit.missing).toEqual([]);
+  });
+
+  it('locates a hole inside its view, beside it, and keeps overall sizes outside', async () => {
+    const { bodies, bodyId } = await buildPart(adapter, plateOperations());
+    const { plan, after, views, audit } = autoDimension(
+      sheetOf(bodyId),
+      bodies
+    );
+    expect(audit).toMatchObject({ missing: [], redundant: [] });
+    const k = drawingPaperPerModelUnit(after.scale, 'mm');
+    const placed = plan.annotations.flatMap((annotation) => {
+      if (annotation.kind !== 'linear') return [];
+      const entry = views.find((v) => v.view.viewId === annotation.viewId)!;
+      const toPage = viewPageTransform(
+        entry.view,
+        entry.projection.bounds!,
+        after,
+        'mm'
+      );
+      const outline = viewPageBox(
+        entry.view,
+        entry.projection.bounds!,
+        after,
+        'mm'
+      );
+      const resolution = resolveDrawingAnnotation(
+        annotation,
+        entry.view,
+        bodies,
+        'mm'
+      );
+      if (!resolution.ok || resolution.resolved.kind !== 'linear') return [];
+      const { box } = layoutAnnotation(
+        resolution.resolved,
+        toPage,
+        k,
+        annotationAnchor(annotation, entry.view)
+      );
+      const ends = [resolution.resolved.from, resolution.resolved.to].map(
+        (point) => toPage(...point)
+      );
+      const axis = annotation.direction === 'horizontal' ? 0 : 1;
+      const [lo, hi] =
+        axis === 0
+          ? [outline.x, outline.x + outline.width]
+          : [outline.y, outline.y + outline.height];
+      const onOutline = (p: [number, number]) =>
+        Math.abs(p[axis] - lo) < 0.01 || Math.abs(p[axis] - hi) < 0.01;
+      const inside =
+        box.x >= outline.x &&
+        box.y >= outline.y &&
+        box.x + box.width <= outline.x + outline.width &&
+        box.y + box.height <= outline.y + outline.height;
+      return [{ overall: ends.every(onOutline), inside }];
+    });
+    // The 40 and 20 envelope outside; a hole's position beside the hole.
+    expect(placed.filter((p) => p.overall).every((p) => !p.inside)).toBe(true);
+    expect(placed.some((p) => !p.overall && p.inside)).toBe(true);
+    expectClearLayout(after, views, bodies);
   });
 
   it('stacks spans shortest nearest the part', async () => {

@@ -5,6 +5,7 @@ import type {
   FaceGeometry,
   FaceTopology,
   FeatureNode,
+  GeometryReadyState,
   ProjectDocument,
   TopologySelection,
   Vector3
@@ -367,10 +368,13 @@ export function resolveFilletBlendFace(
   return matches.length === 1 ? matches[0]! : null;
 }
 
-/** Computes creation-only cyan faces once, when an exact preview publishes. */
+/**
+ * Computes creation-only cyan faces once, when an exact preview publishes —
+ * a completed rebuild or a drag frame's geometry alike.
+ */
 export function newBlendFaceSelections(
   base: ProjectDocument,
-  preview: ProjectDocument['derived']
+  preview: Pick<GeometryReadyState, 'bodyRepresentations'>
 ): TopologySelection[] {
   const baseHashes = new Set(
     Object.values(base.derived.bodyRepresentations).flatMap((body) =>

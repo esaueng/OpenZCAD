@@ -246,7 +246,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
       value: { writeText }
     });
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
-    expect(await screen.findByText('No links yet.')).toBeVisible();
+    expect(await screen.findByText('Only invited people')).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     expect(client.create).toHaveBeenCalledWith('proj_x', 'view');
@@ -266,7 +266,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
       screen.getByRole('button', { name: 'Revoke View only link' })
     );
     expect(client.revoke).toHaveBeenCalledWith('proj_x', 'shr_a');
-    expect(await screen.findByText('No links yet.')).toBeVisible();
+    expect(await screen.findByText('Only invited people')).toBeVisible();
     expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
   });
 
@@ -371,7 +371,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     );
     expect(client.revoke).toHaveBeenCalledTimes(2);
     expect(client.revoke).toHaveBeenLastCalledWith('proj_x', 'shr_a');
-    expect(await screen.findByText('No links yet.')).toBeVisible();
+    expect(await screen.findByText('Only invited people')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 

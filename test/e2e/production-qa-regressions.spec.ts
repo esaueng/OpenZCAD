@@ -152,7 +152,7 @@ for (const [width, height] of [
     const bar = page.getByRole('group', { name: 'Circular pattern command' });
     await expect(bar).toContainText('Click the body to repeat');
     await pickObjectsBody(page, 'Box 1');
-    await expect(bar).toContainText('Pick the axis');
+    await expect(bar).toContainText('Pick an axis');
     // The More tools fold is seeded open, and at narrow widths it covers
     // the stage the axis is clicked on.
     const fold = page.getByRole('button', { name: /^More tools/ });
@@ -161,7 +161,7 @@ for (const [width, height] of [
     }
     await waitForStillViewport(page);
     await clickWorldPoint(page, [0, 0, -5]);
-    await expect(bar).toContainText('Drag the total angle');
+    await expect(bar).toContainText('Drag the angle');
     await enterCommandValue(page, 'count', '3');
     await finishInPlaceCommand(page, 'Circular pattern');
     const counts = page

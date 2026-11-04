@@ -156,7 +156,7 @@ test('imports a STEP file into an encrypted project and resolves it in a fresh b
 
   await page.getByLabel('Project name').fill('Secret fixture');
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'secret-cube.step',
     mimeType: 'application/step',
     buffer: STEP
@@ -264,7 +264,7 @@ test('duplicates an encrypted project and opens the copy in a fresh browser', as
 
   await page.getByLabel('Project name').fill('Secret original');
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
     name: 'secret-cube.step',
     mimeType: 'application/step',
     buffer: STEP

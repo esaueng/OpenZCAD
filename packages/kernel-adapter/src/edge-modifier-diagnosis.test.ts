@@ -12,6 +12,7 @@ import { RemusKernel } from './remus-runtime';
 import {
   acceptedEdgeModifierProbe,
   applyEdgeModifier,
+  blendSubsetRemedy,
   blendCliffLimit,
   chamferLadderAim,
   edgeModifierFailureMessage,
@@ -106,7 +107,7 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     }
   });
 
-  it('names the blendable subset when a corner defeats the whole selection', async () => {
+  it('reports the failed combination without blaming untested edge subsets', async () => {
     const adapter = await createExactKernelAdapter();
     try {
       let doc = addPrimitiveFeature(createProjectDocument('Notched', user), {
@@ -141,11 +142,9 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
       const derived = await adapter.syncDocument(doc);
       const failure = derived.warnings.join(' ');
 
-      // The remedy is a count the kernel measured, not a property of the
-      // selection: deselect the few it refused and the rest still round.
-      expect(failure).toMatch(/cannot be blended where two rounds would meet/);
-      expect(failure).toMatch(/round on their own/);
-      expect(failure).toMatch(/deselect those \d+/);
+      expect(failure).toMatch(/could not build/);
+      expect(failure).toMatch(/separate fillet features/);
+      expect(failure).not.toMatch(/round on their own|deselect those \d+/);
 
       // The claim a plain box disproves must not come back.
       expect(failure).not.toMatch(
@@ -155,6 +154,16 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     } finally {
       adapter.dispose();
     }
+  });
+
+  it('does not turn a legacy planar-filter count into a promise about either subset', () => {
+    const reported =
+      'edges-not-blended: blend: 2 of the edges named were not blended ([Id(35), Id(26)]): the blend engines refused the whole selection (blend: unsupported vertex blend at Id(18): 2 stripes meet); the 1 edge(s) between planar faces would round on their own, but returning that subset would drop the rest without saying so';
+    const remedy = blendSubsetRemedy(reported, 'fillet');
+    expect(remedy).toContain('could not build these edges together');
+    expect(remedy).not.toMatch(
+      /cannot be blended|round on their own|deselect|other 1/
+    );
   });
 
   /**

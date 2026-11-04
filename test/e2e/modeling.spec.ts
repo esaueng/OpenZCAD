@@ -1628,7 +1628,7 @@ test('preflights and splits a box into two live half bodies', async ({
   await page.getByRole('button', { name: /^Split/ }).click();
   await pickObjectsBody(page, 'Box 1');
   const splitBar = page.getByRole('group', { name: 'Split command' });
-  await expect(splitBar).toContainText('Pick the plane');
+  await expect(splitBar).toContainText('Pick a plane or flat face');
   await clickWorldPoint(page, [0, -3, 4]);
   await expect(splitBar).toContainText('Slide the plane');
   await enterCommandValue(page, 'offset', '5');
@@ -2702,7 +2702,7 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   // The import affordance is a hidden <input type=file> the File menu clicks.
   // a-export-box is the corpus's 10x20x30 box: 6000 mm3, twelve edges.
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles(
       fileURLToPath(
         new URL('../parity/corpus/a-export-box.step', import.meta.url)
@@ -2754,7 +2754,7 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click();
+  await expect(fileMenu).not.toHaveAttribute('open');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
@@ -2778,6 +2778,11 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   // Only the two artifact-archive uploads (import and export) may fail, and
   // only because the preview host has no /api/uploads. Anything else is a
   // real console error and this stays an equality assertion so it shows up.
+  // The export's upload starts after the download it archives, so wait for
+  // its 404 rather than counting the instant the file has been read.
+  await expect
+    .poll(() => consoleErrors.filter((message) => message.includes('404')))
+    .toHaveLength(2);
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
@@ -2806,7 +2811,7 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   // A well-formed box whose z-max face points at an entity id that does not
   // exist: the parser rejects it, the geometry never runs.
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles(
       fileURLToPath(
         new URL(
@@ -3028,7 +3033,8 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  await fileMenu.locator('summary').click(); // collapse; it overlays the sidebar
+  // Export STEP closes the menu, which otherwise overlays the sidebar.
+  await expect(fileMenu).not.toHaveAttribute('open');
   expect(download.suggestedFilename()).toBe('E2E-Part.step');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
@@ -4266,7 +4272,7 @@ test('imports an STL mesh and measures the body the worker rebuilt', { tag: '@ci
   expect(beforeImportRequests).toBe(0);
 
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles(
       fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
     );
@@ -4332,7 +4338,7 @@ test('an STL import that outlives its project does not land in the next one', as
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles(
       fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
     );
@@ -4565,7 +4571,7 @@ test('an archive that outlives its project stays out of the next project’s Fil
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page
-    .getByLabel(/^Import FreeCAD, STEP or /)
+    .getByLabel(/^Import STEP or /)
     .setInputFiles(
       fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
     );

@@ -55,6 +55,7 @@ export function suppressedFeaturePassThroughSource(
     case 'fillet':
     case 'chamfer':
     case 'pattern':
+    case 'thread':
       return data.targetBodyId;
     case 'gear':
       // Teeth cut into a body replace it; a new gear has no input body.

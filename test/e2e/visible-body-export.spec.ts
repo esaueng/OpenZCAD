@@ -188,7 +188,7 @@ test('STEP and every mesh format export only visible result bodies through hide,
   await checkFile('step', await exportStep(), 1192, 68, 2);
 
   // Parameter-off bodies use the same scope count and recovery as local eyes.
-  await fileMenu.locator('summary').click();
+  await expect(fileMenu).not.toHaveAttribute('open');
   await page.getByLabel('New parameter type').selectOption('toggle');
   await page.getByLabel('New parameter name').fill('show_parts');
   for (const name of ['Plate', 'Upper']) {

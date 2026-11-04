@@ -154,6 +154,12 @@ export interface HistoryTimelineProps {
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onResumeHistory(): void;
   onReorderFeature(featureId: FeatureId, toIndex: number): void;
+  /**
+   * An exact operation is still running. A reorder started now would be
+   * refused as busy, and repeated arrow presses would leave an order nobody
+   * chose, so the grips hold still until it finishes.
+   */
+  reorderBusy?: boolean;
   /** Renames a feature in place. Without it the row offers no rename. */
   onRenameFeature?(featureId: FeatureId, name: string): void;
 }
@@ -358,6 +364,7 @@ export function HistoryTimeline({
   onRollbackAfterFeature,
   onResumeHistory,
   onReorderFeature,
+  reorderBusy = false,
   onRenameFeature
 }: HistoryTimelineProps) {
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
@@ -384,6 +391,10 @@ export function HistoryTimeline({
   const pendingFeature = features.find(
     (feature) => feature.id === pendingAppendId
   );
+  // The latest row is the list's last: it is out of view only while the
+  // panel scrolls and is scrolled up from its foot, the one time a button
+  // to reach it does anything.
+  const [latestOutOfView, setLatestOutOfView] = useState(false);
 
   const markProgrammaticScroll = useCallback(() => {
     programmaticScroll.current = true;
@@ -418,7 +429,19 @@ export function HistoryTimeline({
     const list = listRef.current;
     const host = list?.closest<HTMLElement>('.model-panel-body') ?? list;
     if (!host) return;
+    const measure = () =>
+      setLatestOutOfView(
+        host.scrollHeight - host.clientHeight - host.scrollTop > 24
+      );
+    measure();
+    const resize =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    resize?.observe(host);
+    if (list && list !== host) resize?.observe(list);
     const onScroll = () => {
+      measure();
       if (programmaticScroll.current) return;
       following.current =
         host.scrollHeight - host.clientHeight - host.scrollTop <= 24;
@@ -433,6 +456,7 @@ export function HistoryTimeline({
     for (const input of inputs)
       host.addEventListener(input, userInput, { passive: true });
     return () => {
+      resize?.disconnect();
       host.removeEventListener('scroll', onScroll);
       for (const input of inputs) host.removeEventListener(input, userInput);
     };
@@ -823,7 +847,7 @@ export function HistoryTimeline({
           ? `New operation available: ${pendingFeature.name}`
           : ''}
       </span>
-      {features.length > 0 && (
+      {features.length > 0 && (pendingFeature || latestOutOfView) && (
         <button
           type="button"
           className="history-resume history-latest"
@@ -1017,7 +1041,7 @@ export function HistoryTimeline({
                 );
               }}
               onDrop={(event) => {
-                if (filtering || !dragFeatureId) {
+                if (filtering || reorderBusy || !dragFeatureId) {
                   return;
                 }
                 event.preventDefault();
@@ -1035,10 +1059,16 @@ export function HistoryTimeline({
                 // step could jump past an invisible one: reorder only the
                 // whole history.
                 title={
-                  filtering ? 'Clear the filter to reorder' : 'Drag to reorder'
+                  filtering
+                    ? 'Clear the filter to reorder'
+                    : reorderBusy
+                      ? 'Reorder once the current rebuild finishes'
+                      : 'Drag to reorder'
                 }
                 disabled={filtering}
-                draggable={!filtering}
+                // Not `disabled`: that would drop keyboard focus mid-press.
+                aria-disabled={reorderBusy || undefined}
+                draggable={!filtering && !reorderBusy}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = 'move';
                   event.dataTransfer.setData('text/plain', feature.featureId);
@@ -1067,6 +1097,9 @@ export function HistoryTimeline({
                   }
                   event.preventDefault();
                   event.stopPropagation();
+                  if (reorderBusy) {
+                    return;
+                  }
                   // Clamped so the ends of the list are a no-op rather than
                   // a move to -1 or past the end. The command layer refuses
                   // those too, but a keypress that cannot do anything should
@@ -1121,7 +1154,10 @@ export function HistoryTimeline({
                   // Every row used to announce the same generic kind label, so
                   // a history read aloud was a list of identical items. The
                   // feature's own name comes first, as on screen.
-                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', combined into a later feature' : ''}, click to edit`}
+                  // The value beside the name can be cut short in a narrow
+                  // panel, and fades for the row's actions on hover: the
+                  // tooltip carries it whole.
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}, click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">

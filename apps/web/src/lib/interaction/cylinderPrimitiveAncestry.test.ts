@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  booleanBodies,
   chamferEdges,
   createProjectDocument,
   directEditBody,
@@ -409,6 +410,153 @@ function sourceFeatureId(document: ReturnType<typeof cylinderDocument>) {
 }
 
 describe('box side ancestry', () => {
+  function joinedBox() {
+    const box = addPrimitiveFeature(
+      createProjectDocument('Joined box', toUserId('user_ancestry')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 18, depth: 26 }
+      }
+    );
+    const cylinder = addPrimitiveFeature(box, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 6, height: 35 }
+    });
+    const joined = booleanBodies(cylinder, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [cylinder.bodyOrder[1]!, box.bodyOrder[0]!]
+    });
+    const rounded = filletEdges(joined.document, {
+      name: 'Round junction',
+      targetBodyId: joined.bodyId,
+      edgeHashes: [101],
+      size: 5
+    });
+    const reference: FaceTopologyReferenceV5 = {
+      kind: 'face',
+      producingFeatureId: listFeaturesInOrder(joined.document).at(-1)!
+        .featureId,
+      lineageName: 'boolean.face.operand.1.primitive.box.face.x-max',
+      currentHash: 123,
+      witnessVersion: 1,
+      witness: {} as FaceWitnessV1
+    };
+    return { box, joined, rounded, reference };
+  }
+
+  it('follows the unique union operand role through the fillet', () => {
+    const { box, rounded, reference } = joinedBox();
+    expect(
+      primitiveBoxFaceAncestor(rounded.document, rounded.bodyId, reference, 123)
+    ).toMatchObject({
+      primitive: { featureId: sourceFeatureId(box) },
+      dimension: 'width',
+      axis: 'x',
+      side: 'max',
+      scale: 1
+    });
+  });
+
+  it('preserves local editing on bare unions and rejects rotated union axes', () => {
+    const { joined, rounded, reference } = joinedBox();
+    expect(
+      primitiveBoxFaceAncestor(joined.document, joined.bodyId, reference, 123)
+    ).toBeNull();
+    const scaled = transformBody(rounded.document, {
+      name: 'Scale union',
+      targetBodyId: rounded.bodyId,
+      translation: { x: 0, y: 0, z: 0 },
+      scale: 2
+    }).document;
+    expect(
+      primitiveBoxFaceAncestor(scaled, rounded.bodyId, reference, 123)?.scale
+    ).toBe(2);
+    const rotated = transformBody(rounded.document, {
+      name: 'Rotate union',
+      targetBodyId: rounded.bodyId,
+      translation: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 90 }
+    }).document;
+    expect(
+      primitiveBoxFaceAncestor(rotated, rounded.bodyId, reference, 123)
+    ).toBeNull();
+  });
+
+  it('requires a current, uniquely published max-side union role', () => {
+    const { rounded, reference } = joinedBox();
+    for (const candidate of [
+      { ...reference, currentHash: 124 },
+      { ...reference, producingFeatureId: sourceFeatureId(rounded.document) },
+      ...[
+        'boolean.face.operand.9.primitive.box.face.x-max',
+        'boolean.face.operand.0.primitive.box.face.x-max',
+        'boolean.face.operand.1.primitive.box.face.x-min',
+        'boolean.face.shared.primitive.box.face.x-max',
+        'boolean.face.operand.1.boolean.face.operand.0.primitive.box.face.x-max'
+      ].map((lineageName) => ({ ...reference, lineageName }))
+    ]) {
+      expect(
+        primitiveBoxFaceAncestor(
+          rounded.document,
+          rounded.bodyId,
+          candidate,
+          123
+        )
+      ).toBeNull();
+    }
+  });
+
+  it('does not cross other booleans or resize a kept source', () => {
+    const { joined, rounded, reference } = joinedBox();
+    const feature = listFeaturesInOrder(joined.document).at(-1)!;
+    for (const data of [
+      { operation: 'subtract' },
+      { operation: 'intersect' },
+      { keepOriginals: 'all' }
+    ] as const) {
+      const document = updateFeature(rounded.document, {
+        featureId: feature.featureId,
+        data
+      });
+      expect(
+        primitiveBoxFaceAncestor(document, rounded.bodyId, reference, 123)
+      ).toBeNull();
+    }
+  });
+
+  it('does not resize a copied source or replace a local face baseline', () => {
+    const { box, rounded, reference } = joinedBox();
+    const copied = transformBody(rounded.document, {
+      name: 'Copy source',
+      targetBodyId: box.bodyOrder[0]!,
+      translation: { x: 50, y: 0, z: 0 },
+      copy: true
+    }).document;
+    expect(
+      primitiveBoxFaceAncestor(copied, rounded.bodyId, reference, 123)
+    ).toBeNull();
+    const locallyMoved = directEditBody(rounded.document, {
+      name: 'Local end move',
+      targetBodyId: rounded.bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: 123,
+        faceReference: reference,
+        sourceSurfaceType: 'plane',
+        sourceArea: 349,
+        sourceCenter: { x: 30, y: 9, z: 13 },
+        sourceNormal: { x: 1, y: 0, z: 0 },
+        offset: 2
+      }
+    }).document;
+    expect(
+      primitiveBoxFaceAncestor(locallyMoved, rounded.bodyId, reference, 123)
+    ).toBeNull();
+  });
+
   it('does not mistake rotated modifier axes for source-box axes', () => {
     const box = addPrimitiveFeature(
       createProjectDocument('Box', toUserId('user_ancestry')),

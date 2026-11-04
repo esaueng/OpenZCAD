@@ -112,7 +112,10 @@ export function createProjectDiagnosticBundle(
         command.kind !== 'node.metadata.set' &&
         !command.kind.startsWith('drawing.') &&
         !command.kind.startsWith('objectFolder.') &&
-        !command.kind.startsWith('reference-image.')
+        !command.kind.startsWith('reference-image.') &&
+        // Assembly component, joint and study names are the user's words,
+        // and no rebuild reads the assembly.
+        !command.kind.startsWith('assembly.')
     )
     .map(sanitizeCommand);
   const diagnosticDocument: ProjectDocument = {
@@ -137,6 +140,8 @@ export function createProjectDiagnosticBundle(
   // Folder names are the user's own words and no rebuild reads them.
   delete diagnosticDocument.objectFolders;
   delete diagnosticDocument.referenceImages;
+  // Component and joint names are the user's own words; no rebuild reads them.
+  delete diagnosticDocument.assembly;
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {
     const body = document.derived.bodyRepresentations[bodyId];

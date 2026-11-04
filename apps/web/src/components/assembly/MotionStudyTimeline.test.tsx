@@ -1,0 +1,265 @@
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  commandFactories,
+  type AnyCommand,
+  type CommandManager
+} from '@openzcad/command-system';
+import type { AssemblyStudySetInput } from '@openzcad/document-core';
+import {
+  assemblyRuntime,
+  getAssemblyRuntime
+} from '../../lib/assembly/assemblyRuntime';
+import { MotionStudyTimeline } from './MotionStudyTimeline';
+import { pivotProject } from './motionTestFixture';
+
+function lane(element: HTMLElement, width = 200) {
+  element.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    right: width,
+    bottom: 36,
+    width,
+    height: 36,
+    x: 0,
+    y: 0,
+    toJSON: () => ({})
+  });
+  return element;
+}
+
+function mount(manager: CommandManager = pivotProject()) {
+  const executed: AnyCommand[] = [];
+  const onClose = vi.fn();
+  const view = render(
+    <MotionStudyTimeline
+      assembly={manager.document.assembly}
+      execute={(command) => {
+        executed.push(command);
+        manager.execute(command);
+        rerender();
+        return true;
+      }}
+      onClose={onClose}
+    />
+  );
+  function rerender() {
+    view.rerender(
+      <MotionStudyTimeline
+        assembly={manager.document.assembly}
+        execute={(command) => {
+          executed.push(command);
+          manager.execute(command);
+          rerender();
+          return true;
+        }}
+        onClose={onClose}
+      />
+    );
+  }
+  return { ...view, manager, executed, onClose };
+}
+
+function lastStudy(executed: AnyCommand[]) {
+  const command = executed.at(-1);
+  expect(command?.kind).toBe('assembly.study.set');
+  return (command?.payload as AssemblyStudySetInput).study;
+}
+
+beforeEach(() => {
+  assemblyRuntime.stop();
+  assemblyRuntime.reset();
+  assemblyRuntime.setActive(true);
+  assemblyRuntime.selectStudy('study_1');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  assemblyRuntime.setActive(false);
+  assemblyRuntime.reset();
+});
+
+describe('MotionStudyTimeline', () => {
+  it('shows the selected study with its transport, ruler and tracks', () => {
+    mount();
+    const timeline = screen.getByRole('region', {
+      name: 'Motion study Motion 1'
+    });
+    expect(timeline).toBeTruthy();
+    expect(screen.getByLabelText('Playhead').textContent).toBe('0.00 / 2.00 s');
+    expect(
+      screen.getByRole<HTMLSelectElement>('combobox', { name: 'Playback' })
+        .value
+    ).toBe('loop');
+    expect(screen.getByRole('group', { name: 'Track Pivot' })).toBeTruthy();
+    expect(
+      screen.getAllByRole('button', { name: /^Key at [0-9]/ })
+    ).toHaveLength(2);
+    // No placeholder controls for features that do not exist yet.
+    expect(screen.queryByRole('button', { name: 'Export video' })).toBeNull();
+    // Paused, the parts show the study at the playhead.
+    expect(getAssemblyRuntime().overrides.get('j_pivot')).toEqual([0]);
+  });
+
+  it('scrubs: a press on a row moves the playhead and the parts', () => {
+    mount();
+    const row = lane(screen.getByTestId('motion-lane-0'));
+    fireEvent.pointerDown(row, { clientX: 100, pointerId: 1, button: 0 });
+    expect(getAssemblyRuntime().studyTimeS).toBe(1);
+    expect(getAssemblyRuntime().overrides.get('j_pivot')).toEqual([45]);
+    fireEvent.pointerMove(row, { clientX: 150, pointerId: 1 });
+    expect(getAssemblyRuntime().studyTimeS).toBe(1.5);
+    fireEvent.pointerUp(row, { pointerId: 1 });
+    fireEvent.pointerMove(row, { clientX: 20, pointerId: 1 });
+    expect(getAssemblyRuntime().studyTimeS).toBe(1.5);
+    expect(screen.getByLabelText('Playhead').textContent).toBe('1.50 / 2.00 s');
+    expect(screen.getByText('67.5°')).toBeTruthy();
+  });
+
+  it('keys every track at the playhead as one study command', () => {
+    const { executed, manager } = mount();
+    const ruler = lane(screen.getByTestId('motion-ruler'));
+    fireEvent.pointerDown(ruler, { clientX: 50, pointerId: 1, button: 0 });
+    fireEvent.pointerUp(ruler, { pointerId: 1 });
+    // A pose dragged in the viewport is what gets keyed.
+    act(() => assemblyRuntime.setOverride('j_pivot', [30]));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Key at playhead (K)' })
+    );
+    expect(executed).toHaveLength(1);
+    expect(lastStudy(executed).tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' },
+      { t: 0.5, value: 30, easing: 'linear' },
+      { t: 2, value: 90, easing: 'linear' }
+    ]);
+    expect(manager.document.assembly?.studies[0]?.tracks[0]?.keys).toHaveLength(
+      3
+    );
+    // K again at the same time replaces that key instead of adding one.
+    act(() => assemblyRuntime.setOverride('j_pivot', [35]));
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'k' });
+    expect(executed).toHaveLength(2);
+    expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.value)).toEqual([
+      0, 35, 90
+    ]);
+  });
+
+  it('plays with startStudy and pauses keeping the playhead', () => {
+    const start = vi.spyOn(assemblyRuntime, 'startStudy');
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    expect(start).toHaveBeenCalledWith('study_1', 1, 0);
+    expect(getAssemblyRuntime().playback?.kind).toBe('study');
+    // The driver advances the playhead; pause keeps it and the pose.
+    act(() => {
+      assemblyRuntime.setStudyTime(0.84);
+    });
+    expect(screen.getByLabelText('Playhead').textContent).toBe('0.84 / 2.00 s');
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(getAssemblyRuntime().playback).toBeNull();
+    expect(getAssemblyRuntime().studyTimeS).toBe(0.84);
+    expect(getAssemblyRuntime().overrides.get('j_pivot')?.[0]).toBeCloseTo(
+      37.8
+    );
+    // Space toggles while the timeline has focus; 2× restarts at that speed.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Speed' }), {
+      target: { value: '2' }
+    });
+    fireEvent.keyDown(screen.getByRole('region'), { key: ' ' });
+    expect(start).toHaveBeenLastCalledWith('study_1', 2, 0.84);
+  });
+
+  it('retimes a dragged key between its neighbours and deletes a key', () => {
+    const { executed } = mount();
+    const row = lane(screen.getByTestId('motion-lane-0'));
+    const last = screen.getByRole('button', { name: 'Key at 2.00 s, 90°' });
+    fireEvent.pointerDown(last, { clientX: 200, pointerId: 2, button: 0 });
+    fireEvent.pointerMove(last, { clientX: 150, pointerId: 2 });
+    fireEvent.pointerMove(last, { clientX: -40, pointerId: 2 });
+    fireEvent.pointerUp(last, { pointerId: 2 });
+    expect(row).toBeTruthy();
+    // Clamped 1 ms after the first key.
+    expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.t)).toEqual([
+      0, 0.001
+    ]);
+    // The moved key stays selected: Delete removes it; the last key stays.
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'Delete' });
+    expect(lastStudy(executed).tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' }
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Key at 0.00 s, 0°' }));
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'Delete' });
+    expect(executed).toHaveLength(2);
+    expect(screen.getByRole('status').textContent).toMatch(/at least one key/);
+  });
+
+  it('edits the selected key and steps the playhead between keys', () => {
+    const { executed } = mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Key at 2.00 s, 90°' }));
+    const editor = screen.getByRole('group', { name: 'Selected key' });
+    expect(editor).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Ease in-out' }));
+    expect(lastStudy(executed).tracks[0]?.keys[1]?.easing).toBe('ease');
+    const value = screen.getByLabelText('Key value');
+    fireEvent.change(value, { target: { value: '120' } });
+    fireEvent.keyDown(value, { key: 'Enter' });
+    expect(lastStudy(executed).tracks[0]?.keys[1]?.value).toBe(120);
+    fireEvent.keyDown(screen.getByRole('region'), { key: ']' });
+    expect(getAssemblyRuntime().studyTimeS).toBe(2);
+    fireEvent.keyDown(screen.getByRole('region'), { key: '[' });
+    expect(getAssemblyRuntime().studyTimeS).toBe(0);
+  });
+
+  it('changes duration and playback mode as single commands', () => {
+    const { executed } = mount();
+    const duration = screen.getByLabelText('Duration in seconds');
+    fireEvent.change(duration, { target: { value: '1' } });
+    fireEvent.blur(duration);
+    expect(lastStudy(executed).durationS).toBe(1);
+    expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.t)).toEqual([0, 1]);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Playback' }), {
+      target: { value: 'ping-pong' }
+    });
+    expect(lastStudy(executed).playback).toBe('ping-pong');
+    expect(executed).toHaveLength(2);
+  });
+
+  it('adds a track for an untracked joint motion from the menu', () => {
+    const manager = pivotProject();
+    const study = manager.document.assembly!.studies[0]!;
+    manager.execute(
+      commandFactories.setAssemblyStudy({ study: { ...study, tracks: [] } })
+    );
+    const { executed } = mount(manager);
+    expect(screen.getByText(/No tracks yet/)).toBeTruthy();
+    expect(
+      screen
+        .getByRole('button', { name: 'Key at playhead (K)' })
+        .hasAttribute('disabled')
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add joint track' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Pivot/ }));
+    expect(lastStudy(executed).tracks).toEqual([
+      {
+        jointId: 'j_pivot',
+        dof: 0,
+        keys: [{ t: 0, value: 0, easing: 'linear' }]
+      }
+    ]);
+    // Every motion now has a track: nothing left to add.
+    expect(
+      screen
+        .getByRole('button', { name: 'Add joint track' })
+        .hasAttribute('disabled')
+    ).toBe(true);
+  });
+
+  it('closes: stops playback, deselects the study and reports it', () => {
+    const { onClose } = mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close motion study' }));
+    expect(getAssemblyRuntime().playback).toBeNull();
+    expect(getAssemblyRuntime().selectedStudyId).toBeNull();
+    expect(onClose).toHaveBeenCalled();
+  });
+});

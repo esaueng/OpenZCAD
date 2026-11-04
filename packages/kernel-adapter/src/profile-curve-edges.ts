@@ -60,9 +60,8 @@ function lift(
 }
 
 /**
- * How one ellipse piece is built, in kernel-neutral terms. Shared with the
- * OCCT parity reference so both kernels cut the same pieces at the same
- * parameters and their vertices coincide.
+ * How one ellipse piece is built, with consistent parameters and coinciding
+ * vertices at adjacent piece boundaries.
  *
  * Kernels want the major radius first, so a taller-than-wide ellipse is
  * restated with the axes swapped (rotation + 90°, parameter − 90°). A
@@ -183,7 +182,6 @@ export function splineNurbsParams(curve: SplineRegionCurve): Float64Array {
  * A spline piece as the curves its edges are built from. A whole closed
  * spline is cut into two exact halves: the pinned Remus extrude chord-splits
  * any closed single edge that is not a circle or ellipse into flat facets.
- * Shared with the OCCT parity reference for coinciding vertices.
  */
 export function splineEdgePieces(
   curve: SplineRegionCurve

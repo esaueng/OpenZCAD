@@ -122,3 +122,117 @@ describe('journaledMove with a prepared move', () => {
     expect(preparedFaceMove(remus, 5, faces)).toBeNull();
   });
 });
+
+describe('explicit sampled cap reconstruction', () => {
+  function qualityKernel() {
+    const fake = fakeKernel();
+    const payload = {
+      solid: 100,
+      op: 9,
+      quality: 'approximate',
+      construction: 'sampledCapJoin',
+      cornerStations: 256,
+      faceEvolution: {
+        origin: 'construction',
+        modified: { 1: [10], 2: [20] },
+        deleted: [3],
+        generated: { 2: [30, 40], 3: [30, 40] },
+        unresolved: {}
+      }
+    };
+    const kernel = Object.assign(fake.kernel, {
+      moveFacesJournaledWithQuality: vi.fn(() => JSON.stringify(payload)),
+      moveFacesPreparedJournaledWithQuality: vi.fn(() =>
+        JSON.stringify(payload)
+      )
+    });
+    kernel.getSolidFaces.mockImplementation((solid?: number) =>
+      Uint32Array.from(solid === 100 ? [10, 20, 30, 40] : [1, 2, 3])
+    );
+    return { ...fake, kernel, payload };
+  }
+
+  it('requires opt-in and preserves surviving picks through changed face counts', () => {
+    const { remus, kernel } = qualityKernel();
+    journaledMove(remus, 5, faces, 5);
+    expect(kernel.moveFacesJournaledWithQuality).not.toHaveBeenCalled();
+    const moved = journaledMove(remus, 5, faces, 5, null, true);
+    expect(moved.approximateCapJoin).toBe(true);
+    expect(moved.relation?.faceMap).toEqual(
+      new Map([
+        [1, 10],
+        [2, 20]
+      ])
+    );
+    expect(moved.relation?.conflictedSources).toEqual(new Set([3]));
+    expect(kernel.moveFacesJournaledWithQuality).toHaveBeenCalledWith(
+      5,
+      faces,
+      5,
+      256
+    );
+  });
+
+  it('carries the same quality and construction map through a prepared drag', () => {
+    const { remus, kernel } = qualityKernel();
+    preparedFaceMove(remus, 5, faces);
+    const prepared = preparedFaceMove(remus, 5, faces);
+    const moved = journaledMove(remus, 5, faces, 5, prepared, true);
+    expect(moved.approximateCapJoin).toBe(true);
+    expect(moved.relation?.faceMap.get(2)).toBe(20);
+    expect(kernel.moveFacesPreparedJournaledWithQuality).toHaveBeenCalledWith(
+      7,
+      5,
+      256
+    );
+    expect(kernel.moveFacesJournaledWithQuality).not.toHaveBeenCalled();
+    releasePreparedFaceMove(remus);
+  });
+
+  it('refuses unknown quality or incomplete history without dropping to the plain move', () => {
+    const { remus, kernel, payload } = qualityKernel();
+    kernel.moveFacesJournaledWithQuality.mockReturnValueOnce(
+      JSON.stringify({ ...payload, quality: 'unknown' })
+    );
+    expect(() => journaledMove(remus, 5, faces, 5, null, true)).toThrow(
+      'unrecognized construction quality'
+    );
+    delete (payload.faceEvolution.modified as Record<string, number[]>)[1];
+    expect(() => journaledMove(remus, 5, faces, 5, null, true)).toThrow(
+      'incomplete construction history'
+    );
+    expect(kernel.moveFaces).not.toHaveBeenCalled();
+  });
+
+  it('retries a refused prepared call once with the same approximation permission', () => {
+    const { remus, kernel } = qualityKernel();
+    preparedFaceMove(remus, 5, faces);
+    const prepared = preparedFaceMove(remus, 5, faces);
+    kernel.moveFacesPreparedJournaledWithQuality.mockImplementationOnce(() => {
+      throw new Error('prepared source changed');
+    });
+    expect(
+      journaledMove(remus, 5, faces, 5, prepared, true).approximateCapJoin
+    ).toBe(true);
+    expect(kernel.releasePreparedMove).toHaveBeenCalledExactlyOnceWith(7);
+    expect(
+      kernel.moveFacesJournaledWithQuality
+    ).toHaveBeenCalledExactlyOnceWith(5, faces, 5, 256);
+    expect(kernel.moveFaces).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat a completed prepared edit whose quality cannot be verified', () => {
+    const { remus, kernel, payload } = qualityKernel();
+    preparedFaceMove(remus, 5, faces);
+    const prepared = preparedFaceMove(remus, 5, faces);
+    kernel.moveFacesPreparedJournaledWithQuality.mockReturnValueOnce(
+      JSON.stringify({ ...payload, quality: 'unknown' })
+    );
+    expect(() => journaledMove(remus, 5, faces, 5, prepared, true)).toThrow(
+      'unrecognized construction quality'
+    );
+    expect(kernel.moveFacesJournaledWithQuality).not.toHaveBeenCalled();
+    expect(kernel.moveFaces).not.toHaveBeenCalled();
+    releasePreparedFaceMove(remus);
+  });
+});

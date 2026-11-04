@@ -387,8 +387,8 @@ describe('a suppressed feature passes its input body through', () => {
 
     suppress(manager, modifierIds!.featureId, true);
     document = await synced(manager.document);
-    // The bevel carries no lineage name, so the hole holds it by its exact
-    // geometric fingerprint, and no face of the union has that fingerprint.
+    // The bevel has a verified construction identity. Suppression must
+    // refuse that missing identity rather than rebinding to a union face.
     const refusal = attributed?.find(
       (entry) => entry.featureName === 'Bevel hole'
     );
@@ -409,10 +409,10 @@ describe('a suppressed feature passes its input body through', () => {
       refusedSuppression?.dependents.find(
         (dependent) => dependent.name === 'Bevel hole'
       )?.reason
-    ).toMatch(/^A selected face no longer exists/);
+    ).toBe('Hole face is stale: The selected face lineage no longer exists.');
     expect(refusal?.kind).toBe('build-failed');
     expect(refusal?.message).toBe(
-      'Feature "Bevel hole": A selected face no longer exists. Re-select the face(s) and re-create this feature.'
+      'Feature "Bevel hole": Hole face is stale: The selected face lineage no longer exists.'
     );
     expect(document.derived.bodyRepresentations[onBevel]).toBeUndefined();
 

@@ -26,8 +26,10 @@ document. Existing topology hashes and lineage references remain readable;
 references described as BrepKit-era are historical compatibility data and are
 not renamed in persisted documents or historical ADR context.
 
-OpenCascade remains a development-only reference under `test/parity`. It is
-not imported by the production adapter or emitted into the application bundle.
+OpenCascade and its parity-reference adapter have been removed, together with
+the FreeCAD saved-solid import converter. Production and test geometry use
+Remus. The STEP corpus retains its Remus baselines, analytic checks and frozen
+interchange fixtures without loading a second kernel.
 
 ## Consequences
 

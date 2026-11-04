@@ -319,6 +319,7 @@ describe('share-link expiration', () => {
     expect(payload.shareLink.createdAt).toBe(CREATED_AT);
     expect(Object.keys(payload.shareLink).sort()).toEqual([
       'createdAt',
+      'label',
       'mode',
       'projectId',
       'revokedAt',

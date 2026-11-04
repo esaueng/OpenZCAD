@@ -36,6 +36,7 @@ import {
   Palette,
   PencilRuler,
   RefreshCcw,
+  ScrollText,
   Search,
   SearchX,
   Settings2,
@@ -102,6 +103,7 @@ import {
 } from './settingsControls';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import { DataDownload } from './DataDownload';
+import { ActivityLogSettings } from './ActivityLogSettings';
 import {
   PersonalInfoToggle,
   PrivateEmailInput,
@@ -210,6 +212,7 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   encryption: <ShieldCheck size={15} aria-hidden="true" />,
   assistant: <Bot size={15} aria-hidden="true" />,
   privacy: <LockKeyhole size={15} aria-hidden="true" />,
+  activity: <ScrollText size={15} aria-hidden="true" />,
   advanced: <Cpu size={15} aria-hidden="true" />
 };
 
@@ -2565,6 +2568,8 @@ export function SettingsPage({
               ) : null}
             </Section>
           )}
+
+          {active === 'activity' && anyMatch && <ActivityLogSettings />}
 
           {active === 'advanced' && anyMatch && (
             <Section

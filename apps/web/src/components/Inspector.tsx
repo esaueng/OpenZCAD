@@ -1,6 +1,7 @@
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
+import { importedMeshUnitsReadout } from '../lib/importUnits';
 import {
   loadMassDensitySelection,
   saveMassDensitySelection
@@ -387,6 +388,7 @@ export function BodyStats({
   lastApplied?: boolean;
 }) {
   const projectId = document?.projectId ?? null;
+  const fileUnits = importedMeshUnitsReadout(document, body.bodyId);
   const [massOpen, setMassOpen] = useState(false);
   const [query, setQuery] = useState<{
     document: ProjectDocument | null | undefined;
@@ -588,6 +590,12 @@ export function BodyStats({
           </span>
           <b>faces</b>
           <span>{body.faceCount}</span>
+          {fileUnits ? (
+            <>
+              <b>file units</b>
+              <span>{fileUnits}</span>
+            </>
+          ) : null}
           <b>status</b>
           <span>
             {body.consumed

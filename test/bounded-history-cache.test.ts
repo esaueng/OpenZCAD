@@ -193,6 +193,53 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
     }
   });
 
+  it('prioritizes a complete tail when earlier checkpoints exhaust the byte ceiling', async () => {
+    const native = RemusKernel.prototype.checkpointMemoryStats;
+    const telemetry = vi
+      .spyOn(RemusKernel.prototype, 'checkpointMemoryStats')
+      .mockImplementation(function (this: RemusKernel) {
+        const stats = JSON.parse(native.call(this)) as { checkpoints: number };
+        // Simulate large copy-on-write prefix snapshots. The live arena fits;
+        // retaining two earlier snapshots leaves no room for another mutation.
+        return JSON.stringify({
+          ...stats,
+          nextMutationEstimatedBytes: stats.checkpoints >= 2 ? 2_000_000 : 100
+        });
+      });
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointEstimatedBytes: 1_000_000,
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const document = boxes(5);
+      await equivalent(document, await adapter.syncDocument(document));
+      const state = cacheState(adapter);
+      expect(state.historyCheckpoints).toHaveLength(1);
+      expect(state.historyCheckpoints[0]).toMatchObject({ featureIndex: 4 });
+      expect(state.historyCheckpoints[0]!.digests).toHaveLength(5);
+      expect(state.historyCheckpointOwners.size).toBe(1);
+      expect(state.historyKernel!.checkpointCount()).toBe(1);
+      // The normal ownership and full-prefix digest checks must accept the
+      // sparse tail, and publication must still equal a fresh exact build.
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)).toMatchObject({ restored: 5, replayed: 0 });
+      expect(state.historyCheckpoints).toHaveLength(1);
+      // Admission may retain a scheduled tail without its earlier slots.
+      // Restoring it must not mistake its table position for a stale schedule.
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)).toMatchObject({ restored: 5, replayed: 0 });
+      expect(state.historyCheckpoints).toHaveLength(1);
+      expect(state.historyKernel!.checkpointCount()).toBe(1);
+      const changed = edit(document, 0, 13);
+      await equivalent(changed, await adapter.syncDocument(changed));
+      expect(events.at(-1)!.restored).toBe(0);
+    } finally {
+      adapter.dispose();
+      telemetry.mockRestore();
+    }
+  });
+
   it("keeps opaque checkpoints through dependent edits, export and mass queries", async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -564,6 +611,8 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
     }
   });
 
+  // Exercise all 1,024 real replays; this is ownership/retirement coverage,
+  // rather than a wall-clock performance assertion.
   it('retires a replayed kernel before export and sync without serving stale handles', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -618,7 +667,7 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
       adapter.dispose();
       ownership(adapter, 0);
     }
-  });
+  }, 300_000);
 
   it.each([0, -1, 2.5, NaN, Infinity])(
     'preserves disabled and integer count semantics for limit %s',
@@ -964,10 +1013,22 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         await equivalent(next, actual);
         expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1 });
         const ids = actual.exportableBodyIds;
-        const step = await adapter.exportStep(next, ids);
-        ownership(adapter, 2);
-        expect(step).toContain('MANIFOLD_SOLID_BREP');
-        expect(await adapter.exportStep(next, ids)).toBe(step);
+        const metadata = { timestamp: '2026-01-01T00:00:00Z' };
+        const clock = new Date();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+          vi.setSystemTime(clock);
+          const step = await adapter.exportStep(next, ids, metadata);
+          ownership(adapter, 2);
+          expect(step).toContain('MANIFOLD_SOLID_BREP');
+          expect(step).toContain(`'${metadata.timestamp}'`);
+          // STEP defaults to the current time. Hold the caller's metadata
+          // fixed while crossing a second; compare every byte, header included.
+          vi.setSystemTime(new Date(clock.getTime() + 1_000));
+          expect(await adapter.exportStep(next, ids, metadata)).toBe(step);
+        } finally {
+          vi.useRealTimers();
+        }
         const stl = await adapter.exportStl(next, ids);
         expect(await adapter.exportStl(next, ids)).toBe(stl);
         ownership(adapter, 2);

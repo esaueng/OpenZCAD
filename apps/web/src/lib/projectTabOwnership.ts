@@ -49,8 +49,13 @@ export function claimProjectOwnership(
     releaseHeld = resolve;
   });
   let released = false;
+  const waiting = new AbortController();
   const release = () => {
     released = true;
+    // Remove an abandoned request immediately. Otherwise it can acquire the
+    // lock during another tab's reload and hold it until this background tab
+    // gets CPU time to run its no-longer-needed callback.
+    waiting.abort();
     releaseHeld();
   };
 
@@ -66,13 +71,17 @@ export function claimProjectOwnership(
         // read-only, then queue: this request is granted when the owning tab
         // goes away, which is exactly when taking over is safe.
         resolveClaim({ owned: false, release });
-        await locks.request(name, async (queued) => {
-          if (released || !queued) {
-            return;
+        await locks.request(
+          name,
+          { signal: waiting.signal },
+          async (queued) => {
+            if (released || !queued) {
+              return;
+            }
+            onPromoted();
+            await held;
           }
-          onPromoted();
-          await held;
-        });
+        );
       })
       .catch(() => {
         // A refused lock request is not a reason to make the project
