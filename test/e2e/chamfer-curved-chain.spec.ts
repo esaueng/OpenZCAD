@@ -133,6 +133,11 @@ test(
     await expect(
       page.getByRole('heading', { name: 'History 2' })
     ).toBeVisible();
+    const simpleView = page.getByRole('button', {
+      name: 'Simple view',
+      exact: true
+    });
+    if (await simpleView.isVisible()) await simpleView.click();
     await page.screenshot({
       path: testInfo.outputPath('curved-chain-preview.png')
     });
@@ -158,6 +163,7 @@ test(
     });
     await expect(status).toContainText('warnings0');
     await waitForStillViewport(page);
+    if (await simpleView.isVisible()) await simpleView.click();
     await page.screenshot({
       path: testInfo.outputPath('curved-chain-reopened.png')
     });
@@ -171,6 +177,8 @@ test(
       chunks.push(chunk as Buffer);
     const bytes = Buffer.concat(chunks);
     expect(bytes.toString()).toContain('CLOSED_SHELL');
+    expect(bytes.toString().match(/CONICAL_SURFACE/g)).toHaveLength(1);
+    expect(bytes.toString().match(/CYLINDRICAL_SURFACE/g)).toHaveLength(1);
     const kernel = new RemusKernel();
     try {
       const io = await loadRemusTranslators();
@@ -179,11 +187,11 @@ test(
       expect(kernel.validateSolid(solids[0]!)).toBe(0);
       expect(kernel.volume(solids[0]!, 1e-5)).toBeCloseTo(
         CURVED_CHAIN_VOLUME,
-        2
+        3
       );
     } finally {
       kernel.free();
     }
-    expect(errors.filter((message) => !message.includes('404'))).toEqual([]);
+    expect(errors).toEqual([]);
   }
 );
