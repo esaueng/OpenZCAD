@@ -15,6 +15,7 @@ import {
   type SelectionActionId
 } from './capabilities';
 import { activeKeymap, keyHint } from '../keymap';
+import type { DimensionMode } from '../keypad';
 
 /**
  * The selection-first interaction machine.
@@ -1466,7 +1467,10 @@ function lifecycleHint(
   return { phase: state.phase, hint: armedHint };
 }
 
-export function toolCardFor(state: InteractionState): ToolCardModel | null {
+export function toolCardFor(
+  state: InteractionState,
+  dimensionMode: DimensionMode = 'diameter'
+): ToolCardModel | null {
   const identity = commandIdentityFor(state);
   if (!identity) {
     return null;
@@ -1474,10 +1478,10 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
   const { icon, title, eyebrow } = identity;
   switch (state.mode) {
     case 'face': {
-      const capabilities = selectionCapabilities({
-        kind: 'face',
-        target: state.target
-      });
+      const capabilities = selectionCapabilities(
+        { kind: 'face', target: state.target },
+        dimensionMode
+      );
       const actions = capabilities.map((capability) => ({
         id: capability.action,
         label: capability.label,
@@ -1516,7 +1520,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
           : state.op === 'remove-face-feature'
             ? `R${state.target.blendRadius ?? '?'} is read-only; this imported blend can be removed.`
             : state.op === 'resize-cylinder-radius'
-              ? 'Drag the radial handle or tap the value to set the radius.'
+              ? `Drag the radial handle or tap the value to set the ${dimensionMode}.`
               : state.target.extrudeFeatureId
                 ? 'Drag the arrow to change the depth, or tap the value to type · click empty space to finish.'
                 : state.target.resizeBodyFeatureId &&

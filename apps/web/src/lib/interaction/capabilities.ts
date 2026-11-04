@@ -9,6 +9,7 @@
 import type { FaceTopologyReferenceV5, FeatureId } from '@openzcad/shared';
 import { UNSTABLE_FACE_OFFSET_REASON } from '../directEdit';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
+import type { DimensionMode } from '../keypad';
 
 export type SelectionActionId =
   | 'resize-body'
@@ -89,7 +90,8 @@ function enabled(
  * disabled reason is useful to the person holding the current selection.
  */
 export function selectionCapabilities(
-  selection: CapabilitySelection
+  selection: CapabilitySelection,
+  dimensionMode: DimensionMode = 'diameter'
 ): SelectionCapability[] {
   switch (selection.kind) {
     case 'face': {
@@ -184,8 +186,8 @@ export function selectionCapabilities(
         return [
           enabled(
             'resize-radial-face',
-            'Adjust Radius',
-            'radius',
+            dimensionMode === 'diameter' ? 'Adjust Diameter' : 'Adjust Radius',
+            dimensionMode,
             'exact-worker',
             true
           )

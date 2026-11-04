@@ -139,6 +139,23 @@ describe('selectionCapabilities', () => {
     ).toEqual([]);
   });
 
+  it.each(['diameter', 'radius'] as const)(
+    'names radial controls after the displayed %s',
+    (mode) => {
+      const capabilities = selectionCapabilities(
+        {
+          kind: 'face',
+          target: { surfaceType: 'cylindrical', hash: 2, radius: 4 }
+        },
+        mode
+      );
+      expect(capabilities[0]).toMatchObject({
+        label: mode === 'diameter' ? 'Adjust Diameter' : 'Adjust Radius',
+        valueKind: mode
+      });
+    }
+  );
+
   it('prefers a producing fillet over generic cylinder resize', () => {
     const capabilities = selectionCapabilities({
       kind: 'face',
