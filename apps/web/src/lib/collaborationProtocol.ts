@@ -129,13 +129,23 @@ function isLease(value: unknown, projectId: string): value is ProjectEditLease {
   );
 }
 
-/** Why the browser refuses a room document, or null when it can open it. */
-function unopenableReason(document: ProjectDocument): string | null {
+/**
+ * The opened form of a room document, or why the browser refuses it. The
+ * opened form is what is adopted: the room relays what a member sent, which
+ * can be a copy an older build wrote, and adopting it raw left this browser
+ * holding a document that compares unequal to its own normalized one on the
+ * schema stamp alone.
+ */
+function openRoomDocument(
+  document: ProjectDocument
+): { document: ProjectDocument } | { reason: string } {
   try {
-    assertStorableDocument(document);
-    return null;
+    return { document: assertStorableDocument(document) };
   } catch (error) {
-    return error instanceof Error ? error.message : 'The document is invalid.';
+    return {
+      reason:
+        error instanceof Error ? error.message : 'The document is invalid.'
+    };
   }
 }
 
@@ -154,8 +164,9 @@ function refuseUnopenable(
   if (!document) return message;
   if ((document.schemaVersion ?? 0) > PROJECT_DOCUMENT_SCHEMA_VERSION)
     return message;
-  const reason = unopenableReason(document);
-  if (reason !== null) {
+  const opened = openRoomDocument(document);
+  if ('reason' in opened) {
+    const { reason } = opened;
     console.error(`Collaboration document refused: ${reason}`);
     if (message.type === 'state') return { ...message, document: null };
     if (message.type === 'ack')
@@ -166,13 +177,16 @@ function refuseUnopenable(
       message: `The room holds a version this browser cannot open: ${reason}`
     };
   }
-  if (message.type === 'conflict' && message.base) {
-    if (unopenableReason(message.base) !== null) {
-      const { base: _base, ...withoutBase } = message;
+  const adopted = { ...message, document: opened.document };
+  if (adopted.type === 'conflict' && adopted.base) {
+    const base = openRoomDocument(adopted.base);
+    if ('reason' in base) {
+      const { base: _base, ...withoutBase } = adopted;
       return withoutBase;
     }
+    return { ...adopted, base: base.document };
   }
-  return message;
+  return adopted;
 }
 
 /**

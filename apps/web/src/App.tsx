@@ -1666,6 +1666,7 @@ import type {
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
+  reaskConflict,
   hasUnresolvedConflict,
   conflictCopyNote,
   resolveProjectConflict,
@@ -14583,6 +14584,16 @@ export function App() {
       try {
         remote = await api.loadProject(projectId);
       } catch (error) {
+        // Unanswered, the question still stands, but about this document:
+        // re-showing the copy from before the room choice let "Keep mine"
+        // write that superseded copy over the account.
+        if (recheck) {
+          setAccountConflict((current) =>
+            current === recheck.conflict
+              ? reaskConflict(current, localDocument)
+              : current
+          );
+        }
         if (isProjectDocumentUnavailableError(error)) {
           accountDocumentUnavailableProjectIdRef.current = projectId;
           setCloudAvailable(false);

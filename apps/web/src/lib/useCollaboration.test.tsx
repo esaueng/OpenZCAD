@@ -2057,6 +2057,30 @@ describe('parseServerMessage', () => {
     ).toMatchObject({ type: 'ack' });
   });
 
+  // Regression: the room relays what a member sent, and adopting an older
+  // build's copy raw made it compare unequal to this browser's opened copy.
+  it('hands over room documents in their opened schema', () => {
+    const olderBuild = (version: number) =>
+      ({
+        ...structuredClone(document),
+        version,
+        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+      }) as unknown as ProjectDocument;
+    const frame = parseServerMessage(
+      JSON.stringify({
+        type: 'conflict',
+        document: olderBuild(3),
+        base: olderBuild(2)
+      }),
+      document.projectId
+    );
+    expect(frame).toMatchObject({
+      type: 'conflict',
+      document: { version: 3, schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION },
+      base: { version: 2, schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION }
+    });
+  });
+
   it('rejects frames with invalid roles, members, and lease targets', () => {
     expect(
       parseServerMessage(

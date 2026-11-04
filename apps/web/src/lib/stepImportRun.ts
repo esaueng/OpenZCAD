@@ -30,6 +30,7 @@ import {
 } from '@openzcad/command-system';
 import {
   createBodyFeatureIds,
+  numberedFeatureName,
   type ImportedStepInput
 } from '@openzcad/document-core';
 import {
@@ -499,7 +500,15 @@ export async function runStepImport(
     // Last boundary before the disposable exact-rebuild worker is created.
     stopIfCancelled();
     const productName = metadata.products[0]?.trim();
-    const name = productName || file.name.replace(/\.(step|stp)$/i, '');
+    const importName = productName || file.name.replace(/\.(step|stp)$/i, '');
+    // Numbered like every other new feature: importing the same file twice
+    // listed two bodies and two History rows with one name ("root", the
+    // product a CAD exporter wrote), which could not be told apart. The name
+    // is stored in the command, so replay keeps it.
+    const current = deps.currentDocument();
+    const name = current
+      ? numberedFeatureName(current, importName)
+      : importName;
     progress?.update({ phase: 'building', fraction: null });
     const solidIndices = deps.commandFactory
       ? []

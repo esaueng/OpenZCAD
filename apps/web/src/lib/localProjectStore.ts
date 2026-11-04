@@ -1892,8 +1892,8 @@ export function projectsHaveSameCanonicalContent(
   remote: ProjectDocument
 ): boolean {
   return jsonValuesEqual(
-    syncComparableDocument(local),
-    syncComparableDocument(remote)
+    syncComparableDocument(comparableDocument(local)),
+    syncComparableDocument(comparableDocument(remote))
   );
 }
 
@@ -1968,8 +1968,8 @@ export function projectsHaveSameRebuildInputs(
   right: ProjectDocument
 ): boolean {
   return jsonValuesEqual(
-    projectRebuildInputs(left),
-    projectRebuildInputs(right)
+    projectRebuildInputs(comparableDocument(left)),
+    projectRebuildInputs(comparableDocument(right))
   );
 }
 
@@ -2132,8 +2132,8 @@ export function withMatchingLocalDerived(
   // document, and the local ones still describe its model exactly.
   if (
     !jsonValuesEqual(
-      projectGeometryInputs(local),
-      projectGeometryInputs(remote)
+      projectGeometryInputs(comparableDocument(local)),
+      projectGeometryInputs(comparableDocument(remote))
     )
   ) {
     return remote;
