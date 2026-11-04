@@ -1,6 +1,6 @@
 # Trusted CI fleet
 
-Linux CI jobs and their completion gates live in `fleet-ci-v5.yml`, called at an
+Linux CI jobs and their completion gates live in `fleet-ci-v6.yml`, called at an
 immutable commit from `ci.yml`. GitHub evaluates the runner expression before
 scheduling each job. There is no GitHub-hosted authorization or routing job in
 front of the Linux checks, and no routing HTTP request from Actions.
@@ -35,10 +35,10 @@ Change it in two PRs, as Remus does:
 
 Old pinned commits stay on main, so earlier runs can still be re-run.
 
-PR #1118 stages `fleet-ci-v6.yml` with `actions/setup-node` v7.1.0 and
+PR #1118 staged `fleet-ci-v6.yml` with `actions/setup-node` v7.1.0 and
 `actions/upload-artifact` v7.0.2. Its only differences from v5 are those
-immutable action pins. The active v5 file and `ci.yml` stay unchanged until
-PR #1120 activates v6 at #1118's landed squash commit. Fleet routing remains
+immutable action pins. PR #1120 activates v6 at #1118's landed squash commit
+`18b74211da50d21d9089fe08b9f03f4241c2a23d` and retires the checked-in v5 file. Fleet routing remains
 disabled during this update; approving a new self-hosted runner-group entry is
 a separate rollout step.
 
@@ -46,16 +46,19 @@ a separate rollout step.
 
 ## Trusted merge-queue overflow
 
-`ci.yml` activates `fleet-ci-v5.yml` at the landed #882 commit
-`0c3bda193536ec351b8e4d7e1ab0edb1fdbb0021` and grants its `checks` job
+`ci.yml` activates `fleet-ci-v6.yml` at the landed #1118 commit
+`18b74211da50d21d9089fe08b9f03f4241c2a23d` and grants its `checks` job
 `pull-requests: read`. Before this caller runs on Jane, add this exact workflow
 entry to the existing `ci-trusted-main` runner group:
 
 ```text
-esaueng/OpenZCAD/.github/workflows/fleet-ci-v5.yml@0c3bda193536ec351b8e4d7e1ab0edb1fdbb0021
+esaueng/OpenZCAD/.github/workflows/fleet-ci-v6.yml@18b74211da50d21d9089fe08b9f03f4241c2a23d
 ```
 
-v5 keeps v2's queue policy and runner isolation byte for byte; it installs
+v6 keeps v5's queue policy and runner isolation byte for byte and updates only
+the Node setup and artifact upload action pins. The v5 caller
+(`fleet-ci-v5.yml@0c3bda193536ec351b8e4d7e1ab0edb1fdbb0021`, #882) remains
+resolvable for older branches and reruns. It installs
 browser binaries only, runs no e2e shards on queue candidates (v4, #878), and
 starts pull-request shards beside `quality` (#882). The v4 caller
 (`fleet-ci-v4.yml@8b8eb4f77706f4b97f18cdb227beb1541c97fd2e`, #880) and the v2
@@ -140,7 +143,7 @@ Local runs keep Playwright's automatic worker count.
 
 One rollout owner coordinates the controller, runner group and shared profile
 across both repositories. Before enabling the profile, verify the controller
-recognizes `ci-server-jane-5gb`, approve the exact v5 entry above, and validate
+recognizes `ci-server-jane-5gb`, approve the exact v6 entry above, and validate
 each slot's guard. Then add `ci-server-jane-5gb` to each verified registration:
 `ci-server-jane-1`, `ci-server-jane-2`, and `ci-server-jane-3`. Keep those runner
 names and their individual slot labels. Keep the old shared `ci-server-jane`
@@ -162,7 +165,7 @@ canonical target `ci-server-jane` under hosted queue pressure; do not set the
 target to the profile label. Preserve all required-check names, App bindings,
 review requirements and queue protections. New queue candidates use the landed
 caller;
-older PR branches must pick up its pin before their runs can use v5.
+older PR branches must pick up its pin before their runs can use v6.
 
 Run an authorized real application job on each Jane slot, verify cleanup,
 hosted-first overflow and fork-hosted execution, then enable normal routing. Code merge alone does
