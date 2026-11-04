@@ -104,23 +104,34 @@ describe('workspace panel state', () => {
     });
   });
 
-  it('lists the tools that fit in the drawer until all are asked for', () => {
-    expect(defaultPanelState().toolDrawerFilter).toBe('fits');
+  it('remembers guide minimization independently of dismissal', () => {
+    const state = { ...defaultPanelState(), workspaceTourMinimized: true };
+    expect(savePanelState(state)).toBe(true);
+    expect(loadPanelState().workspaceTourMinimized).toBe(true);
+    expect(loadPanelState().workspaceTourDismissed).toBe(false);
+    expect(
+      normalizePanelState({ workspaceTourMinimized: 'yes' })
+        .workspaceTourMinimized
+    ).toBe(false);
+  });
+
+  it('exposes every tool by default while preserving a chosen filter', () => {
+    expect(defaultPanelState().toolDrawerFilter).toBe('all');
     expect(
       normalizePanelState({ toolDrawerFilter: 'all' }).toolDrawerFilter
     ).toBe('all');
     expect(
       normalizePanelState({ toolDrawerFilter: 'some' }).toolDrawerFilter
-    ).toBe('fits');
+    ).toBe('all');
   });
 
-  it('opens the drawer simple until the advanced view is chosen', () => {
-    expect(defaultPanelState().toolDrawerView).toBe('simple');
+  it('opens the searchable catalog by default while preserving a chosen view', () => {
+    expect(defaultPanelState().toolDrawerView).toBe('advanced');
     expect(
       normalizePanelState({ toolDrawerView: 'advanced' }).toolDrawerView
     ).toBe('advanced');
     expect(normalizePanelState({ toolDrawerView: 'pro' }).toolDrawerView).toBe(
-      'simple'
+      'advanced'
     );
   });
 

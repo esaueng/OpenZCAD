@@ -1,5 +1,14 @@
 /** Keep engine diagnostics available while leading with a useful recovery. */
-export function modelingRefusalSummary(reason: string): string | null {
+export function modelingRefusalSummary(
+  reason: string,
+  operation?: string
+): string | null {
+  if (
+    operation === 'Intersect' &&
+    /solid has no vertices|empty result|no intersection/i.test(reason)
+  ) {
+    return 'Intersect would leave no solid. Move the bodies so they overlap, then try again.';
+  }
   if (
     /empty result:.*(?:cut|subtract).*target fully contained in tool/i.test(
       reason

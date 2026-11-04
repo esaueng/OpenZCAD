@@ -1715,7 +1715,7 @@
 
 /* A longest-chord column leaves only 35px for descriptions on a 320px
    phone. Keep each binding and its description together on separate lines. */
-@media (max-width: 380px) {
+@media (max-width: 600px) {
   .shortcuts-grid dl {
     grid-template-columns: minmax(0, 1fr);
     row-gap: var(--sp-3);

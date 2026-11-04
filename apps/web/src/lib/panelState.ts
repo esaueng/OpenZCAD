@@ -93,6 +93,7 @@ export interface PanelState {
    * on their next fresh project.
    */
   workspaceTourDismissed: boolean;
+  workspaceTourMinimized: boolean;
   /**
    * Which feature-tool groups are unfolded to named tiles; a folded group
    * shows its tools as one row of icons. Open to begin with — the names are
@@ -164,6 +165,7 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   viewModeRailOpen: true,
   assistantCollapsed: true,
   workspaceTourDismissed: false,
+  workspaceTourMinimized: false,
   toolGroups: {
     create: true,
     'from-sketch': true,
@@ -175,8 +177,8 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   commandFoldOpen: false,
   pinnedTools: [...DEFAULT_PINNED_TOOLS],
   recentTools: [],
-  toolDrawerFilter: 'fits',
-  toolDrawerView: 'simple',
+  toolDrawerFilter: 'all',
+  toolDrawerView: 'advanced',
   sketchPaletteOpen: false,
   tweakPanelOpen: true,
   sectionPanelOpen: true
@@ -193,6 +195,7 @@ function copyDefaults(): PanelState {
     viewModeRailOpen: DEFAULT_PANEL_STATE.viewModeRailOpen,
     assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed,
     workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed,
+    workspaceTourMinimized: DEFAULT_PANEL_STATE.workspaceTourMinimized,
     toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups },
     drawerOpen: DEFAULT_PANEL_STATE.drawerOpen,
     commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen,
@@ -217,6 +220,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.workspaceTourDismissed === 'boolean') {
     state.workspaceTourDismissed = root.workspaceTourDismissed;
+  }
+  if (typeof root.workspaceTourMinimized === 'boolean') {
+    state.workspaceTourMinimized = root.workspaceTourMinimized;
   }
   if (
     root.workspaceMode === 'view' ||

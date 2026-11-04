@@ -23,6 +23,8 @@ export interface PacedStatus<T extends string> {
  * the last one has had its dwell, and otherwise waits for it. Messages that
  * arrive while one is waiting replace it, so a burst ends on its latest
  * message rather than queueing, and `skipped` counts what was passed over.
+ * Explicit tool-state transitions bypass the dwell: retaining "off" after
+ * the tool is on, or "placing" after Cancel, contradicts the controls.
  *
  * While not `live` (hidden, muted or expired) nothing is on screen to be
  * read, so the latest message is taken over at once and the next one to
@@ -32,7 +34,8 @@ export function usePacedStatus<T extends string>(
   status: string,
   tone: T,
   live: boolean,
-  notable?: (status: string, tone: T) => boolean
+  notable?: (status: string, tone: T) => boolean,
+  immediate = false
 ): PacedStatus<T> {
   const [shown, setShown] = useState<PacedStatus<T>>({
     status,
@@ -73,13 +76,13 @@ export function usePacedStatus<T extends string>(
       setShown({ status, tone, skipped });
     };
     const wait = shownAtRef.current + STATUS_MIN_DWELL_MS - Date.now();
-    if (wait <= 0) {
+    if (immediate || wait <= 0) {
       show();
       return;
     }
     const timer = window.setTimeout(show, wait);
     return () => window.clearTimeout(timer);
-  }, [status, tone, live, shown.status, shown.tone]);
+  }, [status, tone, live, immediate, shown.status, shown.tone]);
 
   if (!live) {
     // Nothing is on screen to pace; never let a stale message stand in.

@@ -199,6 +199,35 @@
   flex: 0 0 300px;
 }
 
+.drawing-properties-toggle {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .drawing-workspace {
+    flex-direction: column;
+  }
+
+  .drawing-properties-toggle {
+    display: inline-flex;
+  }
+
+  .drawing-panel {
+    display: none;
+    flex: 0 1 auto;
+    max-height: 40%;
+    margin-bottom: calc(var(--command-bar-h) + var(--island-gap) * 2 + 40px);
+  }
+
+  .drawing-workspace.is-properties-open .drawing-stage {
+    padding-bottom: 0;
+  }
+
+  .drawing-workspace.is-properties-open .drawing-panel {
+    display: flex;
+  }
+}
+
 .drawing-panel-section {
   display: flex;
   flex-direction: column;
@@ -529,7 +558,7 @@
 
   .drawing-panel {
     flex: 0 0 auto;
-    max-height: 45%;
+    max-height: 40%;
   }
 }
 
@@ -893,6 +922,9 @@
   left: 0;
   top: 50%;
   transform: translateY(-50%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -912,6 +944,7 @@
 }
 
 .drawing-rail-button {
+  flex: 0 0 auto;
   width: 34px;
   height: 34px;
   display: inline-flex;
@@ -937,7 +970,55 @@
 
 .drawing-rail-button:disabled {
   cursor: default;
-  opacity: 0.4;
+  color: var(--color-text-dim);
+}
+
+/* A short canvas must never let its rail escape into sheet tabs or export
+   actions. Keep annotation tools in their own scrolling row on compact
+   workspaces, leaving the paper and properties independently scrollable. */
+@media (max-width: 1100px), (max-height: 760px) {
+  .drawing-canvas-area {
+    flex-direction: column;
+    padding-left: 0;
+    gap: 8px;
+  }
+
+  .drawing-tool-rail {
+    position: static;
+    transform: none;
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    max-width: 100%;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    align-self: stretch;
+  }
+
+  .drawing-rail-group {
+    display: contents;
+  }
+
+  .drawing-workspace .drawing-tool-hint {
+    position: static;
+    order: -1;
+    transform: none;
+    flex: 0 0 auto;
+    max-width: none;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 520px) {
+  .drawing-stage {
+    padding-bottom: calc(var(--command-bar-h) + var(--island-gap) * 3 + 64px);
+  }
+
+  .drawing-panel {
+    max-height: 180px;
+    margin-bottom: calc(var(--command-bar-h) + var(--island-gap) * 2 + 40px);
+  }
 }
 
 /* The active tool's next step, over the top of the sheet. */

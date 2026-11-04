@@ -1,13 +1,24 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 
 describe('ShortcutsOverlay', () => {
+  it('offers a modeling workflow and returns to the workspace tour', () => {
+    const onTour = vi.fn();
+    render(<ShortcutsOverlay onClose={vi.fn()} onTour={onTour} />);
+    expect(
+      screen.getByRole('heading', { name: 'Modeling guide' })
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open modeling guide' })
+    );
+    expect(onTour).toHaveBeenCalledOnce();
+  });
   it('is named by the title it shows', () => {
     render(<ShortcutsOverlay onClose={vi.fn()} />);
-    const dialog = screen.getByRole('dialog', { name: 'Controls' });
+    const dialog = screen.getByRole('dialog', { name: 'Help & controls' });
     expect(
-      within(dialog).getByRole('heading', { name: 'Controls' })
+      within(dialog).getByRole('heading', { name: 'Help & controls' })
     ).toBeInTheDocument();
   });
 

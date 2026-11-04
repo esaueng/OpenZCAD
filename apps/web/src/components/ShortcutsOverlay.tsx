@@ -9,6 +9,8 @@ import { useModalFocus } from '../lib/useModalFocus';
 
 interface ShortcutsOverlayProps {
   onClose(): void;
+  onTour?(): void;
+  tourDeferred?: boolean;
 }
 
 /**
@@ -20,7 +22,11 @@ interface ShortcutsOverlayProps {
  * user who tries the obvious gesture clears their selection rather than
  * turning the model.
  */
-export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
+export function ShortcutsOverlay({
+  onClose,
+  onTour,
+  tourDeferred = false
+}: ShortcutsOverlayProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [moreBelow, setMoreBelow] = useState(false);
@@ -68,7 +74,7 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
         ref={dialogRef}
       >
         <div className="shortcuts-header">
-          <h2 id="shortcuts-title">Controls</h2>
+          <h2 id="shortcuts-title">Help &amp; controls</h2>
           <button
             type="button"
             className="icon-button"
@@ -87,6 +93,42 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
           role="region"
           aria-label="Controls list"
         >
+          <section>
+            <h3 className="section-title">Modeling guide</h3>
+            <ol className="shortcuts-guide">
+              <li>
+                <strong>Create:</strong> choose Box for a solid, or Sketch, a
+                plane and a closed profile. Extrude turns the profile into a
+                solid.
+              </li>
+              <li>
+                <strong>Edit:</strong> select a face or edge for the edits it
+                supports. Use the value labels or Options for precise
+                dimensions.
+              </li>
+              <li>
+                <strong>Check:</strong> inspect the preview before Done. Cancel
+                discards the preview; Undo restores the previous operation.
+              </li>
+              <li>
+                <strong>Refine:</strong> open History to change feature values.
+                Objects controls visibility; Parameters names reusable
+                dimensions.
+              </li>
+              <li>
+                <strong>Keep:</strong> autosave stays on this device. File saves
+                a revision or exports STEP, a printing mesh or a complete
+                project backup.
+              </li>
+            </ol>
+            {onTour && (
+              <button type="button" className="secondary" onClick={onTour}>
+                {tourDeferred
+                  ? 'Resume modeling guide after this command'
+                  : 'Open modeling guide'}
+              </button>
+            )}
+          </section>
           {[...keyboardGroups, ...POINTER_CONTROL_GROUPS].map((group) => (
             <section key={group.title}>
               <h3 className="section-title">{group.title}</h3>

@@ -5,6 +5,23 @@ import { WorkspaceTour } from './WorkspaceTour';
 const idle = { featureCount: 0, hasSelection: false, exportSeen: false };
 
 describe('WorkspaceTour', () => {
+  it('minimizes guidance without dismissing or losing its step', () => {
+    const onDismiss = vi.fn();
+    render(<WorkspaceTour {...idle} onDismiss={onDismiss} />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Minimize modeling guide' })
+    );
+    expect(
+      screen.queryByRole('heading', { name: 'Create your first feature' })
+    ).not.toBeInTheDocument();
+    expect(onDismiss).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand modeling guide' })
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Create your first feature' })
+    ).toBeVisible();
+  });
   it('opens on the create step and auto-advances as work happens', () => {
     const { rerender } = render(
       <WorkspaceTour {...idle} onDismiss={vi.fn()} />
@@ -115,6 +132,21 @@ describe('WorkspaceTour', () => {
         .getByRole('heading', { name: 'Select to edit' })
         .closest('[aria-live="polite"]')
     ).not.toBeNull();
+  });
+
+  it('announces progress while minimized without reopening its content', () => {
+    const { rerender } = render(
+      <WorkspaceTour {...idle} minimized onDismiss={vi.fn()} />
+    );
+    rerender(
+      <WorkspaceTour {...idle} minimized featureCount={1} onDismiss={vi.fn()} />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'step 2 of 4: Select to edit'
+    );
+    expect(
+      screen.queryByRole('heading', { name: 'Select to edit' })
+    ).not.toBeInTheDocument();
   });
 
   it('skips on the close control without walking anywhere', () => {

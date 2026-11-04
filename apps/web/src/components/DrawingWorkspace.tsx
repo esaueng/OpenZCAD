@@ -249,7 +249,7 @@ export interface DrawingWorkspaceProps {
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
-  onStatus: (message: string) => void;
+  onStatus: (message: string, options?: { immediate?: boolean }) => void;
   /**
    * D06: the sheet on screen as the assistant reads it, or null when there
    * is none. Called whenever what it measures changes.
@@ -1967,6 +1967,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return () => observer.disconnect();
   }, [canvasElement]);
   const [darkPaper, setDarkPaper] = useState(readDarkPaper);
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
   useEffect(() => {
     if (!canvasElement) return;
     const listener = (event: WheelEvent) => wheelRef.current(event);
@@ -2303,6 +2304,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setTool(next && pinnedTool(next));
     setSectionTool(null);
     setHover(null);
+    if (next) {
+      setPropertiesOpen(false);
+      props.onStatus(
+        `${ANNOTATION_TOOL_LABELS[next.kind]} placement started.`,
+        { immediate: true }
+      );
+    } else if (tool || sectionTool) {
+      props.onStatus('Placement canceled.', { immediate: true });
+    }
     if (next) canvasRef.current?.focus();
   };
   // Tool keys, and Escape back to the sheet. Window capture, ahead of the
@@ -2313,11 +2323,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
     if (event.key === 'Escape') {
-      if (sectionTool) setSectionTool(null);
+      if (sectionTool) chooseTool(null);
       else if (shownAutoPlan) setAutoPlan(null);
       else if (tool) {
-        setTool(null);
-        setHover(null);
+        chooseTool(null);
       } else if (selectedViewId || selectedAnnotationId) {
         setSelectedViewId(null);
         setSelectedAnnotationId(null);
@@ -3016,6 +3025,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ) {
       setSelectedAnnotationId(annotation.annotationId);
       setSelectedViewId(null);
+      if (finished.kind === 'note') setPropertiesOpen(true);
+      props.onStatus(
+        finished.kind === 'note'
+          ? 'Note added. Edit its text in Properties.'
+          : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+        { immediate: true }
+      );
       // A note is placed and then typed; dimensions keep their tool for the
       // next one.
       setTool(
@@ -3102,7 +3118,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       : 'Add a front, top or side view to cut a section from.';
   function toggleSectionTool() {
     if (sectionTool) {
-      setSectionTool(null);
+      chooseTool(null);
       return;
     }
     if (!canSection) {
@@ -3111,7 +3127,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     }
     setTool(null);
     setHover(null);
+    setPropertiesOpen(false);
     setSectionTool({ drag: null, line: null, pointer: null });
+    props.onStatus('Section view placement started.', { immediate: true });
     canvasRef.current?.focus();
   }
   const sectionSource = (line: SectionLine | null) =>
@@ -3608,7 +3626,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ? null
       : exportReason === 'Drawing the views…'
         ? 'Drawing the views…'
-        : 'Matches the model';
+        : 'Drawing up to date';
   const canUpdate = status.kind === 'stale' || status.kind === 'replaced';
   const exportBlocked =
     (!message || keptDrawing !== null) &&
@@ -3624,7 +3642,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   return (
     <section
       ref={workspaceRef}
-      className={`drawing-workspace${darkPaper ? ' is-dark-paper' : ''}`}
+      className={`drawing-workspace${darkPaper ? ' is-dark-paper' : ''}${propertiesOpen ? ' is-properties-open' : ''}`}
       aria-label="Drawings"
     >
       <div className="drawing-stage">
@@ -3643,6 +3661,31 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             }
           />
           <div className="drawing-stage-actions">
+            <button
+              type="button"
+              className="secondary drawing-properties-toggle"
+              aria-expanded={propertiesOpen}
+              aria-controls="drawing-properties"
+              onClick={() => {
+                if (!propertiesOpen && (tool || sectionTool)) {
+                  chooseTool(null);
+                  props.onStatus(
+                    'Placement canceled. Drawing properties opened.',
+                    { immediate: true }
+                  );
+                } else {
+                  props.onStatus(
+                    propertiesOpen
+                      ? 'Drawing properties closed.'
+                      : 'Drawing properties opened.',
+                    { immediate: true }
+                  );
+                }
+                setPropertiesOpen((open) => !open);
+              }}
+            >
+              {propertiesOpen ? 'Hide properties' : 'Properties'}
+            </button>
             {syncLabel && (
               <span className="drawing-sync">
                 <span className="drawing-sync-dot" aria-hidden="true" />
@@ -3953,7 +3996,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   <text
                     className="drawing-view-label"
                     x={box.x}
-                    y={paper.height - box.y + pad + labelSizeMm}
+                    y={Math.max(
+                      labelSizeMm + 2,
+                      paper.height - box.y - box.height - pad
+                    )}
                     fontSize={labelSizeMm}
                   >
                     {state?.state === 'error'
@@ -4199,7 +4245,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               <button
                 type="button"
                 className="drawing-tool-hint-cancel"
-                onClick={() => setSectionTool(null)}
+                onClick={() => chooseTool(null)}
               >
                 Cancel
               </button>
@@ -4219,7 +4265,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           )}
         </div>
       </div>
-      <aside className="drawing-panel" aria-label="Drawing properties">
+      <aside
+        id="drawing-properties"
+        className="drawing-panel"
+        aria-label="Drawing properties"
+      >
         {selection === 'annotation' && selectedAnnotation ? (
           <AnnotationProperties
             selected={selectedAnnotation}

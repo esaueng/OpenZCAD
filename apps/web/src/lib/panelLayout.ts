@@ -829,6 +829,9 @@ export function matchingPreset(layout: PanelLayout): PanelPresetId | null {
  * panel's window comes to the front with it.
  */
 export function notePanelUsed(layout: PanelLayout, id: PanelId): PanelLayout {
+  // The temporary slot must not change which docked columns survive the
+  // width cap, including when that slot is dismissed again.
+  if (layout.revealed === id) return layout;
   const group = layout.floats.find((candidate) =>
     candidate.panels.includes(id)
   );
@@ -1579,7 +1582,7 @@ export function togglePanel(
     layout.revealed === id &&
     isPanelParked(layout, id, stage)
   ) {
-    return notePanelUsed({ ...copyLayout(layout), revealed: null }, id);
+    return { ...copyLayout(layout), revealed: null };
   }
   if (layout.options.hidden || !isPanelOpen(layout, id)) {
     return openPanel(layout, id, stage);
@@ -2090,9 +2093,10 @@ export interface PanelGeometry {
 
 /**
  * Which stored columns dock on this stage: the docks' footprint stays within
- * the cap. Past it, every left column gives way before any right one — the
- * right dock, where pins land and the instrument rail lives, is primary —
- * and within a side the outermost goes first.
+ * the cap. Keep the column the user last worked in, rather than choosing by
+ * screen edge. Before any panel has been used, Objects and History take
+ * priority over parameter and diagnostic panels. Within a dock the outermost
+ * column still gives way first, preserving stable column positions.
  */
 function dockedCounts(
   layout: PanelLayout<PanelEntry>,
@@ -2108,11 +2112,36 @@ function dockedCounts(
   // view, widen the dock or move the rail.
   const fit = (counts: Record<DockSide, number>): Record<DockSide, number> => {
     const next = { ...counts };
+    const priority = (side: DockSide) => {
+      const column = sideColumns(layout, side)[next[side] - 1] ?? [];
+      // A parked panel opened into the temporary slot keeps that placement
+      // until dismissed; focusing it must not shuffle the docks underneath.
+      if (layout.revealed && column.includes(layout.revealed))
+        return Number.POSITIVE_INFINITY;
+      return Math.min(
+        ...column.map((id) => {
+          if (id === PANEL_SLOT) return Number.POSITIVE_INFINITY;
+          const recent = layout.recent.indexOf(id);
+          if (recent >= 0) return recent;
+          const fallback: readonly PanelId[] = [
+            'bodies',
+            'history',
+            'parameters',
+            'revisions',
+            'diagnostics'
+          ];
+          return layout.recent.length + fallback.indexOf(id);
+        })
+      );
+    };
     while (
       next.left + next.right > 0 &&
       overCap(dockFootprint(next, columnWidth, insets), stageWidth)
     ) {
-      if (next.left > 0) {
+      if (
+        next.left > 0 &&
+        (next.right === 0 || priority('left') >= priority('right'))
+      ) {
         next.left -= 1;
       } else {
         next.right -= 1;

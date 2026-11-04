@@ -81,8 +81,31 @@
 .workspace-tour-body {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: var(--fs-xs);
+  font-size: 13px;
   line-height: var(--lh-normal);
+}
+
+.workspace-tour.is-minimized .workspace-tour-head {
+  margin-bottom: 0;
+}
+
+.workspace-tour-actions[hidden] {
+  display: none;
+}
+
+.shortcuts-guide {
+  padding-left: 20px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+}
+
+.shortcuts-guide li + li {
+  margin-top: 8px;
+}
+
+.shortcuts-guide strong {
+  color: var(--color-text);
 }
 
 .workspace-tour-actions {
@@ -117,7 +140,15 @@
    (a phone held sideways) the card, lifted clear of the notice lane, rose
    under the top bar's islands, and its Skip button took the mode switch's
    clicks. */
-@media (max-width: 720px), (max-height: 480px) {
+@media (max-width: 720px) {
+  .workspace-tour {
+    left: 10px;
+    bottom: 60px;
+    max-width: calc(100% - 20px);
+  }
+}
+
+@media (max-height: 480px) {
   .workspace-tour {
     display: none;
   }

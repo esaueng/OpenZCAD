@@ -267,11 +267,30 @@
 }
 
 .instrument-rail .rail-section-panel {
+  width: min(300px, calc(100vw - var(--rail-w) - 32px));
+  max-height: calc(100dvh - var(--stage-top) - var(--command-bar-h) - 68px);
+  overflow-y: auto;
   top: 0;
   bottom: auto;
   left: auto;
   right: calc(100% + 10px);
   transform: none;
+}
+
+.workspace:has(.rail-section-panel) .viewport-scale-indicator {
+  visibility: hidden;
+}
+
+@media (max-height: 600px) {
+  .workspace-column-float .workspace-column-tools {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-text-subtle) var(--color-surface);
+  }
+
+  .rail-section-panel {
+    gap: 6px;
+    padding-block: 8px;
+  }
 }
 
 /* Each island is a stacking context. Lift the viewer island while its
@@ -1918,6 +1937,51 @@ button.command-more-toggle {
   line-height: 1;
 }
 
+/* Short windows and larger touch targets use the rail's width to keep its
+   complete inventory, including Tools, on screen. The catalog still anchors
+   to the outer float, outside the scrolling surface. */
+@media (max-height: 540px), (pointer: coarse) and (max-height: 900px) {
+  .workspace.column-layout:has(.command-rail) {
+    --column-w: calc(var(--rail-w) * var(--tool-rail-columns, 2));
+  }
+
+  .viewer-area .workspace-column-float nav.command-rail {
+    display: grid;
+    grid-template-columns: repeat(var(--tool-rail-columns, 2), minmax(0, 1fr));
+    justify-items: center;
+  }
+
+  nav.command-rail .command-rail-group {
+    display: contents;
+  }
+
+  nav.command-rail .command-rail-pins {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    justify-items: center;
+    width: 100%;
+  }
+
+  nav.command-rail .command-rail-divider,
+  nav.command-rail .command-more {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (pointer: coarse) and (max-height: 540px) {
+  .workspace.column-layout:has(.command-rail) {
+    --tool-rail-columns: 3;
+  }
+}
+
+@media (max-height: 540px) {
+  .workspace.column-layout:has(.command-rail) .viewport-scale-indicator {
+    left: calc(var(--column-w) + var(--island-gap) * 2);
+    bottom: calc(var(--command-bar-h) + var(--island-gap) * 3 + 40px);
+  }
+}
+
 button.command-rail:hover:not(:disabled, [aria-disabled='true']):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
@@ -2091,7 +2155,8 @@ button.command-rail.is-suggested {
     )
   );
   --sheet-h: calc(
-    100vh - var(--stage-top) - var(--island-gap) * 2 - var(--readout-reserve)
+    100vh - var(--stage-top) - var(--island-gap) * 2 -
+      max(var(--readout-reserve), var(--command-bar-h) + 72px)
   );
 }
 
@@ -2099,6 +2164,23 @@ button.command-rail.is-suggested {
   top: var(--sheet-top);
   height: var(--sheet-h);
   max-height: none;
+}
+
+.viewer-area
+  .workspace-column-float
+  .command-flyout.is-advanced:has(
+    .command-flyout-search input:not(:placeholder-shown)
+  ) {
+  height: auto;
+  max-height: var(--sheet-h);
+}
+
+/* The catalog is a temporary surface, above both instrument rails. Its
+   search and filters must remain usable when a phone has no gap between
+   the two rails; a child's z-index cannot escape its column's stacking
+   context. Restore the column's normal layer when the catalog closes. */
+.viewer-area .workspace-column-float:has(.command-flyout) {
+  z-index: var(--z-popover);
 }
 
 /* The simple list stands on the stage's foot, lifted until its own foot is
@@ -2113,15 +2195,18 @@ button.command-rail.is-suggested {
 }
 
 @media (max-height: 600px) {
-  .viewer-area .workspace-column-float .command-flyout {
-    --sheet-h: calc(100vh - var(--stage-top) - var(--island-gap));
-  }
-
   /* A short window has width to spare and no height: the sheet takes two
      columns, so its last tile is half the scroll away (in one column the
      list ran 1,000px through a 216px window at 844 x 390). */
   .command-flyout.is-advanced {
     width: 400px;
+  }
+
+  .viewer-area .workspace-column-float .command-flyout {
+    --sheet-h: calc(
+      100dvh - var(--stage-top) - var(--island-gap) * 2 - var(--command-bar-h) -
+        54px
+    );
   }
 
   .command-flyout.is-advanced .command-flyout-list {
@@ -2217,8 +2302,9 @@ button.command-rail.is-suggested {
 }
 
 .command-flyout-filter > button[aria-pressed='true'] {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
+  color: var(--color-selected-text);
+  background: var(--color-accent-dim);
+  box-shadow: inset 0 0 0 1px var(--color-accent-border);
 }
 
 /* Capped to the stage (with the rail rule above); the list scrolls on the
@@ -2483,8 +2569,22 @@ button.command-rail.is-suggested {
 
 .command-tile:is(:disabled, [aria-disabled='true']) {
   color: var(--color-text-muted);
-  opacity: var(--opacity-disabled);
+  opacity: 1;
   cursor: default;
+}
+
+.in-place-command-state {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+}
+
+.in-place-command.refused .in-place-command-state {
+  color: var(--color-warning);
 }
 
 /* ── The Tweak rail ───────────────────────────────────────── */
@@ -3691,7 +3791,8 @@ button.model-panel-grip[aria-expanded='true'] {
   justify-content: flex-start;
   gap: 8px;
   width: 100%;
-  height: 28px;
+  min-height: 28px;
+  height: auto;
   padding: 0 9px 0 7px;
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -3715,8 +3816,20 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .sketch-modify-item:disabled {
-  opacity: var(--opacity-disabled);
+  opacity: 1;
   cursor: default;
+}
+
+.sketch-modify-item > span {
+  display: grid;
+  gap: 2px;
+  padding-block: 5px;
+}
+
+.sketch-modify-item small {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  font-weight: normal;
 }
 
 /* Finish is the column's foot, lit like the primary verb. */
@@ -4275,25 +4388,83 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 @media (max-width: 520px) {
+  .command-bar-lane:has(.in-place-command) {
+    left: var(--island-gap);
+    right: var(--island-gap);
+  }
+
   .in-place-command {
-    flex-wrap: wrap;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 
   .in-place-command-title {
-    max-width: 96px;
+    max-width: none;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .in-place-command-hint {
-    flex-basis: calc(100% - 120px);
+    grid-column: 1 / -1;
+    grid-row: 4;
+    order: initial;
+  }
+
+  .in-place-command-state {
+    justify-self: end;
+  }
+
+  .in-place-command > .in-place-command-parameters {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .in-place-command > .in-place-command-precise {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .in-place-command:has(> .in-place-command-precise)
+    > .in-place-command-parameters {
+    grid-column: 2;
+  }
+
+  .in-place-command > .in-place-command-cancel:not(.in-place-command-precise),
+  .in-place-command > .in-place-command-done {
+    grid-row: 3;
   }
 
   .in-place-command-cancel,
   .in-place-command-done {
+    justify-content: center;
+    flex: 1 1 auto;
     gap: 4px;
     padding-inline: 5px;
+  }
+}
+
+/* Takeover modes have no modeling dock to reserve. Keep the prompt and
+   its status messages full width instead of squeezing them beside a
+   rail that belongs to the underlying 3D workspace. */
+@media (max-width: 720px) {
+  .workspace-toast-body {
+    height: auto;
+    min-height: 28px;
+    padding-block: 5px;
+    box-sizing: border-box;
+  }
+
+  .workspace-toast-body > span {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .workspace:has(.drawing-workspace) .command-bar-lane,
+  .workspace:has(.drawing-workspace) :is(.workspace-toast, .activity-lane) {
+    left: var(--island-gap);
+    right: var(--island-gap);
   }
 }
 
@@ -4322,7 +4493,7 @@ button.model-panel-grip[aria-expanded='true'] {
   position: absolute;
   left: 0;
   bottom: calc(100% + 8px);
-  min-width: 220px;
+  min-width: min(220px, 100%);
   max-width: 100%;
   box-sizing: border-box;
   max-height: max(
@@ -4766,6 +4937,35 @@ button.model-panel-grip[aria-expanded='true'] {
   margin-left: 4px;
 }
 
+.in-place-param-field.is-refused {
+  flex-wrap: wrap;
+}
+
+.in-place-param-field.is-refused input {
+  flex-basis: 0;
+  width: 0;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector):has(.is-refused) {
+  grid-column: 1 / -1;
+  align-items: flex-start;
+}
+
+.in-place-params-grid.is-compact
+  > .in-place-param-value:not(.is-vector):has(.is-refused)
+  > .in-place-option-label {
+  padding-top: 4px;
+}
+
+.in-place-param-error {
+  flex: 1 0 100%;
+  color: var(--color-error-text);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  padding: 4px 2px;
+}
+
 /* A value's name scrubs it: dragged sideways, it steps the number. */
 .in-place-param-value > .in-place-option-label.is-scrubbable {
   cursor: ew-resize;
@@ -4962,4 +5162,46 @@ button.model-panel-grip[aria-expanded='true'] {
 /* The expanded instructions stand over model panels, as the palette does. */
 .command-bar-lane:has(.workspace-hint-help[open]) {
   z-index: var(--z-popover);
+}
+
+/* Sketch input and feedback each get a whole row above Snap/Grid. Three
+   icon rails cannot also share the narrow strip beside that readout. */
+@media (max-width: 600px) {
+  .workspace.column-layout:has(.sketch-rail) .command-bar-lane {
+    left: var(--island-gap);
+    right: var(--island-gap);
+    bottom: calc(var(--readout-h) + var(--island-gap) * 2);
+  }
+
+  .workspace.column-layout:has(.sketch-rail) .workspace-toast,
+  .workspace.column-layout:has(.sketch-rail) .activity-lane {
+    left: var(--island-gap);
+    right: var(--island-gap);
+    bottom: calc(
+      var(--readout-h) + var(--command-bar-h) + var(--island-gap) * 3 + 8px
+    );
+    z-index: var(--z-popover);
+  }
+
+  .workspace.column-layout:has(.sketch-rail) .workspace-column-float {
+    top: var(--stage-top);
+    transform: none;
+    max-height: calc(
+      100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
+        var(--island-gap) * 4 - 64px
+    );
+  }
+
+  .workspace.column-layout:has(.sketch-rail) .viewport-scale-indicator {
+    visibility: hidden;
+  }
+
+  .workspace.column-layout:has(.sketch-rail)
+    .instrument-rail
+    > .sketch-relations {
+    max-height: calc(
+      100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
+        var(--island-gap) * 4 - 64px
+    );
+  }
 }
