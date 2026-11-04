@@ -3,6 +3,34 @@ import { describe, expect, it, vi } from 'vitest';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
 
 describe('InPlaceCommandBar', () => {
+  it('focuses the new command with its instructions and returns to the viewport on dismissal', () => {
+    const workspace = (open: boolean) => (
+      <div className="viewer-area">
+        <section
+          className="viewer-shell"
+          aria-label="3D viewport"
+          tabIndex={-1}
+        />
+        {open && (
+          <InPlaceCommandBar
+            title="Fillet"
+            hint="Click the edges to fillet"
+            canFinish={false}
+            onDone={vi.fn()}
+            onCancel={vi.fn()}
+          />
+        )}
+      </div>
+    );
+    const { rerender } = render(workspace(true));
+    const command = screen.getByRole('group', { name: 'Fillet command' });
+    expect(command).toHaveFocus();
+    expect(command).toHaveAccessibleDescription('Click the edges to fillet');
+    screen.getByRole('button', { name: /Cancel/ }).focus();
+    rerender(workspace(false));
+    expect(screen.getByRole('region', { name: '3D viewport' })).toHaveFocus();
+  });
+
   it('explains a body-removing cut and preserves its diagnostic behind details', () => {
     const diagnostic = 'Empty result: cut target fully contained in tool';
     render(

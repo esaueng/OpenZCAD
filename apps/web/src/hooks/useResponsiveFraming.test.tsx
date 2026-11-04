@@ -8,7 +8,10 @@ import {
   setOption
 } from '../lib/panelLayout';
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('responsive camera framing', () => {
   it('reframes a changed workspace and a resized window after layout settles', async () => {
@@ -44,7 +47,7 @@ describe('responsive camera framing', () => {
     expect(onFit).toHaveBeenCalledTimes(2);
   });
 
-  it('does not move the camera during an edit or replay a skipped resize later', async () => {
+  it('does not move the camera during an edit or replay a skipped desktop resize later', async () => {
     vi.useFakeTimers();
     const onFit = vi.fn();
     const props = {
@@ -70,6 +73,32 @@ describe('responsive camera framing', () => {
     await act(() => window.dispatchEvent(new Event('resize')));
     await act(() => vi.advanceTimersByTime(200));
     expect(onFit).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains a narrow-screen resize until the edit is ready, then fits once', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('innerWidth', 390);
+    const onFit = vi.fn();
+    const props = {
+      projectId: 'a',
+      mode: 'build',
+      layout: defaultPanelLayout(),
+      panels: 'open',
+      enabled: false,
+      onFit
+    };
+    const { rerender } = renderHook(useResponsiveFraming, {
+      initialProps: props
+    });
+    await act(() => window.dispatchEvent(new Event('resize')));
+    await act(() => vi.advanceTimersByTime(200));
+    expect(onFit).not.toHaveBeenCalled();
+    rerender({ ...props, enabled: true });
+    await act(() => vi.advanceTimersByTime(200));
+    expect(onFit).toHaveBeenCalledOnce();
+    rerender({ ...props, enabled: true });
+    await act(() => vi.advanceTimersByTime(200));
+    expect(onFit).toHaveBeenCalledOnce();
   });
 
   it('retains a structural fit until a fast edit settles, then retires an explicit fit', async () => {

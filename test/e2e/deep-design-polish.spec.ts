@@ -28,10 +28,13 @@ test(
     await page
       .getByRole('combobox', { name: 'Search commands', exact: true })
       .fill('fillet');
-    await page.getByRole('option', { name: /Fillet.*Switch to Build/ }).click();
+    await expect(
+      page.getByRole('option', { name: /Fillet.*Switch to Build/ })
+    ).toBeVisible();
+    await page.keyboard.press('Enter');
     await expect(
       page.getByRole('group', { name: 'Fillet command', exact: true })
-    ).toBeVisible();
+    ).toBeFocused();
     await expect
       .poll(
         () =>
@@ -85,6 +88,10 @@ test(
         { timeout: 20_000 }
       )
       .toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(
+      page.getByRole('region', { name: '3D viewport', exact: true })
+    ).toBeFocused();
   }
 );
 

@@ -4260,6 +4260,7 @@ button.model-panel-grip[aria-expanded='true'] {
   background: var(--color-surface-hover);
   border-color: var(--color-border);
   cursor: default;
+  opacity: 1;
 }
 
 .in-place-command kbd {
@@ -4903,8 +4904,14 @@ button.model-panel-grip[aria-expanded='true'] {
   }
 
   .workspace.column-layout:has(.tweak-flyouts.is-open)
-    .viewport-scale-indicator {
-    display: none;
+    .viewport-scale-indicator,
+  .workspace.column-layout:has(.panel-lane-float) .viewport-scale-indicator {
+    top: var(--stage-top);
+    bottom: auto;
+    left: calc(var(--island-gap) * 2 + var(--rail-w));
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 6px;
   }
 
   .command-bar-lane:has(.workspace-hint-help)
@@ -4928,12 +4935,18 @@ button.model-panel-grip[aria-expanded='true'] {
     margin-left: 8px;
     margin-right: 0;
   }
-  .viewer-area:has(.panel-lane-float) .viewport-scale-indicator {
-    display: none;
-  }
+}
+
+.in-place-command:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 @media (max-width: 360px) {
+  .tweak-flyouts {
+    /* Keep a gap below the viewport controls on narrow portrait phones. */
+    max-height: calc(min(440px, 46dvh) - var(--sp-5));
+  }
   .workspace-hint-help {
     display: none;
   }

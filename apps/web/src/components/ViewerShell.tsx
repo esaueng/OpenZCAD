@@ -695,6 +695,7 @@ export function ViewerShell({
     <section
       className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
       aria-label="3D viewport"
+      tabIndex={-1}
       data-selection-filter={selectionFilter}
       data-selection-filter-source={
         selectionFilterAutomatic ? 'tool' : 'manual'

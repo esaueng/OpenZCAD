@@ -475,6 +475,12 @@ button:disabled {
   opacity: var(--opacity-disabled);
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-text-subtle);
+  opacity: 1;
+}
+
 /*
   `summary` and `a` were not in this list.
 

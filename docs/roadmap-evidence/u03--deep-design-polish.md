@@ -17,4 +17,7 @@ Focused unit coverage exercises framing, pending tool cancellation and dock
 restoration. Framing waits for the viewer to present geometry, preserves saved
 camera poses and yields to viewport gestures. Browser evidence uses the full renderer in development; cloud,
 native desktop and production qualification remain separate.
+Keyboard tool launches focus their instructions and return to the viewport;
+narrow refits survive pending edits, and shared input hints have measured
+contrast in both themes. The phone scale stays visible above its sheet.
 PR #1198.

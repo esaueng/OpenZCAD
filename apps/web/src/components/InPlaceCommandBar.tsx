@@ -147,6 +147,19 @@ export function InPlaceCommandBar({
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
+  const commandRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const command = commandRef.current;
+    if (!command) return;
+    command.focus({ preventScroll: true });
+    return () => {
+      if (command.contains(document.activeElement))
+        command
+          .closest('.viewer-area')
+          ?.querySelector<HTMLElement>('.viewer-shell')
+          ?.focus({ preventScroll: true });
+    };
+  }, [title]);
   const refusalSummary = refusal ? modelingRefusalSummary(refusal) : null;
   const shown = refusalSummary ?? refusal;
   const hintRef = useRef<HTMLSpanElement>(null);
@@ -174,9 +187,12 @@ export function InPlaceCommandBar({
   }, [shown]);
   return (
     <div
+      ref={commandRef}
       className={`in-place-command${refusal ? ' refused' : ''}`}
       role="group"
+      tabIndex={-1}
       aria-label={`${title} command`}
+      aria-describedby={hintId}
     >
       <span className="in-place-command-title">{title}</span>
       <span

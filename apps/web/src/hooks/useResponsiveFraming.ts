@@ -71,7 +71,7 @@ export function useResponsiveFraming({
       }, 120);
     };
     resume.current = () => schedule(true);
-    const resize = () => schedule(false);
+    const resize = () => schedule(window.innerWidth <= PANEL_PHONE_MAX_WIDTH);
     const userNavigation = (event: Event) => {
       if (!(event.target instanceof HTMLCanvasElement)) return;
       clearTimeout(timer);
