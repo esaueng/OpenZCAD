@@ -5476,6 +5476,11 @@ export function App() {
   // Every saved assembly change runs through `executeCommand`.
   const assembleApp = {
     document: doc,
+    initialJointId:
+      DEMO_DEFINITIONS.find((demo) => demo.projectId === doc?.projectId)
+        ?.initialWorkspace === 'assemble'
+        ? doc?.assembly?.joints[0]?.id
+        : undefined,
     execute: (command: AnyCommand) => executeCommand(command),
     onStatus: (message: string) => setStatus(message)
   };
@@ -12945,6 +12950,8 @@ export function App() {
       if (!isCurrent()) return;
       if (existing) {
         hydrateDocument(existing, { activeProjectSince });
+        if (definition.initialWorkspace)
+          setWorkspaceMode(definition.initialWorkspace);
         setStatus(`Opened ${existing.name}.`);
         return;
       }
@@ -12964,6 +12971,8 @@ export function App() {
       await saveLocalProject(document);
       if (!isCurrent()) return;
       hydrateDocument(document, { activeProjectSince });
+      if (definition.initialWorkspace)
+        setWorkspaceMode(definition.initialWorkspace);
       setCloudAvailable(false);
       setProjects((current) => [
         summarizeLocalDocument(document),

@@ -96,11 +96,89 @@ const assemble = (page: Page) =>
 const panel = (page: Page) =>
   page.getByRole('complementary', { name: 'Assembly' });
 
+for (const width of [1440, 390]) {
+  test(
+    `scissors opens ready to try its pivot at ${width}px`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width, height: 900 });
+      await stubApi(page);
+      await page.route('**/api/session', (route) =>
+        route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+      );
+      await page.goto('/');
+      const sample = page.getByRole('button', { name: /^Open demo: Scissors/ });
+      const angle = panel(page).getByRole('textbox', {
+        name: 'Angle',
+        exact: true
+      });
+      const backToProjects = () =>
+        page
+          .getByRole('banner')
+          .getByRole('button', { name: /^OpenZCAD/ })
+          .click();
+      const ready = async (value: string) => {
+        // Cold tool/worker loading has its own startup allowance; the mode
+        // and visible controls below still use the normal UI assertions.
+        await expect(
+          page.getByRole('group', { name: 'Workspace mode' })
+        ).toBeVisible({ timeout: 30_000 });
+        await expect(
+          page.getByRole('button', { name: 'Assemble', exact: true })
+        ).toHaveAttribute('aria-pressed', 'true');
+        await expect(angle).toHaveValue(value);
+        await expect(angle).toBeInViewport();
+        await expect(
+          panel(page).getByRole('button', { name: 'Play', exact: true })
+        ).toBeInViewport();
+        await expectBodyCount(page, 3);
+      };
+
+      await sample.click();
+      await ready('-30');
+      await angle.fill('-45');
+      await angle.press('Enter');
+      await angle.blur();
+      await expect(
+        panel(page).getByRole('region', { name: 'Joints' })
+      ).toContainText('-45.0°');
+
+      // An edited local copy still opens in the sample's workspace, even
+      // after the user changed modes and collapsed its pivot controls.
+      await panel(page)
+        .getByRole('button', { name: /^Revolute 1 / })
+        .click();
+      await expect(angle).toHaveCount(0);
+      await page.getByRole('button', { name: 'Build', exact: true }).click();
+      await backToProjects();
+      await sample.click();
+      await ready('-45');
+      await page.reload();
+      await ready('-45');
+
+      await page.getByRole('button', { name: 'Build', exact: true }).click();
+      await backToProjects();
+      const reset = page.getByRole('button', {
+        name: 'Reset Scissors to the original'
+      });
+      page.once('dialog', (dialog) => dialog.accept());
+      await reset.click();
+      await expect(reset).toHaveCount(0);
+      await sample.click();
+      await ready('-30');
+    }
+  );
+}
+
 test(
   'turns bodies into parts from the first run in the sidebar (AS01)',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     await openDocument(page, blades('Assembly first run', false));
+    await expect(
+      page.getByRole('button', { name: 'Build', exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
     await assemble(page);
     await panel(page).getByRole('button', { name: 'Add 2 parts' }).click();
     const parts = panel(page).getByRole('region', { name: 'Parts' });

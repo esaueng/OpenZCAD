@@ -36,6 +36,8 @@ export type AssemblyExecute = (command: AnyCommand) => boolean;
 
 export interface AssembleWorkspaceApp {
   document: ProjectDocument | null;
+  /** Applied only when opening a project, before the user chooses a selection. */
+  initialJointId?: string;
   execute: AssemblyExecute;
   onStatus(message: string): void;
 }
@@ -229,6 +231,12 @@ export function useAssembleWorkspace(
   }, [active]);
   useEffect(() => {
     assemblyRuntime.reset();
+    const { document, initialJointId } = latest.current;
+    if (
+      initialJointId &&
+      document?.assembly?.joints.some((joint) => joint.id === initialJointId)
+    )
+      assemblyRuntime.selectJoint(initialJointId);
   }, [projectId]);
   useEffect(() => {
     registerAssemblyCommitHandlers({

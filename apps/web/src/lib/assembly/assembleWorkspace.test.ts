@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { commandFactories } from '@openzcad/command-system';
 import type { BodyId } from '@openzcad/shared';
 import {
   PIVOT,
@@ -9,7 +11,9 @@ import {
   assembleKeyFor,
   createJointFromTool,
   jointFromToolState,
-  runAssembleKey
+  runAssembleKey,
+  useAssembleWorkspace,
+  type AssembleWorkspaceApp
 } from './assembleWorkspace';
 import {
   assemblyRuntime,
@@ -43,6 +47,84 @@ function tool(a: BodyId, b: BodyId): AssemblyJointToolState {
 afterEach(() => {
   assemblyRuntime.reset();
   assemblyRuntime.setActive(false);
+});
+
+describe('Assemble workspace launch selection', () => {
+  it('selects the requested joint on open without changing the saved document', () => {
+    const { manager } = scissorsManager({ joint: true });
+    const { commands, execute } = recordingExecute(manager);
+    const document = manager.document;
+    renderHook(() =>
+      useAssembleWorkspace(true, {
+        document,
+        initialJointId: 'joint_pin',
+        execute,
+        onStatus: vi.fn()
+      })
+    );
+    expect(getAssemblyRuntime().selectedJointId).toBe('joint_pin');
+    expect(commands).toEqual([]);
+    expect(manager.document).toBe(document);
+  });
+
+  it('keeps a later user selection through edits and workspace switches', () => {
+    const { manager } = scissorsManager({ joint: true });
+    const { execute } = recordingExecute(manager);
+    const app = (): AssembleWorkspaceApp => ({
+      document: manager.document,
+      initialJointId: 'joint_pin',
+      execute,
+      onStatus: vi.fn()
+    });
+    const { rerender } = renderHook(
+      ({ active, app }) => useAssembleWorkspace(active, app),
+      { initialProps: { active: true, app: app() } }
+    );
+    act(() => {
+      assemblyRuntime.selectComponent('comp_b');
+      execute(
+        commandFactories.setAssemblyPose({ values: { joint_pin: [30] } })
+      );
+    });
+    rerender({ active: false, app: app() });
+    rerender({ active: true, app: app() });
+    expect(getAssemblyRuntime().selectedJointId).toBeNull();
+    expect(getAssemblyRuntime().selectedComponentId).toBe('comp_b');
+  });
+
+  it('clears the sample selection when another project opens', () => {
+    const first = scissorsManager({ joint: true });
+    const second = scissorsManager({ joint: true });
+    const app = (
+      document: AssembleWorkspaceApp['document'],
+      initialJointId?: string
+    ) => ({
+      document,
+      initialJointId,
+      execute: vi.fn(() => true),
+      onStatus: vi.fn()
+    });
+    const { rerender } = renderHook(
+      (app: AssembleWorkspaceApp) => useAssembleWorkspace(true, app),
+      { initialProps: app(first.manager.document, 'joint_pin') }
+    );
+    expect(getAssemblyRuntime().selectedJointId).toBe('joint_pin');
+    rerender(app(second.manager.document));
+    expect(getAssemblyRuntime().selectedJointId).toBeNull();
+  });
+
+  it('leaves an ordinary project or a missing initial joint unselected', () => {
+    const { manager } = scissorsManager({ joint: true });
+    renderHook(() =>
+      useAssembleWorkspace(true, {
+        document: manager.document,
+        initialJointId: 'joint_deleted',
+        execute: vi.fn(() => true),
+        onStatus: vi.fn()
+      })
+    );
+    expect(getAssemblyRuntime().selectedJointId).toBeNull();
+  });
 });
 
 describe('Assemble workspace actions', () => {
