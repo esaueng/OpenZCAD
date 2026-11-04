@@ -15,12 +15,13 @@ import tempfile
 from snapshot import SnapshotError, snapshot_metadata, verify_snapshot
 
 MAX_ARCHIVE_BYTES = 4 * 1024**3
+RAM_ROOT = Path('/dev/shm')
 MEMBER = re.compile(r'(?:database\.sql|manifest\.json|metadata\.json|COMPLETE|objects/[0-9a-f]{64}\.bin)')
 
 
 def ram_directory():
-    root = Path('/dev/shm')
-    if not any(line.split()[1:3] == ['/dev/shm', 'tmpfs']
+    root = RAM_ROOT
+    if not any(line.split()[1:3] == [str(root), 'tmpfs']
                for line in Path('/proc/mounts').read_text().splitlines()):
         raise SnapshotError('Private tmpfs is required for plaintext staging.')
     # tmpfs pages can swap: accept only RAM compression or encrypted block swap.
@@ -133,7 +134,7 @@ def seal(snapshot, destination, password):
 
 def unseal(source, destination, password):
     # Caller must keep destination inside private RAM, never expose restored sessions.
-    if not str(destination.resolve()).startswith('/dev/shm/'):
+    if RAM_ROOT.resolve() not in destination.resolve().parents:
         raise SnapshotError('Restore plaintext requires private tmpfs.')
     with ram_directory() as temporary:
         ram = Path(temporary)

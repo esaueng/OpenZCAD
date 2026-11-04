@@ -432,7 +432,12 @@ test('changing FOV in orthographic keeps framing when returning to perspective',
   const field = page.getByLabel('Perspective field of view');
   await field.fill('70');
   await field.blur();
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
   await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '70');
   await page.keyboard.press('p');
   await expect(projection).toHaveAttribute('aria-pressed', 'false');
@@ -506,7 +511,12 @@ test('the field of view setting widens the camera without moving the part', asyn
   const field = page.getByLabel('Perspective field of view');
   await field.fill('70');
   await field.blur();
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
 
   await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '70');
   // The framing is kept: the box's centre is where it was on screen.
@@ -796,7 +806,12 @@ test('a saved perspective view restores its captured field of view', async ({
   await page.getByRole('button', { name: 'Viewport', exact: true }).click();
   await page.getByLabel('Perspective field of view').fill('70');
   await page.getByLabel('Perspective field of view').blur();
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
   await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '70');
   await page.getByRole('button', { name: 'Standard views' }).click();
   await page.getByRole('button', { name: 'Go to View 1' }).click();

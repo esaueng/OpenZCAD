@@ -365,9 +365,7 @@ test('keeps the failed workspace open on internal departure and retries before r
 
   // An internal departure must await the failed retry and leave the only
   // unsaved document in place rather than replacing it with the project shelf.
-  await page
-    .getByRole('button', { name: 'OpenZCAD Beta', exact: true })
-    .click();
+  await page.getByTitle('Back to projects', { exact: true }).click();
   await expect.poll(writeFailures).toBeGreaterThan(failuresBeforeLeaving);
   await expectBoxAndSphere(page);
   await expect(

@@ -92,7 +92,12 @@ for (const viewport of [
       await expect(
         page.getByRole('dialog', { name: 'Settings' })
       ).toBeVisible();
-      await page.getByRole('button', { name: 'Back to projects' }).click();
+      await page
+        .getByRole('button', {
+          name: 'Close settings and go back to projects',
+          exact: true
+        })
+        .click();
       await expect(cards.last()).toBeInViewport();
     }
     await page.screenshot({ path: testInfo.outputPath('library-bottom.png') });

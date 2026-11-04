@@ -742,14 +742,19 @@ test('a late member checkpoint leaves the newer share navigation and status unch
     window.location.hash = `share=${'n'.repeat(43)}`;
   });
   await expect.poll(() => shareRequested).toBe(true);
-  const pendingStatus = await page.getByRole('contentinfo').textContent();
+  const sharePage = page.getByRole('main', { name: 'Shared model' });
+  const pendingStatus = await sharePage.getByRole('status').textContent();
   try {
     server.release();
     await page.waitForTimeout(350);
-    await expect(page.getByRole('contentinfo')).toHaveText(pendingStatus ?? '');
+    await expect(sharePage.getByRole('status')).toHaveText(pendingStatus ?? '');
+    await expect(
+      sharePage.getByRole('heading', { name: 'Opening shared model…' })
+    ).toBeVisible();
     await expect(page.locator('.breadcrumb')).toContainText(
       'Durable member checkpoint'
     );
+    await expect(page.locator('.breadcrumb')).toBeHidden();
     await expect(
       page.locator('.revision-row', { hasText: 'Clicked box' })
     ).toHaveCount(0);

@@ -105,24 +105,17 @@ test('a generic imported side drags the whole body and stays selected after the 
       start.y + handle.dy * handle.perUnit * step
     );
   }
-  await expect
-    .poll(async () =>
-      Number(await canvas.getAttribute('data-e2e-height-proxy-offset'))
-    )
-    .toBeGreaterThan(10);
   // The body itself carries the extension, rounds and all, before release,
-  // over a ghost of the part as it was.
-  await expect.poll(() => maxX(canvas)).toBeGreaterThan(90);
+  // over a ghost of the part as it was. A generic side may use the exact
+  // worker preview when an affine deformation cannot preserve its details.
+  await expect.poll(() => maxX(canvas)).toBeCloseTo(92, 3);
   await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
-  const dragged = Number(
-    await canvas.getAttribute('data-e2e-height-proxy-offset')
-  );
   await page.mouse.up();
 
   await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
     timeout: 30_000
   });
-  await expect.poll(() => maxX(canvas)).toBeCloseTo(80 + dragged, 3);
+  await expect.poll(() => maxX(canvas)).toBeCloseTo(92, 3);
   await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
   // The moved face is still the selection, armed for another drag, rather
   // than a whole-body selection offering Move.

@@ -27,7 +27,7 @@ explained), `open`, and `pending live` (only the live tier is missing).
 | Rotated input (world-axis aligned)     | `test/growing-holder-lettering.test.ts` rotated moved holder; `test/e2e/growing-holder.spec.ts` two Moves before Apply          | synthetic | covered      |
 | Rotated off the world axes             | `test/opening-recognition.test.ts` "refuses a bracket rotated off the world axes"                                               | synthetic | limit        |
 | Equivalent units — recognition         | `test/growing-holder-units.test.ts` (inch document measures 1/25.4 of the millimetre one; margins now scale, PR for H01)        | synthetic | covered      |
-| Equivalent units — recipe build        | `test/growing-holder-units.test.ts` "refuses the inch recipe by name…": the exact bridge union refuses at inch scale (K07)      | synthetic | limit        |
+| Equivalent units — recipe build        | `test/growing-holder-units.test.ts`: exact inch preflight, 2-inch growth, closed mesh, physical material witnesses and millimetre STEP replay | synthetic | covered |
 | Unsupported model                      | `test/opening-recognition.test.ts` "refuses a solid with no facing pair…"; `growing-holder-assistant` unsupported history       | synthetic | covered      |
 | Ambiguous geometry / drawing           | `test/growing-holder-ambiguous.test.ts`: E-shape publishes `ambiguous` + candidates, no suggestion, forged proposal refused     | synthetic | covered      |
 | Guided selection after ambiguity       | `test/opening-recognition.test.ts` guided `faces` resolves the E-shape; no product surface offers the pick yet (H03)            | synthetic | partial      |

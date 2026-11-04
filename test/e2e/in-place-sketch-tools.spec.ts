@@ -253,13 +253,29 @@ test('Sweep runs in place: profile, path curve clicks, Done', async ({
     .toContain('Pick the path');
   // Click each path line at its middle. Front's sketch v runs along world
   // −Z, so the path's rise in sketch coordinates is a drop in the world.
-  for (const point of [
+  const points = [
     [30, 0, -10],
     [37.5, 0, -20]
-  ] as [number, number, number][]) {
+  ] as [number, number, number][];
+  for (const [index, point] of points.entries()) {
+    // The first staged frame can contain only the marker. Frame again once
+    // the profile is pickable, and after each exact path preview settles.
+    await page
+      .getByRole('button', { name: 'Fit view (F)', exact: true })
+      .click();
+    await waitForStillViewport(page);
     const on = await projected(canvas, point);
+    const bounds = (await canvas.boundingBox())!;
+    expect(on.x).toBeGreaterThan(bounds.x);
+    expect(on.x).toBeLessThan(bounds.x + bounds.width);
+    expect(on.y).toBeGreaterThan(bounds.y);
+    expect(on.y).toBeLessThan(bounds.y + bounds.height);
     await page.mouse.move(on.x, on.y);
     await page.mouse.click(on.x, on.y);
+    await expect(bar).toContainText(`Path of ${index + 1}`);
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 30_000
+    });
   }
   await expect(bar).toContainText('Path of 2');
   await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({

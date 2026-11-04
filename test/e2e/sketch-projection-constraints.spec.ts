@@ -21,6 +21,7 @@ import {
   expectBodyCount,
   revealModelPanel,
   stubApi,
+  MODEL_ONLY,
   test,
   waitForStillViewport
 } from './openzcad-fixtures';
@@ -189,7 +190,7 @@ async function stored(page: Page): Promise<ProjectDocument> {
 }
 
 async function open(page: Page, document: ProjectDocument) {
-  await stubApi(page);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await expect(page).toHaveTitle('OpenZCAD');
@@ -374,6 +375,9 @@ async function inspectLiveSketch(
   await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toBeVisible(
     READY
   );
+  await page
+    .getByRole('button', { name: 'History panel', exact: true })
+    .click();
   await waitForStillViewport(page);
   await expectLiveLoop(page, f);
   const palette = page.getByRole('button', {

@@ -4,6 +4,7 @@ import { test, expect, stubApi } from './openzcad-fixtures';
 interface ActionRowSample {
   text: string;
   width: number;
+  visible: boolean;
 }
 
 declare global {
@@ -227,9 +228,17 @@ test('opens a cloud project without the action row flashing stale states or refl
         .map((part) => part.replace(/\s+/g, ' ').trim())
         .join(' | ');
       const width = Math.round(row.getBoundingClientRect().width);
+      const visible =
+        getComputedStyle(row).visibility !== 'hidden' &&
+        row.closest('[aria-hidden="true"], [inert]') === null;
       const last = samples.at(-1);
-      if (!last || last.text !== text || last.width !== width) {
-        samples.push({ text, width });
+      if (
+        !last ||
+        last.text !== text ||
+        last.width !== width ||
+        last.visible !== visible
+      ) {
+        samples.push({ text, width, visible });
       }
     };
     new MutationObserver(sample).observe(document.body, {
@@ -255,15 +264,19 @@ test('opens a cloud project without the action row flashing stale states or refl
   // flight and the room is being joined. No stale "Saved", no "Offline".
   expect(texts[0]).toContain('Saving');
   expect(texts[0]).toContain('Joining…');
-  expect(texts[0]).toContain('File 2');
+  // File metadata may arrive while the workspace is covered. It must be
+  // correct from the first visible frame and must never reflow that row.
+  const visible = samples.filter((entry) => entry.visible);
+  expect(visible.length).toBeGreaterThan(0);
+  for (const entry of visible) expect(entry.text).toContain('File 2');
   for (const text of texts) {
     expect(text).not.toContain('Offline');
     expect(text).not.toContain('Connecting');
   }
   expect(texts.at(-1)).toBe(
-    'Saved | Open project sharing · 1 live | 1 File 2 Settings'
+    'Saved | Open project sharing · 1 live | File 2 Settings'
   );
-  // The action row holds no status label, and presence reserves its count,
+  // The action row holds no status label, and presence keeps its glyph's width,
   // so the row never moves while the project settles.
-  expect(new Set(samples.map((entry) => entry.width)).size).toBe(1);
+  expect(new Set(visible.map((entry) => entry.width)).size).toBe(1);
 });

@@ -51,9 +51,7 @@ test('reopening a signed-in local project does not request a missing account cop
     .toBe(true);
   expect(documentReads).toBe(0);
 
-  await page
-    .getByRole('button', { name: 'OpenZCAD Beta', exact: true })
-    .click();
+  await page.getByTitle('Back to projects', { exact: true }).click();
   await page
     .locator('.start-tile-open', { hasText: 'Device-only part' })
     .click();

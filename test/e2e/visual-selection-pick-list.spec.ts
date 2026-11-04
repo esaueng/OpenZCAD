@@ -168,15 +168,19 @@ test('lists stacked faces without disturbing selection or click cycling', async 
   // A click establishes the cycle at the front candidate. Opening and
   // dismissing the list must leave that state alone, so the next click still
   // advances exactly one row deeper.
-  const selectionLabel = page.locator(
-    '.selection-readout .selection-callout-name'
-  );
+  const expectCandidate = (index: number) =>
+    expect(canvas).toHaveAttribute(
+      probe!.kinds[index] === 'edge'
+        ? 'data-e2e-selected-edges'
+        : 'data-e2e-selected-face',
+      probe!.topologyIds[index]!
+    );
   await page.mouse.click(probe!.x, probe!.y);
-  await expect(selectionLabel).toHaveText(probe!.labels[0]!);
+  await expectCandidate(0);
   await page.mouse.click(probe!.x, probe!.y, { button: 'right' });
   await expect(menu).toBeVisible();
   await page.keyboard.press('Escape');
   await page.mouse.click(probe!.x, probe!.y);
-  await expect(selectionLabel).toHaveText(probe!.labels[1]!);
+  await expectCandidate(1);
   expect(consoleErrors).toEqual([]);
 });

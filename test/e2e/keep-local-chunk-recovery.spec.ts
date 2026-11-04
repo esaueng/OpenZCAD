@@ -47,9 +47,12 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
           : { projects: [] }
     })
   );
-  let missingChunks = 0;
+  const missingChunks: { url: string; type: string }[] = [];
   await page.route(/\/assets\/keepLocalRoomVersion-.*\.js$/, (route) => {
-    missingChunks++;
+    missingChunks.push({
+      url: route.request().url(),
+      type: route.request().resourceType()
+    });
     return route.fulfill({
       status: 404,
       contentType: 'text/plain',
@@ -137,7 +140,12 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
   const alert = dialog.getByRole('alert');
   await expect(alert).toBeVisible();
   const error = await alert.textContent();
-  expect(missingChunks).toBe(1);
+  // The import fails once; stale-chunk recovery then refreshes its HTTP
+  // cache entry with fetch(cache: 'reload') for the user-controlled reload.
+  await expect
+    .poll(() => missingChunks.map((request) => request.type).sort())
+    .toEqual(['fetch', 'script']);
+  expect(new Set(missingChunks.map((request) => request.url)).size).toBe(1);
   expect(
     await page.evaluate(
       () => (window as unknown as { __keepRequests: number }).__keepRequests
@@ -194,4 +202,5 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
     contentType: 'image/png'
   });
   expect(error).toBe(STALE_CHUNK_MESSAGE);
+  expect(missingChunks).toHaveLength(2);
 });

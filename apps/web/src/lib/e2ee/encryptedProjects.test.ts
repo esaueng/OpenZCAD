@@ -131,6 +131,30 @@ async function fixture() {
       account = { ...account, unlocked: false };
       events.encryptionStateChanged(userId);
     },
+    async enrollElsewhere() {
+      const sibling = await generateSigningKeyPair(false);
+      const siblingUnlock = await generateEncryptionKeyPair(false);
+      const next = nextDeviceListEntry(account.list, {
+        issuedAt: entry.issuedAt + 1,
+        addDevices: [
+          {
+            deviceId: 'sibling',
+            label: 'Sibling',
+            signingKey: await exportPublicKey(sibling.publicKey),
+            unlockKey: await exportPublicKey(siblingUnlock.publicKey),
+            addedAt: entry.issuedAt + 1
+          }
+        ]
+      });
+      chain.push(await signDeviceListEntry(identity.privateKey, next));
+      account = {
+        ...account,
+        list: await verifyDeviceList(identity.publicKey, chain, {
+          pin: account.list.pin
+        })
+      };
+      // A different browser changed authority: no local Settings event.
+    },
     async rotate() {
       const nextKey = generateSymmetricKey();
       encryption = await generateEncryptionKeyPair(false);
@@ -236,6 +260,51 @@ it('keeps a fresh store usable after repeated encryption-settings rechecks', asy
     f.accountKey
   );
   expect(f.load).toHaveBeenCalledTimes(2);
+});
+
+it('rechecks a new sibling against signed authority and retires captured clients once', async () => {
+  const f = await fixture();
+  const oldShare = await f.page.encryptedShareLinks();
+  const changed = vi.fn();
+  const stop = f.events.subscribeEncryptionState(f.userId, changed);
+  await f.enrollElsewhere();
+  await Promise.all([
+    oldShare.ctx.groups.onDeviceListChanged!(),
+    oldShare.ctx.groups.onDeviceListChanged!()
+  ]);
+  expect(changed).toHaveBeenCalledOnce();
+  await expect(oldShare.ctx.groups.account.currentAccountKey()).rejects.toThrow(
+    'The account session ended.'
+  );
+  const current = await f.page.encryptedShareLinks();
+  expect(current).not.toBe(oldShare);
+  expect(
+    current.ctx.groups.account.list.devices.map((d) => d.deviceId)
+  ).toEqual(['browser', 'sibling']);
+  expect(f.load).toHaveBeenCalledTimes(3);
+  stop();
+});
+
+it('does not reconnect or accept changed authority when a recheck is unchanged or refused', async () => {
+  const f = await fixture();
+  const sharing = await f.page.encryptedShareLinks();
+  const changed = vi.fn();
+  const stop = f.events.subscribeEncryptionState(f.userId, changed);
+  await sharing.ctx.groups.onDeviceListChanged!();
+  expect(await f.page.encryptedShareLinks()).toBe(sharing);
+  expect(changed).not.toHaveBeenCalled();
+  f.load.mockRejectedValueOnce(
+    new Error('The device-list pin refused a fork.')
+  );
+  await expect(sharing.ctx.groups.onDeviceListChanged!()).rejects.toThrow(
+    'pin refused a fork'
+  );
+  expect(changed).not.toHaveBeenCalled();
+  expect(await f.page.encryptedShareLinks()).toBe(sharing);
+  expect(
+    sharing.ctx.groups.account.list.devices.map((d) => d.deviceId)
+  ).toEqual(['browser']);
+  stop();
 });
 
 it('refuses cached sharing clients once Settings reports the account locked', async () => {

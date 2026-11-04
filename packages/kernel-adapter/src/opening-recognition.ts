@@ -84,9 +84,13 @@ const SECTION_FRAME: Record<
 };
 
 const round = (value: number): number => Math.round(value * 1e6) / 1e6;
+/** Linear recipe values retain the same physical precision in every unit. */
+const roundMillimetres = (value: number, millimetre: number): number =>
+  round(value / millimetre) * millimetre;
 
 /** The millimetre margins above, expressed in the document's units. */
 interface Margins {
+  millimetre: number;
   cutMargin: number;
   minStraightRun: number;
   minBridge: number;
@@ -99,6 +103,7 @@ interface Margins {
 
 function marginsIn(millimetre: number): Margins {
   return {
+    millimetre,
     cutMargin: CUT_MARGIN * millimetre,
     minStraightRun: MIN_STRAIGHT_RUN * millimetre,
     minBridge: MIN_BRIDGE * millimetre,
@@ -273,8 +278,10 @@ function readProfile(
   face: number,
   axis: OpeningAxis,
   label: string,
-  arcDeflection: number
+  arcDeflection: number,
+  millimetre: number
 ): SectionEdge[] | string {
+  const round = (value: number) => roundMillimetres(value, millimetre);
   if (kernel.getFaceWires(face).length !== 1)
     return `${label} has an inner loop; a hollow section is not supported.`;
   const edges = Array.from(kernel.getWireEdges(kernel.getFaceOuterWire(face)));
@@ -350,7 +357,8 @@ function proveStraightSection(
   cuts: [number, number],
   box: { min: Vector3; max: Vector3 },
   tolerance: number,
-  arcDeflection: number
+  arcDeflection: number,
+  millimetre: number
 ): { section: SectionEdge[] } | string {
   const min = { ...box.min };
   const max = { ...box.max };
@@ -396,7 +404,8 @@ function proveStraightSection(
     ends[0][0]!,
     axis,
     `The section at ${axis} = ${cuts[0]}`,
-    arcDeflection
+    arcDeflection,
+    millimetre
   );
   if (typeof first === 'string') return first;
   const second = readProfile(
@@ -404,7 +413,8 @@ function proveStraightSection(
     ends[1][0]!,
     axis,
     `The section at ${axis} = ${cuts[1]}`,
-    arcDeflection
+    arcDeflection,
+    millimetre
   );
   if (typeof second === 'string') return second;
   if (sectionSignature(first) !== sectionSignature(second))
@@ -476,6 +486,7 @@ function recognizeArmHeight(
   tolerance: number,
   margins: Margins
 ): RecognizedArmHeight | string {
+  const round = (value: number) => roundMillimetres(value, margins.millimetre);
   const others = AXES.filter((a) => a !== opening.axis) as [OpeningAxis, OpeningAxis];
   // The arms extend along whichever remaining axis the inner faces span more.
   const span = (axis: OpeningAxis) =>
@@ -541,7 +552,8 @@ function recognizeArmHeight(
       cuts,
       sideBox(side),
       Math.max(tolerance, 1e-6),
-      margins.arcDeflection
+      margins.arcDeflection,
+      margins.millimetre
     );
     if (typeof proof === 'string') return `${side} end: ${proof}`;
     sections[side] = proof.section.map((edge) => edge.data);
@@ -576,6 +588,7 @@ export function recognizeOpening(
 ): OpeningRecognition {
   const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
   const margins = marginsIn(options.millimetre ?? 1);
+  const round = (value: number) => roundMillimetres(value, margins.millimetre);
   let inventory: AnalyticInventory;
   let bounds: { min: Vector3; max: Vector3 };
   try {
@@ -688,7 +701,8 @@ export function recognizeOpening(
     cuts,
     grownBox,
     Math.max(tolerance, 1e-6),
-    margins.arcDeflection
+    margins.arcDeflection,
+    margins.millimetre
   );
   if (typeof proof === 'string') return unsupported(proof);
   const height = recognizeArmHeight(

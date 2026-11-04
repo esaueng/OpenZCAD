@@ -368,7 +368,12 @@ test('the top-bar status chips only report, and saving lives on File', async ({
   await expect(
     settings.getByRole('heading', { level: 2, name: 'Account', exact: true })
   ).toBeVisible();
-  await settings.getByRole('button', { name: /^Back/ }).click();
+  await settings
+    .getByRole('button', {
+      name: 'Close settings and go back to workspace',
+      exact: true
+    })
+    .click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
   // Neither click saved anything; File › Save revision does.

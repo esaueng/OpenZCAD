@@ -18,6 +18,8 @@ interface Circle {
   center: Point;
   normal: Point;
   radius: number;
+  u_axis?: Point;
+  v_axis?: Point;
 }
 interface Arena {
   version: number;
@@ -25,7 +27,12 @@ interface Arena {
   edges: {
     start: number;
     end: number;
-    curve: 'Line' | { Circle?: Circle };
+    curve:
+      | 'Line'
+      | {
+          Circle?: Circle;
+          NurbsCurve?: { control_points: Point[]; weights: number[] };
+        };
     trim?: [number, number] | null;
   }[];
   wires: { edges: { edge: number; forward: boolean }[] }[];
@@ -57,8 +64,9 @@ const refusal = () =>
 /**
  * Only shrinks are handled: all added material lies inside the old bore.
  * Both end rings must be complete circles, each meeting a planar end or a
- * coaxial cone. Its outer mouth may break out through a side face: those
- * boundary curves remain untouched. Other neighbours and stored UV traces refuse.
+ * coaxial cone. Split circular rims require complete angular coverage; a
+ * broken-out cone's retained outer trims must stay outside the old bore.
+ * Other neighbours and stored UV traces refuse.
  * The pinned native representation is copied; cone carriers, outer rings,
  * unrelated faces, edge trims and tolerances are retained verbatim.
  */
@@ -159,19 +167,72 @@ export function shrinkChamferedThroughHole(
         }
         ring.edges.push(e);
       }
-      // Limit this local edit to unsplit complete circles. Split/trimmed
-      // periodic boundaries need a separate coverage and UV certificate.
+      // Certify a full circle even when STEP/booleans split its periodic rim.
+      // One connected degree-two cycle and a gap/overlap-free angular cover
+      // are both required. Equal total arc length alone is insufficient.
       for (const ring of rings) {
-        if (ring.edges.length !== 1) throw refusal();
-        const e = ring.edges[0]!;
-        const span = probe.getEdgeParamSpan(e);
-        const edge = arena.edges[e]!;
-        if (
-          edge.start !== edge.end ||
-          Math.abs(Math.abs(span[1]! - span[0]!) - 2 * Math.PI) >
-            ANALYTIC_MATCH_EPSILON
-        )
-          throw refusal();
+        const tau = 2 * Math.PI;
+        const first = arena.edges[ring.edges[0]!]!.curve;
+        if (first === 'Line' || !first.Circle) throw refusal();
+        const basis = first.Circle;
+        const intervals: [number, number][] = [];
+        const degree = new Map<number, number>();
+        const neighbours = new Map<number, number[]>();
+        for (const e of ring.edges) {
+          const edge = arena.edges[e]!;
+          const circle = edge.curve === 'Line' ? undefined : edge.curve.Circle;
+          if (!circle) throw refusal();
+          if (ring.edges.length > 1)
+            for (const key of ['normal', 'u_axis', 'v_axis'] as const) {
+              const a = basis[key],
+                b = circle[key];
+              if (
+                !a ||
+                !b ||
+                a.some(
+                  (value, i) => Math.abs(value - b[i]!) > ANALYTIC_MATCH_EPSILON
+                )
+              )
+                throw refusal();
+            }
+          const span = probe.getEdgeParamSpan(e);
+          const width = Math.abs(span[1]! - span[0]!);
+          if (
+            !Number.isFinite(width) ||
+            width <= ANALYTIC_MATCH_EPSILON ||
+            width > tau + ANALYTIC_MATCH_EPSILON
+          )
+            throw refusal();
+          const start = ((Math.min(span[0]!, span[1]!) % tau) + tau) % tau;
+          const end = start + width;
+          intervals.push([start, Math.min(end, tau)]);
+          if (end > tau) intervals.push([0, end - tau]);
+          for (const [a, b] of [
+            [edge.start, edge.end],
+            [edge.end, edge.start]
+          ]) {
+            degree.set(a!, (degree.get(a!) ?? 0) + 1);
+            neighbours.set(a!, [...(neighbours.get(a!) ?? []), b!]);
+          }
+        }
+        if ([...degree.values()].some((value) => value !== 2)) throw refusal();
+        const visited = new Set<number>();
+        const pending = [arena.edges[ring.edges[0]!]!.start];
+        while (pending.length) {
+          const vertex = pending.pop()!;
+          if (visited.has(vertex)) continue;
+          visited.add(vertex);
+          pending.push(...(neighbours.get(vertex) ?? []));
+        }
+        if (visited.size !== degree.size) throw refusal();
+        intervals.sort((a, b) => a[0] - b[0]);
+        let covered = 0;
+        for (const [start, end] of intervals) {
+          if (Math.abs(start - covered) > ANALYTIC_MATCH_EPSILON)
+            throw refusal();
+          covered = end;
+        }
+        if (Math.abs(covered - tau) > ANALYTIC_MATCH_EPSILON) throw refusal();
       }
       return rings;
     };
@@ -185,10 +246,13 @@ export function shrinkChamferedThroughHole(
       throw refusal();
     const local = new Set([bore]);
     const moves = rings.map((ring, end) => {
-      const edge = ring.edges[0]!;
-      const adjacent = owners.get(edge);
-      if (adjacent?.length !== 2) throw refusal();
-      const other = adjacent.find((f) => f !== bore)!;
+      const others = ring.edges.map((edge) => {
+        const adjacent = owners.get(edge);
+        if (adjacent?.length !== 2 || !adjacent.includes(bore)) throw refusal();
+        return adjacent.find((f) => f !== bore)!;
+      });
+      const other = others[0]!;
+      if (others.some((f) => f !== other)) throw refusal();
       local.add(other);
       const surface = arena.faces[other]!.surface;
       if (surface.Plane) {
@@ -204,83 +268,93 @@ export function shrinkChamferedThroughHole(
         cone.half_angle >= Math.PI / 2
       )
         throw refusal();
-      if (arena.faces[other]!.inner_wires.length) throw refusal();
-      const alignment = dot(axis, vector(cone.axis));
-      const slope = Math.tan(cone.half_angle) / alignment;
-      if (!close(geometry.radius, (ring.at - axial(cone.apex)) / slope))
+      const slope = Math.tan(cone.half_angle) / dot(axis, vector(cone.axis));
+      if (
+        !close(ring.at, axial(cone.apex) + geometry.radius * slope) ||
+        arena.faces[other]!.inner_wires.length
+      )
         throw refusal();
-      for (const e of edgesOf(other)) {
-        if (e === edge) continue;
-        const boundaryEdge = arena.edges[e]!;
-        const circle =
-          boundaryEdge.curve === 'Line' ? undefined : boundaryEdge.curve.Circle;
-        // A coaxial circular carrier has a constant radius over its whole trim.
-        if (
-          circle &&
-          parallel(circle.normal) &&
-          onAxis(circle.center) &&
-          circle.radius > geometry.radius + tolerance
-        )
-          continue;
-        const neighbours = owners.get(e)!.filter((f) => f !== other);
-        if (!neighbours.length && boundaryEdge.curve === 'Line') {
-          const uses = arena.wires[
-            arena.faces[other]!.outer_wire
-          ]!.edges.filter((use) => use.edge === e);
-          if (uses.length === 2 && uses[0]!.forward !== uses[1]!.forward)
-            continue;
-        }
-        const plane =
-          neighbours.length === 1
-            ? arena.faces[neighbours[0]!]!.surface.Plane
-            : undefined;
-        const normal = plane && normalized(vector(plane.normal));
-        if (!normal) throw refusal();
-        const along = dot(normal, axis);
-        const p = arena.vertices[boundaryEdge.start]!.point;
-        const radiusAtVertex = (axial(p) - axial(cone.apex)) / slope;
-        // A transverse plane fixes the cone radius. A parallel side plane's
-        // distance from the axis bounds every point of its intersection curve.
-        if (
-          Math.abs(Math.abs(along) - 1) <= ANALYTIC_MATCH_EPSILON &&
-          radiusAtVertex > geometry.radius + tolerance
-        )
-          continue;
-        if (
-          Math.abs(along) <= ANALYTIC_MATCH_EPSILON &&
-          Math.abs(dot(normal, subtract(vector(p), origin))) >
-            geometry.radius + tolerance
-        )
-          continue;
-        throw refusal();
-      }
-      // The input has a strictly valid, nonintersecting cone wire. Its complete
-      // bore ring separates the outer boundary from the region being added.
-      // Certify that every other boundary vertex is on the outward side of
-      // that ring; retain all of its clipped curves verbatim.
-      const vertices = new Set(
-        edgesOf(other).flatMap((e) => [
-          arena.edges[e]!.start,
-          arena.edges[e]!.end
-        ])
+      const side = end === 0 ? -1 : 1;
+      const ringVertices = new Set(
+        ring.edges.flatMap((e) => [arena.edges[e]!.start, arena.edges[e]!.end])
       );
-      let extendsOutward = false;
-      for (const v of vertices) {
-        const p = arena.vertices[v]!.point;
-        const r = length(
-          subtract(subtract(vector(p), origin), scale(axis, axial(p)))
+      const wire = arena.wires[arena.faces[other]!.outer_wire]!;
+      let retained = 0;
+      for (const e of edgesOf(other)) {
+        if (ring.edges.includes(e)) continue;
+        const edge = arena.edges[e]!;
+        const uses = wire.edges.filter((use) => use.edge === e);
+        let controls: Point[];
+        if (edge.curve === 'Line') {
+          const touched = [edge.start, edge.end].filter((v) =>
+            ringVertices.has(v)
+          );
+          if (touched.length) {
+            // A doubled seam stays a cone generator as its inner end moves.
+            if (
+              touched.length !== 1 ||
+              owners.get(e)?.length !== 1 ||
+              uses.length !== 2 ||
+              uses[0]!.forward === uses[1]!.forward
+            )
+              throw refusal();
+            const outer =
+              arena.vertices[edge.start === touched[0] ? edge.end : edge.start]!
+                .point;
+            controls = [outer];
+          } else
+            controls = [
+              arena.vertices[edge.start]!.point,
+              arena.vertices[edge.end]!.point
+            ];
+        } else if (edge.curve.Circle) {
+          const circle = edge.curve.Circle;
+          if (
+            !parallel(circle.normal) ||
+            !onAxis(circle.center) ||
+            circle.radius <= geometry.radius + tolerance ||
+            side * (axial(circle.center) - ring.at) <= tolerance ||
+            !close(
+              axial(circle.center),
+              axial(cone.apex) + circle.radius * slope
+            )
+          )
+            throw refusal();
+          retained++;
+          continue;
+        } else {
+          const nurbs = edge.curve.NurbsCurve;
+          if (
+            !nurbs ||
+            !nurbs.control_points.length ||
+            nurbs.weights.length !== nurbs.control_points.length ||
+            nurbs.weights.some((w) => !Number.isFinite(w) || w <= 0)
+          )
+            throw refusal();
+          controls = nurbs.control_points;
+        }
+        // Positive rational weights keep a retained trim in its control
+        // hull. A separating radial half-plane and axial bound prove that
+        // whole hull stays beyond the old rim; sampled points would not.
+        const radial = (p: Point) =>
+          subtract(subtract(vector(p), origin), scale(axis, axial(p)));
+        const direction = normalized(
+          controls.reduce((sum, p) => add(sum, radial(p)), { x: 0, y: 0, z: 0 })
         );
         if (
-          r < geometry.radius - tolerance ||
-          !close(r, (axial(p) - axial(cone.apex)) / slope)
+          !direction ||
+          controls.some(
+            (p) =>
+              p.some((v) => !Number.isFinite(v)) ||
+              dot(radial(p), direction) <= geometry.radius + tolerance ||
+              side * (axial(p) - ring.at) <= tolerance
+          )
         )
           throw refusal();
-        if (r > geometry.radius + tolerance) extendsOutward = true;
+        retained++;
       }
-      const move = (radius - geometry.radius) * slope;
-      if (!extendsOutward || (end === 0 ? move <= 0 : move >= 0))
-        throw refusal();
-      return move;
+      if (!retained) throw refusal();
+      return (radius - geometry.radius) * slope;
     });
     if (rings[1]!.at + moves[1]! - rings[0]!.at - moves[0]! <= tolerance)
       throw new Error(
@@ -299,24 +373,34 @@ export function shrinkChamferedThroughHole(
     }
     const movedVertices = new Set<number>();
     rings.forEach((ring, i) => {
-      const e = arena.edges[ring.edges[0]!]!;
-      const circle = e.curve === 'Line' ? undefined : e.curve.Circle;
-      if (!circle) throw refusal();
-      const oldCenter = vector(circle.center);
-      const newCenter = add(oldCenter, scale(axis, moves[i]!));
-      circle.center = point(newCenter);
-      circle.radius = radius;
-      for (const vertex of new Set([e.start, e.end])) {
-        if (movedVertices.has(vertex)) throw refusal();
-        movedVertices.add(vertex);
-        const radial = subtract(
-          vector(arena.vertices[vertex]!.point),
-          oldCenter
-        );
-        if (!close(length(radial), geometry.radius)) throw refusal();
-        arena.vertices[vertex]!.point = point(
-          add(newCenter, scale(radial, radius / geometry.radius))
-        );
+      for (const edge of ring.edges) {
+        const e = arena.edges[edge]!;
+        const circle = e.curve === 'Line' ? undefined : e.curve.Circle;
+        if (!circle) throw refusal();
+        const oldCenter = vector(circle.center);
+        const newCenter = add(oldCenter, scale(axis, moves[i]!));
+        circle.center = point(newCenter);
+        circle.radius = radius;
+        for (const vertex of new Set([e.start, e.end])) {
+          const radial = subtract(
+            vector([...probe.getVertexPosition(vertex)] as Point),
+            oldCenter
+          );
+          if (!close(length(radial), geometry.radius)) throw refusal();
+          const destination = add(
+            newCenter,
+            scale(radial, radius / geometry.radius)
+          );
+          if (
+            movedVertices.has(vertex) &&
+            length(
+              subtract(vector(arena.vertices[vertex]!.point), destination)
+            ) > tolerance
+          )
+            throw refusal();
+          movedVertices.add(vertex);
+          arena.vertices[vertex]!.point = point(destination);
+        }
       }
     });
     for (let e = 0; e < arena.edges.length; e++) {
