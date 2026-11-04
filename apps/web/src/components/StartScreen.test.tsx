@@ -9,6 +9,7 @@ import {
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
+import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
@@ -944,6 +945,21 @@ describe('StartScreen library shell', () => {
     );
   });
 
+  it("leaves the closed project's status out and keeps news to one line", () => {
+    const carried =
+      'Chamfer could not be created on 1 selected edge with distance 1. The modeling engine could not join this chamfer to the existing fillet or chamfer.';
+    const props = startScreenProps({ status: carried });
+    const { rerender } = render(<StartScreen {...props} />);
+    expect(document.querySelector('.start-status')).toBeNull();
+    expect(screen.queryByText(/Chamfer could not/)).toBeNull();
+
+    const news = 'Could not import part.openzcad: the file is not a backup.';
+    rerender(<StartScreen {...props} status={news} />);
+    const line = document.querySelector('.start-status');
+    expect(line).toHaveTextContent(news);
+    expect(line).toHaveAttribute('title', news);
+  });
+
   it('turns the sentence over to a save run and its failures', () => {
     const onRetrySync = vi.fn();
     const onDismissSyncRun = vi.fn();
@@ -1753,6 +1769,19 @@ describe('StartScreen permanent deletion', () => {
 
 describe('StartScreen sample reset and folders', () => {
   afterEach(() => localStorage.clear());
+
+  it('offers the scissors assembly without promising unavailable design revisions', () => {
+    const onOpenDemo = vi.fn();
+    renderStartScreen({ demos: DEMO_DEFINITIONS, signedIn: false, onOpenDemo });
+    const card = screen.getByRole('button', { name: /^Open demo: Scissors/ });
+    expect(card).toBeEnabled();
+    expect(within(card).getByText('Scissors')).toBeInTheDocument();
+    expect(card.querySelector('.demo-card-revs')).toBeNull();
+    fireEvent.click(card);
+    expect(onOpenDemo).toHaveBeenCalledWith(
+      DEMO_DEFINITIONS.find((demo) => demo.key === 'scissors')
+    );
+  });
 
   it('takes a reset sample out of any folder that still lists it', async () => {
     const onResetDemo = vi.fn<() => Promise<boolean>>();

@@ -40,10 +40,26 @@ afterEach(() => {
 });
 
 describe('AssemblyPlayer', () => {
-  it('shows nothing for a project without motion studies', () => {
+  it('plays joint sweeps in a project without motion studies', () => {
+    const manager = pivotProject({ study: false });
+    const view = render(
+      <AssemblyPlayer assembly={manager.document.assembly} />
+    );
+    // The pivot has no limits: Animate's full turn, back and forth.
+    expect(screen.getByText('Pivot')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    frame(1000);
+    frame(1750);
+    expect(getAssemblyRuntime().overrides.get('j_pivot')?.[0]).toBeCloseTo(180);
+    view.unmount();
+    // Nothing that moves: no player.
+    const set = manager.document.assembly!;
     const { container } = render(
       <AssemblyPlayer
-        assembly={pivotProject({ study: false }).document.assembly}
+        assembly={{
+          ...set,
+          joints: set.joints.map((j) => ({ ...j, kind: 'rigid', values: [] }))
+        }}
       />
     );
     expect(container.innerHTML).toBe('');

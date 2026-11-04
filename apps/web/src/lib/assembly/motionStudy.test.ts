@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   emptyAssemblySet,
   evaluateTrack,
+  jointSweepRange,
+  jointSweepValue,
   type AssemblyFrame,
   type AssemblyJoint,
   type AssemblyJointKind,
@@ -16,6 +18,8 @@ import {
   dofName,
   formatDofValue,
   formatStudyTime,
+  jointSweepStudy,
+  keyPoseAt,
   keyTimeBounds,
   moveKey,
   nextKeyTime,
@@ -342,5 +346,73 @@ describe('motion study helpers', () => {
       [0, 10]
     ]);
     expect(studyError(assembly(), bad)).toMatch(/out of order/);
+  });
+
+  it('keys a pose: changed motions only, new tracks start from rest', () => {
+    const set = assembly();
+    const base = study([
+      [0, 0],
+      [2, 90]
+    ]);
+    // Pivot moved to 10 at 1 s; the slide's second motion moved from 4 to 9;
+    // its first (0, as saved) and the rigid joint stay out.
+    const { study: keyed, changed } = keyPoseAt(set, base, 1, {
+      j_pivot: [10],
+      j_fixed: [],
+      j_slide: [0, 9]
+    });
+    expect(changed).toBe(true);
+    expect(keyed?.tracks).toEqual([
+      {
+        jointId: 'j_pivot',
+        dof: 0,
+        keys: [
+          { t: 0, value: 0, easing: 'linear' },
+          { t: 1, value: 10, easing: 'linear' },
+          { t: 2, value: 90, easing: 'linear' }
+        ]
+      },
+      {
+        jointId: 'j_slide',
+        dof: 1,
+        keys: [
+          { t: 0, value: 4, easing: 'linear' },
+          { t: 1, value: 9, easing: 'linear' }
+        ]
+      }
+    ]);
+    expect(studyError(set, keyed!)).toBeNull();
+    // What the study already shows (45° at 1 s, within tolerance) is no edit.
+    expect(
+      keyPoseAt(set, base, 1, { j_pivot: [45 + 1e-9], j_slide: [0, 4] })
+    ).toEqual({ study: base, changed: false });
+    // Times outside the study clamp to its end.
+    expect(
+      keyPoseAt(set, base, 5, { j_pivot: [30] }).study?.tracks[0]?.keys.at(-1)
+    ).toEqual({ t: 2, value: 30, easing: 'linear' });
+  });
+
+  it('turns a joint sweep into a study that moves exactly like Animate', () => {
+    const pivot = { ...joint('j_pivot', 'revolute', 'a', 'b', [0]) };
+    const limited = { ...pivot, limits: [{ min: -55, max: 0 }] };
+    const sweep = jointSweepStudy(limited, 1.5);
+    expect(sweep).toMatchObject({
+      id: 'sweep:j_pivot',
+      name: 'Pivot',
+      durationS: 1.5,
+      playback: 'ping-pong'
+    });
+    const range = jointSweepRange(limited, 0)!;
+    for (const t of [0, 0.2, 0.75, 1.1, 1.5])
+      expect(evaluateTrack(sweep!.tracks[0]!, t)).toBeCloseTo(
+        jointSweepValue(range, 'once', 1.5, t).value,
+        9
+      );
+    // An unlimited turn sweeps a full revolution; a free slide has no range.
+    expect(jointSweepStudy(pivot, 1)?.tracks[0]?.keys.at(-1)?.value).toBe(360);
+    expect(
+      jointSweepStudy(joint('j_s', 'slider', 'a', 'b', [0]), 1)
+    ).toBeNull();
+    expect(jointSweepStudy(joint('j_r', 'rigid', 'a', 'b', []), 1)).toBeNull();
   });
 });

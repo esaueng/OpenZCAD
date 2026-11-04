@@ -886,13 +886,17 @@
   text-overflow: ellipsis;
 }
 
-/* News the sentence does not already carry, such as a refused name. */
+/* News the sentence does not already carry, such as a refused name. One
+   line, like the sentence above it: the full text is in the tooltip and the
+   activity log, never a paragraph in the column's foot. */
 .start-status {
   margin: 0;
+  overflow: hidden;
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
   line-height: 1.4;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* ── Body: the shelf ─────────────────────────────────────── */

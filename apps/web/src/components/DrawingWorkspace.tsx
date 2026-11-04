@@ -5,7 +5,8 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
 } from 'react';
 import {
   Angle,
@@ -980,6 +981,95 @@ function annotationName(
     : `${title} (broken)`;
 }
 
+/**
+ * A list longer than this shows only its first `LIST_PREVIEW` rows until
+ * asked; a large assembly otherwise buries the panel under hundreds of rows.
+ * The gap keeps a "Show all" from revealing only one or two more.
+ */
+const LIST_CLIP_AT = 8;
+const LIST_PREVIEW = 5;
+const BODY_NAMES_CLIP_AT = 4;
+const BODY_NAMES_PREVIEW = 3;
+
+/**
+ * Rows of a list, clipped to a preview with a toggle when long. `reveal` is
+ * the index of a row that must stay visible (the selection): it expands the
+ * list when it falls past the preview.
+ */
+function ClippedList(props: {
+  rows: ReactNode[];
+  /** Wraps the visible rows in the list element itself. */
+  wrap: (rows: ReactNode[], expanded: boolean) => ReactNode;
+  /** What the rows are, for the toggle's accessible name. */
+  noun: string;
+  reveal?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const { rows } = props;
+  const clipped = rows.length > LIST_CLIP_AT;
+  const expanded = !clipped || open || (props.reveal ?? -1) >= LIST_PREVIEW;
+  return (
+    <>
+      {props.wrap(
+        expanded ? rows : rows.slice(0, LIST_PREVIEW),
+        clipped && expanded
+      )}
+      {clipped && (props.reveal ?? -1) < LIST_PREVIEW && (
+        <button
+          type="button"
+          className="drawing-list-toggle"
+          aria-expanded={expanded}
+          aria-label={
+            expanded
+              ? `Show fewer ${props.noun}`
+              : `Show all ${rows.length} ${props.noun}`
+          }
+          onClick={() => setOpen(!expanded)}
+        >
+          {expanded ? 'Show fewer' : `Show ${rows.length - LIST_PREVIEW} more`}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** The bodies a sheet draws, named in full only when there are few. */
+function SheetBodies(props: { names: string[] }) {
+  const [open, setOpen] = useState(false);
+  const { names } = props;
+  const clipped = names.length > BODY_NAMES_CLIP_AT;
+  const shown =
+    clipped && !open
+      ? `${names.slice(0, BODY_NAMES_PREVIEW).join(', ')} and ${names.length - BODY_NAMES_PREVIEW} more`
+      : names.join(', ');
+  return (
+    <>
+      <p
+        className={`drawing-hint${clipped && open ? ' drawing-clipped-text' : ''}`}
+        aria-label="Sheet bodies"
+      >
+        {clipped ? `Bodies · ${names.length}: ` : 'Bodies: '}
+        {shown}
+      </p>
+      {clipped && (
+        <button
+          type="button"
+          className="drawing-list-toggle"
+          aria-expanded={open}
+          aria-label={
+            open
+              ? 'Show fewer body names'
+              : `Show all ${names.length} body names`
+          }
+          onClick={() => setOpen(!open)}
+        >
+          {open ? 'Show fewer' : 'Show all'}
+        </button>
+      )}
+    </>
+  );
+}
+
 /** The annotations on the sheet, to select one; values only while ready. */
 function AnnotationList(props: {
   sheet: DrawingSheet;
@@ -994,12 +1084,21 @@ function AnnotationList(props: {
     <div className="drawing-panel-section">
       <h3>Annotations · {annotations.length}</h3>
       {annotations.length > 0 ? (
-        <div
-          className="drawing-view-list"
-          role="listbox"
-          aria-label="Annotations on this sheet"
-        >
-          {annotations.map((annotation) => {
+        <ClippedList
+          noun="annotations"
+          reveal={annotations.findIndex(
+            (annotation) => annotation.annotationId === selected?.annotationId
+          )}
+          wrap={(rows, expanded) => (
+            <div
+              className={`drawing-view-list${expanded ? ' is-scrolling' : ''}`}
+              role="listbox"
+              aria-label="Annotations on this sheet"
+            >
+              {rows}
+            </div>
+          )}
+          rows={annotations.map((annotation) => {
             const entry = props.resolutions.get(annotation.annotationId);
             const broken = ready && entry !== undefined && !entry.ok;
             return (
@@ -1017,7 +1116,7 @@ function AnnotationList(props: {
               </button>
             );
           })}
-        </div>
+        />
       ) : (
         <p className="drawing-hint">
           Pick a dimension tool on the sheet&apos;s left. Dimensions read their
@@ -1124,14 +1223,10 @@ function AutoDimensionPreview(props: {
           <p className="drawing-audit-heading is-warning">
             Left for you · {left.length}
           </p>
-          <ul
-            className="drawing-audit-list"
-            aria-label="Dimensions Auto-dimension leaves for you"
-          >
-            {left.map((finding, index) => (
-              <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
-            ))}
-          </ul>
+          <FindingList
+            label="Dimensions Auto-dimension leaves for you"
+            findings={left}
+          />
         </>
       )}
       <div className="drawing-auto-actions">
@@ -1148,6 +1243,30 @@ function AutoDimensionPreview(props: {
         </button>
       </div>
     </div>
+  );
+}
+
+/** Worded findings, clipped like any long list. */
+function FindingList(props: {
+  label: string;
+  findings: readonly { bodyId: string; message: string }[];
+}) {
+  return (
+    <ClippedList
+      noun={props.label.toLowerCase()}
+      wrap={(rows, expanded) => (
+        <ul
+          className={`drawing-audit-list${expanded ? ' is-scrolling' : ''}`}
+          aria-label={props.label}
+        >
+          {rows}
+        </ul>
+      )}
+      rows={props.findings.map((finding, index) => (
+        // Keyed by position too: like bodies word findings identically.
+        <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
+      ))}
+    />
   );
 }
 
@@ -1244,14 +1363,10 @@ function DimensionCheck(props: {
               <p className="drawing-audit-heading">
                 Missing · {audit.missing.length}
               </p>
-              <ul
-                className="drawing-audit-list"
-                aria-label="Missing dimensions"
-              >
-                {audit.missing.map((finding, index) => (
-                  <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
-                ))}
-              </ul>
+              <FindingList
+                label="Missing dimensions"
+                findings={audit.missing}
+              />
             </>
           )}
           {audit.redundant.length > 0 && (
@@ -1259,11 +1374,19 @@ function DimensionCheck(props: {
               <p className="drawing-audit-heading is-warning">
                 Repeated · {audit.redundant.length}
               </p>
-              <div className="drawing-view-list">
-                {audit.redundant.map((finding) =>
+              <ClippedList
+                noun="repeated dimensions"
+                wrap={(rows, expanded) => (
+                  <div
+                    className={`drawing-view-list${expanded ? ' is-scrolling' : ''}`}
+                  >
+                    {rows}
+                  </div>
+                )}
+                rows={audit.redundant.map((finding) =>
                   entry(finding.annotationId, finding.message)
                 )}
-              </div>
+              />
             </>
           )}
           {audit.unmeasurable.length > 0 && (
@@ -1271,14 +1394,10 @@ function DimensionCheck(props: {
               <p className="drawing-audit-heading">
                 Can&apos;t dimension yet · {audit.unmeasurable.length}
               </p>
-              <ul
-                className="drawing-audit-list"
-                aria-label="Requirements no dimension can state yet"
-              >
-                {audit.unmeasurable.map((finding, index) => (
-                  <li key={`${finding.bodyId}:${index}`}>{finding.message}</li>
-                ))}
-              </ul>
+              <FindingList
+                label="Requirements no dimension can state yet"
+                findings={audit.unmeasurable}
+              />
             </>
           )}
           {audit.unchecked.length > 0 && (
@@ -1286,11 +1405,19 @@ function DimensionCheck(props: {
               <p className="drawing-audit-heading">
                 Not checked · {audit.unchecked.length}
               </p>
-              <div className="drawing-view-list">
-                {audit.unchecked.map((finding) =>
+              <ClippedList
+                noun="unchecked dimensions"
+                wrap={(rows, expanded) => (
+                  <div
+                    className={`drawing-view-list${expanded ? ' is-scrolling' : ''}`}
+                  >
+                    {rows}
+                  </div>
+                )}
+                rows={audit.unchecked.map((finding) =>
                   entry(finding.annotationId, finding.message)
                 )}
-              </div>
+              />
             </>
           )}
         </>
@@ -4390,19 +4517,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         )}
         <div className="drawing-panel-section">
           <h3>Views · {sheet.views.length}</h3>
-          <p className="drawing-hint" aria-label="Sheet bodies">
-            Bodies:{' '}
-            {sheetBodyIds(sheet)
-              .map(
-                (id) =>
-                  bodies[id]?.name ??
-                  Object.values(document.nodes).find(
-                    (node) => node.kind === 'body' && node.bodyId === id
-                  )?.name ??
-                  'Missing body'
-              )
-              .join(', ')}
-          </p>
+          <SheetBodies
+            key={sheet.sheetId}
+            names={sheetBodyIds(sheet).map(
+              (id) =>
+                bodies[id]?.name ??
+                Object.values(document.nodes).find(
+                  (node) => node.kind === 'body' && node.bodyId === id
+                )?.name ??
+                'Missing body'
+            )}
+          />
           {sheetBodyIds(sheet).some(
             (id) => !props.defaultBodyIds.includes(id)
           ) && (

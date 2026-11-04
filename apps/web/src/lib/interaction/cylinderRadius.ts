@@ -76,12 +76,12 @@ export function sameCylinderAxis(
 }
 
 /**
- * The cylindrical face a committed radius edit left on the same axis at the
- * new radius, overlapping the source wall's span along it: what stays
- * selected once a drag applies, so the bore keeps its handle instead of the
- * selection falling back to the whole body. A separate band of a stepped or
- * grooved part can share the axis and radius; the overlap keeps it out. Null
- * when no face, or more than one, fits.
+ * The cylindrical face a radius edit leaves on the same axis at the new
+ * radius, overlapping the source wall's span along it. Keeps selection on the
+ * bore during preview frames and after commit instead of falling back to the
+ * whole body. A separate band of a stepped or grooved part can share the axis
+ * and radius; the overlap keeps it out. Null when no face, or more than one,
+ * fits.
  */
 export function findResizedCylinderFace(
   faces: readonly FaceTopology[],
@@ -146,6 +146,59 @@ export function findResizedCylinderFace(
       Math.max(Math.min(start, end), Math.min(0, sourceEnd)) <=
         Math.min(Math.max(start, end), Math.max(0, sourceEnd)) + tolerance
     );
+  });
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+/** History can change the radius too. Restore only a unique inward wall. */
+export function findHistoryBoreFace(
+  body: BodyRepresentation,
+  axisStart: Vector3,
+  axisEnd: Vector3
+): FaceTopology | null {
+  const { mesh } = body;
+  const vertex = (index: number): Vector3 => ({
+    x: mesh.vertices[index * 3]!,
+    y: mesh.vertices[index * 3 + 1]!,
+    z: mesh.vertices[index * 3 + 2]!
+  });
+  const matches = (body.topology?.faces ?? []).filter((face) => {
+    const radius = face.geometry?.radius;
+    if (
+      radius === undefined ||
+      findResizedCylinderFace([face], axisStart, axisEnd, radius) !== face
+    )
+      return false;
+    // Mesh winding distinguishes the bore from a coaxial outer boss, even
+    // when history changes both radius and chamfer endpoints. Never re-arm a
+    // deleted hole on the outside of its stock cylinder.
+    for (
+      let t = face.triangleStart;
+      t < face.triangleStart + face.triangleCount;
+      t++
+    ) {
+      const a = vertex(mesh.indices[t * 3]!);
+      const b = vertex(mesh.indices[t * 3 + 1]!);
+      const c = vertex(mesh.indices[t * 3 + 2]!);
+      const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+      const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+      const normal = normalized({
+        x: ab.y * ac.z - ab.z * ac.y,
+        y: ab.z * ac.x - ab.x * ac.z,
+        z: ab.x * ac.y - ab.y * ac.x
+      });
+      if (!normal) continue;
+      const point = {
+        x: (a.x + b.x + c.x) / 3,
+        y: (a.y + b.y + c.y) / 3,
+        z: (a.z + b.z + c.z) / 3
+      };
+      return (
+        cylinderRadialFrame(point, normal, axisStart, axisEnd)?.concavity ===
+        'hole'
+      );
+    }
+    return false;
   });
   return matches.length === 1 ? matches[0]! : null;
 }

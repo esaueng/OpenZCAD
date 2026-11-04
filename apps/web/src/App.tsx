@@ -712,6 +712,7 @@ import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
   findResizedCylinderFace,
+  findHistoryBoreFace,
   isUnchangedCylinderRadius,
   isValidCylinderRadius,
   sameCylinderAxis,
@@ -3265,6 +3266,8 @@ export function App() {
     baseVersion: number;
     selectionKey: string;
     geometry: GeometryReadyState;
+    /** Radius of this published cylinder frame, which can lag the handle. */
+    radius?: number;
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const checkpointRoomRef = useRef<{
@@ -3894,6 +3897,14 @@ export function App() {
     projectId: string;
     version: number;
   } | null>(null);
+  // An active hole follows a history rebuild only in this exact revision.
+  // Explicit clearing cancels the handoff; a new pick takes precedence.
+  const pendingCylinderHistorySelectionRef = useRef<{
+    projectId: string;
+    version: number;
+    target: FaceTarget;
+    mode: DimensionMode;
+  } | null>(null);
   const geometry = useGeometryWorker({
     onGeometryReady: (geometry, projectId, version) => {
       const committed = committedDerivedRef.current;
@@ -3934,6 +3945,7 @@ export function App() {
         recordFeatureAttribution(validated, derived);
         setParameterPreviewBase({ ...validated, derived });
         setDoc(validated);
+        restoreCylinderHistorySelection(validated);
         // Fresh meshes now reflect the document (worker results are dropped
         // unless their version matches), so any held Move pose must release
         // in this same batch — one render later would double-transform.
@@ -5483,8 +5495,18 @@ export function App() {
   const modelingLocked = viewMode || tweakMode || drawingMode || assembleMode;
   // AS01: the Assemble workspace's runtime, commit handlers and playback.
   // Every saved assembly change runs through `executeCommand`.
+  const activeDemo = DEMO_DEFINITIONS.find(
+    (demo) => demo.projectId === doc?.projectId
+  );
   const assembleApp = {
     document: doc,
+    initialJointId:
+      activeDemo?.initialWorkspace === 'assemble'
+        ? doc?.assembly?.joints[0]?.id
+        : undefined,
+    initialPlayback: appSettings.appearance.reducedMotion
+      ? undefined
+      : activeDemo?.initialPlayback,
     execute: (command: AnyCommand) => executeCommand(command),
     onStatus: (message: string) => setStatus(message)
   };
@@ -7070,7 +7092,8 @@ export function App() {
    * Exact regeneration may assign a new topology ID to an edited face. Keep
    * selection attached through operation-specific immutable identity: exact
    * fillet evolution lineage, the translated source plane for offsets, or the
-   * fixed axis for cylinder radii.
+   * coaxial wall at the displayed radius for cylinder edits. Chamfered mouths
+   * move the wall's endpoints as their shared boundary is rebuilt.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology && !currentFaceGeometryPreview) {
@@ -7177,21 +7200,14 @@ export function App() {
       y: interaction.target.axisEnd[1],
       z: interaction.target.axisEnd[2]
     };
-    const candidates = faces.filter((face) => {
-      const geometry = face.geometry;
-      return (
-        geometry?.surfaceType === 'cylinder' &&
-        geometry.axisStart !== undefined &&
-        geometry.axisEnd !== undefined &&
-        sameCylinderAxis(
-          axisStart,
-          axisEnd,
-          geometry.axisStart,
-          geometry.axisEnd
-        )
-      );
-    });
-    const regenerated = candidates.length === 1 ? candidates[0] : null;
+    // Use the radius that produced the visible mesh, not the newest pointer
+    // value: completed worker frames can arrive while the hand moves ahead.
+    const radius =
+      currentFaceGeometryPreview?.radius ?? interaction.target.radius;
+    const regenerated =
+      radius === undefined
+        ? null
+        : findResizedCylinderFace(faces, axisStart, axisEnd, radius);
     return regenerated
       ? {
           bodyId: selectedTopology.bodyId,
@@ -10959,6 +10975,7 @@ export function App() {
   }
 
   function clearSelection() {
+    pendingCylinderHistorySelectionRef.current = null;
     const current = interactionRef.current;
     if (
       isOperationState(current) &&
@@ -12973,6 +12990,8 @@ export function App() {
       if (!isCurrent()) return;
       if (existing) {
         hydrateDocument(existing, { activeProjectSince });
+        if (definition.initialWorkspace)
+          setWorkspaceMode(definition.initialWorkspace);
         setStatus(`Opened ${existing.name}.`);
         return;
       }
@@ -12992,12 +13011,18 @@ export function App() {
       await saveLocalProject(document);
       if (!isCurrent()) return;
       hydrateDocument(document, { activeProjectSince });
+      if (definition.initialWorkspace)
+        setWorkspaceMode(definition.initialWorkspace);
       setCloudAvailable(false);
       setProjects((current) => [
         summarizeLocalDocument(document),
         ...current.filter((project) => project.projectId !== document.projectId)
       ]);
-      setStatus('Demo ready · Try Tweak to change a value');
+      setStatus(
+        definition.revisions.length > 0
+          ? 'Demo ready · Try Tweak to change a value'
+          : `${definition.name} ready — explore its parts and pivot in Assemble.`
+      );
     } catch (error) {
       if (isCurrent())
         setStatus(errorMessage(error, 'Failed to build the demo.'));
@@ -14325,10 +14350,27 @@ export function App() {
     }
   }
 
+  function captureHoleHistorySelection() {
+    const current = interactionRef.current;
+    if (
+      current.mode === 'face' &&
+      current.op === 'resize-cylinder-radius' &&
+      current.target.concavity === 'hole'
+    ) {
+      return { target: current.target, mode: cylinderDimensionMode };
+    }
+    const pending = pendingCylinderHistorySelectionRef.current;
+    return pending?.projectId === managerRef.current?.document.projectId
+      ? pending
+      : null;
+  }
+
   function handleUndo() {
     if (!managerRef.current) {
       return;
     }
+    // A spent history shortcut must leave an armed hole alone.
+    if (!managerRef.current.canUndo && captureHoleHistorySelection()) return;
     // Tweak mode locks modeling, not parameters: an undo entry that touched
     // parameter sets only is Tweak's own vocabulary and stays available, so
     // a typo made seconds ago is one keypress away. Anything else — a
@@ -14349,6 +14391,10 @@ export function App() {
     if (parametersOnly && !ensureCanEditParameters('undo')) {
       return;
     }
+    const cylinderSelection =
+      drawingOnly || folderOnly || imageOnly || assemblyOnly
+        ? null
+        : captureHoleHistorySelection();
     const label = managerRef.current.undoLabel;
     // A spent ⌘Z still lands here and leaves the history where it was; only
     // the undo that steps off the last kept entry reaches the floor.
@@ -14370,6 +14416,14 @@ export function App() {
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
+    if (cylinderSelection) {
+      const restored = managerRef.current.document;
+      pendingCylinderHistorySelectionRef.current = {
+        ...cylinderSelection,
+        projectId: restored.projectId,
+        version: restored.version
+      };
+    }
     if (undid && managerRef.current.undoFloorTrimmed) {
       // Panels are Build's alone: Tweak, View and Draw render none, so the
       // action goes to Build first. Where Build is locked (a shared link, a
@@ -14397,6 +14451,8 @@ export function App() {
     if (!managerRef.current) {
       return;
     }
+    // A spent history shortcut must leave an armed hole alone.
+    if (!managerRef.current.canRedo && captureHoleHistorySelection()) return;
     // Same split as undo: redoing a parameter-only step is a parameter edit,
     // redoing anything else is modeling. Redo applies the entry at the
     // cursor, so its kinds decide — not the undo entry below it.
@@ -14415,6 +14471,10 @@ export function App() {
     if (parametersOnly && !ensureCanEditParameters('redo')) {
       return;
     }
+    const cylinderSelection =
+      drawingOnly || folderOnly || imageOnly || assemblyOnly
+        ? null
+        : captureHoleHistorySelection();
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
@@ -14430,6 +14490,14 @@ export function App() {
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
+    if (cylinderSelection) {
+      const restored = managerRef.current.document;
+      pendingCylinderHistorySelectionRef.current = {
+        ...cylinderSelection,
+        projectId: restored.projectId,
+        version: restored.version
+      };
+    }
     setToast(null);
     setStatus(label ? `Redo ${label}` : 'Redo');
   }
@@ -23575,6 +23643,101 @@ export function App() {
     dispatchInteraction({ type: 'reset-value' });
   }
 
+  function reselectCylinderWall(
+    target: FaceTarget,
+    radius: number,
+    mode: DimensionMode,
+    document: ProjectDocument
+  ) {
+    if (!target.axisStart || !target.axisEnd || target.radius === undefined)
+      return;
+    const vector = (value: readonly [number, number, number]) => ({
+      x: value[0],
+      y: value[1],
+      z: value[2]
+    });
+    const bodyId = target.bodyId as BodyId;
+    const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces;
+    const wall = faces
+      ? findResizedCylinderFace(
+          faces,
+          vector(target.axisStart),
+          vector(target.axisEnd),
+          radius
+        )
+      : null;
+    const geometry = wall?.geometry;
+    if (!wall || !geometry?.axisStart || !geometry.axisEnd) return;
+    const radial = target.radialDirection ?? target.normal;
+    const delta = radius - target.radius;
+    const { reference: _staleReference, ...stableTarget } = target;
+    const triple = (value: {
+      x: number;
+      y: number;
+      z: number;
+    }): [number, number, number] => [value.x, value.y, value.z];
+    const nextTarget: FaceTarget = {
+      ...stableTarget,
+      topologyId: wall.topologyId,
+      hash: wall.hash,
+      ...(wall.reference ? { reference: wall.reference } : {}),
+      point: target.point.map(
+        (component, axis) => component + radial[axis]! * delta
+      ) as [number, number, number],
+      surfaceCenter: triple(geometry.center),
+      radius,
+      axisStart: triple(geometry.axisStart),
+      axisEnd: triple(geometry.axisEnd),
+      ...(geometry.axialLength !== undefined
+        ? { axialLength: geometry.axialLength }
+        : {}),
+      ...(geometry.diameter !== undefined
+        ? { diameter: geometry.diameter }
+        : {})
+    };
+    setSelectedTopology({
+      bodyId,
+      kind: 'face',
+      topologyId: wall.topologyId,
+      hash: wall.hash,
+      ...(wall.reference ? { reference: wall.reference } : {})
+    });
+    setSelectedBodyIds([bodyId]);
+    carriedCylinderModeRef.current = {
+      key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
+      mode
+    };
+    dispatchInteraction({ type: 'select-face', target: nextTarget });
+  }
+
+  function restoreCylinderHistorySelection(document: ProjectDocument) {
+    const pending = pendingCylinderHistorySelectionRef.current;
+    if (
+      !pending ||
+      pending.projectId !== document.projectId ||
+      pending.version !== document.version
+    )
+      return;
+    pendingCylinderHistorySelectionRef.current = null;
+    if (interactionRef.current.mode !== 'idle') return;
+    const { target, mode } = pending;
+    if (!target.axisStart || !target.axisEnd) return;
+    const vector = (value: readonly [number, number, number]) => ({
+      x: value[0],
+      y: value[1],
+      z: value[2]
+    });
+    const body = document.derived.bodyRepresentations[target.bodyId as BodyId];
+    if (!body) return;
+    const wall = findHistoryBoreFace(
+      body,
+      vector(target.axisStart),
+      vector(target.axisEnd)
+    );
+    if (wall?.geometry?.radius === undefined) return;
+    reselectCylinderWall(target, wall.geometry.radius, mode, document);
+  }
+
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
     if (!requireDisplayedGeometryComplete()) {
       return false;
@@ -23642,66 +23805,14 @@ export function App() {
       // as a moved face does: falling back to the whole body swapped the
       // hole's card for the body's Move/Rotate card the moment it applied.
       () => {
-        if (!target.axisStart || !target.axisEnd) return;
-        const vector = (value: readonly [number, number, number]) => ({
-          x: value[0],
-          y: value[1],
-          z: value[2]
-        });
-        const bodyId = target.bodyId as BodyId;
-        const faces =
-          managerRef.current?.document.derived.bodyRepresentations[bodyId]
-            ?.topology?.faces;
-        const wall = faces
-          ? findResizedCylinderFace(
-              faces,
-              vector(target.axisStart),
-              vector(target.axisEnd),
-              radius
-            )
-          : null;
-        const geometry = wall?.geometry;
-        if (!wall || !geometry?.axisStart || !geometry.axisEnd) return;
-        const radial = target.radialDirection ?? target.normal;
-        const delta = radius - sourceRadius;
-        const { reference: _staleReference, ...stableTarget } = target;
-        const triple = (value: {
-          x: number;
-          y: number;
-          z: number;
-        }): [number, number, number] => [value.x, value.y, value.z];
-        const nextTarget: FaceTarget = {
-          ...stableTarget,
-          topologyId: wall.topologyId,
-          hash: wall.hash,
-          ...(wall.reference ? { reference: wall.reference } : {}),
-          point: target.point.map(
-            (component, axis) => component + radial[axis]! * delta
-          ) as [number, number, number],
-          surfaceCenter: triple(geometry.center),
-          radius,
-          axisStart: triple(geometry.axisStart),
-          axisEnd: triple(geometry.axisEnd),
-          ...(geometry.axialLength !== undefined
-            ? { axialLength: geometry.axialLength }
-            : {}),
-          ...(geometry.diameter !== undefined
-            ? { diameter: geometry.diameter }
-            : {})
-        };
-        setSelectedTopology({
-          bodyId,
-          kind: 'face',
-          topologyId: wall.topologyId,
-          hash: wall.hash,
-          ...(wall.reference ? { reference: wall.reference } : {})
-        });
-        setSelectedBodyIds([bodyId]);
-        carriedCylinderModeRef.current = {
-          key: `${bodyId}:${wall.topologyId}:${Boolean(target.localFaceOffset)}`,
-          mode: cylinderDimensionMode
-        };
-        dispatchInteraction({ type: 'select-face', target: nextTarget });
+        const committed = managerRef.current?.document;
+        if (committed)
+          reselectCylinderWall(
+            target,
+            radius,
+            cylinderDimensionMode,
+            committed
+          );
       },
       plan.sourceFeatureId
         ? affectedFeatureTargets(

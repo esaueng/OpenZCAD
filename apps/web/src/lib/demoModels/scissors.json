@@ -1,0 +1,3161 @@
+{
+  "schemaVersion": 54,
+  "projectId": "proj_demo_scissors",
+  "ownerUserId": "user_demo_template",
+  "rootNodeId": "ent_d3a929a8-b3e7-4cba-a214-dbcb9634e610",
+  "rootAssemblyId": "ent_b4557d97-588a-4c1b-badc-ff14c8cac845",
+  "activePartId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+  "name": "Demo · Scissors",
+  "units": "mm",
+  "version": 67,
+  "nodes": {
+    "ent_d3a929a8-b3e7-4cba-a214-dbcb9634e610": {
+      "id": "ent_d3a929a8-b3e7-4cba-a214-dbcb9634e610",
+      "kind": "project",
+      "name": "Demo · Scissors",
+      "parentId": null,
+      "revisionId": null,
+      "projectId": "proj_demo_scissors",
+      "units": "mm",
+      "activePartId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69"
+    },
+    "ent_b4557d97-588a-4c1b-badc-ff14c8cac845": {
+      "id": "ent_b4557d97-588a-4c1b-badc-ff14c8cac845",
+      "kind": "assembly",
+      "name": "Root Assembly",
+      "parentId": "ent_d3a929a8-b3e7-4cba-a214-dbcb9634e610",
+      "revisionId": null,
+      "childIds": ["ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69"]
+    },
+    "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69": {
+      "id": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "kind": "part",
+      "name": "Part 1",
+      "parentId": "ent_b4557d97-588a-4c1b-badc-ff14c8cac845",
+      "revisionId": null,
+      "childIds": [
+        "ent_a2dc890d-426b-4d2f-8cc7-b5c442523bbb",
+        "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+        "ent_7a610e9d-cb0d-483a-b65f-9f2727e5957e",
+        "ent_5286f536-67c1-4513-bd8f-2b1f009bcc7e",
+        "ent_99293e12-24a2-4d0b-be03-c7c663ca3da8",
+        "ent_55d2a712-8947-4d59-a0a3-dbf9f24f67e5",
+        "ent_874e5ee9-d56f-4aa8-9d0f-f4c337cdd1e3",
+        "ent_22bc40bc-380c-43be-9437-ed8ffae39bf7",
+        "ent_3508497d-d729-4e57-8284-44ed46720ed4",
+        "ent_8d5d5fb3-fb2b-4866-b5ea-75d09e18fe00",
+        "ent_8101d19b-401e-469a-af45-cd8b70ab7caf",
+        "ent_6df3ee94-24c5-4a91-a098-91207425988f",
+        "ent_2ea844b1-6c8f-4d59-8abc-6770bc7d1bad",
+        "ent_63f07cfc-b213-4771-9591-d013c9af012a",
+        "ent_b3b01ad7-ee9f-421a-a2b2-bd6515c94be8",
+        "ent_499ed8f2-2e89-4520-9974-14fd9f57f2d0",
+        "ent_8b918570-54b3-4fe9-a24c-112d0b012608",
+        "ent_cb5abaa7-cb27-4b7e-b27a-1818507ef71f",
+        "ent_de7370e1-eb7a-4de7-8241-209a35b6038b",
+        "ent_40756bfb-ff9a-4a00-ad24-27794658f446",
+        "ent_99a71ca2-3a96-4013-8c95-6da5e77fc9ff",
+        "ent_5993a5c2-900a-457a-96cf-c1898a4b7606",
+        "ent_449a69d6-bbb2-4447-a986-2480fd8b0afb",
+        "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+        "ent_9a7f1fec-033d-4ea2-b16b-ae71597331d8",
+        "ent_f2e4689b-51a3-4713-9d32-8338c2b17046",
+        "ent_1044eb8f-dc79-497d-a741-a1591c31b199",
+        "ent_90bca47f-4aa0-492b-adce-1340d7ca57e4",
+        "ent_6c0f141a-d0a5-48c8-8f34-395670e363ab",
+        "ent_85a3c9d9-8ae3-4770-8f76-e0f6b53e2ebe",
+        "ent_8ed56aef-6150-4196-a6e7-eee9705f637c",
+        "ent_209d4824-5c41-4cc6-b242-f3fe3855a1df",
+        "ent_4ff2f6f3-e38c-4288-8bb7-33c308387f1f",
+        "ent_57c74a5e-bf22-4448-ab2e-9b64c6be7850",
+        "ent_7cb138b3-f930-4eb4-a29f-bd760bd7fa20",
+        "ent_70de4b39-88b8-4c00-8898-18a6736af9c4",
+        "ent_6828cd1c-368e-416e-bd19-c493e736445f",
+        "ent_36e4ab4e-5ad3-4c92-90a8-982e67e57d01",
+        "ent_16a85ee9-4d8e-41a9-a467-948a811a6aba",
+        "ent_dc17ed42-0635-49cd-8363-87de3652eca9",
+        "ent_c02b9b1c-7158-468c-bfc6-7d9a66c115ef",
+        "ent_fc5395db-f9a4-49c8-9d6b-503ae7064d70",
+        "ent_2ba6eb4f-438d-4178-a706-208b4ff1bc14",
+        "ent_81dd0334-b222-48e7-805b-e1c0fc6ccbf0",
+        "ent_baffd63b-53a2-4ecd-a5cb-2bcfb1512bff",
+        "ent_6a06e65c-7d60-45f9-ab67-bced024dc2db",
+        "ent_eee815b1-c9a7-483d-8833-862b4fedbc7e",
+        "ent_6651e622-4b12-4166-934d-bdfa373cb546",
+        "ent_51b3508f-4e0a-4c42-9e54-bb3b302e6f83",
+        "ent_e4a18bd5-db8d-496a-b84b-1e58266047ab",
+        "ent_bbd528e5-627f-4b02-a238-f0b4ccd0ae60",
+        "ent_8f09ffe1-4926-4369-9274-512e04c85a89",
+        "ent_ca9d1be0-1611-42e7-9734-a6340cc6a4fa",
+        "ent_e83caccd-695d-4586-8872-5fde0552e3de",
+        "ent_318b9334-66ea-4daf-8dbe-84518f897986",
+        "ent_5904ab49-9b44-4831-ad54-1bb6c573f5bc",
+        "ent_594fc4be-4312-4da9-b27f-a3a49d8737df",
+        "ent_be6d5edb-04f3-4bc7-851d-2c0ec7c9d899",
+        "ent_807cd741-ce22-4604-85ef-775ca88075d3",
+        "ent_a9f33352-e194-4d10-bc82-809e8c4f29ec"
+      ]
+    },
+    "ent_3f92ffce-d961-4e43-8df5-1c2104ddf1cd": {
+      "id": "ent_3f92ffce-d961-4e43-8df5-1c2104ddf1cd",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -64,
+        "y1": -25,
+        "x2": -40,
+        "y2": -22
+      }
+    },
+    "ent_57a92160-3c57-4d33-b3cf-d35e40bdd18e": {
+      "id": "ent_57a92160-3c57-4d33-b3cf-d35e40bdd18e",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -40,
+        "y1": -22,
+        "x2": -19,
+        "y2": -10
+      }
+    },
+    "ent_537c1732-6e05-432c-aae1-9a2d03d36364": {
+      "id": "ent_537c1732-6e05-432c-aae1-9a2d03d36364",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -19,
+        "y1": -10,
+        "x2": -8,
+        "y2": -9
+      }
+    },
+    "ent_59d69436-d2a6-43a8-bc23-d3194557d826": {
+      "id": "ent_59d69436-d2a6-43a8-bc23-d3194557d826",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -8,
+        "y1": -9,
+        "x2": 7,
+        "y2": -2
+      }
+    },
+    "ent_869accea-5eaa-4c35-8048-d5f8740bc474": {
+      "id": "ent_869accea-5eaa-4c35-8048-d5f8740bc474",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 7,
+        "y1": -2,
+        "x2": 94,
+        "y2": 0
+      }
+    },
+    "ent_e67001fb-b3c8-498b-b025-29dee6c6afb5": {
+      "id": "ent_e67001fb-b3c8-498b-b025-29dee6c6afb5",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 94,
+        "y1": 0,
+        "x2": 96,
+        "y2": 1
+      }
+    },
+    "ent_22dc7e8c-1d2e-4ef6-8d93-c8ebf4be4a69": {
+      "id": "ent_22dc7e8c-1d2e-4ef6-8d93-c8ebf4be4a69",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 96,
+        "y1": 1,
+        "x2": 90,
+        "y2": 5
+      }
+    },
+    "ent_2384a97d-fff5-4744-8f9f-b3b1a719a669": {
+      "id": "ent_2384a97d-fff5-4744-8f9f-b3b1a719a669",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 90,
+        "y1": 5,
+        "x2": 63,
+        "y2": 11
+      }
+    },
+    "ent_e17a63b3-3015-49d1-987a-114037de50ae": {
+      "id": "ent_e17a63b3-3015-49d1-987a-114037de50ae",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 63,
+        "y1": 11,
+        "x2": 20,
+        "y2": 16
+      }
+    },
+    "ent_934455b4-5733-4bc7-97e6-0b9bcd6a1922": {
+      "id": "ent_934455b4-5733-4bc7-97e6-0b9bcd6a1922",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 20,
+        "y1": 16,
+        "x2": 3,
+        "y2": 11
+      }
+    },
+    "ent_3db5db33-3a70-4d75-900f-28e03a05d3be": {
+      "id": "ent_3db5db33-3a70-4d75-900f-28e03a05d3be",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 3,
+        "y1": 11,
+        "x2": -8,
+        "y2": 8
+      }
+    },
+    "ent_dcf34908-4547-436c-adee-a01f53e65bfb": {
+      "id": "ent_dcf34908-4547-436c-adee-a01f53e65bfb",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -8,
+        "y1": 8,
+        "x2": -23,
+        "y2": -2
+      }
+    },
+    "ent_a93d9eef-736f-45a7-aa88-e7fc433a9647": {
+      "id": "ent_a93d9eef-736f-45a7-aa88-e7fc433a9647",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -23,
+        "y1": -2,
+        "x2": -45,
+        "y2": -12
+      }
+    },
+    "ent_ce149e6b-dada-4393-bcfc-a5a91f6c9bd6": {
+      "id": "ent_ce149e6b-dada-4393-bcfc-a5a91f6c9bd6",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -45,
+        "y1": -12,
+        "x2": -64,
+        "y2": -14
+      }
+    },
+    "ent_89d0a7d8-ddf7-4b5e-bf5f-106a757aa985": {
+      "id": "ent_89d0a7d8-ddf7-4b5e-bf5f-106a757aa985",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -64,
+        "y1": -14,
+        "x2": -64,
+        "y2": -25
+      }
+    },
+    "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8": {
+      "id": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+      "kind": "sketch",
+      "name": "Lower blade & finger loop blank profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_3c7d8975-b62a-47ab-a7c8-95d7dac9ddd6",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 0
+      },
+      "objectIds": [
+        "ent_3f92ffce-d961-4e43-8df5-1c2104ddf1cd",
+        "ent_57a92160-3c57-4d33-b3cf-d35e40bdd18e",
+        "ent_537c1732-6e05-432c-aae1-9a2d03d36364",
+        "ent_59d69436-d2a6-43a8-bc23-d3194557d826",
+        "ent_869accea-5eaa-4c35-8048-d5f8740bc474",
+        "ent_e67001fb-b3c8-498b-b025-29dee6c6afb5",
+        "ent_22dc7e8c-1d2e-4ef6-8d93-c8ebf4be4a69",
+        "ent_2384a97d-fff5-4744-8f9f-b3b1a719a669",
+        "ent_e17a63b3-3015-49d1-987a-114037de50ae",
+        "ent_934455b4-5733-4bc7-97e6-0b9bcd6a1922",
+        "ent_3db5db33-3a70-4d75-900f-28e03a05d3be",
+        "ent_dcf34908-4547-436c-adee-a01f53e65bfb",
+        "ent_a93d9eef-736f-45a7-aa88-e7fc433a9647",
+        "ent_ce149e6b-dada-4393-bcfc-a5a91f6c9bd6",
+        "ent_89d0a7d8-ddf7-4b5e-bf5f-106a757aa985"
+      ]
+    },
+    "ent_a2dc890d-426b-4d2f-8cc7-b5c442523bbb": {
+      "id": "ent_a2dc890d-426b-4d2f-8cc7-b5c442523bbb",
+      "kind": "feature",
+      "name": "Lower blade & finger loop blank profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_8500c8ac-9bfc-4ae3-b033-acba898589db",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_3c7d8975-b62a-47ab-a7c8-95d7dac9ddd6"
+      }
+    },
+    "ent_7a610e9d-cb0d-483a-b65f-9f2727e5957e": {
+      "id": "ent_7a610e9d-cb0d-483a-b65f-9f2727e5957e",
+      "kind": "feature",
+      "name": "Lower blade & finger loop blank",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_d605105d-30bb-4503-b566-4a1e2fdf5642",
+      "bodyId": "body_82df379d-59d5-4524-9273-3762e6e05006",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_3c7d8975-b62a-47ab-a7c8-95d7dac9ddd6",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": [
+            "ent_3f92ffce-d961-4e43-8df5-1c2104ddf1cd",
+            "ent_57a92160-3c57-4d33-b3cf-d35e40bdd18e",
+            "ent_537c1732-6e05-432c-aae1-9a2d03d36364",
+            "ent_59d69436-d2a6-43a8-bc23-d3194557d826",
+            "ent_869accea-5eaa-4c35-8048-d5f8740bc474",
+            "ent_e67001fb-b3c8-498b-b025-29dee6c6afb5",
+            "ent_22dc7e8c-1d2e-4ef6-8d93-c8ebf4be4a69",
+            "ent_2384a97d-fff5-4744-8f9f-b3b1a719a669",
+            "ent_e17a63b3-3015-49d1-987a-114037de50ae",
+            "ent_934455b4-5733-4bc7-97e6-0b9bcd6a1922",
+            "ent_3db5db33-3a70-4d75-900f-28e03a05d3be",
+            "ent_dcf34908-4547-436c-adee-a01f53e65bfb",
+            "ent_a93d9eef-736f-45a7-aa88-e7fc433a9647",
+            "ent_ce149e6b-dada-4393-bcfc-a5a91f6c9bd6",
+            "ent_89d0a7d8-ddf7-4b5e-bf5f-106a757aa985"
+          ]
+        }
+      }
+    },
+    "ent_5286f536-67c1-4513-bd8f-2b1f009bcc7e": {
+      "id": "ent_5286f536-67c1-4513-bd8f-2b1f009bcc7e",
+      "kind": "body",
+      "name": "Lower blade & finger loop blank",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_82df379d-59d5-4524-9273-3762e6e05006",
+      "featureId": "feat_d605105d-30bb-4503-b566-4a1e2fdf5642",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_d2f705ea-b875-4105-9202-f8cf9e01db81": {
+      "id": "ent_d2f705ea-b875-4105-9202-f8cf9e01db81",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_55d2a712-8947-4d59-a0a3-dbf9f24f67e5",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": -65,
+        "centerY": -22,
+        "radius": 23
+      }
+    },
+    "ent_55d2a712-8947-4d59-a0a3-dbf9f24f67e5": {
+      "id": "ent_55d2a712-8947-4d59-a0a3-dbf9f24f67e5",
+      "kind": "sketch",
+      "name": "Lower blade & finger loop loop profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_26b597df-fc0a-417c-84f0-997a1ee4e1e1",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 0
+      },
+      "objectIds": ["ent_d2f705ea-b875-4105-9202-f8cf9e01db81"]
+    },
+    "ent_99293e12-24a2-4d0b-be03-c7c663ca3da8": {
+      "id": "ent_99293e12-24a2-4d0b-be03-c7c663ca3da8",
+      "kind": "feature",
+      "name": "Lower blade & finger loop loop profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_ab08440e-618e-4153-95b0-1382b3c5b078",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_26b597df-fc0a-417c-84f0-997a1ee4e1e1"
+      }
+    },
+    "ent_874e5ee9-d56f-4aa8-9d0f-f4c337cdd1e3": {
+      "id": "ent_874e5ee9-d56f-4aa8-9d0f-f4c337cdd1e3",
+      "kind": "feature",
+      "name": "Lower blade & finger loop loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_7c7d7a90-77c6-4e3f-bc25-c6ab6092899f",
+      "bodyId": "body_1ce2281a-b3a5-47d2-8227-346e4fa3ec44",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_26b597df-fc0a-417c-84f0-997a1ee4e1e1",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_d2f705ea-b875-4105-9202-f8cf9e01db81"]
+        }
+      }
+    },
+    "ent_22bc40bc-380c-43be-9437-ed8ffae39bf7": {
+      "id": "ent_22bc40bc-380c-43be-9437-ed8ffae39bf7",
+      "kind": "body",
+      "name": "Lower blade & finger loop loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_1ce2281a-b3a5-47d2-8227-346e4fa3ec44",
+      "featureId": "feat_7c7d7a90-77c6-4e3f-bc25-c6ab6092899f",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_3508497d-d729-4e57-8284-44ed46720ed4": {
+      "id": "ent_3508497d-d729-4e57-8284-44ed46720ed4",
+      "kind": "feature",
+      "name": "Lower blade & finger loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_ddb771ea-05e5-40e3-af88-904042aa9dde",
+      "bodyId": "body_60c78b04-5f06-4179-afa1-6d9b1a46d74b",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_82df379d-59d5-4524-9273-3762e6e05006",
+          "body_1ce2281a-b3a5-47d2-8227-346e4fa3ec44"
+        ]
+      }
+    },
+    "ent_8d5d5fb3-fb2b-4866-b5ea-75d09e18fe00": {
+      "id": "ent_8d5d5fb3-fb2b-4866-b5ea-75d09e18fe00",
+      "kind": "body",
+      "name": "Lower blade & finger loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_60c78b04-5f06-4179-afa1-6d9b1a46d74b",
+      "featureId": "feat_ddb771ea-05e5-40e3-af88-904042aa9dde",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_443308ac-c58d-44d0-9818-93116f9c9389": {
+      "id": "ent_443308ac-c58d-44d0-9818-93116f9c9389",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_6df3ee94-24c5-4a91-a098-91207425988f",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": -65,
+        "centerY": -22,
+        "radius": 17
+      }
+    },
+    "ent_6df3ee94-24c5-4a91-a098-91207425988f": {
+      "id": "ent_6df3ee94-24c5-4a91-a098-91207425988f",
+      "kind": "sketch",
+      "name": "Lower blade & finger loop finger opening profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_be6d7822-3d44-4f0e-a433-896b93a81df2",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": -1
+      },
+      "objectIds": ["ent_443308ac-c58d-44d0-9818-93116f9c9389"]
+    },
+    "ent_8101d19b-401e-469a-af45-cd8b70ab7caf": {
+      "id": "ent_8101d19b-401e-469a-af45-cd8b70ab7caf",
+      "kind": "feature",
+      "name": "Lower blade & finger loop finger opening profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_2d05000c-ab1b-4631-b21c-7e1488c775e0",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_be6d7822-3d44-4f0e-a433-896b93a81df2"
+      }
+    },
+    "ent_2ea844b1-6c8f-4d59-8abc-6770bc7d1bad": {
+      "id": "ent_2ea844b1-6c8f-4d59-8abc-6770bc7d1bad",
+      "kind": "feature",
+      "name": "Lower blade & finger loop finger opening",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_59eb2cd4-38c4-474c-8c8e-51eed9fcfaba",
+      "bodyId": "body_d5d973d2-55e5-4450-8929-4c6b499bea4d",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_be6d7822-3d44-4f0e-a433-896b93a81df2",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_443308ac-c58d-44d0-9818-93116f9c9389"]
+        }
+      }
+    },
+    "ent_63f07cfc-b213-4771-9591-d013c9af012a": {
+      "id": "ent_63f07cfc-b213-4771-9591-d013c9af012a",
+      "kind": "body",
+      "name": "Lower blade & finger loop finger opening",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_d5d973d2-55e5-4450-8929-4c6b499bea4d",
+      "featureId": "feat_59eb2cd4-38c4-474c-8c8e-51eed9fcfaba",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_b3b01ad7-ee9f-421a-a2b2-bd6515c94be8": {
+      "id": "ent_b3b01ad7-ee9f-421a-a2b2-bd6515c94be8",
+      "kind": "feature",
+      "name": "Lower blade & finger loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_5cef35e0-a408-49cf-9564-f57c68cfa94a",
+      "bodyId": "body_2067c39f-ccdd-454a-8da2-2fe56401f599",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_60c78b04-5f06-4179-afa1-6d9b1a46d74b",
+          "body_d5d973d2-55e5-4450-8929-4c6b499bea4d"
+        ]
+      }
+    },
+    "ent_499ed8f2-2e89-4520-9974-14fd9f57f2d0": {
+      "id": "ent_499ed8f2-2e89-4520-9974-14fd9f57f2d0",
+      "kind": "body",
+      "name": "Lower blade & finger loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_2067c39f-ccdd-454a-8da2-2fe56401f599",
+      "featureId": "feat_5cef35e0-a408-49cf-9564-f57c68cfa94a",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_ee98fdec-0265-45a7-b68a-5ff8ccf5fcf0": {
+      "id": "ent_ee98fdec-0265-45a7-b68a-5ff8ccf5fcf0",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_cb5abaa7-cb27-4b7e-b27a-1818507ef71f",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": 0,
+        "centerY": 0,
+        "radius": 3.1
+      }
+    },
+    "ent_cb5abaa7-cb27-4b7e-b27a-1818507ef71f": {
+      "id": "ent_cb5abaa7-cb27-4b7e-b27a-1818507ef71f",
+      "kind": "sketch",
+      "name": "Lower blade & finger loop pivot bore profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_2e9e313a-c447-4a8a-9376-46ee3b7d2dea",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": -1
+      },
+      "objectIds": ["ent_ee98fdec-0265-45a7-b68a-5ff8ccf5fcf0"]
+    },
+    "ent_8b918570-54b3-4fe9-a24c-112d0b012608": {
+      "id": "ent_8b918570-54b3-4fe9-a24c-112d0b012608",
+      "kind": "feature",
+      "name": "Lower blade & finger loop pivot bore profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_184d5a95-4275-4615-bdf1-4807b6d16d96",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_2e9e313a-c447-4a8a-9376-46ee3b7d2dea"
+      }
+    },
+    "ent_de7370e1-eb7a-4de7-8241-209a35b6038b": {
+      "id": "ent_de7370e1-eb7a-4de7-8241-209a35b6038b",
+      "kind": "feature",
+      "name": "Lower blade & finger loop pivot bore",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_39a00673-b303-464d-b94c-8e4ae9c863e3",
+      "bodyId": "body_b843173b-bd11-4a37-a44f-9f4681f67fb9",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_2e9e313a-c447-4a8a-9376-46ee3b7d2dea",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_ee98fdec-0265-45a7-b68a-5ff8ccf5fcf0"]
+        }
+      }
+    },
+    "ent_40756bfb-ff9a-4a00-ad24-27794658f446": {
+      "id": "ent_40756bfb-ff9a-4a00-ad24-27794658f446",
+      "kind": "body",
+      "name": "Lower blade & finger loop pivot bore",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_b843173b-bd11-4a37-a44f-9f4681f67fb9",
+      "featureId": "feat_39a00673-b303-464d-b94c-8e4ae9c863e3",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_99a71ca2-3a96-4013-8c95-6da5e77fc9ff": {
+      "id": "ent_99a71ca2-3a96-4013-8c95-6da5e77fc9ff",
+      "kind": "feature",
+      "name": "Lower blade & finger loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_981ced96-598d-426e-a422-fab125fd4b1c",
+      "bodyId": "body_85eacd62-d382-43c1-a7a1-bf62fa3d5fc9",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_2067c39f-ccdd-454a-8da2-2fe56401f599",
+          "body_b843173b-bd11-4a37-a44f-9f4681f67fb9"
+        ]
+      }
+    },
+    "ent_5993a5c2-900a-457a-96cf-c1898a4b7606": {
+      "id": "ent_5993a5c2-900a-457a-96cf-c1898a4b7606",
+      "kind": "body",
+      "name": "Lower blade & finger loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_85eacd62-d382-43c1-a7a1-bf62fa3d5fc9",
+      "featureId": "feat_981ced96-598d-426e-a422-fab125fd4b1c",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_6cd5df35-c177-4aa8-b9b9-8983029c27a1": {
+      "id": "ent_6cd5df35-c177-4aa8-b9b9-8983029c27a1",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -64,
+        "y1": 14,
+        "x2": -45,
+        "y2": 12
+      }
+    },
+    "ent_d1049dfb-bd1e-4bfd-a898-e7d023f5384b": {
+      "id": "ent_d1049dfb-bd1e-4bfd-a898-e7d023f5384b",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -45,
+        "y1": 12,
+        "x2": -23,
+        "y2": 2
+      }
+    },
+    "ent_a98155c9-2abf-4e9a-8b26-c346b4c0883f": {
+      "id": "ent_a98155c9-2abf-4e9a-8b26-c346b4c0883f",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -23,
+        "y1": 2,
+        "x2": -8,
+        "y2": -8
+      }
+    },
+    "ent_d4f17da7-43b8-4a1d-a699-5a5ba792c485": {
+      "id": "ent_d4f17da7-43b8-4a1d-a699-5a5ba792c485",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -8,
+        "y1": -8,
+        "x2": 3,
+        "y2": -11
+      }
+    },
+    "ent_55c7feb4-085b-41d1-8f02-a558ea8a8885": {
+      "id": "ent_55c7feb4-085b-41d1-8f02-a558ea8a8885",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 3,
+        "y1": -11,
+        "x2": 20,
+        "y2": -16
+      }
+    },
+    "ent_e1e626b6-17f2-4239-b95a-9d7eb00defc4": {
+      "id": "ent_e1e626b6-17f2-4239-b95a-9d7eb00defc4",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 20,
+        "y1": -16,
+        "x2": 63,
+        "y2": -11
+      }
+    },
+    "ent_f2f93cf9-c1b2-4e59-99d9-fa2147648e9c": {
+      "id": "ent_f2f93cf9-c1b2-4e59-99d9-fa2147648e9c",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 63,
+        "y1": -11,
+        "x2": 90,
+        "y2": -5
+      }
+    },
+    "ent_807dbfab-6988-4b4b-8be5-1e42fa013e30": {
+      "id": "ent_807dbfab-6988-4b4b-8be5-1e42fa013e30",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 90,
+        "y1": -5,
+        "x2": 96,
+        "y2": -1
+      }
+    },
+    "ent_5f3b30e0-e734-4a11-bb65-b63d630c3387": {
+      "id": "ent_5f3b30e0-e734-4a11-bb65-b63d630c3387",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 96,
+        "y1": -1,
+        "x2": 94,
+        "y2": 0
+      }
+    },
+    "ent_b5217a31-4fc7-4b27-91d7-b965fa70104a": {
+      "id": "ent_b5217a31-4fc7-4b27-91d7-b965fa70104a",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 94,
+        "y1": 0,
+        "x2": 7,
+        "y2": 2
+      }
+    },
+    "ent_4ae87e8e-2652-4030-8a1c-9d3730966254": {
+      "id": "ent_4ae87e8e-2652-4030-8a1c-9d3730966254",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": 7,
+        "y1": 2,
+        "x2": -8,
+        "y2": 9
+      }
+    },
+    "ent_f937342e-a9f6-44ec-940e-4f8cd7372656": {
+      "id": "ent_f937342e-a9f6-44ec-940e-4f8cd7372656",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -8,
+        "y1": 9,
+        "x2": -19,
+        "y2": 10
+      }
+    },
+    "ent_ac7dfebe-eeba-46dd-b189-5a6a86ea9e2b": {
+      "id": "ent_ac7dfebe-eeba-46dd-b189-5a6a86ea9e2b",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -19,
+        "y1": 10,
+        "x2": -40,
+        "y2": 22
+      }
+    },
+    "ent_0ba5dec2-0fb8-460b-a2b5-141f89e3b9c2": {
+      "id": "ent_0ba5dec2-0fb8-460b-a2b5-141f89e3b9c2",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -40,
+        "y1": 22,
+        "x2": -64,
+        "y2": 25
+      }
+    },
+    "ent_cf5f5193-b646-433a-b775-7ed5e196aa2a": {
+      "id": "ent_cf5f5193-b646-433a-b775-7ed5e196aa2a",
+      "kind": "sketch-object",
+      "name": "line profile",
+      "parentId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "revisionId": null,
+      "objectKind": "line",
+      "data": {
+        "objectKind": "line",
+        "x1": -64,
+        "y1": 25,
+        "x2": -64,
+        "y2": 14
+      }
+    },
+    "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4": {
+      "id": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+      "kind": "sketch",
+      "name": "Upper blade & thumb loop blank profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_5f60ab15-1325-400e-8f0b-f36a801b7a1d",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 2.45
+      },
+      "objectIds": [
+        "ent_6cd5df35-c177-4aa8-b9b9-8983029c27a1",
+        "ent_d1049dfb-bd1e-4bfd-a898-e7d023f5384b",
+        "ent_a98155c9-2abf-4e9a-8b26-c346b4c0883f",
+        "ent_d4f17da7-43b8-4a1d-a699-5a5ba792c485",
+        "ent_55c7feb4-085b-41d1-8f02-a558ea8a8885",
+        "ent_e1e626b6-17f2-4239-b95a-9d7eb00defc4",
+        "ent_f2f93cf9-c1b2-4e59-99d9-fa2147648e9c",
+        "ent_807dbfab-6988-4b4b-8be5-1e42fa013e30",
+        "ent_5f3b30e0-e734-4a11-bb65-b63d630c3387",
+        "ent_b5217a31-4fc7-4b27-91d7-b965fa70104a",
+        "ent_4ae87e8e-2652-4030-8a1c-9d3730966254",
+        "ent_f937342e-a9f6-44ec-940e-4f8cd7372656",
+        "ent_ac7dfebe-eeba-46dd-b189-5a6a86ea9e2b",
+        "ent_0ba5dec2-0fb8-460b-a2b5-141f89e3b9c2",
+        "ent_cf5f5193-b646-433a-b775-7ed5e196aa2a"
+      ]
+    },
+    "ent_449a69d6-bbb2-4447-a986-2480fd8b0afb": {
+      "id": "ent_449a69d6-bbb2-4447-a986-2480fd8b0afb",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop blank profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_252b83be-b38d-410b-9b07-45ebdd02eee3",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_5f60ab15-1325-400e-8f0b-f36a801b7a1d"
+      }
+    },
+    "ent_9a7f1fec-033d-4ea2-b16b-ae71597331d8": {
+      "id": "ent_9a7f1fec-033d-4ea2-b16b-ae71597331d8",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop blank",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_9f3cb664-0836-4222-ac8e-20208b0dd1fb",
+      "bodyId": "body_57f4707e-23e1-43c0-835c-15817e14e57f",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_5f60ab15-1325-400e-8f0b-f36a801b7a1d",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": [
+            "ent_6cd5df35-c177-4aa8-b9b9-8983029c27a1",
+            "ent_d1049dfb-bd1e-4bfd-a898-e7d023f5384b",
+            "ent_a98155c9-2abf-4e9a-8b26-c346b4c0883f",
+            "ent_d4f17da7-43b8-4a1d-a699-5a5ba792c485",
+            "ent_55c7feb4-085b-41d1-8f02-a558ea8a8885",
+            "ent_e1e626b6-17f2-4239-b95a-9d7eb00defc4",
+            "ent_f2f93cf9-c1b2-4e59-99d9-fa2147648e9c",
+            "ent_807dbfab-6988-4b4b-8be5-1e42fa013e30",
+            "ent_5f3b30e0-e734-4a11-bb65-b63d630c3387",
+            "ent_b5217a31-4fc7-4b27-91d7-b965fa70104a",
+            "ent_4ae87e8e-2652-4030-8a1c-9d3730966254",
+            "ent_f937342e-a9f6-44ec-940e-4f8cd7372656",
+            "ent_ac7dfebe-eeba-46dd-b189-5a6a86ea9e2b",
+            "ent_0ba5dec2-0fb8-460b-a2b5-141f89e3b9c2",
+            "ent_cf5f5193-b646-433a-b775-7ed5e196aa2a"
+          ]
+        }
+      }
+    },
+    "ent_f2e4689b-51a3-4713-9d32-8338c2b17046": {
+      "id": "ent_f2e4689b-51a3-4713-9d32-8338c2b17046",
+      "kind": "body",
+      "name": "Upper blade & thumb loop blank",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_57f4707e-23e1-43c0-835c-15817e14e57f",
+      "featureId": "feat_9f3cb664-0836-4222-ac8e-20208b0dd1fb",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_b55c8209-b1e5-4bbd-bbf8-bf4be8409518": {
+      "id": "ent_b55c8209-b1e5-4bbd-bbf8-bf4be8409518",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_90bca47f-4aa0-492b-adce-1340d7ca57e4",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": -65,
+        "centerY": 22,
+        "radius": 21
+      }
+    },
+    "ent_90bca47f-4aa0-492b-adce-1340d7ca57e4": {
+      "id": "ent_90bca47f-4aa0-492b-adce-1340d7ca57e4",
+      "kind": "sketch",
+      "name": "Upper blade & thumb loop loop profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_f4200771-efde-4c1b-9f03-2aed41354dcc",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 2.45
+      },
+      "objectIds": ["ent_b55c8209-b1e5-4bbd-bbf8-bf4be8409518"]
+    },
+    "ent_1044eb8f-dc79-497d-a741-a1591c31b199": {
+      "id": "ent_1044eb8f-dc79-497d-a741-a1591c31b199",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop loop profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_3a5ead60-d4db-44ce-9c21-a72876433004",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_f4200771-efde-4c1b-9f03-2aed41354dcc"
+      }
+    },
+    "ent_6c0f141a-d0a5-48c8-8f34-395670e363ab": {
+      "id": "ent_6c0f141a-d0a5-48c8-8f34-395670e363ab",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_a2c0f6df-23c6-47bc-8fc7-1263d88313d2",
+      "bodyId": "body_904fbc4a-5227-4d8d-9eda-815ef6cb748f",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_f4200771-efde-4c1b-9f03-2aed41354dcc",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_b55c8209-b1e5-4bbd-bbf8-bf4be8409518"]
+        }
+      }
+    },
+    "ent_85a3c9d9-8ae3-4770-8f76-e0f6b53e2ebe": {
+      "id": "ent_85a3c9d9-8ae3-4770-8f76-e0f6b53e2ebe",
+      "kind": "body",
+      "name": "Upper blade & thumb loop loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_904fbc4a-5227-4d8d-9eda-815ef6cb748f",
+      "featureId": "feat_a2c0f6df-23c6-47bc-8fc7-1263d88313d2",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_8ed56aef-6150-4196-a6e7-eee9705f637c": {
+      "id": "ent_8ed56aef-6150-4196-a6e7-eee9705f637c",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_24397cde-1073-4bdf-b23c-6862871aea3f",
+      "bodyId": "body_0b40a6d1-5306-45cd-a66c-8bac18293e42",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_57f4707e-23e1-43c0-835c-15817e14e57f",
+          "body_904fbc4a-5227-4d8d-9eda-815ef6cb748f"
+        ]
+      }
+    },
+    "ent_209d4824-5c41-4cc6-b242-f3fe3855a1df": {
+      "id": "ent_209d4824-5c41-4cc6-b242-f3fe3855a1df",
+      "kind": "body",
+      "name": "Upper blade & thumb loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_0b40a6d1-5306-45cd-a66c-8bac18293e42",
+      "featureId": "feat_24397cde-1073-4bdf-b23c-6862871aea3f",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_666b6902-1a2a-4604-b736-201faa4abc94": {
+      "id": "ent_666b6902-1a2a-4604-b736-201faa4abc94",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_57c74a5e-bf22-4448-ab2e-9b64c6be7850",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": -65,
+        "centerY": 22,
+        "radius": 15
+      }
+    },
+    "ent_57c74a5e-bf22-4448-ab2e-9b64c6be7850": {
+      "id": "ent_57c74a5e-bf22-4448-ab2e-9b64c6be7850",
+      "kind": "sketch",
+      "name": "Upper blade & thumb loop finger opening profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_cbe2a411-4395-4c39-b78b-f9525365a41b",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 1.4500000000000002
+      },
+      "objectIds": ["ent_666b6902-1a2a-4604-b736-201faa4abc94"]
+    },
+    "ent_4ff2f6f3-e38c-4288-8bb7-33c308387f1f": {
+      "id": "ent_4ff2f6f3-e38c-4288-8bb7-33c308387f1f",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop finger opening profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_7371313d-2ea1-486b-af2c-fca7872e28be",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_cbe2a411-4395-4c39-b78b-f9525365a41b"
+      }
+    },
+    "ent_7cb138b3-f930-4eb4-a29f-bd760bd7fa20": {
+      "id": "ent_7cb138b3-f930-4eb4-a29f-bd760bd7fa20",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop finger opening",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_4478430c-25f5-4eb9-b79e-665e71d0a5b6",
+      "bodyId": "body_521db29c-0bf5-4311-8f73-e78f4fc077e7",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_cbe2a411-4395-4c39-b78b-f9525365a41b",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_666b6902-1a2a-4604-b736-201faa4abc94"]
+        }
+      }
+    },
+    "ent_70de4b39-88b8-4c00-8898-18a6736af9c4": {
+      "id": "ent_70de4b39-88b8-4c00-8898-18a6736af9c4",
+      "kind": "body",
+      "name": "Upper blade & thumb loop finger opening",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_521db29c-0bf5-4311-8f73-e78f4fc077e7",
+      "featureId": "feat_4478430c-25f5-4eb9-b79e-665e71d0a5b6",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_6828cd1c-368e-416e-bd19-c493e736445f": {
+      "id": "ent_6828cd1c-368e-416e-bd19-c493e736445f",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_bcb22781-1ac5-4f50-b90d-68d173b47344",
+      "bodyId": "body_f18e42c4-af9a-4a7d-bf5b-7a7d6207b709",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_0b40a6d1-5306-45cd-a66c-8bac18293e42",
+          "body_521db29c-0bf5-4311-8f73-e78f4fc077e7"
+        ]
+      }
+    },
+    "ent_36e4ab4e-5ad3-4c92-90a8-982e67e57d01": {
+      "id": "ent_36e4ab4e-5ad3-4c92-90a8-982e67e57d01",
+      "kind": "body",
+      "name": "Upper blade & thumb loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_f18e42c4-af9a-4a7d-bf5b-7a7d6207b709",
+      "featureId": "feat_bcb22781-1ac5-4f50-b90d-68d173b47344",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_d7b0fcc6-1f9e-4f59-871c-38423d2831b7": {
+      "id": "ent_d7b0fcc6-1f9e-4f59-871c-38423d2831b7",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_dc17ed42-0635-49cd-8363-87de3652eca9",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": 0,
+        "centerY": 0,
+        "radius": 3.1
+      }
+    },
+    "ent_dc17ed42-0635-49cd-8363-87de3652eca9": {
+      "id": "ent_dc17ed42-0635-49cd-8363-87de3652eca9",
+      "kind": "sketch",
+      "name": "Upper blade & thumb loop pivot bore profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_b38c8ba2-425c-44c4-bf4f-fc6da589f17f",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 1.4500000000000002
+      },
+      "objectIds": ["ent_d7b0fcc6-1f9e-4f59-871c-38423d2831b7"]
+    },
+    "ent_16a85ee9-4d8e-41a9-a467-948a811a6aba": {
+      "id": "ent_16a85ee9-4d8e-41a9-a467-948a811a6aba",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop pivot bore profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_0317913b-af5c-4996-8867-52cede91ab33",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_b38c8ba2-425c-44c4-bf4f-fc6da589f17f"
+      }
+    },
+    "ent_c02b9b1c-7158-468c-bfc6-7d9a66c115ef": {
+      "id": "ent_c02b9b1c-7158-468c-bfc6-7d9a66c115ef",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop pivot bore",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_aa762924-75ff-489f-a535-60741c3dbca9",
+      "bodyId": "body_45151fee-4e5d-49a5-9648-975473d6ba1f",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_b38c8ba2-425c-44c4-bf4f-fc6da589f17f",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_d7b0fcc6-1f9e-4f59-871c-38423d2831b7"]
+        }
+      }
+    },
+    "ent_fc5395db-f9a4-49c8-9d6b-503ae7064d70": {
+      "id": "ent_fc5395db-f9a4-49c8-9d6b-503ae7064d70",
+      "kind": "body",
+      "name": "Upper blade & thumb loop pivot bore",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_45151fee-4e5d-49a5-9648-975473d6ba1f",
+      "featureId": "feat_aa762924-75ff-489f-a535-60741c3dbca9",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_2ba6eb4f-438d-4178-a706-208b4ff1bc14": {
+      "id": "ent_2ba6eb4f-438d-4178-a706-208b4ff1bc14",
+      "kind": "feature",
+      "name": "Upper blade & thumb loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_cb62fc35-8162-4824-aa4d-02798aa2e2f2",
+      "bodyId": "body_969b1f8b-c46f-4bb7-80e2-3deaccb71a24",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_f18e42c4-af9a-4a7d-bf5b-7a7d6207b709",
+          "body_45151fee-4e5d-49a5-9648-975473d6ba1f"
+        ]
+      }
+    },
+    "ent_81dd0334-b222-48e7-805b-e1c0fc6ccbf0": {
+      "id": "ent_81dd0334-b222-48e7-805b-e1c0fc6ccbf0",
+      "kind": "body",
+      "name": "Upper blade & thumb loop",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_969b1f8b-c46f-4bb7-80e2-3deaccb71a24",
+      "featureId": "feat_cb62fc35-8162-4824-aa4d-02798aa2e2f2",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_af3c9b9f-a121-4903-9157-dc5bcbc915d7": {
+      "id": "ent_af3c9b9f-a121-4903-9157-dc5bcbc915d7",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_6a06e65c-7d60-45f9-ab67-bced024dc2db",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": 0,
+        "centerY": 0,
+        "radius": 3
+      }
+    },
+    "ent_6a06e65c-7d60-45f9-ab67-bced024dc2db": {
+      "id": "ent_6a06e65c-7d60-45f9-ab67-bced024dc2db",
+      "kind": "sketch",
+      "name": "Pivot shank Ø6 profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_879b85dd-a2ce-4176-a6d7-d6d4b85d6ce7",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": -0.8
+      },
+      "objectIds": ["ent_af3c9b9f-a121-4903-9157-dc5bcbc915d7"]
+    },
+    "ent_baffd63b-53a2-4ecd-a5cb-2bcfb1512bff": {
+      "id": "ent_baffd63b-53a2-4ecd-a5cb-2bcfb1512bff",
+      "kind": "feature",
+      "name": "Pivot shank Ø6 profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_c16ba7e3-8268-41be-a45b-c17f6b215de4",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_879b85dd-a2ce-4176-a6d7-d6d4b85d6ce7"
+      }
+    },
+    "ent_eee815b1-c9a7-483d-8833-862b4fedbc7e": {
+      "id": "ent_eee815b1-c9a7-483d-8833-862b4fedbc7e",
+      "kind": "feature",
+      "name": "Pivot shank Ø6",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_af93e9df-c86a-4f89-81ba-b74653d6ce3f",
+      "bodyId": "body_638dcd38-b672-424c-9591-7bd64facf867",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_879b85dd-a2ce-4176-a6d7-d6d4b85d6ce7",
+        "distance": 6.45,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_af3c9b9f-a121-4903-9157-dc5bcbc915d7"]
+        }
+      }
+    },
+    "ent_6651e622-4b12-4166-934d-bdfa373cb546": {
+      "id": "ent_6651e622-4b12-4166-934d-bdfa373cb546",
+      "kind": "body",
+      "name": "Pivot shank Ø6",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_638dcd38-b672-424c-9591-7bd64facf867",
+      "featureId": "feat_af93e9df-c86a-4f89-81ba-b74653d6ce3f",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_e0f3074b-7fd1-425e-9504-b6a744492d04": {
+      "id": "ent_e0f3074b-7fd1-425e-9504-b6a744492d04",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_e4a18bd5-db8d-496a-b84b-1e58266047ab",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": 0,
+        "centerY": 0,
+        "radius": 5.5
+      }
+    },
+    "ent_e4a18bd5-db8d-496a-b84b-1e58266047ab": {
+      "id": "ent_e4a18bd5-db8d-496a-b84b-1e58266047ab",
+      "kind": "sketch",
+      "name": "Pivot head Ø11 profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_6a557480-f552-4513-8849-8441103231cb",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": -1.8
+      },
+      "objectIds": ["ent_e0f3074b-7fd1-425e-9504-b6a744492d04"]
+    },
+    "ent_51b3508f-4e0a-4c42-9e54-bb3b302e6f83": {
+      "id": "ent_51b3508f-4e0a-4c42-9e54-bb3b302e6f83",
+      "kind": "feature",
+      "name": "Pivot head Ø11 profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_dbb8a052-c38f-4f2c-a1e1-0f5dd64f8dc4",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_6a557480-f552-4513-8849-8441103231cb"
+      }
+    },
+    "ent_bbd528e5-627f-4b02-a238-f0b4ccd0ae60": {
+      "id": "ent_bbd528e5-627f-4b02-a238-f0b4ccd0ae60",
+      "kind": "feature",
+      "name": "Pivot head Ø11",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_aa2e00a4-13fc-401b-90a1-a973eeb2156b",
+      "bodyId": "body_aa9fa90b-bad0-4367-bd63-a54f61b8933a",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_6a557480-f552-4513-8849-8441103231cb",
+        "distance": 1.2,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_e0f3074b-7fd1-425e-9504-b6a744492d04"]
+        }
+      }
+    },
+    "ent_8f09ffe1-4926-4369-9274-512e04c85a89": {
+      "id": "ent_8f09ffe1-4926-4369-9274-512e04c85a89",
+      "kind": "body",
+      "name": "Pivot head Ø11",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_aa9fa90b-bad0-4367-bd63-a54f61b8933a",
+      "featureId": "feat_aa2e00a4-13fc-401b-90a1-a973eeb2156b",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_ca9d1be0-1611-42e7-9734-a6340cc6a4fa": {
+      "id": "ent_ca9d1be0-1611-42e7-9734-a6340cc6a4fa",
+      "kind": "feature",
+      "name": "Captive pivot pin",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_e8d32059-c12c-462f-b3af-4116a0c365f7",
+      "bodyId": "body_0413a238-e190-4a5e-8d7f-191044c8f832",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_638dcd38-b672-424c-9591-7bd64facf867",
+          "body_aa9fa90b-bad0-4367-bd63-a54f61b8933a"
+        ]
+      }
+    },
+    "ent_e83caccd-695d-4586-8872-5fde0552e3de": {
+      "id": "ent_e83caccd-695d-4586-8872-5fde0552e3de",
+      "kind": "body",
+      "name": "Captive pivot pin",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_0413a238-e190-4a5e-8d7f-191044c8f832",
+      "featureId": "feat_e8d32059-c12c-462f-b3af-4116a0c365f7",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_cd45c5ec-e08f-4576-b58b-bb4f685d57dd": {
+      "id": "ent_cd45c5ec-e08f-4576-b58b-bb4f685d57dd",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_5904ab49-9b44-4831-ad54-1bb6c573f5bc",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": 0,
+        "centerY": 0,
+        "radius": 5
+      }
+    },
+    "ent_5904ab49-9b44-4831-ad54-1bb6c573f5bc": {
+      "id": "ent_5904ab49-9b44-4831-ad54-1bb6c573f5bc",
+      "kind": "sketch",
+      "name": "Pivot cap Ø10 profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "sketchId": "sketch_aa62ce0e-0fa3-4962-989f-77c6412af8fc",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 5.05
+      },
+      "objectIds": ["ent_cd45c5ec-e08f-4576-b58b-bb4f685d57dd"]
+    },
+    "ent_318b9334-66ea-4daf-8dbe-84518f897986": {
+      "id": "ent_318b9334-66ea-4daf-8dbe-84518f897986",
+      "kind": "feature",
+      "name": "Pivot cap Ø10 profile",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_7743ca28-7a0d-4344-a887-2838c2b8f717",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_aa62ce0e-0fa3-4962-989f-77c6412af8fc"
+      }
+    },
+    "ent_594fc4be-4312-4da9-b27f-a3a49d8737df": {
+      "id": "ent_594fc4be-4312-4da9-b27f-a3a49d8737df",
+      "kind": "feature",
+      "name": "Pivot cap Ø10",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_3b423219-50ab-46aa-8ec4-e2e02e3ee414",
+      "bodyId": "body_7db37518-de68-4c73-8b5a-dae03aeb6a5f",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_aa62ce0e-0fa3-4962-989f-77c6412af8fc",
+        "distance": 1.2,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_cd45c5ec-e08f-4576-b58b-bb4f685d57dd"]
+        }
+      }
+    },
+    "ent_be6d5edb-04f3-4bc7-851d-2c0ec7c9d899": {
+      "id": "ent_be6d5edb-04f3-4bc7-851d-2c0ec7c9d899",
+      "kind": "body",
+      "name": "Pivot cap Ø10",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_7db37518-de68-4c73-8b5a-dae03aeb6a5f",
+      "featureId": "feat_3b423219-50ab-46aa-8ec4-e2e02e3ee414",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_807cd741-ce22-4604-85ef-775ca88075d3": {
+      "id": "ent_807cd741-ce22-4604-85ef-775ca88075d3",
+      "kind": "feature",
+      "name": "Captive pivot pin",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "featureId": "feat_8d6e1716-256d-46dc-9b97-eebf8497c4e1",
+      "bodyId": "body_b79ebbb8-492b-4c0d-895c-106b1dc3cbd8",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_0413a238-e190-4a5e-8d7f-191044c8f832",
+          "body_7db37518-de68-4c73-8b5a-dae03aeb6a5f"
+        ]
+      }
+    },
+    "ent_a9f33352-e194-4d10-bc82-809e8c4f29ec": {
+      "id": "ent_a9f33352-e194-4d10-bc82-809e8c4f29ec",
+      "kind": "body",
+      "name": "Captive pivot pin",
+      "parentId": "ent_1ebcde67-7429-4e5d-a4f0-3edf087deb69",
+      "revisionId": null,
+      "bodyId": "body_b79ebbb8-492b-4c0d-895c-106b1dc3cbd8",
+      "featureId": "feat_8d6e1716-256d-46dc-9b97-eebf8497c4e1",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    }
+  },
+  "featureOrder": [
+    "feat_8500c8ac-9bfc-4ae3-b033-acba898589db",
+    "feat_d605105d-30bb-4503-b566-4a1e2fdf5642",
+    "feat_ab08440e-618e-4153-95b0-1382b3c5b078",
+    "feat_7c7d7a90-77c6-4e3f-bc25-c6ab6092899f",
+    "feat_ddb771ea-05e5-40e3-af88-904042aa9dde",
+    "feat_2d05000c-ab1b-4631-b21c-7e1488c775e0",
+    "feat_59eb2cd4-38c4-474c-8c8e-51eed9fcfaba",
+    "feat_5cef35e0-a408-49cf-9564-f57c68cfa94a",
+    "feat_184d5a95-4275-4615-bdf1-4807b6d16d96",
+    "feat_39a00673-b303-464d-b94c-8e4ae9c863e3",
+    "feat_981ced96-598d-426e-a422-fab125fd4b1c",
+    "feat_252b83be-b38d-410b-9b07-45ebdd02eee3",
+    "feat_9f3cb664-0836-4222-ac8e-20208b0dd1fb",
+    "feat_3a5ead60-d4db-44ce-9c21-a72876433004",
+    "feat_a2c0f6df-23c6-47bc-8fc7-1263d88313d2",
+    "feat_24397cde-1073-4bdf-b23c-6862871aea3f",
+    "feat_7371313d-2ea1-486b-af2c-fca7872e28be",
+    "feat_4478430c-25f5-4eb9-b79e-665e71d0a5b6",
+    "feat_bcb22781-1ac5-4f50-b90d-68d173b47344",
+    "feat_0317913b-af5c-4996-8867-52cede91ab33",
+    "feat_aa762924-75ff-489f-a535-60741c3dbca9",
+    "feat_cb62fc35-8162-4824-aa4d-02798aa2e2f2",
+    "feat_c16ba7e3-8268-41be-a45b-c17f6b215de4",
+    "feat_af93e9df-c86a-4f89-81ba-b74653d6ce3f",
+    "feat_dbb8a052-c38f-4f2c-a1e1-0f5dd64f8dc4",
+    "feat_aa2e00a4-13fc-401b-90a1-a973eeb2156b",
+    "feat_e8d32059-c12c-462f-b3af-4116a0c365f7",
+    "feat_7743ca28-7a0d-4344-a887-2838c2b8f717",
+    "feat_3b423219-50ab-46aa-8ec4-e2e02e3ee414",
+    "feat_8d6e1716-256d-46dc-9b97-eebf8497c4e1"
+  ],
+  "bodyOrder": [
+    "body_82df379d-59d5-4524-9273-3762e6e05006",
+    "body_1ce2281a-b3a5-47d2-8227-346e4fa3ec44",
+    "body_60c78b04-5f06-4179-afa1-6d9b1a46d74b",
+    "body_d5d973d2-55e5-4450-8929-4c6b499bea4d",
+    "body_2067c39f-ccdd-454a-8da2-2fe56401f599",
+    "body_b843173b-bd11-4a37-a44f-9f4681f67fb9",
+    "body_85eacd62-d382-43c1-a7a1-bf62fa3d5fc9",
+    "body_57f4707e-23e1-43c0-835c-15817e14e57f",
+    "body_904fbc4a-5227-4d8d-9eda-815ef6cb748f",
+    "body_0b40a6d1-5306-45cd-a66c-8bac18293e42",
+    "body_521db29c-0bf5-4311-8f73-e78f4fc077e7",
+    "body_f18e42c4-af9a-4a7d-bf5b-7a7d6207b709",
+    "body_45151fee-4e5d-49a5-9648-975473d6ba1f",
+    "body_969b1f8b-c46f-4bb7-80e2-3deaccb71a24",
+    "body_638dcd38-b672-424c-9591-7bd64facf867",
+    "body_aa9fa90b-bad0-4367-bd63-a54f61b8933a",
+    "body_0413a238-e190-4a5e-8d7f-191044c8f832",
+    "body_7db37518-de68-4c73-8b5a-dae03aeb6a5f",
+    "body_b79ebbb8-492b-4c0d-895c-106b1dc3cbd8"
+  ],
+  "sketchOrder": [
+    "sketch_3c7d8975-b62a-47ab-a7c8-95d7dac9ddd6",
+    "sketch_26b597df-fc0a-417c-84f0-997a1ee4e1e1",
+    "sketch_be6d7822-3d44-4f0e-a433-896b93a81df2",
+    "sketch_2e9e313a-c447-4a8a-9376-46ee3b7d2dea",
+    "sketch_5f60ab15-1325-400e-8f0b-f36a801b7a1d",
+    "sketch_f4200771-efde-4c1b-9f03-2aed41354dcc",
+    "sketch_cbe2a411-4395-4c39-b78b-f9525365a41b",
+    "sketch_b38c8ba2-425c-44c4-bf4f-fc6da589f17f",
+    "sketch_879b85dd-a2ce-4176-a6d7-d6d4b85d6ce7",
+    "sketch_6a557480-f552-4513-8849-8441103231cb",
+    "sketch_aa62ce0e-0fa3-4962-989f-77c6412af8fc"
+  ],
+  "parameterOrder": [],
+  "revisions": [
+    {
+      "revisionId": "rev_8e0d7bdb-3a12-4cf6-b51d-83fae1b80066",
+      "createdAt": "2026-11-04T03:32:56.857Z",
+      "reason": "Initial document",
+      "commandCount": 0
+    },
+    {
+      "revisionId": "rev_3b42d673-fd1c-48b5-ac4d-c0ead8c36542",
+      "createdAt": "2026-11-04T03:32:56.858Z",
+      "reason": "Add sketch",
+      "commandCount": 1
+    },
+    {
+      "revisionId": "rev_77567202-ec1a-4ea4-af0f-781fa02e763e",
+      "createdAt": "2026-11-04T03:32:56.860Z",
+      "reason": "Extrude sketch",
+      "commandCount": 2
+    },
+    {
+      "revisionId": "rev_91b3bb21-e9c9-42ec-863a-c856cf45aac4",
+      "createdAt": "2026-11-04T03:32:56.860Z",
+      "reason": "Add circle sketch",
+      "commandCount": 3
+    },
+    {
+      "revisionId": "rev_e6cbba60-7d99-47eb-b3da-c51d105bcd85",
+      "createdAt": "2026-11-04T03:32:56.861Z",
+      "reason": "Extrude sketch",
+      "commandCount": 4
+    },
+    {
+      "revisionId": "rev_b575f52a-248c-42b8-82de-186872813fb1",
+      "createdAt": "2026-11-04T03:32:56.861Z",
+      "reason": "Boolean union",
+      "commandCount": 5
+    },
+    {
+      "revisionId": "rev_75998857-bbf8-4ab6-9cf3-8b75a7626522",
+      "createdAt": "2026-11-04T03:32:56.862Z",
+      "reason": "Add circle sketch",
+      "commandCount": 6
+    },
+    {
+      "revisionId": "rev_5c448c3c-7004-4b0e-9fef-a0f8f7dd2fb2",
+      "createdAt": "2026-11-04T03:32:56.862Z",
+      "reason": "Extrude sketch",
+      "commandCount": 7
+    },
+    {
+      "revisionId": "rev_2182f84a-12a1-45bd-8b16-194639504bee",
+      "createdAt": "2026-11-04T03:32:56.862Z",
+      "reason": "Boolean subtract",
+      "commandCount": 8
+    },
+    {
+      "revisionId": "rev_0bc97986-7b4c-4ea0-b49e-55a5fa31f11c",
+      "createdAt": "2026-11-04T03:32:56.863Z",
+      "reason": "Add circle sketch",
+      "commandCount": 9
+    },
+    {
+      "revisionId": "rev_57ce43b3-f2ad-4159-92c3-b5eac5c511a0",
+      "createdAt": "2026-11-04T03:32:56.863Z",
+      "reason": "Extrude sketch",
+      "commandCount": 10
+    },
+    {
+      "revisionId": "rev_f0ba1041-aafd-4881-9c0d-52764e597371",
+      "createdAt": "2026-11-04T03:32:56.864Z",
+      "reason": "Boolean subtract",
+      "commandCount": 11
+    },
+    {
+      "revisionId": "rev_aa588af7-d4d1-40f1-bf9e-b004a82d74e8",
+      "createdAt": "2026-11-04T03:32:56.864Z",
+      "reason": "Add sketch",
+      "commandCount": 12
+    },
+    {
+      "revisionId": "rev_b7654fcd-ed93-4980-b63d-2b3b893ee925",
+      "createdAt": "2026-11-04T03:32:56.865Z",
+      "reason": "Extrude sketch",
+      "commandCount": 13
+    },
+    {
+      "revisionId": "rev_07e416ea-e3f7-4731-95f3-00bddfde8054",
+      "createdAt": "2026-11-04T03:32:56.866Z",
+      "reason": "Add circle sketch",
+      "commandCount": 14
+    },
+    {
+      "revisionId": "rev_5cb3adf2-a0d2-4adb-b9dc-a1b33ce28f1c",
+      "createdAt": "2026-11-04T03:32:56.867Z",
+      "reason": "Extrude sketch",
+      "commandCount": 15
+    },
+    {
+      "revisionId": "rev_44aa7363-8146-4d81-b291-1b40a10ed3be",
+      "createdAt": "2026-11-04T03:32:56.868Z",
+      "reason": "Boolean union",
+      "commandCount": 16
+    },
+    {
+      "revisionId": "rev_0c2a1b9a-980f-4525-92f8-c83c970a3c77",
+      "createdAt": "2026-11-04T03:32:56.869Z",
+      "reason": "Add circle sketch",
+      "commandCount": 17
+    },
+    {
+      "revisionId": "rev_b7879ca9-06d5-4740-82ca-43b73fa029bd",
+      "createdAt": "2026-11-04T03:32:56.870Z",
+      "reason": "Extrude sketch",
+      "commandCount": 18
+    },
+    {
+      "revisionId": "rev_b75f2c41-c14d-41bb-8572-ffa4a31608dd",
+      "createdAt": "2026-11-04T03:32:56.871Z",
+      "reason": "Boolean subtract",
+      "commandCount": 19
+    },
+    {
+      "revisionId": "rev_bc6e34db-6cde-4d5b-9c19-6c9a55efef14",
+      "createdAt": "2026-11-04T03:32:56.872Z",
+      "reason": "Add circle sketch",
+      "commandCount": 20
+    },
+    {
+      "revisionId": "rev_7bb12bf9-3bfd-4021-94d1-c2684184d11b",
+      "createdAt": "2026-11-04T03:32:56.873Z",
+      "reason": "Extrude sketch",
+      "commandCount": 21
+    },
+    {
+      "revisionId": "rev_a06c78b6-a77e-4afa-950b-5f16946916f9",
+      "createdAt": "2026-11-04T03:32:56.874Z",
+      "reason": "Boolean subtract",
+      "commandCount": 22
+    },
+    {
+      "revisionId": "rev_df055b7d-d713-4fff-b4f6-7fa5b055415d",
+      "createdAt": "2026-11-04T03:32:56.876Z",
+      "reason": "Add circle sketch",
+      "commandCount": 23
+    },
+    {
+      "revisionId": "rev_a5186aea-6b51-4944-a394-b1ae425eebbd",
+      "createdAt": "2026-11-04T03:32:56.878Z",
+      "reason": "Extrude sketch",
+      "commandCount": 24
+    },
+    {
+      "revisionId": "rev_5cd0d1e4-5970-492c-a518-67be1e01d3ba",
+      "createdAt": "2026-11-04T03:32:56.879Z",
+      "reason": "Add circle sketch",
+      "commandCount": 25
+    },
+    {
+      "revisionId": "rev_c6835585-4ea9-4ec8-a89d-e87fe784fb57",
+      "createdAt": "2026-11-04T03:32:56.882Z",
+      "reason": "Extrude sketch",
+      "commandCount": 26
+    },
+    {
+      "revisionId": "rev_ea495324-c1a0-4bd6-860c-e8d6f708b213",
+      "createdAt": "2026-11-04T03:32:56.883Z",
+      "reason": "Boolean union",
+      "commandCount": 27
+    },
+    {
+      "revisionId": "rev_da73c8f3-1cfc-43b5-85df-5597af4b9123",
+      "createdAt": "2026-11-04T03:32:56.885Z",
+      "reason": "Add circle sketch",
+      "commandCount": 28
+    },
+    {
+      "revisionId": "rev_c1df4c43-a7c6-4e3a-ae81-88f3b4232400",
+      "createdAt": "2026-11-04T03:32:56.886Z",
+      "reason": "Extrude sketch",
+      "commandCount": 29
+    },
+    {
+      "revisionId": "rev_7ddfaf9e-6ba2-43e3-acf1-ce011a263c62",
+      "createdAt": "2026-11-04T03:32:56.887Z",
+      "reason": "Boolean union",
+      "commandCount": 30
+    },
+    {
+      "revisionId": "rev_64ae03b3-34b5-4e5f-aca8-f19b6d74b836",
+      "createdAt": "2026-11-04T03:33:16.407Z",
+      "reason": "Add 3 components",
+      "commandCount": 31
+    },
+    {
+      "revisionId": "rev_2e9b0728-38bd-4882-8a1d-eaa8cd8631d9",
+      "createdAt": "2026-11-04T03:34:20.162Z",
+      "reason": "Add joint Revolute 1",
+      "commandCount": 32
+    },
+    {
+      "revisionId": "rev_738ee2b2-a1f5-436f-a3ef-d7c7dfa33745",
+      "createdAt": "2026-11-04T03:34:25.434Z",
+      "reason": "Move joint",
+      "commandCount": 33
+    }
+  ],
+  "checkpoints": [],
+  "commandLog": [
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Lower blade & finger loop blank profile",
+        "plane": "XY",
+        "offset": 0,
+        "objects": [
+          {
+            "objectKind": "line",
+            "x1": -64,
+            "y1": -25,
+            "x2": -40,
+            "y2": -22
+          },
+          {
+            "objectKind": "line",
+            "x1": -40,
+            "y1": -22,
+            "x2": -19,
+            "y2": -10
+          },
+          {
+            "objectKind": "line",
+            "x1": -19,
+            "y1": -10,
+            "x2": -8,
+            "y2": -9
+          },
+          {
+            "objectKind": "line",
+            "x1": -8,
+            "y1": -9,
+            "x2": 7,
+            "y2": -2
+          },
+          {
+            "objectKind": "line",
+            "x1": 7,
+            "y1": -2,
+            "x2": 94,
+            "y2": 0
+          },
+          {
+            "objectKind": "line",
+            "x1": 94,
+            "y1": 0,
+            "x2": 96,
+            "y2": 1
+          },
+          {
+            "objectKind": "line",
+            "x1": 96,
+            "y1": 1,
+            "x2": 90,
+            "y2": 5
+          },
+          {
+            "objectKind": "line",
+            "x1": 90,
+            "y1": 5,
+            "x2": 63,
+            "y2": 11
+          },
+          {
+            "objectKind": "line",
+            "x1": 63,
+            "y1": 11,
+            "x2": 20,
+            "y2": 16
+          },
+          {
+            "objectKind": "line",
+            "x1": 20,
+            "y1": 16,
+            "x2": 3,
+            "y2": 11
+          },
+          {
+            "objectKind": "line",
+            "x1": 3,
+            "y1": 11,
+            "x2": -8,
+            "y2": 8
+          },
+          {
+            "objectKind": "line",
+            "x1": -8,
+            "y1": 8,
+            "x2": -23,
+            "y2": -2
+          },
+          {
+            "objectKind": "line",
+            "x1": -23,
+            "y1": -2,
+            "x2": -45,
+            "y2": -12
+          },
+          {
+            "objectKind": "line",
+            "x1": -45,
+            "y1": -12,
+            "x2": -64,
+            "y2": -14
+          },
+          {
+            "objectKind": "line",
+            "x1": -64,
+            "y1": -14,
+            "x2": -64,
+            "y2": -25
+          }
+        ],
+        "ids": {
+          "featureId": "feat_8500c8ac-9bfc-4ae3-b033-acba898589db",
+          "featureNodeId": "ent_a2dc890d-426b-4d2f-8cc7-b5c442523bbb",
+          "sketchId": "sketch_3c7d8975-b62a-47ab-a7c8-95d7dac9ddd6",
+          "sketchNodeId": "ent_d61c091f-7308-4dbe-b0a4-fc29c86dbec8",
+          "objectNodeId": "ent_3f92ffce-d961-4e43-8df5-1c2104ddf1cd",
+          "objectNodeIds": [
+            "ent_3f92ffce-d961-4e43-8df5-1c2104ddf1cd",
+            "ent_57a92160-3c57-4d33-b3cf-d35e40bdd18e",
+            "ent_537c1732-6e05-432c-aae1-9a2d03d36364",
+            "ent_59d69436-d2a6-43a8-bc23-d3194557d826",
+            "ent_869accea-5eaa-4c35-8048-d5f8740bc474",
+            "ent_e67001fb-b3c8-498b-b025-29dee6c6afb5",
+            "ent_22dc7e8c-1d2e-4ef6-8d93-c8ebf4be4a69",
+            "ent_2384a97d-fff5-4744-8f9f-b3b1a719a669",
+            "ent_e17a63b3-3015-49d1-987a-114037de50ae",
+            "ent_934455b4-5733-4bc7-97e6-0b9bcd6a1922",
+            "ent_3db5db33-3a70-4d75-900f-28e03a05d3be",
+            "ent_dcf34908-4547-436c-adee-a01f53e65bfb",
+            "ent_a93d9eef-736f-45a7-aa88-e7fc433a9647",
+            "ent_ce149e6b-dada-4393-bcfc-a5a91f6c9bd6",
+            "ent_89d0a7d8-ddf7-4b5e-bf5f-106a757aa985"
+          ]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add sketch",
+      "timestamp": "2026-11-04T03:32:56.858Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Lower blade & finger loop blank",
+        "bodyName": "Lower blade & finger loop blank",
+        "sketchId": "sketch_3c7d8975-b62a-47ab-a7c8-95d7dac9ddd6",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": [
+            "ent_3f92ffce-d961-4e43-8df5-1c2104ddf1cd",
+            "ent_57a92160-3c57-4d33-b3cf-d35e40bdd18e",
+            "ent_537c1732-6e05-432c-aae1-9a2d03d36364",
+            "ent_59d69436-d2a6-43a8-bc23-d3194557d826",
+            "ent_869accea-5eaa-4c35-8048-d5f8740bc474",
+            "ent_e67001fb-b3c8-498b-b025-29dee6c6afb5",
+            "ent_22dc7e8c-1d2e-4ef6-8d93-c8ebf4be4a69",
+            "ent_2384a97d-fff5-4744-8f9f-b3b1a719a669",
+            "ent_e17a63b3-3015-49d1-987a-114037de50ae",
+            "ent_934455b4-5733-4bc7-97e6-0b9bcd6a1922",
+            "ent_3db5db33-3a70-4d75-900f-28e03a05d3be",
+            "ent_dcf34908-4547-436c-adee-a01f53e65bfb",
+            "ent_a93d9eef-736f-45a7-aa88-e7fc433a9647",
+            "ent_ce149e6b-dada-4393-bcfc-a5a91f6c9bd6",
+            "ent_89d0a7d8-ddf7-4b5e-bf5f-106a757aa985"
+          ]
+        },
+        "ids": {
+          "featureId": "feat_d605105d-30bb-4503-b566-4a1e2fdf5642",
+          "featureNodeId": "ent_7a610e9d-cb0d-483a-b65f-9f2727e5957e",
+          "bodyId": "body_82df379d-59d5-4524-9273-3762e6e05006",
+          "bodyNodeId": "ent_5286f536-67c1-4513-bd8f-2b1f009bcc7e"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.859Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Lower blade & finger loop loop profile",
+        "plane": "XY",
+        "offset": 0,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": -65,
+            "centerY": -22,
+            "radius": 23
+          }
+        ],
+        "ids": {
+          "featureId": "feat_ab08440e-618e-4153-95b0-1382b3c5b078",
+          "featureNodeId": "ent_99293e12-24a2-4d0b-be03-c7c663ca3da8",
+          "sketchId": "sketch_26b597df-fc0a-417c-84f0-997a1ee4e1e1",
+          "sketchNodeId": "ent_55d2a712-8947-4d59-a0a3-dbf9f24f67e5",
+          "objectNodeId": "ent_d2f705ea-b875-4105-9202-f8cf9e01db81",
+          "objectNodeIds": ["ent_d2f705ea-b875-4105-9202-f8cf9e01db81"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.860Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Lower blade & finger loop loop",
+        "bodyName": "Lower blade & finger loop loop",
+        "sketchId": "sketch_26b597df-fc0a-417c-84f0-997a1ee4e1e1",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_d2f705ea-b875-4105-9202-f8cf9e01db81"]
+        },
+        "ids": {
+          "featureId": "feat_7c7d7a90-77c6-4e3f-bc25-c6ab6092899f",
+          "featureNodeId": "ent_874e5ee9-d56f-4aa8-9d0f-f4c337cdd1e3",
+          "bodyId": "body_1ce2281a-b3a5-47d2-8227-346e4fa3ec44",
+          "bodyNodeId": "ent_22bc40bc-380c-43be-9437-ed8ffae39bf7"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.861Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Lower blade & finger loop",
+        "bodyName": "Lower blade & finger loop",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_82df379d-59d5-4524-9273-3762e6e05006",
+          "body_1ce2281a-b3a5-47d2-8227-346e4fa3ec44"
+        ],
+        "ids": {
+          "featureId": "feat_ddb771ea-05e5-40e3-af88-904042aa9dde",
+          "featureNodeId": "ent_3508497d-d729-4e57-8284-44ed46720ed4",
+          "bodyId": "body_60c78b04-5f06-4179-afa1-6d9b1a46d74b",
+          "bodyNodeId": "ent_8d5d5fb3-fb2b-4866-b5ea-75d09e18fe00"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean union",
+      "timestamp": "2026-11-04T03:32:56.861Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Lower blade & finger loop finger opening profile",
+        "plane": "XY",
+        "offset": -1,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": -65,
+            "centerY": -22,
+            "radius": 17
+          }
+        ],
+        "ids": {
+          "featureId": "feat_2d05000c-ab1b-4631-b21c-7e1488c775e0",
+          "featureNodeId": "ent_8101d19b-401e-469a-af45-cd8b70ab7caf",
+          "sketchId": "sketch_be6d7822-3d44-4f0e-a433-896b93a81df2",
+          "sketchNodeId": "ent_6df3ee94-24c5-4a91-a098-91207425988f",
+          "objectNodeId": "ent_443308ac-c58d-44d0-9818-93116f9c9389",
+          "objectNodeIds": ["ent_443308ac-c58d-44d0-9818-93116f9c9389"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.862Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Lower blade & finger loop finger opening",
+        "bodyName": "Lower blade & finger loop finger opening",
+        "sketchId": "sketch_be6d7822-3d44-4f0e-a433-896b93a81df2",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_443308ac-c58d-44d0-9818-93116f9c9389"]
+        },
+        "ids": {
+          "featureId": "feat_59eb2cd4-38c4-474c-8c8e-51eed9fcfaba",
+          "featureNodeId": "ent_2ea844b1-6c8f-4d59-8abc-6770bc7d1bad",
+          "bodyId": "body_d5d973d2-55e5-4450-8929-4c6b499bea4d",
+          "bodyNodeId": "ent_63f07cfc-b213-4771-9591-d013c9af012a"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.862Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Lower blade & finger loop",
+        "bodyName": "Lower blade & finger loop",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_60c78b04-5f06-4179-afa1-6d9b1a46d74b",
+          "body_d5d973d2-55e5-4450-8929-4c6b499bea4d"
+        ],
+        "ids": {
+          "featureId": "feat_5cef35e0-a408-49cf-9564-f57c68cfa94a",
+          "featureNodeId": "ent_b3b01ad7-ee9f-421a-a2b2-bd6515c94be8",
+          "bodyId": "body_2067c39f-ccdd-454a-8da2-2fe56401f599",
+          "bodyNodeId": "ent_499ed8f2-2e89-4520-9974-14fd9f57f2d0"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean subtract",
+      "timestamp": "2026-11-04T03:32:56.862Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Lower blade & finger loop pivot bore profile",
+        "plane": "XY",
+        "offset": -1,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": 0,
+            "centerY": 0,
+            "radius": 3.1
+          }
+        ],
+        "ids": {
+          "featureId": "feat_184d5a95-4275-4615-bdf1-4807b6d16d96",
+          "featureNodeId": "ent_8b918570-54b3-4fe9-a24c-112d0b012608",
+          "sketchId": "sketch_2e9e313a-c447-4a8a-9376-46ee3b7d2dea",
+          "sketchNodeId": "ent_cb5abaa7-cb27-4b7e-b27a-1818507ef71f",
+          "objectNodeId": "ent_ee98fdec-0265-45a7-b68a-5ff8ccf5fcf0",
+          "objectNodeIds": ["ent_ee98fdec-0265-45a7-b68a-5ff8ccf5fcf0"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.863Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Lower blade & finger loop pivot bore",
+        "bodyName": "Lower blade & finger loop pivot bore",
+        "sketchId": "sketch_2e9e313a-c447-4a8a-9376-46ee3b7d2dea",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_ee98fdec-0265-45a7-b68a-5ff8ccf5fcf0"]
+        },
+        "ids": {
+          "featureId": "feat_39a00673-b303-464d-b94c-8e4ae9c863e3",
+          "featureNodeId": "ent_de7370e1-eb7a-4de7-8241-209a35b6038b",
+          "bodyId": "body_b843173b-bd11-4a37-a44f-9f4681f67fb9",
+          "bodyNodeId": "ent_40756bfb-ff9a-4a00-ad24-27794658f446"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.863Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Lower blade & finger loop",
+        "bodyName": "Lower blade & finger loop",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_2067c39f-ccdd-454a-8da2-2fe56401f599",
+          "body_b843173b-bd11-4a37-a44f-9f4681f67fb9"
+        ],
+        "ids": {
+          "featureId": "feat_981ced96-598d-426e-a422-fab125fd4b1c",
+          "featureNodeId": "ent_99a71ca2-3a96-4013-8c95-6da5e77fc9ff",
+          "bodyId": "body_85eacd62-d382-43c1-a7a1-bf62fa3d5fc9",
+          "bodyNodeId": "ent_5993a5c2-900a-457a-96cf-c1898a4b7606"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean subtract",
+      "timestamp": "2026-11-04T03:32:56.864Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Upper blade & thumb loop blank profile",
+        "plane": "XY",
+        "offset": 2.45,
+        "objects": [
+          {
+            "objectKind": "line",
+            "x1": -64,
+            "y1": 14,
+            "x2": -45,
+            "y2": 12
+          },
+          {
+            "objectKind": "line",
+            "x1": -45,
+            "y1": 12,
+            "x2": -23,
+            "y2": 2
+          },
+          {
+            "objectKind": "line",
+            "x1": -23,
+            "y1": 2,
+            "x2": -8,
+            "y2": -8
+          },
+          {
+            "objectKind": "line",
+            "x1": -8,
+            "y1": -8,
+            "x2": 3,
+            "y2": -11
+          },
+          {
+            "objectKind": "line",
+            "x1": 3,
+            "y1": -11,
+            "x2": 20,
+            "y2": -16
+          },
+          {
+            "objectKind": "line",
+            "x1": 20,
+            "y1": -16,
+            "x2": 63,
+            "y2": -11
+          },
+          {
+            "objectKind": "line",
+            "x1": 63,
+            "y1": -11,
+            "x2": 90,
+            "y2": -5
+          },
+          {
+            "objectKind": "line",
+            "x1": 90,
+            "y1": -5,
+            "x2": 96,
+            "y2": -1
+          },
+          {
+            "objectKind": "line",
+            "x1": 96,
+            "y1": -1,
+            "x2": 94,
+            "y2": 0
+          },
+          {
+            "objectKind": "line",
+            "x1": 94,
+            "y1": 0,
+            "x2": 7,
+            "y2": 2
+          },
+          {
+            "objectKind": "line",
+            "x1": 7,
+            "y1": 2,
+            "x2": -8,
+            "y2": 9
+          },
+          {
+            "objectKind": "line",
+            "x1": -8,
+            "y1": 9,
+            "x2": -19,
+            "y2": 10
+          },
+          {
+            "objectKind": "line",
+            "x1": -19,
+            "y1": 10,
+            "x2": -40,
+            "y2": 22
+          },
+          {
+            "objectKind": "line",
+            "x1": -40,
+            "y1": 22,
+            "x2": -64,
+            "y2": 25
+          },
+          {
+            "objectKind": "line",
+            "x1": -64,
+            "y1": 25,
+            "x2": -64,
+            "y2": 14
+          }
+        ],
+        "ids": {
+          "featureId": "feat_252b83be-b38d-410b-9b07-45ebdd02eee3",
+          "featureNodeId": "ent_449a69d6-bbb2-4447-a986-2480fd8b0afb",
+          "sketchId": "sketch_5f60ab15-1325-400e-8f0b-f36a801b7a1d",
+          "sketchNodeId": "ent_f2ebc6c4-fe5f-4aca-8755-cd85bf7a2dd4",
+          "objectNodeId": "ent_6cd5df35-c177-4aa8-b9b9-8983029c27a1",
+          "objectNodeIds": [
+            "ent_6cd5df35-c177-4aa8-b9b9-8983029c27a1",
+            "ent_d1049dfb-bd1e-4bfd-a898-e7d023f5384b",
+            "ent_a98155c9-2abf-4e9a-8b26-c346b4c0883f",
+            "ent_d4f17da7-43b8-4a1d-a699-5a5ba792c485",
+            "ent_55c7feb4-085b-41d1-8f02-a558ea8a8885",
+            "ent_e1e626b6-17f2-4239-b95a-9d7eb00defc4",
+            "ent_f2f93cf9-c1b2-4e59-99d9-fa2147648e9c",
+            "ent_807dbfab-6988-4b4b-8be5-1e42fa013e30",
+            "ent_5f3b30e0-e734-4a11-bb65-b63d630c3387",
+            "ent_b5217a31-4fc7-4b27-91d7-b965fa70104a",
+            "ent_4ae87e8e-2652-4030-8a1c-9d3730966254",
+            "ent_f937342e-a9f6-44ec-940e-4f8cd7372656",
+            "ent_ac7dfebe-eeba-46dd-b189-5a6a86ea9e2b",
+            "ent_0ba5dec2-0fb8-460b-a2b5-141f89e3b9c2",
+            "ent_cf5f5193-b646-433a-b775-7ed5e196aa2a"
+          ]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add sketch",
+      "timestamp": "2026-11-04T03:32:56.864Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Upper blade & thumb loop blank",
+        "bodyName": "Upper blade & thumb loop blank",
+        "sketchId": "sketch_5f60ab15-1325-400e-8f0b-f36a801b7a1d",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": [
+            "ent_6cd5df35-c177-4aa8-b9b9-8983029c27a1",
+            "ent_d1049dfb-bd1e-4bfd-a898-e7d023f5384b",
+            "ent_a98155c9-2abf-4e9a-8b26-c346b4c0883f",
+            "ent_d4f17da7-43b8-4a1d-a699-5a5ba792c485",
+            "ent_55c7feb4-085b-41d1-8f02-a558ea8a8885",
+            "ent_e1e626b6-17f2-4239-b95a-9d7eb00defc4",
+            "ent_f2f93cf9-c1b2-4e59-99d9-fa2147648e9c",
+            "ent_807dbfab-6988-4b4b-8be5-1e42fa013e30",
+            "ent_5f3b30e0-e734-4a11-bb65-b63d630c3387",
+            "ent_b5217a31-4fc7-4b27-91d7-b965fa70104a",
+            "ent_4ae87e8e-2652-4030-8a1c-9d3730966254",
+            "ent_f937342e-a9f6-44ec-940e-4f8cd7372656",
+            "ent_ac7dfebe-eeba-46dd-b189-5a6a86ea9e2b",
+            "ent_0ba5dec2-0fb8-460b-a2b5-141f89e3b9c2",
+            "ent_cf5f5193-b646-433a-b775-7ed5e196aa2a"
+          ]
+        },
+        "ids": {
+          "featureId": "feat_9f3cb664-0836-4222-ac8e-20208b0dd1fb",
+          "featureNodeId": "ent_9a7f1fec-033d-4ea2-b16b-ae71597331d8",
+          "bodyId": "body_57f4707e-23e1-43c0-835c-15817e14e57f",
+          "bodyNodeId": "ent_f2e4689b-51a3-4713-9d32-8338c2b17046"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.865Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Upper blade & thumb loop loop profile",
+        "plane": "XY",
+        "offset": 2.45,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": -65,
+            "centerY": 22,
+            "radius": 21
+          }
+        ],
+        "ids": {
+          "featureId": "feat_3a5ead60-d4db-44ce-9c21-a72876433004",
+          "featureNodeId": "ent_1044eb8f-dc79-497d-a741-a1591c31b199",
+          "sketchId": "sketch_f4200771-efde-4c1b-9f03-2aed41354dcc",
+          "sketchNodeId": "ent_90bca47f-4aa0-492b-adce-1340d7ca57e4",
+          "objectNodeId": "ent_b55c8209-b1e5-4bbd-bbf8-bf4be8409518",
+          "objectNodeIds": ["ent_b55c8209-b1e5-4bbd-bbf8-bf4be8409518"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.865Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Upper blade & thumb loop loop",
+        "bodyName": "Upper blade & thumb loop loop",
+        "sketchId": "sketch_f4200771-efde-4c1b-9f03-2aed41354dcc",
+        "distance": 2.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_b55c8209-b1e5-4bbd-bbf8-bf4be8409518"]
+        },
+        "ids": {
+          "featureId": "feat_a2c0f6df-23c6-47bc-8fc7-1263d88313d2",
+          "featureNodeId": "ent_6c0f141a-d0a5-48c8-8f34-395670e363ab",
+          "bodyId": "body_904fbc4a-5227-4d8d-9eda-815ef6cb748f",
+          "bodyNodeId": "ent_85a3c9d9-8ae3-4770-8f76-e0f6b53e2ebe"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.867Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Upper blade & thumb loop",
+        "bodyName": "Upper blade & thumb loop",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_57f4707e-23e1-43c0-835c-15817e14e57f",
+          "body_904fbc4a-5227-4d8d-9eda-815ef6cb748f"
+        ],
+        "ids": {
+          "featureId": "feat_24397cde-1073-4bdf-b23c-6862871aea3f",
+          "featureNodeId": "ent_8ed56aef-6150-4196-a6e7-eee9705f637c",
+          "bodyId": "body_0b40a6d1-5306-45cd-a66c-8bac18293e42",
+          "bodyNodeId": "ent_209d4824-5c41-4cc6-b242-f3fe3855a1df"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean union",
+      "timestamp": "2026-11-04T03:32:56.868Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Upper blade & thumb loop finger opening profile",
+        "plane": "XY",
+        "offset": 1.4500000000000002,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": -65,
+            "centerY": 22,
+            "radius": 15
+          }
+        ],
+        "ids": {
+          "featureId": "feat_7371313d-2ea1-486b-af2c-fca7872e28be",
+          "featureNodeId": "ent_4ff2f6f3-e38c-4288-8bb7-33c308387f1f",
+          "sketchId": "sketch_cbe2a411-4395-4c39-b78b-f9525365a41b",
+          "sketchNodeId": "ent_57c74a5e-bf22-4448-ab2e-9b64c6be7850",
+          "objectNodeId": "ent_666b6902-1a2a-4604-b736-201faa4abc94",
+          "objectNodeIds": ["ent_666b6902-1a2a-4604-b736-201faa4abc94"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.869Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Upper blade & thumb loop finger opening",
+        "bodyName": "Upper blade & thumb loop finger opening",
+        "sketchId": "sketch_cbe2a411-4395-4c39-b78b-f9525365a41b",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_666b6902-1a2a-4604-b736-201faa4abc94"]
+        },
+        "ids": {
+          "featureId": "feat_4478430c-25f5-4eb9-b79e-665e71d0a5b6",
+          "featureNodeId": "ent_7cb138b3-f930-4eb4-a29f-bd760bd7fa20",
+          "bodyId": "body_521db29c-0bf5-4311-8f73-e78f4fc077e7",
+          "bodyNodeId": "ent_70de4b39-88b8-4c00-8898-18a6736af9c4"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.870Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Upper blade & thumb loop",
+        "bodyName": "Upper blade & thumb loop",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_0b40a6d1-5306-45cd-a66c-8bac18293e42",
+          "body_521db29c-0bf5-4311-8f73-e78f4fc077e7"
+        ],
+        "ids": {
+          "featureId": "feat_bcb22781-1ac5-4f50-b90d-68d173b47344",
+          "featureNodeId": "ent_6828cd1c-368e-416e-bd19-c493e736445f",
+          "bodyId": "body_f18e42c4-af9a-4a7d-bf5b-7a7d6207b709",
+          "bodyNodeId": "ent_36e4ab4e-5ad3-4c92-90a8-982e67e57d01"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean subtract",
+      "timestamp": "2026-11-04T03:32:56.870Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Upper blade & thumb loop pivot bore profile",
+        "plane": "XY",
+        "offset": 1.4500000000000002,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": 0,
+            "centerY": 0,
+            "radius": 3.1
+          }
+        ],
+        "ids": {
+          "featureId": "feat_0317913b-af5c-4996-8867-52cede91ab33",
+          "featureNodeId": "ent_16a85ee9-4d8e-41a9-a467-948a811a6aba",
+          "sketchId": "sketch_b38c8ba2-425c-44c4-bf4f-fc6da589f17f",
+          "sketchNodeId": "ent_dc17ed42-0635-49cd-8363-87de3652eca9",
+          "objectNodeId": "ent_d7b0fcc6-1f9e-4f59-871c-38423d2831b7",
+          "objectNodeIds": ["ent_d7b0fcc6-1f9e-4f59-871c-38423d2831b7"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.872Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Upper blade & thumb loop pivot bore",
+        "bodyName": "Upper blade & thumb loop pivot bore",
+        "sketchId": "sketch_b38c8ba2-425c-44c4-bf4f-fc6da589f17f",
+        "distance": 4.4,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_d7b0fcc6-1f9e-4f59-871c-38423d2831b7"]
+        },
+        "ids": {
+          "featureId": "feat_aa762924-75ff-489f-a535-60741c3dbca9",
+          "featureNodeId": "ent_c02b9b1c-7158-468c-bfc6-7d9a66c115ef",
+          "bodyId": "body_45151fee-4e5d-49a5-9648-975473d6ba1f",
+          "bodyNodeId": "ent_fc5395db-f9a4-49c8-9d6b-503ae7064d70"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.873Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Upper blade & thumb loop",
+        "bodyName": "Upper blade & thumb loop",
+        "operation": "subtract",
+        "targetBodyIds": [
+          "body_f18e42c4-af9a-4a7d-bf5b-7a7d6207b709",
+          "body_45151fee-4e5d-49a5-9648-975473d6ba1f"
+        ],
+        "ids": {
+          "featureId": "feat_cb62fc35-8162-4824-aa4d-02798aa2e2f2",
+          "featureNodeId": "ent_2ba6eb4f-438d-4178-a706-208b4ff1bc14",
+          "bodyId": "body_969b1f8b-c46f-4bb7-80e2-3deaccb71a24",
+          "bodyNodeId": "ent_81dd0334-b222-48e7-805b-e1c0fc6ccbf0"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean subtract",
+      "timestamp": "2026-11-04T03:32:56.874Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Pivot shank Ø6 profile",
+        "plane": "XY",
+        "offset": -0.8,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": 0,
+            "centerY": 0,
+            "radius": 3
+          }
+        ],
+        "ids": {
+          "featureId": "feat_c16ba7e3-8268-41be-a45b-c17f6b215de4",
+          "featureNodeId": "ent_baffd63b-53a2-4ecd-a5cb-2bcfb1512bff",
+          "sketchId": "sketch_879b85dd-a2ce-4176-a6d7-d6d4b85d6ce7",
+          "sketchNodeId": "ent_6a06e65c-7d60-45f9-ab67-bced024dc2db",
+          "objectNodeId": "ent_af3c9b9f-a121-4903-9157-dc5bcbc915d7",
+          "objectNodeIds": ["ent_af3c9b9f-a121-4903-9157-dc5bcbc915d7"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.876Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Pivot shank Ø6",
+        "bodyName": "Pivot shank Ø6",
+        "sketchId": "sketch_879b85dd-a2ce-4176-a6d7-d6d4b85d6ce7",
+        "distance": 6.45,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_af3c9b9f-a121-4903-9157-dc5bcbc915d7"]
+        },
+        "ids": {
+          "featureId": "feat_af93e9df-c86a-4f89-81ba-b74653d6ce3f",
+          "featureNodeId": "ent_eee815b1-c9a7-483d-8833-862b4fedbc7e",
+          "bodyId": "body_638dcd38-b672-424c-9591-7bd64facf867",
+          "bodyNodeId": "ent_6651e622-4b12-4166-934d-bdfa373cb546"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.878Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Pivot head Ø11 profile",
+        "plane": "XY",
+        "offset": -1.8,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": 0,
+            "centerY": 0,
+            "radius": 5.5
+          }
+        ],
+        "ids": {
+          "featureId": "feat_dbb8a052-c38f-4f2c-a1e1-0f5dd64f8dc4",
+          "featureNodeId": "ent_51b3508f-4e0a-4c42-9e54-bb3b302e6f83",
+          "sketchId": "sketch_6a557480-f552-4513-8849-8441103231cb",
+          "sketchNodeId": "ent_e4a18bd5-db8d-496a-b84b-1e58266047ab",
+          "objectNodeId": "ent_e0f3074b-7fd1-425e-9504-b6a744492d04",
+          "objectNodeIds": ["ent_e0f3074b-7fd1-425e-9504-b6a744492d04"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.879Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Pivot head Ø11",
+        "bodyName": "Pivot head Ø11",
+        "sketchId": "sketch_6a557480-f552-4513-8849-8441103231cb",
+        "distance": 1.2,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_e0f3074b-7fd1-425e-9504-b6a744492d04"]
+        },
+        "ids": {
+          "featureId": "feat_aa2e00a4-13fc-401b-90a1-a973eeb2156b",
+          "featureNodeId": "ent_bbd528e5-627f-4b02-a238-f0b4ccd0ae60",
+          "bodyId": "body_aa9fa90b-bad0-4367-bd63-a54f61b8933a",
+          "bodyNodeId": "ent_8f09ffe1-4926-4369-9274-512e04c85a89"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.882Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Captive pivot pin",
+        "bodyName": "Captive pivot pin",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_638dcd38-b672-424c-9591-7bd64facf867",
+          "body_aa9fa90b-bad0-4367-bd63-a54f61b8933a"
+        ],
+        "ids": {
+          "featureId": "feat_e8d32059-c12c-462f-b3af-4116a0c365f7",
+          "featureNodeId": "ent_ca9d1be0-1611-42e7-9734-a6340cc6a4fa",
+          "bodyId": "body_0413a238-e190-4a5e-8d7f-191044c8f832",
+          "bodyNodeId": "ent_e83caccd-695d-4586-8872-5fde0552e3de"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean union",
+      "timestamp": "2026-11-04T03:32:56.883Z"
+    },
+    {
+      "kind": "sketch.add",
+      "payload": {
+        "name": "Pivot cap Ø10 profile",
+        "plane": "XY",
+        "offset": 5.05,
+        "objects": [
+          {
+            "objectKind": "circle",
+            "centerX": 0,
+            "centerY": 0,
+            "radius": 5
+          }
+        ],
+        "ids": {
+          "featureId": "feat_7743ca28-7a0d-4344-a887-2838c2b8f717",
+          "featureNodeId": "ent_318b9334-66ea-4daf-8dbe-84518f897986",
+          "sketchId": "sketch_aa62ce0e-0fa3-4962-989f-77c6412af8fc",
+          "sketchNodeId": "ent_5904ab49-9b44-4831-ad54-1bb6c573f5bc",
+          "objectNodeId": "ent_cd45c5ec-e08f-4576-b58b-bb4f685d57dd",
+          "objectNodeIds": ["ent_cd45c5ec-e08f-4576-b58b-bb4f685d57dd"]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add circle sketch",
+      "timestamp": "2026-11-04T03:32:56.885Z"
+    },
+    {
+      "kind": "feature.extrude",
+      "payload": {
+        "name": "Pivot cap Ø10",
+        "bodyName": "Pivot cap Ø10",
+        "sketchId": "sketch_aa62ce0e-0fa3-4962-989f-77c6412af8fc",
+        "distance": 1.2,
+        "profile": {
+          "all": true,
+          "sourceEntityIds": ["ent_cd45c5ec-e08f-4576-b58b-bb4f685d57dd"]
+        },
+        "ids": {
+          "featureId": "feat_3b423219-50ab-46aa-8ec4-e2e02e3ee414",
+          "featureNodeId": "ent_594fc4be-4312-4da9-b27f-a3a49d8737df",
+          "bodyId": "body_7db37518-de68-4c73-8b5a-dae03aeb6a5f",
+          "bodyNodeId": "ent_be6d5edb-04f3-4bc7-851d-2c0ec7c9d899"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Extrude sketch",
+      "timestamp": "2026-11-04T03:32:56.886Z"
+    },
+    {
+      "kind": "feature.boolean",
+      "payload": {
+        "name": "Captive pivot pin",
+        "bodyName": "Captive pivot pin",
+        "operation": "union",
+        "targetBodyIds": [
+          "body_0413a238-e190-4a5e-8d7f-191044c8f832",
+          "body_7db37518-de68-4c73-8b5a-dae03aeb6a5f"
+        ],
+        "ids": {
+          "featureId": "feat_8d6e1716-256d-46dc-9b97-eebf8497c4e1",
+          "featureNodeId": "ent_807cd741-ce22-4604-85ef-775ca88075d3",
+          "bodyId": "body_b79ebbb8-492b-4c0d-895c-106b1dc3cbd8",
+          "bodyNodeId": "ent_a9f33352-e194-4d10-bc82-809e8c4f29ec"
+        }
+      },
+      "replayVersion": 1,
+      "label": "Boolean union",
+      "timestamp": "2026-11-04T03:32:56.887Z"
+    },
+    {
+      "kind": "assembly.components.add",
+      "payload": {
+        "components": [
+          {
+            "componentId": "comp_ea0bb644-0b5a-4cda-95c0-3b3e12af904a",
+            "name": "Lower blade & finger loop",
+            "bodyId": "body_85eacd62-d382-43c1-a7a1-bf62fa3d5fc9",
+            "grounded": true
+          },
+          {
+            "componentId": "comp_060f9012-8418-432e-b44e-d70a2d33a055",
+            "name": "Upper blade & thumb loop",
+            "bodyId": "body_969b1f8b-c46f-4bb7-80e2-3deaccb71a24",
+            "grounded": false
+          },
+          {
+            "componentId": "comp_18fbd1b5-793c-4c16-8046-3b42cbbe755e",
+            "name": "Captive pivot pin",
+            "bodyId": "body_b79ebbb8-492b-4c0d-895c-106b1dc3cbd8",
+            "grounded": true
+          }
+        ]
+      },
+      "replayVersion": 1,
+      "label": "Add 3 components",
+      "timestamp": "2026-11-04T03:33:16.407Z"
+    },
+    {
+      "kind": "assembly.joint.add",
+      "payload": {
+        "joint": {
+          "id": "joint_ea1c3a16-ea0d-4a5a-8868-8982f7e0ff89",
+          "name": "Revolute 1",
+          "kind": "revolute",
+          "parent": {
+            "componentId": "comp_ea0bb644-0b5a-4cda-95c0-3b3e12af904a",
+            "frame": {
+              "origin": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+              },
+              "zAxis": {
+                "x": 0,
+                "y": 0,
+                "z": -1
+              },
+              "xAxis": {
+                "x": 1,
+                "y": 0,
+                "z": 0
+              }
+            },
+            "source": {
+              "kind": "circle",
+              "label": "Circular edge · centre"
+            }
+          },
+          "child": {
+            "componentId": "comp_060f9012-8418-432e-b44e-d70a2d33a055",
+            "frame": {
+              "origin": {
+                "x": 0,
+                "y": 0,
+                "z": 4.85
+              },
+              "zAxis": {
+                "x": 0,
+                "y": 0,
+                "z": -1
+              },
+              "xAxis": {
+                "x": 1,
+                "y": 0,
+                "z": 0
+              }
+            },
+            "source": {
+              "kind": "circle",
+              "label": "Circular edge · centre"
+            }
+          },
+          "values": [0],
+          "limits": [
+            {
+              "min": -55,
+              "max": 0
+            }
+          ]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Add joint Revolute 1",
+      "timestamp": "2026-11-04T03:34:20.161Z"
+    },
+    {
+      "kind": "assembly.pose.set",
+      "payload": {
+        "values": {
+          "joint_ea1c3a16-ea0d-4a5a-8868-8982f7e0ff89": [-30]
+        }
+      },
+      "replayVersion": 1,
+      "label": "Move joint",
+      "timestamp": "2026-11-04T03:34:25.434Z"
+    }
+  ],
+  "assets": {},
+  "shaprImports": {},
+  "shaprImportOrder": [],
+  "derived": {
+    "bodyRepresentations": {},
+    "exportableBodyIds": [],
+    "warnings": [],
+    "updatedAt": "2026-11-04T03:33:07.409Z"
+  },
+  "assembly": {
+    "components": [
+      {
+        "id": "comp_ea0bb644-0b5a-4cda-95c0-3b3e12af904a",
+        "name": "Lower blade & finger loop",
+        "bodyId": "body_85eacd62-d382-43c1-a7a1-bf62fa3d5fc9",
+        "grounded": true,
+        "placement": {
+          "translation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "w": 1
+          }
+        }
+      },
+      {
+        "id": "comp_060f9012-8418-432e-b44e-d70a2d33a055",
+        "name": "Upper blade & thumb loop",
+        "bodyId": "body_969b1f8b-c46f-4bb7-80e2-3deaccb71a24",
+        "grounded": false,
+        "placement": {
+          "translation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "w": 1
+          }
+        }
+      },
+      {
+        "id": "comp_18fbd1b5-793c-4c16-8046-3b42cbbe755e",
+        "name": "Captive pivot pin",
+        "bodyId": "body_b79ebbb8-492b-4c0d-895c-106b1dc3cbd8",
+        "grounded": true,
+        "placement": {
+          "translation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "w": 1
+          }
+        }
+      }
+    ],
+    "joints": [
+      {
+        "id": "joint_ea1c3a16-ea0d-4a5a-8868-8982f7e0ff89",
+        "name": "Revolute 1",
+        "kind": "revolute",
+        "parent": {
+          "componentId": "comp_ea0bb644-0b5a-4cda-95c0-3b3e12af904a",
+          "frame": {
+            "origin": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "zAxis": {
+              "x": 0,
+              "y": 0,
+              "z": -1
+            },
+            "xAxis": {
+              "x": 1,
+              "y": 0,
+              "z": 0
+            }
+          },
+          "source": {
+            "kind": "circle",
+            "label": "Circular edge · centre"
+          }
+        },
+        "child": {
+          "componentId": "comp_060f9012-8418-432e-b44e-d70a2d33a055",
+          "frame": {
+            "origin": {
+              "x": 0,
+              "y": 0,
+              "z": 4.85
+            },
+            "zAxis": {
+              "x": 0,
+              "y": 0,
+              "z": -1
+            },
+            "xAxis": {
+              "x": 1,
+              "y": 0,
+              "z": 0
+            }
+          },
+          "source": {
+            "kind": "circle",
+            "label": "Circular edge · centre"
+          }
+        },
+        "limits": [
+          {
+            "min": -55,
+            "max": 0
+          }
+        ],
+        "values": [-30]
+      }
+    ],
+    "positions": [],
+    "studies": []
+  }
+}

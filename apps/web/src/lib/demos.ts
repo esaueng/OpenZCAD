@@ -11,6 +11,7 @@ import {
   createParameterIds,
   createProjectDocument,
   createSketchFeatureIds,
+  normalizeDocument,
   type BodyFeatureIds,
   type SketchFeatureIds
 } from '@openzcad/document-core';
@@ -35,12 +36,13 @@ export {
 };
 
 /**
- * Design revision demos: three seeded projects that each tell a three-stage
+ * Design revision demos tell a three-stage
  * design story (Rev A → Rev B → Rev C) through real parametric feature
  * history. Demos are built with ordinary commands, so every feature remains
  * editable, replayable, and undoable — and the finishing stages (fillet /
  * chamfer) reference exact edge hashes resolved through a live kernel sync,
- * exactly like an interactive edge pick.
+ * exactly like an interactive edge pick. Supplied sample projects retain
+ * their editable model and assembly state without inventing design stages.
  */
 
 export type ExactSyncFn = (document: ProjectDocument) => Promise<DerivedState>;
@@ -809,6 +811,28 @@ async function buildHeatSink(
   return builder.finish(await syncExact(builder.document));
 }
 
+async function buildScissors(
+  definition: DemoDefinition,
+  ownerUserId: UserId,
+  syncExact: ExactSyncFn
+): Promise<DemoSeed> {
+  // Keep the supplied model out of the launcher and the other demo builds.
+  // Clone the module's template so separate users never share mutable nodes.
+  const { default: template } = await import('./demoModels/scissors.json');
+  const document = createCheckpoint(
+    normalizeDocument({
+      ...(structuredClone(template) as unknown as ProjectDocument),
+      ownerUserId,
+      name: definition.name
+    }),
+    'Scissors — Revolute pivot assembly'
+  );
+  return {
+    document: attachDerivedState(document, await syncExact(document)),
+    saveStates: [document]
+  };
+}
+
 const DEMO_BUILDERS: Record<
   string,
   (
@@ -820,6 +844,7 @@ const DEMO_BUILDERS: Record<
   bracket: buildBracket,
   flange: buildFlange,
   heatsink: buildHeatSink,
+  scissors: buildScissors,
   'visual-selection-acceptance': buildVisualSelectionAcceptance
 };
 

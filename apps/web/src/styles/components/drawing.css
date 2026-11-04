@@ -471,6 +471,31 @@
   line-height: 1.45;
 }
 
+/* An expanded long list scrolls in place rather than pushing the rest of
+   the panel (title block, sheet actions) hundreds of rows down. */
+.drawing-view-list.is-scrolling,
+.drawing-audit-list.is-scrolling,
+.drawing-clipped-text {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.drawing-list-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.drawing-list-toggle:hover {
+  text-decoration: underline;
+}
+
 .drawing-audit-item {
   display: flex;
   flex-direction: column;
