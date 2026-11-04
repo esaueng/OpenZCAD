@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthSession } from '@openzcad/shared';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { TopBar } from './TopBar';
@@ -285,6 +285,60 @@ describe('TopBar save chip', () => {
     fireEvent.click(screen.getByText('File'));
     fireEvent.click(screen.getByRole('button', { name: /^Save revision as…/ }));
     expect(onSaveAs).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * happy-dom lays nothing out, so the name's overflow is stubbed. At a 1000px
+ * window "Save to my account" kept its words in a 270px island and printed
+ * over the units and past the island's edge.
+ */
+describe('TopBar identity room', () => {
+  function stubNameOverflow(overflowing: (topbar: HTMLElement) => boolean) {
+    const isName = (element: HTMLElement) =>
+      element.matches('.topbar-identity .breadcrumb strong');
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100);
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(
+      function (this: HTMLElement) {
+        const topbar = this.closest<HTMLElement>('.topbar');
+        return isName(this) && topbar && overflowing(topbar) ? 101 : 100;
+      }
+    );
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  function topbar() {
+    return document.querySelector<HTMLElement>('.topbar')!;
+  }
+
+  it('leaves the identity whole where the name fits', () => {
+    stubNameOverflow(() => false);
+    renderTopBar({ signedIn: true, saveToAccount: true });
+    expect(topbar().dataset.nameRoom).toBeUndefined();
+    expect(topbar().dataset.saveRoom).toBeUndefined();
+  });
+
+  it('drops the wordmark first and keeps the action in words', () => {
+    // Cut only while the wordmark is shown.
+    stubNameOverflow((bar) => bar.dataset.nameRoom !== 'tight');
+    renderTopBar({ signedIn: true, saveToAccount: true });
+    expect(topbar().dataset.nameRoom).toBe('tight');
+    expect(topbar().dataset.saveRoom).toBeUndefined();
+  });
+
+  it('folds an actionable status to its glyph where the name is still cut', () => {
+    stubNameOverflow(() => true);
+    renderTopBar({ signedIn: true, saveToAccount: true });
+    expect(topbar().dataset.nameRoom).toBe('tight');
+    expect(topbar().dataset.saveRoom).toBe('glyph');
+    // The words stay in its name and it still saves.
+    expect(
+      screen.getByRole('button', { name: 'Save to my account' })
+    ).toBeVisible();
   });
 });
 

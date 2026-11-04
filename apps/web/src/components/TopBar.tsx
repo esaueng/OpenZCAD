@@ -195,9 +195,18 @@ function fitProjectName(topbar: HTMLElement) {
   if (!name) {
     return;
   }
+  const cut = () => name.scrollWidth > name.clientWidth;
   delete topbar.dataset.nameRoom;
-  if (name.scrollWidth > name.clientWidth) {
-    topbar.dataset.nameRoom = 'tight';
+  delete topbar.dataset.saveRoom;
+  if (!cut()) {
+    return;
+  }
+  topbar.dataset.nameRoom = 'tight';
+  // Still cut without them: an actionable status ("Save to my account")
+  // folds to its glyph too (topbar.css). Below 1200px the wordmark is
+  // already gone, so at a 1000px window this is the step that frees room.
+  if (cut()) {
+    topbar.dataset.saveRoom = 'glyph';
   }
 }
 
