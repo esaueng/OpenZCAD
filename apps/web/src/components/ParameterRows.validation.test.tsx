@@ -46,7 +46,7 @@ it('shows pending validation, explains refusal, and restores the committed value
   );
   await user.click(screen.getByRole('button', { name: 'View details' }));
   expect(onViewDetails).toHaveBeenCalledOnce();
-  expect(input).toHaveAttribute('aria-invalid', 'true');
+  expect(input).not.toHaveAttribute('aria-invalid', 'true');
   await user.clear(input);
   await user.type(input, '60');
   expect(screen.queryByRole('alert')).toBeNull();

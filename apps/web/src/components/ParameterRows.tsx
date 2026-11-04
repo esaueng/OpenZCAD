@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { BodyId, ParameterKind, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { parameterDisplayName } from '../lib/parameterDisplayName';
 
 /**
  * The parameter table rows, shared between the Build sidebar and the Tweak
@@ -18,6 +19,8 @@ interface ToggleBindingProps {
   onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
 }
 interface ParameterRowProps extends ToggleBindingProps {
+  /** Reader-friendly label with the exact expression identifier underneath. */
+  readableName?: boolean;
   parameter: ParameterNode;
   value: number | undefined;
   onSet(name: string, expression: string): void | Promise<string | null>;
@@ -108,6 +111,7 @@ function quantityLabel(quantity: string): string {
 }
 
 export function ParameterRow({
+  readableName = false,
   onSetQuantity,
   suggestedQuantity = null,
   parameter,
@@ -125,6 +129,16 @@ export function ParameterRow({
   onConfigureToggle,
   table
 }: ParameterRowProps) {
+  const displayName = parameterDisplayName(
+    parameter.name,
+    parameter.description
+  );
+  const readableLabel = (
+    <span className="param-readable-name">
+      <span>{displayName}</span>
+      <code>{parameter.name}</code>
+    </span>
+  );
   const [expression, setExpression] = useState(parameter.expression);
   const [editing, setEditing] = useState(false);
   const [syncedExpression, setSyncedExpression] = useState(
@@ -316,7 +330,7 @@ export function ParameterRow({
           <button
             ref={renameButtonRef}
             type="button"
-            className="param-name param-name-button mono"
+            className={`param-name param-name-button${readableName ? '' : ' mono'}`}
             title={`Rename parameter ${parameter.name}`}
             aria-label={`Rename parameter ${parameter.name}`}
             onClick={() => {
@@ -325,9 +339,11 @@ export function ParameterRow({
               setRenaming(true);
             }}
           >
-            <span>{parameter.name}</span>
+            {readableName ? readableLabel : <span>{parameter.name}</span>}
             <Pencil size={12} aria-hidden="true" />
           </button>
+        ) : readableName ? (
+          readableLabel
         ) : (
           <span className="param-name mono">{parameter.name}</span>
         )}
@@ -351,7 +367,9 @@ export function ParameterRow({
             value={expression}
             spellCheck={false}
             aria-label={`Expression for ${parameter.name}`}
-            aria-invalid={error ? true : undefined}
+            aria-invalid={
+              error && expression !== parameter.expression ? true : undefined
+            }
             aria-describedby={
               error || pending || minimum !== undefined
                 ? `parameter-feedback-${parameter.parameterId}`
@@ -517,7 +535,13 @@ export function ParameterRow({
             renameError
           ) : error ? (
             <>
-              <span>{error.message} No change applied.</span>
+              <span>
+                {error.message.replace(
+                  `Parameter "${parameter.name}"`,
+                  `Parameter “${displayName}”`
+                )}{' '}
+                No change applied.
+              </span>
               {error.detailsAvailable && onViewDetails ? (
                 <button
                   type="button"

@@ -86,6 +86,19 @@ afterEach(() => {
 });
 
 describe('CommandBar', () => {
+  it('states the destination before a cross-mode tool runs', async () => {
+    const user = userEvent.setup();
+    const tool = command('fillet', 'Fillet', 'Finish', {
+      modeHint: 'Switch to Build'
+    });
+    render(<Bar commands={[tool]} />);
+    await user.type(searchField(), 'fillet');
+    expect(screen.getByRole('option')).toHaveTextContent(
+      'FilletSwitch to Build'
+    );
+    await user.keyboard('{Enter}');
+    expect(tool.run).toHaveBeenCalledOnce();
+  });
   it('lists the commands run from it first on an empty search, marked Recent (ZC-203)', async () => {
     const commands = [
       command('box', 'Box', 'Create'),

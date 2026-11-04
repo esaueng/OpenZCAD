@@ -18,6 +18,8 @@ export interface SearchableCommand {
   keywords?: string[];
   /** Non-null: the command cannot run now, and says why. */
   disabledReason?: string | null;
+  /** Cross-mode tools appear only in an intentional typed search. */
+  modeHint?: string;
   /**
    * The command does not act on the current pick (a body tool while a face
    * is picked). It still runs and still answers a typed search; an empty
@@ -182,7 +184,8 @@ export function browseCommands<T extends SearchableCommand>(
   commands: readonly T[],
   recentIds: readonly string[] = []
 ): BrowseEntry<T>[] {
-  const valid = (command: T) => !command.disabledReason && !command.offPick;
+  const valid = (command: T) =>
+    !command.disabledReason && !command.offPick && !command.modeHint;
   const byId = new Map(commands.map((command) => [command.id, command]));
   const recent = recentIds.flatMap((id) => {
     const command = byId.get(id);

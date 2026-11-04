@@ -25,6 +25,11 @@ const cmd = (
 ): SearchableCommand => ({ id, label, group: 'Tool', ...extra });
 
 describe('command search', () => {
+  it('discovers other workspaces only when searched, including recent tools', () => {
+    const tool = cmd('fillet', 'Fillet', { modeHint: 'Switch to Build' });
+    expect(browseCommands([tool], ['fillet'])).toEqual([]);
+    expect(rankedCommands([tool], 'fillet')).toEqual([tool]);
+  });
   it('scores a name prefix, a word start or initials, a substring, then a group', () => {
     const pattern = cmd('lp', 'Linear pattern');
     expect(tokenScore(pattern, 'lin')).toBe(4);

@@ -1466,7 +1466,10 @@ export function SettingsPage({
                   one thing per context (C is Cylinder in the workspace and
                   Circle in a sketch); the editor's groups are those contexts.
                   The overrides follow the account, never a project. */}
-              <Group title="Keyboard" note="Paused while you type">
+              <Group
+                title="Keyboard"
+                note="Workspace shortcuts pause while you type in a field"
+              >
                 <KeymapEditor
                   overrides={settings.keymap.overrides}
                   onChange={(overrides) =>

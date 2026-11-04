@@ -41,6 +41,8 @@ export interface PaletteCommand {
   icon?: ReactNode;
   /** Non-null disables the row and explains why. */
   disabledReason?: string | null;
+  /** Visible before choosing a command that deliberately changes workspace. */
+  modeHint?: string;
   /**
    * The command does not act on the current pick: an empty search leaves it
    * out and a typed one ranks it lower (`lib/commandSearch.ts`).
@@ -375,7 +377,8 @@ export function CommandBar({
                       </small>
                     ) : (
                       <small className="palette-group">
-                        {recent ? 'Recent' : command.group}
+                        {command.modeHint ??
+                          (recent ? 'Recent' : command.group)}
                       </small>
                     )}
                     {command.shortcut && (

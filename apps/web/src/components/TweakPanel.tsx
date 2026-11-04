@@ -1,14 +1,17 @@
-import { Copy, Download, SlidersHorizontal } from 'lucide-react';
-import type { ReactNode } from 'react';
-import type { ParameterNode } from '@openzcad/shared';
+import { Copy, Download, SlidersHorizontal, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import type { ParameterNode, UnitSystem } from '@openzcad/shared';
 import { ParameterRow, parameterTable } from './ParameterRows';
 import { Tooltip } from './Tooltip';
 import { PartsListModeProvider } from './ViewModeRail';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { parameterDisplayName } from '../lib/parameterDisplayName';
 
 /** Every format the Export mesh dialog offers; this said "3MF or STL". */
 const MESH_FORMATS = '3MF, STL, OBJ, glTF or PLY';
 
 interface TweakPanelProps {
+  units?: UnitSystem;
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
   canExport: boolean;
@@ -44,7 +47,12 @@ interface TweakPanelProps {
    * The parts list, shared with View mode: its rail button(s) go first on
    * this rail, and its list, when open, stands above the parameter table.
    */
-  parts?: { buttons: ReactNode; list: ReactNode };
+  parts?: {
+    buttons(open: boolean, onOpenChange: (open: boolean) => void): ReactNode;
+    list: ReactNode;
+    open?: boolean;
+    onOpenChange?(open: boolean): void;
+  };
 }
 
 /**
@@ -57,6 +65,7 @@ interface TweakPanelProps {
  * never have to answer.
  */
 export function TweakPanel({
+  units,
   parameters,
   parameterValues,
   parameterMinimums,
@@ -75,6 +84,30 @@ export function TweakPanel({
   onTogglePanel,
   parts
 }: TweakPanelProps) {
+  const phone = useMediaQuery('(max-width: 479px)');
+  const [phonePanel, setPhonePanel] = useState<'parameters' | 'parts'>(
+    'parameters'
+  );
+  const partsOpen = parts?.open ?? Boolean(parts?.list);
+  const previousOpen = useRef({ parameters: panelOpen, parts: partsOpen });
+  const parametersButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (panelOpen && !previousOpen.current.parameters)
+      setPhonePanel('parameters');
+    else if (partsOpen && !previousOpen.current.parts) setPhonePanel('parts');
+    previousOpen.current = { parameters: panelOpen, parts: partsOpen };
+  }, [panelOpen, partsOpen]);
+  const selectedPhonePanel =
+    phonePanel === 'parameters'
+      ? panelOpen
+        ? 'parameters'
+        : 'parts'
+      : partsOpen
+        ? 'parts'
+        : 'parameters';
+  const showParameters =
+    panelOpen && (!phone || selectedPhonePanel === 'parameters');
+  const showParts = partsOpen && (!phone || selectedPhonePanel === 'parts');
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`
@@ -89,7 +122,10 @@ export function TweakPanel({
       <div className="tweak-rail" role="toolbar" aria-label="Tweak tools">
         {parts && (
           <>
-            {parts.buttons}
+            {parts.buttons(showParts, (open) => {
+              if (phone && open) setPhonePanel('parts');
+              parts.onOpenChange?.(open);
+            })}
             <span className="tweak-rail-divider" aria-hidden="true" />
           </>
         )}
@@ -100,11 +136,17 @@ export function TweakPanel({
           }
         >
           <button
+            ref={parametersButtonRef}
             type="button"
-            className={panelOpen ? 'active' : undefined}
+            className={showParameters ? 'active' : undefined}
             aria-label="Parameters"
-            aria-expanded={panelOpen}
-            onClick={onTogglePanel}
+            aria-expanded={showParameters}
+            onClick={() => {
+              if (phone && !showParameters) {
+                setPhonePanel('parameters');
+                if (!panelOpen) onTogglePanel();
+              } else onTogglePanel();
+            }}
           >
             <SlidersHorizontal size={16} aria-hidden="true" />
           </button>
@@ -151,19 +193,81 @@ export function TweakPanel({
           </Tooltip>
         )}
       </div>
-      <div className="tweak-flyouts" data-rail-flyouts="">
-        {parts?.list && (
+      <div
+        className={`tweak-flyouts${panelOpen || partsOpen ? ' is-open' : ''}`}
+        data-rail-flyouts=""
+      >
+        {phone && (panelOpen || partsOpen) && (
+          <div
+            className="tweak-sheet-tabs"
+            role="group"
+            aria-label="Tweak panels"
+          >
+            <button
+              type="button"
+              aria-pressed={selectedPhonePanel === 'parameters'}
+              onClick={() => {
+                setPhonePanel('parameters');
+                if (!panelOpen) onTogglePanel();
+              }}
+            >
+              Parameters
+            </button>
+            {parts && (
+              <button
+                type="button"
+                aria-pressed={selectedPhonePanel === 'parts'}
+                onClick={() => {
+                  setPhonePanel('parts');
+                  if (!partsOpen) parts.onOpenChange?.(true);
+                }}
+              >
+                Parts
+              </button>
+            )}
+            <button
+              type="button"
+              className="model-panel-action"
+              aria-label="Close Tweak panel"
+              onClick={() => {
+                if (panelOpen) onTogglePanel();
+                if (partsOpen) parts?.onOpenChange?.(false);
+                requestAnimationFrame(() =>
+                  parametersButtonRef.current?.focus({ preventScroll: true })
+                );
+              }}
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        {showParts && parts?.list && (
           <PartsListModeProvider mode="tweak">
             {parts.list}
           </PartsListModeProvider>
         )}
-        {panelOpen && (
+        {showParameters && (
           <aside className="sidebar tweak-panel" aria-label="Parameters">
-            <div className="sidebar-label">Parameters</div>
+            <div className="tweak-panel-heading">
+              <div className="sidebar-label">Parameters</div>
+              <button
+                type="button"
+                className="model-panel-action"
+                aria-label="Close parameters"
+                onClick={onTogglePanel}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
             {/* How to change a value only where there is one to change. */}
             {parameters.length > 0 && (
               <p className="muted tweak-panel-intro">
                 Change a value and press Enter, or use an on/off toggle.
+                {units && (
+                  <span className="tweak-model-units">
+                    Model units: {units}
+                  </span>
+                )}
               </p>
             )}
             {modelError && (
@@ -176,6 +280,7 @@ export function TweakPanel({
                 {parameters.map((parameter) => (
                   <div className="param-entry" key={parameter.parameterId}>
                     <ParameterRow
+                      readableName
                       parameter={parameter}
                       value={parameterValues[parameter.name]}
                       minimum={parameterMinimums?.[parameter.name]}
@@ -184,11 +289,15 @@ export function TweakPanel({
                       onPreview={onPreviewParameter}
                       table={table}
                     />
-                    {parameter.description && (
-                      <p className="param-description-text">
-                        {parameter.description}
-                      </p>
-                    )}
+                    {parameter.description &&
+                      parameterDisplayName(
+                        parameter.name,
+                        parameter.description
+                      ) !== parameter.description.trim() && (
+                        <p className="param-description-text">
+                          {parameter.description}
+                        </p>
+                      )}
                   </div>
                 ))}
               </div>

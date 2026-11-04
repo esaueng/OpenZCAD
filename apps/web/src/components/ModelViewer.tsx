@@ -7125,7 +7125,7 @@ export function ModelViewer({
       const labelWidth = radiusLabelChip.offsetWidth;
       const pairWidth = edgeChipPair.offsetWidth;
       const pairHeight = edgeChipPair.offsetHeight;
-      const laneLeft = rightLaneLeft();
+      const laneLeft = rightLaneLeft(true);
       // Above the bottom lane, where a command's bar stands (the in-place
       // Extrude's, under the region arrow it extrudes): a chip held there
       // sat under the bar and could not be tapped.
@@ -7145,8 +7145,14 @@ export function ModelViewer({
           .closest('.viewer-area')
           ?.querySelectorAll<HTMLElement>(MODEL_PANEL_OBSTACLES) ?? [])
       ]
-        .filter((element) => !element.matches(RIGHT_LANE_MODEL_PANELS))
-        .map((element) => element.getBoundingClientRect())
+        .filter((element) => !element.closest('[inert]'))
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(
+          ({ element, rect }) =>
+            !element.matches(RIGHT_LANE_MODEL_PANELS) ||
+            rect.left < stageRect.left + stageRect.width / 2
+        )
+        .map(({ rect }) => rect)
         .filter((rect) => rect.width > 0 && rect.height > 0);
       const pills = [chip, radiusLabelChip]
         .filter((element) => !element.hidden)

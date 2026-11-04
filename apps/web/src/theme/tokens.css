@@ -99,8 +99,8 @@
   --color-viewport-bg: #101215;
   --color-stage-top: #171a1f;
   --color-stage-bottom: #0b0c0f;
-  --color-stage-grid-minor: #5c6573;
-  --color-stage-grid-major: #838d9c;
+  --color-stage-grid-minor: #454d59;
+  --color-stage-grid-major: #707b8a;
   --stage-shadow-opacity: 0.55;
   /* Text and rules drawn straight on the stage, with no card of their own
      (the scale bar, the snap refusal). They re-theme with the stage; the
@@ -157,22 +157,20 @@
   /* Geist Mono's latin subset is barely more than ASCII; Geist Sans, already
      loaded, draws its arrows, ≈ and the geometric shapes before any system
      font is asked. */
-  --font-ui: 'Geist Sans', 'OpenZCAD Symbols', system-ui, -apple-system,
-    sans-serif;
-  --font-mono: 'Geist Mono', 'Geist Sans', 'OpenZCAD Symbols', ui-monospace,
-    'SF Mono', Menlo, monospace;
+  --font-ui:
+    'Geist Sans', 'OpenZCAD Symbols', system-ui, -apple-system, sans-serif;
+  --font-mono:
+    'Geist Mono', 'Geist Sans', 'OpenZCAD Symbols', ui-monospace, 'SF Mono',
+    Menlo, monospace;
 
-  /* The accessibility review's floor: below 11px this metadata stops being
-     readable at 100% zoom. Half a pixel less used to be needed because it
-     kept the sketch palette three pixels shorter, which was all that stood
-     between one e2e drag and the panel it would otherwise land on; that
-     gesture now measures the bare canvas instead of assuming it. */
-  --fs-mini: 11px;
-  --fs-xs: 11.5px;
-  --fs-sm: 12px;
-  --fs-base: 13px;
-  --fs-md: 14px;
-  --fs-lg: 16px;
+  /* Metadata stays at least 12px at 100% zoom; ordinary interface copy is
+     14px. Layouts wrap or scroll rather than shrinking essential text. */
+  --fs-mini: 12px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
   --fs-xl: 22px;
 
   --fw-regular: 400;
@@ -212,9 +210,8 @@
   --opacity-disabled: 0.45;
 
   /* ── Elevation ────────────────────────────────────────── */
-  /* Three steps: a chip or card resting on a panel, a menu or popover
-     floating over the workspace, a dialog over its scrim. The same values in
-     both themes; the light chrome never repaints its shadows. */
+  /* Three steps: a chip or card, a popover, then a dialog. Light surfaces
+     use softer elevations below so stacked panels do not form dark slabs. */
   --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.25);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.55);
@@ -344,8 +341,11 @@
   --color-viewport-bg: #eeeeee;
   --color-stage-top: #f5f5f5;
   --color-stage-bottom: #e6e6e6;
-  --color-stage-grid-minor: #c4c4c4;
-  --color-stage-grid-major: #b0b0b0;
+  --color-stage-grid-minor: #c8c8c8;
+  --color-stage-grid-major: #bdbdbd;
+  --shadow-1: 0 1px 4px rgba(0, 0, 0, 0.12);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.16);
+  --shadow-3: 0 16px 40px rgba(0, 0, 0, 0.26);
   --stage-shadow-opacity: 0.18;
   --color-stage-ink: #1d1d1f;
   --color-stage-ink-muted: #56565b;
@@ -387,8 +387,11 @@
     --color-viewport-bg: #eeeeee;
     --color-stage-top: #f5f5f5;
     --color-stage-bottom: #e6e6e6;
-    --color-stage-grid-minor: #c4c4c4;
-    --color-stage-grid-major: #b0b0b0;
+    --color-stage-grid-minor: #c8c8c8;
+    --color-stage-grid-major: #bdbdbd;
+    --shadow-1: 0 1px 4px rgba(0, 0, 0, 0.12);
+    --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.16);
+    --shadow-3: 0 16px 40px rgba(0, 0, 0, 0.26);
     --stage-shadow-opacity: 0.18;
     --color-stage-ink: #1d1d1f;
     --color-stage-ink-muted: #56565b;

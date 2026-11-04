@@ -1179,6 +1179,19 @@
   font-weight: var(--fw-medium);
 }
 
+.start-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.start-empty-actions > button {
+  min-height: 40px;
+  padding-inline: var(--sp-4);
+}
+
 /* ── Shelf bar ───────────────────────────────────────────── */
 
 .start-shelf-bar {
@@ -2238,32 +2251,30 @@
 
 /* ── First run ───────────────────────────────────────────── */
 
-/* With nothing saved yet the demos take the stage under the empty shelf as
-   full cards, and the cloud card closes the column on its own. The empty
-   shelf stretches to fill the stage above them, in both layouts, so the page
-   reads as an empty stage with the demos anchored under it. A min-height on
-   the section could not do it: it resolved against the body's auto row. */
+/* The empty shelf stays compact so examples remain in the first viewport. */
 .start-screen.is-fresh .start-body {
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto;
+  align-content: start;
 }
 
 .start-screen.is-fresh .start-stage > .start-section {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
 }
 
 .start-screen.is-fresh .start-empty {
   align-content: center;
+  min-height: 220px;
 }
 
 @media (min-width: 901px) {
   .start-screen.is-fresh {
-    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto minmax(0, 1fr);
     grid-template-areas:
       'brand   body'
       'launch  body'
       'library body'
-      '.       body'
-      'account learn';
+      '.       learn'
+      'account .';
   }
 
   .start-screen.is-fresh .start-column-foot {

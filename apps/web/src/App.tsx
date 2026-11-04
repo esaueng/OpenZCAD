@@ -841,6 +841,8 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
+import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
+import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
@@ -1710,6 +1712,7 @@ import {
   applyPreset,
   closePanel,
   computePanelGeometry,
+  isPanelCoveredByInspection,
   isPanelOpen,
   loadPanelLayout,
   matchingPreset,
@@ -5482,6 +5485,14 @@ export function App() {
   // The activity log is a Settings page; every "details" link opens it there.
   const openActivityLog = () => openSettingsAt('activity');
   workspaceModeRef.current = resolvedWorkspaceMode;
+  const canNavigateToBuild = !shareSession && buildModeDisabledReason === null;
+  const navigateToBuildTool = useBuildToolNavigation({
+    mode: resolvedWorkspaceMode,
+    projectId: doc?.projectId ?? null,
+    canBuild: canNavigateToBuild,
+    onSwitch: () => handleWorkspaceMode('build'),
+    onLaunch: launchTool
+  });
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
   // collaboration seat locks parameters as firmly as features.
@@ -12965,9 +12976,7 @@ export function App() {
         summarizeLocalDocument(document),
         ...current.filter((project) => project.projectId !== document.projectId)
       ]);
-      setStatus(
-        `${definition.name} ready — three revisions in the feature history.`
-      );
+      setStatus('Demo ready · Try Tweak to change a value');
     } catch (error) {
       if (isCurrent())
         setStatus(errorMessage(error, 'Failed to build the demo.'));
@@ -21524,6 +21533,18 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  useResponsiveFraming({
+    projectId: doc?.projectId ?? null,
+    mode: resolvedWorkspaceMode,
+    layout: panelLayout,
+    panels: `${panelState.tweakPanelOpen}:${panelState.viewModeRailOpen}`,
+    enabled:
+      !tool &&
+      !inPlace.active &&
+      interaction.mode === 'idle' &&
+      !parameterDraftActive,
+    onFit: () => setFitSignal((value) => value + 1)
+  });
   // Every open edit: an in-place command's, and the in-place Extrude's.
   cancelInPlaceRef.current = () => {
     inPlaceRef.current.cancel(true);
@@ -28090,7 +28111,9 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied/i.test(status)
+        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+              status
+            )
           ? 'warning'
           : 'ready';
 
@@ -28195,6 +28218,10 @@ export function App() {
   const panelShowing = (id: PanelId) =>
     !panelsHidden &&
     isPanelOpen(panelLayout, id) &&
+    !(
+      panelGeometry &&
+      isPanelCoveredByInspection(panelLayout, id, panelGeometry)
+    ) &&
     (panelGeometry === null ||
       (panelGeometry.phone
         ? phonePanel === id
@@ -28244,7 +28271,22 @@ export function App() {
       setPanelLayout(next);
     },
     onUnpin: () => setPanelLayout((current) => unpinPanel(current, id)),
-    onClose: () => setPanelLayout((current) => closePanel(current, id)),
+    onClose: () => {
+      setPanelLayout((current) => closePanel(current, id));
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLButtonElement>(`[data-model-panel-rail="${id}"]`)
+          ?.focus({ preventScroll: true })
+      );
+    },
+    onHidePanels: () => {
+      setPanelLayout((current) => setOption(current, 'hidden', true));
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLButtonElement>(`[data-model-panel-rail="${id}"]`)
+          ?.focus({ preventScroll: true })
+      );
+    },
     onUse: () => setPanelLayout((current) => notePanelUsed(current, id))
   });
   // Only the row Ctrl+Shift+M would land on carries it as its shortcut.
@@ -28264,26 +28306,29 @@ export function App() {
   const commandContext = commandContextFor(commandSelection);
   // No two rows share a name: a repeated one is numbered.
   const paletteCommands = withDistinctLabels<PaletteCommand>([
-    // Modeling tools leave the palette entirely in the reading workspaces
-    // rather than appearing greyed out: a list of things you cannot do is
-    // not a menu.
-    ...(modelingLocked
-      ? []
-      : TOOL_GROUPS.flatMap((group) =>
-          group.tools.map((toolId): PaletteCommand => {
-            const meta = TOOL_META[toolId];
-            return {
-              id: `tool-${toolId}`,
-              label: meta.label,
-              group: group.label,
-              shortcut: keymap.label(toolCommandId(toolId)),
-              icon: meta.icon,
-              disabledReason: toolDisabledReason(toolId, shownAvailability),
-              offPick: !toolApplies(commandContext, toolId),
-              run: () => launchTool(toolId)
-            };
-          })
-        )),
+    // Typed search reaches tools across modes, with the destination stated
+    // before the choice. Empty browsing still lists this workspace's actions.
+    ...TOOL_GROUPS.flatMap((group) =>
+      group.tools.map((toolId): PaletteCommand => {
+        const meta = TOOL_META[toolId];
+        return {
+          id: `tool-${toolId}`,
+          label: meta.label,
+          group: group.label,
+          shortcut: keymap.label(toolCommandId(toolId)),
+          icon: meta.icon,
+          disabledReason:
+            modelingLocked && !canNavigateToBuild
+              ? (buildModeDisabledReason ?? 'Make a copy to use modeling tools')
+              : modelingLocked
+                ? null
+                : toolDisabledReason(toolId, shownAvailability),
+          modeHint: modelingLocked ? 'Switch to Build' : undefined,
+          offPick: !toolApplies(commandContext, toolId),
+          run: () => navigateToBuildTool(toolId)
+        };
+      })
+    ),
     {
       // Measuring is reading, so it stays in every workspace — Build included,
       // where the palette used to have no way to it at all.
@@ -28669,6 +28714,12 @@ export function App() {
               ({
                 id: `parameter-${parameter.parameterId}`,
                 label: `${parameter.name} = ${parameter.expression}`,
+                keywords: [
+                  ...(parameter.description?.split(/\s+/) ?? []),
+                  ...parameter.name
+                    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+                    .split(/[_\s]+/)
+                ],
                 group: 'Parameter',
                 icon: <SlidersHorizontal size={16} aria-hidden="true" />,
                 run: () => {
@@ -28770,7 +28821,7 @@ export function App() {
   const tweakModeHint = measuring
     ? viewModeHint
     : parameters.length > 0
-      ? 'Edit a parameter and press Enter · the model rebuilds exactly'
+      ? 'Edit parameters'
       : 'This model has no parameters · Build mode is where they are defined';
   // Measuring writes the lane in Build too: it is the command of the moment.
   const readingHints = viewMode || measuring;
@@ -29547,6 +29598,7 @@ export function App() {
       sidebar={
         viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
+            units={doc?.units}
             modelError={parameterModelError}
             parameters={exposedParameters}
             parameterValues={parameterScope.scope}
@@ -29576,10 +29628,16 @@ export function App() {
               }))
             }
             parts={{
-              buttons: <PartsRailButtons {...partsProps} />,
-              list: panelState.viewModeRailOpen ? (
-                <PartsList {...partsProps} />
-              ) : null
+              buttons: (open, onOpenChange) => (
+                <PartsRailButtons
+                  {...partsProps}
+                  open={open}
+                  onOpenChange={onOpenChange}
+                />
+              ),
+              list: <PartsList {...partsProps} />,
+              open: panelState.viewModeRailOpen,
+              onOpenChange: partsProps.onOpenChange
             }}
           />
         ) : (
@@ -29713,6 +29771,7 @@ export function App() {
                         type="button"
                         className={`rail-button${showing ? ' active' : ''}${parked ? ' parked' : ''}`}
                         aria-label={`${label} panel`}
+                        data-model-panel-rail={id}
                         aria-pressed={showing}
                         title={
                           badge > 0

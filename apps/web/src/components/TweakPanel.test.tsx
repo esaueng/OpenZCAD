@@ -71,6 +71,36 @@ describe('TweakPanel mesh export', () => {
 });
 
 describe('TweakPanel refusals', () => {
+  it('keeps the restored value valid while explaining the rejected edit', async () => {
+    const user = userEvent.setup();
+    render(
+      <TweakPanel
+        parameters={[width]}
+        parameterValues={{ width: 80 }}
+        canExport
+        exportScope={null}
+        onSetParameter={async () => 'Unknown identifier abc.'}
+        onViewActivityLog={vi.fn()}
+        onExportStep={vi.fn()}
+        onOpenMeshExport={vi.fn()}
+        share={null}
+        panelOpen
+        onTogglePanel={vi.fn()}
+        units="mm"
+      />
+    );
+    const field = screen.getByRole('textbox', { name: 'Expression for width' });
+    await user.clear(field);
+    await user.type(field, 'abc{Enter}');
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Unknown identifier abc. No change applied.'
+      )
+    );
+    expect(field).toHaveValue('80');
+    expect(field).not.toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Model units: mm')).toBeVisible();
+  });
   function parameter(name: string, expression: string): ParameterNode {
     return {
       ...width,

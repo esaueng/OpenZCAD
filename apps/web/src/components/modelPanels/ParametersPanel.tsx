@@ -58,6 +58,7 @@ export function ParametersPanel({
       <div className="param-list">
         {parameters.map((parameter) => (
           <ParameterRow
+            readableName
             key={parameter.parameterId}
             parameter={parameter}
             value={parameterValues[parameter.name]}

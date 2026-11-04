@@ -1148,8 +1148,56 @@
 }
 
 .keymap-chip .icon-button {
-  width: 18px;
-  height: 18px;
+  width: 28px;
+  height: 28px;
+}
+
+.keymap-editor .settings-control-group dl {
+  grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.4fr);
+}
+
+.keymap-editor .settings-control-groups {
+  grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr));
+}
+
+.keymap-editor .keymap-actions {
+  flex-shrink: 0;
+}
+
+.keymap-editor .keymap-actions button {
+  white-space: nowrap;
+}
+
+.keymap-editor .settings-control-row dt {
+  display: grid;
+  gap: 4px;
+  font-weight: var(--fw-regular);
+}
+
+.keymap-editor .settings-control-row dt strong {
+  font-weight: var(--fw-regular);
+}
+
+.keymap-editor .settings-control-row dt small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+}
+
+.keymap-editor .settings-control-row dd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.keymap-editor .settings-control-keys {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .keymap-editor .settings-control-group dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .keymap-unbound {

@@ -525,6 +525,9 @@ export function CommandCard({
               onClick={onToggleMore}
             >
               <Ellipsis size={16} aria-hidden="true" />
+              <span className="command-rail-label" aria-hidden="true">
+                Tools
+              </span>
             </button>
           </Tooltip>
           {moreOpen && (

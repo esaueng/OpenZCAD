@@ -97,6 +97,34 @@ describe('measureFitFrame', () => {
     document.body.append(canvas);
     expect(measureFitFrame(canvas)).toBeUndefined();
   });
+
+  it('frames between the header and a phone editing sheet', () => {
+    const canvas = stage();
+    const app = document.createElement('div');
+    app.className = 'app-shell';
+    const header = placed(document.createElement('header'), 0, 0, 1024, 60);
+    header.className = 'topbar';
+    app.append(header, canvas.closest('.viewer-area')!);
+    document.body.append(app);
+    const sheet = placed(document.createElement('aside'), 10, 360, 1014, 720);
+    sheet.className = 'tweak-flyouts';
+    canvas.parentElement!.append(sheet);
+    const frame = measureFitFrame(canvas)!;
+    expect(frame.maxY).toBeCloseTo(1 - (72 / 768) * 2);
+    expect(frame.minY).toBeCloseTo(1 - (348 / 768) * 2);
+    expect(frame.maxX).toBeCloseTo(((972 - 12) / 1024) * 2 - 1);
+  });
+
+  it('does not reserve space for the covered, inert dock column', () => {
+    const canvas = stage('docked');
+    const column = canvas
+      .closest('.viewer-area')!
+      .querySelector<HTMLElement>('.panel-column')!;
+    column.style.visibility = 'hidden';
+    column.setAttribute('inert', '');
+    const frame = measureFitFrame(canvas)!;
+    expect(frame.maxX).toBeCloseTo(((668 - 12) / 1024) * 2 - 1);
+  });
 });
 
 describe('measurePickFrame', () => {

@@ -22,7 +22,8 @@ import type { StatusTone } from './StatusActivityLog';
  * A message worth going back to the log for: a warning, or a refusal worded
  * as one ("Cannot use Box: …", "Not created — …") whatever its tone.
  */
-const REFUSAL_PATTERN = /refus|cannot|can't|not created|not applied|no change/i;
+const REFUSAL_PATTERN =
+  /refus|cannot|can't|not created|not applied|not changed|no change/i;
 
 function isNotableStatus(status: string, tone: StatusTone): boolean {
   return tone === 'warning' || REFUSAL_PATTERN.test(status);

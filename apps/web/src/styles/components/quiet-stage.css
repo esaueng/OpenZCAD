@@ -828,8 +828,6 @@
    bar's box. */
 .command-bar > kbd {
   flex: 0 0 auto;
-  background: var(--color-surface-hover);
-  border: 0;
 }
 
 /* The conversation's end of the bar: attach and the Enter key take the
@@ -853,8 +851,7 @@
 }
 
 .command-bar-stream-keys > kbd {
-  background: var(--color-surface-hover);
-  border: 0;
+  font-size: var(--fs-mini);
 }
 
 .command-bar-attach {
@@ -1521,15 +1518,17 @@
    The stage inherits the taller header clearance, including comfortable UI. */
 @media (max-width: 479px) {
   .app-shell {
+    --phone-mode-h: 52px;
     --stage-top: calc(
-      var(--topbar-island-h) * 2 + var(--sp-1) + var(--island-gap) * 2
+      var(--topbar-island-h) + var(--phone-mode-h) + var(--sp-1) +
+        var(--island-gap) * 2
     );
   }
 
   .app-shell > .topbar {
-    height: calc(var(--topbar-island-h) * 2 + var(--sp-1));
+    height: calc(var(--topbar-island-h) + var(--phone-mode-h) + var(--sp-1));
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: repeat(2, var(--topbar-island-h));
+    grid-template-rows: var(--topbar-island-h) var(--phone-mode-h);
   }
 
   /* Sized to its content, as at every other width: stretched across the
@@ -1541,6 +1540,11 @@
     gap: var(--sp-2);
   }
 
+  .topbar-identity .save-state {
+    flex: none;
+    margin-left: 4px;
+  }
+
   .topbar > .topbar-actions-island {
     grid-column: 2;
     grid-row: 1;
@@ -1549,6 +1553,25 @@
   .topbar > .mode-switch.topbar-island {
     grid-column: 1 / -1;
     grid-row: 2;
+    height: var(--phone-mode-h);
+    width: min(100%, 360px);
+    grid-auto-columns: minmax(0, 1fr);
+  }
+
+  .topbar > .mode-switch.topbar-island .mode-switch-option {
+    flex: 1 1 0;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+    min-height: 44px;
+    width: 100%;
+    padding: 2px 4px;
+    font-size: var(--fs-mini);
+  }
+
+  .topbar .mode-switch-label {
+    display: inline;
   }
 }
 
@@ -1877,6 +1900,19 @@ button.command-rail {
 button.command-rail svg {
   width: 16px;
   height: 16px;
+}
+
+button.command-more-toggle {
+  height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.command-rail-label {
+  font-size: var(--fs-mini);
+  line-height: 1;
 }
 
 button.command-rail:hover:not(:disabled, [aria-disabled='true']):not(.active) {
@@ -2576,6 +2612,139 @@ button.command-rail.is-suggested {
   display: none;
 }
 
+.tweak-sheet-tabs {
+  display: none;
+}
+
+/* Phone editing leaves the upper stage available for the model. The rail
+   keeps its usual position, while its lists share a bounded lower sheet. */
+@media (max-width: 479px) {
+  .workspace.has-column
+    .viewer-area
+    .workspace-column-float:has(> .tweak-rail) {
+    top: var(--stage-top);
+    bottom: calc(var(--island-gap) * 2 + var(--readout-reserve));
+    max-height: none;
+    transform: none;
+  }
+
+  .workspace-column-float > .tweak-rail {
+    position: absolute;
+    top: 0;
+    transform: none;
+  }
+
+  .workspace.column-layout:has(.tweak-flyouts)
+    .palette-float:has(.view-mode-bar) {
+    top: var(--stage-top);
+    transform: none;
+  }
+
+  .tweak-flyouts {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    width: calc(100vw - var(--island-gap) * 2);
+    max-height: min(440px, 46dvh);
+    gap: 0;
+    transform: none;
+  }
+
+  .tweak-flyouts.is-open {
+    overflow: hidden;
+    background: var(--color-surface);
+    border: var(--border-thin);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+  }
+
+  .tweak-flyouts > .view-mode-rail,
+  .tweak-flyouts > .tweak-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    scrollbar-width: thin;
+  }
+
+  /* The sheet owns the opaque surface; its table owns scrolling. Keeping
+     the scrollable card transparent also avoids painting an opaque scroll
+     backdrop outside its bounds over the WebGL canvas in Chromium. */
+  .tweak-flyouts > .tweak-panel {
+    overflow: clip;
+    background: transparent;
+  }
+
+  .tweak-flyouts > .view-mode-rail {
+    overflow: clip;
+    background: transparent;
+  }
+
+  .tweak-panel-intro {
+    flex: none;
+  }
+
+  .tweak-panel-params {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 16px;
+    scrollbar-width: thin;
+    border-top: var(--border-thin);
+    margin-top: 8px;
+  }
+
+  .tweak-panel .param-row input {
+    font-size: 16px;
+    height: 44px;
+  }
+
+  .tweak-flyouts .tweak-panel-heading,
+  .tweak-flyouts .view-mode-rail-head {
+    display: none;
+  }
+
+  .tweak-sheet-tabs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    padding: 2px 4px;
+    border-bottom: var(--border-thin);
+  }
+
+  .tweak-sheet-tabs > button {
+    min-height: 44px;
+    padding-inline: var(--sp-3);
+    color: var(--color-text-muted);
+    border-radius: var(--radius-md);
+  }
+
+  .tweak-sheet-tabs > button[aria-pressed='true'] {
+    color: var(--color-selected-text);
+    background: var(--color-selected-fill);
+  }
+
+  .tweak-sheet-tabs > .model-panel-action {
+    margin-left: auto;
+    min-width: 44px;
+    padding: 0;
+  }
+
+  .tweak-flyouts > .tweak-panel::-webkit-scrollbar {
+    display: block;
+    width: 4px;
+  }
+
+  .tweak-panel-heading .model-panel-action {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 /* ── The model panels (U08) ─────────────────────────────── */
 
 /* The lane's width when only a phone-width panel is in it. */
@@ -2795,6 +2964,18 @@ button.command-rail.is-suggested {
   pointer-events: none;
 }
 
+/* A temporary inspection borrows an existing column, preserving its state.
+   Inert and aria-hidden in PanelDock also remove the covered controls. */
+.panel-column.is-inspecting {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.model-panel:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
 /* An unpinned panel too wide to stand beside the lane covers it instead, as a
    float would, and stands over the inspector it covers until it closes. */
 .panel-dock-layer.slot-over-lane .panel-unpinned {
@@ -2977,13 +3158,21 @@ button.command-rail.is-suggested {
 
 @media (max-width: 520px) {
   .viewer-area .stage-right:has(> .panel-lane-float) {
-    left: calc(var(--column-w) + var(--island-gap) * 2);
+    z-index: calc(var(--z-inspector-float) + 2);
+    top: auto;
+    right: var(--island-gap);
+    bottom: calc(var(--lane-base) + 40px);
+    left: var(--island-gap);
+    max-height: min(
+      40dvh,
+      calc(100% - var(--stage-top) - var(--lane-base) - 40px)
+    );
   }
 
   .stage-right > .panel-lane-float {
     flex: 0 1 auto;
     min-height: 0;
-    max-height: min(50dvh, 100%);
+    max-height: min(40dvh, 100%);
   }
 
   .panel-lane-float > .model-panel {
@@ -3954,6 +4143,7 @@ button.model-panel-grip[aria-expanded='true'] {
   position: relative;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   max-width: min(max(calc(var(--command-bar-w) + 120px), 520px), 100%);
   padding: 4px 4px 4px 12px;
@@ -3966,17 +4156,19 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .in-place-command-title {
-  flex: none;
+  flex: 1 1 auto;
   font-weight: 600;
 }
 
 .in-place-command-hint {
-  flex: 1 1 auto;
+  order: 1;
+  flex: 1 0 100%;
   min-width: 0;
   overflow: hidden;
   color: var(--color-text-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: var(--lh-normal);
 }
 
 .in-place-command.refused .in-place-command-hint {
@@ -4415,8 +4607,7 @@ button.model-panel-grip[aria-expanded='true'] {
   text-align: right;
 }
 
-.in-place-params-grid.is-compact
-  > .in-place-param-row.is-keypad:focus-within {
+.in-place-params-grid.is-compact > .in-place-param-row.is-keypad:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 1px var(--color-accent);
 }
@@ -4595,6 +4786,22 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 .workspace-hint-help summary::-webkit-details-marker {
   display: none;
+}
+
+@media (max-width: 520px) {
+  .workspace-hint-help summary {
+    right: 8px;
+  }
+
+  .command-bar-lane:has(.workspace-hint-help) .workspace-hint {
+    padding-right: 44px;
+  }
+
+  .command-bar-lane:has(.workspace-hint-help)
+    .command-bar:not(.open)
+    .command-bar-input {
+    padding-right: 32px;
+  }
 }
 .workspace-hint-help > p {
   position: absolute;

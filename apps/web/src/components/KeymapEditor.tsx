@@ -113,6 +113,16 @@ export function KeymapEditor({ overrides, onChange }: KeymapEditorProps) {
                       data-keymap-command={command.id}
                     >
                       <dt>
+                        <strong>{command.label}</strong>
+                        {refused ? (
+                          <small className="keymap-refusal" role="alert">
+                            {refused}
+                          </small>
+                        ) : active ? (
+                          <small>Press the new shortcut · Esc cancels</small>
+                        ) : null}
+                      </dt>
+                      <dd>
                         <span className="settings-control-keys">
                           {bindings.length === 0 ? (
                             <span className="keymap-unbound">Unassigned</span>
@@ -143,16 +153,6 @@ export function KeymapEditor({ overrides, onChange }: KeymapEditorProps) {
                             ))
                           )}
                         </span>
-                      </dt>
-                      <dd>
-                        <strong>{command.label}</strong>
-                        {refused ? (
-                          <small className="keymap-refusal" role="alert">
-                            {refused}
-                          </small>
-                        ) : active ? (
-                          <small>Press the new shortcut · Esc cancels</small>
-                        ) : null}
                         <span className="keymap-actions">
                           <button
                             type="button"

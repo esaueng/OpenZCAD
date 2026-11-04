@@ -98,6 +98,19 @@
   gap: 0;
 }
 
+.tweak-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: var(--sp-2);
+  border-bottom: var(--border-thin);
+}
+
+.tweak-panel-heading .sidebar-label {
+  border-bottom: 0;
+  flex: 1;
+}
+
 .tweak-panel-intro {
   margin: 10px 12px 2px;
   font-size: var(--fs-xs);
@@ -117,7 +130,60 @@
 /* Tweak shows neither the curation toggle nor delete: the row gives both
    slots back to the name and the expression. */
 .tweak-panel .param-row {
-  grid-template-columns: minmax(0, 1fr) 76px minmax(0, max-content);
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 1fr) minmax(
+      0,
+      max-content
+    );
+  min-height: 48px;
+  gap: 10px;
+}
+
+.param-readable-name {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+.param-readable-name > code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.param-readable-name > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: var(--lh-normal);
+}
+
+.tweak-panel .param-row:has(> .param-value:empty) {
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 1fr);
+}
+
+.tweak-panel .param-value:empty {
+  display: none;
+}
+
+.param-name-button .param-readable-name {
+  text-align: left;
+}
+
+.param-readable-name > code {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+}
+
+.tweak-panel .param-row input {
+  height: 34px;
+  font-size: var(--fs-sm);
+}
+
+.tweak-model-units {
+  display: block;
+  margin-top: 6px;
+  color: var(--color-text);
 }
 
 /* Read, not edited: in Tweak the gloss is prose under the control, and it is

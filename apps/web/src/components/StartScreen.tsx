@@ -3101,9 +3101,20 @@ export function StartScreen({
                   <>
                     <strong>No projects yet</strong>
                     <span>
-                      Name one and press New project, or open a demo to see a
-                      project walk through its revisions.
+                      Start a design of your own, or explore a working demo
+                      below.
                     </span>
+                    <div className="start-empty-actions">
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={!canCreate}
+                        onClick={createPart}
+                      >
+                        <Plus size={16} aria-hidden="true" />
+                        Create your first project
+                      </button>
+                    </div>
                   </>
                 ) : shelf === 'archived' ? (
                   <>
