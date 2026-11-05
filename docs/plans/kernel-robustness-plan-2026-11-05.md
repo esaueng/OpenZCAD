@@ -243,14 +243,73 @@ Upstream Remus work, prioritized by the cells WS1 and WS3 show users reach:
 A kernel change counts toward a cell only when the whole WS1 family for that
 cell passes on the installed packages, not a single witness.
 
+## Reference behaviour: direct edits on an imported blended body
+
+On 2026-11-05 the owner recorded a mainstream direct-modeling CAD editing the
+kind of body this plan is about. The recording is a two-minute screen capture
+and stays outside the repository, as do its model and file name. The body is
+an imported STEP solid: a tilted round post rising out of a rectangular
+block, joined by a variable fillet band where the two meet, with rounded block
+edges. Every edit below is a local face or edge operation on the imported
+body. Each one becomes an ordinary, replayable history row (Offset Face 01–15,
+Fillet 01–03, Chamfer 01–02), and a "related to selection" filter narrows the
+history to the selected face.
+
+This is the target behaviour. Each scenario becomes a K10 acceptance cell on a
+synthetic, redistributable twin of the body (WS1): a tilted cylinder fused
+into a box, the seam blended, the box edges rounded, exported to STEP and
+reimported.
+
+| #   | What the reference does                                                                                                                                                                                                   | Owner         |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| R1  | Offset the post's planar top cap up and down along its axis. The rim fillet follows the cap and the post grows or shortens.                                                                                               | WS6, WS7.1    |
+| R2  | Offset the post's cylindrical wall radially, thicker and thinner, on the tilted axis. The fillet band where the post meets the block is rebuilt against the new radius, so the post-to-block blend survives.              | WS6, WS7.1–2  |
+| R3  | Offset block faces that the post-to-block blend band bounds. The band re-limits and keeps its tangency instead of refusing.                                                                                               | WS7.1 (6.2)   |
+| R4  | Offset a blend face itself, which changes the blend's size in place.                                                                                                                                                      | WS7.2 (C4)    |
+| R5  | Fillet single block edges with a live radius drag, then fillet edges that run into earlier fillets. The corners close as vertex blends.                                                                                   | WS7.2 (C4)    |
+| R6  | Fillet a tangent edge chain that runs from straight block edges around the curved blend profile, and chamfer edges next to fillets.                                                                                       | WS7.2 (C4)    |
+| R7  | Refuse an edit that would make an invalid body with one plain sentence ("the resulting body wouldn't be valid") and keep the last valid body. Refuse an out-of-range value ("radius should be positive") before building. | WS2           |
+| R8  | Show a live preview of every face and edge drag, including a preview that degenerates before the refusal on release.                                                                                                      | WS2, K02, W05 |
+| R9  | Keep every edit as a separately listed, replayable history row on the imported body. A later edit re-resolves earlier ones without re-picking.                                                                            | WS5, C5       |
+
+**Where OpenZCAD stands.** R2 is the same capability as the reported
+boss-on-sphere resize: a cylindrical wall whose neighbour is a blend band or a
+curved face. On the `2026.1.122` pin the kernel refuses it, because
+replace-surface re-limits only against planes, cylinders and axial cones. For a
+native history the source-dimension route (WS4, #1252) avoids the local edit.
+An imported body has no source dimension, so R2 needs the local route: either
+WS6's remove-blend, edit, re-blend ladder, or WS7.1 replace-surface against
+blend and freeform neighbours. That makes R2 the acceptance test for M2. R3 is
+covered for constant-radius analytic bands on holed planar supports (Remus
+6.2), not for a variable band around a tilted post. R5 and R6 are partly
+covered upstream: equal-radius planar vertex blends, and sequential fillets
+that cross an earlier band. Whether each scenario passes today is unmeasured;
+the first R-slice of the K10 ledger records it.
+
+**Plan changes from the recording.**
+
+- WS1 adds an imported-body operand family. It builds the synthetic twin from
+  primitives, round-trips it through STEP, and drops all construction history,
+  so cells exercise the local-edit route a real import takes. R1–R9 are its
+  first follow-up axis.
+- WS6's remove-blend, edit, re-blend ladder is promoted from fallback to the
+  required route for imported bodies. Blend recognition is the prerequisite:
+  the adapter or kernel must identify the post-to-block band and its support
+  faces before it can remove and rebuild it.
+- M2's exit signal becomes "R1–R3 pass on the synthetic imported twin", which
+  includes a direct resize of a boss that meets a blend band.
+- R7's two sentences are the copy bar for WS2. A refusal names the outcome in
+  one sentence and keeps the last valid body. Kernel detail stays behind
+  "View details".
+
 ## Milestones
 
-| Milestone | Scope                                                                                                                                                                      | Exit signal                                                                 |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| M0        | WS2 consumer side; the reported history pinned as a typed-refusal regression; WS1 skeleton with the first slice; route the scenario harness and direct-edit corpus into CI | No known refusal reaches the generic sentence; first-slice ledger committed |
-| M1        | WS1 campaign, scheduled run and ledger artifact; WS3 analytics; WS4 and WS5 for primitives across booleans                                                                 | The reported edit succeeds through the parametric route                     |
-| M2        | WS6 ladder; WS7.1 upstream and pin adoption                                                                                                                                | A direct resize of a boss on a sphere is exact                              |
-| M3+       | WS7.2–7.3 by ledger priority; imported bodies join WS1                                                                                                                     | Qualified-or-typed share rises every release and never regresses            |
+| Milestone | Scope                                                                                                                                                                      | Exit signal                                                                                                   |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| M0        | WS2 consumer side; the reported history pinned as a typed-refusal regression; WS1 skeleton with the first slice; route the scenario harness and direct-edit corpus into CI | No known refusal reaches the generic sentence; first-slice ledger committed                                   |
+| M1        | WS1 campaign, scheduled run and ledger artifact; WS3 analytics; WS4 and WS5 for primitives across booleans                                                                 | The reported edit succeeds through the parametric route                                                       |
+| M2        | WS6 ladder with blend recognition; WS7.1 upstream and pin adoption; imported-body twin in WS1                                                                              | A direct resize of a boss on a sphere is exact; reference scenarios R1–R3 pass on the synthetic imported twin |
+| M3+       | WS7.2–7.3 by ledger priority; imported bodies join WS1                                                                                                                     | Qualified-or-typed share rises every release and never regresses                                              |
 
 **Program metrics.** Share of WS1 cells Qualified or Typed refusal with an
 alternative; count of Untyped and Wrong cells (target zero); count of harvested
