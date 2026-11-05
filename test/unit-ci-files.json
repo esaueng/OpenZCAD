@@ -128,6 +128,7 @@
     "test/sketch-constraint-set.test.ts",
     "test/sketch-editing.test.ts",
     "test/sketch-regions.test.ts",
+    "test/sphere-cylinder-union.test.ts",
     "test/step-import-privacy.test.ts",
     "test/step-preview-profile.test.ts",
     "test/thread-feature.test.ts",
