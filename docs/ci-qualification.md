@@ -13,8 +13,9 @@ updates and explicit `ci:full` requests select full unit and browser suites.
 Changed browser regression files run every case, including untagged cases;
 the other browser files retain their smoke tags. Exact STEP parity, builds,
 bundle budgets and the existing privacy/security gates remain required.
-The `ci:full` label takes effect on the next CI run; rerun that workflow or
-use manual dispatch to request full validation immediately. Unit selection
+The `ci:full` label takes effect on the next push. To request full validation
+immediately, manually dispatch `ci` on the PR branch; a rerun retains its
+original event payload. Unit selection
 and timing artifacts identify the files executed by each partition.
 
 Ordinary merge candidates run the unit selection, build/parity and browser

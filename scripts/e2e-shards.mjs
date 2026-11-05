@@ -1,4 +1,6 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import console from 'node:console';
+import process from 'node:process';
 import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { changedBrowserSpecs } from './ci-selection.mjs';

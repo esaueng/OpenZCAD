@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
+import process from 'node:process';
 
 export const ROOT_FULL_INCLUDE = [
   'test/**/*.test.ts',

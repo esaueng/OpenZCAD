@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import console from 'node:console';
+import process from 'node:process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';

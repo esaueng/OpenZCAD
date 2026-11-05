@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import process from 'node:process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
