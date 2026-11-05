@@ -109,11 +109,11 @@ export interface PlanePickerRig {
    */
   setOffset(offset: number): void;
   /**
-   * A world point on a panel that a ray from `camera` reaches before any
-   * other panel, or null if another panel covers all of it. Searched from the
-   * outer corner inward. For tests that click a ghost plane.
+   * World points on a panel that a ray from `camera` reaches before any
+   * other panel, from the outer corner inward. For tests that click a ghost
+   * plane.
    */
-  exposedPoint(plane: PlaneId, camera: THREE.Camera): THREE.Vector3 | null;
+  exposedPoints(plane: PlaneId, camera: THREE.Camera): THREE.Vector3[];
   dispose(): void;
 }
 
@@ -404,7 +404,8 @@ export function buildPlanePickerRig(
       group.scale.setScalar(Math.max(worldPerPixel, MIN_WORLD_PER_PIXEL));
       applyOffset();
     },
-    exposedPoint(plane, camera) {
+    exposedPoints(plane, camera) {
+      const exposed: THREE.Vector3[] = [];
       const panel = panels.get(plane)!;
       const fills = [...panels.values()].map((candidate) => candidate.fill);
       group.updateMatrixWorld(true);
@@ -431,10 +432,10 @@ export function buildPlanePickerRig(
             raycaster.set(eye, point.clone().sub(eye).normalize());
           }
           const hit = raycaster.intersectObjects(fills, false)[0];
-          if (hit?.object === panel.fill) return point;
+          if (hit?.object === panel.fill) exposed.push(point);
         }
       }
-      return null;
+      return exposed;
     },
     dispose() {
       for (const item of disposables) {

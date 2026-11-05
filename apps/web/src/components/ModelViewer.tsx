@@ -6111,8 +6111,25 @@ export function ModelViewer({
           ? Object.fromEntries(
               (['XY', 'XZ', 'YZ'] as const).map((plane) => [
                 plane,
-                ghostRig.exposedPoint(plane, context.activeCamera)?.toArray() ??
-                  null
+                // The first point a real click there would give this plane:
+                // not covered by another panel, nor near a model edge.
+                ghostRig
+                  .exposedPoints(plane, context.activeCamera)
+                  .find((point) => {
+                    const projected = point
+                      .clone()
+                      .project(context.activeCamera);
+                    const probe = new MouseEvent('mousemove', {
+                      clientX: rect.left + ((projected.x + 1) / 2) * rect.width,
+                      clientY: rect.top + ((1 - projected.y) / 2) * rect.height
+                    });
+                    const ghost = pickGhostPlane(probe);
+                    return (
+                      ghost?.plane === plane &&
+                      ghostPlaneTakesPick(ghost.distance, pick(probe))
+                    );
+                  })
+                  ?.toArray() ?? null
               ])
             )
           : null,
