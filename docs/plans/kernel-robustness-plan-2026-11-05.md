@@ -139,6 +139,47 @@ Wrong cells, each a silent defect with a minimal history in the ledger:
 4. **Steinmetz (equal-radius) cross drill** (13 cells). The volume is off by
    0.071 mm³ (1.3e-5) against the exact 16r³/3, beyond the tolerance.
 
+**Acceptance gates (K10 wrong-cell follow-up).** On the `669d1e2` pin the
+same four defects reproduce. The adapter now refuses the first three by name
+(`packages/kernel-adapter/src/result-acceptance.ts`), with no oracle or
+tolerance changed. With the typed cylindrical-face resize refusals (#1265)
+also merged, the ledgers stand at 724 qualified, 521 typed refusals, 176
+untyped refusals and 13 wrong:
+
+| Defect                    | Gate                                                                                                                                                                                                                    | Cells         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| Box − torus unchanged     | A subtract whose exact intersect refused is checked on a grid over the overlap box: a point the kernel classifies inside target, tool and result refuses (`cut_kept_tool_material`). `cutDetailed` itself reports `ok`. | 70 → typed    |
+| Resize under a seam blend | The curved faces meeting the wall must still meet the resized wall, and the volume change must lie within 3× of the swept sleeve (`resize_left_blend_behind`, `resize_volume_mismatch`).                                | 8 → typed     |
+| Tangent cross drill       | Caught by the same point witness: the cut keeps tool material near the tangency (its body also fails strict validation).                                                                                                | 3 → typed     |
+| Steinmetz cross drill     | Not gated: the body is exact. See below.                                                                                                                                                                                | 13 stay wrong |
+
+Measured on the r 7 boss: the kernel leaves the r 6 fillet band in place and
+caps it with a new downward annulus π(7² − 6²) at the band's top. The 46.9 mm³
+groove underneath is missing material, and the volume change equals the bare
+sleeve π(7² − 6²)·18 exactly, so only the face census can see it.
+`cylinderPrimitiveAncestry.ts` routes hash-only seam fillets to this resize,
+so the app now shows that refusal where it used to commit the groove.
+
+Cuts and intersects are now also held to strict validation
+(`solid_validation_failed`), the bar unions already had to clear. That turns
+one previously qualified cell into a typed refusal:
+`cylinder×cylinder/tangent/subtract/no-modifier/source-grow`, an r 7 drill
+grazing the bar wall. Its volume was inside tolerance, but the validator
+reports an inner wire on the periodic wall wound like its outer wire and one
+edge with inconsistently oriented faces. That is the same signature as the
+tangent drill. One untyped refusal also becomes typed.
+
+**Steinmetz is a kernel measurement defect, not a body defect.** The
+equal-radius cut's four intersection edges are exact `ELLIPSE` curves, lying
+within 5e-15 of both cylinders, and strict validation is clean. Cut plus
+intersect volumes sum to the bar exactly (18849.5559). The intersect measures
+5333.2664 against the exact 16r³/3 = 5333.3333. `volume()` at any deflection
+and `massProperties` with refinement (eps 1e-11, depth 24) all converge on
+that same value, 1.25e-5 low. So the integrator handles the trimmed cylinder
+faces, whose ellipses cross at the two singular points, short of the exact
+domain. That is reported upstream rather than masked, and the 13 cells stay
+`wrong` until the kernel measures them correctly.
+
 The largest untyped families are the cylinder×cylinder union (83 cells,
 "open, non-manifold, or inconsistently oriented"). The next is the union
 connectivity check (50 cells). It is right for tangent and stacked operands.

@@ -149,11 +149,13 @@ describe('a cylinder radius drag across a boolean', () => {
     120_000
   );
 
-  it('keeps a hash-only seam fillet on the local wall resize', async () => {
+  it('keeps a hash-only seam fillet on the local wall resize, which refuses rather than leave it behind', async () => {
     // Box ∪ boss with its seam filleted. The kernel's evolution declines to
     // trace the seam, so the fillet holds a hash. A source radius edit would
-    // make a new seam and lose that pick; the local resize keeps it and
-    // succeeds, so the drag must not cross the union here.
+    // make a new seam and lose that pick, so the drag must not cross the
+    // union here. The local resize reaches r 7, but the kernel leaves the
+    // fillet band at r 6 capped by a new annulus — a 46.9 mm³ groove (K10) —
+    // so the adapter refuses it by name instead of shipping that body.
     let document = addPrimitiveFeature(
       createProjectDocument('Boss on a plate', toUserId('user_boss_plate')),
       {
@@ -242,7 +244,18 @@ describe('a cylinder radius drag across a boolean', () => {
         })
       ]
     );
-    const { wall: resized } = await wallOf(local, rounded.bodyId);
-    expect(resized?.geometry?.radius).toBeCloseTo(7, 9);
+    const derived = await adapter.syncDocument(local);
+    const refusal = (derived.featureWarnings ?? []).find(
+      (warning) => warning.featureName === 'Resize Cylinder'
+    );
+    expect(refusal?.kind).toBe('build-failed');
+    expect(refusal?.kernelRefusal).toEqual({
+      family: 'validation',
+      category: 'unsupported',
+      code: 'resize_left_blend_behind'
+    });
+    expect(refusal?.message).toContain(
+      'The wall could not be resized to radius 7: the blend or chamfer along its edge would be left behind at the old size.'
+    );
   }, 120_000);
 });

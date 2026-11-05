@@ -287,7 +287,11 @@ function cylinderRadiusChain(
   // A fillet or chamfer after the boolean that holds a hash-only edge pick
   // loses it when the operand changes size: the seam a resized boss makes is
   // a new edge, and nothing but a lineage name can find it again. Keep those
-  // chains on the local wall resize, which leaves the seam in place.
+  // chains on the local wall resize, which leaves the seam in place. When
+  // the pick is the boss seam itself the local resize cannot carry the blend
+  // either, and the adapter refuses it (`resize_left_blend_behind`) rather
+  // than leave the blend behind at the old radius: neither route is correct
+  // there yet, so the refusal is the answer.
   const pickedByHashOnly = listFeaturesInOrder(document).some(
     (feature) =>
       chain.publishers.has(feature.featureId) &&
