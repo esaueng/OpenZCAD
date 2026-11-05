@@ -268,7 +268,9 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
     size: '2'
   });
   await expect(page.locator('.feature-row')).toHaveCount(2);
-  await expectConsumedBodyCount(page, 1);
+  // The body before the blend is an earlier state of the same body, a step
+  // in History rather than a source body: nothing goes behind the toggle.
+  await expectConsumedBodyCount(page, 0);
   // The body keeps its own name through the fillet; only History says Fillet.
   await expect(
     page.locator('.body-row', { hasText: 'Cylinder 1' })
