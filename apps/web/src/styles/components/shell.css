@@ -5,7 +5,7 @@
 /* ── App shell ───────────────────────────────────────────── */
 
 .app-shell {
-  height: 100vh;
+  height: 100dvh;
   display: grid;
   /* The column is declared as well as the rows: an implicit `auto` track
      sizes to its widest child's max-content, so the top bar's intrinsic

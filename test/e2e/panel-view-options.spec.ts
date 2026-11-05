@@ -529,7 +529,11 @@ test('Panel width Large at 1280×720 parks the outer column, and Small brings it
   await openWorkspace(
     page,
     'Width',
-    { left: [['bodies']], right: [['parameters']] },
+    {
+      left: [['bodies']],
+      right: [['parameters']],
+      recent: ['parameters', 'bodies']
+    },
     { width: 1280, height: 720 }
   );
   const menu = await viewOptions(page);
@@ -623,12 +627,16 @@ test('with Hide all on, a ⌘K feature or parameter turns it off and shows and f
     history.locator('.feature-row-main[aria-pressed="true"]')
   ).toHaveCount(1);
   await expect(history).toContainText(/base/i);
-  await expect(modelPanel(page, 'Parameters')).toBeVisible();
+  // The temporary inspection uses the right column at this width, keeping
+  // the saved Parameters dock intact underneath it.
+  await expect(modelPanel(page, 'Parameters')).toBeHidden();
   expect(await storedLayout(page)).toMatchObject({
     unpinned: 'history',
     recent: ['history', 'parameters'],
     options: { hidden: false }
   });
+  await history.getByRole('button', { name: 'Close History' }).click();
+  await expect(modelPanel(page, 'Parameters')).toBeVisible();
 });
 
 test('Tab moves from the rail through the panel headers, gaps and the menu without hiding the panels', async ({

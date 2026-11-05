@@ -295,6 +295,10 @@ export function PartThumbnail({
       ? cachedThumbnail(project.projectId, authorization, protectedImage)
       : undefined
   );
+  // The request that settled with nothing to show: a miss the publisher could
+  // not fill, or a failed read. Its slot shows the placeholder rather than
+  // staying a blank loading box for good.
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
   const authorizationRef = useRef(authorization);
@@ -319,9 +323,9 @@ export function PartThumbnail({
         loadThumbnail,
         publishThumbnail
       ).then((next) => {
-        if (active && next && isCurrent()) {
-          setResult(next);
-        }
+        if (!active || !isCurrent()) return;
+        if (next) setResult(next);
+        else setSettledKey(cacheKey);
       });
     };
     // All project cards remain searchable and keyboard-accessible, while
@@ -372,7 +376,7 @@ export function PartThumbnail({
   }
   // Unknown/loading is not an empty model. Keep its slot quiet while the
   // cache/decode completes; the wire cube is reserved for a confirmed miss.
-  if (!visible)
+  if (!visible && settledKey !== cacheKey)
     return (
       <span
         ref={attachPreview}

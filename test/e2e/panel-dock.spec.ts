@@ -161,7 +161,9 @@ test('a rail press opens a panel unpinned, and clicks on the model leave it open
   await expect(panel).toHaveClass(/is-unpinned/);
   await expect(history).toHaveAttribute('aria-pressed', 'true');
   await expect(
-    panel.getByText('Unpinned — the next panel you open replaces it')
+    panel.getByText(
+      'Temporary panel. Pin to keep it alongside your other panels.'
+    )
   ).toBeVisible();
   // Beside the rail's inner edge, not in a dock.
   await expect(page.locator('.panel-column')).toHaveCount(0);
@@ -993,11 +995,11 @@ for (const viewport of [
       lane.getByRole('region', { name: 'Parameters' })
     ).toBeVisible();
     await expect(page.locator('.model-panel')).toHaveCount(1);
-    // Pin does not dock here; the status line says so.
-    await lane.getByRole('button', { name: 'Pin Parameters' }).click();
-    await expect(page.getByRole('contentinfo')).toContainText(
-      'Panels do not dock at this width'
-    );
+    // Phone panels have no pin action: the lane preserves their saved place.
+    await expect(
+      lane.getByRole('button', { name: 'Pin Parameters' })
+    ).toHaveCount(0);
+    await expect(lane).toContainText('Panels share this space.');
     await expect(page.locator('.panel-column')).toHaveCount(0);
     await railPanelButton(page, 'Parameters').click();
     await expect(page.locator('.model-panel')).toHaveCount(0);
@@ -1026,14 +1028,13 @@ test('a stored dock shows one panel in the lane at a 720px stage and docks at 72
     .locator('.panel-lane-float')
     .getByRole('region', { name: other });
   await expect(laneRegion).toBeVisible();
-  // Its saved dock stands: the lane's Pin reads unpinned, and a press is
-  // refused rather than unpinning it out of the column.
+  // Its saved dock stands; the phone lane offers no pin that could change it.
   const pin = laneRegion.getByRole('button', { name: `Pin ${other}` });
-  await expect(pin).toHaveAttribute('aria-pressed', 'false');
-  await pin.click();
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'Panels do not dock at this width'
-  );
+  await expect(pin).toHaveCount(0);
+  expect(await dockedTitles(page)).toEqual([]);
+  expect((await storedLayout(page))?.right).toEqual([
+    ['history', 'parameters']
+  ]);
   await page.setViewportSize({ width: 721, height: 800 });
   await expect(page.locator('.panel-column')).toBeVisible();
   expect(await dockedTitles(page)).toEqual([['History', 'Parameters']]);
@@ -1275,7 +1276,16 @@ for (const theme of ['dark', 'light'] as const) {
       const header = page.locator(`${host} .model-panel-header`).first();
       await expect(header).toBeVisible();
       const controls = header.locator('button');
-      await expect.poll(() => controls.count()).toBeGreaterThanOrEqual(2);
+      await expect
+        .poll(() => controls.count())
+        .toBeGreaterThanOrEqual(viewport.width > 720 ? 3 : 1);
+      await expect(
+        header.getByRole('button', { name: /^Close / })
+      ).toBeVisible();
+      if (viewport.width <= 720)
+        await expect(header.getByRole('button', { name: /^Pin / })).toHaveCount(
+          0
+        );
       // The phone lane slides in: hit-test where the panel comes to rest,
       // not a frame of its arrival.
       await header.evaluate(

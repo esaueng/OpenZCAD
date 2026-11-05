@@ -1003,7 +1003,7 @@
 
 .sharing-popover {
   width: min(400px, 100%);
-  max-height: calc(100vh - var(--topbar-h) - var(--sp-5));
+  max-height: calc(100dvh - var(--topbar-h) - var(--sp-5));
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
@@ -1752,7 +1752,7 @@
   display: grid;
   gap: var(--sp-3);
   width: min(560px, calc(100vw - 32px));
-  max-height: min(640px, calc(100vh - 64px));
+  max-height: min(640px, calc(100dvh - 64px));
   padding: var(--sp-4);
   overflow-y: auto;
   background: var(--color-surface);
