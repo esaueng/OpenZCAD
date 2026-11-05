@@ -64,7 +64,13 @@ for (const width of [1440, 390]) {
     // 522px tall, which at a phone width reached the view cube.
     const rail = page.locator('.instrument-rail');
     const band = await page.locator('.stage-right').boundingBox();
-    const bandBottom = band!.y + band!.height;
+    const corner = await page.locator('.viewer-rail-stack').boundingBox();
+    // Phone inspection panels occupy a separate bottom sheet. The cube's
+    // 4px inset still leaves the rail an island gap above its corner band.
+    const bandBottom = Math.min(
+      band!.y + band!.height,
+      corner!.y - ISLAND_GAP - 4
+    );
     await expect
       .poll(async () => {
         const bounds = await rail.boundingBox();

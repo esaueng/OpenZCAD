@@ -111,6 +111,8 @@ const FolderCoverDialog = lazy(async () => ({
 interface StartScreenProps {
   projects: ProjectSummary[];
   status: string;
+  /** Only a closed workspace's status is suppressed on library entry. */
+  previousWorkspaceStatus?: string | null;
   /**
    * Present once the version watch confirms a newer build: the footer offers
    * the reload. Download failures have their own actionable toast.
@@ -471,6 +473,7 @@ interface CloudSentence {
 export function StartScreen({
   projects: discoveredProjects,
   status,
+  previousWorkspaceStatus,
   onReloadForUpdate,
   onReloadForLoadFailure,
   busy,
@@ -531,10 +534,12 @@ export function StartScreen({
     }
   }, [name, units]);
   const [initialView] = useState(readLibraryView);
-  // The status the library opened with belongs to the project just closed —
-  // a modeling refusal, say — and is already in the activity log. Only
-  // news set while the library is showing earns the card's line.
-  const [carriedStatus, setCarriedStatus] = useState<string | null>(status);
+  // Suppress the status carried from the workspace just closed; it is
+  // already in the activity log. A creation refusal belongs to the library
+  // and must remain visible even when it is the first status on mount.
+  const [carriedStatus, setCarriedStatus] = useState<string | null>(
+    previousWorkspaceStatus ?? null
+  );
   if (carriedStatus !== null && status !== carriedStatus) {
     setCarriedStatus(null);
   }

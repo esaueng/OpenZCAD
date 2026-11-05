@@ -191,7 +191,7 @@ async function fixture(kind: 'parallel' | 'three-point' | 'axis') {
 }
 
 async function open(page: Page, document: ProjectDocument) {
-  await stubApi(page);
+  await stubApi(page, { commandFoldClosed: true });
   await page.route('**/api/session', (route) =>
     route.fulfill({ status: 401, json: { error: 'Not signed in' } })
   );
