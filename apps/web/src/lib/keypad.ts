@@ -19,8 +19,12 @@ export interface KeypadSize {
 export interface KeypadPlacement {
   x: number;
   y: number;
-  /** Which side of the anchor the keypad settled on. */
-  side: 'below' | 'above' | 'right' | 'left';
+  /**
+   * Which side of the anchor the keypad settled on. `over`: in the place of
+   * the value chip it edits. `docked`: at the foot of the stage, because the
+   * chip was not on screen to take the place of.
+   */
+  side: 'below' | 'above' | 'right' | 'left' | 'over' | 'docked';
 }
 
 const ANCHOR_GAP = 14;
@@ -120,7 +124,7 @@ export function keypadClampPosition(
   };
 }
 
-/** A host-relative box the keypad must stand beside, not on. */
+/** A host-relative box: the painted value chip the control stands in for. */
 export interface KeypadAvoidRect {
   left: number;
   top: number;
@@ -129,40 +133,79 @@ export interface KeypadAvoidRect {
 }
 
 /**
- * Places the keypad BESIDE the value chips it was opened from — right of
- * them, else left — top-aligned with them, so the chips, the handle's anchor
- * dot and the picked geometry under them stay in view while a value is
- * typed. Centered below the chip, the keypad covered the very edge it was
- * rounding. Falls back to {@link keypadClampPosition} under the chips when
- * neither side has room clear of the docked panels.
+ * Places the edit control IN the value chip's place: the value the chip
+ * showed becomes the field that edits it, beside the operation tag, rather
+ * than a second card repeating it nearby. Its first row (`rowHeight`) is
+ * centred on the chip, so the operation tag and the value read as one row.
+ * It moves only as far as it must to stay on screen and clear of the docked
+ * panels, and it is placed once: the caller freezes it while editing.
+ *
+ * With no chip to stand in for (orbited away, behind the model, not yet
+ * drawn) or a chip under a docked panel, it docks at the foot of the stage,
+ * centred in the widest gap the panels leave: an editor that followed its
+ * anchor off screen took the typed value with it.
  */
-export function keypadBesidePosition(
-  avoid: KeypadAvoidRect,
+export function keypadInPlacePosition(
+  chip: KeypadAvoidRect | null,
+  size: KeypadSize,
+  viewport: KeypadSize,
+  exclusions: readonly KeypadExclusion[] = [],
+  rowHeight = size.height
+): KeypadPlacement {
+  const range = horizontalRange(size, viewport, exclusions);
+  const maxY = Math.max(
+    VIEWPORT_MARGIN,
+    viewport.height - size.height - VIEWPORT_MARGIN
+  );
+  const occluded =
+    chip !== null &&
+    exclusions.some((band) => {
+      const centre = (chip.left + chip.right) / 2;
+      return (
+        band.width > 0 && centre >= band.x && centre <= band.x + band.width
+      );
+    });
+  const offScreen =
+    chip !== null &&
+    (chip.right < 0 ||
+      chip.left > viewport.width ||
+      chip.bottom < 0 ||
+      chip.top > viewport.height);
+  if (!chip || occluded || offScreen) {
+    return keypadDockedPosition(size, viewport, exclusions);
+  }
+  const x = Math.min(
+    Math.max(chip.left, range.min),
+    Math.max(range.max, range.min)
+  );
+  const y = Math.min(
+    Math.max(
+      Math.round((chip.top + chip.bottom) / 2 - rowHeight / 2),
+      VIEWPORT_MARGIN
+    ),
+    maxY
+  );
+  return { x, y, side: 'over' };
+}
+
+/**
+ * The control docked at the foot of the stage, centred in the widest gap
+ * the docked panels leave: where it goes when its pick is not on screen.
+ */
+export function keypadDockedPosition(
   size: KeypadSize,
   viewport: KeypadSize,
   exclusions: readonly KeypadExclusion[] = []
 ): KeypadPlacement {
-  const y = Math.min(
-    Math.max(avoid.top - 4, VIEWPORT_MARGIN),
-    Math.max(VIEWPORT_MARGIN, viewport.height - size.height - VIEWPORT_MARGIN)
-  );
-  const clear = (x: number) =>
-    x >= VIEWPORT_MARGIN &&
-    x + size.width <= viewport.width - VIEWPORT_MARGIN &&
-    exclusions.every(
-      (band) =>
-        band.width <= 0 || x + size.width <= band.x || x >= band.x + band.width
-    );
-  const right = avoid.right + ANCHOR_GAP;
-  if (clear(right)) return { x: right, y, side: 'right' };
-  const left = avoid.left - ANCHOR_GAP - size.width;
-  if (clear(left)) return { x: left, y, side: 'left' };
-  return keypadClampPosition(
-    { x: (avoid.left + avoid.right) / 2, y: avoid.bottom },
-    size,
-    viewport,
-    exclusions
-  );
+  const range = horizontalRange(size, viewport, exclusions);
+  return {
+    x: Math.round((range.min + Math.max(range.max, range.min)) / 2),
+    y: Math.max(
+      VIEWPORT_MARGIN,
+      viewport.height - size.height - VIEWPORT_MARGIN
+    ),
+    side: 'docked'
+  };
 }
 
 /** Every document unit, plus the one angles use. */
@@ -379,4 +422,64 @@ export function appendKeypadKey(current: string, key: string): string {
     return current.startsWith('-') ? current.slice(1) : `-${current}`;
   }
   return current + key;
+}
+
+/**
+ * The exact kernel's verdict on one previewed value: `built` (the preview
+ * rebuilt it), `refused`, or `unchecked` (the host settled it without a
+ * kernel check, such as a zero offset that changes nothing). An entry is
+ * only Ready once the verdict for the value it shows has come back.
+ */
+export interface PreviewVerdict {
+  value: number;
+  status: 'built' | 'refused' | 'unchecked';
+}
+
+/**
+ * What the edit control says about its value, in words as well as colour:
+ * `ready` (Enter applies it), `checking` (the kernel has not answered for
+ * this value yet), `refused` (Not built), `invalid` (the entry does not
+ * evaluate).
+ */
+export type EditControlState = 'ready' | 'checking' | 'refused' | 'invalid';
+
+/** Same value, allowing for the float noise of a unit conversion. */
+export function sameEntryValue(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+}
+
+export function editControlState(input: {
+  /** The entry evaluates. */
+  entryOk: boolean;
+  /**
+   * The value last handed to the live preview, or null while the entry
+   * still shows its untouched prefill (what the model already is).
+   */
+  previewed: number | null;
+  /**
+   * The host's latest verdict, or undefined when the host does not check
+   * this kind of value (a sketch dimension, a command's own field).
+   */
+  verdict: PreviewVerdict | null | undefined;
+  /** The host is validating a commit already. */
+  hostChecking: boolean;
+  /** The host's own refused/disabled flags, for a host without verdicts. */
+  hostRefused: boolean;
+  hostDisabled: boolean;
+}): EditControlState {
+  if (!input.entryOk) return 'invalid';
+  if (input.hostChecking) return 'checking';
+  if (input.verdict === undefined) {
+    return input.hostRefused
+      ? 'refused'
+      : input.hostDisabled
+        ? 'checking'
+        : 'ready';
+  }
+  if (input.previewed === null) return input.hostRefused ? 'refused' : 'ready';
+  // Only the verdict for the value on screen counts: a Ready from an earlier
+  // value must never let newer input commit unchecked.
+  if (!input.verdict || !sameEntryValue(input.verdict.value, input.previewed))
+    return 'checking';
+  return input.verdict.status === 'refused' ? 'refused' : 'ready';
 }

@@ -66,7 +66,8 @@ import {
 } from './exact-cylinder-ops';
 import {
   applyEdgeModifier,
-  edgeModifierFailureMessage
+  EdgeModifierRefusalError,
+  edgeModifierRefusal
 } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
@@ -2434,27 +2435,26 @@ function buildEdgeModifierFeature(
         )
       );
     }
-    throw new Error(
-      edgeModifierFailureMessage(
-        kernel,
-        target,
-        selected,
-        data.featureKind,
-        size,
-        result.partialRevolveBodies.has(data.targetBodyId),
-        reportedRefusal,
-        chamferAngleRadians,
-        priorBlendFaceTest(
-          document,
-          feature.featureId,
-          // The lineage is keyed by the stored solid's handles, which
-          // describe `target` only when it was not collapsed from several.
-          storedTarget.solids.length === 1 && storedTarget.solids[0] === target
-            ? storedTarget.lineage
-            : undefined
-        )
+    const refusal = edgeModifierRefusal(
+      kernel,
+      target,
+      selected,
+      data.featureKind,
+      size,
+      result.partialRevolveBodies.has(data.targetBodyId),
+      reportedRefusal,
+      chamferAngleRadians,
+      priorBlendFaceTest(
+        document,
+        feature.featureId,
+        // The lineage is keyed by the stored solid's handles, which
+        // describe `target` only when it was not collapsed from several.
+        storedTarget.solids.length === 1 && storedTarget.solids[0] === target
+          ? storedTarget.lineage
+          : undefined
       )
     );
+    throw new EdgeModifierRefusalError(refusal.message, refusal.advice);
   }
   const rootPrimitive = modifierChainRootPrimitive(document, data.targetBodyId);
   const primitiveFallbackLineage =

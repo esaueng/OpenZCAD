@@ -383,7 +383,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   // A radius the kernel cannot build on this box is refused at the handle:
-  // the cause lands in the notice lane in the kernel's plain words, the
+  // the control says Not built, its Why? gives the cause in plain words, the
   // Selection card marks the operation Failed, the chip
   // turns to its warning state, and the last radius that built stays on
   // screen instead of the blend vanishing. 30 is wider than the narrower of
@@ -391,10 +391,13 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   // round fits. (This used to be 12, which does fit: it was refused only
   // while the round's cylinder face reported a full-circle bounding box.)
   await keypad.getByRole('textbox').fill('30');
-  const refusal = page.locator('.selection-refusal-lane');
-  await expect(refusal).toContainText('Try a smaller radius', {
-    timeout: 30_000
-  });
+  const refusal = keypad.getByRole('alert');
+  await expect(refusal).toContainText('Not built', { timeout: 30_000 });
+  await keypad.getByRole('button', { name: 'Why?' }).click();
+  await expect(keypad.getByRole('group')).toContainText(
+    /Try a smaller radius|too large here/
+  );
+  await keypad.getByRole('button', { name: 'Why?' }).click();
   await expect(editFillet).toContainText('Failed');
   await expect(chip).toHaveAttribute('data-state', 'warning');
   expect((await readBlend(canvas))?.blendRadius ?? null).toBeCloseTo(2, 6);
@@ -602,10 +605,9 @@ test('still refuses an oversize radius after a slow blend preview', async ({
   // pass: the next value was dropped and no refusal ever reached the card.
   // 30 is genuinely oversize for this box; see the first test.
   await keypad.getByRole('textbox').fill('30');
-  await expect(page.locator('.selection-refusal-lane')).toContainText(
-    'Try a smaller radius',
-    { timeout: 30_000 }
-  );
+  await expect(keypad.getByRole('alert')).toContainText('Not built', {
+    timeout: 30_000
+  });
   await expect(editFillet).toContainText('Failed');
   await expect(chip).toHaveAttribute('data-state', 'warning');
   expect((await readBlend(canvas))?.blendRadius ?? null).toBeCloseTo(2, 6);

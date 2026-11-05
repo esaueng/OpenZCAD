@@ -3365,7 +3365,53 @@ export interface FeatureWarning {
     category: string;
     code: string;
   };
+  /**
+   * What the adapter's size ladder proved about a refused fillet or chamfer.
+   * Present only on an edge-modifier refusal. The headline a control shows
+   * branches on this rather than on `message`, which is product copy.
+   */
+  blendAdvice?: BlendRefusalAdvice;
 }
+
+/**
+ * The verdict of a refused fillet or chamfer, as data.
+ *
+ * - `smaller-size`: the probe ladder BUILT `size` exactly, so it is safe to
+ *   offer as a one-click remedy.
+ * - `structural`: every smaller size on the ladder was refused too. `cause`
+ *   names what the adapter could attribute, `unknown` when nothing was.
+ *   Smaller sizes failing is evidence, not proof, that no size builds.
+ */
+export type BlendRefusalAdvice = {
+  operation: 'fillet' | 'chamfer';
+  /** How many edges the refused feature selected ("this edge", "these"). */
+  edges: number;
+  /**
+   * The cause in a sentence, without the "Fillet could not be created on …"
+   * preamble `message` opens with: what an explanation shows under a
+   * headline that already says the feature was not built.
+   */
+  reason: string;
+} & (
+  | {
+      kind: 'smaller-size';
+      size: number;
+    }
+  | {
+      kind: 'structural';
+      cause:
+        | 'trim-face'
+        | 'trim-face-beside-blend'
+        | 'closed-rim'
+        | 'ends-on-blend'
+        | 'shared-corner'
+        | 'edge-groups'
+        | 'partial-revolve'
+        | 'smooth-boundary'
+        | 'neighbor-faces'
+        | 'unknown';
+    }
+);
 
 /** Explicit, bounded foreground analysis; never part of canonical history. */
 export interface EditAnalysisRequest {

@@ -1,4 +1,8 @@
-import type { FeatureId, FeatureWarning } from '@openzcad/shared';
+import type {
+  BlendRefusalAdvice,
+  FeatureId,
+  FeatureWarning
+} from '@openzcad/shared';
 import type { CommandDiagnostic } from './interaction/machine';
 import { plainRefusal } from './refusalLanguage';
 
@@ -96,7 +100,11 @@ export function refusingWarningDetail(
   warnings: readonly string[],
   featureWarnings?: readonly FeatureWarning[],
   featureId?: FeatureId
-): { reason: string; category?: string } | null {
+): {
+  reason: string;
+  category?: string;
+  advice?: BlendRefusalAdvice;
+} | null {
   if (!featureWarnings) {
     const reason = warningForFeature(featureName, warnings);
     return reason === null ? null : { reason };
@@ -115,7 +123,8 @@ export function refusingWarningDetail(
         'This operation does not produce valid geometry.',
       ...(failure.kernelRefusal
         ? { category: failure.kernelRefusal.category }
-        : {})
+        : {}),
+      ...(failure.blendAdvice ? { advice: failure.blendAdvice } : {})
     };
   }
   return null;
@@ -141,6 +150,7 @@ export function validatedFeatureRejection(
   if (warning) {
     return {
       ...splitRefusal(warning.reason, warning.category),
+      ...(warning.advice ? { advice: warning.advice } : {}),
       ...(input.featureId
         ? {
             culprit: {

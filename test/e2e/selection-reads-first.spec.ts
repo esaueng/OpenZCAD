@@ -261,8 +261,8 @@ test('an edge pick carries its operation on the chip, refusal included', async (
   });
   expect(hit).toBe(true);
 
-  // The card marks the refusal; the notice lane says it, with the way out,
-  // and no second card opens.
+  // The card marks the refusal; the edit control says it, with the way
+  // out, and no second card opens.
   await page.getByTestId('direct-manipulation-value').click();
   const keypad = page.getByRole('dialog', { name: 'Radius value' });
   await keypad.getByRole('textbox').fill('40');
@@ -271,12 +271,11 @@ test('an edge pick carries its operation on the chip, refusal included', async (
     timeout: 60_000
   });
   await expect(chip.getByRole('alert')).toHaveCount(0);
-  const refusal = page.locator('.selection-refusal-lane').getByRole('alert');
+  const refusal = keypad.getByRole('alert');
   await expect(refusal).toBeVisible();
-  await expect(refusal).toContainText(/radius/i);
+  await expect(refusal).toContainText(/Not built/);
   await expect(page.locator('.tool-card')).toHaveCount(0);
-  // The lane row stays under the search bar's width rather than stretching
-  // across the viewport.
+  // The control stays compact rather than stretching across the viewport.
   expect((await refusal.boundingBox())!.width).toBeLessThanOrEqual(640.5);
 
   // The handle's own riding label stays: the chip did not replace it.

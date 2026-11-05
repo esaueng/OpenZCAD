@@ -63,6 +63,11 @@ interface WorkspaceReadoutProps {
    */
   pick?: ReactNode;
   /**
+   * A refused edit with no control open to explain it (a refused drag): the
+   * compact "Not built · Why?", read after the pick and before the key hints.
+   */
+  notice?: ReactNode;
+  /**
    * U09: an in-place command's bar. It takes the guidance row while a
    * command runs, so its step is read where every hint is.
    */
@@ -112,6 +117,7 @@ export function WorkspaceReadout({
   prompt,
   instructionDetails = null,
   pick = null,
+  notice = null,
   commandRow = null,
   projectName,
   featureCount,
@@ -125,7 +131,8 @@ export function WorkspaceReadout({
 }: WorkspaceReadoutProps) {
   const laneRef = useRef<HTMLDivElement>(null);
   const hasCommandRow = commandRow !== null;
-  const hasSelectionGuidance = !hasCommandRow && pick !== null;
+  const hasSelectionGuidance =
+    !hasCommandRow && (pick !== null || notice !== null);
   useLayoutEffect(() => {
     const lane = laneRef.current;
     const viewer = lane?.closest<HTMLElement>('.viewer-area');
@@ -265,7 +272,8 @@ export function WorkspaceReadout({
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
   const syncLabel = WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel;
-  const hasGuidance = commandRow == null && Boolean((prompt && !shown) || pick);
+  const hasGuidance =
+    commandRow == null && Boolean((prompt && !shown) || pick || notice);
   // Always in the tree, as the page's contentinfo landmark: what the status
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
@@ -281,7 +289,19 @@ export function WorkspaceReadout({
         ref={laneRef}
       >
         {commandRow ??
-          ((prompt && !shown) || pick ? (
+          (notice ? (
+            // A block, not the hint's paragraph: the notice holds buttons and
+            // an explanation that opens above the row.
+            <div className="workspace-hint is-selection has-notice">
+              {pick}
+              {notice}
+              {prompt && !shown ? (
+                <span className="workspace-hint-text" aria-hidden="true">
+                  {prompt}
+                </span>
+              ) : null}
+            </div>
+          ) : (prompt && !shown) || pick ? (
             <p className={`workspace-hint${pick ? ' is-selection' : ''}`}>
               {pick}
               {prompt && !shown ? (

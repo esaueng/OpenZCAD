@@ -1,12 +1,19 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLayoutEffect } from 'react';
-import { NumericKeypad, type KeypadRequest } from './NumericKeypad';
+import {
+  NumericKeypad,
+  resetKeypadPointerForTests,
+  type KeypadRequest
+} from './NumericKeypad';
+import type { PreviewVerdict } from '../lib/keypad';
+import type { CommandDiagnostic } from '../lib/interaction/machine';
+import type { SelectionCalloutOperation } from '../lib/selectionCallout';
 import { prepareCommandChip } from '../lib/inPlace/chipNames';
 
 /** Answers `(pointer: fine)` as a mouse (true) or a touch screen (false). */
 function stubPointer(fine: boolean) {
-  window.matchMedia = ((query: string) => ({
+  window.matchMedia = (query: string) => ({
     matches: query === '(pointer: fine)' ? fine : false,
     media: query,
     onchange: null,
@@ -15,7 +22,7 @@ function stubPointer(fine: boolean) {
     addListener: () => undefined,
     removeListener: () => undefined,
     dispatchEvent: () => false
-  }));
+  });
 }
 
 // Most of this file exercises the keys and unit chips, which a touch screen
@@ -197,17 +204,21 @@ describe('numeric entry first character', () => {
       const keypad = screen.getByRole('dialog', { name: 'Height value' });
       notify(); // ResizeObserver delivers once even without a size change.
       anchor.current?.({ x: 800, y: 100 });
-      // No room right of the anchor in a 1000px host: it stands to the left,
-      // top-aligned with the chip rather than under it.
-      expect(keypad).toHaveStyle({ left: '554px', top: '96px' });
+      // No chip to stand in for: it stands under the anchor point.
+      expect(keypad).toHaveStyle({ left: '684px', top: '114px' });
+      // Frozen while editing: a later anchor push does not move it.
       anchor.current?.({ x: 200, y: 400 });
-      expect(keypad).toHaveStyle({ left: '554px', top: '96px' });
+      expect(keypad).toHaveStyle({ left: '684px', top: '114px' });
       Object.defineProperty(host, 'clientWidth', { value: 390 });
       notify();
-      // Neither side fits a phone: it falls back under the anchor.
+      // A narrower host re-clamps it on screen, at the same height.
       expect(parseFloat(keypad.style.left) + 232).toBeLessThanOrEqual(382);
       anchor.current?.({ x: 200, y: 400 });
       expect(keypad.style.top).toBe('114px');
+      // The anchor leaving the screen docks the control at the foot.
+      anchor.current?.(null);
+      expect(keypad).toHaveAttribute('data-placement', 'docked');
+      expect(keypad.style.top).toBe('752px');
     } finally {
       view.unmount();
       host.remove();
@@ -215,7 +226,7 @@ describe('numeric entry first character', () => {
     }
   });
 
-  it('stands beside the chip it was opened from, clear of its painted box', () => {
+  it('takes the place of the chip it was opened from, its row centred on it', () => {
     const host = document.createElement('div');
     Object.defineProperties(host, {
       clientWidth: { value: 1000 },
@@ -262,12 +273,13 @@ describe('numeric entry first character', () => {
       { container: host }
     );
     const keypad = screen.getByRole('dialog', { name: 'Radius value' });
-    // Right of the chip's painted box (455–545 × 274–294), top-aligned.
+    // Over the chip's painted box (455–545 × 274–294), centred on it.
     expect(keypad).toHaveStyle({
-      left: '559px',
-      top: '270px',
+      left: '455px',
+      top: '264px',
       visibility: 'visible'
     });
+    expect(keypad).toHaveAttribute('data-placement', 'over');
     expect(screen.getByRole('textbox')).toHaveFocus();
     view.unmount();
     host.remove();
@@ -617,9 +629,17 @@ describe('on a mouse-and-keyboard device', () => {
     expect(screen.queryByRole('button', { name: '7' })).toBeNull();
     expect(screen.queryByRole('radiogroup', { name: 'Entry unit' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Apply height' })).toBeEnabled();
-    expect(
-      screen.getByText('Other units: 2cm, 1in')
-    ).toBeInTheDocument();
+    // Other units are typed; the unit itself says how.
+    const unit = screen.getByRole('button', { name: 'mm' });
+    expect(screen.queryByRole('note')).toBeNull();
+    fireEvent.focus(unit);
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Type units or expressions: 2cm, 1in'
+    );
+    expect(unit).toHaveAccessibleDescription(
+      'Type units or expressions: 2cm, 1in'
+    );
+    fireEvent.blur(unit);
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('button', { name: '7' })).toBeInTheDocument();
@@ -678,5 +698,309 @@ describe('a refused value', () => {
     expect(
       screen.getByRole('dialog', { name: 'Radius value' })
     ).toHaveAttribute('data-state', 'checking');
+  });
+});
+
+describe('a value the kernel checks as it is typed', () => {
+  function checked(verdict: PreviewVerdict | null = null) {
+    const onPreview = vi.fn();
+    const onCommit = vi.fn();
+    const onUiStateChange = vi.fn();
+    const props = {
+      request: {
+        kind: 'edge',
+        label: 'Radius',
+        initial: '1',
+        unitKind: 'length'
+      } satisfies KeypadRequest,
+      units: 'mm' as const,
+      scope: {},
+      anchorRef: { current: null },
+      onPreview,
+      onCommit,
+      onUiStateChange,
+      onCancel: () => undefined
+    };
+    const view = render(<NumericKeypad {...props} verdict={verdict} />);
+    return {
+      input: screen.getByRole<HTMLInputElement>('textbox', { name: 'Radius' }),
+      apply: screen.getByRole('button', { name: 'Apply radius' }),
+      keypad: screen.getByRole('dialog', { name: 'Radius value' }),
+      onPreview,
+      onCommit,
+      onUiStateChange,
+      rerender: (next: PreviewVerdict | null) =>
+        view.rerender(<NumericKeypad {...props} verdict={next} />)
+    };
+  }
+
+  it('reads Checking… with Apply off until the typed value has built', () => {
+    const { input, apply, keypad, rerender } = checked();
+    // The untouched prefill is what the model already is.
+    expect(keypad).toHaveAttribute('data-state', 'ready');
+    fireEvent.change(input, { target: { value: '2' } });
+    expect(keypad).toHaveAttribute('data-state', 'checking');
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+    expect(apply).toBeDisabled();
+    rerender({ value: 2, status: 'built' });
+    expect(keypad).toHaveAttribute('data-state', 'ready');
+    expect(apply).toBeEnabled();
+  });
+
+  it('never commits an earlier value’s preview against newer input', () => {
+    const { input, apply, onCommit, rerender } = checked();
+    fireEvent.change(input, { target: { value: '2' } });
+    rerender({ value: 2, status: 'built' });
+    fireEvent.change(input, { target: { value: '25' } });
+    // 2 built; 25 has no verdict yet.
+    expect(apply).toBeDisabled();
+    fireEvent.click(apply);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(
+      screen.getByText('Checking… applies once it builds')
+    ).toBeInTheDocument();
+    // The verdict for 25 lands: the pending Enter applies 25, not 2.
+    rerender({ value: 25, status: 'built' });
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith(25, '25');
+  });
+
+  it('drops a pending Enter when its value is refused or the entry changes', () => {
+    const { input, onCommit, rerender } = checked();
+    fireEvent.change(input, { target: { value: '9' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    rerender({ value: 9, status: 'refused' });
+    rerender({ value: 9, status: 'built' });
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '3' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.change(input, { target: { value: '4' } });
+    rerender({ value: 4, status: 'built' });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('reports its state for the key hints, and nothing once closed', () => {
+    const { input, onUiStateChange } = checked();
+    expect(onUiStateChange).toHaveBeenLastCalledWith({
+      state: 'ready',
+      explaining: false,
+      pending: false
+    });
+    fireEvent.change(input, { target: { value: '2+' } });
+    expect(onUiStateChange).toHaveBeenLastCalledWith({
+      state: 'invalid',
+      explaining: false,
+      pending: false
+    });
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAccessibleDescription(/./);
+    cleanup();
+    expect(onUiStateChange).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe('a refusal on the control', () => {
+  const operation = (
+    error: CommandDiagnostic,
+    extra: Partial<SelectionCalloutOperation> = {}
+  ): SelectionCalloutOperation => ({
+    title: 'Fillet',
+    error,
+    onEditCulprit: vi.fn(),
+    onViewDetails: vi.fn(),
+    onKeepLastValid: vi.fn(),
+    onSelectAllEdges: vi.fn(),
+    ...extra
+  });
+  const structural: CommandDiagnostic = {
+    message:
+      'Fillet could not be created on the selected closed edge with radius 1. The modeling engine could not trim the cylindrical face beside it. Smaller radii failed too, so a different size is unlikely to help.',
+    detail: 'trimming-failure: blend: trimming failure on face Id(9)',
+    advice: {
+      operation: 'fillet',
+      edges: 1,
+      kind: 'structural',
+      cause: 'trim-face',
+      reason:
+        'The modeling engine could not trim the cylindrical face beside it. Smaller radii failed too, so a different size is unlikely to help.'
+    }
+  };
+
+  function refused(
+    error: CommandDiagnostic,
+    extra: Partial<SelectionCalloutOperation> = {}
+  ) {
+    const onCancel = vi.fn();
+    const onPreview = vi.fn();
+    const onPickAnother = vi.fn();
+    const op = operation(error, extra);
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'edge',
+          label: 'Radius',
+          initial: '1',
+          selectInitial: false,
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={onPreview}
+        onCommit={vi.fn()}
+        onCancel={onCancel}
+        verdict={{ value: 1, status: 'refused' }}
+        commitRefused
+        commitDisabled
+        refusal={{
+          operation: op,
+          onPickAnother,
+          pickAnotherLabel: 'Pick another edge'
+        }}
+      />
+    );
+    return { onCancel, onPreview, onPickAnother, op };
+  }
+
+  it('says Not built in one live line, with the controls outside it', () => {
+    refused(structural);
+    const keypad = screen.getByRole('dialog', { name: 'Radius value' });
+    expect(keypad).toHaveAttribute('data-state', 'refused');
+    const line = screen.getByRole('alert');
+    expect(line).toHaveTextContent(
+      'Not builtCan’t round this edge hereSolid unchanged'
+    );
+    expect(line.querySelector('button')).toBeNull();
+    const input = screen.getByRole('textbox', { name: 'Radius' });
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    // The error is the field's description: the live line itself.
+    expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(
+      line.id
+    );
+    expect(screen.getByRole('button', { name: 'Apply radius' })).toBeDisabled();
+    // Size was ruled out: no size is offered.
+    expect(screen.queryByRole('button', { name: /^Try / })).toBeNull();
+  });
+
+  it('opens Why? in place, and Escape closes it before it cancels the edit', () => {
+    const { onCancel, onPickAnother, op } = refused(structural, {
+      keepLastValidLabel: 'Keep 0.5 mm'
+    });
+    expect(screen.getByRole('button', { name: 'Keep 0.5 mm' })).toBeVisible();
+    const why = screen.getByRole('button', { name: 'Why?' });
+    fireEvent.click(why);
+    expect(why).toHaveAttribute('aria-expanded', 'true');
+    const card = screen.getByRole('group', {
+      name: 'Can’t round this edge here'
+    });
+    expect(card).toHaveTextContent(
+      'The modeling engine could not trim the cylindrical face beside it.'
+    );
+    // Remedies are the verified ones only.
+    fireEvent.click(screen.getByRole('button', { name: 'Pick another edge' }));
+    expect(onPickAnother).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Technical details' }));
+    expect(op.onViewDetails).toHaveBeenCalledOnce();
+
+    const input = screen.getByRole('textbox', { name: 'Radius' });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('group')).toBeNull();
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it('names the feature to edit when the refusal names one', () => {
+    const { op } = refused({
+      ...structural,
+      culprit: { featureId: 'f-1', featureName: 'Fillet edges 2' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Why?' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Edit “Fillet edges 2”' })
+    );
+    expect(op.onEditCulprit).toHaveBeenCalledWith('f-1');
+  });
+
+  it('offers the size the ladder built, and only that one', () => {
+    const { onPreview } = refused({
+      message:
+        'Fillet could not be created on 1 selected edge with radius 5. Try a smaller radius: radius 2.5 builds here.',
+      advice: {
+        operation: 'fillet',
+        edges: 1,
+        kind: 'smaller-size',
+        size: 2.5,
+        reason: 'Radius 5 is too large here; radius 2.5 builds.'
+      }
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Radius too large');
+    fireEvent.click(screen.getByRole('button', { name: 'Try 2.5 mm' }));
+    expect(onPreview).toHaveBeenLastCalledWith(2.5);
+    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('2.5');
+  });
+});
+
+describe('the unit help and the Escape ladder', () => {
+  it('closes the unit help first, then cancels the edit', () => {
+    const onCancel = vi.fn();
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Offset',
+          initial: '4',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onCancel={onCancel}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'mm' }));
+    expect(screen.getByRole('note')).toBeInTheDocument();
+    const input = screen.getByRole('textbox', { name: 'Offset' });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it('shows an expression or another unit evaluated in document units, inline', () => {
+    setup('', false);
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: '2cm' }
+    });
+    expect(screen.getByText('= 20 mm')).toBeInTheDocument();
+  });
+});
+
+describe('the keypad behind its overflow action', () => {
+  beforeEach(() => {
+    stubPointer(true);
+    resetKeypadPointerForTests();
+  });
+
+  it('stays folded after a mouse opening', () => {
+    fireEvent.pointerDown(document.body, { pointerType: 'mouse' });
+    setup('4');
+    expect(screen.getByRole('button', { name: 'Keypad' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  });
+
+  it('opens for a touch opening on a hybrid device with a fine primary pointer', () => {
+    fireEvent.pointerDown(document.body, { pointerType: 'touch' });
+    setup('4');
+    expect(screen.getByRole('button', { name: 'Keypad' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    expect(screen.getByRole('button', { name: '7' })).toBeInTheDocument();
   });
 });

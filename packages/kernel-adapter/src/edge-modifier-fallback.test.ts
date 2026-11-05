@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  blendAdviceOf,
   closedEdgeLoopCount,
-  edgeModifierFailureMessage
+  EdgeModifierRefusalError,
+  edgeModifierFailureMessage,
+  edgeModifierRefusal
 } from './exact-edge-modifiers';
 import type { RemusKernel } from './remus-runtime';
 
@@ -48,7 +51,7 @@ describe('edge modifier fallback advice', () => {
     );
     expect(fillet).toBe(
       'Fillet could not be created on 2 selected edges with radius 3. ' +
-        'Smaller radii were refused too, so the size is not the cause. ' +
+        'Smaller radii were refused too, so a different size is unlikely to help. ' +
         'Try rounding fewer edges at once, or different edges.'
     );
     const chamfer = edgeModifierFailureMessage(
@@ -65,6 +68,34 @@ describe('edge modifier fallback advice', () => {
         'with its current neighboring faces. Try a different edge or change the adjacent geometry.'
     );
     expect(chamfer).not.toContain('Try a smaller');
+  });
+
+  it('returns the same verdict as data, so a control never reads the sentence', () => {
+    const refusal = edgeModifierRefusal(
+      refusingKernel,
+      1,
+      [2, 3],
+      'fillet',
+      3,
+      false
+    );
+    expect(refusal.advice).toEqual({
+      operation: 'fillet',
+      edges: 2,
+      kind: 'structural',
+      cause: 'unknown',
+      reason:
+        'Smaller radii were refused too, so a different size is unlikely to help. ' +
+        'Try rounding fewer edges at once, or different edges.'
+    });
+    // The reason is the message without its preamble, never a second wording.
+    expect(refusal.message.endsWith(refusal.advice!.reason)).toBe(true);
+    const thrown = new EdgeModifierRefusalError(
+      refusal.message,
+      refusal.advice
+    );
+    expect(blendAdviceOf(thrown)).toBe(refusal.advice);
+    expect(blendAdviceOf(new Error(refusal.message))).toBeUndefined();
   });
 });
 
@@ -160,7 +191,7 @@ describe('a closed rim split into arcs', () => {
       'Fillet could not be created on the selected closed edge with radius 1. ' +
         'The modeling engine could not trim the cylindrical face beside it, ' +
         'which also meets an earlier fillet or chamfer. Smaller radii failed ' +
-        'the same way, so the size is not the cause. Try a different edge, or ' +
+        'too, so a different size is unlikely to help. Try a different edge, or ' +
         'try adding this edge to that earlier feature so both are built together.'
     );
   });
@@ -177,6 +208,6 @@ describe('a closed rim split into arcs', () => {
     );
     expect(message).toContain('could not trim the flat face beside it.');
     expect(message).not.toContain('earlier fillet');
-    expect(message).toContain('Smaller distances failed the same way');
+    expect(message).toContain('Smaller distances failed too');
   });
 });

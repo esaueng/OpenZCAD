@@ -26,7 +26,7 @@ function rule(sheet: string, selector: string): string {
 const READABLE: readonly [string, string][] = [
   ['quiet-stage.css', '.command-bar-keys'],
   ['quiet-stage.css', '.command-flyout-heading'],
-  ['direct-manipulation.css', '.keypad-expr-preview'],
+  ['edit-control.css', '.keypad-expr-preview'],
   ['direct-manipulation.css', '.sketch-entity-editor .eyebrow'],
   ['direct-manipulation.css', '.sketch-entity-constraints .eyebrow'],
   ['direct-manipulation.css', '.field-hint'],
