@@ -194,7 +194,18 @@ Timing and ownership rules:
    - An offset magnifier (`viewer/touchLoupe.ts`) follows a finger dragging
      sketch geometry: twice the canvas under the finger with a crosshair,
      above the finger (below near the top edge), naming the snap it took.
-6. **Apple Pencil**, as above.
+6. **Apple Pencil**, as above, with these specifics:
+   - Pen events already take the mouse path, so Pencil taps, handle drags,
+     strokes, empty-space marquee and hover preselection need no new code.
+   - Pencil mode: after the first pen pointer, a finger in a sketch drawing
+     tool only navigates (`navigationOnly`); finger taps elsewhere still
+     select. Settings › Viewport "Only Apple Pencil draws", on by default.
+   - Palm rejection: fingers that land while a pen is down, or within
+     300 ms of its lift, are ignored until they lift, and a pen landing
+     drops (and cancels) any finger gesture in progress.
+   - `getCoalescedEvents()` is deferred: the drag paths sample once per
+     frame and there is no freehand stroke yet that would use the extra
+     samples.
 7. **Home Screen app and files.**
    - `viewport-fit=cover` and safe-area insets for the top bar, stage,
      floating islands and fixed layers.

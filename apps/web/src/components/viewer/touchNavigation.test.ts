@@ -224,3 +224,58 @@ describe('touch navigation', () => {
     expect(t.calls).toEqual(['pressDown', 'abandonPress(1)']);
   });
 });
+
+describe('touch navigation beside a Pencil', () => {
+  it('lets a navigation-only finger orbit but never press, tap or draw', () => {
+    const calls: string[] = [];
+    const host = {
+      pressDown: () => calls.push('pressDown'),
+      pressClaimed: () => true,
+      pressMove: () => calls.push('pressMove'),
+      pressUp: () => calls.push('pressUp'),
+      pressCancel: () => calls.push('pressCancel'),
+      abandonPress: () => calls.push('abandonPress'),
+      navigationOnly: () => true,
+      canOrbit: () => false,
+      beginOrbit: () => calls.push('beginOrbit'),
+      orbitBy: () => calls.push('orbitBy'),
+      beginPinch: () => calls.push('beginPinch'),
+      panBy: () => calls.push('panBy'),
+      zoomBy: () => calls.push('zoomBy'),
+      endNavigation: () => calls.push('endNavigation'),
+      longPress: () => calls.push('longPress'),
+      doubleTap: () => calls.push('doubleTap'),
+      history: () => calls.push('history'),
+      now: () => 0,
+      setTimer: () => 1,
+      clearTimer: () => undefined
+    };
+    const touch = createTouchNavigation(host);
+    const event = (pointerId: number, clientX: number) =>
+      ({
+        pointerId,
+        clientX,
+        clientY: 100,
+        pointerType: 'touch'
+      }) as PointerEvent;
+    touch.down(event(1, 100));
+    touch.up(event(1, 100));
+    touch.down(event(2, 100));
+    touch.move(event(2, 160));
+    touch.up(event(2, 160));
+    expect(calls).toEqual(['beginPinch', 'panBy', 'endNavigation']);
+  });
+
+  it('hands back the fingers it drops when a Pencil lands', () => {
+    const t = setup();
+    t.down(1, 100, 100);
+    t.down(2, 200, 100);
+    t.move(2, 260, 100);
+    expect(t.touch.abandon().sort()).toEqual([1, 2]);
+    expect(t.touch.active).toBe(false);
+    expect(t.calls.slice(-1)).toEqual(['endNavigation']);
+    // Their later samples are no longer this layer's.
+    expect(t.move(2, 300, 100)).toBe(false);
+    expect(t.up(1, 100, 100)).toBe(false);
+  });
+});

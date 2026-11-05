@@ -307,3 +307,111 @@ test.describe('touch sketching', () => {
     );
   });
 });
+
+/** A real pen stroke through the input domain (pointerType "pen"). */
+async function penStroke(
+  cdp: CDPSession,
+  from: Point,
+  to: Point,
+  { release = true, steps = 6 } = {}
+) {
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: from[0],
+    y: from[1],
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+    pointerType: 'pen'
+  });
+  for (let step = 1; step <= steps; step += 1) {
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: from[0] + ((to[0] - from[0]) * step) / steps,
+      y: from[1] + ((to[1] - from[1]) * step) / steps,
+      button: 'left',
+      buttons: 1,
+      pointerType: 'pen'
+    });
+  }
+  if (release) {
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: to[0],
+      y: to[1],
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+      pointerType: 'pen'
+    });
+  }
+}
+
+test.describe('Apple Pencil', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('once a Pencil draws, a finger in a drawing tool only moves the view', async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Pencil sketch');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).tap();
+    await page.getByRole('button', { name: 'Top (XY)' }).tap();
+    const tools = page.getByRole('toolbar', { name: 'Sketch tools' });
+    const circle = tools.getByRole('button', { name: /^Circle/ });
+    await circle.tap();
+    await expect(circle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.viewport-dock-grid')).not.toHaveText('');
+    const canvas = page.locator('.viewer-host canvas').first();
+    const box = (await canvas.boundingBox())!;
+    const cdp = await page.context().newCDPSession(page);
+    const status = page.getByRole('contentinfo');
+
+    const penAt: Point = [box.x + box.width * 0.35, box.y + box.height * 0.5];
+    await penStroke(cdp, penAt, [penAt[0] + 60, penAt[1]]);
+    await expect(status).toContainText('Sketch 01 started.');
+
+    await circle.tap();
+    await expect(circle).toHaveAttribute('aria-pressed', 'true');
+    // Long enough after the pen lifted that the finger is not a palm.
+    await page.waitForTimeout(400);
+    const finger: Point = [box.x + box.width * 0.55, box.y + box.height * 0.4];
+    await swipe(cdp, [finger], [[finger[0] + 80, finger[1] + 30]]);
+    await page.waitForTimeout(500);
+    await expect(status).not.toContainText('Added circle.');
+    await expect(circle).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('a palm on the glass while the Pencil is down does nothing', async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });
+    const canvas = await openBlock(page);
+    await recordOrientation(canvas);
+    const cdp = await page.context().newCDPSession(page);
+    const box = (await canvas.boundingBox())!;
+    const pen: Point = [box.x + box.width * 0.3, box.y + box.height * 0.25];
+    // The pen rests without moving: a press, not yet a band.
+    await penStroke(cdp, pen, pen, { release: false, steps: 1 });
+    const palm: Point = [box.x + box.width * 0.35, box.y + box.height * 0.7];
+    await swipe(cdp, [palm], [[palm[0] + 150, palm[1] - 40]]);
+    await page.waitForTimeout(400);
+    const after = await cameraState(canvas);
+    const frames = after.orientations;
+    if (frames.length > 1) {
+      expect(angleBetween(frames[0]!, frames.at(-1)!)).toBeLessThan(1e-3);
+    }
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: pen[0],
+      y: pen[1],
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+      pointerType: 'pen'
+    });
+  });
+});

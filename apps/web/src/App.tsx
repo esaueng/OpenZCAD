@@ -30328,6 +30328,7 @@ export function App() {
             onUndo={handleUndo}
             onRedo={handleRedo}
             touchHistoryGestures={appSettings.viewport.touchHistoryGestures}
+            pencilDrawsOnly={appSettings.viewport.pencilDrawsOnly}
             key={`workspace-view-${resumeViewGeneration}`}
             initialView={initialView}
             onViewChange={handleViewportChange}

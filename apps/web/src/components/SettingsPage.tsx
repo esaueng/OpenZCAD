@@ -1475,6 +1475,20 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
+                <SettingRow
+                  title="Only Apple Pencil draws"
+                  hint="Once a Pencil is used, fingers move the view in a sketch and the Pencil places geometry."
+                >
+                  <Toggle
+                    checked={settings.viewport.pencilDrawsOnly}
+                    label="Only Apple Pencil draws"
+                    onChange={(pencilDrawsOnly) =>
+                      patch({
+                        viewport: { ...settings.viewport, pencilDrawsOnly }
+                      })
+                    }
+                  />
+                </SettingRow>
               </Group>
               {/* Every remappable command with its live keys. A key can mean
                   one thing per context (C is Cylinder in the workspace and

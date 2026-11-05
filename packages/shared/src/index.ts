@@ -4448,6 +4448,11 @@ export interface AppSettings {
     xrayOpacity: number;
     /** On a touch screen, two- and three-finger taps undo and redo. */
     touchHistoryGestures: boolean;
+    /**
+     * Once an Apple Pencil (any pen) is used, only it draws sketch geometry;
+     * fingers navigate.
+     */
+    pencilDrawsOnly: boolean;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -4602,7 +4607,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     pointerNavigation: 'auto',
     fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
     xrayOpacity: XRAY_OPACITY_BOUNDS.default,
-    touchHistoryGestures: true
+    touchHistoryGestures: true,
+    pencilDrawsOnly: true
   },
   sketching: {
     gridVisible: true,
