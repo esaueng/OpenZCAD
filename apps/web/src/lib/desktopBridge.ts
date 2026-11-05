@@ -1,3 +1,4 @@
+import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
@@ -506,12 +507,7 @@ function downloadBlobFile(
   contents: BlobPart,
   contentType: string
 ): void {
-  const href = URL.createObjectURL(new Blob([contents], { type: contentType }));
-  const anchor = document.createElement('a');
-  anchor.href = href;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(href);
+  void saveFile(fileName, new Blob([contents], { type: contentType }));
 }
 
 export async function saveCadTextFile(

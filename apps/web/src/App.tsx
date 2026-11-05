@@ -1,4 +1,10 @@
 import {
+  CAD_IMPORT_ACCEPT,
+  fileAccept,
+  persistStorageForInstalledApp
+} from './lib/appleTouch';
+import { registerOfflineShell } from './lib/offlineShell';
+import {
   localHistoryAppend,
   retainLocalHistoryAppend,
   type LocalHistoryAppend
@@ -2286,6 +2292,13 @@ export function App() {
       countReactCommit();
     }
   });
+  // An installed (Home Screen) app keeps its local projects under storage
+  // pressure and opens offline (L02). Here rather than in the entry, which
+  // stays as small as it was.
+  useEffect(() => {
+    void persistStorageForInstalledApp();
+    registerOfflineShell();
+  }, []);
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
@@ -32055,7 +32068,7 @@ export function App() {
           <input
             ref={projectImportInputRef}
             type="file"
-            accept=".openzcad"
+            accept={fileAccept('.openzcad')}
             hidden
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
@@ -32066,7 +32079,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
+            accept={fileAccept(CAD_IMPORT_ACCEPT)}
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {

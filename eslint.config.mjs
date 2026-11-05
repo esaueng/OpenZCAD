@@ -27,6 +27,18 @@ export default tseslint.config(
     }
   },
   {
+    // The offline shell runs as a service worker, not a page.
+    files: ["apps/web/public/sw.js"],
+    languageOptions: {
+      globals: {
+        URL: "readonly",
+        caches: "readonly",
+        fetch: "readonly",
+        self: "readonly"
+      }
+    }
+  },
+  {
     // Node scripts that also pass closures to the page (window).
     files: ["packages/mls/browser/*.mjs", "packages/crypto/browser/*.mjs"],
     languageOptions: {
