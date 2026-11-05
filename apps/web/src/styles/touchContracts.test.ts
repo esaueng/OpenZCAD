@@ -110,6 +110,23 @@ describe('touch targets', () => {
     expect(block).toMatch(/--rail-w:\s*52px/);
   });
 
+  it('keeps 40 px targets only on a phone on its side, where 44 px rows overflow', () => {
+    const css = targetSize;
+    const coarse = css.indexOf('@media (pointer: coarse) {');
+    const short = css.lastIndexOf(
+      '@media (pointer: coarse) and (max-height: 540px) {'
+    );
+    // Later in the file, so it wins over the 44 px rule at equal specificity.
+    expect(short).toBeGreaterThan(coarse);
+    const block = mediaBlock(
+      css.slice(short),
+      '(pointer: coarse) and (max-height: 540px)'
+    );
+    expect(block).toMatch(/--rail-w:\s*48px/);
+    expect(block).toMatch(/grid-template-columns:\s*repeat\(2, 40px\)/);
+    expect(block).toMatch(/min-height:\s*40px/);
+  });
+
   it('keeps the split instrument rail columns as wide as its buttons', () => {
     expect(
       mediaBlock(targetSize, '(pointer: coarse) and (max-height: 900px)')

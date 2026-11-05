@@ -124,3 +124,25 @@
     min-height: 44px;
   }
 }
+
+/* A phone on its side (no taller than 540 px) has no room for 44 px rows:
+   the three-column tool rail ran past the bottom of the screen and clipped
+   Tools. It keeps the 40 px targets it had; an iPad is never this short. */
+@media (pointer: coarse) and (max-height: 540px) {
+  .workspace.column-layout {
+    --rail-w: 48px;
+  }
+
+  .instrument-rail > .viewer-rail {
+    grid-template-columns: repeat(2, 40px);
+  }
+
+  button.command-rail,
+  .instrument-rail .rail-button,
+  .drawing-rail-button {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
