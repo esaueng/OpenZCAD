@@ -5,7 +5,8 @@ import type { PlaneId } from '@openzcad/shared';
 import {
   buildPlanePickerRig,
   ghostPlaneTakesPick,
-  PLANE_PICKER_ORDER
+  PLANE_PICKER_ORDER,
+  preferredGhostHit
 } from './planePickerRig';
 
 describe('plane picker offsets', () => {
@@ -94,5 +95,56 @@ describe('ghost plane picks', () => {
       expect(ghostPlaneTakesPick(40, { kind, distance: 25 })).toBe(false);
       expect(ghostPlaneTakesPick(25, { kind, distance: 40 })).toBe(true);
     }
+  });
+});
+
+describe('overlapping ghost planes', () => {
+  // The default framing looks down on the origin from the front right, where
+  // the upright XZ panel stands in front of much of XY.
+  const eye = new THREE.Vector3(60, -80, 50);
+
+  function hitsToward(
+    rig: ReturnType<typeof buildPlanePickerRig>,
+    at: THREE.Vector3
+  ) {
+    const raycaster = new THREE.Raycaster(eye, at.clone().sub(eye).normalize());
+    return raycaster.intersectObjects(rig.targets(), false);
+  }
+
+  it('gives XY its centre back where XZ covers it', () => {
+    const rig = buildPlanePickerRig();
+    rig.setScale(0.1);
+    rig.group.updateMatrixWorld(true);
+    // XY's centre, 7.8 along X and Y (78 px at 0.1 world units per pixel).
+    const hits = hitsToward(rig, new THREE.Vector3(7.8, 7.8, 0));
+    // Precondition: XZ really is in front of XY here.
+    expect(hits.map((hit) => hit.object.userData.pickPlane as string)).toEqual([
+      'XZ',
+      'XY'
+    ]);
+    expect(preferredGhostHit(hits)?.object.userData.pickPlane).toBe('XY');
+    rig.dispose();
+  });
+
+  it('keeps XZ where the pointer is well inside it', () => {
+    const rig = buildPlanePickerRig();
+    rig.setScale(0.1);
+    rig.group.updateMatrixWorld(true);
+    const hits = hitsToward(rig, new THREE.Vector3(7.8, 0, 7.8));
+    expect(hits[0]?.object.userData.pickPlane).toBe('XZ');
+    expect(preferredGhostHit(hits)?.object.userData.pickPlane).toBe('XZ');
+    rig.dispose();
+  });
+
+  it('takes the nearer of two equally deep hits', () => {
+    const rig = buildPlanePickerRig();
+    const [xy, xz] = rig.targets();
+    const at = (object: THREE.Object3D, x: number, y: number) =>
+      new THREE.Vector3(x, y, 0).applyMatrix4(object.matrixWorld);
+    rig.group.updateMatrixWorld(true);
+    const near = { object: xz!, point: at(xz!, 40, 40), distance: 1 };
+    const far = { object: xy!, point: at(xy!, 40, 40), distance: 2 };
+    expect(preferredGhostHit([near, far])).toBe(near);
+    rig.dispose();
   });
 });
