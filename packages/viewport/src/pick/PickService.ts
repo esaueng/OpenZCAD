@@ -156,6 +156,11 @@ export class PickService {
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.options.camera());
+    // `dblclick` is a MouseEvent with no pointer type: a mouse band.
+    configureEdgeRaycasting(
+      this.raycaster,
+      'pointerType' in event ? event.pointerType : undefined
+    );
   }
 
   /** Ray-tests an arbitrary object list with the already-aimed ray. */

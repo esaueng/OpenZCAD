@@ -148,15 +148,24 @@ Timing and ownership rules:
 2. **Gesture recogniser.** A pure multi-pointer state machine in
    `packages/viewport/src/input/` covering the vocabulary above, unit tested
    with synthetic pointer sequences.
-3. **Viewport wiring.**
-   - Touch pointers go to the recogniser in the capture phase, before
-     selection.
-   - Camera calls go through `CameraController`.
-   - Tap, double tap and long press drive the existing selection and context
-     menu.
-   - `pointerType` is passed through to the pick tolerances.
-   - Add a WebKit iPad Playwright project for a small `@tablet` set. This
-     changes CI (a WebKit install in the shards), so call it out in the PR.
+3. **Viewport wiring** (`viewer/touchNavigation.ts`).
+   - A sequence's first finger still runs the viewport's own press handling.
+     If that claims it (a handle, the move gizmo, a footprint, a sketch
+     tool's stroke, the armed face), the finger acts exactly as a mouse
+     button. Otherwise the recogniser owns it: a tap replays the release as
+     the click it is, a drag orbits (or pans where rotation is off), and a
+     long press opens the pick list or context menu. Every later finger
+     belongs to the recogniser.
+   - Camera calls go through `CameraController` (`beginPinchDrag`,
+     `panByPixels`, `zoomByPinch` beside the view cube's orbit).
+   - Touch picks edges in a band about twice as wide; snap and sketch-grab
+     radii move with slice 5.
+   - Browser coverage drives real multi-touch through Chromium's input
+     domain. A WebKit project is dropped: Playwright's Linux WebKit is not
+     iPadOS Safari, cannot send multi-touch, and would add a browser install
+     to every CI shard.
+   - The Settings switch for two- and three-finger taps moves to slice 4,
+     with the other touch preferences.
 4. **Hover and keyboard replacements.**
    - Selection-mode and modifier chips: Add, Toggle, Snap off, Free value,
      Cycle snap.

@@ -160,6 +160,7 @@
   "text-authoring.spec.ts": 55,
   "text-place-transform.spec.ts": 35,
   "topbar-open-transition.spec.ts": 2,
+  "touch-navigation.spec.ts": 20,
   "transform-copy.spec.ts": 15,
   "transform-pivot.spec.ts": 8,
   "translator-recovery.spec.ts": 7,
