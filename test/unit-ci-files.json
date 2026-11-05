@@ -174,6 +174,8 @@
     "src/components/viewer/touchNavigation.test.ts",
     "src/lib/touchLongPress.test.ts",
     "src/lib/pointerSlack.test.ts",
+    "src/lib/saveFile.test.ts",
+    "src/lib/offlineShell.test.ts",
     "src/hooks/useCommandFold.test.tsx",
     "src/hooks/useGeometryWorker.test.tsx",
     "src/hooks/useGeometryWorkerDemand.test.tsx",

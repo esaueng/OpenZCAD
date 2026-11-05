@@ -1,4 +1,4 @@
-import { downloadBlob } from './saveFile';
+import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
@@ -507,7 +507,7 @@ function downloadBlobFile(
   contents: BlobPart,
   contentType: string
 ): void {
-  downloadBlob(fileName, new Blob([contents], { type: contentType }));
+  void saveFile(fileName, new Blob([contents], { type: contentType }));
 }
 
 export async function saveCadTextFile(

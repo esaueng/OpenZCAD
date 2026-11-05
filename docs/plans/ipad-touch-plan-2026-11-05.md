@@ -207,15 +207,23 @@ Timing and ownership rules:
      frame and there is no freehand stroke yet that would use the extra
      samples.
 7. **Home Screen app and files.**
-   - `viewport-fit=cover` and safe-area insets for the top bar, stage,
-     floating islands and fixed layers.
-   - Manifest, `apple-mobile-web-app-*` tags, and a service worker caching the
-     shell and kernel WASM.
-   - `navigator.storage.persist()`.
-   - `navigator.share({ files })` export.
-   - iOS-safe `accept` filters, with the file checked after picking.
-   - Delayed revoke of the download blob URL in `lib/model.ts`, with a
-     regression test.
+   - A manifest (`display: standalone`), `apple-mobile-web-app-*` tags and
+     theme colours. The default status-bar style keeps the page below the
+     status bar and inside the safe area, so `viewport-fit=cover` and
+     safe-area insets are not needed and are dropped from the plan.
+   - An installed app asks for persistent storage; a browser tab never
+     does (Firefox would prompt for it).
+   - An offline shell (`public/sw.js`), registered only by an installed app
+     in a production build: network-first pages with the last good one kept
+     for offline, cache-first content-hashed `/assets/` (kernel WASM
+     included, capped at 400), everything else untouched.
+   - Exports offer the share sheet on a touch screen that can share files
+     (Save to Files, AirDrop, another app), falling back to a download.
+   - No `accept` filter on an Apple touch device: its Files picker greys out
+     `.step`, `.openzcad` and `.shapr`; imports check the format after
+     picking.
+   - Download blob URLs live for a minute instead of being revoked at click
+     time (WebKit could cancel the save).
 8. **Rendering limits.**
    - Lower pixel ratio during gestures.
    - Smaller shadow map on coarse pointers or low memory.

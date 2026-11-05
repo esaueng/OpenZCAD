@@ -1,4 +1,4 @@
-import { downloadBlob } from './saveFile';
+import { saveFile } from './saveFile';
 import {
   evaluateExpression,
   isValidParameterName,
@@ -245,7 +245,7 @@ export function downloadText(
   value: string,
   contentType = 'text/plain'
 ): void {
-  downloadBlob(name, new Blob([value], { type: contentType }));
+  void saveFile(name, new Blob([value], { type: contentType }));
 }
 
 /** File-safe stem derived from the project name (e.g. for exports). */
