@@ -1443,6 +1443,19 @@ export function isStaleSelectionError(
   return /no longer exists/.test(error?.message ?? '');
 }
 
+/**
+ * The refusal already proved a smaller value fails too (the kernel adapter
+ * walks a size ladder before it says so), so "try another value" would send
+ * the user round the same refusal at every size they type.
+ */
+export function refusalRulesOutSize(
+  error: CommandDiagnostic | null | undefined
+): boolean {
+  return /size is not the cause|Smaller (?:radii|distances) (?:were refused|failed)/.test(
+    error?.message ?? ''
+  );
+}
+
 function lifecycleHint(
   state: Extract<InteractionState, { mode: 'face' | 'edges' | 'region' }>,
   armedHint: string
@@ -1458,7 +1471,9 @@ function lifecycleHint(
       phase: state.phase,
       hint: isStaleSelectionError(state.error)
         ? 'Esc closes the tool.'
-        : 'Adjust the value and try again.',
+        : refusalRulesOutSize(state.error)
+          ? 'Pick a different edge or face, or Esc to close the tool.'
+          : 'Adjust the value and try again.',
       error: state.error ?? {
         message: 'The exact operation was rejected.'
       }

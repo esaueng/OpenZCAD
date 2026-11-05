@@ -115,6 +115,44 @@ afterEach(() => {
 });
 
 describe('HistoryTimeline', () => {
+  it('shows a refused operation as a transient row that is not a step', () => {
+    const { container, rerender, props } = renderTimeline({
+      pendingStep: {
+        title: 'Fillet',
+        message: 'Fillet could not be created on the selected closed edge.'
+      }
+    });
+    const pending = screen.getByRole('status');
+    expect(pending).toHaveTextContent('Fillet');
+    expect(pending).toHaveTextContent('not built');
+    expect(pending).toHaveAttribute(
+      'title',
+      'Fillet could not be created on the selected closed edge.'
+    );
+    // Not a row: the handle, the keyboard walk and the count skip it.
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+    expect(pending.closest('.feature-list')).toBeNull();
+    rerender(<HistoryTimeline {...props} pendingStep={null} />);
+    expect(container.querySelector('.history-pending-row')).toBeNull();
+  });
+
+  it('names a Boolean row by the bodies it combined', () => {
+    renderTimeline({
+      features: [
+        feature(1, {
+          featureKind: 'boolean',
+          operation: 'union',
+          targetBodyIds: ['body_box', 'body_cylinder']
+        })
+      ],
+      representations: {
+        body_box: { name: 'Box 1' },
+        body_cylinder: { name: 'Cylinder 1' }
+      } as unknown as ComponentProps<typeof HistoryTimeline>['representations']
+    });
+    expect(screen.getByText('Box 1 + Cylinder 1')).toBeInTheDocument();
+  });
+
   it('puts the value beside the name in the row tooltip, whole', () => {
     renderTimeline({
       features: [

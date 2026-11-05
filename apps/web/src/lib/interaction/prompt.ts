@@ -1,6 +1,8 @@
 import {
   escapeTarget,
   isStaleSelectionError,
+  refusalRulesOutSize,
+  type CommandDiagnostic,
   type InteractionState
 } from './machine';
 import { activeKeymap, keyHint } from '../keymap';
@@ -26,6 +28,21 @@ export interface CommandPrompt {
    * there.
    */
   escape: string | null;
+}
+
+/** What the workspace knows that the interaction state alone does not. */
+export interface CommandPromptContext {
+  /**
+   * The refusal is already on screen in the notice lane, with its ways out,
+   * so the prompt says only what to do next instead of repeating it: the
+   * same paragraph used to run in the lane, the keypad and the status row.
+   */
+  refusalShown?: boolean;
+  /**
+   * How the picked edges read when they are not a plain count — a rim the
+   * boolean split into four arcs is the one "closed edge" the user clicked.
+   */
+  edgeNoun?: string;
 }
 
 /** How each rung of the Escape ladder reads to someone about to press it. */
@@ -54,7 +71,8 @@ const SKETCH_TOOL_STEPS: Record<string, string> = {
 /** The armed step for an operation, before any drag has begun. */
 function armedStep(
   state: InteractionState,
-  dimensionMode: DimensionMode
+  dimensionMode: DimensionMode,
+  edgeNoun?: string
 ): string {
   if (state.mode === 'face') {
     switch (state.op) {
@@ -81,7 +99,7 @@ function armedStep(
   }
   if (state.mode === 'edges') {
     const count = state.edges.length;
-    const noun = count === 1 ? 'edge' : `${count} edges`;
+    const noun = edgeNoun ?? (count === 1 ? 'edge' : `${count} edges`);
     const value = state.op === 'fillet' ? 'radius' : 'distance';
     return `Drag the arrow to set the ${state.op} on ${noun}, or type a ${value}`;
   }
@@ -116,7 +134,8 @@ function draggingStep(state: InteractionState): string {
  */
 export function commandPrompt(
   state: InteractionState,
-  dimensionMode: DimensionMode = 'diameter'
+  dimensionMode: DimensionMode = 'diameter',
+  context: CommandPromptContext = {}
 ): CommandPrompt | null {
   const escape = ESCAPE_LABELS[escapeTarget(state)];
   if (state.mode === 'idle') {
@@ -149,14 +168,7 @@ export function commandPrompt(
     return { step: 'Checking the exact result…', escape };
   }
   if (state.phase === 'failed') {
-    return {
-      step: state.error
-        ? isStaleSelectionError(state.error)
-          ? state.error.message
-          : `${state.error.message} Try another value.`
-        : 'That value did not build. Try another.',
-      escape
-    };
+    return { step: failedStep(state.error, context.refusalShown), escape };
   }
   if (state.phase === 'exact-entry') {
     return { step: 'Type a value · Enter applies', escape };
@@ -164,15 +176,40 @@ export function commandPrompt(
   if (state.phase === 'dragging') {
     return { step: draggingStep(state), escape };
   }
-  return { step: armedStep(state, dimensionMode), escape };
+  return { step: armedStep(state, dimensionMode, context.edgeNoun), escape };
+}
+
+/**
+ * The next move after a refused value. "Try another value" is offered only
+ * when a different value could build: a stale selection fails at every value,
+ * and so does a refusal whose size ladder already failed all the way down.
+ */
+function failedStep(
+  error: CommandDiagnostic | null,
+  refusalShown = false
+): string {
+  if (!error) return 'That value did not build. Try another.';
+  const stale = isStaleSelectionError(error);
+  const sizeRuledOut = refusalRulesOutSize(error);
+  if (refusalShown) {
+    return stale
+      ? 'Re-select, as the note above says'
+      : sizeRuledOut
+        ? 'Pick a different edge or face'
+        : 'Try another value';
+  }
+  return stale || sizeRuledOut
+    ? error.message
+    : `${error.message} Try another value.`;
 }
 
 /** The prompt as one line, ready for the status bar. */
 export function commandPromptText(
   state: InteractionState,
-  dimensionMode: DimensionMode = 'diameter'
+  dimensionMode: DimensionMode = 'diameter',
+  context: CommandPromptContext = {}
 ): string | null {
-  const prompt = commandPrompt(state, dimensionMode);
+  const prompt = commandPrompt(state, dimensionMode, context);
   if (!prompt) {
     return null;
   }

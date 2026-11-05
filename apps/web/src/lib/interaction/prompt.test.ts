@@ -258,3 +258,50 @@ describe('the step describes the operation actually armed', () => {
     );
   });
 });
+
+describe('a refused value', () => {
+  const sizeRuledOut =
+    'Fillet could not be created on the selected closed edge with radius 1. Smaller radii failed the same way, so the size is not the cause.';
+
+  it('does not tell the user to try another value once every size failed', () => {
+    const refused = faceState('failed', 'offset-face', sizeRuledOut);
+    expect(commandPrompt(refused)?.step).toBe(sizeRuledOut);
+    expect(commandPromptText(refused)).not.toContain('Try another value');
+  });
+
+  it('still offers another value when a smaller one could build', () => {
+    expect(
+      commandPrompt(
+        faceState('failed', 'offset-face', 'Offset removes the face.')
+      )?.step
+    ).toBe('Offset removes the face. Try another value.');
+  });
+
+  it('leaves the sentence to the notice lane when the lane already shows it', () => {
+    const shown = { refusalShown: true };
+    expect(
+      commandPromptText(
+        faceState('failed', 'offset-face', sizeRuledOut),
+        'diameter',
+        shown
+      )
+    ).toBe('Pick a different edge or face · Esc clears the selection');
+    expect(
+      commandPromptText(
+        faceState('failed', 'offset-face', 'Offset removes the face.'),
+        'diameter',
+        shown
+      )
+    ).toBe('Try another value · Esc clears the selection');
+  });
+
+  it('names a split rim as the closed edge it is', () => {
+    expect(
+      commandPrompt(edgeState('armed', 'fillet', 4), 'diameter', {
+        edgeNoun: 'the closed edge'
+      })?.step
+    ).toBe(
+      'Drag the arrow to set the fillet on the closed edge, or type a radius'
+    );
+  });
+});

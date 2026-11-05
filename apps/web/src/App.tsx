@@ -573,6 +573,7 @@ import {
   PanelsHiddenPill,
   ViewOptionsMenu
 } from './components/modelPanels/ViewOptionsMenu';
+import { Tooltip } from './components/Tooltip';
 import type { FeatureHistoryPanel as FeatureHistoryComponent } from './components/FeatureHistoryPanel';
 import type { TweakPanel as TweakPanelComponent } from './components/TweakPanel';
 import type { ViewModeBar as ViewModeBarComponent } from './components/ViewModeBar';
@@ -726,6 +727,7 @@ import {
   primitiveCylinderScale
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
+import { edgeSelectionName } from './lib/edgeLoops';
 import {
   offsetPreviewRejection,
   resolveOffsetPreviewFace
@@ -7992,6 +7994,21 @@ export function App() {
     interaction.mode === 'face' && interaction.op === 'offset-face';
   const resizingCylinder =
     interaction.mode === 'face' && interaction.op === 'resize-cylinder-radius';
+  // A rim the boolean split into arcs is one closed edge to the user, in
+  // the readout, the prompt and the assistant's placeholder alike.
+  const edgeSelectionNaming = useMemo(() => {
+    if (selectedEdges.length < 2) return null;
+    const picked = selectedEdges.map((selection) =>
+      renderedRepresentations[selection.bodyId]?.topology?.edges.find(
+        (edge) =>
+          edge.topologyId === selection.topologyId ||
+          (selection.hash !== undefined && edge.hash === selection.hash)
+      )
+    );
+    return picked.every((edge) => edge !== undefined)
+      ? edgeSelectionName(picked)
+      : null;
+  }, [selectedEdges, renderedRepresentations]);
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
@@ -8015,7 +8032,9 @@ export function App() {
         sampled = sampled || measured?.quality === 'sampled';
         return sum + (measured?.value ?? 0);
       }, 0);
-      const label = textLabelSegments(`${selectedEdges.length} edges`);
+      const label = textLabelSegments(
+        edgeSelectionNaming?.label ?? `${selectedEdges.length} edges`
+      );
       const value =
         total > 0
           ? `${sampled ? '≈ ' : ''}${round(total)} ${units}`
@@ -8166,7 +8185,8 @@ export function App() {
     selectedTopology,
     representations,
     offsettingFace,
-    resizingCylinder
+    resizingCylinder,
+    edgeSelectionNaming
   ]);
 
   const {
@@ -24322,8 +24342,10 @@ export function App() {
       return null;
     }
     const payload = {
+      // The in-place tool's names ("Fillet", "Fillet 2"), so a round made by
+      // dragging and one made from the tool read as the same kind of step.
       name: newFeatureName(
-        currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges'
+        currentInteraction.op === 'fillet' ? 'Fillet' : 'Chamfer'
       ),
       targetBodyId: bodyId,
       edgeHashes,
@@ -24388,7 +24410,7 @@ export function App() {
     const facesBefore =
       representations[command.payload.targetBodyId]?.topology?.faces;
     // Judged as the preview judges it: the kernel names a refusal after the
-    // new feature ("Fillet edges 4"), never the command's generic label.
+    // new feature ("Fillet 4"), never the command's generic label.
     const validationTarget = newBlendValidationTarget(command);
     void executeValidatedDirectEdit(
       command,
@@ -28704,6 +28726,7 @@ export function App() {
   // act on it, and the bar's empty search leaves them out (U05).
   const commandSelection: CommandSelection = {
     edgeCount: selectedEdges.length,
+    ...(edgeSelectionNaming ? { edgeNoun: edgeSelectionNaming.noun } : {}),
     faceSelected: renderedSelectedTopology?.kind === 'face',
     bodyCount: selectedBodyIds.length,
     regionCount: selectedProfiles.length
@@ -29239,7 +29262,12 @@ export function App() {
           ? viewModeHint
           : tweakMode
             ? tweakModeHint
-            : (commandPromptText(interaction, cylinderDimensionMode) ??
+            : (commandPromptText(interaction, cylinderDimensionMode, {
+                refusalShown: Boolean(calloutWithOperation?.operation?.error),
+                ...(edgeSelectionNaming && interaction.mode === 'edges'
+                  ? { edgeNoun: edgeSelectionNaming.noun }
+                  : {})
+              }) ??
               (tool === 'sketch'
                 ? [
                     'Drag to draw',
@@ -29639,6 +29667,14 @@ export function App() {
         openReferenceImage(imageId as ReferenceImageId)
       }
       warnings={diagnostics}
+      pendingHistoryStep={
+        commandSession?.phase === 'failed' && commandSession.error
+          ? {
+              title: commandSession.title,
+              message: commandSession.error.message
+            }
+          : null
+      }
       historyDetails={
         <FeatureHistoryPanel
           document={doc}
@@ -30178,33 +30214,42 @@ export function App() {
                       id === 'diagnostics' && diagnostics.length > 0
                         ? diagnostics.length
                         : 0;
+                    // The rail's own tooltip, as the viewer group above it
+                    // has: a native title waited a second and named only
+                    // the panel, so a row of bare icons read as unlabelled.
                     return (
-                      <button
+                      <Tooltip
                         key={id}
-                        type="button"
-                        className={`rail-button${showing ? ' active' : ''}${parked ? ' parked' : ''}`}
-                        aria-label={`${label} panel`}
-                        data-model-panel-rail={id}
-                        aria-pressed={showing}
-                        title={
+                        label={label}
+                        description={
                           badge > 0
-                            ? `${label} · ${badge} ${badge === 1 ? 'warning' : 'warnings'}`
-                            : label
+                            ? `${badge} ${badge === 1 ? 'warning' : 'warnings'} · ${showing ? 'Hide' : 'Show'} the panel`
+                            : `${showing ? 'Hide' : 'Show'} the panel`
                         }
-                        onPointerDown={(event) =>
-                          panelDockRef.current?.pressRail(id, event)
-                        }
-                        onClick={() => pressRailPanel(id)}
                       >
-                        <Icon size={16} aria-hidden="true" />
-                        {badge > 0 && (
-                          <span className="rail-badge" aria-hidden="true">
-                            {badge > 99 ? '99+' : badge}
-                          </span>
-                        )}
-                      </button>
+                        <button
+                          type="button"
+                          className={`rail-button${showing ? ' active' : ''}${parked ? ' parked' : ''}`}
+                          aria-label={`${label} panel`}
+                          data-model-panel-rail={id}
+                          aria-pressed={showing}
+                          onPointerDown={(event) =>
+                            panelDockRef.current?.pressRail(id, event)
+                          }
+                          onClick={() => pressRailPanel(id)}
+                        >
+                          <Icon size={16} aria-hidden="true" />
+                          {badge > 0 && (
+                            <span className="rail-badge" aria-hidden="true">
+                              {badge > 99 ? '99+' : badge}
+                            </span>
+                          )}
+                        </button>
+                      </Tooltip>
                     );
                   })}
+                  {/* The panels above; the layout and the log below. */}
+                  <span className="rail-divider" aria-hidden="true" />
                   <ViewOptionsMenu
                     options={panelLayout.options}
                     preset={matchingPreset(panelLayout)}
@@ -30822,10 +30867,20 @@ export function App() {
                         (interaction.phase === 'failed' ||
                           interaction.phase === 'validating')
                       }
+                      commitRefused={
+                        isOperationState(interaction) &&
+                        interaction.phase === 'failed'
+                      }
                       commitDisabledReason={
                         interaction.mode !== 'idle' &&
-                        interaction.mode !== 'sketch'
-                          ? (interaction.error?.message ?? null)
+                        interaction.mode !== 'sketch' &&
+                        interaction.error
+                          ? // The notice lane carries the full sentence and
+                            // its ways out; the keypad points there rather
+                            // than repeating the paragraph over the model.
+                            calloutWithOperation?.operation?.error
+                            ? 'This value did not build. The note below says why.'
+                            : interaction.error.message
                           : null
                       }
                       onCommit={(value, raw) => {
@@ -31919,7 +31974,17 @@ export function App() {
                   assistantCollapsed &&
                   assistantActivity.unread > 0
                 }
-                context={assistantAvailable ? assistantActivity.context : null}
+                context={
+                  assistantAvailable
+                    ? // The panel counts picks; the rim it counted as four
+                      // arcs is the one closed edge the readout names.
+                      edgeSelectionNaming &&
+                      assistantActivity.context ===
+                        `${selectedEdges.length} selected edges`
+                      ? edgeSelectionNaming.context
+                      : assistantActivity.context
+                    : null
+                }
                 draft={promptDraft}
                 pick={commandContextLabel(commandSelection)}
               />

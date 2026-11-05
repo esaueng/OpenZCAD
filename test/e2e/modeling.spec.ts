@@ -1499,7 +1499,9 @@ for (const modifier of [
     await expect(
       page.getByRole('heading', { name: 'Objects 1' })
     ).toBeVisible();
-    await expectConsumedBodyCount(page, 1);
+    // The body before the blend is an earlier state of the same body, a step
+    // in History rather than a source body: nothing goes behind the toggle.
+    await expectConsumedBodyCount(page, 0);
     await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
 
@@ -1574,7 +1576,9 @@ for (const modifier of [
     await expect(
       page.getByRole('heading', { name: 'Objects 1' })
     ).toBeVisible();
-    await expectConsumedBodyCount(page, 1);
+    // The body before the blend is an earlier state of the same body, a step
+    // in History rather than a source body: nothing goes behind the toggle.
+    await expectConsumedBodyCount(page, 0);
     await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();
     await expect
@@ -1704,9 +1708,13 @@ test('preflights and drills a through hole into the top face', { tag: '@ci-smoke
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
   ).toBeVisible();
-  await expectConsumedBodyCount(page, 1);
-  await page.locator('.consumed-toggle').click();
-  await expect(page.locator('.body-row.consumed')).toContainText('Box 1');
+  // The drilled box is the same body a step on, not a new body made from
+  // it: no source body, and the undrilled box is reached by its own History
+  // step.
+  await expectConsumedBodyCount(page, 0);
+  await expect(
+    page.locator('.feature-row-main', { hasText: /^Box/ })
+  ).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -1767,9 +1775,13 @@ test('preflights and creates an exact open-top shell', { tag: '@ci-smoke' }, asy
   await expect(
     page.locator('.feature-row-main', { hasText: 'Shell' })
   ).toBeVisible();
-  await expectConsumedBodyCount(page, 1);
-  await page.locator('.consumed-toggle').click();
-  await expect(page.locator('.body-row.consumed')).toContainText('Box 1');
+  // The shelled box is the same body a step on, not a new body made from
+  // it: no source body, and the solid box is reached by its own History
+  // step.
+  await expectConsumedBodyCount(page, 0);
+  await expect(
+    page.locator('.feature-row-main', { hasText: /^Box/ })
+  ).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -3135,7 +3147,11 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   // toggles that card; Measurements opens it explicitly in either state.
   const boxMeasurements = await featureCardFromHistory(
     page,
-    page.locator('.feature-row', { hasText: 'Box' })
+    // Matched by its name, not its value: a boolean row now names its
+    // operands ("Box 1 − Cylinder"), which also contain "Box".
+    page.locator('.feature-row', {
+      has: page.locator('.feature-row-main', { hasText: 'Box' })
+    })
   );
   await expect(boxMeasurements).toContainText('34560');
 

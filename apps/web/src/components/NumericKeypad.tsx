@@ -1,18 +1,20 @@
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type MutableRefObject
 } from 'react';
-import { Check, Delete } from 'lucide-react';
+import { Check, Delete, Grid3x3 } from 'lucide-react';
 import type { UnitSystem } from '@openzcad/shared';
 import {
   appendKeypadKey,
   convertDimensionInput,
   dimensionModeForInput,
   evaluateKeypadInput,
+  keypadBesidePosition,
   keypadClampPosition,
   type DimensionMode,
   type KeypadExclusion,
@@ -95,11 +97,30 @@ interface NumericKeypadProps {
   /** Exact preview refused the current value; entry stays editable. */
   commitDisabled?: boolean;
   commitDisabledReason?: string | null;
+  /**
+   * The value was refused, not merely being checked: the keypad takes the
+   * error colour the notice lane uses. A check in flight stays neutral —
+   * it used to wear the same warning amber as a refusal.
+   */
+  commitRefused?: boolean;
   onDimensionModeChange?(mode: DimensionMode): void;
   onCancel(): void;
 }
 
 const METRIC_UNITS: KeypadUnit[] = ['mm', 'cm', 'm'];
+
+/**
+ * Whether the digit grid opens expanded. A mouse-and-keyboard user types
+ * into the field, so on a fine pointer the grid (two thirds of the keypad,
+ * over the model being edited) waits behind its toggle; a touch screen has
+ * no keyboard to type with and opens it. Without `matchMedia` (a test DOM)
+ * it opens, as it always did.
+ */
+function keypadGridOpensExpanded(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function')
+    return true;
+  return !window.matchMedia('(pointer: fine)').matches;
+}
 
 /**
  * The chips a length entry offers: the metric three, plus the document's own
@@ -183,6 +204,40 @@ function dockedPanelBands(host: HTMLElement): KeypadExclusion[] {
 }
 
 /**
+ * The box the value chip and its operation label paint, host-relative, or a
+ * point box at the rig's anchor when neither is drawn yet.
+ *
+ * Their painted boxes, unlike the anchor: the chip pair is laid out away
+ * from the rig's point by CSS, so the point alone put the keypad on top of
+ * the very chip it was opened from.
+ */
+function chipBoxAround(
+  host: HTMLElement,
+  point: { x: number; y: number }
+): { left: number; top: number; right: number; bottom: number } {
+  const hostRect = host.getBoundingClientRect();
+  const boxes = [
+    host.querySelector<HTMLElement>(
+      '[data-testid="direct-manipulation-value"]'
+    ) ?? host.querySelector<HTMLElement>('.handle-value-chip'),
+    host.querySelector<HTMLElement>('.handle-label-chip')
+  ]
+    .map((chip) => chip?.getBoundingClientRect())
+    .filter((rect): rect is DOMRect =>
+      Boolean(rect && rect.width > 0 && rect.height > 0)
+    );
+  if (boxes.length === 0) {
+    return { left: point.x, top: point.y, right: point.x, bottom: point.y };
+  }
+  return {
+    left: Math.min(...boxes.map((rect) => rect.left)) - hostRect.left,
+    top: Math.min(...boxes.map((rect) => rect.top)) - hostRect.top,
+    right: Math.max(...boxes.map((rect) => rect.right)) - hostRect.left,
+    bottom: Math.max(...boxes.map((rect) => rect.bottom)) - hostRect.top
+  };
+}
+
+/**
  * How far down the host the keypad may reach: to the top of the bottom lane
  * (the guidance row and the search bar, where a command's Done stands),
  * which is drawn over the stage and would take the keypad's own clicks.
@@ -231,6 +286,7 @@ export function NumericKeypad({
   onCommit,
   commitDisabled = false,
   commitDisabledReason,
+  commitRefused = false,
   onDimensionModeChange,
   onCancel
 }: NumericKeypadProps) {
@@ -250,6 +306,9 @@ export function NumericKeypad({
       ? 'Diameter'
       : 'Radius'
     : request.label;
+  const [gridOpen, setGridOpen] = useState(keypadGridOpensExpanded);
+  const reasonId = useId();
+  const gridId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   // The pad is the touch keyboard: the field keeps focus (Enter, Escape and
@@ -318,15 +377,21 @@ export function NumericKeypad({
       }
       lastAnchor = point;
       root.style.maxHeight = `${Math.max(0, keypadFloor(host) - 16)}px`;
-      const placement = keypadClampPosition(
-        point,
-        {
-          width: root.offsetWidth || 232,
-          height: root.offsetHeight || 280
-        },
-        { width: host.clientWidth, height: keypadFloor(host) },
-        dockedPanelBands(host)
-      );
+      const size = {
+        width: root.offsetWidth || 232,
+        height: root.offsetHeight || 280
+      };
+      const viewport = { width: host.clientWidth, height: keypadFloor(host) };
+      // A click-placed editor has no chips to stand beside; one opened from
+      // a handle's value chip stands beside the chips, clear of the handle.
+      const placement = request.fixedClientAnchor
+        ? keypadClampPosition(point, size, viewport, dockedPanelBands(host))
+        : keypadBesidePosition(
+            chipBoxAround(host, point),
+            size,
+            viewport,
+            dockedPanelBands(host)
+          );
       root.style.visibility = 'visible';
       root.style.left = `${placement.x}px`;
       root.style.top = `${placement.y}px`;
@@ -493,7 +558,9 @@ export function NumericKeypad({
     <div
       ref={rootRef}
       className="numeric-keypad"
-      data-state={commitDisabled ? 'warning' : 'ready'}
+      data-state={
+        commitRefused ? 'refused' : commitDisabled ? 'checking' : 'ready'
+      }
       role="dialog"
       // The visible label may be a glyph ("⌀", "R"); the names are in words.
       aria-label={`${spokenValueName(label)} value`}
@@ -543,10 +610,24 @@ export function NumericKeypad({
             event.currentTarget.focus();
           }}
           value={value}
-          aria-invalid={commitDisabled || !evaluation.ok}
+          aria-invalid={commitRefused || !evaluation.ok}
           spellCheck={false}
           onChange={(event) => previewIfValid(event.target.value)}
         />
+        <button
+          type="button"
+          className="keypad-grid-toggle"
+          aria-label="Keypad"
+          title={gridOpen ? 'Hide keypad' : 'Show keypad'}
+          aria-expanded={gridOpen}
+          aria-controls={gridId}
+          onClick={() => {
+            setGridOpen((open) => !open);
+            inputRef.current?.focus();
+          }}
+        >
+          <Grid3x3 size={14} aria-hidden="true" />
+        </button>
       </div>
       {/* A converted or computed value is shown in the document's own units,
           so a value typed in some other unit is never committed unseen — a
@@ -560,10 +641,14 @@ export function NumericKeypad({
           ? evaluation.ok && evaluation.value !== undefined
             ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}${request.unitKind === 'angle' ? '°' : request.unitKind === 'count' ? '' : ` ${unitLabel('length', units)}`}`
             : (evaluation.error ?? 'invalid')
-          : ''}
+          : request.unitKind === 'length'
+            ? // Typing a unit is how another one is entered; the hint says
+              // so where the chips used to suggest a document setting.
+              `Other units: 2cm, 1in`
+            : ''}
       </div>
       {commitDisabled && commitDisabledReason ? (
-        <div className="keypad-warning" role="alert">
+        <div className="keypad-warning" role="alert" id={reasonId}>
           {commitDisabledReason}
         </div>
       ) : null}
@@ -589,13 +674,18 @@ export function NumericKeypad({
           ))}
         </div>
       )}
-      {request.unitKind !== 'count' && (
+      {gridOpen && request.unitKind !== 'count' && (
         <div
-          className="keypad-units"
+          className="keypad-units keypad-entry-units"
           role="radiogroup"
           aria-label="Entry unit"
           onKeyDown={onRadioGroupKeyDown}
         >
+          {/* Named as the unit typed in, not the document's: the bare
+              mm/cm/m row read as a switch for the whole model. */}
+          <span className="keypad-units-label" aria-hidden="true">
+            Enter in
+          </span>
           {(request.unitKind === 'angle'
             ? (['deg'] as KeypadUnit[])
             : lengthUnitsFor(units)
@@ -629,8 +719,8 @@ export function NumericKeypad({
           ))}
         </div>
       )}
-      <div className="keypad-grid">
-        {PAD_KEYS.flat().map((key) => (
+      <div className="keypad-grid" id={gridId}>
+        {(gridOpen ? PAD_KEYS.flat() : []).map((key) => (
           <button
             key={key}
             type="button"
@@ -640,20 +730,26 @@ export function NumericKeypad({
             {key === '*' ? '×' : key === '/' ? '÷' : key}
           </button>
         ))}
-        <button
-          type="button"
-          className="keypad-key"
-          aria-label="Backspace"
-          onClick={() => previewIfValid(appendKeypadKey(value, '⌫'))}
-        >
-          <Delete size={14} aria-hidden="true" />
-        </button>
+        {gridOpen && (
+          <button
+            type="button"
+            className="keypad-key"
+            aria-label="Backspace"
+            onClick={() => previewIfValid(appendKeypadKey(value, '⌫'))}
+          >
+            <Delete size={14} aria-hidden="true" />
+          </button>
+        )}
         {/* Named, not just ticked: a bare checkmark makes the user guess what
             it applies, and the name is the same one assistive tech reads. */}
         <button
           type="button"
           className="keypad-commit"
           disabled={!evaluation.ok || commitDisabled}
+          // The reason the button is off, read with it and shown on hover.
+          {...(commitDisabled && commitDisabledReason
+            ? { 'aria-describedby': reasonId, title: commitDisabledReason }
+            : {})}
           onClick={commit}
         >
           <Check size={16} aria-hidden="true" />

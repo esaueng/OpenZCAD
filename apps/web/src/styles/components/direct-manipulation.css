@@ -636,10 +636,12 @@
     box-shadow var(--dur-fast) var(--ease-out);
 }
 
-.numeric-keypad[data-state='warning'] {
-  border-color: var(--color-warning);
+/* A refused value wears the notice lane's error red, so the two read as one
+   event; a check still in flight is not a problem yet and stays neutral. */
+.numeric-keypad[data-state='refused'] {
+  border-color: var(--color-error);
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-warning) 28%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--color-error) 28%, transparent),
     0 18px 44px rgba(0, 0, 0, 0.5);
 }
 
@@ -681,9 +683,50 @@
 }
 
 .keypad-warning {
-  color: var(--color-warning);
+  color: var(--color-error-text);
   font-size: var(--fs-xs);
   line-height: 1.35;
+}
+
+/* One line: the unit hint must not push the keys down under the pointer. */
+.keypad-expr-preview {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.keypad-grid-toggle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.keypad-grid-toggle:hover,
+.keypad-grid-toggle[aria-expanded='true'] {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.keypad-grid-toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.keypad-units-label {
+  flex: 0 0 auto;
+  align-self: center;
+  padding-right: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
 }
 
 .keypad-units {
@@ -758,9 +801,18 @@
   background: var(--color-accent-hi);
 }
 
+/* Off reads as off: a neutral key with muted text, not a dimmed accent
+   that still looks like the way forward. */
 .keypad-commit:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: default;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  cursor: not-allowed;
+}
+
+/* With the digits folded away, Apply takes the whole row. */
+.keypad-grid:not(:has(.keypad-key)) .keypad-commit {
+  grid-column: 1 / -1;
 }
 
 /* ---------------------------------------------------------------------------

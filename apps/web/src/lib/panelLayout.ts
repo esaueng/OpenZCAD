@@ -156,7 +156,9 @@ export interface PanelLayoutOptions {
    * Docked panels hug their content (View options › Fit panels to
    * content): one drawn shorter than its share leaves the rest to the
    * panels beside it, or to the model. Off, the default, every docked panel
-   * fills its share, as a window's panels always do. Stored as `hug`: the
+   * fills its share, as a window's panels always do — except a panel at its
+   * default weight beside History, which hugs its rows so History takes the
+   * rest (see `capOf`). Stored as `hug`: the
    * `fit` key it replaced defaulted on, and is ignored so every device
    * starts filling.
    */
@@ -2285,16 +2287,39 @@ export function computePanelGeometry(
   // window keeps the height it was given, so its panels fill it.
   // A drop preview's slot carries the dragged panel's natural height
   // (`naturals[PANEL_SLOT]`), so the preview is drawn as the drop will be.
-  const capOf = (entry: PanelEntry): number =>
-    (layout.options.hug ? stage.naturals?.[entry] : undefined) ??
-    Number.POSITIVE_INFINITY;
+  //
+  // Beside History, Objects at its default weight hugs its rows even with
+  // the option off, and History takes what it leaves: a model of one body
+  // drew a one-row Objects list in half the column and squeezed the longer
+  // list under it. It keeps the 90px minimum every panel holds, and only
+  // Objects does this: Parameters or Revisions hugging beside History undid
+  // a double-click's even split (both back at weight 1) the moment it was
+  // made. A sized Objects (any other weight) keeps its share, and History
+  // itself always fills.
+  const capOf = (entry: PanelEntry, column: readonly PanelEntry[]): number => {
+    if (layout.options.hug) {
+      return stage.naturals?.[entry] ?? Number.POSITIVE_INFINITY;
+    }
+    const natural =
+      entry === 'bodies' &&
+      layout.weights[entry] === 1 &&
+      column.includes('history')
+        ? stage.naturals?.[entry]
+        : undefined;
+    return natural === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(PANEL_MIN_HEIGHT, natural);
+  };
   const stack = (
     entries: PanelEntry[],
     rect: Rect,
     mode: PanelRect['mode'],
     container: GapGeometry['container']
   ): { overflowing: boolean; contentHeight: number } => {
-    const caps = mode === 'docked' ? entries.map(capOf) : undefined;
+    const caps =
+      mode === 'docked'
+        ? entries.map((entry) => capOf(entry, entries))
+        : undefined;
     const result = stackHeights(
       entries.map((entry) => weightOf(layout, entry)),
       rect.h,
@@ -2384,7 +2409,7 @@ export function computePanelGeometry(
         side,
         column
       });
-      const caps = entries.map(capOf);
+      const caps = entries.map((entry) => capOf(entry, entries));
       geometry.columns.push({
         ...rect,
         side,
