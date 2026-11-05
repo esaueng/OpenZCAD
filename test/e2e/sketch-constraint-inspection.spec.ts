@@ -153,7 +153,9 @@ async function enterSketch(page: Page, canvas: Locator, objectCount = 1) {
 }
 
 async function expectReachable(control: Locator) {
-  await control.scrollIntoViewIfNeeded();
+  // Expansion can reflow the shared flyout after an initial scroll. A trial
+  // click waits for a stable, unobstructed target without selecting geometry.
+  await control.click({ trial: true });
   await expect(control).toBeInViewport({ ratio: 1 });
   await expect
     .poll(() =>

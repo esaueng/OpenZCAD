@@ -3131,8 +3131,13 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   const paramInput = page.getByLabel('Expression for w');
   await paramInput.fill('40');
   await paramInput.press('Enter');
-  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
-  await expect(page.locator('.panel-body')).toContainText('34560');
+  // A parameter edit can leave this feature's inspector pinned. Its row
+  // toggles that card; Measurements opens it explicitly in either state.
+  const boxMeasurements = await featureCardFromHistory(
+    page,
+    page.locator('.feature-row', { hasText: 'Box' })
+  );
+  await expect(boxMeasurements).toContainText('34560');
 
   // Undo while the untouched input is focused must not let the stale visible
   // draft recommit over the newer canonical expression on blur. Dispatching on
