@@ -9,9 +9,12 @@ import {
   isInPlaceTransform
 } from '@openzcad/shared';
 import { editableFilletFeature } from './interaction/filletFaceEdit';
+import { extrudeCapAncestor } from './interaction/extrudeCapAncestry';
 import type { FeatureSelectionSource } from './inspectorHeading';
 import {
   primitiveBoxFaceAncestor,
+  primitiveConeCapAncestor,
+  primitiveCurvedFaceAncestor,
   primitiveCylinderCapAncestor,
   primitiveCylinderRadiusAncestor
 } from './interaction/cylinderPrimitiveAncestry';
@@ -180,7 +183,21 @@ export function selectionFeature(
         body.bodyId,
         face.reference,
         face.hash
-      )?.primitive;
+      )?.primitive ??
+      primitiveConeCapAncestor(document, body.bodyId, face.reference, face.hash)
+        ?.primitive ??
+      // A sphere patch, cone wall or torus shell, named for the primitive or
+      // for the union or subtract operand it survived as.
+      primitiveCurvedFaceAncestor(
+        document,
+        body.bodyId,
+        face.reference,
+        face.hash
+      ) ??
+      (face.reference?.lineageName.startsWith('boolean.face.operand.')
+        ? extrudeCapAncestor(document, body.bodyId, face.reference, face.hash)
+            ?.feature
+        : undefined);
     if (ancestor) return ancestor;
     if (face.reference?.lineageName === 'modifier.cylinder.face.wall') {
       return primitiveCylinderRadiusAncestor(document, body.bodyId);
