@@ -533,21 +533,21 @@ describe('renderSelectionCallout', () => {
         })
       );
       const readMore = [...element.querySelectorAll('button')].find(
-        (item) => item.textContent === 'Read more'
+        (item) => item.textContent === 'More'
       )!;
       expect(readMore.getAttribute('aria-expanded')).toBe('false');
       readMore.click();
       expect(readMore.getAttribute('aria-expanded')).toBe('true');
-      expect(element.querySelector('[role="alert"]')).toHaveClass(
-        'is-expanded'
-      );
+      expect(
+        element.querySelector('.selection-callout-diagnostic')
+      ).toHaveClass('is-expanded');
       expect(
         element.querySelector('.selection-callout-error')?.textContent
       ).toBe(message);
       readMore.click();
-      expect(element.querySelector('[role="alert"]')).not.toHaveClass(
-        'is-expanded'
-      );
+      expect(
+        element.querySelector('.selection-callout-diagnostic')
+      ).not.toHaveClass('is-expanded');
     });
 
     it('says why it refused, with each way out as a button', () => {

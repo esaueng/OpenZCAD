@@ -9,6 +9,8 @@ import {
   type BodyId,
   type FaceTopologyReferenceV5,
   type FeatureId,
+  type BooleanOperation,
+  type DirectEditOperation,
   type FeatureNode,
   type ProjectDocument,
   isInPlaceTransform
@@ -33,10 +35,25 @@ interface PrimitiveChain {
   scale: number;
 }
 
-interface UnionBoxPath {
+/**
+ * A face whose v5 role names one consumed operand of a boolean, so a
+ * dimension drag on it may cross that boolean to the operand's primitive.
+ */
+interface BooleanOperandPath {
   reference: FaceTopologyReferenceV5;
   operandIndex: number;
-  axis: BoxAxis;
+  /** Boolean operations this crossing is qualified for. */
+  operations: readonly BooleanOperation[];
+  /**
+   * A box side may cross only after a fillet or chamfer: without one, the
+   * plain face offset already resolves the union's side exactly.
+   */
+  requireEdgeModifier: boolean;
+  /**
+   * Whether an earlier direct edit downstream of the operand keeps the
+   * primitive's stored dimension authoritative.
+   */
+  allowsDirectEdit: (operation: DirectEditOperation) => boolean;
 }
 
 /**
@@ -63,7 +80,7 @@ function primitiveChain(
   selectedBodyId: BodyId,
   primitiveKind: 'cylinder' | 'box',
   dimension: CylinderDimension | BoxDimension,
-  unionPath?: UnionBoxPath
+  unionPath?: BooleanOperandPath
 ): PrimitiveChain | null {
   const features = listFeaturesInOrder(document);
   const producerByBodyId = new Map(
@@ -104,8 +121,8 @@ function primitiveChain(
       // cannot inherit this bounded resize contract.
       if (
         crossedUnion ||
-        !hasEdgeModifier ||
-        data.operation !== 'union' ||
+        (unionPath.requireEdgeModifier && !hasEdgeModifier) ||
+        !unionPath.operations.includes(data.operation) ||
         producer.featureId !== unionPath.reference.producingFeatureId ||
         !operand ||
         !booleanConsumedBodyIds(data).includes(operand)
@@ -176,10 +193,7 @@ function primitiveChain(
       if (data.featureKind === 'direct-edit') {
         // A previous local move of this dimension has its own baseline. Do
         // not replace that baseline with the primitive's stored dimension.
-        return (
-          data.operation.kind !== 'offset-face' ||
-          Math.abs(data.operation.sourceNormal[unionPath.axis]) > 1e-6
-        );
+        return !unionPath.allowsDirectEdit(data.operation);
       }
       // A copied/patterned/shared source would resize another branch too.
       return !isInPlaceTransform(data);
@@ -236,14 +250,69 @@ function primitiveChain(
     : null;
 }
 
-/** The primitive a cylindrical wall drag should resize instead of the body. */
+/**
+ * A cylinder wall that survived a union or subtract, named for the operand
+ * it came from. The K10 combination matrix qualifies a source radius edit
+ * across both operations, including where a direct wall resize is refused
+ * (a boss or bore meeting a sphere).
+ */
+const BOOLEAN_CYLINDER_WALL_LINEAGE =
+  /^boolean\.face\.operand\.(0|[1-9]\d*)\.(?:primitive|modifier)\.cylinder\.face\.wall$/;
+
+function cylinderRadiusChain(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference?: FaceTopologyReferenceV5,
+  faceHash?: number
+): PrimitiveChain | null {
+  const operand =
+    faceReference && faceReference.currentHash === faceHash
+      ? BOOLEAN_CYLINDER_WALL_LINEAGE.exec(faceReference.lineageName)
+      : null;
+  if (!operand || !faceReference) {
+    return primitiveChain(document, selectedBodyId, 'cylinder', 'radius');
+  }
+  const chain = primitiveChain(document, selectedBodyId, 'cylinder', 'radius', {
+    reference: faceReference,
+    operandIndex: Number(operand[1]),
+    operations: ['union', 'subtract'],
+    requireEdgeModifier: false,
+    // A lineage-resolved planar offset (a cap pushed after the union) is
+    // regenerated on the resized operand. A wall resize or any measured
+    // edit pins the pre-edit radius and keeps the edit local.
+    allowsDirectEdit: (operation) =>
+      operation.kind === 'offset-face' && operation.faceReference !== undefined
+  });
+  if (!chain?.publishers.has(faceReference.producingFeatureId)) return null;
+  // A fillet or chamfer after the boolean that holds a hash-only edge pick
+  // loses it when the operand changes size: the seam a resized boss makes is
+  // a new edge, and nothing but a lineage name can find it again. Keep those
+  // chains on the local wall resize, which leaves the seam in place.
+  const pickedByHashOnly = listFeaturesInOrder(document).some(
+    (feature) =>
+      chain.publishers.has(feature.featureId) &&
+      (feature.data.featureKind === 'fillet' ||
+        feature.data.featureKind === 'chamfer') &&
+      (feature.data.edgeReferences?.length ?? 0) <
+        feature.data.edgeHashes.length
+  );
+  return pickedByHashOnly ? null : chain;
+}
+
+/**
+ * The primitive a cylindrical wall drag should resize instead of the body.
+ * Pass the picked face's v5 reference to let the drag cross one union or
+ * subtract that consumed the cylinder.
+ */
 export function primitiveCylinderRadiusAncestor(
   document: ProjectDocument,
-  selectedBodyId: BodyId
+  selectedBodyId: BodyId,
+  faceReference?: FaceTopologyReferenceV5,
+  faceHash?: number
 ): FeatureNode | null {
   return (
-    primitiveChain(document, selectedBodyId, 'cylinder', 'radius')?.primitive ??
-    null
+    cylinderRadiusChain(document, selectedBodyId, faceReference, faceHash)
+      ?.primitive ?? null
   );
 }
 
@@ -292,11 +361,13 @@ export function primitiveCylinderHeightAncestor(
 
 export function primitiveCylinderScale(
   document: ProjectDocument,
-  selectedBodyId: BodyId
+  selectedBodyId: BodyId,
+  faceReference?: FaceTopologyReferenceV5,
+  faceHash?: number
 ): number | null {
   return (
-    primitiveChain(document, selectedBodyId, 'cylinder', 'radius')?.scale ??
-    null
+    cylinderRadiusChain(document, selectedBodyId, faceReference, faceHash)
+      ?.scale ?? null
   );
 }
 
@@ -357,7 +428,15 @@ export function primitiveBoxFaceAncestor(
     'box',
     dimension,
     union
-      ? { reference: faceReference, operandIndex: Number(union[1]), axis }
+      ? {
+          reference: faceReference,
+          operandIndex: Number(union[1]),
+          operations: ['union'],
+          requireEdgeModifier: true,
+          allowsDirectEdit: (operation) =>
+            operation.kind === 'offset-face' &&
+            Math.abs(operation.sourceNormal[axis]) <= 1e-6
+        }
       : undefined
   );
   return chain?.publishers.has(faceReference.producingFeatureId)

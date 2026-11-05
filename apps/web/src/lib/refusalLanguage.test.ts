@@ -114,6 +114,21 @@ describe('plainRefusal', () => {
       [
         'resize blend: radial resize collapses a torus ring',
         'That diameter would collapse a wall or blend. Try a smaller change.'
+      ],
+      [
+        // A boss grown out of a sphere (2026-11-05 resize report).
+        'offset: move-face does not support face Id(18) (sphere): face is adjacent to selected move boundary edge 80',
+        "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead."
+      ],
+      [
+        // The same boss once its seam with the sphere is filleted.
+        'offset: move-face does not support face Id(50) (nurbs): face is adjacent to selected move boundary edge 350',
+        "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet."
+      ],
+      [
+        // A blind bore cut into the same sphere.
+        'offset: move-face does not support face Id(22) (cylinder): partial-cylinder resize currently requires an outward quarter wall with radial planar sides',
+        "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead."
       ]
     ];
     for (const [raw, sentence] of cases) {

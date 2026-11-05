@@ -18,6 +18,7 @@ import {
 } from '../../lib/panelLayout';
 import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { useMenuKeyboard } from '../../lib/useMenuKeyboard';
+import { Tooltip } from '../Tooltip';
 
 /** What a locked layout's presets and width say instead of what they do. */
 export const LAYOUT_LOCKED_DETAIL = 'Unlock the layout to change it';
@@ -72,18 +73,22 @@ export function ViewOptionsMenu(props: ViewOptionsMenuProps) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        className={`rail-button${open ? ' active' : ''}`}
-        aria-label="View options"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="View options · presets, Hide all, Lock, Compact, Width"
-        onClick={() => setOpen((current) => !current)}
+      <Tooltip
+        label="View options"
+        description="Presets, Hide all, Lock, Compact and Width"
       >
-        <LayoutPanelLeft size={16} aria-hidden="true" />
-      </button>
+        <button
+          ref={buttonRef}
+          type="button"
+          className={`rail-button${open ? ' active' : ''}`}
+          aria-label="View options"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <LayoutPanelLeft size={16} aria-hidden="true" />
+        </button>
+      </Tooltip>
       {open &&
         createPortal(
           <ViewOptionsList

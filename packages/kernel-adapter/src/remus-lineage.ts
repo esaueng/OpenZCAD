@@ -12,6 +12,7 @@ import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
   edgeLiesOnFaceCarriers,
   importedStepLineageName,
+  orderPiecesAroundCylinderSeam,
   straightEdgePositionOnSource,
   inspectTopologyWitness,
   topologyHashOfWitness,
@@ -19,6 +20,8 @@ import {
   topologyWitnessesEqual,
   topologyWitnessesNearlyEqual,
   verifyTopologyEvolution,
+  sameSphereCarrier,
+  type QuantizedSphereCarrier,
   type TopologyKind,
   type TopologyLineageOperation,
   type TopologyWitnessV1
@@ -68,6 +71,19 @@ export interface RemusTopologyCandidate {
   readonly kind: TopologyKind;
   readonly witness: TopologyWitnessV1;
 }
+
+/**
+ * Settles a witness tie: given a source sub-shape and the several result
+ * sub-shapes its exact witness matched, names the one that is provably its
+ * image, or null. Implementations must decide from exact kernel predicates
+ * (see `exact-sphere-patches`), never by proximity or order; null keeps the
+ * fail-closed split.
+ */
+export type WitnessTieResolver = (
+  kind: TopologyKind,
+  sourceHandle: number,
+  resultHandles: readonly number[]
+) => number | null;
 
 export interface RemusSemanticAssignment extends RemusTopologyCandidate {
   readonly lineageName: string;
@@ -793,7 +809,8 @@ export function carryRemusUnchangedLineage(
   source: RemusLineageState | undefined,
   results: readonly RemusTopologyCandidate[],
   operation: TopologyLineageOperation,
-  omittedCode: RemusLineageDiagnosticCode = 'hash-only'
+  omittedCode: RemusLineageDiagnosticCode = 'hash-only',
+  resolveTie?: WitnessTieResolver
 ): RemusLineageState | undefined {
   if (!source) {
     return undefined;
@@ -802,9 +819,9 @@ export function carryRemusUnchangedLineage(
   output.diagnostics.push(...source.diagnostics);
   const claimedResults = new Set<string>();
   let omitted = 0;
-  const references: TopologyReferenceV5[] = [
-    ...source.faceReferences.values(),
-    ...source.edgeReferences.values()
+  const references: [number, TopologyReferenceV5][] = [
+    ...source.faceReferences.entries(),
+    ...source.edgeReferences.entries()
   ];
   const matching = {
     face: witnessMatcher(
@@ -816,8 +833,16 @@ export function carryRemusUnchangedLineage(
       results.filter((candidate) => candidate.kind === 'edge')
     )
   };
-  for (const reference of references) {
-    const matches = matching[reference.kind](reference.witness);
+  for (const [sourceHandle, reference] of references) {
+    let matches = matching[reference.kind](reference.witness);
+    if (matches.length > 1 && resolveTie) {
+      const chosen = resolveTie(
+        reference.kind,
+        sourceHandle,
+        matches.map((candidate) => candidate.handle)
+      );
+      matches = matches.filter((candidate) => candidate.handle === chosen);
+    }
     if (matches.length !== 1) {
       omitted += 1;
       continue;
@@ -1708,7 +1733,8 @@ export function propagateRemusRigidTransformLineage(
   source: RemusLineageState,
   results: readonly RemusTopologyCandidate[],
   matrix: readonly number[],
-  allowUniformScale = false
+  allowUniformScale = false,
+  resolveTie?: WitnessTieResolver
 ): RemusLineageState {
   const output = emptyLineageState();
   output.diagnostics.push(...source.diagnostics);
@@ -1729,11 +1755,11 @@ export function propagateRemusRigidTransformLineage(
     string,
     { handle: number; reference: TopologyReferenceV5 }[]
   >();
-  const sources: TopologyReferenceV5[] = [
-    ...source.faceReferences.values(),
-    ...source.edgeReferences.values()
+  const sources: [number, TopologyReferenceV5][] = [
+    ...source.faceReferences.entries(),
+    ...source.edgeReferences.entries()
   ];
-  for (const reference of sources) {
+  for (const [sourceHandle, reference] of sources) {
     const expected = transformRemusWitness(
       reference.kind,
       reference.witness,
@@ -1742,7 +1768,7 @@ export function propagateRemusRigidTransformLineage(
     if (!expected) {
       continue;
     }
-    const matches = results.filter(
+    let matches = results.filter(
       (candidate) =>
         candidate.kind === reference.kind &&
         // Near-equality, not exact: the expected witness carries quantized
@@ -1753,6 +1779,17 @@ export function propagateRemusRigidTransformLineage(
           candidate.witness
         )
     );
+    if (matches.length > 1 && resolveTie) {
+      const chosen = resolveTie(
+        reference.kind,
+        sourceHandle,
+        matches.map((candidate) => candidate.handle)
+      );
+      const resolved = matches.filter(
+        (candidate) => candidate.handle === chosen
+      );
+      if (resolved.length === 1) matches = resolved;
+    }
     if (matches.length === 0) {
       output.diagnostics.push({
         code: 'transform-deleted',
@@ -2181,8 +2218,16 @@ export function deriveRemusBooleanEvolutionLineage(input: {
   readonly resultSolid: number;
   readonly operands: readonly RemusBooleanOperand[];
   readonly resultCandidates: readonly RemusTopologyCandidate[];
+  /**
+   * Exact spheres of the operand and result sphere faces, by handle. The
+   * frozen face witness has no sphere term, so without these a sphere face
+   * has no carrier to verify a claim against and stays unnamed.
+   */
+  readonly sphereCarriers?: ReadonlyMap<number, QuantizedSphereCarrier>;
 }): RemusLineageState {
   const { evolution } = input;
+  const sphereCarriers: ReadonlyMap<number, QuantizedSphereCarrier> =
+    input.sphereCarriers ?? new Map();
   if (evolution.solid !== input.resultSolid) {
     return remusHashOnlyLineage(
       'boolean',
@@ -2272,7 +2317,16 @@ export function deriveRemusBooleanEvolutionLineage(input: {
       resultWitness: result.witness,
       relation: { kind: 'analytic-carrier' }
     });
-    if (verification.status !== 'verified') {
+    // The same relation for a sphere face, held against the kernel's exact
+    // sphere because the witness has no sphere term to compare.
+    const sphereVerified =
+      reference.witness.surfaceType === 'sphere' &&
+      (result.witness as FaceWitnessV1).surfaceType === 'sphere' &&
+      sameSphereCarrier(
+        sphereCarriers.get(sourceHandle),
+        sphereCarriers.get(resultHandle)
+      );
+    if (verification.status !== 'verified' && !sphereVerified) {
       diagnostics.push({
         code: 'boolean-evolution-unverified',
         operation: 'boolean',
@@ -2454,6 +2508,7 @@ export function deriveRemusBooleanEvolutionLineage(input: {
     // faces' exact carriers, and a pair that made more than one edge (a
     // slot's two walls meeting one floor) names none of them.
     const generatedPair = new Map<number, string>();
+    const generatedPairFaces = new Map<string, FaceWitnessV1[]>();
     const pairUse = new Map<string, number>();
     for (const [resultHandle, [faceA, faceB]] of evolution.edges.generated) {
       const result = resultEdges.get(resultHandle);
@@ -2462,7 +2517,11 @@ export function deriveRemusBooleanEvolutionLineage(input: {
         const reference = origin?.reference;
         return reference?.kind === 'face' &&
           referenceMatchesCandidate(reference, origin!.candidate)
-          ? { name: `${origin!.slot}.${reference.lineageName}`, reference }
+          ? {
+              name: `${origin!.slot}.${reference.lineageName}`,
+              reference,
+              sphere: sphereCarriers.get(handle)
+            }
           : null;
       });
       if (
@@ -2471,24 +2530,64 @@ export function deriveRemusBooleanEvolutionLineage(input: {
         !sides[0] ||
         !sides[1] ||
         sides[0].name === sides[1].name ||
-        !edgeLiesOnFaceCarriers(result.witness as EdgeWitnessV1, [
-          sides[0].reference.witness,
-          sides[1].reference.witness
-        ])
+        !edgeLiesOnFaceCarriers(
+          result.witness as EdgeWitnessV1,
+          [sides[0].reference.witness, sides[1].reference.witness],
+          [sides[0].sphere, sides[1].sphere]
+        )
       ) {
         continue;
       }
       const pair = [sides[0].name, sides[1].name].sort().join('|');
       generatedPair.set(resultHandle, pair);
+      generatedPairFaces.set(pair, [
+        sides[0].reference.witness,
+        sides[1].reference.witness
+      ]);
       pairUse.set(pair, (pairUse.get(pair) ?? 0) + 1);
     }
+    const piecesByPair = new Map<string, number[]>();
     for (const [resultHandle, pair] of generatedPair) {
       if (pairUse.get(pair) !== 1) {
+        piecesByPair.set(pair, [
+          ...(piecesByPair.get(pair) ?? []),
+          resultHandle
+        ]);
         continue;
       }
       assignments.push({
         ...resultEdges.get(resultHandle)!,
         lineageName: `boolean.edge.between.${pair}`
+      });
+    }
+    // A pair whose intersection the kernel cut into pieces around a cylinder
+    // wall (a boss's foot on a sphere) names each piece by its place around
+    // the wall, counted from the wall's seam, and by the number of pieces —
+    // the `….piece.i.of.n` rule straight edges already follow. Only a pair
+    // with exactly one cylinder side has a wall to count around; anything
+    // `orderPiecesAroundCylinderSeam` cannot order stays unnamed.
+    const allResultEdges = [...resultEdges.values()].map(
+      (candidate) => candidate.witness as EdgeWitnessV1
+    );
+    for (const [pair, handles] of piecesByPair) {
+      const faces = generatedPairFaces.get(pair);
+      const walls = faces?.filter(
+        (witness) => witness.analytic.kind === 'cylinder'
+      );
+      if (!walls || walls.length !== 1) continue;
+      const order = orderPiecesAroundCylinderSeam(
+        handles.map(
+          (handle) => resultEdges.get(handle)!.witness as EdgeWitnessV1
+        ),
+        walls[0]!.analytic,
+        allResultEdges
+      );
+      if (!order) continue;
+      order.forEach((pieceIndex, position) => {
+        assignments.push({
+          ...resultEdges.get(handles[pieceIndex]!)!,
+          lineageName: `boolean.edge.between.${pair}.piece.${position}.of.${order.length}`
+        });
       });
     }
     if (evolution.edges.unresolved.size > 0) {

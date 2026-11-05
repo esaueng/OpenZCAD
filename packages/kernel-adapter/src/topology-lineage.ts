@@ -837,14 +837,64 @@ function pointOnAnalyticCarrier(
  */
 export function edgeLiesOnFaceCarriers(
   edge: EdgeWitnessV1,
-  faces: readonly FaceWitnessV1[]
+  faces: readonly FaceWitnessV1[],
+  sphereCarriers: readonly (QuantizedSphereCarrier | undefined)[] = []
 ): boolean {
   if (edge.closed || faces.length === 0) {
     return false;
   }
   const points = [edge.endpoints[0], edge.endpoints[1], edge.midpoint];
-  return faces.every((face) =>
-    points.every((point) => pointOnAnalyticCarrier(point, face.analytic))
+  return faces.every((face, index) => {
+    const sphere = sphereCarriers[index];
+    if (face.analytic.kind === 'none' && face.surfaceType === 'sphere') {
+      return (
+        sphere !== undefined &&
+        points.every((point) => pointOnSphereCarrier(point, sphere))
+      );
+    }
+    return points.every((point) =>
+      pointOnAnalyticCarrier(point, face.analytic)
+    );
+  });
+}
+
+/**
+ * A sphere measured outside the frozen ADR-011 witness (which has no sphere
+ * term): centre and radius in the same coordinate quantum. Supplied by the
+ * caller from the kernel's analytic parameters, never persisted.
+ */
+export interface QuantizedSphereCarrier {
+  readonly center: QuantizedTopologyPoint;
+  readonly radius: number;
+}
+
+function pointOnSphereCarrier(
+  point: QuantizedTopologyPoint,
+  sphere: QuantizedSphereCarrier
+): boolean {
+  if (!(sphere.radius > 0)) return false;
+  const tolerance = GEOMETRY_LINEAR_TOLERANCE;
+  const distance = Math.hypot(
+    (point[0] - sphere.center[0]) * tolerance,
+    (point[1] - sphere.center[1]) * tolerance,
+    (point[2] - sphere.center[2]) * tolerance
+  );
+  return (
+    Math.abs(distance - sphere.radius * tolerance) <=
+    CARRIER_POINT_SLACK * tolerance
+  );
+}
+
+/** Exactly the same quantized sphere: same centre, same radius. */
+export function sameSphereCarrier(
+  left: QuantizedSphereCarrier | undefined,
+  right: QuantizedSphereCarrier | undefined
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    pointSignature(left.center) === pointSignature(right.center) &&
+    left.radius === right.radius
   );
 }
 
@@ -878,7 +928,11 @@ export function straightEdgePositionOnSource(
     point.map((component) => component * tolerance);
   const start = real(source.endpoints[0]);
   const end = real(source.endpoints[1]);
-  const direction = [end[0]! - start[0]!, end[1]! - start[1]!, end[2]! - start[2]!];
+  const direction = [
+    end[0]! - start[0]!,
+    end[1]! - start[1]!,
+    end[2]! - start[2]!
+  ];
   const length = Math.hypot(direction[0]!, direction[1]!, direction[2]!);
   if (!(length > slack)) return null;
   const unit = direction.map((component) => component / length);
@@ -903,6 +957,123 @@ export function straightEdgePositionOnSource(
     return null;
   }
   return along(points[2]!) / length;
+}
+
+type OpenEdgeWitness = Extract<EdgeWitnessV1, { closed: false }>;
+
+function isOpenEdgeWitness(edge: EdgeWitnessV1): edge is OpenEdgeWitness {
+  return !edge.closed;
+}
+
+/**
+ * Smallest angle (radians) a piece's midpoint may sit from the wall's seam
+ * and still be ordered: a midpoint that close to the cut could fall on either
+ * side of it after an edit, so the whole loop declines instead.
+ */
+const SEAM_ORDER_MARGIN = 1e-3;
+
+/**
+ * Orders the pieces of one generated intersection loop around a cylinder
+ * wall, or returns null.
+ *
+ * A boolean that meets a cylinder wall can hand back its intersection with
+ * another face as several `generated` edges of the same face pair: the kernel
+ * cuts the loop at the wall's own parameter breaks. No piece is "the" edge
+ * between the two faces, but each has a fixed place around the wall. The
+ * wall carries exactly one seam — a straight line on its carrier, parallel to
+ * the axis — and that seam is the angular origin: each piece is placed by the
+ * angle of its midpoint about the wall's axis measured from the seam, turning
+ * right-handed about the canonical axis direction.
+ *
+ * Fails closed when any piece is not open or does not lie on the wall, when
+ * there is not exactly one seam line on the wall's carrier among
+ * `resultEdges`, when a midpoint sits within {@link SEAM_ORDER_MARGIN} of the
+ * seam, or when two midpoints share an angle. The returned array is the
+ * pieces' indices in order.
+ */
+export function orderPiecesAroundCylinderSeam(
+  pieces: readonly EdgeWitnessV1[],
+  wall: FaceAnalyticWitnessV1,
+  resultEdges: readonly EdgeWitnessV1[]
+): number[] | null {
+  if (wall.kind !== 'cylinder' || pieces.length < 2) return null;
+  const open = pieces.filter(isOpenEdgeWitness);
+  if (
+    open.length !== pieces.length ||
+    open.some(
+      (piece) =>
+        ![piece.endpoints[0], piece.endpoints[1], piece.midpoint].every(
+          (point) => pointOnAnalyticCarrier(point, wall)
+        )
+    )
+  ) {
+    return null;
+  }
+  const tolerance = GEOMETRY_LINEAR_TOLERANCE;
+  const axisRaw = wall.axis.map(
+    (component) => (component * tolerance) / DIRECTION_QUANTUM_SCALE
+  );
+  const axisLength = Math.hypot(axisRaw[0]!, axisRaw[1]!, axisRaw[2]!);
+  if (!(axisLength > 0)) return null;
+  const axis = axisRaw.map((component) => component / axisLength);
+  const foot = wall.axisFoot.map((component) => component * tolerance);
+  const radial = (point: QuantizedTopologyPoint) => {
+    const v = point.map(
+      (component, index) => component * tolerance - foot[index]!
+    );
+    const along = v[0]! * axis[0]! + v[1]! * axis[1]! + v[2]! * axis[2]!;
+    return v.map((component, index) => component - along * axis[index]!);
+  };
+  const seams = resultEdges.filter(isOpenEdgeWitness).filter((edge) => {
+    if (edge.curveType !== 'LINE') return false;
+    const points = [edge.endpoints[0], edge.endpoints[1], edge.midpoint];
+    if (!points.every((point) => pointOnAnalyticCarrier(point, wall))) {
+      return false;
+    }
+    const a = radial(edge.endpoints[0]);
+    const b = radial(edge.endpoints[1]);
+    return (
+      Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!) <=
+      CARRIER_POINT_SLACK * tolerance
+    );
+  });
+  if (seams.length !== 1) return null;
+  const origin = radial(seams[0]!.midpoint);
+  const originLength = Math.hypot(origin[0]!, origin[1]!, origin[2]!);
+  if (!(originLength > 0)) return null;
+  const e1 = origin.map((component) => component / originLength);
+  const e2 = [
+    axis[1]! * e1[2]! - axis[2]! * e1[1]!,
+    axis[2]! * e1[0]! - axis[0]! * e1[2]!,
+    axis[0]! * e1[1]! - axis[1]! * e1[0]!
+  ];
+  const angles = open.map((piece) => {
+    const r = radial(piece.midpoint);
+    const angle = Math.atan2(
+      r[0]! * e2[0]! + r[1]! * e2[1]! + r[2]! * e2[2]!,
+      r[0]! * e1[0]! + r[1]! * e1[1]! + r[2]! * e1[2]!
+    );
+    return angle < 0 ? angle + 2 * Math.PI : angle;
+  });
+  if (
+    angles.some(
+      (angle) =>
+        angle < SEAM_ORDER_MARGIN || angle > 2 * Math.PI - SEAM_ORDER_MARGIN
+    )
+  ) {
+    return null;
+  }
+  const order = angles.map((_, index) => index);
+  order.sort((left, right) => angles[left]! - angles[right]!);
+  for (let index = 1; index < order.length; index += 1) {
+    if (
+      angles[order[index]!]! - angles[order[index - 1]!]! <
+      SEAM_ORDER_MARGIN
+    ) {
+      return null;
+    }
+  }
+  return order;
 }
 
 export function verifyTopologyEvolution(

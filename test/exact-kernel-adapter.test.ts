@@ -846,9 +846,10 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // two same-surface hemispheres that share one exact witness, so BOTH
     // patches hash identically and every edge reports a single distinct hash —
     // even the equator, which genuinely divides two faces. A consumer cannot
-    // use these hashes to tell the hemispheres apart. That collision is why
-    // face picks on spheres are unavailable, and if it ever stops being true
-    // this assertion should turn red and be revisited deliberately.
+    // use these hashes to tell the hemispheres apart; only their lineage
+    // references (named by the pole each holds) can. If the hash collision
+    // ever stops being true this assertion should turn red and be revisited
+    // deliberately.
     expect(faceHashesOf('Sphere').size).toBe(1);
     for (const edge of edgesOf('Sphere')) {
       expect(new Set(adjacencyOf(edge)).size).toBe(1);

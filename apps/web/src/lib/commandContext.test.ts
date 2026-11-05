@@ -101,6 +101,18 @@ describe('commandContextFor', () => {
 });
 
 describe('commandContextLabel', () => {
+  it('names a split rim as the one closed edge that was picked', () => {
+    expect(
+      commandContextLabel({
+        edgeCount: 4,
+        edgeNoun: 'the closed edge',
+        faceSelected: false,
+        bodyCount: 1,
+        regionCount: 0
+      })
+    ).toBe('the closed edge');
+  });
+
   it('names the pick the command bar filters to', () => {
     expect(commandContextLabel(EVERY_KIND.idle)).toBeNull();
     expect(commandContextLabel(EVERY_KIND.body)).toBe('1 body');

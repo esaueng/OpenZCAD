@@ -349,7 +349,8 @@ test('an unapplied Move is asked about before Revolve starts', async ({
 
 test('switching workspace ends an in-place Revolve', async ({ page }) => {
   test.setTimeout(90_000);
-  await stubApi(page, { panelLayout: MODEL_ONLY });
+  // A letter in the tool search belongs to that field, not the workspace.
+  await stubApi(page, { panelLayout: MODEL_ONLY, commandFoldClosed: true });
   let document = createProjectDocument(
     'Revolve then View',
     toUserId('user_e2e')

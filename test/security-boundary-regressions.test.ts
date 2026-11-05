@@ -132,7 +132,8 @@ describe('security resource and persistence boundaries', () => {
     );
   });
 
-  it('accepts exactly 10,000 3MF objects and refuses the next object', async () => {
+  // Each parser operation keeps its own normal test deadline under coverage.
+  it('accepts exactly 10,000 3MF objects', async () => {
     expect(
       (
         await readThreeMfPackage(
@@ -140,6 +141,9 @@ describe('security resource and persistence boundaries', () => {
         )
       ).meshObjectCount
     ).toBe(10_000);
+  });
+
+  it('refuses the 10,001st 3MF object', async () => {
     await expect(
       readThreeMfPackage(await deflatedThreeMfFixture({ objects: 10_001 }))
     ).rejects.toThrow(/object count.*limit/);

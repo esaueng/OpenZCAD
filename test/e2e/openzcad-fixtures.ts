@@ -1545,6 +1545,44 @@ export async function clickWorldPoint(
   await page.mouse.click(point!.x, point!.y);
 }
 
+/**
+ * Clicks an armed ghost plane (XY, XZ or YZ) where no other ghost plane is in
+ * front of it, and returns the world point clicked. The panels cover only
+ * their positive quadrants and overlap on screen from most views, so a fixed
+ * world point can land on the wrong one.
+ */
+export async function clickGhostPlane(
+  page: Page,
+  plane: 'XY' | 'XZ' | 'YZ'
+): Promise<[number, number, number]> {
+  const canvas = page.locator('.viewer-host canvas');
+  let at: number[] | null = null;
+  await expect
+    .poll(async () => {
+      at = await canvas.evaluate(
+        (element, id) =>
+          new Promise<number[] | null>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-project-points', {
+                detail: {
+                  points: [],
+                  resolve: (state: {
+                    ghostPlanePoints: Record<string, number[] | null> | null;
+                  }) => resolve(state.ghostPlanePoints?.[id] ?? null)
+                }
+              })
+            );
+          }),
+        plane
+      );
+      return at !== null;
+    })
+    .toBe(true);
+  const point = at! as unknown as [number, number, number];
+  await clickWorldPoint(page, point);
+  return point;
+}
+
 /** Picks a datum plane for an in-place Mirror or Split from its Objects row. */
 export async function pickDatumRow(page: Page, name: string) {
   const button = railPanelButton(page, 'Objects');
