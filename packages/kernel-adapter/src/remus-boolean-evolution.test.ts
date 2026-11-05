@@ -21,6 +21,39 @@ function rowMajor(tx: number, ty: number, tz: number): Float64Array {
   return new Float64Array([1, 0, 0, tx, 0, 1, 0, ty, 0, 0, 1, tz, 0, 0, 0, 1]);
 }
 
+/**
+ * Whether a straight result edge lies on a straight source edge's segment —
+ * computed here from the witnesses, independently of the adapter's own
+ * reader. Witness coordinates are integers in the 1e-6 document-unit
+ * quantum, so `off <= 1` is one quantum of slack.
+ */
+function straightRemainderOf(
+  result: EdgeWitnessV1,
+  source: EdgeWitnessV1
+): boolean {
+  if (
+    result.curveType !== 'LINE' ||
+    source.curveType !== 'LINE' ||
+    result.closed ||
+    source.closed
+  ) {
+    return false;
+  }
+  const [a, b] = source.endpoints;
+  const along = b.map((value, axis) => value - a[axis]!);
+  const length = Math.hypot(...along);
+  return result.endpoints.every((point) => {
+    const offset = point.map((value, axis) => value - a[axis]!);
+    const t =
+      offset.reduce((sum, value, axis) => sum + value * along[axis]!, 0) /
+      (length * length);
+    const off = Math.hypot(
+      ...offset.map((value, axis) => value - t * along[axis]!)
+    );
+    return t >= -1e-9 && t <= 1 + 1e-9 && off <= 1;
+  });
+}
+
 /** Names every face and edge of an operand, so the carry has something to carry. */
 function nameEverything(
   candidates: readonly RemusTopologyCandidate[],
@@ -305,9 +338,26 @@ describe('boolean entity evolution against the pinned kernel', () => {
     kernel.transformSolid(bore, rowMajor(10, 10, -5));
     const boxCandidates = topologyCandidatesForSolid(kernel, box);
     const boreCandidates = topologyCandidatesForSolid(kernel, bore);
-    const evolution = decodeRemusBooleanEntityEvolution(
+    const reported = decodeRemusBooleanEntityEvolution(
       kernel.cutWithEntityEvolution(box, bore)
     );
+    // Since Remus 669d1e2 the kernel traces every edge of a bore through a
+    // plate (and of every other primitive cut tried), so a real payload no
+    // longer declines one. Withdraw one PRESERVED edge's record into
+    // `unresolved` — an edge that would otherwise carry its name — so the
+    // adapter's handling of a declined edge stays exercised on real topology.
+    const [declined] = [...reported.edges.preserved.keys()];
+    expect(declined).toBeDefined();
+    const preserved = new Map(reported.edges.preserved);
+    preserved.delete(declined!);
+    const evolution = {
+      ...reported,
+      edges: {
+        ...reported.edges,
+        preserved,
+        unresolved: new Set([...reported.edges.unresolved, declined!])
+      }
+    };
     expect(evolution.edges.unresolved.size).toBeGreaterThan(0);
     const resultCandidates = topologyCandidatesForSolid(
       kernel,
@@ -339,33 +389,44 @@ describe('boolean entity evolution against the pinned kernel', () => {
         (entry) => entry.code === 'boolean-edge-unresolved'
       )
     ).toBe(true);
-    // Nor generated edges, which have no source. A modified edge carries
-    // only when its exact witness is unchanged, which a bore through a plate
-    // never leaves behind: every edge it modifies is shortened or split.
+    // Nor generated edges, which have no source.
     for (const handle of evolution.edges.generated.keys()) {
       expect(derived.edgeReferences.has(handle)).toBe(false);
     }
+    // A modified edge carries when its exact witness is unchanged, or when it
+    // is a straight remainder lying on its source's line (the adapter's
+    // trimmed-edge rule). Since Remus 669d1e2 the bore's seam is reported as
+    // modified from the tool's seam, shortened to the plate's thickness, and
+    // is the second kind; every other edge the bore modifies is split.
     const resultEdges = new Map(
       resultCandidates
         .filter((candidate) => candidate.kind === 'edge')
         .map((candidate) => [candidate.handle, candidate] as const)
     );
-    const unchangedModified = [...evolution.edges.modified].filter(
-      ([resultHandle, sourceHandle]) =>
-        JSON.stringify(resultEdges.get(resultHandle)?.witness) ===
-        JSON.stringify(
-          boxCandidates
-            .concat(boreCandidates)
-            .find((candidate) => candidate.handle === sourceHandle)?.witness
-        )
-    );
+    const sourceWitness = (handle: number) =>
+      boxCandidates
+        .concat(boreCandidates)
+        .find((candidate) => candidate.handle === handle)?.witness;
+    const carries = ([resultHandle, sourceHandle]: [number, number]) => {
+      const result = resultEdges.get(resultHandle)?.witness;
+      const source = sourceWitness(sourceHandle);
+      if (JSON.stringify(result) === JSON.stringify(source)) return true;
+      return (
+        result !== undefined &&
+        source !== undefined &&
+        'curveType' in result &&
+        'curveType' in source &&
+        straightRemainderOf(result, source)
+      );
+    };
+    const carriedModified = [...evolution.edges.modified].filter(carries);
     for (const [handle] of evolution.edges.modified) {
       expect(derived.edgeReferences.has(handle)).toBe(
-        unchangedModified.some(([unchanged]) => unchanged === handle)
+        carriedModified.some(([carried]) => carried === handle)
       );
     }
     expect(derived.edgeReferences.size).toBe(
-      evolution.edges.preserved.size + unchangedModified.length
+      evolution.edges.preserved.size + carriedModified.length
     );
   });
 
