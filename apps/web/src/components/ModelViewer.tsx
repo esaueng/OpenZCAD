@@ -375,7 +375,10 @@ type SketchMoveEvent = Extract<
 >;
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData, Vector3 } from '@openzcad/shared';
-import { buildPlanePickerRig } from './viewer/planePickerRig';
+import {
+  buildPlanePickerRig,
+  ghostPlaneTakesPick
+} from './viewer/planePickerRig';
 import {
   buildAxisPickerRig,
   type AxisPickerCandidate
@@ -4792,9 +4795,9 @@ export function ModelViewer({
     }
 
     /**
-     * Nearest ghost plane under the pointer, or null. Distance-compared with
-     * the solid pick by the callers, so a plane in front of the model wins
-     * the click and a face in front of a plane still wins its own.
+     * Nearest ghost plane under the pointer, or null. The callers weigh it
+     * against the model pick with ghostPlaneTakesPick: it wins through faces,
+     * but not over edges, vertices, regions or a face in its own plane.
      */
     function pickGhostPlane(
       event: PointerEvent | MouseEvent
@@ -6084,12 +6087,15 @@ export function ModelViewer({
           resolve?: (value: {
             box: { min: number[]; max: number[] } | null;
             points: { x: number; y: number }[];
+            /** A world point on each ghost plane no other one covers. */
+            ghostPlanePoints: Record<string, number[] | null> | null;
           }) => void;
         }>
       ).detail;
       if (!detail?.resolve) {
         return;
       }
+      const ghostRig = planePickerRigRef.current;
       const object = bodiesRef.current
         .filter((body) => !body.consumed)
         .map((body) => context.objectsByBodyId.get(body.bodyId))
@@ -6101,6 +6107,32 @@ export function ModelViewer({
           box && !box.isEmpty()
             ? { min: box.min.toArray(), max: box.max.toArray() }
             : null,
+        ghostPlanePoints: ghostRig
+          ? Object.fromEntries(
+              (['XY', 'XZ', 'YZ'] as const).map((plane) => [
+                plane,
+                // The first point a real click there would give this plane:
+                // not covered by another panel, nor near a model edge.
+                ghostRig
+                  .exposedPoints(plane, context.activeCamera)
+                  .find((point) => {
+                    const projected = point
+                      .clone()
+                      .project(context.activeCamera);
+                    const probe = new MouseEvent('mousemove', {
+                      clientX: rect.left + ((projected.x + 1) / 2) * rect.width,
+                      clientY: rect.top + ((1 - projected.y) / 2) * rect.height
+                    });
+                    const ghost = pickGhostPlane(probe);
+                    return (
+                      ghost?.plane === plane &&
+                      ghostPlaneTakesPick(ghost.distance, pick(probe))
+                    );
+                  })
+                  ?.toArray() ?? null
+              ])
+            )
+          : null,
         points: (detail.points ?? []).map((point) => {
           const projected = new THREE.Vector3(...point).project(
             context.activeCamera
@@ -6481,10 +6513,11 @@ export function ModelViewer({
       );
       depthCycle = stepped.cycle;
       const result = stepped.candidate;
-      // A ghost plane in front of whatever the stack resolved starts the
-      // sketch instead: it is armed precisely to be clicked.
+      // A ghost plane starts the sketch instead, even through a face in
+      // front of it: it is armed precisely to be clicked, and it sits where
+      // a part at the origin usually is (see ghostPlaneTakesPick).
       const ghost = facesOnly ? null : pickGhostPlane(event);
-      if (ghost && (!result || ghost.distance < result.distance)) {
+      if (ghost && ghostPlaneTakesPick(ghost.distance, result)) {
         planePickerRigRef.current?.setHover(null);
         onPickPlaneRef.current(ghost.plane, ghost.point);
         return;
@@ -6887,11 +6920,12 @@ export function ModelViewer({
         updateMeasurePreview(event);
         return;
       }
-      // A ghost plane nearer than the solid under the cursor owns the hover:
-      // the click will start a sketch on it, not select the face behind.
+      // A ghost plane under the cursor owns the hover wherever its click
+      // would win (see ghostPlaneTakesPick): the click will start a sketch
+      // on it, not select the face.
       const ghost = pickGhostPlane(event);
       const solid = pick(event);
-      if (ghost && (!solid || ghost.distance < solid.distance)) {
+      if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
         planePickerRigRef.current?.setHover(ghost.plane);
         applyHover(null);
         renderer.domElement.style.cursor = 'pointer';
@@ -14074,7 +14108,9 @@ export function ModelViewer({
     if (!context || !planePickerArmed) {
       return;
     }
-    const rig = buildPlanePickerRig();
+    const rig = buildPlanePickerRig({
+      resolution: context.fatLineResolution()
+    });
     // The render loop sizes it against the live camera on the next frame;
     // this only keeps the first frame from drawing a unit-sized sliver.
     rig.setScale(0.05);

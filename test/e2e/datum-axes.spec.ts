@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import {
+  clickGhostPlane,
   clickWorldPoint,
   createPrimitiveInPlace,
   enterCommandValue,
@@ -164,9 +165,9 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   await page.getByRole('button', { name: /^Axis — / }).click();
   const axisBar = page.getByRole('group', { name: 'Axis command' });
   await expect(axisBar).toContainText('Pick an edge, cylinder');
-  await clickWorldPoint(page, [3, 0, 3]);
+  await clickGhostPlane(page, 'XZ');
   await expect(axisBar).toContainText('Pick the second plane');
-  await clickWorldPoint(page, [0, -3, 3]);
+  await clickGhostPlane(page, 'YZ');
   await expect(axisBar).toContainText('Where the two planes meet');
   await finishInPlaceCommand(page, 'Axis');
   await expect(
