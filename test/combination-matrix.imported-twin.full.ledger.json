@@ -1,14 +1,14 @@
 {
   "summary": {
     "qualified": 25,
-    "typed-refusal": 1,
-    "untyped-refusal": 42,
-    "wrong": 1,
+    "typed-refusal": 4,
+    "untyped-refusal": 40,
+    "wrong": 0,
     "timeout": 0
   },
   "cells": {
     "imported-twin/upright/R1/cap-down": "qualified",
-    "imported-twin/upright/R2/wall-shrink": "wrong",
+    "imported-twin/upright/R2/wall-shrink": "typed-refusal",
     "imported-twin/upright/R3/top-up": "qualified",
     "imported-twin/upright/R3/top-down": "qualified",
     "imported-twin/upright/R3/front-out": "qualified",
@@ -63,8 +63,8 @@
     "imported-twin/tilted-unblended/twin/import": "qualified",
     "imported-twin/tilted-unblended/R1/cap-up": "qualified",
     "imported-twin/tilted-unblended/R1/cap-down": "qualified",
-    "imported-twin/tilted-unblended/R2/wall-grow": "untyped-refusal",
-    "imported-twin/tilted-unblended/R2/wall-shrink": "untyped-refusal",
+    "imported-twin/tilted-unblended/R2/wall-grow": "typed-refusal",
+    "imported-twin/tilted-unblended/R2/wall-shrink": "typed-refusal",
     "imported-twin/tilted-unblended/R3/top-up": "qualified",
     "imported-twin/tilted-unblended/R3/top-down": "qualified",
     "imported-twin/tilted-unblended/R3/front-out": "qualified",

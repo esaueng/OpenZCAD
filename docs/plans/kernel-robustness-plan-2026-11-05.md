@@ -426,6 +426,10 @@ a single tangent-ended edge, which uses a labelled interval.
   both blend bands keep their r 6 carriers. The result is 16 faces instead
   of 14 and misses the oracle by −127 mm³ (r 7) and +108 mm³ (r 5). On the
   tilted twin, the same edit refuses untyped against the torus rim fillet.
+  After the acceptance gates (#1266) and typed resize refusals (#1265) merged,
+  all four R2 cells refuse typed (`resize_left_blend_behind` on the upright
+  twin). The 74 cells now stand at 28 qualified, 5 typed refusals, 41 untyped
+  refusals and 0 wrong.
 - **R5 and R6 depend on size.** A fillet of r 1.5 on one bottom edge spreads
   round the whole tangent chain and qualifies. An equal-radius r 4 chain
   closes its corners as sphere octants. An r 1.5 chain, a chamfer chain
