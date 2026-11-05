@@ -783,10 +783,11 @@ export function StartScreen({
       recoveryCounts.set(original, (recoveryCounts.get(original) ?? 0) + 1);
     }
   }
-  const needsAttention = (project: ProjectSummary) =>
+  const needsDecision = (project: ProjectSummary) =>
     conflictedProjectIds.has(project.projectId) ||
-    syncEntryById.get(project.projectId)?.state === 'failed' ||
-    recoveryCopyOf(project.name) !== null;
+    syncEntryById.get(project.projectId)?.state === 'failed';
+  const needsAttention = (project: ProjectSummary) =>
+    needsDecision(project) || recoveryCopyOf(project.name) !== null;
   const filterMatches: Record<
     ShelfFilter,
     (project: ProjectSummary) => boolean
@@ -1752,9 +1753,16 @@ export function StartScreen({
                   project.revisionCount
                 } ${project.revisionCount === 1 ? 'save' : 'saves'}`}
               >
-                {formatLastEdited(project.updatedAt)}
-                {recoveryOf !== null &&
-                  ` · ${formatTime(new Date(project.updatedAt))}`}
+                {/* The time is what tells a part's recovery copies apart, so
+                    the date clips before it does. */}
+                <span className="start-tile-date">
+                  {formatLastEdited(project.updatedAt)}
+                </span>
+                {recoveryOf !== null && (
+                  <span className="start-tile-clock">
+                    {` · ${formatTime(new Date(project.updatedAt))}`}
+                  </span>
+                )}
               </time>
             </span>
             {/* The list has a Saves column; a card leaves the count out. */}
@@ -2921,7 +2929,14 @@ export function StartScreen({
                     className={[
                       'start-filter',
                       activeFilter === entry.id ? 'is-active' : '',
-                      entry.id === 'attention' ? 'is-attention' : ''
+                      entry.id === 'attention' ? 'is-attention' : '',
+                      // Recovery copies alone are a standing state, not news:
+                      // the count turns amber only for a conflict or failure.
+                      entry.id === 'attention' &&
+                      !loading &&
+                      baseProjects.some(needsDecision)
+                        ? 'is-urgent'
+                        : ''
                     ]
                       .filter(Boolean)
                       .join(' ')}

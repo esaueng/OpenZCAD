@@ -210,3 +210,34 @@ describe('start screen shelf clip', () => {
     );
   });
 });
+
+describe('start screen review follow-ups', () => {
+  // 5 Nov 2026 review of the Projects page.
+  it("clips a recovery copy's date before its time", () => {
+    expect(rule(css, '.start-tile-date')).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(css, '.start-tile-clock')).toMatch(/flex:\s*none/);
+  });
+
+  it('does not dim a recovery copy as if it were disabled', () => {
+    expect(css).not.toMatch(/\.is-recovery\s+\.start-tile-name\s*\{/);
+  });
+
+  it('draws the recovery-copies count as a chip, not accent text', () => {
+    const chip = rule(css, '.start-tile-copies');
+    expect(chip).toMatch(/border:/);
+    expect(chip).not.toMatch(/color:\s*var\(--color-accent\)/);
+  });
+
+  it('keeps the Needs attention amber for a decision', () => {
+    expect(
+      rule(css, '.start-filter.is-attention.is-urgent .start-filter-count')
+    ).toMatch(/color:\s*var\(--color-warning\)/);
+    expect(css).not.toMatch(
+      /\.start-filter\.is-attention\s+\.start-filter-count\s*\{/
+    );
+  });
+
+  it("puts a folder's pin beside its count in the column", () => {
+    expect(rule(css, '.start-folder-link-pin')).toMatch(/margin-left:\s*auto/);
+  });
+});

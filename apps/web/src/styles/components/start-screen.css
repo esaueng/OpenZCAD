@@ -1028,7 +1028,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.start-filter.is-attention .start-filter-count {
+.start-filter.is-attention.is-urgent .start-filter-count {
   color: var(--color-warning);
 }
 
@@ -1371,11 +1371,6 @@
   user-select: none;
 }
 
-/* A recovery copy reads as secondary to the part it was made from. */
-.start-tile-project.is-recovery .start-tile-name {
-  color: var(--color-text-muted);
-}
-
 /* A group a drag has emptied keeps a target to drop back into. */
 .start-drop-zone {
   display: grid;
@@ -1573,10 +1568,21 @@
 }
 
 .start-tile-meta time {
+  display: inline-flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.start-tile-date {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+/* Kept whole: it tells a part's recovery copies apart. */
+.start-tile-clock {
+  flex: none;
+  white-space: pre;
 }
 
 /* The date and the quiet marks that qualify it: encrypted, a recovery copy,
@@ -1641,15 +1647,21 @@
   height: 20px;
   margin: 0 36px 11px 0;
   padding: 0 5px;
-  color: var(--color-accent);
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
+  background: var(--color-surface);
+  border: var(--border-thin);
   border-radius: var(--radius-sm);
 }
 
+/* A bordered chip, not accent text: accent beside the date read as a link
+   with no target. */
 .start-tile-copies:hover {
+  color: var(--color-accent);
   background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
 }
 
 .start-tile-copies-label {
@@ -2858,9 +2870,15 @@
   white-space: nowrap;
 }
 
+/* Beside the count, in the column's right-hand group, not after the name. */
 .start-folder-link-pin {
   flex: none;
-  color: var(--color-text-subtle);
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.start-folder-link-pin + .start-shelf-count {
+  margin-left: 0;
 }
 
 @media (max-width: 900px) {

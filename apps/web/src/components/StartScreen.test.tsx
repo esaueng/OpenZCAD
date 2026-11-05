@@ -753,6 +753,31 @@ describe('StartScreen cloud project status', () => {
       })
     );
   });
+  it('turns the Needs attention count amber only for a decision', () => {
+    // 5 Nov 2026: recovery copies alone kept the count amber on every
+    // visit, so it stopped meaning anything.
+    const copy = {
+      ...localProject,
+      projectId: toProjectId('copy'),
+      name: `${localProject.name} (Recovery)`
+    };
+    const attention = () =>
+      within(screen.getByRole('group', { name: 'Show projects' })).getByRole(
+        'button',
+        { name: /^Needs attention/ }
+      );
+    const { unmount } = renderStartScreen({ projects: [localProject, copy] });
+    expect(attention()).toHaveClass('is-attention');
+    expect(attention()).not.toHaveClass('is-urgent');
+    unmount();
+
+    renderStartScreen({
+      projects: [localProject, copy],
+      conflictedProjectIds: new Set([localProject.projectId])
+    });
+    expect(attention()).toHaveClass('is-urgent');
+  });
+
   it('offers a confirmed device-only project for account sync', () => {
     renderStartScreen();
 
