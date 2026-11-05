@@ -46,8 +46,6 @@ export interface CommandPromptContext {
     state: EditControlState;
     /** An explanation is open, which Escape closes first. */
     explaining: boolean;
-    /** Enter was pressed while checking and waits for the verdict. */
-    pending: boolean;
   };
   /**
    * How the picked edges read when they are not a plain count — a rim the
@@ -206,10 +204,7 @@ function editorHints(
     case 'ready':
       return { step: 'Enter apply', escape: 'cancel' };
     case 'checking':
-      return {
-        step: editor.pending ? 'Applies once it builds' : 'Checking…',
-        escape: 'cancel'
-      };
+      return { step: 'Checking…', escape: 'cancel' };
     default:
       return { step: '', escape: 'cancel' };
   }

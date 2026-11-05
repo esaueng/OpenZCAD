@@ -145,8 +145,6 @@ export interface KeypadUiState {
   state: EditControlState;
   /** An explanation (Why?, the unit help) is open: Esc closes it first. */
   explaining: boolean;
-  /** Enter was pressed while checking: it applies once the value builds. */
-  pending: boolean;
 }
 
 /** Phone widths: the control is a sheet above the on-screen keyboard. */
@@ -376,9 +374,6 @@ export function NumericKeypad({
   const [explaining, setExplaining] = useState(false);
   // The value last handed to the live preview: only its verdict counts.
   const [previewed, setPreviewed] = useState<number | null>(null);
-  // Enter pressed while the value was still being checked: it applies once
-  // that value builds, and is dropped by a refusal or by more typing.
-  const [commitPending, setCommitPending] = useState(false);
   const reasonId = useId();
   const gridId = useId();
   const helpId = useId();
@@ -595,7 +590,6 @@ export function NumericKeypad({
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
     if (next !== value) {
       untouchedPrefill.current = false;
-      setCommitPending(false);
     }
     const typedMode = dimensionModeForInput(next, scope);
     const nextMode = typedMode ?? requestedMode;
@@ -643,22 +637,13 @@ export function NumericKeypad({
       else onCommit(normalizedValue, normalizedRaw);
     }
   };
+  // Apply waits for the value on screen to build. Enter while it is still
+  // being checked hands the typed value over all the same: the host runs
+  // the exact check on that value before anything is applied, so neither
+  // path ever commits an earlier value's preview against newer input.
   const commit = () => {
-    if (state === 'ready') commitNow();
-    else if (state === 'checking' && !checking) setCommitPending(true);
+    if (state === 'ready' || (state === 'checking' && !checking)) commitNow();
   };
-  // A pending Enter lands on the verdict for the value it was pressed on.
-  useEffect(() => {
-    if (!commitPending) return;
-    if (state === 'ready') {
-      setCommitPending(false);
-      commitNow();
-    } else if (state !== 'checking') {
-      setCommitPending(false);
-    }
-    // commitNow reads the same render's value; only the state moves it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commitPending, state]);
 
   const switchDimensionMode = (nextMode: DimensionMode) => {
     if (!dimensionMode || nextMode === dimensionMode) {
@@ -682,10 +667,9 @@ export function NumericKeypad({
   useEffect(() => {
     onUiStateChangeRef.current?.({
       state,
-      explaining: explaining || helpOpen,
-      pending: commitPending
+      explaining: explaining || helpOpen
     });
-  }, [state, explaining, helpOpen, commitPending]);
+  }, [state, explaining, helpOpen]);
   useEffect(() => () => onUiStateChangeRef.current?.(null), []);
 
   const unitText =
@@ -843,7 +827,7 @@ export function NumericKeypad({
       ) : state === 'checking' ? (
         <p className="keypad-state" id={stateId}>
           <LoaderCircle size={12} className="spin" aria-hidden="true" />
-          {commitPending ? 'Checking… applies once it builds' : 'Checking…'}
+          Checking…
         </p>
       ) : explained ? (
         <EditRefusal
@@ -917,7 +901,6 @@ export function NumericKeypad({
                   onClick={() => {
                     if (unit !== entryUnit) {
                       untouchedPrefill.current = false;
-                      setCommitPending(false);
                     }
                     setEntryUnit(unit);
                     const result = evaluateKeypadInput(

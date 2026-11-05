@@ -4459,6 +4459,9 @@ export function App() {
           value: offset,
           ms: performance.now() - buildStarted
         });
+        // Nothing to preview (no plan for this value): no verdict will come.
+        if (!(base && plan && candidate && current.mode === 'face'))
+          setPreviewVerdict({ value: offset, status: 'unchecked' });
         return base && plan && candidate && current.mode === 'face'
           ? {
               selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
@@ -23801,7 +23804,8 @@ export function App() {
       return;
     }
     if (exactGeometry) {
-      cylinderRadiusPreview.request(radius);
+      if (!cylinderRadiusPreview.request(radius))
+        setPreviewVerdict({ value: radius, status: 'unchecked' });
     } else {
       // A simple standalone cylinder is projected with a disposable viewport
       // transform during drag. Drop any older worker result so it cannot flash
@@ -24910,7 +24914,8 @@ export function App() {
         recoverPreviewInteraction();
         return;
       }
-      regionExtrudePreview.request(offset);
+      if (!regionExtrudePreview.request(offset))
+        setPreviewVerdict({ value: offset, status: 'unchecked' });
       return;
     }
     if (
@@ -24950,7 +24955,10 @@ export function App() {
       recoverPreviewInteraction();
       return;
     }
-    offsetPreview.request(offset);
+    // A value the preview turns away (a slow gesture past its budget) gets
+    // no verdict to wait for: the commit checks it exactly instead.
+    if (!offsetPreview.request(offset))
+      setPreviewVerdict({ value: offset, status: 'unchecked' });
     setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
   }
 

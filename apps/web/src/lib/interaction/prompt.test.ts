@@ -315,23 +315,13 @@ describe('the edit control’s key hints', () => {
     });
 
   it.each([
-    [
-      { state: 'ready', explaining: false, pending: false },
-      'Enter apply · Esc cancel'
-    ],
-    [
-      { state: 'checking', explaining: false, pending: false },
-      'Checking… · Esc cancel'
-    ],
-    [
-      { state: 'checking', explaining: false, pending: true },
-      'Applies once it builds · Esc cancel'
-    ],
+    [{ state: 'ready', explaining: false }, 'Enter apply · Esc cancel'],
+    [{ state: 'checking', explaining: false }, 'Checking… · Esc cancel'],
     // Enter does nothing on a refused or unreadable value, so it is not offered.
-    [{ state: 'refused', explaining: false, pending: false }, 'Esc cancel'],
-    [{ state: 'invalid', explaining: false, pending: false }, 'Esc cancel'],
+    [{ state: 'refused', explaining: false }, 'Esc cancel'],
+    [{ state: 'invalid', explaining: false }, 'Esc cancel'],
     // The first rung of the ladder: an open explanation closes first.
-    [{ state: 'refused', explaining: true, pending: false }, 'Esc close']
+    [{ state: 'refused', explaining: true }, 'Esc close']
   ] as const)('reads %o as %s', (editor, text) => {
     expect(hints(editor)).toBe(text);
   });

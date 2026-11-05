@@ -752,30 +752,21 @@ describe('a value the kernel checks as it is typed', () => {
     fireEvent.change(input, { target: { value: '2' } });
     rerender({ value: 2, status: 'built' });
     fireEvent.change(input, { target: { value: '25' } });
-    // 2 built; 25 has no verdict yet.
+    // 2 built; 25 has no verdict yet, so Apply waits.
     expect(apply).toBeDisabled();
     fireEvent.click(apply);
-    fireEvent.keyDown(input, { key: 'Enter' });
     expect(onCommit).not.toHaveBeenCalled();
-    expect(
-      screen.getByText('Checking… applies once it builds')
-    ).toBeInTheDocument();
-    // The verdict for 25 lands: the pending Enter applies 25, not 2.
-    rerender({ value: 25, status: 'built' });
+    // Enter hands over 25 itself, for the host to check exactly before it
+    // applies anything; 2's preview never stands in for it.
+    fireEvent.keyDown(input, { key: 'Enter' });
     expect(onCommit).toHaveBeenCalledExactlyOnceWith(25, '25');
   });
 
-  it('drops a pending Enter when its value is refused or the entry changes', () => {
+  it('does nothing on Enter for a refused value or while a commit is checked', () => {
     const { input, onCommit, rerender } = checked();
     fireEvent.change(input, { target: { value: '9' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
     rerender({ value: 9, status: 'refused' });
-    rerender({ value: 9, status: 'built' });
-    expect(onCommit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '3' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    fireEvent.change(input, { target: { value: '4' } });
-    rerender({ value: 4, status: 'built' });
     expect(onCommit).not.toHaveBeenCalled();
   });
 
@@ -783,14 +774,12 @@ describe('a value the kernel checks as it is typed', () => {
     const { input, onUiStateChange } = checked();
     expect(onUiStateChange).toHaveBeenLastCalledWith({
       state: 'ready',
-      explaining: false,
-      pending: false
+      explaining: false
     });
     fireEvent.change(input, { target: { value: '2+' } });
     expect(onUiStateChange).toHaveBeenLastCalledWith({
       state: 'invalid',
-      explaining: false,
-      pending: false
+      explaining: false
     });
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input).toHaveAccessibleDescription(/./);
