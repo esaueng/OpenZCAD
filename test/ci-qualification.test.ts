@@ -55,7 +55,7 @@ describe('complete application qualification', () => {
     // GitHub resolves a job's env before a runner exists. Step env and
     // action inputs can use runner paths, but job env cannot.
     const environments = [
-      ...workflow.matchAll(/^    env:\n((?: {6,}[^\n]*\n)+)/gm)
+      ...workflow.matchAll(/^ {4}env:\n((?: {6,}[^\n]*\n)+)/gm)
     ];
     expect(environments.length).toBeGreaterThan(0);
     for (const environment of environments)
