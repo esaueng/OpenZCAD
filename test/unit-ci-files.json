@@ -153,7 +153,8 @@
     "test/direct-edit-corpus/corpus.test.ts",
     "test/refusal-reproduction.test.ts",
     "test/project-diagnostics.test.ts",
-    "test/cylinder-radius-across-boolean.test.ts"
+    "test/cylinder-radius-across-boolean.test.ts",
+    "test/sphere-patch-lineage.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",

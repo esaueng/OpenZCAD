@@ -47,6 +47,7 @@ import {
   registerSolidWitnesses
 } from './exact-witnesses';
 import { edgeToFaceMapOf } from './exact-sync-memo';
+import { primitiveSphereFaceRoles } from './exact-sphere-patches';
 import {
   pointAt,
   pointOnPlane,
@@ -811,14 +812,36 @@ export function buildPrimitiveLineage(
         )
       );
       break;
-    case 'sphere':
-      diagnostics.push(
-        remusHashOnlyLineage(
-          'primitive',
-          'Remus sphere hemispheres share the same exact witness and cannot be named one-to-one.'
-        )
-      );
+    case 'sphere': {
+      // The two hemispheres share one exact witness, so no witness predicate
+      // can separate them. Each is named instead by the pole its trimmed face
+      // contains, which the kernel answers exactly (see
+      // `exact-sphere-patches`); anything short of one pole per face names
+      // neither. The equator edges stay hash-only: they are
+      // parameterization segments of one smooth seam.
+      const roles = primitiveSphereFaceRoles(kernel, solid);
+      if (!roles) {
+        diagnostics.push(
+          remusHashOnlyLineage(
+            'primitive',
+            'Remus sphere hemispheres could not each be proved to hold exactly one pole.'
+          )
+        );
+        break;
+      }
+      for (const role of ['z-max', 'z-min'] as const) {
+        addUniqueSemanticAssignment(
+          faces,
+          'face',
+          `primitive.sphere.face.${role}`,
+          (candidate) => roles.get(candidate.handle) === role,
+          assignments,
+          diagnostics,
+          'primitive'
+        );
+      }
       break;
+    }
   }
 
   return mergeRemusLineageStates([
