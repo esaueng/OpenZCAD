@@ -182,6 +182,10 @@ test('Revolve runs in place: region, axis line, angle drag, keypad, Done', async
 
   // The sketch's vertical axis is world Z on Front. Click it above the
   // profile: below it, the line can run under the command bar.
+  // The profile pick proves the sketch layer is ready; Fit must include it
+  // before reading a screen coordinate on the axis.
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
   const onAxis = await projected(canvas, [0, 0, 16]);
   await page.mouse.click(onAxis.x, onAxis.y);
   await expect(bar).toContainText('Drag the angle');
@@ -275,6 +279,10 @@ test('Escape leaves an in-place Revolve with nothing added', async ({
       return bar.textContent();
     })
     .toContain('Pick an axis');
+  // The profile pick proves the sketch layer is ready; Fit must include it
+  // before reading a screen coordinate on the axis.
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
   const onAxis = await projected(canvas, [0, 0, 16]);
   await page.mouse.click(onAxis.x, onAxis.y);
   await expect(bar).toContainText('Drag the angle');

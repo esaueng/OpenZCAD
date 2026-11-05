@@ -194,3 +194,42 @@ describe('PanelFrame hugging its content', () => {
     ).not.toBeNull();
   });
 });
+
+describe('temporary panel Escape ownership', () => {
+  it.each(['phone', 'unpinned', 'revealed'] as const)(
+    'lets an active workspace command cancel from a %s panel',
+    (placement) => {
+      const controls = { ...frame(), placement, commandActive: true };
+      const cancelled = vi.fn();
+      render(
+        <div onKeyDown={cancelled}>
+          <PanelFrame id="history" count={2} controls={controls}>
+            <p>Rows</p>
+          </PanelFrame>
+        </div>
+      );
+      const region = screen.getByRole('region', { name: 'History' });
+      const key = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true
+      });
+      fireEvent(region, key);
+      expect(controls.onClose).not.toHaveBeenCalled();
+      expect(cancelled).toHaveBeenCalledOnce();
+      expect(key.defaultPrevented).toBe(false);
+    }
+  );
+  it('closes the phone panel once the workspace command has ended', () => {
+    const controls = {
+      ...frame(),
+      placement: 'phone' as const,
+      commandActive: false
+    };
+    renderFrame(controls);
+    fireEvent.keyDown(screen.getByRole('region', { name: 'History' }), {
+      key: 'Escape'
+    });
+    expect(controls.onClose).toHaveBeenCalledOnce();
+  });
+});

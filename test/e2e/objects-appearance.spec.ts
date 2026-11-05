@@ -40,7 +40,7 @@ for (const width of [1440, 390]) {
       page.on('console', (message) => {
         if (message.type() === 'error') errors.push(message.text());
       });
-      await stubApi(page);
+      await stubApi(page, { commandFoldClosed: true });
       await page.route('**/api/projects', (route) =>
         route.request().method() === 'POST'
           ? route.fulfill({
@@ -183,8 +183,9 @@ for (const width of [1440, 390]) {
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect(swatch).toHaveCSS('--body-color', '#a78bfa');
       await swatch.click();
-      // On a phone the popover uses the space below its row, over the list.
-      if (width === 390) await swatch.click();
+      // On a phone the popover covers the list; dismiss it before selecting
+      // another row rather than clicking through its painted surface.
+      if (width === 390) await page.keyboard.press('Escape');
       await otherSwatch.click();
       await expect(editor).toHaveCount(0);
       await expect(

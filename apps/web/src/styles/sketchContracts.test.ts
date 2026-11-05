@@ -26,6 +26,43 @@ function rule(css: string, selector: string): string {
   return css.slice(open + 1, css.indexOf('}', open));
 }
 
+/** Match the complete media block, without borrowing later rules outside it. */
+function mediaBlocks(css: string, query: string) {
+  const marker = `@media ${query} {`;
+  const blocks: { at: number; css: string }[] = [];
+  let at = css.indexOf(marker);
+  while (at >= 0) {
+    const start = at + marker.length;
+    let end = start;
+    let depth = 1;
+    while (end < css.length && depth > 0) {
+      if (css[end] === '{') depth++;
+      if (css[end] === '}') depth--;
+      end++;
+    }
+    if (depth !== 0) throw new Error(`Unclosed media block: ${query}`);
+    blocks.push({ at, css: css.slice(start, end - 1) });
+    at = css.indexOf(marker, end);
+  }
+  return blocks;
+}
+
+it('keeps stylesheet contracts inside their owning media block', () => {
+  const blocks = mediaBlocks(
+    '@media (max-height: 600px) { .other { height: 1px; } } ' +
+      '.flyout { max-height: 2px; } ' +
+      '@media (max-height: 600px) { .flyout { max-height: 3px; } } ' +
+      '.flyout { max-height: 4px; }',
+    '(max-height: 600px)'
+  );
+  expect(blocks).toHaveLength(2);
+  expect(() => rule(blocks[0]!.css, '.flyout')).toThrow('No rule');
+  expect(rule(blocks[1]!.css, '.flyout')).toMatch(/max-height:\s*3px/);
+  expect(() => mediaBlocks('@media (short) { .flyout {', '(short)')).toThrow(
+    'Unclosed media block'
+  );
+});
+
 describe('circle type strip', () => {
   it('is one row as wide as its tiles, bounded by the right lane', () => {
     // Positioned past the 40px rail with only a left edge, the strip shrank
@@ -58,12 +95,14 @@ describe('sketch flyouts', () => {
     const css = sheet('quiet-stage.css');
     const selector =
       '.viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts)';
-    const short = css.slice(css.indexOf('@media (max-height: 600px)'));
-    const maxHeight =
-      rule(short, selector).match(/max-height:\s*([^;]+);/)?.[1] ?? '';
-    expect(css.indexOf('@media (max-height: 600px)')).toBeGreaterThan(
-      css.indexOf(`${selector} {`)
+    const overrides = mediaBlocks(css, '(max-height: 600px)').filter((block) =>
+      block.css.includes(`${selector} {`)
     );
+    expect(overrides).toHaveLength(1);
+    const short = overrides[0]!;
+    const maxHeight =
+      rule(short.css, selector).match(/max-height:\s*([^;]+);/)?.[1] ?? '';
+    expect(short.at).toBeGreaterThan(css.indexOf(`${selector} {`));
     expect(maxHeight).toMatch(/var\(--readout-reserve\)\s*\+/);
     expect(maxHeight).not.toMatch(/-\s*var\(--readout-reserve\)/);
   });
