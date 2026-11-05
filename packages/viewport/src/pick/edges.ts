@@ -38,6 +38,20 @@ export function idleEdgeColor(edge: THREE.Object3D): number {
 const EDGE_PICK_PADDING_PX = 14;
 
 /**
+ * A fingertip covers several millimetres and hides what it touches, so touch
+ * gets twice the band: (1.4 + 28) / 2 ≈ 14.7 px. Pen keeps the mouse band;
+ * its tip is as precise as a cursor.
+ */
+const TOUCH_EDGE_PICK_PADDING_PX = 28;
+
+/** The edge pick padding for a pointer type ('' or undefined reads as mouse). */
+export function edgePickPaddingPx(pointerType?: string): number {
+  return pointerType === 'touch'
+    ? TOUCH_EDGE_PICK_PADDING_PX
+    : EDGE_PICK_PADDING_PX;
+}
+
+/**
  * Edge and face intersections for the same topological boundary can differ by
  * a few floating-point ulps. Keep the allowance relative to camera distance;
  * a fixed model-unit allowance can select an edge hidden behind the face.
@@ -47,8 +61,14 @@ const EDGE_DEPTH_ABSOLUTE_EPSILON = 1e-6;
 
 export type TopologyHit = Pick<THREE.Intersection, 'distance' | 'object'>;
 
-export function configureEdgeRaycasting(raycaster: THREE.Raycaster) {
-  raycaster.params.Line2 = { threshold: EDGE_PICK_PADDING_PX };
+export function configureEdgeRaycasting(
+  raycaster: THREE.Raycaster,
+  pointerType?: string
+) {
+  const threshold = edgePickPaddingPx(pointerType);
+  if (raycaster.params.Line2?.threshold !== threshold) {
+    raycaster.params.Line2 = { threshold };
+  }
 }
 
 /**

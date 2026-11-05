@@ -176,6 +176,7 @@
     "src/components/ViewportFrameStats.test.tsx",
     "src/components/WorkspaceLoading.test.tsx",
     "src/components/assistant/AssistantPanel.drawing.test.tsx",
+    "src/components/viewer/touchNavigation.test.ts",
     "src/hooks/useCommandFold.test.tsx",
     "src/hooks/useGeometryWorker.test.tsx",
     "src/hooks/useGeometryWorkerDemand.test.tsx",
