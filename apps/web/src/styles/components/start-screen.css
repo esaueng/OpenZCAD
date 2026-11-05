@@ -914,11 +914,20 @@
 }
 
 .start-body {
+  /* Room inside the scroller's clip for what a tile draws outside its box:
+     a folder's 7px tab above the first row and the 2px focus and drop rings
+     on every edge. The left margin cancels the inset so the cards keep their
+     line; on the right it is the gutter before the scrollbar. */
+  --start-shelf-inset: 8px;
   display: grid;
   align-content: start;
   gap: var(--sp-3);
   min-height: 0;
+  margin-left: calc(-1 * var(--start-shelf-inset));
+  padding-top: var(--start-shelf-inset);
+  padding-right: var(--start-shelf-inset);
   padding-bottom: var(--sp-4);
+  padding-left: var(--start-shelf-inset);
   /* Preview mounts must not re-anchor the whole grid and undo a wheel scroll
      or the position restored by useScrollMemory. Card dimensions stay fixed. */
   overflow-anchor: none;
@@ -2385,6 +2394,7 @@
   }
 
   .start-body {
+    margin-left: 0;
     padding: 0;
     overflow: visible;
   }
