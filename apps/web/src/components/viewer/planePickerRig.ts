@@ -120,17 +120,21 @@ export interface PlanePickerRig {
 /**
  * Whether a ghost-plane hit takes the click (or hover) from the model pick
  * under the same pointer. The panels sit where a part at the origin usually
- * is, so they win through faces in front of them. They do not win over
- * edges, vertices, axes or sketch regions, which are thin targets a click
- * means precisely, nor over a face lying in the ghost's own plane: that face
- * is the same plane with real lineage, so it is the better pick.
+ * is, so they win through faces (or whole-body hits) in front of them.
+ * They do not win over edges, vertices, axes or sketch regions, which are
+ * thin targets a click means precisely, nor over a face lying in the
+ * ghost's own plane: that face is the same plane with real lineage, so it is
+ * the better pick.
  */
 export function ghostPlaneTakesPick(
   ghostDistance: number,
   model: { kind: string; distance: number } | null | undefined
 ): boolean {
   if (!model) return true;
-  if (model.kind !== 'face') return ghostDistance < model.distance;
+  // A whole-body hit is a surface hit too (what a body-level filter returns).
+  if (model.kind !== 'face' && model.kind !== 'body') {
+    return ghostDistance < model.distance;
+  }
   // Coplanar: both rays end on the same point. Relative tolerance, since the
   // distance is in world units and the pick depth buffer is not exact.
   const tolerance = Math.max(1e-6, 1e-4 * ghostDistance);

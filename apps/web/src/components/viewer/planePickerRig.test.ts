@@ -76,8 +76,9 @@ describe('plane picker panels', () => {
 });
 
 describe('ghost plane picks', () => {
-  it('wins through a face in front of it', () => {
+  it('wins through a face or body in front of it', () => {
     expect(ghostPlaneTakesPick(40, { kind: 'face', distance: 25 })).toBe(true);
+    expect(ghostPlaneTakesPick(40, { kind: 'body', distance: 25 })).toBe(true);
     expect(ghostPlaneTakesPick(40, null)).toBe(true);
   });
 
@@ -89,7 +90,7 @@ describe('ghost plane picks', () => {
   });
 
   it('never takes an edge, sketch or region in front of it', () => {
-    for (const kind of ['edge', 'sketch', 'region', 'body']) {
+    for (const kind of ['edge', 'sketch', 'region']) {
       expect(ghostPlaneTakesPick(40, { kind, distance: 25 })).toBe(false);
       expect(ghostPlaneTakesPick(25, { kind, distance: 40 })).toBe(true);
     }
