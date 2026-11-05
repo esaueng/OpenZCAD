@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TOOLTIP_OPEN_DELAY_MS, Tooltip } from './Tooltip';
+import {
+  installTouchLongPress,
+  TOUCH_LONG_PRESS_MS
+} from '../lib/touchLongPress';
 
 describe('Tooltip', () => {
   beforeEach(() => {
@@ -478,5 +482,49 @@ describe('Tooltip', () => {
       expect(parseFloat(tooltip.style.top)).toBeCloseTo(413, 6);
       expect(tooltip).toHaveTextContent('TorusA ring');
     });
+  });
+
+  it('shows its help to a held finger, unless the trigger has a menu', () => {
+    const uninstall = installTouchLongPress();
+    try {
+      const menu = vi.fn((event: { preventDefault(): void }) =>
+        event.preventDefault()
+      );
+      render(
+        <>
+          <Tooltip label="Box" description="Create a box">
+            <button type="button">Box tool</button>
+          </Tooltip>
+          <Tooltip label="Row">
+            <button type="button" onContextMenu={menu}>
+              Row with menu
+            </button>
+          </Tooltip>
+        </>
+      );
+      const hold = (name: string) => {
+        const trigger = screen.getByRole('button', { name });
+        const init = {
+          pointerId: 3,
+          pointerType: 'touch',
+          isPrimary: true,
+          clientX: 10,
+          clientY: 10
+        };
+        fireEvent.pointerEnter(trigger, init);
+        fireEvent.pointerDown(trigger, init);
+        act(() => {
+          vi.advanceTimersByTime(TOUCH_LONG_PRESS_MS);
+        });
+      };
+      hold('Box tool');
+      expect(screen.getByRole('tooltip')).toHaveTextContent('BoxCreate a box');
+      fireEvent.pointerLeave(screen.getByRole('button', { name: 'Box tool' }));
+      hold('Row with menu');
+      expect(menu).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      uninstall();
+    }
   });
 });

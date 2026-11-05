@@ -242,7 +242,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         viewport.fieldOfView,
         VIEWPORT_FIELD_OF_VIEW_BOUNDS
       ),
-      xrayOpacity: clampedNumber(viewport.xrayOpacity, XRAY_OPACITY_BOUNDS)
+      xrayOpacity: clampedNumber(viewport.xrayOpacity, XRAY_OPACITY_BOUNDS),
+      // Absent from settings written before touch gestures existed: on.
+      touchHistoryGestures: boolean(
+        viewport.touchHistoryGestures,
+        defaults.viewport.touchHistoryGestures
+      )
     },
     sketching: {
       gridVisible: boolean(

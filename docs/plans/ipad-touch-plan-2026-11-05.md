@@ -167,16 +167,33 @@ Timing and ownership rules:
    - The Settings switch for two- and three-finger taps moves to slice 4,
      with the other touch preferences.
 4. **Hover and keyboard replacements.**
-   - Selection-mode and modifier chips: Add, Toggle, Snap off, Free value,
-     Cycle snap.
-   - Handles stay visible after touch input.
-   - Press-and-hold tooltips, with key `title=` labels moved to `Tooltip`.
-   - One long-press hook for the 16 `onContextMenu` sites.
-   - On-screen Redo, Delete and view actions.
+   - Two viewer-bar toggles, for coarse pointers only: Multi-select (a pick
+     adds or removes, as Shift and Ctrl/⌘ do) and Free values (no snaps or
+     inference, exact drag values, as Shift does). They are workspace-local
+     and start off.
+   - A finger held 550 ms anywhere in the chrome dispatches a real
+     `contextmenu` (`lib/touchLongPress.ts`), so every right-click menu
+     works with no handler changes, and swallows the lift's click. A
+     `Tooltip` trigger with no menu shows its help instead. Text fields and
+     the viewport canvas are left alone.
+   - Settings › Viewport switch "Undo with two fingers", on by default, and
+     carried by the Worker when an older client saves without it.
+   - Already reachable by touch, so unchanged: Redo, Standard views and the
+     orientation cube, row actions under `hover: none`, and the command
+     search button. Handles stay drawn without hover; only their hover
+     highlight is missing, and Pencil hover (slice 6) restores it.
 5. **Touch sketching.**
-   - Line, arc and spline are drawn press–drag–release per segment, with a
-     live preview and chaining from the last end.
-   - An offset magnifier shows the snap target under the finger.
+   - Line and arc already draw press–drag–release per segment with a live
+     preview, and sketch tools are claimed presses in slice 3, so they run
+     unchanged under a finger.
+   - A finger gets twice each screen tolerance (`lib/pointerSlack.ts`):
+     sketch snaps, the move and offset snaps, the measure snap, the sketch
+     grab dot and the ring's band (the dot never grows into the ring), and
+     curve picks. The axis picker's 7 px tube is scaled per frame inside its
+     rig and stays as it is.
+   - An offset magnifier (`viewer/touchLoupe.ts`) follows a finger dragging
+     sketch geometry: twice the canvas under the finger with a crosshair,
+     above the finger (below near the top edge), naming the snap it took.
 6. **Apple Pencil**, as above.
 7. **Home Screen app and files.**
    - `viewport-fit=cover` and safe-area insets for the top bar, stage,

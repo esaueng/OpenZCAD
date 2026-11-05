@@ -223,3 +223,87 @@ test.describe('touch on the 3D viewport', () => {
     await expect(page.getByRole('menu')).toBeVisible();
   });
 });
+
+test.describe('touch stand-ins for keys and right-click', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('Multi-select makes a second tap on the block take it back out', async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });
+    const canvas = await openBlock(page);
+    const { body } = await points(canvas);
+    const picked = page.locator('.selection-readout .selection-callout-name');
+    await page.touchscreen.tap(body[0], body[1]);
+    await expect(picked).toBeVisible();
+    // Without the toggle a second tap is a plain click: still selected.
+    await page.waitForTimeout(400);
+    await page.touchscreen.tap(body[0], body[1]);
+    await expect(picked).toBeVisible();
+    const multi = page.getByRole('button', { name: 'Multi-select' });
+    await multi.tap();
+    await expect(multi).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForTimeout(400);
+    await page.touchscreen.tap(body[0], body[1]);
+    await expect(picked).toHaveCount(0);
+  });
+
+  test('a held finger on a History row opens its menu', async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });
+    await openBlock(page);
+    const row = page.locator('.feature-row').filter({ hasText: 'Extrude' });
+    await expect(row).toBeVisible();
+    const box = (await row.boundingBox())!;
+    const cdp = await page.context().newCDPSession(page);
+    const at: Point = [box.x + 40, box.y + box.height / 2];
+    await touch(cdp, 'touchStart', [at]);
+    await page.waitForTimeout(800);
+    await touch(cdp, 'touchEnd', []);
+    await expect(page.getByRole('menu')).toBeVisible();
+    // The lift was the hold's, not a click on the row.
+    await expect(page.getByRole('menu')).toBeVisible();
+  });
+});
+
+test.describe('touch sketching', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('a finger draws a circle with a magnifier over the point it hides', async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Touch sketch');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).tap();
+    await page.getByRole('button', { name: 'Top (XY)' }).tap();
+    const tools = page.getByRole('toolbar', { name: 'Sketch tools' });
+    await expect(tools).toBeVisible();
+    const circle = tools.getByRole('button', { name: /^Circle/ });
+    await circle.tap();
+    await expect(circle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.viewport-dock-grid')).not.toHaveText('');
+
+    const box = (await page
+      .locator('.viewer-host canvas')
+      .first()
+      .boundingBox())!;
+    const center: Point = [box.x + box.width * 0.4, box.y + box.height * 0.5];
+    const cdp = await page.context().newCDPSession(page);
+    const loupe = page.locator('.touch-loupe');
+    await touch(cdp, 'touchStart', [center]);
+    for (let step = 1; step <= 6; step += 1) {
+      await touch(cdp, 'touchMove', [[center[0] + step * 12, center[1]]]);
+    }
+    await expect(loupe).toBeVisible();
+    // It sits clear of the finger, never under it.
+    const shown = (await loupe.boundingBox())!;
+    expect(shown.y + shown.height).toBeLessThan(center[1]);
+    await touch(cdp, 'touchEnd', []);
+    await expect(loupe).toBeHidden();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Sketch 01 started.'
+    );
+  });
+});

@@ -250,3 +250,16 @@ export function createTouchNavigation(
     }
   };
 }
+
+/** Toggles on a touch screen that stand in for held modifier keys. */
+export interface TouchModifiers {
+  /** A pick adds or removes, as with Shift or Ctrl/⌘ held. */
+  multiSelect: boolean;
+  /** Drags and sketching ignore snaps and inference, as with Shift held. */
+  freeValues: boolean;
+}
+
+export const NO_TOUCH_MODIFIERS: Readonly<TouchModifiers> = Object.freeze({
+  multiSelect: false,
+  freeValues: false
+});

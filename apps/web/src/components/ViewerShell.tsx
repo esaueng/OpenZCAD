@@ -8,6 +8,10 @@ import type {
 import type { CompositeShape } from '../lib/sketch/composites';
 import type { ViewportImageSource } from './viewer/viewportImage';
 import {
+  NO_TOUCH_MODIFIERS,
+  type TouchModifiers
+} from './viewer/touchNavigation';
+import {
   datumOffsetHandle,
   datumPlaneDisplays,
   shiftedDatumFrame
@@ -208,6 +212,8 @@ interface ViewerShellProps {
   canRedo: boolean;
   onUndo(): void;
   onRedo(): void;
+  /** Two- and three-finger taps undo and redo (Settings › Viewport). */
+  touchHistoryGestures?: boolean;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -451,6 +457,7 @@ export function ViewerShell({
   canRedo,
   onUndo,
   onRedo,
+  touchHistoryGestures = true,
   projection,
   initialView,
   onViewChange,
@@ -621,6 +628,9 @@ export function ViewerShell({
   // part of the target, so a release (accepted, refused or back at zero)
   // rebuilds the rig and no gesture carries the last one's value.
   const [datumGesture, setDatumGesture] = useState(0);
+  // Workspace-local, like a held key: a reload starts with neither on.
+  const [touchModifiers, setTouchModifiers] =
+    useState<TouchModifiers>(NO_TOUCH_MODIFIERS);
   const datumHandleKey = datumHandle
     ? JSON.stringify({ ...datumHandle, draftShift, gesture: datumGesture })
     : '';
@@ -670,6 +680,8 @@ export function ViewerShell({
       canRedo={canRedo}
       onUndo={onUndo}
       onRedo={onRedo}
+      touchModifiers={touchModifiers}
+      onTouchModifiersChange={setTouchModifiers}
       onToggleGrid={onToggleGrid}
       onFit={onFit}
       measuring={measuring}
@@ -898,11 +910,13 @@ export function ViewerShell({
         onMovePreviewChange={onMovePreviewChange}
         onContextMenu={onContextMenu}
         onTouchHistory={(step) => {
+          if (!touchHistoryGestures) return;
           if (step === 'undo' ? canUndo : canRedo) {
             if (step === 'undo') onUndo();
             else onRedo();
           }
         }}
+        touchModifiers={touchModifiers}
         assemblyView={assemblyView}
       />
       {dockLayout && !hideViewerToolbar && (
