@@ -288,10 +288,11 @@ function cylinderRadiusChain(
   // loses it when the operand changes size: the seam a resized boss makes is
   // a new edge, and nothing but a lineage name can find it again. Keep those
   // chains on the local wall resize, which leaves the seam in place. When
-  // the pick is the boss seam itself the local resize cannot carry the blend
-  // either, and the adapter refuses it (`resize_left_blend_behind`) rather
-  // than leave the blend behind at the old radius: neither route is correct
-  // there yet, so the refusal is the answer.
+  // the pick is the boss seam itself the kernel's own local resize cannot
+  // carry the blend, so the adapter removes the band, resizes the sharp wall
+  // and rebuilds the band (WS6 ladder); a seam it cannot prove and rebuild
+  // exactly, such as a chamfer, still refuses (`resize_left_blend_behind`)
+  // rather than leave the blend behind at the old radius.
   const pickedByHashOnly = listFeaturesInOrder(document).some(
     (feature) =>
       chain.publishers.has(feature.featureId) &&
