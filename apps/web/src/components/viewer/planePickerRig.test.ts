@@ -148,3 +148,31 @@ describe('overlapping ghost planes', () => {
     rig.dispose();
   });
 });
+
+describe('ghost plane borders', () => {
+  // Fat-line segments overlap at every joint; translucent, those overlaps
+  // blend twice and the dimmed corners showed as bright beads.
+  it('stay opaque and dim toward the stage colour instead', () => {
+    const backdrop = new THREE.Color('#101215');
+    const sum = (c: THREE.Color) => c.r + c.g + c.b;
+    const rig = buildPlanePickerRig({ backdrop });
+    rig.setHover('XY');
+    for (const plane of PLANE_PICKER_ORDER) {
+      const line = rig.group.getObjectByName(
+        `plane-picker-border-${plane}`
+      ) as THREE.Mesh;
+      const material = line.material as THREE.Material & {
+        color: THREE.Color;
+      };
+      expect(material.opacity).toBe(1);
+      if (plane === 'XY') continue;
+      // Dimmed: brighter than the stage, but nearer it than full strength.
+      const full = sum(new THREE.Color(PLANE_COLORS_FOR_TEST[plane]));
+      expect(sum(material.color)).toBeGreaterThan(sum(backdrop));
+      expect(sum(material.color)).toBeLessThan((sum(backdrop) + full) / 2);
+    }
+    rig.dispose();
+  });
+});
+
+const PLANE_COLORS_FOR_TEST = { XY: 0x4da3ff, XZ: 0x4ade80, YZ: 0xf87171 };
