@@ -38,15 +38,26 @@ export function selectCI(
     /^(?:\.github\/|scripts\/|test\/support\/|test\/setup|test\/unit-global|test\/unit-ci-files|test\/e2e\/fixtures\/|test\/parity\/|packages\/(?:crypto|mls)\/|packages\/kernel-adapter\/package\.json$|(?:pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|vitest.*|playwright.*|tsconfig.*|eslint.*|turbo\.json)$)|(?:^|\/)package\.json$/;
   const known =
     /^(?:apps\/web\/(?:src|worker)\/|packages\/[^/]+\/src\/|test\/|docs\/|public\/)|\.(?:md|css|svg|png|jpg|webp)$/;
-  const full =
+  const explicitFull =
     event === 'schedule' ||
     event === 'workflow_dispatch' ||
-    labels.includes('ci:full') ||
+    labels.includes('ci:full');
+  const unitFull =
+    explicitFull ||
     labels.includes('kernel-bump') ||
     deleted ||
     !paths.length ||
     paths.some((p) => broad.test(p) || !known.test(p));
-  return { unit: full ? 'full' : 'smoke', e2e: full ? 'full' : 'smoke' };
+  // Extended browser coverage has its own qualification lane. Removing a
+  // browser regression still requires the full remaining matrix.
+  const browserFull =
+    explicitFull ||
+    (deleted &&
+      paths.some((p) => p.startsWith('test/e2e/') && p.endsWith('.spec.ts')));
+  return {
+    unit: unitFull ? 'full' : 'smoke',
+    e2e: browserFull ? 'full' : 'smoke'
+  };
 }
 
 export function changedBrowserSpecs(base, all, cwd = process.cwd()) {

@@ -8,8 +8,10 @@ history, failed discovery and invalid inventories select the complete
 project. Individual test deadlines, isolation and per-runner worker limits
 remain unchanged.
 
-Unknown inputs, deleted files, dependency/configuration changes, kernel
-updates and explicit `ci:full` requests select full unit and browser suites.
+Unknown inputs, deleted files, dependency/configuration changes and kernel
+updates select full unit suites. The browser gate runs critical journeys plus
+changed regression files. Scheduled qualification, manual dispatch, `ci:full`
+requests and browser regression deletions select the full browser matrix.
 Changed browser regression files run every case, including untagged cases;
 the other browser files retain their smoke tags. Exact STEP parity, builds,
 bundle budgets and the existing privacy/security gates remain required.
@@ -19,8 +21,8 @@ original event payload. Unit selection
 and timing artifacts identify the files executed by each partition.
 
 Ordinary merge candidates run the unit selection, build/parity and browser
-history/save journeys against the combined tree. Broad candidates run the
-full browser partitions. A skipped or failed selected set cannot satisfy
+history/save journeys against the combined tree. Explicit full requests and
+browser regression deletions run the full browser partitions. A skipped or failed selected set cannot satisfy
 the completion gates. Prior PR success does not stand in for a combined-tree
 browser check.
 
@@ -28,7 +30,10 @@ browser check.
 
 `daily-validation.yml` runs at 07:37 UTC, on manual dispatch, and when its own
 implementation changes in a PR. It executes complete root and web suites
-with coverage and all six full browser partitions. All jobs use the event's
+with coverage and all six full browser partitions. Each full browser case has
+one attempt, exposing flakes and avoiding repeated deadlines for persistent
+failures. Browser artifacts include the report and failure-context files.
+All jobs use the event's
 immutable checkout SHA and read-only credentials. Failures retain reports;
 the aggregate receipt records the source SHA, each project result and the
 last successful scheduled main qualification. Missing, skipped or cancelled

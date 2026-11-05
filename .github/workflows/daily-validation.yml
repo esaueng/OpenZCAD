@@ -98,12 +98,14 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_FILE: qualification-browser.json
         run: |
           specs="$(node scripts/e2e-shards.mjs --suite full "$SHARD/6")"
-          pnpm test:e2e:full --reporter=dot,json $specs
+          pnpm test:e2e:full --retries=0 --reporter=dot,json $specs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: qualification-browser-${{ matrix.shard }}
-          path: qualification-browser.json
+          path: |
+            qualification-browser.json
+            test-results/
           if-no-files-found: error
           retention-days: 7
   report:

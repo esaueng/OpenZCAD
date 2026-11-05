@@ -70,6 +70,7 @@
     "test/collaboration-checkpoint.test.ts",
     "test/command-system.test.ts",
     "test/css-class-coverage.test.ts",
+    "test/dense-polyline-crossings.test.ts",
     "test/deploy-safety.test.ts",
     "test/deployment-config-validator.test.ts",
     "test/desktop-release-privacy.test.ts",

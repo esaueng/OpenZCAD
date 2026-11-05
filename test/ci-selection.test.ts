@@ -25,7 +25,7 @@ describe('critical and affected CI selection', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('vitest.full.config.ts');
   });
-  it('retains complete validation for unknown, foundational and explicit full inputs', () => {
+  it('retains complete unit validation for unknown and foundational inputs', () => {
     for (const paths of [
       [],
       ['pnpm-lock.yaml'],
@@ -36,7 +36,7 @@ describe('critical and affected CI selection', () => {
       ['new-configuration.json'],
       ['packages/kernel-adapter/package.json']
     ]) {
-      expect(selectCI(paths)).toEqual({ unit: 'full', e2e: 'full' });
+      expect(selectCI(paths)).toEqual({ unit: 'full', e2e: 'smoke' });
     }
     for (const options of [
       { event: 'schedule' },
@@ -52,6 +52,29 @@ describe('critical and affected CI selection', () => {
       unit: 'smoke',
       e2e: 'smoke'
     });
+  });
+
+  it('reserves full browsers for explicit qualification and removed browser regressions', () => {
+    for (const options of [
+      { event: 'schedule' },
+      { event: 'workflow_dispatch' },
+      { labels: ['ci:full'] }
+    ])
+      expect(selectCI(['apps/web/src/App.tsx'], options)).toEqual({
+        unit: 'full',
+        e2e: 'full'
+      });
+    expect(selectCI(['pnpm-lock.yaml'], { labels: ['kernel-bump'] })).toEqual({
+      unit: 'full',
+      e2e: 'smoke'
+    });
+    expect(selectCI(['test/e2e/deleted.spec.ts'], { deleted: true })).toEqual({
+      unit: 'full',
+      e2e: 'full'
+    });
+    expect(
+      selectCI(['.github/workflows/fleet-ci-v6.yml'], { deleted: true })
+    ).toEqual({ unit: 'full', e2e: 'smoke' });
   });
 
   it('selects changed untagged browser regressions and refuses deleted specs', () => {

@@ -430,7 +430,7 @@ jobs:
           test "$TYPECHECK_RESULT" = success
           test "$UNIT_RESULT" = success
           test "$VALIDATION_RESULT" = success
-  # Explicit full requests and broad queue candidates run the full shard set.
+  # Manual qualifications and browser regression deletions run the full shard set.
   e2e-tests:
     needs: [queue-trust, plan]
     if: ${{ !cancelled() && github.event_name != 'pull_request' && (github.event_name != 'merge_group' || needs.plan.outputs.e2e == 'full') }}
