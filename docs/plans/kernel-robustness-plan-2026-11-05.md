@@ -142,8 +142,9 @@ Wrong cells, each a silent defect with a minimal history in the ledger:
 **Acceptance gates (K10 wrong-cell follow-up).** On the `669d1e2` pin the
 same four defects reproduce. The adapter now refuses the first three by name
 (`packages/kernel-adapter/src/result-acceptance.ts`), with no oracle or
-tolerance changed, and the ledgers stand at 724 qualified, 482 typed refusals,
-215 untyped refusals and 13 wrong:
+tolerance changed. With the typed cylindrical-face resize refusals (#1265)
+also merged, the ledgers stand at 724 qualified, 521 typed refusals, 176
+untyped refusals and 13 wrong:
 
 | Defect                    | Gate                                                                                                                                                                                                                    | Cells         |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
