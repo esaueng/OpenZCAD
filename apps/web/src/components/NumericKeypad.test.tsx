@@ -993,3 +993,32 @@ describe('the keypad behind its overflow action', () => {
     expect(screen.getByRole('button', { name: '7' })).toBeInTheDocument();
   });
 });
+
+describe('help shown by hovering the unit', () => {
+  it('does not take the Escape that cancels the edit', () => {
+    const onCancel = vi.fn();
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Total',
+          initial: '28',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onCancel={onCancel}
+      />
+    );
+    // The control opens under the pointer that pressed the chip.
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'mm' }));
+    expect(screen.getByRole('note')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Total' }), {
+      key: 'Escape'
+    });
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+});

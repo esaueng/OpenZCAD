@@ -667,9 +667,9 @@ export function NumericKeypad({
   useEffect(() => {
     onUiStateChangeRef.current?.({
       state,
-      explaining: explaining || helpOpen
+      explaining: explaining || helpPinned
     });
-  }, [state, explaining, helpOpen]);
+  }, [state, explaining, helpPinned]);
   useEffect(() => () => onUiStateChangeRef.current?.(null), []);
 
   const unitText =
@@ -734,9 +734,12 @@ export function NumericKeypad({
           // own card closes itself before this hears it), then the edit is
           // cancelled back to its baseline; the next Escape, with the
           // control gone, clears the selection.
-          if (helpOpen) {
+          // Only help opened on purpose holds a rung: help shown because the
+          // pointer happens to rest on the unit (the control opens under
+          // it) must not swallow the Escape that cancels the edit.
+          setHelpHover(false);
+          if (helpPinned) {
             setHelpPinned(false);
-            setHelpHover(false);
             inputRef.current?.focus();
             return;
           }
