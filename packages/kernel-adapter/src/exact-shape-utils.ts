@@ -28,6 +28,7 @@ import {
 } from './remus-lineage';
 import { topologyHashOfWitness } from './topology-lineage';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
+import { sphereWitnessTieResolver } from './exact-sphere-patches';
 import { measureFaceGeometry } from './exact-measure';
 import {
   MEASUREMENT_DEFLECTION,
@@ -291,7 +292,8 @@ export function copyShapeWithVerifiedLineage(
       source,
       topologyCandidatesForSolid(kernel, resultSolid),
       Array.from(matrix),
-      allowUniformScale
+      allowUniformScale,
+      sphereWitnessTieResolver(kernel, sourceSolid, Array.from(matrix))
     );
   });
   return { solids, lineage: mergeRemusLineageStates(lineages) };

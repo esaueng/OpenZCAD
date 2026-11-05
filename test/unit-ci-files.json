@@ -151,7 +151,8 @@
     "test/sphere-boss-resize-refusal.test.ts",
     "test/parity/parity.test.ts",
     "test/direct-edit-corpus/corpus.test.ts",
-    "test/cylinder-radius-across-boolean.test.ts"
+    "test/cylinder-radius-across-boolean.test.ts",
+    "test/sphere-patch-lineage.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",
