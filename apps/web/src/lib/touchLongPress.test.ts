@@ -85,6 +85,47 @@ describe('touch long press', () => {
     expect(clicks).toHaveBeenCalledTimes(1);
   });
 
+  it('swallows the release click after the menu has been held open for seconds', () => {
+    const clicks = vi.fn();
+    const row = document.getElementById('row')!;
+    row.addEventListener('click', clicks);
+    pointer('pointerdown', row);
+    advance(TOUCH_LONG_PRESS_MS);
+    advance(5000);
+    pointer('pointerup', row);
+    advance(100);
+    row.click();
+    expect(clicks).not.toHaveBeenCalled();
+    row.click();
+    expect(clicks).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a new deliberate tap through after a cancelled long hold', () => {
+    const clicks = vi.fn();
+    const row = document.getElementById('row')!;
+    row.addEventListener('click', clicks);
+    pointer('pointerdown', row);
+    advance(TOUCH_LONG_PRESS_MS);
+    pointer('pointercancel', row);
+    pointer('pointerdown', row, { pointerId: 2 });
+    pointer('pointerup', row, { pointerId: 2 });
+    row.click();
+    expect(clicks).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires suppression after release when no click arrives', () => {
+    const clicks = vi.fn();
+    const row = document.getElementById('row')!;
+    row.addEventListener('click', clicks);
+    pointer('pointerdown', row);
+    advance(TOUCH_LONG_PRESS_MS);
+    advance(5000);
+    pointer('pointerup', row);
+    advance(1001);
+    row.click();
+    expect(clicks).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves a moved finger, a quick tap and a lifted hold alone', () => {
     const seen = menus();
     const row = document.getElementById('row')!;

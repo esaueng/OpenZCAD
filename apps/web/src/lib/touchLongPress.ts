@@ -20,7 +20,7 @@
 export const TOUCH_LONG_PRESS_MS = 550;
 /** Travel that makes a press a scroll or drag rather than a hold. */
 const TOUCH_LONG_PRESS_SLOP_PX = 10;
-/** How long after the synthetic menu the lift's click is still swallowed. */
+/** How long after the finger lifts its delayed click is still swallowed. */
 const SWALLOW_CLICK_MS = 1000;
 
 const IGNORED =
@@ -53,6 +53,7 @@ export function installTouchLongPress(
     timer: number;
   } | null = null;
   let swallowClickUntil = Number.NEGATIVE_INFINITY;
+  let heldPointerId: number | null = null;
 
   const cancel = () => {
     if (!pending) return;
@@ -62,6 +63,11 @@ export function installTouchLongPress(
 
   const onPointerDown = (event: PointerEvent) => {
     cancel();
+    // A new deliberate press must not lose its click to a previous hold
+    // that was cancelled or whose browser never emitted a click.
+    if (heldPointerId === null) {
+      swallowClickUntil = Number.NEGATIVE_INFINITY;
+    }
     if (event.pointerType !== 'touch' || !event.isPrimary) return;
     const target = event.target;
     if (!(target instanceof Element) || target.closest(IGNORED)) return;
@@ -83,7 +89,10 @@ export function installTouchLongPress(
         view: doc.defaultView
       });
       longPressMenus.add(menu);
-      swallowClickUntil = clock.now() + SWALLOW_CLICK_MS;
+      heldPointerId = press.pointerId;
+      // The hold can last arbitrarily long after its menu has opened. Start
+      // the browser's delayed-click grace period only when this finger lifts.
+      swallowClickUntil = Number.POSITIVE_INFINITY;
       press.target.dispatchEvent(menu);
     }, TOUCH_LONG_PRESS_MS);
     pending = press;
@@ -101,6 +110,10 @@ export function installTouchLongPress(
 
   const onPointerEnd = (event: PointerEvent) => {
     if (pending?.pointerId === event.pointerId) cancel();
+    if (heldPointerId === event.pointerId) {
+      heldPointerId = null;
+      swallowClickUntil = clock.now() + SWALLOW_CLICK_MS;
+    }
   };
 
   const onContextMenu = (event: MouseEvent) => {
