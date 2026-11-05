@@ -65,6 +65,7 @@ export * from './gizmo/offsetBodyPreview';
 export * from './input/bindings';
 export * from './input/GestureRouter';
 export * from './input/RightClickGestureTracker';
+export * from './input/touchGestures';
 
 // Scene graph: disposal, labels, display modes, and preview geometry.
 export * from './scene/HudLayer';

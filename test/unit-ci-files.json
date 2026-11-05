@@ -48,6 +48,7 @@
     "packages/shared/src/sketch-composite-targets.test.ts",
     "packages/shared/src/sketch-reference-dimensions.test.ts",
     "packages/viewport/src/camera/depthRange.test.ts",
+    "packages/viewport/src/input/touchGestures.test.ts",
     "packages/viewport/src/render/coplanarBodies.test.ts",
     "packages/viewport/src/render/edgeOverlay.test.ts",
     "test/api-routes.test.ts",
