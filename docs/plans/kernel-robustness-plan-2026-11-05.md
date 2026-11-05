@@ -79,6 +79,22 @@ attempted geometrically.
    captured edge references, so this is a strong hint, not proof, that boolean
    seam edges lose identity across an upstream dimension change. The axis-aligned
    fillet also warns that its display mesh has gaps.
+6. **The seam fillet is slow.** The r 2 fillet on the four sphere/cylinder
+   seam edges took 3.5–14 minutes per rebuild in the reproduction, on a heavily
+   loaded workstation. That is a budget and cancellation problem (K02, W01) as
+   well as a capability one, and it is why the modifier cells stay out of the
+   CI slice until they are fast.
+
+### First matrix slice (M0, PR #1249)
+
+The sphere × cylinder, no-modifier slice of WS1 runs in about 25 s. Of 16
+cells, 8 qualify: every union and subtract build, off-axis and tilted, and
+every source Cylinder radius edit after either boolean. The other 8, every
+direct wall resize, refuse untyped. A blind bore cut into the sphere refuses
+for a second reason: the kernel resizes a partial cylinder only on the
+outside of a boss with radial planar sides. So, without a modifier, editing the
+source shape and replaying works today. This is the route WS4 makes the
+default, and the refusal sentences now point to it.
 
 ## Why combinations fail when primitives work
 
