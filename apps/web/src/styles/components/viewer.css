@@ -71,9 +71,12 @@
   bottom: 38px;
   left: 18px;
   z-index: var(--z-viewer-overlay);
+  /* The rule lies along the foot with its value beside it, as a scale bar
+     reads on a drawing; ViewportScaleIndicator ends it short of the bar. */
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 8px;
   color: var(--color-stage-ink);
   pointer-events: none;
   user-select: none;
@@ -81,20 +84,6 @@
 
 .viewport-scale-indicator[hidden] {
   display: none;
-}
-
-/* Upright, the rule stands on the value, its ticks reaching right. */
-.viewport-scale-indicator.is-upright {
-  align-items: flex-start;
-}
-
-.viewer-shell .viewport-scale-indicator.is-upright canvas.viewport-scale-rule {
-  width: 18px !important;
-  height: var(--viewport-scale-length, 1px) !important;
-}
-
-.viewport-scale-indicator.is-upright .viewport-scale-value {
-  font-size: 13px;
 }
 
 .viewer-shell canvas.viewport-scale-rule {
@@ -106,10 +95,11 @@
 
 .viewport-scale-value {
   min-width: max-content;
-  margin-top: 4px;
+  /* Level with the rule's baseline, 2px above the canvas foot. */
+  padding-bottom: 1px;
   color: var(--color-stage-ink);
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 13px;
   font-weight: var(--fw-regular);
   line-height: 1;
   letter-spacing: 0.01em;

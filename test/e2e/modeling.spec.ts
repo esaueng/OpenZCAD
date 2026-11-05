@@ -20,7 +20,7 @@ import {
   MODEL_ONLY,
   bodyCardFromHistory,
   featureCardFromHistory,
-  clickWorldPoint,
+  clickGhostPlane,
   createShellInPlace,
   enterCommandValue,
   finishInPlaceCommand,
@@ -1499,7 +1499,9 @@ for (const modifier of [
     await expect(
       page.getByRole('heading', { name: 'Objects 1' })
     ).toBeVisible();
-    await expectConsumedBodyCount(page, 1);
+    // The body before the blend is an earlier state of the same body, a step
+    // in History rather than a source body: nothing goes behind the toggle.
+    await expectConsumedBodyCount(page, 0);
     await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
 
@@ -1574,7 +1576,9 @@ for (const modifier of [
     await expect(
       page.getByRole('heading', { name: 'Objects 1' })
     ).toBeVisible();
-    await expectConsumedBodyCount(page, 1);
+    // The body before the blend is an earlier state of the same body, a step
+    // in History rather than a source body: nothing goes behind the toggle.
+    await expectConsumedBodyCount(page, 0);
     await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();
     await expect
@@ -1636,13 +1640,13 @@ test('preflights and splits a box into two live half bodies', async ({
   ).toBeVisible();
 
   // U09: Split runs in place. The body, then the Right (YZ) ghost plane
-  // (clicked clear of the box), which lies on the box's x = 0 face where
+  // (clicked through the box), which lies on the box's x = 0 face where
   // the kernel refuses a split; sliding it 5 along +X crosses the interior.
   await page.getByRole('button', { name: /^Split/ }).click();
   await pickObjectsBody(page, 'Box 1');
   const splitBar = page.getByRole('group', { name: 'Split command' });
   await expect(splitBar).toContainText('Pick a plane or flat face');
-  await clickWorldPoint(page, [0, -3, 4]);
+  await clickGhostPlane(page, 'YZ');
   await expect(splitBar).toContainText('the cutting plane contains edge');
   await expect(
     splitBar.getByRole('button', { name: 'Done', exact: true })
@@ -1704,9 +1708,13 @@ test('preflights and drills a through hole into the top face', { tag: '@ci-smoke
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
   ).toBeVisible();
-  await expectConsumedBodyCount(page, 1);
-  await page.locator('.consumed-toggle').click();
-  await expect(page.locator('.body-row.consumed')).toContainText('Box 1');
+  // The drilled box is the same body a step on, not a new body made from
+  // it: no source body, and the undrilled box is reached by its own History
+  // step.
+  await expectConsumedBodyCount(page, 0);
+  await expect(
+    page.locator('.feature-row-main', { hasText: /^Box/ })
+  ).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -1767,9 +1775,13 @@ test('preflights and creates an exact open-top shell', { tag: '@ci-smoke' }, asy
   await expect(
     page.locator('.feature-row-main', { hasText: 'Shell' })
   ).toBeVisible();
-  await expectConsumedBodyCount(page, 1);
-  await page.locator('.consumed-toggle').click();
-  await expect(page.locator('.body-row.consumed')).toContainText('Box 1');
+  // The shelled box is the same body a step on, not a new body made from
+  // it: no source body, and the solid box is reached by its own History
+  // step.
+  await expectConsumedBodyCount(page, 0);
+  await expect(
+    page.locator('.feature-row-main', { hasText: /^Box/ })
+  ).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -3131,8 +3143,17 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   const paramInput = page.getByLabel('Expression for w');
   await paramInput.fill('40');
   await paramInput.press('Enter');
-  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
-  await expect(page.locator('.panel-body')).toContainText('34560');
+  // A parameter edit can leave this feature's inspector pinned. Its row
+  // toggles that card; Measurements opens it explicitly in either state.
+  const boxMeasurements = await featureCardFromHistory(
+    page,
+    // Matched by its name, not its value: a boolean row now names its
+    // operands ("Box 1 − Cylinder"), which also contain "Box".
+    page.locator('.feature-row', {
+      has: page.locator('.feature-row-main', { hasText: 'Box' })
+    })
+  );
+  await expect(boxMeasurements).toContainText('34560');
 
   // Undo while the untouched input is focused must not let the stale visible
   // draft recommit over the newer canonical expression on blur. Dispatching on
@@ -3544,7 +3565,7 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   // keeps its default name, "Split".
   await page.getByRole('button', { name: /^Split/ }).click();
   await pickObjectsBody(page, 'Box 1');
-  await clickWorldPoint(page, [0, -3, 4]);
+  await clickGhostPlane(page, 'YZ');
   await enterCommandValue(page, 'offset', '5');
   await finishInPlaceCommand(page, 'Split');
   const row = page.locator('.feature-row-main', { hasText: /^Split/ });

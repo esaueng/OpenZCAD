@@ -113,6 +113,35 @@ const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
       'That diameter would collapse a wall or blend. Try a smaller change.'
   },
   {
+    // A resized or moved face is re-limited against its boundary neighbours,
+    // and the kernel can only do that against planes, cylinders and axial
+    // cones. A boss that grows out of a sphere meets the sphere; once the
+    // seam is filleted it meets the blend band, which is a NURBS surface.
+    // Editing the source feature rebuilds the boolean instead, which does
+    // handle the sphere, so the sphere case names that route. A blend
+    // neighbour gets no route: replaying the history currently breaks the
+    // fillet's edge selection (docs/plans/kernel-robustness-plan-2026-11-05.md).
+    pattern:
+      /move-face does not support face [^:]*\((?:nurbs|bspline)\): face is adjacent/i,
+    sentence:
+      "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet."
+  },
+  {
+    pattern:
+      /move-face does not support face [^:]*\((?:sphere|torus|cone)\): face is adjacent/i,
+    sentence:
+      "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead."
+  },
+  {
+    // A hole wall that does not run between two whole circles — a blind bore
+    // ending on a sphere — is a partial cylinder, and the kernel resizes a
+    // partial wall only on the outside of a boss with planar sides. Editing
+    // the tool's source size rebuilds the cut and works.
+    pattern: /partial-cylinder resize currently requires/i,
+    sentence:
+      "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead."
+  },
+  {
     // A local face move sweeps the face and lets only its edge neighbours
     // stretch; anything else in the path refuses the move.
     pattern:

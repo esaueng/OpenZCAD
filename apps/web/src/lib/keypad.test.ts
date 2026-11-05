@@ -4,6 +4,7 @@ import {
   convertDimensionInput,
   dimensionModeForInput,
   evaluateKeypadInput,
+  keypadBesidePosition,
   keypadClampPosition,
   typedUnitValue
 } from './keypad';
@@ -50,6 +51,33 @@ describe('keypadClampPosition', () => {
       VIEWPORT
     );
     expect(placement.y).toBe(8);
+  });
+});
+
+describe('keypadBesidePosition', () => {
+  const chips = { left: 400, top: 190, right: 560, bottom: 210 };
+
+  it('stands right of the chips, top-aligned, so nothing under them is hidden', () => {
+    const placement = keypadBesidePosition(chips, SIZE, VIEWPORT);
+    expect(placement).toEqual({ x: 574, y: 186, side: 'right' });
+  });
+
+  it('takes the left side when the right is a docked panel', () => {
+    const placement = keypadBesidePosition(chips, SIZE, VIEWPORT, [
+      { x: 700, width: 300 }
+    ]);
+    expect(placement.side).toBe('left');
+    expect(placement.x + SIZE.width).toBeLessThanOrEqual(chips.left);
+  });
+
+  it('falls back under the chips when neither side has room', () => {
+    const placement = keypadBesidePosition(
+      { left: 100, top: 100, right: 300, bottom: 120 },
+      SIZE,
+      { width: 400, height: 700 }
+    );
+    expect(placement.side).toBe('below');
+    expect(placement.y).toBeGreaterThan(120);
   });
 });
 

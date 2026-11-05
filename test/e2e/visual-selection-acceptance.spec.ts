@@ -830,7 +830,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   );
   const selectionReadout = page.locator('.selection-readout');
   await expect(selectionReadout.locator('.selection-callout-name')).toHaveText(
-    'Fillet edges'
+    'Fillet'
   );
 
   // 10. A second oblique angle keeps the rim selection and chip world anchor.

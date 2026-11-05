@@ -75,6 +75,24 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   background: var(--color-error);
 }
 
+/* The refusal mark is a glyph rather than a dot (SelectionRail's
+   PhaseMarker), so it reads as an alert and not as a recording light. */
+.selection-rail .selection-rail-phase.has-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin: 2px 0 0;
+  color: var(--color-error);
+  background: none;
+  border-radius: var(--radius-sm);
+}
+
+.selection-rail .selection-rail-phase.has-icon:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 /* ── The pick, in the bar's guidance line ───────────────────
    Its name and measurement lead the line, as one quiet chip; the guidance
    follows it. The line never takes the pointer, so neither does the chip. */
@@ -152,8 +170,11 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   --lane-refusal: 0px;
 }
 
+/* SelectionRefusal measures its row into --lane-refusal-measured, so an open
+   diagnosis lifts the toast as far as it reaches; the fixed figures are the
+   folded row's, for the frame before the first measurement. */
 .viewer-area:has(.selection-refusal-lane .selection-callout-diagnostic) {
-  --lane-refusal: 52px;
+  --lane-refusal: var(--lane-refusal-measured, 52px);
 }
 
 .selection-refusal-lane {
@@ -192,13 +213,21 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   overflow-wrap: anywhere;
 }
 
+/* Folded to its headline: one line over the model, More opens the rest.
+   Every refusal is clamped, so the lane can measure whether the line clips;
+   More appears only when it does. */
 .selection-refusal-lane
-  .selection-callout-diagnostic.is-expandable:not(.is-expanded)
+  .selection-callout-diagnostic:not(.is-expanded)
   .selection-callout-error {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   overflow: hidden;
+}
+
+/* Beside the first line of an open paragraph, not centred on it. */
+.selection-refusal-lane .selection-callout-expand {
+  align-self: flex-start;
 }
 
 .selection-refusal-lane .selection-callout-recovery {
@@ -218,7 +247,9 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   .selection-callout-error {
   display: block;
   -webkit-line-clamp: unset;
-  overflow: visible;
+  /* A long diagnosis scrolls rather than climbing over the whole model. */
+  max-height: 30vh;
+  overflow-y: auto;
   overflow-wrap: anywhere;
 }
 
@@ -232,7 +263,7 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
 @container viewer-area (max-width: 719px) {
   .viewer-area:has(.selection-refusal-lane .selection-callout-diagnostic)
     .toast {
-    --lane-refusal: 92px;
+    --lane-refusal: var(--lane-refusal-measured, 92px);
   }
 }
 

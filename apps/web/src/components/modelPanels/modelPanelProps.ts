@@ -21,6 +21,12 @@ import type { BodyAppearancePatch } from './BodyAppearanceEditor';
  * Everything the five model panels read from the open document and the
  * workspace, and every action they offer. Each panel picks what it needs.
  */
+/** A refused, uncommitted operation, as History's transient last row. */
+export interface PendingHistoryStep {
+  title: string;
+  message: string;
+}
+
 export interface ModelPanelSource {
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
@@ -60,6 +66,13 @@ export interface ModelPanelSource {
   onSelectReferenceImage?(imageId: string): void;
   warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
+  /**
+   * The operation on the model that the kernel just refused, shown as a
+   * transient last row in History so a failed step is not silently missing
+   * from the list. Never a feature: it goes when the operation re-arms or
+   * ends.
+   */
+  pendingHistoryStep?: PendingHistoryStep | null;
   checkpoints: ProjectCheckpoint[];
   projectId?: string;
   /** The open document's version, to mark the save point it sits on. */

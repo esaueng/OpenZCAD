@@ -142,6 +142,8 @@ export interface HistoryTimelineProps {
   brokenProjectionSketchIds?: ReadonlySet<string>;
   parameterValues: Record<string, number>;
   units: UnitSystem;
+  /** A refused operation, drawn after the last row until it re-arms. */
+  pendingStep?: { title: string; message: string } | null;
   findOpen: boolean;
   onCloseFind(): void;
   onSelectFeature(nodeId: string): void;
@@ -367,6 +369,7 @@ export function HistoryTimeline({
   brokenProjectionSketchIds,
   parameterValues,
   units,
+  pendingStep = null,
   findOpen,
   onCloseFind,
   onSelectFeature,
@@ -513,7 +516,12 @@ export function HistoryTimeline({
   // nothing is selected, so clearing the selection never empties the list.
   const related = findOpen && relatedOnly ? relatedFeatureIds : null;
   const summaries = features.map((feature) =>
-    featureValueSummary(feature, parameterValues, units)
+    featureValueSummary(
+      feature,
+      parameterValues,
+      units,
+      (bodyId) => representations[bodyId]?.name
+    )
   );
   const visible = features
     .map((feature, index) => ({ feature, index }))
@@ -1455,6 +1463,20 @@ export function HistoryTimeline({
           </div>
         )}
       </div>
+      {pendingStep && !filtering && (
+        // Outside the list: the handle, spine and keyboard walk measure
+        // `.feature-row`s, and this is not a step that can be selected,
+        // rolled back to or reordered.
+        <div
+          className="history-pending-row"
+          role="status"
+          title={pendingStep.message}
+        >
+          <AlertTriangle size={13} aria-hidden="true" />
+          <span className="history-pending-name">{pendingStep.title}</span>
+          <span className="history-pending-state">not built</span>
+        </div>
+      )}
     </div>
   );
 }

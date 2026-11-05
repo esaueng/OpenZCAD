@@ -4,6 +4,7 @@ import {
   datumPlaneSources,
   datumPointSources,
   type BodyId,
+  type FaceWitnessV1,
   type FeatureId,
   type FeatureNode,
   type ProjectDocument
@@ -22,6 +23,12 @@ import {
   type RemusTopologyCandidate
 } from './remus-lineage';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
+import {
+  quantizedSphereCarrier,
+  sphereCarrierOf,
+  sphereWitnessTieResolver
+} from './exact-sphere-patches';
+import type { QuantizedSphereCarrier } from './topology-lineage';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 
 /**
@@ -61,6 +68,11 @@ export interface BooleanEvolutionEvidence {
   readonly operands: readonly RemusBooleanOperand[];
   /** Measured candidates of the evolution call's own result. */
   readonly candidates: readonly RemusTopologyCandidate[];
+  /**
+   * The exact sphere of every sphere face among the operand copies and the
+   * probe's result, by handle — the carrier the face witness cannot hold.
+   */
+  readonly sphereCarriers?: ReadonlyMap<number, QuantizedSphereCarrier>;
   /** Why no payload is being used. Null when one is. */
   readonly declined: string | null;
 }
@@ -146,14 +158,42 @@ function solidsAreTheSameBody(
 function operandAsCopied(
   kernel: RemusKernel,
   operand: RemusBooleanOperand,
+  original: number,
   copy: number
 ): RemusBooleanOperand {
   const candidates = topologyCandidatesForSolid(kernel, copy);
   return {
     ...(operand.role ? { role: operand.role } : {}),
     candidates,
-    lineage: carryRemusUnchangedLineage(operand.lineage, candidates, 'boolean')
+    lineage: carryRemusUnchangedLineage(
+      operand.lineage,
+      candidates,
+      'boolean',
+      'hash-only',
+      // A sphere's two hemispheres tie on witness; the copy is the identity
+      // transform, so each pole settles which copy face is which.
+      sphereWitnessTieResolver(kernel, original)
+    )
   };
+}
+
+function sphereCarriersOf(
+  kernel: RemusKernel,
+  candidates: readonly RemusTopologyCandidate[]
+): Map<number, QuantizedSphereCarrier> {
+  const carriers = new Map<number, QuantizedSphereCarrier>();
+  for (const candidate of candidates) {
+    if (
+      candidate.kind !== 'face' ||
+      (candidate.witness as FaceWitnessV1).surfaceType !== 'sphere'
+    ) {
+      continue;
+    }
+    const carrier = sphereCarrierOf(kernel, candidate.handle);
+    if (carrier)
+      carriers.set(candidate.handle, quantizedSphereCarrier(carrier));
+  }
+  return carriers;
 }
 
 /**
@@ -232,13 +272,18 @@ export function probeBooleanEntityEvolution(input: {
       `The kernel's entity-evolution ${operation} did not reproduce the body the plain ${operation} shipped, so its provenance describes a different solid.`
     );
   }
+  const copiedOperands = [
+    operandAsCopied(kernel, operands[0]!, input.a, copies[0]),
+    operandAsCopied(kernel, operands[1]!, input.b, copies[1])
+  ];
   return {
     evolution,
-    operands: [
-      operandAsCopied(kernel, operands[0]!, copies[0]),
-      operandAsCopied(kernel, operands[1]!, copies[1])
-    ],
+    operands: copiedOperands,
     candidates,
+    sphereCarriers: sphereCarriersOf(kernel, [
+      ...copiedOperands.flatMap((operand) => operand.candidates),
+      ...candidates
+    ]),
     declined: null
   };
 }
@@ -283,7 +328,8 @@ export function deriveBooleanLineage(input: {
     evolution: evidence.evolution,
     resultSolid: evidence.evolution.solid,
     operands: evidence.operands,
-    resultCandidates: evidence.candidates
+    resultCandidates: evidence.candidates,
+    sphereCarriers: evidence.sphereCarriers
   });
   const carried =
     carryRemusUnchangedLineage(
@@ -309,9 +355,7 @@ export const BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE =
   'The boolean evolution probe was skipped because no later feature references the result faces or edges.';
 
 /** Whether this feature is a boolean whose lineage the probe could enrich. */
-export function isBooleanEvolutionProbeEligible(
-  feature: FeatureNode
-): boolean {
+export function isBooleanEvolutionProbeEligible(feature: FeatureNode): boolean {
   return feature.data.featureKind === 'boolean';
 }
 
@@ -587,10 +631,7 @@ function persistedReferenceNamesProducer(
  * caller side; this module only reads the set it is handed.
  */
 export type BooleanLineageDemand =
-  | ReadonlySet<BodyId>
-  | readonly BodyId[]
-  | null
-  | undefined;
+  ReadonlySet<BodyId> | readonly BodyId[] | null | undefined;
 
 /** Sorted, deduplicated demand as a set; unhashable input yields empty. */
 export function normalizeBooleanLineageDemand(

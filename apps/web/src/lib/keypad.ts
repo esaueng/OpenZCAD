@@ -20,7 +20,7 @@ export interface KeypadPlacement {
   x: number;
   y: number;
   /** Which side of the anchor the keypad settled on. */
-  side: 'below' | 'above';
+  side: 'below' | 'above' | 'right' | 'left';
 }
 
 const ANCHOR_GAP = 14;
@@ -118,6 +118,51 @@ export function keypadClampPosition(
     ),
     side: 'above'
   };
+}
+
+/** A host-relative box the keypad must stand beside, not on. */
+export interface KeypadAvoidRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * Places the keypad BESIDE the value chips it was opened from — right of
+ * them, else left — top-aligned with them, so the chips, the handle's anchor
+ * dot and the picked geometry under them stay in view while a value is
+ * typed. Centered below the chip, the keypad covered the very edge it was
+ * rounding. Falls back to {@link keypadClampPosition} under the chips when
+ * neither side has room clear of the docked panels.
+ */
+export function keypadBesidePosition(
+  avoid: KeypadAvoidRect,
+  size: KeypadSize,
+  viewport: KeypadSize,
+  exclusions: readonly KeypadExclusion[] = []
+): KeypadPlacement {
+  const y = Math.min(
+    Math.max(avoid.top - 4, VIEWPORT_MARGIN),
+    Math.max(VIEWPORT_MARGIN, viewport.height - size.height - VIEWPORT_MARGIN)
+  );
+  const clear = (x: number) =>
+    x >= VIEWPORT_MARGIN &&
+    x + size.width <= viewport.width - VIEWPORT_MARGIN &&
+    exclusions.every(
+      (band) =>
+        band.width <= 0 || x + size.width <= band.x || x >= band.x + band.width
+    );
+  const right = avoid.right + ANCHOR_GAP;
+  if (clear(right)) return { x: right, y, side: 'right' };
+  const left = avoid.left - ANCHOR_GAP - size.width;
+  if (clear(left)) return { x: left, y, side: 'left' };
+  return keypadClampPosition(
+    { x: (avoid.left + avoid.right) / 2, y: avoid.bottom },
+    size,
+    viewport,
+    exclusions
+  );
 }
 
 /** Every document unit, plus the one angles use. */
