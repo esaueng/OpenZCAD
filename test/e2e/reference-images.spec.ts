@@ -400,7 +400,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
     'reference-image.update'
   ]);
 
-  // Undo puts it back on Top; it survives a reload, pixels and all.
+  // Undo puts it back on Top, and Redo reattaches it to the datum.
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect
     .poll(async () => (await drawnImages(canvas))[0]?.center.z)
@@ -412,9 +412,19 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/, {
     timeout: 20_000
   });
+  // Hide both references, then reload with no document edit in between.
+  await objects.getByRole('button', { name: 'Hide plane Plane 1' }).click();
+  await objects.getByRole('button', { name: 'Hide image Bracket plan' }).click();
   await page.reload();
-  // Reopening the project, then reading and decoding the picture, outlasts
-  // the default poll on a loaded runner.
+  const showPlane = objects.getByRole('button', { name: 'Show plane Plane 1' });
+  const showImage = objects.getByRole('button', {
+    name: 'Show image Bracket plan'
+  });
+  await expect(showPlane).toBeVisible({ timeout: 20_000 });
+  await expect(showImage).toBeVisible();
+  await expect.poll(async () => drawnImages(canvas)).toEqual([]);
+  await showPlane.click();
+  await showImage.click();
   await expect
     .poll(async () => drawnImages(canvas), { timeout: 20_000 })
     .toEqual([expect.objectContaining({ textured: true })]);
@@ -423,6 +433,9 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   // A device without the picture resolves it from the archived artifact.
   await forgetSourceBlobs(page);
   await page.reload();
+  await expect(
+    objects.getByRole('button', { name: 'Hide plane Plane 1' })
+  ).toBeVisible({ timeout: 20_000 });
   // Reopening the project, then reading and decoding the picture, outlasts
   // the default poll on a loaded runner.
   await expect
