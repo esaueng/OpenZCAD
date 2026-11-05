@@ -100,6 +100,199 @@ export const CAD_OPERATIONS = [
   'assembly.study.set',
   'assembly.study.delete'
 ] as const;
+/**
+ * `kernel_refused`: one aggregate observation per new kernel refusal, opt-in
+ * like every expanded metric. The bucket is the whole payload and is built
+ * only from the fixed vocabularies below, joined in a fixed order:
+ *
+ *   operation|family|kernelOperation|category|code|warningKind|target|neighbours
+ *
+ * No geometry, dimensions, names, hashes, ids, file names or free text can
+ * pass: every field is a closed list except `code`, the kernel's own stable
+ * snake_case identifier, which is shape-checked (letters and underscores only)
+ * and bounded instead, because the pinned kernel does not publish its code
+ * list. Anything else is `other`.
+ */
+export const KERNEL_REFUSED_EVENT = 'kernel_refused' as const;
+export const REFUSAL_DIRECT_EDIT_OPERATIONS = [
+  'resize-through-hole',
+  'resize-imported-blind-hole',
+  'resize-imported-counterbore',
+  'resize-imported-countersink',
+  'remove-face-feature',
+  'offset-face',
+  'set-face-distance',
+  'resize-cylindrical-face',
+  'resize-blend',
+  'remove-blends'
+] as const;
+export const REFUSAL_OPERATIONS = [
+  'primitive',
+  'sketch',
+  'extrude',
+  'revolve',
+  'loft',
+  'sweep',
+  'helical-sweep',
+  'boolean',
+  'transform',
+  'mirror',
+  'shell',
+  'solid-offset',
+  'draft',
+  'thicken',
+  'fillet',
+  'chamfer',
+  'pattern',
+  'split',
+  'hole',
+  'gear',
+  'thread',
+  'direct-edit',
+  'imported-step',
+  'imported-mesh',
+  'datum-plane',
+  'datum-axis',
+  ...REFUSAL_DIRECT_EDIT_OPERATIONS.map((kind) => `direct-edit.${kind}`),
+  'other'
+] as const;
+export const REFUSAL_FAMILIES = [
+  'boolean',
+  'validation',
+  'healing',
+  'import',
+  'blend',
+  'gear',
+  'thread',
+  'other',
+  'none'
+] as const;
+export const REFUSAL_KERNEL_OPERATIONS = [
+  'cut',
+  'fuse',
+  'intersect',
+  'other',
+  'none'
+] as const;
+export const REFUSAL_CATEGORIES = [
+  'invalid_input',
+  'invalid_topology',
+  'unsupported',
+  'nonconvergence',
+  'resource_limit',
+  'tolerance_violation',
+  'quality_refused',
+  'cancelled',
+  'internal',
+  'other',
+  'none'
+] as const;
+export const REFUSAL_WARNING_KINDS = ['build-failed', 'refusal'] as const;
+export const REFUSAL_SURFACES = [
+  'plane',
+  'cylinder',
+  'cone',
+  'sphere',
+  'torus',
+  'bspline',
+  'other'
+] as const;
+/**
+ * A kernel code: lower-case words joined by underscores, at most 48 chars.
+ * No digits, so a generated id (`prefix_<uuid>`), hash or dimension cannot
+ * take this slot, and never starting with one of the app's id prefixes, so
+ * a hand-made id cannot either. `none` and `other` match too.
+ */
+export const REFUSAL_CODE_PATTERN =
+  /^(?=.{1,48}$)(?!(?:user|owner|proj|project|feat|body|sketch|ent|node|param|parameter|artifact|asset|rev|sref|scon|scmp)_)[a-z]+(?:_[a-z]+)*$/;
+export const KERNEL_REFUSED_BUCKET_MAX_LENGTH = 200;
+export interface KernelRefusedBucket {
+  operation: (typeof REFUSAL_OPERATIONS)[number];
+  family: (typeof REFUSAL_FAMILIES)[number];
+  kernelOperation: (typeof REFUSAL_KERNEL_OPERATIONS)[number];
+  category: (typeof REFUSAL_CATEGORIES)[number];
+  code: string;
+  warningKind: (typeof REFUSAL_WARNING_KINDS)[number];
+  /** The target face's surface, or `none` when the operation has no face. */
+  target: (typeof REFUSAL_SURFACES)[number] | 'none';
+  /** Distinct neighbour surfaces, in REFUSAL_SURFACES order. */
+  neighbours: (typeof REFUSAL_SURFACES)[number][];
+}
+function member<T extends string>(
+  list: readonly T[],
+  value: unknown
+): value is T {
+  return (
+    typeof value === 'string' && (list as readonly string[]).includes(value)
+  );
+}
+/** The canonical wire form, or null when any field is outside its list. */
+export function formatKernelRefusedBucket(
+  value: KernelRefusedBucket
+): string | null {
+  const neighbours = value.neighbours;
+  if (
+    !member(REFUSAL_OPERATIONS, value.operation) ||
+    !member(REFUSAL_FAMILIES, value.family) ||
+    !member(REFUSAL_KERNEL_OPERATIONS, value.kernelOperation) ||
+    !member(REFUSAL_CATEGORIES, value.category) ||
+    typeof value.code !== 'string' ||
+    !REFUSAL_CODE_PATTERN.test(value.code) ||
+    !member(REFUSAL_WARNING_KINDS, value.warningKind) ||
+    !(value.target === 'none' || member(REFUSAL_SURFACES, value.target)) ||
+    !Array.isArray(neighbours) ||
+    !neighbours.every((surface) => member(REFUSAL_SURFACES, surface))
+  )
+    return null;
+  const ordered = REFUSAL_SURFACES.filter((surface) =>
+    neighbours.includes(surface)
+  );
+  const bucket = [
+    value.operation,
+    value.family,
+    value.kernelOperation,
+    value.category,
+    value.code,
+    value.warningKind,
+    value.target,
+    ordered.length > 0 ? ordered.join('+') : 'none'
+  ].join('|');
+  return bucket.length <= KERNEL_REFUSED_BUCKET_MAX_LENGTH ? bucket : null;
+}
+/** Strict inverse: only a bucket this module could have formatted parses. */
+export function parseKernelRefusedBucket(
+  bucket: unknown
+): KernelRefusedBucket | null {
+  if (
+    typeof bucket !== 'string' ||
+    bucket.length > KERNEL_REFUSED_BUCKET_MAX_LENGTH
+  )
+    return null;
+  const parts = bucket.split('|');
+  if (parts.length !== 8) return null;
+  const [
+    operation,
+    family,
+    kernelOperation,
+    category,
+    code,
+    warningKind,
+    target,
+    rest
+  ] = parts as [string, string, string, string, string, string, string, string];
+  const neighbours = rest === 'none' ? [] : rest.split('+');
+  const parsed = {
+    operation,
+    family,
+    kernelOperation,
+    category,
+    code,
+    warningKind,
+    target,
+    neighbours
+  } as KernelRefusedBucket;
+  return formatKernelRefusedBucket(parsed) === bucket ? parsed : null;
+}
 export const EXPANDED: Readonly<Record<string, readonly string[]>> = {
   feature_operation: CAD_OPERATIONS,
   cloud_status: [
@@ -156,6 +349,8 @@ export function expandedMetric(
     ['feature_operation', 'cloud_status'].includes(event)
   )
     return false;
+  if (event === KERNEL_REFUSED_EVENT)
+    return app === 'openzcad' && parseKernelRefusedBucket(bucket) !== null;
   return (
     Object.hasOwn(EXPANDED, event) &&
     (EXPANDED[event]?.includes(bucket) ?? false)

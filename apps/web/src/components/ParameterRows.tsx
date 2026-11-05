@@ -3,6 +3,10 @@ import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { BodyId, ParameterKind, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import { parameterDisplayName } from '../lib/parameterDisplayName';
+import {
+  SAVE_REPRODUCTION_HINT,
+  SAVE_REPRODUCTION_LABEL
+} from '../lib/selectionCalloutView';
 
 /**
  * The parameter table rows, shared between the Build sidebar and the Tweak
@@ -25,6 +29,8 @@ interface ParameterRowProps extends ToggleBindingProps {
   value: number | undefined;
   onSet(name: string, expression: string): void | Promise<string | null>;
   onViewDetails?(): void;
+  /** Present only while a refused rebuild is held to save as a reproduction. */
+  onSaveReproduction?(): void;
   minimum?: number;
   onPreview?(name: string, expression: string | null): void;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
@@ -118,6 +124,7 @@ export function ParameterRow({
   value,
   onSet,
   onViewDetails,
+  onSaveReproduction,
   onPreview,
   minimum,
   onDelete,
@@ -558,6 +565,16 @@ export function ParameterRow({
                   onClick={onViewDetails}
                 >
                   View details
+                </button>
+              ) : null}
+              {error.detailsAvailable && onSaveReproduction ? (
+                <button
+                  type="button"
+                  className="activity-log-link"
+                  title={SAVE_REPRODUCTION_HINT}
+                  onClick={onSaveReproduction}
+                >
+                  {SAVE_REPRODUCTION_LABEL}
                 </button>
               ) : null}
             </>

@@ -151,6 +151,8 @@
     "test/sphere-boss-resize-refusal.test.ts",
     "test/parity/parity.test.ts",
     "test/direct-edit-corpus/corpus.test.ts",
+    "test/refusal-reproduction.test.ts",
+    "test/project-diagnostics.test.ts",
     "test/cylinder-radius-across-boolean.test.ts"
   ],
   "web": [
@@ -217,6 +219,9 @@
     "src/lib/interaction/cylinderPrimitiveAncestry.test.ts",
     "src/lib/interaction/cylinderRadius.test.ts",
     "src/lib/interaction/faceOffsetPlan.test.ts",
+    "src/lib/analytics.test.ts",
+    "src/lib/refusalHarvest.test.ts",
+    "src/lib/refusalReproduction.test.ts",
     "src/lib/lazyChunkPrefetch.test.ts",
     "src/lib/libraryFolders.test.ts",
     "src/lib/libraryLayout.test.ts",

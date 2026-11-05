@@ -32,6 +32,8 @@ import type {
 import {
   OPERATION_PHASE_LABELS,
   REFUSAL_FOLD_LABELS,
+  SAVE_REPRODUCTION_HINT,
+  SAVE_REPRODUCTION_LABEL,
   refusalIsExpandable
 } from '../lib/selectionCalloutView';
 import { TOOL_META, type ToolId } from '../lib/tools';
@@ -435,6 +437,16 @@ export function SelectionRefusal({
           onClick={operation.onViewDetails}
         >
           View details
+        </button>
+      )}
+      {error.detail && operation.onSaveReproduction && (
+        <button
+          type="button"
+          className="selection-callout-recovery"
+          title={SAVE_REPRODUCTION_HINT}
+          onClick={operation.onSaveReproduction}
+        >
+          {SAVE_REPRODUCTION_LABEL}
         </button>
       )}
     </div>

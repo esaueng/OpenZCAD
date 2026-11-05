@@ -1,4 +1,6 @@
 import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toProjectId,
   toUserId,
   type DocumentNode,
@@ -51,10 +53,36 @@ export interface ProjectDiagnosticBundle {
   };
 }
 
+/**
+ * Metadata keys a rebuild reads. Everything else in a node's metadata is the
+ * user's (notes, colours, labels) and is dropped; suppression is build state,
+ * and stripping it would replay a suppressed feature as active.
+ */
+const REBUILD_METADATA_KEYS = [
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY
+] as const;
+
+function rebuildMetadata(
+  node: DocumentNode
+): DocumentNode['metadata'] | undefined {
+  if (node.kind !== 'feature' || !node.metadata) {
+    return undefined;
+  }
+  const kept = Object.fromEntries(
+    REBUILD_METADATA_KEYS.filter((key) => node.metadata?.[key] === true).map(
+      (key) => [key, true]
+    )
+  );
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
 function sanitizeNode(node: DocumentNode): DocumentNode {
   const { metadata: _metadata, ...withoutMetadata } = node;
+  const kept = rebuildMetadata(node);
   const sanitized = {
     ...withoutMetadata,
+    ...(kept ? { metadata: kept } : {}),
     revisionId: null
   } as DocumentNode;
   if (sanitized.kind === 'project') {

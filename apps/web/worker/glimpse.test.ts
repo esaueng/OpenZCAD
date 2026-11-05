@@ -137,3 +137,40 @@ it('keeps client and relay wire vocabularies aligned', async () => {
   expect(client.EXPANDED).toEqual(relay.EXPANDED);
   expect(client.CENSUS_FIELDS).toEqual(relay.CENSUS_FIELDS);
 });
+
+it('relays only canonical kernel_refused buckets and nothing beside them', async () => {
+  const bucket =
+    'direct-edit.resize-cylindrical-face|none|none|none|none|build-failed|cylinder|plane+sphere';
+  expect(parseUsage({ event: 'kernel_refused', bucket })).toEqual({
+    level: 'optional',
+    event: 'kernel_refused',
+    bucket
+  });
+  for (const rejected of [
+    { event: 'kernel_refused', bucket: 'none' },
+    {
+      event: 'kernel_refused',
+      bucket: bucket.replace('cylinder|', 'Acme part|')
+    },
+    {
+      event: 'kernel_refused',
+      bucket: bucket.replace('none|build', 'feat_0b1c|build')
+    },
+    { event: 'kernel_refused', bucket, featureName: 'Acme' },
+    { event: 'kernel_refused', bucket, geometry: { radius: 6 } }
+  ]) {
+    expect(parseUsage(rejected), JSON.stringify(rejected)).toBeNull();
+  }
+  const client = await import('../src/lib/glimpseContract');
+  const relay = await import('./glimpseContract');
+  for (const candidate of [
+    bucket,
+    'boolean|boolean|cut|internal|operation_failed|build-failed|none|none',
+    'boolean|boolean|cut|internal|body_abcd|build-failed|none|none',
+    'boolean|boolean|cut|internal|operation_failed|build-failed|none|sphere+plane'
+  ]) {
+    expect(relay.parseKernelRefusedBucket(candidate)).toEqual(
+      client.parseKernelRefusedBucket(candidate)
+    );
+  }
+});

@@ -11,7 +11,7 @@ import {
 
 import {
   DIRECT_EDIT_FIXTURE_FORMAT,
-  DIRECT_EDIT_FIXTURE_FORMAT_VERSION
+  DIRECT_EDIT_FIXTURE_READABLE_VERSIONS
 } from '../../apps/web/src/lib/directEditFixture';
 import type { DirectEditFixture } from '../../apps/web/src/lib/directEditFixture';
 import { AUTHORED_REPLAY_CHECKS, AUTHORED_SCENARIOS } from './authored';
@@ -67,6 +67,11 @@ function assertOutcome(fixture: DirectEditFixture, result: ReplayResult): void {
         `retire the pin (${routeOf(result)})`
     ).toBe('refused');
     expect(result.message).toContain(pin.message);
+    // A saved reproduction also recorded the kernel's classification; a
+    // refusal that changed category is a different cell, not the same pin.
+    if (fixture.edit.op === 'feature-build' && fixture.observed.kernelRefusal) {
+      expect(result.kernelRefusal).toEqual(fixture.observed.kernelRefusal);
+    }
     return;
   }
   expect(
@@ -102,7 +107,9 @@ describe('captured direct-edit fixtures', () => {
         : stem,
       async () => {
         expect(fixture.format).toBe(DIRECT_EDIT_FIXTURE_FORMAT);
-        expect(fixture.formatVersion).toBe(DIRECT_EDIT_FIXTURE_FORMAT_VERSION);
+        expect(DIRECT_EDIT_FIXTURE_READABLE_VERSIONS).toContain(
+          fixture.formatVersion
+        );
         expect(fixture.name).toBe(stem);
         assertOutcome(fixture, await replayFixture(adapter, fixture));
       },

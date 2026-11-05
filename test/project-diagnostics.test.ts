@@ -112,6 +112,39 @@ describe('project diagnostic export', () => {
     expect(serialized).not.toContain('"vertices"');
   });
 
+  it('keeps feature suppression, which the rebuild reads, and drops other metadata', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Private project', toUserId('user_private'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 20, height: 40 }
+      })
+    );
+    const feature = Object.values(manager.document.nodes).find(
+      (node) => node.kind === 'feature'
+    )!;
+    manager.execute(
+      commandFactories.setNodeMetadata({
+        nodeId: feature.id,
+        metadata: { suppressed: true, privateNote: 'remove-me' }
+      })
+    );
+
+    const bundle = createProjectDiagnosticBundle(
+      manager.document,
+      BUILD,
+      CAPTURED_AT
+    );
+
+    expect(bundle.document.nodes[feature.id]?.metadata).toEqual({
+      suppressed: true
+    });
+    expect(JSON.stringify(bundle)).not.toContain('remove-me');
+  });
+
   it('refuses imported sources until their embedded metadata can be sanitized', () => {
     const manager = new CommandManager(
       createProjectDocument('Imported', toUserId('user_private'))

@@ -91,6 +91,14 @@ function phaseMarker(owner: Document, phase: OperationPhase): HTMLElement {
 export const REFUSAL_FOLD_LABELS = { more: 'More', less: 'Less' } as const;
 
 /**
+ * The refusal's "Save reproduction" action, beside "View details" on every
+ * surface that shows one. It downloads a local file; nothing is uploaded.
+ */
+export const SAVE_REPRODUCTION_LABEL = 'Save reproduction';
+export const SAVE_REPRODUCTION_HINT =
+  'Download a sanitized, history-only file that reproduces this refusal. Names and account details are removed; nothing is uploaded.';
+
+/**
  * Whether a refusal is likely to need folding: more than its headline
  * sentence, or a headline too long for one line. Kernel diagnoses run to four
  * sentences (cause, what was tried, what to do next), and spelled out in full
@@ -172,6 +180,17 @@ function diagnostic(
         operation.onViewDetails
       )
     );
+    const save = operation.onSaveReproduction;
+    if (save) {
+      const saveButton = button(
+        owner,
+        'selection-callout-recovery',
+        SAVE_REPRODUCTION_LABEL,
+        save
+      );
+      saveButton.title = SAVE_REPRODUCTION_HINT;
+      row.append(saveButton);
+    }
   }
   return row;
 }

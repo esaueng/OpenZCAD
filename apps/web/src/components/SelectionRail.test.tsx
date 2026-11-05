@@ -338,6 +338,21 @@ describe('SelectionRefusal', () => {
     expect(onViewDetails).toHaveBeenCalledOnce();
   });
 
+  it('offers Save reproduction beside View details when one is held', () => {
+    const onSaveReproduction = vi.fn();
+    render(
+      <SelectionRefusal
+        operation={operation({
+          phase: 'failed',
+          error: { message: 'Refused.', detail: 'kernel words' },
+          onSaveReproduction
+        })}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save reproduction' }));
+    expect(onSaveReproduction).toHaveBeenCalledOnce();
+  });
+
   it('draws nothing while the operation stands', () => {
     const { container } = render(<SelectionRefusal operation={operation()} />);
     expect(container).toBeEmptyDOMElement();
