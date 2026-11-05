@@ -441,4 +441,39 @@ describe('ObjectsPanel', () => {
     // Only the live result is a "Union 1" row.
     expect(screen.getAllByRole('button', { name: 'Union 1' })).toHaveLength(1);
   });
+  it('keeps a body split into two halves as their source', async () => {
+    const user = userEvent.setup();
+    const box = body('box', 'Box 1', true);
+    const front = body('front', 'Box 1 (front)');
+    const back = body('back', 'Box 1 (back)');
+    const rounded = body('rounded', 'Box 1 (front)');
+    const features = [
+      feature(1, { bodyId: box.bodyId }),
+      feature(2, {
+        bodyId: front.bodyId,
+        data: {
+          featureKind: 'split',
+          targetBodyId: box.bodyId,
+          secondBodyId: back.bodyId
+        }
+      } as Partial<FeatureNode>),
+      // Rounding one half afterwards still makes that half an earlier state.
+      feature(3, {
+        bodyId: rounded.bodyId,
+        data: { featureKind: 'fillet', targetBodyId: front.bodyId }
+      } as Partial<FeatureNode>)
+    ];
+    expect([...earlierBodyVersionIds(features)]).toEqual([front.bodyId]);
+    renderPanel({
+      features,
+      representations: Object.fromEntries(
+        [box, { ...front, consumed: true }, back, rounded].map((entry) => [
+          entry.bodyId,
+          entry
+        ])
+      )
+    });
+    await user.click(screen.getByRole('button', { name: '1 source body' }));
+    expect(screen.getByRole('button', { name: 'Box 1' })).toBeInTheDocument();
+  });
 });
