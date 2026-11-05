@@ -11,7 +11,8 @@ for (const directManipulation of [true, false]) {
   test(`a pick opens no card and History opens the feature with direct manipulation ${directManipulation ? 'on' : 'off'}`, async ({
     page
   }) => {
-    await stubApi(page);
+    // Keep the tool search from taking focus before the Delete shortcut.
+    await stubApi(page, { commandFoldClosed: true });
     await page.addInitScript(
       ({ defaults, enabled }) => {
         localStorage.setItem(

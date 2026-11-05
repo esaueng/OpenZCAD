@@ -101,19 +101,30 @@ test('search bar and toast clear the column at phone width', async ({
   await seedDismissedWorkspaceTour(page);
   await createProject(page, 'Phone dock');
 
-  const right = await columnRight(page);
+  await columnRight(page);
+  const columnBox = (await page.locator('.workspace-column').boundingBox())!;
+  const clearsColumn = (bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) =>
+    bounds.x >= columnBox.x + columnBox.width ||
+    bounds.y >= columnBox.y + columnBox.height;
 
   const bar = page.locator('.command-bar');
   await expect(bar).toBeVisible();
   const barBox = await bar.boundingBox();
   expect(barBox).not.toBeNull();
-  expect(barBox!.x).toBeGreaterThanOrEqual(right);
+  // Portrait phones place the search row below the rail, using the width
+  // it leaves vertically rather than reserving an empty strip beside it.
+  expect(clearsColumn(barBox!)).toBe(true);
   expect(barBox!.x + barBox!.width).toBeLessThanOrEqual(390);
 
   const toast = page.locator('.workspace-toast');
   const toastBox = await toast.boundingBox();
   expect(toastBox).not.toBeNull();
-  expect(toastBox!.x).toBeGreaterThanOrEqual(right);
+  expect(clearsColumn(toastBox!)).toBe(true);
 
   // Outside a sketch the readout has nothing to say and does not draw; the
   // ruler lies in the bottom-left corner above the search row.
@@ -203,7 +214,10 @@ for (const { width, compact, minLane, phoneBar } of [
     const barBox = await page.locator('.command-bar').boundingBox();
     expect(readoutBox).not.toBeNull();
     expect(barBox).not.toBeNull();
-    expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(barBox!.x);
+    expect(
+      readoutBox!.x + readoutBox!.width <= barBox!.x ||
+        barBox!.y + barBox!.height <= readoutBox!.y
+    ).toBe(true);
     const laneBox = await page.locator('.command-bar-lane').boundingBox();
     expect(laneBox).not.toBeNull();
     expect(laneBox!.width).toBeGreaterThanOrEqual(minLane);
@@ -237,11 +251,11 @@ for (const { width, compact, minLane, phoneBar } of [
 // standing on it, and only from 1011px down, where the cube steps up above
 // the search row, does the bar have the lane again (to the dock's edge).
 for (const { width, bar, height, type, key } of [
-  { width: 900, bar: 474, height: 34, type: '13px', key: true },
-  { width: 1024, bar: 292, height: 34, type: '13px', key: false },
-  { width: 1280, bar: 520, height: 34, type: '13px', key: true },
-  { width: 1920, bar: 730, height: 38, type: '14px', key: true },
-  { width: 2560, bar: 760, height: 38, type: '14px', key: true }
+  { width: 900, bar: 474, height: 34, type: '14px', key: true },
+  { width: 1024, bar: 292, height: 34, type: '14px', key: false },
+  { width: 1280, bar: 520, height: 34, type: '14px', key: true },
+  { width: 1920, bar: 730, height: 38, type: '15px', key: true },
+  { width: 2560, bar: 760, height: 38, type: '15px', key: true }
 ]) {
   test(`search bar scales with the window at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

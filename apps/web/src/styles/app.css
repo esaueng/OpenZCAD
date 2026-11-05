@@ -53,3 +53,5 @@
 @import './components/edit-control.css';
 /* After every sizing rule: it only adds hit area, never moves a control. */
 @import './components/target-size.css';
+/* Touch-only browser behaviour; it sizes nothing. */
+@import './components/touch.css';

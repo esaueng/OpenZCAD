@@ -71,7 +71,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         page
       }, testInfo) => {
         await page.setViewportSize({ width, height: 900 });
-        await stubApi(page, { panelLayout: null });
+        await stubApi(page, { panelLayout: null, commandFoldClosed: true });
         await page.goto('/');
         await page.getByLabel('Project name').fill('Command action contrast');
         await page.getByRole('button', { name: 'New project' }).click();
@@ -124,7 +124,10 @@ for (const colorScheme of ['light', 'dark'] as const) {
       page
     }, testInfo) => {
       await page.setViewportSize({ width: 390, height: 900 });
-      await stubApi(page, { panelLayout: null });
+      await stubApi(page, {
+        panelLayout: { left: [['history']], unpinned: 'parameters' },
+        commandFoldClosed: true
+      });
       await page.goto('/');
       await page.getByLabel('Project name').fill('Wrapped command feedback');
       await page.getByRole('button', { name: 'New project' }).click();
@@ -138,8 +141,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expect(
         bar.getByRole('button', { name: 'Precise values…' })
       ).toBeVisible();
-      // Trigger fresh feedback rather than relying on Box's transient
-      // completion toast surviving a cold production renderer startup.
+      // Refuse a second dock column at a docking width, then resize with
+      // that fresh feedback visible. Phone panels offer no Pin action.
+      await page.setViewportSize({ width: 1000, height: 900 });
       await revealModelPanel(page, 'Parameters');
       const parameters = page.getByRole('region', {
         name: 'Parameters',
@@ -153,6 +157,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         '.workspace-toast:not(.hidden) .workspace-toast-body'
       );
       await expect(toast).toBeVisible();
+      await expect(toast).toContainText('The docks are full at this width.');
       for (const width of [390, 320, 520, 1440, 390]) {
         await page.setViewportSize({ width, height: 900 });
         await expect

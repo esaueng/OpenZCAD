@@ -138,9 +138,7 @@ test('deleting a history feature raises an undoable toast that counts its depend
       .getByRole('region', { name: 'Feature inspector' })
       .getByRole('textbox', { name: /^Width/ })
   ).toHaveCount(0);
-  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(
-    0
-  );
+  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(0);
   await expect(
     summary.getByLabel(/ · 17 features · 1 body\. Sync /)
   ).toBeVisible();
@@ -293,7 +291,7 @@ test('keeps every history row control inside a narrow sidebar', async ({
   }
 
   // The controls themselves still show on hover, at this width, on the
-  // row whose name is now cut short.
+  // row whose readable name must fit without displacing those controls.
   const longest = page.locator('.feature-row', {
     hasText: 'Aim bore through boss'
   });
@@ -304,8 +302,10 @@ test('keeps every history row control inside a narrow sidebar', async ({
     })
   ).toBeVisible();
   const name = longest.locator('.feature-name');
-  const clipped = await name.evaluate((el) => el.scrollWidth > el.clientWidth);
-  expect(clipped).toBe(true);
+  await expect(name).toHaveText('Aim bore through boss');
+  expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+    true
+  );
 });
 
 /**

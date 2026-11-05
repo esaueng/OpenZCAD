@@ -40,6 +40,7 @@ import {
 } from '../lib/keypadReturnFocus';
 import { spokenValueName } from '../lib/inPlace/chipNames';
 import type { SelectionCalloutOperation } from '../lib/selectionCallout';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { EditRefusal } from './EditRefusal';
 
 export interface KeypadRequest {
@@ -336,14 +337,25 @@ function detachedPlacement(side: string | null): boolean {
  * (the guidance row and the search bar, where a command's Done stands),
  * which is drawn over the stage and would take the keypad's own clicks.
  */
-function keypadFloor(host: HTMLElement): number {
+export function keypadFloor(host: HTMLElement): number {
+  const hostTop = host.getBoundingClientRect().top;
+  let floor = host.clientHeight;
   const lane = host
     .closest('.viewer-area')
     ?.querySelector<HTMLElement>('.command-bar-lane');
-  if (!lane) return host.clientHeight;
-  const top =
-    lane.getBoundingClientRect().top - host.getBoundingClientRect().top;
-  return top > 0 ? Math.min(host.clientHeight, top) : host.clientHeight;
+  if (lane) {
+    const top = lane.getBoundingClientRect().top - hostTop;
+    if (top > 0) floor = Math.min(floor, top);
+  }
+  // A software keyboard shrinks the visual viewport and leaves the layout
+  // viewport (and so the host) as it was. A pinch-zoomed view is the
+  // reader's own framing, not an obstruction, so only an unscaled one counts.
+  const visual = host.ownerDocument.defaultView?.visualViewport;
+  if (visual && Math.abs(visual.scale - 1) < 0.01) {
+    const visibleBottom = visual.offsetTop + visual.height - hostTop;
+    if (visibleBottom > 0) floor = Math.min(floor, visibleBottom);
+  }
+  return floor;
 }
 
 /**
@@ -413,6 +425,13 @@ export function NumericKeypad({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // The pad is the touch keyboard: the field keeps focus (Enter, Escape and
+  // a hardware keyboard still land on it) without raising the system
+  // keyboard over the keys. A deliberate touch on the field itself asks for
+  // the system keyboard, which parameter names need.
+  const coarsePointer = useMediaQuery('(pointer: coarse)');
+  const [systemKeyboard, setSystemKeyboard] = useState(false);
+  const raiseSystemKeyboard = useRef(false);
   // Read on the first render, before the field takes focus below.
   const [returnTarget] = useState(keypadReturnTarget);
   useEffect(() => () => returnKeypadFocus(returnTarget), [returnTarget]);
@@ -571,22 +590,27 @@ export function NumericKeypad({
     observer?.observe(root);
     window.addEventListener('resize', reposition);
     // The phone sheet rides above the on-screen keyboard, which shrinks the
-    // visual viewport rather than the layout one.
-    const viewport = window.visualViewport;
+    // visual viewport rather than the layout one; a placed control keeps
+    // above it too (keypadFloor reads the visual viewport).
+    const visual = window.visualViewport;
     const keyboardInset = () => {
-      if (!viewport) return;
+      if (!visual) return;
       const inset = Math.max(
         0,
-        window.innerHeight - viewport.height - viewport.offsetTop
+        window.innerHeight - visual.height - visual.offsetTop
       );
       root.style.setProperty('--keyboard-inset', `${Math.round(inset)}px`);
     };
+    const onVisualResize = () => {
+      keyboardInset();
+      reposition();
+    };
     keyboardInset();
-    viewport?.addEventListener('resize', keyboardInset);
+    visual?.addEventListener('resize', onVisualResize);
     return () => {
       observer?.disconnect();
       window.removeEventListener('resize', reposition);
-      viewport?.removeEventListener('resize', keyboardInset);
+      visual?.removeEventListener('resize', onVisualResize);
       anchorRef.current = null;
     };
   }, [anchorRef, request.fixedClientAnchor, request.commandValueId]);
@@ -839,11 +863,38 @@ export function NumericKeypad({
           ref={inputRef}
           className="keypad-value"
           aria-label={spokenValueName(label)}
+          // Asked for by a touch on the field, the full keyboard (names);
+          // while the pad is open on a touch screen, none over its keys;
+          // otherwise the digits.
+          inputMode={
+            systemKeyboard
+              ? undefined
+              : coarsePointer && gridOpen
+                ? 'none'
+                : 'decimal'
+          }
+          onPointerDown={(event) => {
+            if (
+              coarsePointer &&
+              !systemKeyboard &&
+              event.pointerType !== 'mouse'
+            ) {
+              raiseSystemKeyboard.current = true;
+              setSystemKeyboard(true);
+            }
+          }}
+          onClick={(event) => {
+            // WebKit raises the keyboard only for a focus made inside the
+            // gesture, and this field was focused before the tap.
+            if (!raiseSystemKeyboard.current) return;
+            raiseSystemKeyboard.current = false;
+            event.currentTarget.blur();
+            event.currentTarget.focus();
+          }}
           value={value}
           aria-invalid={unreadable || state === 'refused'}
           aria-describedby={describedBy}
           spellCheck={false}
-          inputMode="decimal"
           enterKeyHint="done"
           onChange={(event) => previewIfValid(event.target.value)}
         />

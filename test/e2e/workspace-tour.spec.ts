@@ -113,7 +113,9 @@ test('manual tour advance reveals the History control without moving keyboard fo
   await tour.getByRole('button', { name: 'Skip the tour' }).click();
   await expect(tour).toHaveCount(0);
   await expect(history).not.toHaveClass(/tour-target/);
-  await expect(history).toBeFocused();
+  // Opening the temporary History panel moves the keyboard into it; leaving
+  // the guide returns there rather than back to its rail opener.
+  await expect(modelPanel(page, 'History')).toBeFocused();
 
   await page.reload();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();

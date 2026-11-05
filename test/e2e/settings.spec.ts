@@ -808,7 +808,10 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
 
   await page.keyboard.press('?');
   await expect(paletteInput).toHaveValue('');
-  const shortcuts = page.getByRole('dialog', { name: 'Help & controls', exact: true });
+  const shortcuts = page.getByRole('dialog', {
+    name: 'Help & controls',
+    exact: true
+  });
   await expect(shortcuts).toHaveAttribute('aria-modal', 'true');
   // Focus used to stay on BODY, leaving the dialog unreachable by keyboard.
   await expect(shortcuts.locator(':focus')).toHaveCount(1);
@@ -923,7 +926,10 @@ test('disabling the assistant takes its live preview with it', async ({
   await expect(status).toContainText('Previewing exact proposed geometry.');
   // The preview is unapplied geometry: it shows a body the document does not
   // have, which is what makes an orphaned preview visible at all.
-  await expectBodyCount(page, 1);
+  await expectBodyCount(page, 0);
+  await expect(
+    page.locator('canvas[data-e2e-rendered-bodies]')
+  ).toHaveAttribute('data-e2e-rendered-bodies', '1');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
@@ -945,6 +951,9 @@ test('disabling the assistant takes its live preview with it', async ({
   // workspace has to drop it rather than render a proposal forever.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   await expectBodyCount(page, 0);
+  await expect(
+    page.locator('canvas[data-e2e-rendered-bodies]')
+  ).toHaveAttribute('data-e2e-rendered-bodies', '0');
 });
 
 test('settings swallow workspace shortcuts instead of editing behind them', async ({

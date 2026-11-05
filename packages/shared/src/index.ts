@@ -4491,6 +4491,8 @@ export interface AppSettings {
     fieldOfView: number;
     /** How opaque faces stay in X-ray, as a whole percentage. */
     xrayOpacity: number;
+    /** On a touch screen, two- and three-finger taps undo and redo. */
+    touchHistoryGestures: boolean;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -4644,7 +4646,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     middleDrag: 'pan',
     pointerNavigation: 'auto',
     fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
-    xrayOpacity: XRAY_OPACITY_BOUNDS.default
+    xrayOpacity: XRAY_OPACITY_BOUNDS.default,
+    touchHistoryGestures: true
   },
   sketching: {
     gridVisible: true,

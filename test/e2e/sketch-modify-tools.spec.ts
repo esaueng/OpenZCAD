@@ -107,7 +107,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
     test('enters the portal and returns to the adjacent rail tools', async ({
       page
     }) => {
-      await page.setViewportSize({ width: 320, height: 568 });
+      // Seed geometry on clear canvas before exercising the keyboard at both
+      // sizes; the phone's rectangle-type flyout occupies those old picks.
+      await page.setViewportSize({ width: 1440, height: 900 });
       const at = await startSketch(page, 'Modify keyboard');
       await drawLine(page, at(0.4, 0.4), at(0.55, 0.5));
       const rail = page.getByRole('toolbar', { name: 'Sketch tools' });

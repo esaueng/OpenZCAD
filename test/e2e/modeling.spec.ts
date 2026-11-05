@@ -2057,7 +2057,7 @@ test('applies an assistant-created sketch and same-proposal extrude', { tag: '@c
 test('resumes a clarified request from an OpenRouter Responses stream', async ({
   page
 }) => {
-  await stubApi(page, { assistantEnabled: true });
+  await stubApi(page, { assistantEnabled: true, commandFoldClosed: true });
   const consoleErrors: string[] = [];
   const assistantRequests: Array<Record<string, unknown>> = [];
   page.on('console', (message) => {
@@ -2366,7 +2366,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
 test('rejects a disconnected Union proposed by the assistant before commit', async ({
   page
 }) => {
-  await stubApi(page, { assistantEnabled: true });
+  await stubApi(page, { assistantEnabled: true, commandFoldClosed: true });
   await page.route('**/api/assistant/status', (route) =>
     route.fulfill({
       json: {
@@ -3143,8 +3143,17 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   const paramInput = page.getByLabel('Expression for w');
   await paramInput.fill('40');
   await paramInput.press('Enter');
-  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
-  await expect(page.locator('.panel-body')).toContainText('34560');
+  // A parameter edit can leave this feature's inspector pinned. Its row
+  // toggles that card; Measurements opens it explicitly in either state.
+  const boxMeasurements = await featureCardFromHistory(
+    page,
+    // Matched by its name, not its value: a boolean row now names its
+    // operands ("Box 1 − Cylinder"), which also contain "Box".
+    page.locator('.feature-row', {
+      has: page.locator('.feature-row-main', { hasText: 'Box' })
+    })
+  );
+  await expect(boxMeasurements).toContainText('34560');
 
   // Undo while the untouched input is focused must not let the stale visible
   // draft recommit over the newer canonical expression on blur. Dispatching on
@@ -3228,7 +3237,8 @@ test('keeps parameter names visible in the 252px Build sidebar', async ({
   const parameterName = page.locator('.param-name', {
     hasText: 'mount_inset'
   });
-  await expect(parameterName).toHaveText('mount_inset');
+  await expect(parameterName).toContainText('Mount inset');
+  await expect(parameterName.locator('code')).toHaveText('mount_inset');
   await expect
     .poll(() =>
       parameterName.evaluate(

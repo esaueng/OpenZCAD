@@ -27,9 +27,10 @@
    unpinned panel (quiet-stage.css), whichever reaches further in. Where
    the band between them is too narrow for the card (768px with More tools
    open), it stands over the column's tools and the rails rather than
-   under them, so Cancel is always pressable; floating windows stay above. */
+   under them, so Cancel is always pressable. Keep it above tool popovers
+   as well; modal dialogs retain their higher layer. */
 .activity-lane:has(.pattern-progress) {
-  z-index: calc(var(--z-inspector-float) + 2);
+  z-index: calc(var(--z-popover) + 1);
   right: max(
     var(--notice-end, 0px),
     var(--lane-end, calc(var(--column-w) + 12px)),

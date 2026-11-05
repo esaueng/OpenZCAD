@@ -675,6 +675,49 @@
   display: none;
 }
 
+/* L02: the magnifier above a finger that is drawing or moving sketch
+   geometry (viewer/touchLoupe.ts). Its canvas is a copy of the frame, so the
+   ring and label are the only chrome; it never takes the pointer. */
+.touch-loupe {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 3);
+  width: 112px;
+  height: 112px;
+  overflow: hidden;
+  color: var(--color-viewport-text);
+  background: var(--color-bg);
+  border: 2px solid var(--color-border-strong);
+  border-radius: 50%;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.touch-loupe[data-snapped='true'] {
+  border-color: var(--color-accent);
+}
+
+.touch-loupe-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.touch-loupe-label {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  padding: 1px 5px;
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+  background: rgba(15, 17, 20, 0.85);
+  border-radius: 3px;
+  transform: translateX(-50%);
+}
+
+.touch-loupe-label:empty {
+  display: none;
+}
+
 /* Center discovery appears before the snap engages. HUD axes remain legible
    over the adaptive grid while the matching WebGL guides stay plane-exact. */
 .sketch-center-target {

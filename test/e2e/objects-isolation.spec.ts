@@ -12,6 +12,7 @@ import {
   enableFullRender,
   expect,
   promptField,
+  revealModelPanel,
   stubApi,
   test
 } from './openzcad-fixtures';
@@ -119,7 +120,18 @@ for (const viewport of [
     await isolate.click();
     // Clearing the pick proves isolation, rather than selected-body export,
     // is what limits the files to Plate.
+    // A phone's first Escape belongs to its temporary panel. Close that
+    // panel explicitly so Escape reaches the selection on both viewports.
+    if (viewport.width === 390) {
+      await page
+        .getByRole('button', { name: 'Objects panel', exact: true })
+        .click();
+    }
     await page.keyboard.press('Escape');
+    await revealModelPanel(page, 'Objects');
+    await expect(
+      objects.getByRole('button', { name: 'Plate', exact: true })
+    ).toHaveAttribute('aria-pressed', 'false');
     await expect(objects.locator('.hidden-body')).toHaveCount(3);
     const exit = objects.getByRole('button', {
       name: 'Exit isolation of Plate'
@@ -162,7 +174,7 @@ for (const viewport of [
       await menu.getByRole('button', { name: /Export mesh/ }).click();
       const dialog = page.getByRole('dialog', { name: 'Export mesh' });
       await expect(dialog).toContainText(
-        'visible bodies (1, 3 hidden left out)'
+        'Exports visible bodies (1, 3 hidden left out) in millimeters'
       );
       await dialog.getByRole('radio', { name: label, exact: true }).check();
       await measure(
@@ -197,6 +209,7 @@ for (const viewport of [
     await promptField(page).fill('isolate');
     await page.getByRole('option', { name: /Isolate selected body/ }).click();
     await page.keyboard.press('Escape');
+    await revealModelPanel(page, 'Objects');
     await expect(
       objects.getByRole('button', { name: 'Exit isolation of Upper' })
     ).toBeVisible();

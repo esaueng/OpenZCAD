@@ -443,99 +443,119 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   expect(consoleErrors).toEqual([]);
 });
 
-test('resizes an imported analytic blend twice without reselection', async ({
-  page
-}) => {
-  test.setTimeout(120_000);
-  await stubApi(page);
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  const consoleErrors: string[] = [];
-  page.on('console', (message) => {
-    if (message.type() === 'error') {
-      consoleErrors.push(message.text());
-    }
-  });
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Imported Blend Boundary');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByLabel(/^Import STEP or /).setInputFiles({
-    name: 'remus-fillet.step',
-    mimeType: 'model/step',
-    buffer: Buffer.from(await editableImportedBlendStep())
-  });
+test(
+  'resizes an imported analytic blend twice without reselection',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const consoleErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        consoleErrors.push(message.text());
+      }
+    });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Imported Blend Boundary');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel(/^Import STEP or /).setInputFiles({
+      name: 'remus-fillet.step',
+      mimeType: 'model/step',
+      buffer: Buffer.from(await editableImportedBlendStep())
+    });
 
-  // PRODUCT names vary by exporter; this fixture still produces exactly one
-  // imported history feature, which is the invariant this flow needs.
-  const importedRow = page.locator('.feature-row').first();
-  await expect(importedRow).toBeVisible({ timeout: 30_000 });
-  await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(
-    0
-  );
-  const canvas = page.locator('.viewer-host canvas');
-  const status = page.getByRole('contentinfo');
-  await expect(canvas).toBeVisible({ timeout: 120_000 });
-  await expect
-    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
-      timeout: 30_000
-    })
-    .toBeCloseTo(3, 6);
-  // Imported faces name the imported-step feature for stable topology. That
-  // reference must not be mistaken for a native Fillet feature below.
-  expect((await readBlend(canvas))?.producingFeatureId).toBeTruthy();
-  expect(await readBlend(canvas, true)).not.toBeNull();
+    // PRODUCT names vary by exporter; this fixture still produces exactly one
+    // imported history feature, which is the invariant this flow needs.
+    const importedRow = page.locator('.feature-row').first();
+    await expect(importedRow).toBeVisible({ timeout: 30_000 });
+    await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(
+      0
+    );
+    const canvas = page.locator('.viewer-host canvas');
+    const status = page.getByRole('contentinfo');
+    await expect(canvas).toBeVisible({ timeout: 120_000 });
+    await expect
+      .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+        timeout: 30_000
+      })
+      .toBeCloseTo(3, 6);
+    // Imported faces name the imported-step feature for stable topology. That
+    // reference must not be mistaken for a native Fillet feature below.
+    expect((await readBlend(canvas))?.producingFeatureId).toBeTruthy();
+    expect(await readBlend(canvas, true)).not.toBeNull();
 
-  // A direct pick opens no card: the Selection card names the blend, and
-  // its armed edit is made at the handle, so the card offers no Edit face.
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toHaveCount(0);
-  await expect(
-    page.locator('.selection-readout .selection-callout-name')
-  ).toContainText('Blend face R3');
-  await expect(
-    page.getByRole('button', { name: 'Selection: Edit face' })
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole('region', { name: 'Selected face properties' })
-  ).toHaveCount(0);
-  const editFillet = page.getByRole('region', {
-    name: 'Edit Fillet operation'
-  });
-  await expect(editFillet).toBeVisible();
-  const chip = page.getByTestId('direct-manipulation-value');
-  await expect(chip).toHaveText('Edit Fillet · R 3 mm');
+    // A direct pick opens no card: the Selection card names the blend, and
+    // its armed edit is made at the handle, so the card offers no Edit face.
+    const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    await expect(inspector).toHaveCount(0);
+    await expect(
+      page.locator('.selection-readout .selection-callout-name')
+    ).toContainText('Blend face R3');
+    await expect(
+      page.getByRole('button', { name: 'Selection: Edit face' })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole('region', { name: 'Selected face properties' })
+    ).toHaveCount(0);
+    const editFillet = page.getByRole('region', {
+      name: 'Edit Fillet operation'
+    });
+    await expect(editFillet).toBeVisible();
+    const chip = page.getByTestId('direct-manipulation-value');
+    await expect(chip).toHaveText('Edit Fillet · R 3 mm');
 
-  await chip.click();
-  let keypad = page.getByRole('dialog', { name: 'Radius value' });
-  await keypad.getByRole('textbox').fill('2');
-  await expect
-    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
-      timeout: 30_000
-    })
-    .toBeCloseTo(2, 6);
-  await keypad.getByRole('button', { name: 'Apply radius' }).click();
-  await expect(status).toContainText('Set imported blend radius to R 2 mm.');
-  await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 2 mm');
+    await chip.click();
+    let keypad = page.getByRole('dialog', { name: 'Radius value' });
+    await keypad.getByRole('textbox').fill('2');
+    await expect
+      .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+        timeout: 30_000
+      })
+      .toBeCloseTo(2, 6);
+    await keypad.getByRole('button', { name: 'Apply radius' }).click();
+    await expect(status).toContainText('Set imported blend radius to R 2 mm.');
+    await expect(editFillet).toBeVisible();
+    await expect(chip).toHaveText('Edit Fillet · R 2 mm');
 
-  // The analytic carrier identity, not the changed face hash, keeps the same
-  // band armed for a second edit.
-  await chip.click();
-  keypad = page.getByRole('dialog', { name: 'Radius value' });
-  await keypad.getByRole('textbox').fill('1.5');
-  await keypad.getByRole('button', { name: 'Apply radius' }).click();
-  await expect(status).toContainText('Set imported blend radius to R 1.5 mm.');
-  await expect
-    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
-      timeout: 30_000
-    })
-    .toBeCloseTo(1.5, 6);
-  await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
-  await expect(page.getByRole('heading', { name: 'History 3' })).toBeVisible();
-  expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
-    []
-  );
-});
+    // The import's persistent warning must leave the rearmed value clickable.
+    await expect
+      .poll(() =>
+        chip.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(
+              rect.left + rect.width / 2,
+              rect.top + rect.height / 2
+            )
+          );
+        })
+      )
+      .toBe(true);
+    // The analytic carrier identity, not the changed face hash, keeps the same
+    // band armed for a second edit.
+    await chip.click();
+    keypad = page.getByRole('dialog', { name: 'Radius value' });
+    await keypad.getByRole('textbox').fill('1.5');
+    await keypad.getByRole('button', { name: 'Apply radius' }).click();
+    await expect(status).toContainText(
+      'Set imported blend radius to R 1.5 mm.'
+    );
+    await expect
+      .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+        timeout: 30_000
+      })
+      .toBeCloseTo(1.5, 6);
+    await expect(editFillet).toBeVisible();
+    await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
+    await expect(
+      page.getByRole('heading', { name: 'History 3' })
+    ).toBeVisible();
+    expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
+      []
+    );
+  }
+);
 
 test('still refuses an oversize radius after a slow blend preview', async ({
   page
