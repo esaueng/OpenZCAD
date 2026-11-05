@@ -188,3 +188,25 @@ describe('start screen shelf groups', () => {
     expect(label).toMatch(/margin:\s*0;/);
   });
 });
+
+describe('start screen shelf clip', () => {
+  // 5 Nov 2026: the scroller clipped a first-row folder's tab, so a pinned
+  // folder lost it, and the last column ran flush into the scrollbar.
+  it('keeps a folder tab and focus rings inside the scroller', () => {
+    const tab = rule(css, '.start-tile-folder::before');
+    const tabHeight = Number(/height:\s*(\d+)px/.exec(tab)?.[1]);
+    expect(tab).toMatch(new RegExp(`top:\\s*-${tabHeight}px`));
+    const body = rule(css, '.start-body');
+    const inset = Number(/--start-shelf-inset:\s*(\d+)px/.exec(body)?.[1]);
+    expect(inset).toBeGreaterThan(tabHeight);
+    for (const side of ['top', 'right', 'left']) {
+      expect(body).toMatch(
+        new RegExp(`padding-${side}:\\s*var\\(--start-shelf-inset\\)`)
+      );
+    }
+    // The left inset is cancelled so the cards keep the toolbar's line.
+    expect(body).toMatch(
+      /margin-left:\s*calc\(-1\s*\*\s*var\(--start-shelf-inset\)\)/
+    );
+  });
+});

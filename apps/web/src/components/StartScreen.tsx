@@ -593,16 +593,19 @@ export function StartScreen({
   );
   // Settings sits on the shelf line's end, but is placed over the body, whose
   // classic scrollbar (Firefox, Windows) takes width from the window's edge;
-  // the slot moves in by it so it ends where the line and the cards do.
+  // the slot moves in by it, and by the body's right gutter, so it ends where
+  // the line and the cards do.
   useEffect(() => {
     const screen = screenRef.current;
     const body = screen?.querySelector<HTMLElement>('.start-body');
     if (!screen || !body || typeof ResizeObserver === 'undefined') return;
-    const measure = () =>
+    const measure = () => {
+      const gutter = Number.parseFloat(getComputedStyle(body).paddingRight);
       screen.style.setProperty(
         '--corner-scrollbar-w',
-        `${body.offsetWidth - body.clientWidth}px`
+        `${body.offsetWidth - body.clientWidth + (Number.isFinite(gutter) ? gutter : 0)}px`
       );
+    };
     measure();
     // A scrollbar appearing narrows the content box, which this observes.
     const observer = new ResizeObserver(measure);
