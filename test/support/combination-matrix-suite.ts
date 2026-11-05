@@ -14,6 +14,20 @@ import {
   type CellState
 } from './combination-matrix';
 
+/** How a suite runs its cells; the generated matrix is the default. */
+export interface LedgerRunner<C extends { id: string }> {
+  run(adapter: ExactKernelAdapter, cell: C): Promise<CellOutcome>;
+  reproduction(cell: C): string;
+  /** Opt-in shrinking (`K10_SHRINK=1`); absent for hand-written families. */
+  shrink?(adapter: ExactKernelAdapter, cell: C, state: CellState): Promise<C>;
+}
+
+const MATRIX_RUNNER: LedgerRunner<Cell> = {
+  run: (adapter, cell) => runCell(adapter, cell),
+  reproduction,
+  shrink: shrinkCell
+};
+
 /**
  * One K10 ledger suite. Every cell must match its committed state.
  *
@@ -25,10 +39,11 @@ import {
  * - `K10_SHRINK=1` shrinks each cell that leaves its ledger state and is
  *   not qualified to the smallest history in the same state.
  */
-export function defineLedgerSuite(
+export function defineLedgerSuite<C extends { id: string } = Cell>(
   title: string,
   ledgerUrl: URL,
-  cells: readonly Cell[]
+  cells: readonly C[],
+  runner: LedgerRunner<C> = MATRIX_RUNNER as unknown as LedgerRunner<C>
 ): void {
   const ledger = JSON.parse(readFileSync(ledgerUrl, 'utf8')) as {
     cells: Record<string, CellState>;
@@ -77,28 +92,29 @@ export function defineLedgerSuite(
       it(
         cell.id,
         async () => {
-          const outcome = await runCell(adapter, cell);
+          const outcome = await runner.run(adapter, cell);
           recorded[cell.id] = outcome.state;
           outcomes[cell.id] = outcome;
           if (record || only) {
             console.info(`${cell.id}: ${outcome.state} — ${outcome.evidence}`);
-            if (only) console.info(reproduction(cell));
+            if (only) console.info(runner.reproduction(cell));
             if (record) return;
           }
           const committed = ledger.cells[cell.id];
           if (
             outcome.state !== committed &&
             process.env.K10_SHRINK === '1' &&
-            outcome.state !== 'qualified'
+            outcome.state !== 'qualified' &&
+            runner.shrink
           ) {
-            const minimal = await shrinkCell(adapter, cell, outcome.state);
+            const minimal = await runner.shrink(adapter, cell, outcome.state);
             console.info(
-              `minimal history for ${cell.id}:\n${reproduction(minimal)}`
+              `minimal history for ${cell.id}:\n${runner.reproduction(minimal)}`
             );
           }
           expect(
             outcome.state,
-            `${outcome.evidence}\n${reproduction(cell)}`
+            `${outcome.evidence}\n${runner.reproduction(cell)}`
           ).toBe(committed);
         },
         120_000

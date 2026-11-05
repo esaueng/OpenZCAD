@@ -358,6 +358,44 @@ the first R-slice of the K10 ledger records it.
   one sentence and keeps the last valid body. Kernel detail stays behind
   "View details".
 
+**R-slice results (2026-11-05, Remus `2026.1.123`).** The imported-twin
+family (`test/support/imported-twin.ts`) builds the twin from a block
+(60 × 40 × 20), an r 6 post, an r 2 seam fillet, an r 1 rim fillet and r 4
+vertical rounds, round-trips it through STEP and edits the import, which has
+no construction history. Its 74 cells (5 in the CI slice) are 28 qualified,
+1 typed refusal, 43 untyped refusals and 2 wrong. Oracles are closed forms,
+Pappus sections and the integrated block/post overlap. The one exception is
+a single tangent-ended edge, which uses a labelled interval.
+
+- **The twin itself.** A post tilted about X does not fuse (typed
+  `quality_refused`). Tilted 15° about Y it fuses, but its elliptical seam
+  takes neither a fillet nor a chamfer. An upright post's seam takes a
+  fillet but not a chamfer. Every edit therefore runs on two fallback twins:
+  `upright`, with a filleted seam, and `tilted-unblended`, a Y-tilted post
+  with a sharp seam. The import recognises every blend as an analytic band.
+- **R1, R3 and R4 pass.** Cap offsets move with their rim fillet. Top and
+  side block offsets re-limit the seam band and the rounds. The seam band
+  resizes and removes in place, and a corner round resizes.
+- **R2 fails, as the plan expected, and on the upright twin it is wrong,
+  not refused.** `resize-cylindrical-face` builds an exact, closed body, but
+  both blend bands keep their r 6 carriers. The result is 16 faces instead
+  of 14 and misses the oracle by −127 mm³ (r 7) and +108 mm³ (r 5). On the
+  tilted twin, the same edit refuses untyped against the torus rim fillet.
+- **R5 and R6 depend on size.** A fillet of r 1.5 on one bottom edge spreads
+  round the whole tangent chain and qualifies. An equal-radius r 4 chain
+  closes its corners as sphere octants. An r 1.5 chain, a chamfer chain
+  beside the rounds, and r 4 then r 1.5 sequential chains all qualify. At
+  r 3 the same chains and edge refuse with "radius 1.5 builds here", and an
+  r 2 top chain after an r 4 bottom chain refuses too.
+- **R7 is half there.** All four refusals keep the last valid body and show
+  a plain, non-generic sentence, but none is typed. A negative radius or
+  size passes the command layer and is refused only by the adapter during
+  the rebuild, not before it.
+- **R9 passes.** Each edit is its own `direct-edit` row. Reopen and
+  undo/redo reproduce the body. Moving the first cap offset from 5 to 3
+  re-resolves the later round resize without a new pick.
+- **R8** is viewport behaviour and has no cell.
+
 ## Milestones
 
 | Milestone | Scope                                                                                                                                                                      | Exit signal                                                                                                   |
