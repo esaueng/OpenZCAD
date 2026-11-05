@@ -50,6 +50,18 @@ describe('complete application qualification', () => {
     );
   });
 
+  it('does not resolve runtime-only runner expressions in job environments', () => {
+    const workflow = readFileSync('.github/workflows/fleet-ci-v7.yml', 'utf8');
+    // GitHub resolves a job's env before a runner exists. Step env and
+    // action inputs can use runner paths, but job env cannot.
+    const environments = [
+      ...workflow.matchAll(/^    env:\n((?: {6,}[^\n]*\n)+)/gm)
+    ];
+    expect(environments.length).toBeGreaterThan(0);
+    for (const environment of environments)
+      expect(environment[1]).not.toMatch(/\$\{\{[^}]*\brunner(?:\.|\[)/);
+  });
+
   it('stages sharded affected tests and requires real browser coverage of combined queue trees', () => {
     const staged = readFileSync('.github/workflows/fleet-ci-v7.yml', 'utf8');
     expect(staged).toContain(
