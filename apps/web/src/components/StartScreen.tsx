@@ -783,10 +783,11 @@ export function StartScreen({
       recoveryCounts.set(original, (recoveryCounts.get(original) ?? 0) + 1);
     }
   }
-  const needsAttention = (project: ProjectSummary) =>
+  const needsDecision = (project: ProjectSummary) =>
     conflictedProjectIds.has(project.projectId) ||
-    syncEntryById.get(project.projectId)?.state === 'failed' ||
-    recoveryCopyOf(project.name) !== null;
+    syncEntryById.get(project.projectId)?.state === 'failed';
+  const needsAttention = (project: ProjectSummary) =>
+    needsDecision(project) || recoveryCopyOf(project.name) !== null;
   const filterMatches: Record<
     ShelfFilter,
     (project: ProjectSummary) => boolean
@@ -843,6 +844,13 @@ export function StartScreen({
       baseProjects.filter(filterMatches[entry.id]).length
     ])
   ) as Record<ShelfFilter, number>;
+  // The Pinned count includes a pinned folder's projects, while the grid
+  // shows that folder as one tile; the tab's tooltip says how many.
+  const pinnedViaFolder = baseProjects.filter(
+    (project) =>
+      !projectOrganization(project).pinned &&
+      folderByProject.get(project.projectId)?.pinned === true
+  ).length;
   const filteredProjects =
     activeFilter === 'all'
       ? baseProjects
@@ -1746,9 +1754,14 @@ export function StartScreen({
                 } ${project.revisionCount === 1 ? 'save' : 'saves'}`}
               >
                 {formatLastEdited(project.updatedAt)}
-                {recoveryOf !== null &&
-                  ` · ${formatTime(new Date(project.updatedAt))}`}
               </time>
+              {/* The time is what tells a part's recovery copies apart, so
+                  the date clips before it does. */}
+              {recoveryOf !== null && (
+                <span className="start-tile-clock">
+                  {`· ${formatTime(new Date(project.updatedAt))}`}
+                </span>
+              )}
             </span>
             {/* The list has a Saves column; a card leaves the count out. */}
             {layout === 'list' && (
@@ -2361,8 +2374,8 @@ export function StartScreen({
     groupLayout
   ]);
 
-  // Matches the loaded shelf: an all-pinned shelf still keeps its pinned
-  // cards apart (unlabelled), and its empty Projects group shows only
+  // Matches the loaded shelf: an all-pinned shelf keeps its pinned cards
+  // apart under their label, and its empty Projects group shows only
   // mid-drag.
   const loadingGroups = previousLayout?.groups
     ? previousLayout.groups
@@ -2535,20 +2548,27 @@ export function StartScreen({
       };
     }
     const saved = accountableProjects.length;
+    // Archived projects are saved too, but the Projects count leaves them
+    // out: a number here that differs from it read as missing projects.
+    const archived = shelves.archived.length;
     return {
       tone: 'saved',
       Icon: CloudCheck,
       text:
         saved === 0
           ? 'Signed in'
-          : saved === 1
-            ? '1 saved'
-            : `All ${saved} saved`,
+          : archived > 0
+            ? 'All saved'
+            : saved === 1
+              ? '1 saved'
+              : `All ${saved} saved`,
       ...(saved > 0 && {
         title:
           saved === 1
             ? '1 project saved to your account.'
-            : `All ${saved} projects saved to your account.`
+            : archived > 0
+              ? `All ${saved} projects saved to your account, including ${archived} archived.`
+              : `All ${saved} projects saved to your account.`
       })
     };
   }
@@ -2899,10 +2919,22 @@ export function StartScreen({
                     type="button"
                     disabled={loading}
                     aria-pressed={activeFilter === entry.id}
+                    title={
+                      entry.id === 'pinned' && !loading && pinnedViaFolder > 0
+                        ? `${filterCounts.pinned} ${filterCounts.pinned === 1 ? 'project' : 'projects'}, ${pinnedViaFolder} of them in pinned folders`
+                        : undefined
+                    }
                     className={[
                       'start-filter',
                       activeFilter === entry.id ? 'is-active' : '',
-                      entry.id === 'attention' ? 'is-attention' : ''
+                      entry.id === 'attention' ? 'is-attention' : '',
+                      // Recovery copies alone are a standing state, not news:
+                      // the count turns amber only for a conflict or failure.
+                      entry.id === 'attention' &&
+                      !loading &&
+                      baseProjects.some(needsDecision)
+                        ? 'is-urgent'
+                        : ''
                     ]
                       .filter(Boolean)
                       .join(' ')}
@@ -3035,6 +3067,11 @@ export function StartScreen({
                 )}
                 {loadingGroups.map((group) => (
                   <Fragment key={group.label ?? 'all'}>
+                    {group.label && (
+                      <h3 className="start-group-label" aria-hidden="true">
+                        {group.label}
+                      </h3>
+                    )}
                     <div
                       className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
                       aria-hidden="true"
@@ -3107,6 +3144,11 @@ export function StartScreen({
                   // An empty group only shows as a drop target mid-drag.
                   group.items.length === 0 && !reorder.draggingId ? null : (
                     <Fragment key={group.label ?? 'all'}>
+                      {/* Without it the Pinned group's short row read as a
+                          gap in the grid rather than a group of its own. */}
+                      {group.label && (
+                        <h3 className="start-group-label">{group.label}</h3>
+                      )}
                       <div
                         className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
                         data-tile-group={canReorder ? group.group : undefined}
