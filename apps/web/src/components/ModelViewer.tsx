@@ -1360,6 +1360,11 @@ export interface ModelViewerProps {
    */
   touchModifiers?: TouchModifiers;
   /**
+   * After a pen is first used, a finger in a sketch drawing tool only
+   * navigates; the pen draws (Settings › Viewport, L02).
+   */
+  pencilDrawsOnly?: boolean;
+  /**
    * The Assemble workspace's view (AS02): component bodies drawn at their
    * solved poses, the rest dimmed, joint glyphs, and the primary button
    * taken over for dragging components and picking joint frames. Null (or
@@ -2042,6 +2047,11 @@ const RIGHT_PAN_TARGET_EPSILON = 1e-9;
  * echo of a double tap the touch layer already handled.
  */
 const TOUCH_DBLCLICK_ECHO_MS = 700;
+/**
+ * How long after a pen lifts a new finger is still taken for the hand that
+ * held it, rather than a gesture (L02 slice 6).
+ */
+const PALM_REJECT_AFTER_PEN_MS = 300;
 /** Safari's non-standard pinch and rotate events, which zoom the page. */
 const SAFARI_GESTURE_EVENTS = [
   'gesturestart',
@@ -2246,6 +2256,7 @@ export function ModelViewer({
   onContextMenu,
   onTouchHistory,
   touchModifiers = NO_TOUCH_MODIFIERS,
+  pencilDrawsOnly = true,
   assemblyView = null
 }: ModelViewerProps) {
   if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
@@ -2363,6 +2374,8 @@ export function ModelViewer({
   onTouchHistoryRef.current = onTouchHistory;
   const touchModifiersRef = useRef(touchModifiers);
   touchModifiersRef.current = touchModifiers;
+  const pencilDrawsOnlyRef = useRef(pencilDrawsOnly);
+  pencilDrawsOnlyRef.current = pencilDrawsOnly;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
@@ -11112,6 +11125,16 @@ export function ModelViewer({
         }
         gestures.release(pointerId, '');
       },
+      // Once a Pencil is in use, it draws; a finger moves the view.
+      navigationOnly: () => {
+        const mode = sketchModeRef.current;
+        return (
+          penSeen &&
+          pencilDrawsOnlyRef.current &&
+          mode !== null &&
+          mode.tool !== 'select'
+        );
+      },
       canOrbit: () => cameraRig.controls.enableRotate,
       beginOrbit: (press) => {
         pivotOrbitOnCursor(press);
@@ -11131,20 +11154,50 @@ export function ModelViewer({
     });
     /** When the last finger lifted: the browser's own dblclick follows it. */
     let lastTouchEndAt = Number.NEGATIVE_INFINITY;
+    // Palm rejection: a hand resting on the glass while a pen writes. iPadOS
+    // rejects most palms itself; these catch the contacts it lets through.
+    let penSeen = false;
+    let penPointerId: number | null = null;
+    let penLiftedAt = Number.NEGATIVE_INFINITY;
+    /** Fingers ignored until they lift: palms, and touches a pen displaced. */
+    const rejectedTouches = new Set<number>();
     const routePointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'pen') {
+        penSeen = true;
+        penPointerId = event.pointerId;
+        // Whatever the fingers were doing was most likely the palm landing.
+        for (const id of touchNavigation.abandon()) rejectedTouches.add(id);
+      }
       if (event.pointerType === 'touch') {
         // OrbitControls would run its own one-finger rotate and pinch beside
         // these; it listens on this element after this capture listener.
         event.stopImmediatePropagation();
+        if (
+          penPointerId !== null ||
+          performance.now() - penLiftedAt < PALM_REJECT_AFTER_PEN_MS
+        ) {
+          rejectedTouches.add(event.pointerId);
+          return;
+        }
         touchNavigation.down(event);
         return;
       }
       handlePointerDown(event);
     };
     const routePointerMove = (event: PointerEvent) => {
+      if (rejectedTouches.has(event.pointerId)) return;
       if (!touchNavigation.move(event)) handlePointerMove(event);
     };
+    /** True when the event was a rejected finger's, now forgotten. */
+    const releaseRejected = (event: PointerEvent) => {
+      if (event.pointerId === penPointerId) {
+        penPointerId = null;
+        penLiftedAt = performance.now();
+      }
+      return rejectedTouches.delete(event.pointerId);
+    };
     const routePointerUp = (event: PointerEvent) => {
+      if (releaseRejected(event)) return;
       if (!touchNavigation.up(event)) {
         handlePointerUp(event);
       } else if (!touchNavigation.active) {
@@ -11152,6 +11205,7 @@ export function ModelViewer({
       }
     };
     const routePointerCancel = (event: PointerEvent) => {
+      if (releaseRejected(event)) return;
       if (!touchNavigation.cancel(event)) {
         handlePointerCancel(event);
       } else if (!touchNavigation.active) {

@@ -247,6 +247,10 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       touchHistoryGestures: boolean(
         viewport.touchHistoryGestures,
         defaults.viewport.touchHistoryGestures
+      ),
+      pencilDrawsOnly: boolean(
+        viewport.pencilDrawsOnly,
+        defaults.viewport.pencilDrawsOnly
       )
     },
     sketching: {
