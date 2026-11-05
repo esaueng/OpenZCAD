@@ -705,9 +705,12 @@ export function NumericKeypad({
         ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}${unitText ? ` ${unitText}` : ''}`
         : (evaluation.error ?? 'invalid')
       : '';
+  // An empty field is waiting for a value, not wrong: Apply waits, but it
+  // is not called an error until something unreadable is typed.
+  const unreadable = state === 'invalid' && value.trim() !== '';
   const describedBy =
     [
-      explained || reasonShown || state === 'invalid' ? reasonId : null,
+      explained || reasonShown || unreadable ? reasonId : null,
       state === 'checking' ? stateId : null
     ]
       .filter(Boolean)
@@ -767,7 +770,7 @@ export function NumericKeypad({
           className="keypad-value"
           aria-label={spokenValueName(label)}
           value={value}
-          aria-invalid={state === 'invalid' || state === 'refused'}
+          aria-invalid={unreadable || state === 'refused'}
           aria-describedby={describedBy}
           spellCheck={false}
           inputMode="decimal"
@@ -833,7 +836,7 @@ export function NumericKeypad({
           {helpText}
         </p>
       )}
-      {state === 'invalid' ? (
+      {unreadable ? (
         <p className="keypad-warning" id={reasonId}>
           {entryError === 'invalid' ? 'Not a number or expression' : entryError}
         </p>
