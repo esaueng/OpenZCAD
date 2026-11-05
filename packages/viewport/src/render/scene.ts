@@ -627,10 +627,11 @@ export function createBodyMaterial(body: GeometryBodyRepresentation) {
       new THREE.MeshPhongMaterial({
         color: body.color,
         // A broad, dim highlight: at shininess 38 and #667487 every fillet
-        // corner and torus band carried a small white hotspot that read as
-        // a rendering glitch rather than a curve.
-        shininess: 18,
-        specular: '#465160',
+        // corner and torus band carried a small white hotspot under the key
+        // light that read as a rendering glitch rather than a curve; at 18
+        // and #465160 the spherical corners still flared.
+        shininess: 14,
+        specular: '#2f3641',
         transparent: translucent,
         opacity,
         // Translucent walls must not write depth or back faces and interior

@@ -155,8 +155,8 @@ describe('CAD viewport shading', () => {
     const object = createObjectForBody(body) as THREE.Mesh;
 
     expect(material).toBeInstanceOf(THREE.MeshPhongMaterial);
-    expect(material.shininess).toBe(18);
-    expect(material.specular.getHex()).toBe(0x465160);
+    expect(material.shininess).toBe(14);
+    expect(material.specular.getHex()).toBe(0x2f3641);
     expect(material.side).toBe(THREE.FrontSide);
     expect(material.polygonOffset).toBe(true);
     expect(material.polygonOffsetFactor).toBe(1);
