@@ -133,6 +133,32 @@ describe('WorkspaceReadout', () => {
     );
   });
 
+  it('lifts the notice lane only by a guidance row that is drawn', () => {
+    const pick = <span className="selection-readout">Bracket · Top face</span>;
+    const { container } = render(
+      <div className="viewer-area">
+        <WorkspaceReadout
+          status=""
+          tone="ready"
+          onOpenLog={vi.fn()}
+          {...SUMMARY}
+          pick={pick}
+        />
+      </div>
+    );
+    const viewer = container.querySelector<HTMLElement>('.viewer-area')!;
+    const hint = container.querySelector<HTMLElement>(
+      '.workspace-hint.is-selection'
+    );
+    expect(hint).not.toBeNull();
+    // Unlaid out, the row has no height: no gap for a row that is not there.
+    // It used to read 8px, which lifted the notice lane over the handle's
+    // value chip while an operation was armed.
+    expect(viewer.style.getPropertyValue('--workspace-guidance-h')).toBe(
+      '0px'
+    );
+  });
+
   it('leads the guidance with the pick, which outlasts a live message', () => {
     const pick = <span className="selection-readout">Bracket · Top face</span>;
     const { container, rerender } = render(

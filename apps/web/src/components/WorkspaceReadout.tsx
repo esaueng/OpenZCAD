@@ -149,9 +149,15 @@ export function WorkspaceReadout({
       const guidance = lane.querySelector<HTMLElement>(
         '.workspace-hint.is-selection'
       );
+      // The gap belongs to a row that is drawn. A guidance element with no
+      // height (the pick's row while an operation is armed) still added it,
+      // and the notice lane stood 8px up, over the handle's value chip.
+      const guidanceHeight = guidance
+        ? Math.ceil(guidance.getBoundingClientRect().height)
+        : 0;
       viewer.style.setProperty(
         '--workspace-guidance-h',
-        `${guidance ? Math.ceil(guidance.getBoundingClientRect().height) + 8 : 0}px`
+        `${guidanceHeight > 0 ? guidanceHeight + 8 : 0}px`
       );
     };
     measure();

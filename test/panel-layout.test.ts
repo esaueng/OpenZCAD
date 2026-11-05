@@ -1535,12 +1535,20 @@ describe('docked panels hugging their content', () => {
       ...STAGE,
       naturals: { parameters: 100, bodies: 60, history: 150 }
     });
-    // Except beside History: a panel at its default weight hugs its rows,
-    // and History, which always fills, takes what they leave.
-    expect(unfit.panels.bodies!.h).toBe(60);
-    expect(unfit.panels.parameters!.h).toBe(100);
+    // Except Objects beside History: at its default weight it hugs its rows,
+    // held at the 90px minimum, and History, which always fills, takes what
+    // it leaves. Parameters keeps its share, so an even split stays even.
+    expect(unfit.panels.bodies!.h).toBe(PANEL_MIN_HEIGHT);
+    expect(unfit.panels.parameters!.h).toBeCloseTo(
+      plain.panels.parameters!.h +
+        (plain.panels.bodies!.h - PANEL_MIN_HEIGHT) / 2,
+      6
+    );
     expect(unfit.panels.history!.h).toBeCloseTo(
-      unfit.columns[0]!.h - 160 - PANEL_STACK_GAP * 2,
+      unfit.columns[0]!.h -
+        PANEL_MIN_HEIGHT -
+        unfit.panels.parameters!.h -
+        PANEL_STACK_GAP * 2,
       6
     );
     expect(unfit.panels.history!.h).toBeGreaterThan(plain.panels.history!.h);
@@ -1553,7 +1561,7 @@ describe('docked panels hugging their content', () => {
       },
       { ...STAGE, naturals: { parameters: 100, bodies: 60, history: 150 } }
     );
-    expect(sized.panels.bodies!.h).toBeGreaterThan(60);
+    expect(sized.panels.bodies!.h).toBeGreaterThan(PANEL_MIN_HEIGHT);
     // And without History in the column, every panel fills its share.
     const apart = computePanelGeometry(
       setOption(
@@ -1563,7 +1571,7 @@ describe('docked panels hugging their content', () => {
       ),
       { ...STAGE, naturals: { parameters: 100, bodies: 60 } }
     );
-    expect(apart.panels.bodies!.h).toBeGreaterThan(60);
+    expect(apart.panels.bodies!.h).toBeGreaterThan(PANEL_MIN_HEIGHT);
     expect(defaultPanelLayout().options.hug).toBe(false);
     // A stored layout without the option fills, as a new one does; the
     // `fit` key it replaced defaulted on and is ignored.

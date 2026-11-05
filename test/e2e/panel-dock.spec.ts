@@ -1357,10 +1357,12 @@ test('Diagnostics counts warnings on its rail button and never opens by itself',
   await addBox(page);
   const diagnostics = railPanelButton(page, 'Diagnostics');
   await expect(diagnostics.locator('.rail-badge')).toHaveText('2');
-  await expect(diagnostics).toHaveAttribute(
-    'title',
-    'Diagnostics · 2 warnings'
-  );
+  // The count reads in the rail's own tooltip, not a native title.
+  await diagnostics.hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toContainText('Diagnostics');
+  await expect(tip).toContainText('2 warnings');
+  await page.mouse.move(0, 0);
   // The badge is not part of the button's name.
   await expect(diagnostics).toHaveAccessibleName('Diagnostics panel');
   await expect(diagnostics).toHaveAttribute('aria-pressed', 'false');
