@@ -6087,12 +6087,15 @@ export function ModelViewer({
           resolve?: (value: {
             box: { min: number[]; max: number[] } | null;
             points: { x: number; y: number }[];
+            /** A world point on each ghost plane no other one covers. */
+            ghostPlanePoints: Record<string, number[] | null> | null;
           }) => void;
         }>
       ).detail;
       if (!detail?.resolve) {
         return;
       }
+      const ghostRig = planePickerRigRef.current;
       const object = bodiesRef.current
         .filter((body) => !body.consumed)
         .map((body) => context.objectsByBodyId.get(body.bodyId))
@@ -6104,6 +6107,15 @@ export function ModelViewer({
           box && !box.isEmpty()
             ? { min: box.min.toArray(), max: box.max.toArray() }
             : null,
+        ghostPlanePoints: ghostRig
+          ? Object.fromEntries(
+              (['XY', 'XZ', 'YZ'] as const).map((plane) => [
+                plane,
+                ghostRig.exposedPoint(plane, context.activeCamera)?.toArray() ??
+                  null
+              ])
+            )
+          : null,
         points: (detail.points ?? []).map((point) => {
           const projected = new THREE.Vector3(...point).project(
             context.activeCamera

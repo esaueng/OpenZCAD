@@ -108,6 +108,12 @@ export interface PlanePickerRig {
    * sketch it starts will actually land rather than always at the origin.
    */
   setOffset(offset: number): void;
+  /**
+   * A world point on a panel that a ray from `camera` reaches before any
+   * other panel, or null if another panel covers all of it. Searched from the
+   * outer corner inward. For tests that click a ghost plane.
+   */
+  exposedPoint(plane: PlaneId, camera: THREE.Camera): THREE.Vector3 | null;
   dispose(): void;
 }
 
@@ -393,6 +399,38 @@ export function buildPlanePickerRig(
     setScale(worldPerPixel) {
       group.scale.setScalar(Math.max(worldPerPixel, MIN_WORLD_PER_PIXEL));
       applyOffset();
+    },
+    exposedPoint(plane, camera) {
+      const panel = panels.get(plane)!;
+      const fills = [...panels.values()].map((candidate) => candidate.fill);
+      group.updateMatrixWorld(true);
+      camera.updateMatrixWorld();
+      const raycaster = new THREE.Raycaster();
+      const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+      const orthographic = (camera as THREE.OrthographicCamera)
+        .isOrthographicCamera;
+      const forward = camera.getWorldDirection(new THREE.Vector3());
+      // Inset from the chamfer and the gap; 12 px steps from the outer corner.
+      const outer = EXTENT_PX - CHAMFER_PX;
+      const inner = GAP_PX + 4;
+      for (let a = outer; a >= inner; a -= 12) {
+        for (let b = outer; b >= inner; b -= 12) {
+          const point = new THREE.Vector3(a, b, 0).applyMatrix4(
+            panel.holder.matrixWorld
+          );
+          if (orthographic) {
+            raycaster.set(
+              point.clone().addScaledVector(forward, -1e6),
+              forward
+            );
+          } else {
+            raycaster.set(eye, point.clone().sub(eye).normalize());
+          }
+          const hit = raycaster.intersectObjects(fills, false)[0];
+          if (hit?.object === panel.fill) return point;
+        }
+      }
+      return null;
     },
     dispose() {
       for (const item of disposables) {

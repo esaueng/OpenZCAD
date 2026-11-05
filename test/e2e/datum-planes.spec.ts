@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import {
-  clickWorldPoint,
+  clickGhostPlane,
   createPrimitiveInPlace,
   enterCommandValue,
   expect,
@@ -168,7 +168,7 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   await page.getByRole('button', { name: /^Plane — / }).click();
   const planeBar = page.getByRole('group', { name: 'Plane command' });
   await expect(planeBar).toContainText('Pick a plane');
-  await clickWorldPoint(page, [3, 2, 0]);
+  await clickGhostPlane(page, 'XY');
   await expect(planeBar).toContainText('Drag the offset');
   await enterCommandValue(page, 'offset', '8');
   await finishInPlaceCommand(page, 'Plane');

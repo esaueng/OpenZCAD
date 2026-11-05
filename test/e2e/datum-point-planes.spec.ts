@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import {
+  clickGhostPlane,
   clickWorldPoint,
   createPrimitiveInPlace,
   expect,
@@ -156,7 +157,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
   await page.getByRole('button', { name: /^Plane — / }).click();
   const planeBar = page.getByRole('group', { name: 'Plane command' });
   await expect(planeBar).toContainText('Pick a plane');
-  await clickWorldPoint(page, [3, 2, 0]);
+  await clickGhostPlane(page, 'XY');
   await expect(planeBar).toContainText('Drag the offset');
   await setSelectionFilter(page, 'Edge');
   await clickWorldPoint(page, [20, 18, 20]);
