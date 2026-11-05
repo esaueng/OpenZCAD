@@ -529,12 +529,13 @@ async function modelShare(page: Page) {
   });
 }
 
-test('the docks keep the model 40% of the stage, parking the left column first, at widths from the tokens', async ({
+test('the docks keep the model 40% of the stage, parking the least recent column first, at widths from the tokens', async ({
   page
 }) => {
   await openWorkspace(page, 'Dock cap', {
     left: [['bodies']],
-    right: [['parameters']]
+    right: [['parameters']],
+    recent: ['parameters', 'bodies']
   });
   const widths = await capWidths(page);
   // Today's tokens: 40px rails, 10px island gaps, 4px dock gaps and 296px

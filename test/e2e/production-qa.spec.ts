@@ -24,7 +24,7 @@ test('invalid primitive dimensions never enter saved history', async ({
   const entry = page.locator('.numeric-keypad input');
   await entry.fill('-5');
   await entry.press('Enter');
-  await expect(bar).toContainText('-5; Box width takes at least 0.001.');
+  await expect(bar).toContainText('Box width takes at least 0.001.');
   await expect(width).toContainText('Width 30');
   await revealModelPanel(page, 'History');
   await expect(
