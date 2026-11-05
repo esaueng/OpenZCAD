@@ -30,7 +30,6 @@ import {
   measureFaceGeometry,
   measureOwnedFaceGeometry,
   requireBlendRegion,
-  type BlendCarrierSnapshot,
   requireThroughHole,
   type ThroughHoleGeometry
 } from './exact-measure';
@@ -111,6 +110,11 @@ import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
 import { resizeChamferedThroughHole } from './exact-chamfered-hole';
 import { assertWallResizeAccepted } from './result-acceptance';
+import {
+  recognizeWallBlends,
+  resizeWallThroughBlends,
+  sameBlendCarrier
+} from './exact-direct-edit-reblend';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -1438,32 +1442,6 @@ export function removeFaceFeature(
   return output;
 }
 
-/**
- * Whether a measured band is the recorded one: same surface class and radius,
- * and the same carrier up to sign. A cylinder band is pinned by its axis line
- * rather than its midpoint, because removing a neighbouring band can lengthen
- * it; a torus is pinned by its centre, which nothing around it moves.
- */
-function sameBlendCarrier(
-  measured: BlendCarrierSnapshot,
-  recorded: RecordedBlendCarrier
-): boolean {
-  if (
-    measured.surfaceClass !== recorded.surfaceClass ||
-    Math.abs(measured.radius - recorded.radius) >
-      Math.max(recorded.radius * 1e-5, 1e-9)
-  ) {
-    return false;
-  }
-  const axis = normalized(recorded.axis);
-  if (!axis || Math.abs(dot(measured.axis, axis)) < 1 - 1e-6) return false;
-  const tolerance = Math.max(recorded.radius * 1e-5, 1e-6);
-  const offset = subtract(measured.center, recorded.center);
-  return recorded.surfaceClass === 'torus'
-    ? length(offset) <= tolerance
-    : length(subtract(offset, scale(axis, dot(offset, axis)))) <= tolerance;
-}
-
 function formatBlend(blend: RecordedBlendCarrier): string {
   return `R${Number(blend.radius.toPrecision(6))} ${blend.surfaceClass} blend`;
 }
@@ -2157,76 +2135,120 @@ export function applyDirectEdit(
   const sourceCandidates = deferOutputLineage
     ? []
     : topologyCandidatesForSolid(kernel, solid);
-  let journal: RemusMoveFacesJournal | null = null;
-  if (!deferOutputLineage) {
-    try {
-      journal = decodeRemusMoveFacesJournal(
-        kernel.resizeCylindricalFaceJournaled(solid, face, newRadius)
-      );
-    } catch {
-      // Older or unqualified resize constructions can still use the exact
-      // sleeve route. That route makes no construction identity claim.
+  const sourceRadius = geometry.radius;
+  const axisStart = geometry.axisStart;
+  const plainResize = (
+    fromSolid: number,
+    wall: number,
+    journaled: boolean
+  ): { output: number; journal: RemusMoveFacesJournal | null } => {
+    let journal: RemusMoveFacesJournal | null = null;
+    if (journaled) {
+      try {
+        journal = decodeRemusMoveFacesJournal(
+          kernel.resizeCylindricalFaceJournaled(fromSolid, wall, newRadius)
+        );
+      } catch {
+        // Older or unqualified resize constructions can still use the exact
+        // sleeve route. That route makes no construction identity claim.
+      }
     }
-  }
-  const output =
-    journal?.solid ??
-    resizeCylindricalFaceExactly(
+    const output =
+      journal?.solid ??
+      resizeCylindricalFaceExactly(
+        kernel,
+        fromSolid,
+        wall,
+        sourceRadius,
+        newRadius,
+        axisStart,
+        axisDir,
+        axisTolerance,
+        operation.concavity
+      );
+    if (kernel.validateSolidRelaxed(output) !== 0) {
+      throw new Error(
+        `Resizing the face to radius ${newRadius} does not produce a valid solid.`
+      );
+    }
+    // The kernel gates on a closed shell and on the volume the resize is
+    // defined to produce, and a degraded result can still clear both: a
+    // boolean that meets a coaxial cylindrical face may hand back the
+    // untouched original, and a mesh-boolean fallback encloses the right
+    // space with a wall of triangles instead of a cylinder. Read the wall
+    // back and insist it is an analytic cylinder at the new radius, so
+    // either failure surfaces as a failed feature rather than a gesture that
+    // looked like it worked.
+    const coaxialRadii = coaxialCylinderRadii(
       kernel,
-      solid,
-      face,
-      geometry.radius,
-      newRadius,
-      geometry.axisStart,
+      output,
+      axisStart,
       axisDir,
-      axisTolerance,
-      operation.concavity
+      axisTolerance
     );
-  if (kernel.validateSolidRelaxed(output) !== 0) {
-    throw new Error(
-      `Resizing the face to radius ${newRadius} does not produce a valid solid.`
-    );
-  }
-  // The kernel gates on a closed shell and on the volume the resize is
-  // defined to produce, and a degraded result can still clear both: a
-  // boolean that meets a coaxial cylindrical face may hand back the
-  // untouched original, and a mesh-boolean fallback encloses the right
-  // space with a wall of triangles instead of a cylinder. Read the wall
-  // back and insist it is an analytic cylinder at the new radius, so either
-  // failure surfaces as a failed feature rather than a gesture that looked
-  // like it worked.
-  const coaxialRadii = coaxialCylinderRadii(
-    kernel,
-    output,
-    geometry.axisStart,
-    axisDir,
-    axisTolerance
-  );
-  const atRadius = (radius: number): boolean =>
-    coaxialRadii.some(
-      (candidate) => Math.abs(candidate - radius) <= radiusTolerance
-    );
-  if (!atRadius(newRadius)) {
-    throw new Error(
-      atRadius(geometry.radius)
-        ? `The wall kept its original radius instead of resizing to ${newRadius}.`
-        : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
-    );
-  }
-  // A wall under a seam blend can come back at the new radius, closed and
-  // valid, with the blend left at the old size and capped off by a new face
-  // (K10, box×cylinder seam fillet). Hash-only seam fillets route here from
-  // `cylinderPrimitiveAncestry.ts`, so this is reachable in the app.
-  assertWallResizeAccepted(kernel, {
+    const atRadius = (radius: number): boolean =>
+      coaxialRadii.some(
+        (candidate) => Math.abs(candidate - radius) <= radiusTolerance
+      );
+    if (!atRadius(newRadius)) {
+      throw new Error(
+        atRadius(sourceRadius)
+          ? `The wall kept its original radius instead of resizing to ${newRadius}.`
+          : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
+      );
+    }
+    return { output, journal };
+  };
+  const acceptance = (output: number) => ({
     sourceSolid: solid,
     sourceWall: face,
-    sourceRadius: geometry.radius,
+    sourceRadius: sourceRadius,
     output,
     newRadius,
-    axisPoint: geometry.axisStart,
+    axisPoint: axisStart,
     axisDirection: axisDir,
     axisTolerance,
     radiusTolerance
   });
+  let output: number;
+  let journal: RemusMoveFacesJournal | null;
+  try {
+    ({ output, journal } = plainResize(solid, face, !deferOutputLineage));
+    // A wall under a seam blend can come back at the new radius, closed and
+    // valid, with the blend left at the old size and capped off by a new
+    // face (K10, box×cylinder seam fillet). Hash-only seam fillets route
+    // here from `cylinderPrimitiveAncestry.ts`, so this is reachable in the
+    // app.
+    assertWallResizeAccepted(kernel, acceptance(output));
+  } catch (error) {
+    // WS6 ladder, step 2: remove the bands incident to the wall, resize the
+    // sharp wall, rebuild the bands at their recognised radius. Only a wall
+    // whose every curved neighbour is a proven band qualifies, and only a
+    // result that passes every gate is accepted; otherwise the plain
+    // route's refusal stands. The three kernel steps carry no single
+    // construction journal, so the result claims no output lineage and a
+    // later edit resolves its faces by fingerprint.
+    const blends = recognizeWallBlends(kernel, solid, face);
+    if (!blends) throw error;
+    let rebuilt: number;
+    try {
+      rebuilt = resizeWallThroughBlends(kernel, {
+        solid,
+        blends,
+        sourceRadius,
+        newRadius,
+        axisPoint: axisStart,
+        axisDirection: axisDir,
+        axisTolerance,
+        radiusTolerance,
+        resize: (sharp, wall) => plainResize(sharp, wall, false).output
+      });
+      assertWallResizeAccepted(kernel, acceptance(rebuilt));
+    } catch {
+      throw error;
+    }
+    return { solids: [rebuilt] };
+  }
   if (deferOutputLineage || !journal) return { solids: [output] };
   const relation = moveFacesJournalFaceMap(
     kernel,

@@ -1,7 +1,7 @@
 {
   "summary": {
-    "qualified": 3,
-    "typed-refusal": 1,
+    "qualified": 4,
+    "typed-refusal": 0,
     "untyped-refusal": 1,
     "wrong": 0,
     "timeout": 0
@@ -9,7 +9,7 @@
   "cells": {
     "imported-twin/upright/twin/import": "qualified",
     "imported-twin/upright/R1/cap-up": "qualified",
-    "imported-twin/upright/R2/wall-grow": "typed-refusal",
+    "imported-twin/upright/R2/wall-grow": "qualified",
     "imported-twin/upright/R4/seam-grow": "qualified",
     "imported-twin/tilted/twin/import": "untyped-refusal"
   }
