@@ -753,6 +753,31 @@ describe('StartScreen cloud project status', () => {
       })
     );
   });
+  it('turns the Needs attention count amber only for a decision', () => {
+    // 5 Nov 2026: recovery copies alone kept the count amber on every
+    // visit, so it stopped meaning anything.
+    const copy = {
+      ...localProject,
+      projectId: toProjectId('copy'),
+      name: `${localProject.name} (Recovery)`
+    };
+    const attention = () =>
+      within(screen.getByRole('group', { name: 'Show projects' })).getByRole(
+        'button',
+        { name: /^Needs attention/ }
+      );
+    const { unmount } = renderStartScreen({ projects: [localProject, copy] });
+    expect(attention()).toHaveClass('is-attention');
+    expect(attention()).not.toHaveClass('is-urgent');
+    unmount();
+
+    renderStartScreen({
+      projects: [localProject, copy],
+      conflictedProjectIds: new Set([localProject.projectId])
+    });
+    expect(attention()).toHaveClass('is-urgent');
+  });
+
   it('offers a confirmed device-only project for account sync', () => {
     renderStartScreen();
 
@@ -910,6 +935,26 @@ describe('StartScreen library shell', () => {
     expect(screen.queryByRole('button', { name: /to my account/ })).toBeNull();
   });
 
+  it('keeps archived parts out of the saved count beside Projects', () => {
+    // 5 Nov 2026: "All 108 saved" sat under a Projects count of 106; the
+    // two archived parts made the difference and read as missing projects.
+    const archivedPart: ProjectSummary = {
+      ...localProject,
+      projectId: toProjectId('archived-part'),
+      name: 'Archived part',
+      organization: { status: 'archived', pinned: false, sortOrder: 0 }
+    };
+    renderStartScreen({
+      projects: [localProject, archivedPart],
+      cloudProjectIds: new Set([localProject.projectId, archivedPart.projectId])
+    });
+
+    expect(screen.getByText('All saved')).toHaveAttribute(
+      'title',
+      'All 2 projects saved to your account, including 1 archived.'
+    );
+  });
+
   it('offers sign-in in one line when signed out', () => {
     // Settings' footer explains signing in; the card used to repeat it as a
     // paragraph, a third copy of the same nag. The sentence names the state
@@ -948,7 +993,10 @@ describe('StartScreen library shell', () => {
   it("leaves the closed project's status out and keeps news to one line", () => {
     const carried =
       'Chamfer could not be created on 1 selected edge with distance 1. The modeling engine could not join this chamfer to the existing fillet or chamfer.';
-    const props = startScreenProps({ status: carried });
+    const props = startScreenProps({
+      status: carried,
+      previousWorkspaceStatus: carried
+    });
     const { rerender } = render(<StartScreen {...props} />);
     expect(document.querySelector('.start-status')).toBeNull();
     expect(screen.queryByText(/Chamfer could not/)).toBeNull();
@@ -958,6 +1006,16 @@ describe('StartScreen library shell', () => {
     const line = document.querySelector('.start-status');
     expect(line).toHaveTextContent(news);
     expect(line).toHaveAttribute('title', news);
+  });
+
+  it('shows a creation refusal already present when the library remounts', () => {
+    renderStartScreen({
+      status: 'Creation refused for this test.',
+      previousWorkspaceStatus: 'Created Previous project.'
+    });
+    expect(document.querySelector('.start-status')).toHaveTextContent(
+      'Creation refused for this test.'
+    );
   });
 
   it('turns the sentence over to a save run and its failures', () => {
@@ -1920,12 +1978,17 @@ describe('StartScreen sidebar and shelf edge', () => {
     { ...localProject, projectId: toProjectId('loose'), name: 'Loose part' }
   ];
 
-  it('groups pinned cards first with no labels, as inside a folder', () => {
-    // The cards' own pins mark the group.
+  it('groups pinned cards first under Pinned and Projects labels', () => {
+    // 5 Nov 2026: unlabelled, the Pinned group's short first row read as a
+    // gap in the grid rather than a group.
     const { container } = renderStartScreen({ projects: pinnedAndLoose() });
     const body = container.querySelector('.start-body')!;
     expect(body.querySelectorAll(':scope > .start-tile-grid')).toHaveLength(2);
-    expect(body.querySelector('h3')).toBeNull();
+    expect(
+      [...body.querySelectorAll(':scope > h3.start-group-label')].map(
+        (label) => label.textContent
+      )
+    ).toEqual(['Pinned', 'Projects']);
   });
 
   it('counts projects, not tiles, in the Pinned tab and group labels', () => {
@@ -1961,6 +2024,11 @@ describe('StartScreen sidebar and shelf edge', () => {
       name: /^Pinned/
     });
     expect(pinnedFilter).toHaveTextContent('Pinned3');
+    // The grid shows the folder as one tile; the tab says why it counts 3.
+    expect(pinnedFilter).toHaveAttribute(
+      'title',
+      '3 projects, 2 of them in pinned folders'
+    );
 
     fireEvent.click(pinnedFilter);
     expect(

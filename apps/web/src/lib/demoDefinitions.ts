@@ -61,7 +61,7 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     projectId: toProjectId('proj_demo_scissors'),
     name: 'Demo · Scissors',
     tagline: 'Scissors assembly with a working revolute pivot',
-    summary: 'Three parts, limited pivot motion',
+    summary: 'Assembly, revolute pivot',
     revisions: [],
     initialWorkspace: 'assemble',
     initialPlayback: 'ping-pong'

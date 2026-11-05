@@ -531,7 +531,7 @@ describe('PartThumbnail', () => {
     const loadThumbnail = vi.fn().mockResolvedValue(undefined);
     const publishThumbnail = vi.fn().mockResolvedValue(undefined);
 
-    render(
+    const view = render(
       <PartThumbnail
         project={summary()}
         loadThumbnail={loadThumbnail}
@@ -540,6 +540,14 @@ describe('PartThumbnail', () => {
     );
 
     await waitFor(() => expect(publishThumbnail).toHaveBeenCalled());
+    // 5 Nov 2026: a settled miss stayed the blank loading slot for good, so
+    // the card read as broken; it is the wire cube, uncaptioned.
+    await waitFor(() =>
+      expect(view.container.querySelector('svg')).toBeInTheDocument()
+    );
+    expect(
+      view.container.querySelector('.start-tile-thumb-loading')
+    ).toBeNull();
     expect(screen.queryByRole('img')).toBeNull();
     expect(screen.queryByText('No geometry')).toBeNull();
   });
@@ -589,7 +597,7 @@ describe('PartThumbnail', () => {
     const loadThumbnail = vi.fn().mockRejectedValue(new Error('idb closed'));
     const publishThumbnail = vi.fn();
 
-    render(
+    const view = render(
       <PartThumbnail
         project={summary()}
         loadThumbnail={loadThumbnail}
@@ -599,6 +607,9 @@ describe('PartThumbnail', () => {
 
     await waitFor(() => expect(loadThumbnail).toHaveBeenCalled());
     expect(screen.queryByRole('img')).toBeNull();
+    await waitFor(() =>
+      expect(view.container.querySelector('svg')).toBeInTheDocument()
+    );
   });
 
   it('survives a rejected backfill without throwing', async () => {
