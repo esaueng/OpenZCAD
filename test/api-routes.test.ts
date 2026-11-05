@@ -3324,18 +3324,19 @@ describe('worker api routes', () => {
   ])(
     'rejects an oversized stream $description with 413',
     async ({ contentLength }) => {
-      const chunk = new Uint8Array(1024 * 1024).fill(0x20);
-      // Past the document-write ceiling, which leaves room for base64 uploads.
-      let chunksRemaining =
-        Math.ceil(MAX_CLOUD_PROJECT_WRITE_BYTES / chunk.length) + 1;
+      const chunk = new Uint8Array(MAX_CLOUD_PROJECT_WRITE_BYTES).fill(0x20);
+      // Neither chunk alone exceeds the ceiling: the rejection must still
+      // count bytes across reads. Cross it by one byte on the second read,
+      // without making the JSON guard scan tens of MiB of whitespace first.
+      const chunks = [chunk.subarray(0, 1), chunk];
       const body = new ReadableStream<Uint8Array>({
         pull(controller) {
-          if (chunksRemaining === 0) {
+          const next = chunks.shift();
+          if (!next) {
             controller.close();
             return;
           }
-          chunksRemaining -= 1;
-          controller.enqueue(chunk);
+          controller.enqueue(next);
         }
       });
       const request = new Request('https://example.com/api/projects', {
