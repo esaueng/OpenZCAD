@@ -31,6 +31,7 @@ async function ownsItsCentre(locator: Locator): Promise<boolean> {
 
 async function expectReachable(locator: Locator) {
   await expect(locator).toBeVisible();
+  await locator.scrollIntoViewIfNeeded();
   await expect.poll(() => ownsItsCentre(locator)).toBe(true);
 }
 
@@ -45,7 +46,7 @@ async function createBoxProject(
   name: string,
   panelLayout = ALL_PANELS_DOCKED
 ) {
-  await stubApi(page, { panelLayout });
+  await stubApi(page, { panelLayout, commandFoldClosed: true });
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'New project' }).click();
@@ -296,6 +297,7 @@ test('UI-12: Tweak body actions fit a 320px window', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   const flyouts = page.locator('.tweak-flyouts');
   await expect(flyouts).toBeVisible();
+  await flyouts.getByRole('button', { name: 'Parts', exact: true }).click();
   const showOnly = flyouts.getByRole('button', { name: /^Show only/ });
   const hide = flyouts.getByRole('button', { name: /^Hide Box 1/ });
   await expectReachable(showOnly);

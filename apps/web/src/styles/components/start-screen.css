@@ -1028,7 +1028,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.start-filter.is-attention .start-filter-count {
+.start-filter.is-attention.is-urgent .start-filter-count {
   color: var(--color-warning);
 }
 
@@ -1268,6 +1268,23 @@
   gap: var(--sp-3);
 }
 
+/* Pinned and Projects, over their groups: the column's mono eyebrow. The
+   body's row gap below it leaves room for a folder's 7px tab; the margin
+   above sets the label off from the group before it. */
+.start-group-label {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.start-tile-grid + .start-group-label {
+  margin-top: var(--sp-3);
+}
+
 /* Card size (Settings › Appearance): the narrowest a card may be. Small is
    the original; the preview keeps its 16:10, so it grows with the card. */
 .start-tile-grid.is-small {
@@ -1352,11 +1369,6 @@
 :root.is-tile-dragging * {
   cursor: grabbing !important;
   user-select: none;
-}
-
-/* A recovery copy reads as secondary to the part it was made from. */
-.start-tile-project.is-recovery .start-tile-name {
-  color: var(--color-text-muted);
 }
 
 /* A group a drag has emptied keeps a target to drop back into. */
@@ -1514,20 +1526,12 @@
   display: none;
 }
 
-/* A decision waiting is a dot in the corner; its words are its name and
-   its tooltip. */
+/* A decision waiting keeps its warning icon in the corner: a bare coloured
+   dot told a conflict from a failed save by hue alone. Its words are its
+   name and its tooltip. */
 .start-tile-grid:not(.is-list) .start-tile-badge.is-conflict,
 .start-tile-grid:not(.is-list) .start-tile-badge.is-sync-failed {
-  width: 8px;
-  height: 8px;
-  padding: 0;
-  background: currentcolor;
-  border: 0;
-}
-
-.start-tile-grid:not(.is-list) .start-tile-badge.is-conflict svg,
-.start-tile-grid:not(.is-list) .start-tile-badge.is-sync-failed svg {
-  display: none;
+  background: color-mix(in srgb, currentcolor 18%, var(--color-surface));
 }
 
 .start-tile-body {
@@ -1539,13 +1543,18 @@
   padding: 9px 40px 10px var(--sp-3);
 }
 
+/* Two lines, not one: parts named in series ("PRM-0401-2026-1…") differ
+   only at the end, which a single clipped line hid. */
 .start-tile-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: var(--color-text);
   font-size: var(--fs-base);
   font-weight: var(--fw-medium);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .start-tile-meta {
@@ -1563,6 +1572,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Kept whole: it tells a part's recovery copies apart. */
+.start-tile-clock {
+  flex: none;
+  white-space: pre;
 }
 
 /* The date and the quiet marks that qualify it: encrypted, a recovery copy,
@@ -1627,15 +1642,21 @@
   height: 20px;
   margin: 0 36px 11px 0;
   padding: 0 5px;
-  color: var(--color-accent);
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
+  background: var(--color-surface);
+  border: var(--border-thin);
   border-radius: var(--radius-sm);
 }
 
+/* A bordered chip, not accent text: accent beside the date read as a link
+   with no target. */
 .start-tile-copies:hover {
+  color: var(--color-accent);
   background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
 }
 
 .start-tile-copies-label {
@@ -2844,9 +2865,15 @@
   white-space: nowrap;
 }
 
+/* Beside the count, in the column's right-hand group, not after the name. */
 .start-folder-link-pin {
   flex: none;
-  color: var(--color-text-subtle);
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.start-folder-link-pin + .start-shelf-count {
+  margin-left: 0;
 }
 
 @media (max-width: 900px) {

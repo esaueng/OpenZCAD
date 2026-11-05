@@ -241,6 +241,15 @@ for (const [units, initial, changed] of [
       stored.dimensionLabelPositions
     );
     await page.setViewportSize({ width: 320, height: 568 });
+    await expect(page.locator('.panel-column')).toHaveCount(0);
+    // The saved dock becomes a phone inspection lane. Close that
+    // lane before using the sketch's reference controls underneath it.
+    const hidePanels = page.getByRole('button', {
+      name: 'Hide panels',
+      exact: true
+    });
+    await expect(hidePanels).toBeVisible();
+    await hidePanels.click();
     const remove = panel.getByRole('button', {
       name: /^Delete Reference vertical distance/
     });
@@ -493,6 +502,13 @@ test('radius and angle references remain read-only and their controls fit a phon
     contentType: 'image/png'
   });
   await page.setViewportSize({ width: 320, height: 568 });
+  await expect(page.locator('.panel-column')).toHaveCount(0);
+  const hidePanels = page.getByRole('button', {
+    name: 'Hide panels',
+    exact: true
+  });
+  await expect(hidePanels).toBeVisible();
+  await hidePanels.click();
   const remove = panel.getByRole('button', { name: /^Delete Reference angle/ });
   await remove.scrollIntoViewIfNeeded();
   await expect(remove).toBeInViewport({ ratio: 1 });

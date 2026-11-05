@@ -56,6 +56,8 @@ export interface PanelControls {
   status: PanelStatus;
   /** View options' Compact rows: tighter rows, the same controls. */
   compact?: boolean;
+  /** The workspace command handles Escape before a temporary panel closes. */
+  commandActive?: boolean;
   onPin(): void;
   onUnpin(): void;
   onClose(): void;
@@ -173,7 +175,11 @@ export function PanelFrame({
         )
           return;
         // An active command owns Escape before a temporary inspection does.
-        if (document.querySelector('.in-place-command')) return;
+        if (
+          controls.commandActive ||
+          document.querySelector('.in-place-command')
+        )
+          return;
         if (
           (event.target as HTMLElement).closest(
             'input, textarea, select, [contenteditable="true"]'

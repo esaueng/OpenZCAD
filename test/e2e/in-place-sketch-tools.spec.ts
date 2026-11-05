@@ -311,6 +311,8 @@ test('Helical sweep runs in place: profile, axis, turns from the keypad', async 
       return bar.textContent();
     })
     .toContain('helix axis');
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
   const onAxis = await projected(canvas, [0, 0, 6]);
   await page.mouse.move(onAxis.x, onAxis.y);
   await page.mouse.click(onAxis.x, onAxis.y);

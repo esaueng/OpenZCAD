@@ -467,6 +467,14 @@
   text-align: left;
 }
 
+/* Keep the signed-in menu's extra sharing and account actions visible on
+   desktop without shrinking the text or changing the phone's scrollport. */
+@media (min-width: 720px) and (min-height: 800px) {
+  .file-menu .topbar-menu-item {
+    padding-block: 5px;
+  }
+}
+
 .topbar-menu-item:hover:not(:disabled) {
   background: var(--color-surface-hover);
 }

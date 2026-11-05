@@ -4417,7 +4417,9 @@ export function ModelViewer({
       const otherPanels = [
         ...(renderer.domElement
           .closest('.viewer-area')
-          ?.querySelectorAll<HTMLElement>(MODEL_PANEL_OBSTACLES) ?? [])
+          ?.querySelectorAll<HTMLElement>(
+            `${MODEL_PANEL_OBSTACLES}, .workspace-column, .command-flyout`
+          ) ?? [])
       ]
         .filter((element) => !element.matches(RIGHT_LANE_MODEL_PANELS))
         .map((element) => element.getBoundingClientRect())
@@ -4535,8 +4537,16 @@ export function ModelViewer({
                 {
                   left: stageRect.left + x - halfWidth,
                   right: stageRect.left + x + halfWidth,
-                  top: stageRect.top + y - halfHeight,
-                  bottom: stageRect.top + y + halfHeight
+                  top:
+                    stageRect.top +
+                    y -
+                    halfHeight -
+                    (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT,
+                  bottom:
+                    stageRect.top +
+                    y +
+                    halfHeight -
+                    (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT
                 },
                 otherPanels,
                 chipStage,
@@ -5249,11 +5259,17 @@ export function ModelViewer({
         if (!candidateScreen) {
           continue;
         }
+        const clientX = rect.left + candidateScreen.x;
+        const clientY = rect.top + candidateScreen.y;
+        // A screenshot probe must see the surface itself, rather than a
+        // keypad or flyout drawn over the same projected point.
+        if (
+          document.elementFromPoint(clientX, clientY) !== renderer.domElement
+        ) {
+          continue;
+        }
         const stack = picker.pickAll(
-          new MouseEvent('mousemove', {
-            clientX: rect.left + candidateScreen.x,
-            clientY: rect.top + candidateScreen.y
-          })
+          new MouseEvent('mousemove', { clientX, clientY })
         );
         if (
           !stack.some(
