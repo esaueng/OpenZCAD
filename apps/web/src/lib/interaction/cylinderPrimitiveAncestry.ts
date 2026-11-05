@@ -401,10 +401,11 @@ function cylinderRadiusChain(
   // pins the pre-edit radius and keeps the edit local. A fillet or chamfer
   // holding a hash-only edge pick keeps the local wall resize too, which
   // leaves the seam in place; when the pick is the boss seam itself the
-  // local resize cannot carry the blend either, and the adapter refuses it
-  // (`resize_left_blend_behind`) rather than leave the blend behind at the
-  // old radius: neither route is correct there yet, so the refusal is the
-  // answer.
+  // kernel's own local resize cannot carry the blend, so the adapter removes
+  // the band, resizes the sharp wall and rebuilds the band (WS6 ladder); a
+  // seam it cannot prove and rebuild exactly, such as a chamfer, still
+  // refuses (`resize_left_blend_behind`) rather than leave the blend behind
+  // at the old radius.
   return booleanOperandSource(
     document,
     selectedBodyId,

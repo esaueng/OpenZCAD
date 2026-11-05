@@ -1,14 +1,14 @@
 {
   "summary": {
-    "qualified": 25,
-    "typed-refusal": 4,
+    "qualified": 26,
+    "typed-refusal": 3,
     "untyped-refusal": 40,
     "wrong": 0,
     "timeout": 0
   },
   "cells": {
     "imported-twin/upright/R1/cap-down": "qualified",
-    "imported-twin/upright/R2/wall-shrink": "typed-refusal",
+    "imported-twin/upright/R2/wall-shrink": "qualified",
     "imported-twin/upright/R3/top-up": "qualified",
     "imported-twin/upright/R3/top-down": "qualified",
     "imported-twin/upright/R3/front-out": "qualified",

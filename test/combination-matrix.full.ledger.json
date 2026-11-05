@@ -1,7 +1,7 @@
 {
   "summary": {
-    "qualified": 699,
-    "typed-refusal": 507,
+    "qualified": 702,
+    "typed-refusal": 504,
     "untyped-refusal": 173,
     "wrong": 13,
     "timeout": 0
@@ -91,7 +91,7 @@
     "box×cylinder/aligned/subtract/no-modifier/step-roundtrip": "qualified",
     "box×cylinder/aligned/subtract/fillet-seam/none": "qualified",
     "box×cylinder/aligned/subtract/fillet-seam/source-grow": "untyped-refusal",
-    "box×cylinder/aligned/subtract/fillet-seam/direct-grow": "typed-refusal",
+    "box×cylinder/aligned/subtract/fillet-seam/direct-grow": "qualified",
     "box×cylinder/aligned/subtract/fillet-seam/remove-blend": "qualified",
     "box×cylinder/aligned/subtract/fillet-seam/reopen": "qualified",
     "box×cylinder/aligned/subtract/chamfer-seam/none": "qualified",
@@ -178,7 +178,7 @@
     "box×cylinder/off-centre/union/no-modifier/step-roundtrip": "qualified",
     "box×cylinder/off-centre/union/fillet-seam/none": "qualified",
     "box×cylinder/off-centre/union/fillet-seam/source-grow": "untyped-refusal",
-    "box×cylinder/off-centre/union/fillet-seam/direct-grow": "typed-refusal",
+    "box×cylinder/off-centre/union/fillet-seam/direct-grow": "qualified",
     "box×cylinder/off-centre/union/fillet-seam/remove-blend": "qualified",
     "box×cylinder/off-centre/union/fillet-seam/reopen": "qualified",
     "box×cylinder/off-centre/union/chamfer-seam/none": "untyped-refusal",
@@ -209,7 +209,7 @@
     "box×cylinder/off-centre/subtract/no-modifier/step-roundtrip": "qualified",
     "box×cylinder/off-centre/subtract/fillet-seam/none": "qualified",
     "box×cylinder/off-centre/subtract/fillet-seam/source-grow": "untyped-refusal",
-    "box×cylinder/off-centre/subtract/fillet-seam/direct-grow": "typed-refusal",
+    "box×cylinder/off-centre/subtract/fillet-seam/direct-grow": "qualified",
     "box×cylinder/off-centre/subtract/fillet-seam/remove-blend": "qualified",
     "box×cylinder/off-centre/subtract/fillet-seam/reopen": "qualified",
     "box×cylinder/off-centre/subtract/chamfer-seam/none": "qualified",

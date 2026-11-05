@@ -1,7 +1,7 @@
 {
   "summary": {
-    "qualified": 25,
-    "typed-refusal": 14,
+    "qualified": 26,
+    "typed-refusal": 13,
     "untyped-refusal": 3,
     "wrong": 0,
     "timeout": 0
@@ -30,7 +30,7 @@
     "box×cylinder/aligned/union/no-modifier/step-roundtrip": "qualified",
     "box×cylinder/aligned/union/fillet-seam/none": "qualified",
     "box×cylinder/aligned/union/fillet-seam/source-grow": "untyped-refusal",
-    "box×cylinder/aligned/union/fillet-seam/direct-grow": "typed-refusal",
+    "box×cylinder/aligned/union/fillet-seam/direct-grow": "qualified",
     "box×cylinder/aligned/union/cap-offset/none": "qualified",
     "box×cylinder/aligned/subtract/no-modifier/none": "qualified",
     "box×cylinder/aligned/subtract/no-modifier/direct-grow": "qualified",
