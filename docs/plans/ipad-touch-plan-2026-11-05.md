@@ -224,11 +224,18 @@ Timing and ownership rules:
      picking.
    - Download blob URLs live for a minute instead of being revoked at click
      time (WebKit could cancel the save).
-8. **Rendering limits.**
-   - Lower pixel ratio during gestures.
-   - Smaller shadow map on coarse pointers or low memory.
-   - `webglcontextlost`/`webglcontextrestored` recovery.
-   - WASM and GPU memory measured on iPad, recorded under W01.
+8. **Rendering limits** (`viewer/renderBudget.ts`).
+   - A coarse-pointer device gets a 2048² key-light shadow map instead of
+     3072² (about 17 MB of GPU memory instead of 38 MB); desktops are
+     unchanged.
+   - A device dropping below 45 frames a second navigates at a 1.25 pixel
+     ratio and gets its full ratio back at rest; once it has needed this it
+     keeps it for the session, so the faster lowered frames cannot flip it
+     back. Fast devices never change resolution.
+   - A lost WebGL context (iPadOS reclaiming a background tab) is restored
+     drawing: the baked environment is rebuilt and the frozen shadow map
+     refreshed.
+   - WASM and GPU memory on iPad stays a device measurement under W01.
 
 Later and optional: Pencil draw-to-sketch shape recognition, and a native iPad
 shell.
