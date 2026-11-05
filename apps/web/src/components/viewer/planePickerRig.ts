@@ -6,6 +6,7 @@ import {
 } from '@openzcad/geometry';
 import {
   createFatLine,
+  DARK_STAGE_PALETTE,
   VIEWPORT_RENDER_ORDER,
   type FatLineResolution
 } from '@openzcad/viewport';
@@ -89,6 +90,11 @@ export const PLANE_PICKER_ORDER: readonly PlaneId[] = ['XY', 'XZ', 'YZ'];
 
 export interface PlanePickerRigOptions {
   resolution?: FatLineResolution;
+  /**
+   * The stage colour behind the panels (`--color-viewport-bg`). Borders are
+   * dimmed toward it rather than made translucent; see `paint`.
+   */
+  backdrop?: THREE.ColorRepresentation;
 }
 
 export interface PlanePickerRig {
@@ -97,6 +103,8 @@ export interface PlanePickerRig {
   targets(): THREE.Object3D[];
   /** Highlights one plane and dims the others, or clears it with null. */
   setHover(plane: PlaneId | null): void;
+  /** Re-dims the borders against a new stage colour, for a theme change. */
+  setBackdrop(color: THREE.ColorRepresentation): void;
   /**
    * Keeps the panels a stable size on screen. `worldPerPixel` is measured at
    * the origin, so the rig reads the same at any zoom — the same trick the
@@ -310,7 +318,6 @@ export function buildPlanePickerRig(
     const border = createFatLine(outline3, {
       color: PLANE_COLOR[plane],
       linewidth: BORDER_WIDTH_PX,
-      opacity: IDLE.border,
       resolution: options.resolution
     });
     border.name = `plane-picker-border-${plane}`;
@@ -322,7 +329,6 @@ export function buildPlanePickerRig(
     const hidden = createFatLine(outline3, {
       color: PLANE_COLOR[plane],
       linewidth: DATUM_HIDDEN_WIDTH_PX,
-      opacity: IDLE.border * HIDDEN_BORDER_SCALE,
       resolution: options.resolution
     });
     hidden.material.depthFunc = THREE.GreaterDepth;
@@ -411,21 +417,42 @@ export function buildPlanePickerRig(
     }
   };
 
+  const backdrop = new THREE.Color(
+    options.backdrop ?? DARK_STAGE_PALETTE.backdropMiddle
+  );
+  /**
+   * Borders stay opaque and are dimmed by mixing their hue toward the stage
+   * colour. A fat line is one quad per segment with round caps, so where two
+   * segments meet the caps overlap: translucent, each overlap blends twice,
+   * and the eight-segment fillets came out as bright beads on a border that
+   * otherwise all but vanished. Opaque overlaps cannot stack.
+   */
+  const dimmed = (plane: PlaneId, strength: number) =>
+    backdrop.clone().lerp(new THREE.Color(PLANE_COLOR[plane]), strength);
+
   const paint = () => {
     for (const [plane, panel] of panels) {
       const look = hovered === null ? IDLE : hovered === plane ? HOVER : DIMMED;
       panel.fillMaterial.opacity = look.fill;
-      panel.border.material.opacity = look.border;
+      panel.border.material.color.copy(dimmed(plane, look.border));
       panel.border.material.linewidth =
         hovered === plane ? HOVER_BORDER_WIDTH_PX : BORDER_WIDTH_PX;
-      panel.hidden.material.opacity = look.border * HIDDEN_BORDER_SCALE;
+      panel.hidden.material.color.copy(
+        dimmed(plane, look.border * HIDDEN_BORDER_SCALE)
+      );
       if (panel.labelMaterial) panel.labelMaterial.opacity = look.label;
     }
   };
 
+  paint();
+
   return {
     group,
     targets: () => [...panels.values()].map((panel) => panel.fill),
+    setBackdrop(color) {
+      backdrop.set(color);
+      paint();
+    },
     setHover(plane) {
       if (plane === hovered) {
         return;

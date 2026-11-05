@@ -2997,6 +2997,9 @@ export function ModelViewer({
       const datumColor = readDatumColor(host);
       datumPlaneRigRef.current?.setColor(datumColor);
       datumAxisRigRef.current?.setColor(datumColor);
+      planePickerRigRef.current?.setBackdrop(
+        readStagePalette(host).backdropMiddle
+      );
       requestRender();
     });
 
@@ -14165,7 +14168,8 @@ export function ModelViewer({
       return;
     }
     const rig = buildPlanePickerRig({
-      resolution: context.fatLineResolution()
+      resolution: context.fatLineResolution(),
+      backdrop: readStagePalette(context.renderer.domElement).backdropMiddle
     });
     // The render loop sizes it against the live camera on the next frame;
     // this only keeps the first frame from drawing a unit-sized sliver.
