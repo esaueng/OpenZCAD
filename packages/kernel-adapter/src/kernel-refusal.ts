@@ -71,7 +71,14 @@ export const UNENUMERATED_CATEGORIES: readonly MissingCategory[] = [];
  * the two want different sentences.
  */
 export type KernelRefusalFamily =
-  'boolean' | 'validation' | 'healing' | 'import' | 'blend' | 'gear' | 'thread';
+  | 'boolean'
+  | 'validation'
+  | 'healing'
+  | 'import'
+  | 'blend'
+  | 'gear'
+  | 'thread'
+  | 'direct-edit';
 
 export interface KernelRefusalInit {
   family: KernelRefusalFamily;
@@ -83,6 +90,13 @@ export interface KernelRefusalInit {
   message: string;
   /** The headline without its operation heading, for callers that add one. */
   reason: string;
+  /**
+   * The kernel's own cause code from `details.reason`, for a family whose
+   * single `code` covers several causes (a refused cylindrical-face resize).
+   */
+  kernelReason?: string;
+  /** The blocking neighbour's surface type, when the kernel named one. */
+  neighborSurfaceType?: string;
   cause?: unknown;
 }
 
@@ -99,6 +113,8 @@ export class KernelRefusal extends Error {
   readonly kernelMessage: string;
   /** The refusal without its operation heading, for callers that add one. */
   readonly reason: string;
+  readonly kernelReason?: string;
+  readonly neighborSurfaceType?: string;
 
   constructor(init: KernelRefusalInit) {
     super(
@@ -111,6 +127,12 @@ export class KernelRefusal extends Error {
     this.kernelCode = init.kernelCode;
     this.kernelMessage = init.kernelMessage;
     this.reason = init.reason;
+    if (init.kernelReason !== undefined) {
+      this.kernelReason = init.kernelReason;
+    }
+    if (init.neighborSurfaceType !== undefined) {
+      this.neighborSurfaceType = init.neighborSurfaceType;
+    }
   }
 }
 
@@ -183,6 +205,10 @@ export interface KernelRefusalRecord {
   operation?: string;
   category: string;
   code: string;
+  /** {@link KernelRefusal.kernelReason}, when the kernel gave one. */
+  reason?: string;
+  /** {@link KernelRefusal.neighborSurfaceType}, when the kernel gave one. */
+  neighborSurfaceType?: string;
 }
 
 /** The record for an error, or undefined when the kernel gave no category. */
@@ -198,7 +224,11 @@ export function kernelRefusalRecordOf(
     family: refusal.family,
     ...(typeof operation === 'string' ? { operation } : {}),
     category: refusal.category,
-    code: refusal.kernelCode
+    code: refusal.kernelCode,
+    ...(refusal.kernelReason ? { reason: refusal.kernelReason } : {}),
+    ...(refusal.neighborSurfaceType
+      ? { neighborSurfaceType: refusal.neighborSurfaceType }
+      : {})
   };
 }
 
