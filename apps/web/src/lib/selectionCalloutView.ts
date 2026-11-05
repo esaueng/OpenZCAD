@@ -87,6 +87,24 @@ function phaseMarker(owner: Document, phase: OperationPhase): HTMLElement {
   return marker;
 }
 
+/** The fold toggle's labels, shared by the chip row and the notice lane. */
+export const REFUSAL_FOLD_LABELS = { more: 'More', less: 'Less' } as const;
+
+/**
+ * Whether a refusal is likely to need folding: more than its headline
+ * sentence, or a headline too long for one line. Kernel diagnoses run to four
+ * sentences (cause, what was tried, what to do next), and spelled out in full
+ * they covered the model they were about. Any sentence start counts ("2 edges
+ * could not…"); an abbreviation may over-fold, which the notice lane corrects
+ * by measuring whether its line actually clips.
+ */
+export function refusalIsExpandable(message: string): boolean {
+  const sentences = message.trim().split(/(?<=[.!?])\s+(?=\S)/);
+  return sentences.length > 1 || message.length > 90;
+}
+
+let refusalIds = 0;
+
 /** The refusal and its ways out, on a row of its own under the chip. */
 function diagnostic(
   owner: Document,
@@ -98,24 +116,30 @@ function diagnostic(
   }
   const row = owner.createElement('span');
   row.className = 'selection-callout-diagnostic';
-  row.setAttribute('role', 'alert');
+  // The sentence alone is the live region: with the toggle inside it, the
+  // toggle's changing label re-announced the whole refusal.
   const message = owner.createElement('span');
   message.className = 'selection-callout-error';
+  message.setAttribute('role', 'alert');
+  message.id = `selection-callout-refusal-${(refusalIds += 1)}`;
   message.textContent = error.message;
   row.append(message);
-  if (error.message.length > 100) {
+  if (refusalIsExpandable(error.message)) {
     row.classList.add('is-expandable');
     const expand = button(
       owner,
       'selection-callout-recovery',
-      'Read more',
+      REFUSAL_FOLD_LABELS.more,
       () => {
         const expanded = row.classList.toggle('is-expanded');
         expand.setAttribute('aria-expanded', String(expanded));
-        expand.textContent = expanded ? 'Less' : 'Read more';
+        expand.textContent = expanded
+          ? REFUSAL_FOLD_LABELS.less
+          : REFUSAL_FOLD_LABELS.more;
       }
     );
     expand.setAttribute('aria-expanded', 'false');
+    expand.setAttribute('aria-controls', message.id);
     row.append(expand);
   }
   const culprit = error.culprit;

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ViewportGridReadout,
   ViewportScaleIndicator,
+  scaleRuleRoom,
   type SketchGridReadoutSink,
   type ViewportScaleSink
 } from './ViewportScaleIndicator';
@@ -13,13 +14,8 @@ describe('ViewportScaleIndicator', () => {
     vi.restoreAllMocks();
   });
 
-  for (const upright of [true, false]) {
-    it(`keeps unchanged label nodes and bitmap dimensions while the ${upright ? 'upright' : 'lying'} rule changes length`, () => {
-      vi.spyOn(window, 'matchMedia').mockReturnValue({
-        matches: upright,
-        addEventListener() {},
-        removeEventListener() {}
-      } as unknown as MediaQueryList);
+  {
+    it('keeps unchanged label nodes and bitmap dimensions while the rule changes length', () => {
       const clearRect = vi.fn();
       vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
         setTransform() {},
@@ -75,16 +71,7 @@ describe('ViewportScaleIndicator', () => {
       );
     });
 
-    it(`draws the rule ${upright ? 'upright beside the rail' : 'lying along the foot on a phone'}`, () => {
-      vi.spyOn(window, 'matchMedia').mockImplementation(
-        (query: string) =>
-          ({
-            matches: upright,
-            media: query,
-            addEventListener() {},
-            removeEventListener() {}
-          }) as unknown as MediaQueryList
-      );
+    it('draws the rule lying along the foot at every width', () => {
       const transforms: number[][] = [];
       vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
         setTransform: (...args: number[]) => transforms.push(args),
@@ -104,21 +91,47 @@ describe('ViewportScaleIndicator', () => {
       const canvas = screen.getByTestId<HTMLCanvasElement>(
         'viewport-scale-rule'
       );
-      expect(root.classList.contains('is-upright')).toBe(upright);
-      // 120px along the rule, 18px across it, whichever way it stands.
+      expect(root.classList.contains('is-upright')).toBe(false);
+      // 120px along the rule, 18px across it.
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      expect([canvas.width, canvas.height]).toEqual(
-        upright
-          ? [Math.round(18 * ratio), Math.round(120 * ratio)]
-          : [Math.round(120 * ratio), Math.round(18 * ratio)]
-      );
+      expect([canvas.width, canvas.height]).toEqual([
+        Math.round(120 * ratio),
+        Math.round(18 * ratio)
+      ]);
       expect(canvas.style.getPropertyValue('--viewport-scale-length')).toBe(
         '120px'
       );
-      // Upright, the lying drawing is turned a quarter: its start at the foot.
-      expect(transforms.at(-1)?.[0]).toBe(upright ? 0 : ratio);
+      expect(transforms.at(-1)?.[0]).toBe(ratio);
     });
   }
+
+  it('ends the rule short of the search bar it shares a row with', () => {
+    const rule = { left: 10, top: 960, bottom: 978 };
+    // A wide stage: the bar starts far enough right for the full rule.
+    expect(scaleRuleRoom(rule, { left: 346, top: 952, bottom: 990 })).toEqual({
+      maxWidthPx: 200,
+      raise: false
+    });
+    // 1280px: the bar starts at 230, so the rule and its value end before it.
+    expect(scaleRuleRoom(rule, { left: 230, top: 756, bottom: 790 })).toEqual({
+      maxWidthPx: 200,
+      raise: false
+    });
+    expect(scaleRuleRoom(rule, { left: 230, top: 952, bottom: 990 })).toEqual({
+      maxWidthPx: 136,
+      raise: false
+    });
+    // Too little room for a readable rule: it steps up over the bar.
+    expect(scaleRuleRoom(rule, { left: 116, top: 952, bottom: 990 })).toEqual({
+      maxWidthPx: 200,
+      raise: true
+    });
+    // No bar, or one in another row: the full rule.
+    expect(scaleRuleRoom(rule, null)).toEqual({
+      maxWidthPx: 200,
+      raise: false
+    });
+  });
 
   it('strokes the rule in the stage ink, not the chrome text colours', () => {
     // The rule sits straight on the stage, so it follows the stage's ink

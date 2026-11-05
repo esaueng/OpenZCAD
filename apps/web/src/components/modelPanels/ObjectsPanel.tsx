@@ -42,6 +42,7 @@ import {
   DEFAULT_BODY_COLOR,
   type BodyId,
   type BodyRepresentation,
+  type FeatureNode,
   type ObjectFolder,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -192,6 +193,37 @@ export function modelBodies({
   return bodies;
 }
 
+/**
+ * Bodies that are an earlier state of a later body rather than an input to
+ * it: the target of a fillet, chamfer, direct edit or any other single-body
+ * step that writes a new body of its own. A Boolean's operands are not here;
+ * they are the sources the result was built from.
+ *
+ * A union rounded twice consumes three bodies named "Union 1" on the way, so
+ * counting them as sources read "4 source bodies" beside a History that shows
+ * a box and a cylinder going in. The earlier states are History's steps.
+ */
+export function earlierBodyVersionIds(
+  features: readonly FeatureNode[]
+): Set<string> {
+  const earlier = new Set<string>();
+  for (const feature of features) {
+    const data = feature.data as {
+      featureKind: string;
+      targetBodyId?: unknown;
+    };
+    if (
+      data.featureKind !== 'boolean' &&
+      typeof data.targetBodyId === 'string' &&
+      feature.bodyId &&
+      feature.bodyId !== data.targetBodyId
+    ) {
+      earlier.add(data.targetBodyId);
+    }
+  }
+  return earlier;
+}
+
 function modelSketches({ features }: Pick<ObjectsSource, 'features'>) {
   return features.filter((feature) => feature.data.featureKind === 'sketch');
 }
@@ -321,7 +353,12 @@ export function ObjectsPanel({
   const allLiveBodyIds = new Set(
     bodies.filter((body) => !body.consumed).map((body) => body.bodyId)
   );
-  const consumedBodies = matchingBodies.filter((body) => body.consumed);
+  // Only true sources go behind the disclosure; an earlier state of a body
+  // still listed is a step in History, not another body.
+  const earlierVersions = earlierBodyVersionIds(features);
+  const consumedBodies = matchingBodies.filter(
+    (body) => body.consumed && !earlierVersions.has(body.bodyId)
+  );
   const showBodies = objectFilter === 'all' || objectFilter === 'bodies';
   const showSketches = objectFilter === 'all' || objectFilter === 'sketches';
   const showPlanes = objectFilter === 'all' || objectFilter === 'planes';

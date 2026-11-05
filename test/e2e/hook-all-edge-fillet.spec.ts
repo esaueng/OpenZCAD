@@ -203,17 +203,17 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   if ((await dismissFillet.count()) > 0) {
     await dismissFillet.first().click();
   }
-  const filletRow = page.locator('.feature-row', { hasText: 'Fillet edges' });
+  const filletRow = page.locator('.feature-row', { hasText: 'Fillet' });
   await expect(filletRow).toBeVisible();
   // U09 phase 7: the row re-arms the fillet in place, its 49 edges picked
   // and its radius on the chip.
   await filletRow.locator('.feature-row-main').click();
-  const edit = page.getByRole('group', { name: 'Edit Fillet edges command' });
+  const edit = page.getByRole('group', { name: 'Edit Fillet command' });
   const chip = page.getByTestId('command-handle-radius');
   await expect(edit).toContainText('49 edges');
   await expect(chip).toHaveText('R 1 mm');
   await enterCommandValue(page, 'radius', '0.5');
-  await finishInPlaceCommand(page, 'Edit Fillet edges');
+  await finishInPlaceCommand(page, 'Edit Fillet');
   await expect
     .poll(async () => (await readBlend(page))?.blendRadius ?? null, {
       timeout: 120_000

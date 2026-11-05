@@ -975,6 +975,37 @@
   font-family: var(--font-ui);
 }
 
+/* A refused operation that never became a step: dashed and in the error
+   tone, under the last row, so it reads as "tried, not built" rather than
+   as a feature that can be selected, reordered or rolled back to. */
+.history-pending-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0 20px;
+  padding: 4px 8px;
+  color: var(--color-error-text);
+  font-size: var(--fs-sm);
+  border: 1px dashed color-mix(in srgb, var(--color-error) 55%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+  cursor: help;
+}
+
+.history-pending-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-pending-state {
+  flex: 0 0 auto;
+  color: var(--color-error-text);
+  font-size: var(--fs-xs);
+}
+
 .history-row-actions {
   display: flex;
   gap: 1px;

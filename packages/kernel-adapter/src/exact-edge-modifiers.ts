@@ -17,6 +17,7 @@ import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
 import {
   countBlendFaces,
   blendFaceRadii,
+  isBlendFace,
   selectionTouchesBlendFace
 } from './exact-brep';
 import {
@@ -744,6 +745,120 @@ export function blendSubsetRemedy(
   return `The kernel could not build these edges together. Try the adjoining edge groups in separate ${featureKind} features.`;
 }
 
+/**
+ * How many closed loops the selection makes when every selected edge lies on
+ * one, or `null` when any edge belongs to an open run.
+ *
+ * A boolean leaves the rim of a unioned cylinder as four quarter arcs, and a
+ * user who clicked one circle reads "4 selected edges" as a miscount — and
+ * "try fewer edges at once" as advice they cannot follow, since the circle is
+ * the smallest thing they can pick. Joined by shared vertex handles, so arcs
+ * that only meet geometrically do not count as one loop.
+ */
+export function closedEdgeLoopCount(
+  kernel: RemusKernel,
+  selected: readonly number[]
+): number | null {
+  if (selected.length === 0) return null;
+  try {
+    const parent = new Map<number, number>();
+    const find = (vertex: number): number => {
+      let root = vertex;
+      while (parent.get(root) !== root) root = parent.get(root)!;
+      parent.set(vertex, root);
+      return root;
+    };
+    const degree = new Map<number, number>();
+    for (const edge of selected) {
+      const vertices = Array.from(kernel.getEdgeVertexHandles(edge));
+      const start = vertices[0];
+      if (start === undefined) return null;
+      const end = vertices[1] ?? start;
+      for (const vertex of [start, end]) {
+        if (!parent.has(vertex)) parent.set(vertex, vertex);
+        degree.set(vertex, (degree.get(vertex) ?? 0) + 1);
+      }
+      parent.set(find(start), find(end));
+    }
+    if ([...degree.values()].some((count) => count !== 2)) return null;
+    return new Set([...parent.keys()].map(find)).size;
+  } catch {
+    return null;
+  }
+}
+
+/** How a refused selection is named at the head of the sentence. */
+function selectionPhrase(
+  kernel: RemusKernel,
+  selected: readonly number[]
+): { phrase: string; count: number } {
+  const loops =
+    selected.length > 1 ? closedEdgeLoopCount(kernel, selected) : null;
+  if (loops !== null && loops < selected.length) {
+    return loops === 1
+      ? { phrase: 'the selected closed edge', count: 1 }
+      : { phrase: `${loops} selected closed edges`, count: loops };
+  }
+  return {
+    phrase: `${selected.length} selected edge${selected.length === 1 ? '' : 's'}`,
+    count: selected.length
+  };
+}
+
+const SURFACE_WORDS: Record<string, string> = {
+  plane: 'flat',
+  cylinder: 'cylindrical',
+  cone: 'conical',
+  sphere: 'spherical',
+  torus: 'rounded'
+};
+
+/**
+ * The kernel could not trim a face beside the selection to the new blend.
+ *
+ * Remus names the face it gave up on (`trimming-failure: blend: trimming
+ * failure on face Id(352)`), and a refusal that survives the whole size
+ * ladder is not a size problem. Measured on a unioned r6 cylinder whose wall
+ * also carries an r2 junction fillet: its top rim is refused with this code
+ * at every radius down to 0.125, by every blend engine, alone or as all four
+ * arcs, and a chamfer is refused the same way — while the same rim rounds
+ * when it is filleted in the same feature as the junction edges.
+ */
+function trimmingFailureAdvice(
+  kernel: RemusKernel,
+  target: number,
+  reported: string | null,
+  featureKind: 'fillet' | 'chamfer',
+  priorBlendFace?: (face: number) => boolean
+): string | null {
+  if (!reported?.includes('trimming-failure')) return null;
+  const face = Number(/face Id\((\d+)\)/.exec(reported)?.[1]);
+  let surface = '';
+  let besideBlend = false;
+  if (Number.isInteger(face)) {
+    try {
+      const word = SURFACE_WORDS[kernel.getSurfaceType(face)];
+      if (word) surface = `${word} `;
+      const ownEdges = new Set(kernel.getFaceEdges(face));
+      besideBlend = Array.from(kernel.getSolidFaces(target)).some(
+        (other) =>
+          other !== face &&
+          isBlendFace(kernel, target, other) &&
+          (priorBlendFace?.(other) ?? true) &&
+          Array.from(kernel.getFaceEdges(other)).some((edge) =>
+            ownEdges.has(edge)
+          )
+      );
+    } catch {
+      // The face only explains the refusal; the code alone still holds.
+    }
+  }
+  const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
+  return besideBlend
+    ? `The modeling engine could not trim the ${surface}face beside it, which also meets an earlier fillet or chamfer. Smaller ${sizes} failed the same way, so the size is not the cause. Try a different edge, or try adding this edge to that earlier feature so both are built together.`
+    : `The modeling engine could not trim the ${surface}face beside it. Smaller ${sizes} failed the same way, so the size is not the cause. Try a different edge, or change the geometry next to it first.`;
+}
+
 export function edgeModifierFailureMessage(
   kernel: RemusKernel,
   target: number,
@@ -768,7 +883,8 @@ export function edgeModifierFailureMessage(
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
   const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
-  const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
+  const named = selectionPhrase(kernel, selected);
+  const prefix = `${label} could not be created on ${named.phrase} with ${dimension} ${size}.`;
   if (featureKind === 'chamfer' && selected.length > 0) {
     try {
       const smooth = new Set(kernel.getSolidSmoothEdges(target));
@@ -864,6 +980,16 @@ export function edgeModifierFailureMessage(
       }
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
     }
+    const trimming = trimmingFailureAdvice(
+      kernel,
+      target,
+      reported,
+      featureKind,
+      priorBlendFace
+    );
+    if (trimming) {
+      return `${prefix} ${trimming}`;
+    }
   } catch {
     // Diagnosis is best-effort; fall through to the generic message.
   }
@@ -871,7 +997,7 @@ export function edgeModifierFailureMessage(
     // No cause was named, but the ladder proved the size is not it: telling
     // the user to shrink the value sent them round the same refusal.
     const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
-    if (selected.length === 1) {
+    if (named.count === 1) {
       return `${prefix} Smaller ${sizes} were refused too. The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.`;
     }
     const gerund = featureKind === 'fillet' ? 'rounding' : 'chamfering';

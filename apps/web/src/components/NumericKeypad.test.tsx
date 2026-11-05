@@ -1,8 +1,26 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLayoutEffect } from 'react';
 import { NumericKeypad, type KeypadRequest } from './NumericKeypad';
 import { prepareCommandChip } from '../lib/inPlace/chipNames';
+
+/** Answers `(pointer: fine)` as a mouse (true) or a touch screen (false). */
+function stubPointer(fine: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query === '(pointer: fine)' ? fine : false,
+    media: query,
+    onchange: null,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    dispatchEvent: () => false
+  }));
+}
+
+// Most of this file exercises the keys and unit chips, which a touch screen
+// opens with; the fine-pointer fold has its own suite below.
+beforeEach(() => stubPointer(false));
 
 function setup(initial: string, selectInitial?: boolean) {
   const onPreview = vi.fn();
@@ -179,11 +197,14 @@ describe('numeric entry first character', () => {
       const keypad = screen.getByRole('dialog', { name: 'Height value' });
       notify(); // ResizeObserver delivers once even without a size change.
       anchor.current?.({ x: 800, y: 100 });
-      expect(keypad).toHaveStyle({ left: '684px', top: '114px' });
+      // No room right of the anchor in a 1000px host: it stands to the left,
+      // top-aligned with the chip rather than under it.
+      expect(keypad).toHaveStyle({ left: '554px', top: '96px' });
       anchor.current?.({ x: 200, y: 400 });
-      expect(keypad).toHaveStyle({ left: '684px', top: '114px' });
+      expect(keypad).toHaveStyle({ left: '554px', top: '96px' });
       Object.defineProperty(host, 'clientWidth', { value: 390 });
       notify();
+      // Neither side fits a phone: it falls back under the anchor.
       expect(parseFloat(keypad.style.left) + 232).toBeLessThanOrEqual(382);
       anchor.current?.({ x: 200, y: 400 });
       expect(keypad.style.top).toBe('114px');
@@ -194,7 +215,7 @@ describe('numeric entry first character', () => {
     }
   });
 
-  it('uses the rig anchor rather than the transformed chip bounds for its first placement', () => {
+  it('stands beside the chip it was opened from, clear of its painted box', () => {
     const host = document.createElement('div');
     Object.defineProperties(host, {
       clientWidth: { value: 1000 },
@@ -241,9 +262,10 @@ describe('numeric entry first character', () => {
       { container: host }
     );
     const keypad = screen.getByRole('dialog', { name: 'Radius value' });
+    // Right of the chip's painted box (455–545 × 274–294), top-aligned.
     expect(keypad).toHaveStyle({
-      left: '384px',
-      top: '314px',
+      left: '559px',
+      top: '270px',
       visibility: 'visible'
     });
     expect(screen.getByRole('textbox')).toHaveFocus();
@@ -582,5 +604,79 @@ describe('numeric keypad names', () => {
     expect(screen.getByRole('textbox', { name: 'Diameter' })).toHaveValue('6');
     // The keypad still shows the compact glyph.
     expect(screen.getByText('⌀')).toBeTruthy();
+  });
+});
+
+describe('on a mouse-and-keyboard device', () => {
+  beforeEach(() => stubPointer(true));
+
+  it('folds the digits and unit chips away, keeping Apply', () => {
+    setup('4');
+    const toggle = screen.getByRole('button', { name: 'Keypad' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: '7' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Entry unit' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Apply height' })).toBeEnabled();
+    expect(
+      screen.getByText('Other units: 2cm, 1in')
+    ).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: '7' })).toBeInTheDocument();
+    expect(screen.getByText('Enter in')).toBeInTheDocument();
+  });
+});
+
+describe('a refused value', () => {
+  it('reads as refused, with Apply off and saying why', () => {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'edge',
+          label: 'Radius',
+          initial: '1',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={() => undefined}
+        onCommit={() => undefined}
+        onCancel={() => undefined}
+        commitDisabled
+        commitRefused
+        commitDisabledReason="This value did not build. The note below says why."
+      />
+    );
+    const keypad = screen.getByRole('dialog', { name: 'Radius value' });
+    expect(keypad).toHaveAttribute('data-state', 'refused');
+    const apply = screen.getByRole('button', { name: 'Apply radius' });
+    expect(apply).toBeDisabled();
+    expect(apply).toHaveAccessibleDescription(
+      'This value did not build. The note below says why.'
+    );
+  });
+
+  it('stays neutral while the value is only being checked', () => {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'edge',
+          label: 'Radius',
+          initial: '1',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={() => undefined}
+        onCommit={() => undefined}
+        onCancel={() => undefined}
+        commitDisabled
+      />
+    );
+    expect(
+      screen.getByRole('dialog', { name: 'Radius value' })
+    ).toHaveAttribute('data-state', 'checking');
   });
 });

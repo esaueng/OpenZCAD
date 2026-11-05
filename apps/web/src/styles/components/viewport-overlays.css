@@ -15,8 +15,14 @@
   pointer-events: none;
 }
 
-/* The transparent SVG stays click-through; visible faces own click and drag. */
+/* The transparent SVG stays click-through; visible faces own click and drag.
+   Drawn at --cube-size: its viewBox stays in the cube's own 88-unit space,
+   and the viewer paints the cube to the SVG's box (orientationCubeOverlay),
+   so the canvas cube and the click targets scale together. At 88px the face
+   labels were 9px and barely legible. */
 .orientation-cube {
+  width: var(--cube-size);
+  height: var(--cube-size);
   pointer-events: none;
   /* The box hugs the cube; triad tips may reach past it in some views. */
   overflow: visible;
@@ -112,8 +118,9 @@
   /* Drawn on the cube's own facets, so it follows the cube's palette rather
      than --color-text: the chrome and the cube need not turn together. */
   fill: var(--color-cube-label);
-  font-size: 9px;
-  font-weight: var(--fw-medium);
+  /* In cube units: 10 of 88 is about 12.7px at the 112px cube. */
+  font-size: 10px;
+  font-weight: var(--fw-semibold, 600);
   letter-spacing: 0.02em;
   text-anchor: middle;
   dominant-baseline: central;

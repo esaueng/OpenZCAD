@@ -1535,8 +1535,35 @@ describe('docked panels hugging their content', () => {
       ...STAGE,
       naturals: { parameters: 100, bodies: 60, history: 150 }
     });
-    expect(unfit.panels).toEqual(plain.panels);
+    // Except beside History: a panel at its default weight hugs its rows,
+    // and History, which always fills, takes what they leave.
+    expect(unfit.panels.bodies!.h).toBe(60);
+    expect(unfit.panels.parameters!.h).toBe(100);
+    expect(unfit.panels.history!.h).toBeCloseTo(
+      unfit.columns[0]!.h - 160 - PANEL_STACK_GAP * 2,
+      6
+    );
+    expect(unfit.panels.history!.h).toBeGreaterThan(plain.panels.history!.h);
     expect(unfit.columns[0]!.contentHeight).toBe(unfit.columns[0]!.h);
+    // A panel the user has sized keeps its share.
+    const sized = computePanelGeometry(
+      {
+        ...setOption(column(), 'hug', false),
+        weights: { ...column().weights, bodies: 2 }
+      },
+      { ...STAGE, naturals: { parameters: 100, bodies: 60, history: 150 } }
+    );
+    expect(sized.panels.bodies!.h).toBeGreaterThan(60);
+    // And without History in the column, every panel fills its share.
+    const apart = computePanelGeometry(
+      setOption(
+        normalizePanelLayout({ right: [['parameters', 'bodies']] }),
+        'hug',
+        false
+      ),
+      { ...STAGE, naturals: { parameters: 100, bodies: 60 } }
+    );
+    expect(apart.panels.bodies!.h).toBeGreaterThan(60);
     expect(defaultPanelLayout().options.hug).toBe(false);
     // A stored layout without the option fills, as a new one does; the
     // `fit` key it replaced defaulted on and is ignored.

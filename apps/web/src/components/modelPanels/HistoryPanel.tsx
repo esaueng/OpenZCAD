@@ -43,6 +43,7 @@ export type HistoryPanelProps = Pick<
   | 'parameterValues'
   | 'units'
   | 'historyDetails'
+  | 'pendingHistoryStep'
   | 'onSelectFeature'
   | 'onToggleBodyVisibility'
   | 'onToggleSketchVisibility'
@@ -71,6 +72,7 @@ export function HistoryPanel({
   parameterValues,
   units,
   historyDetails,
+  pendingHistoryStep,
   onSelectFeature,
   onToggleBodyVisibility,
   onToggleSketchVisibility,
@@ -103,6 +105,7 @@ export function HistoryPanel({
         }
         parameterValues={parameterValues}
         units={units}
+        pendingStep={pendingHistoryStep ?? null}
         findOpen={find.open}
         onCloseFind={find.close}
         onSelectFeature={onSelectFeature}

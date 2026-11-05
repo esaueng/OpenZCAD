@@ -8,7 +8,12 @@ import type {
   FeatureNode
 } from '@openzcad/shared';
 import { DEFAULT_BODY_COLOR } from '@openzcad/shared';
-import { modelBodies, ObjectsPanel, objectCount } from './ObjectsPanel';
+import {
+  earlierBodyVersionIds,
+  modelBodies,
+  ObjectsPanel,
+  objectCount
+} from './ObjectsPanel';
 import { useObjectsView } from './panelViews';
 
 function feature(
@@ -382,5 +387,58 @@ describe('ObjectsPanel', () => {
     expect(screen.queryByRole('button', { name: 'Source' })).toBeNull();
     await user.click(screen.getByRole('button', { name: '1 source body' }));
     expect(screen.getByRole('button', { name: 'Source' })).toBeInTheDocument();
+  });
+
+  it('counts a union rounded twice as two sources, not four', async () => {
+    const user = userEvent.setup();
+    const box = body('box', 'Box 1', true);
+    const cylinder = body('cylinder', 'Cylinder 1', true);
+    const union = body('union', 'Union 1', true);
+    const rounded = body('rounded', 'Union 1', true);
+    const final = body('final', 'Union 1');
+    const features = [
+      feature(1, { bodyId: box.bodyId }),
+      feature(2, { bodyId: cylinder.bodyId }),
+      feature(3, {
+        bodyId: union.bodyId,
+        data: {
+          featureKind: 'boolean',
+          operation: 'union',
+          targetBodyIds: [box.bodyId, cylinder.bodyId]
+        }
+      }),
+      feature(4, {
+        bodyId: rounded.bodyId,
+        data: { featureKind: 'fillet', targetBodyId: union.bodyId }
+      } as Partial<FeatureNode>),
+      feature(5, {
+        bodyId: final.bodyId,
+        data: { featureKind: 'fillet', targetBodyId: rounded.bodyId }
+      } as Partial<FeatureNode>),
+      // An in-place edit writes no body of its own.
+      feature(6, {
+        bodyId: final.bodyId,
+        data: { featureKind: 'direct-edit', targetBodyId: final.bodyId }
+      } as Partial<FeatureNode>)
+    ];
+    expect([...earlierBodyVersionIds(features)].sort()).toEqual(
+      [rounded.bodyId, union.bodyId].sort()
+    );
+    renderPanel({
+      features,
+      representations: Object.fromEntries(
+        [box, cylinder, union, rounded, final].map((entry) => [
+          entry.bodyId,
+          entry
+        ])
+      )
+    });
+    await user.click(screen.getByRole('button', { name: '2 source bodies' }));
+    expect(screen.getByRole('button', { name: 'Box 1' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Cylinder 1' })
+    ).toBeInTheDocument();
+    // Only the live result is a "Union 1" row.
+    expect(screen.getAllByRole('button', { name: 'Union 1' })).toHaveLength(1);
   });
 });
