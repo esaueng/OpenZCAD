@@ -85,9 +85,9 @@ export function presentedDiagnostics(
   // reading its words. Keyed by the message because that is what `warnings`
   // holds; a message that repeats across features shares one category, which
   // is true by construction — the same sentence came from the same refusal.
-  const categories = new Map(
+  const refusals = new Map(
     (featureWarnings ?? []).flatMap((entry) =>
-      entry.kernelRefusal ? [[entry.message, entry.kernelRefusal.category]] : []
+      entry.kernelRefusal ? [[entry.message, entry.kernelRefusal] as const] : []
     )
   );
   const rows: DiagnosticRow[] = [];
@@ -96,7 +96,8 @@ export function presentedDiagnostics(
     const match = FEATURE_PREFIX.exec(warning);
     const featureName = match?.[1] ?? null;
     const body = (match ? warning.slice(match[0].length) : warning).trim();
-    const category = categories.get(warning);
+    const refusal = refusals.get(warning);
+    const category = refusal?.category;
     const classified = category ? { category } : {};
     const rewrite = REWRITES.find(({ pattern }) => pattern.test(body));
     if (rewrite) {
@@ -109,7 +110,7 @@ export function presentedDiagnostics(
       });
       continue;
     }
-    const plain = plainRefusal(body, category);
+    const plain = plainRefusal(body, refusal);
     const message = plain.message
       .replace(INTERNAL_ID, '')
       .replace(/\s{2,}/g, ' ')
