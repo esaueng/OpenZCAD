@@ -420,8 +420,24 @@ test('changing FOV in orthographic keeps framing when returning to perspective',
   await projection.click();
   await expect(projection).toHaveAttribute('aria-pressed', 'true');
   const { box } = await project(page);
-  const middleY = (box!.min[1]! + box!.max[1]!) / 2;
-  const middleZ = (box!.min[2]! + box!.max[2]!) / 2;
+  const target = await canvas(page).evaluate(
+    (element) =>
+      new Promise<[number, number, number]>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-input-state', {
+            detail: {
+              resolve: (state: {
+                camera: { target: [number, number, number] };
+              }) => resolve(state.camera.target)
+            }
+          })
+        );
+      })
+  );
+  // FOV changes preserve the orbit target's plane. Fit can pan that target
+  // away from the body centre to keep the model clear of open panels.
+  const middleY = target[1];
+  const middleZ = target[2];
   const points: [number, number, number][] = [
     [box!.min[0]!, middleY, middleZ],
     [box!.max[0]!, middleY, middleZ]
@@ -748,9 +764,7 @@ test('a pending Move copy follows X-ray opacity and edge styling', async ({
   const controls = page.getByRole('form', { name: 'Move controls' });
   await openMoveOptions(controls);
   await controls.getByLabel('Move X in mm').fill('40');
-  await controls
-    .getByRole('checkbox', { name: 'Keep original' })
-    .check();
+  await controls.getByRole('checkbox', { name: 'Keep original' }).check();
   await expect(canvas(page)).toHaveAttribute(
     'data-e2e-move-copy-preview',
     'true'
