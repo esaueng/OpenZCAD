@@ -1753,17 +1753,15 @@ export function StartScreen({
                   project.revisionCount
                 } ${project.revisionCount === 1 ? 'save' : 'saves'}`}
               >
-                {/* The time is what tells a part's recovery copies apart, so
-                    the date clips before it does. */}
-                <span className="start-tile-date">
-                  {formatLastEdited(project.updatedAt)}
-                </span>
-                {recoveryOf !== null && (
-                  <span className="start-tile-clock">
-                    {` · ${formatTime(new Date(project.updatedAt))}`}
-                  </span>
-                )}
+                {formatLastEdited(project.updatedAt)}
               </time>
+              {/* The time is what tells a part's recovery copies apart, so
+                  the date clips before it does. */}
+              {recoveryOf !== null && (
+                <span className="start-tile-clock">
+                  {`· ${formatTime(new Date(project.updatedAt))}`}
+                </span>
+              )}
             </span>
             {/* The list has a Saves column; a card leaves the count out. */}
             {layout === 'list' && (

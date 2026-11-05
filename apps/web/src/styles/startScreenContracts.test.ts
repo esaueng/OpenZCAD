@@ -214,7 +214,9 @@ describe('start screen shelf clip', () => {
 describe('start screen review follow-ups', () => {
   // 5 Nov 2026 review of the Projects page.
   it("clips a recovery copy's date before its time", () => {
-    expect(rule(css, '.start-tile-date')).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(css, '.start-tile-meta time')).toMatch(
+      /text-overflow:\s*ellipsis/
+    );
     expect(rule(css, '.start-tile-clock')).toMatch(/flex:\s*none/);
   });
 

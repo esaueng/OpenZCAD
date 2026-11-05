@@ -1568,15 +1568,10 @@
 }
 
 .start-tile-meta time {
-  display: inline-flex;
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.start-tile-date {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Kept whole: it tells a part's recovery copies apart. */
