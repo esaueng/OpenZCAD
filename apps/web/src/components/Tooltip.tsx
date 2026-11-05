@@ -7,12 +7,14 @@ import {
   useRef,
   useState,
   type FocusEventHandler,
+  type MouseEventHandler,
   type PointerEventHandler,
   type ReactElement,
   type ReactNode,
   type Ref
 } from 'react';
 import { platformShortcutLabel } from '../lib/platformShortcut';
+import { isTouchLongPress } from '../lib/touchLongPress';
 import { ShortcutKeys } from './ShortcutKeys';
 import { createPortal } from 'react-dom';
 
@@ -25,6 +27,7 @@ interface TooltipTriggerProps {
   onPointerEnter?: PointerEventHandler<HTMLElement>;
   onPointerLeave?: PointerEventHandler<HTMLElement>;
   onPointerDown?: PointerEventHandler<HTMLElement>;
+  onContextMenu?: MouseEventHandler<HTMLElement>;
   onFocus?: FocusEventHandler<HTMLElement>;
   onBlur?: FocusEventHandler<HTMLElement>;
 }
@@ -265,6 +268,18 @@ export function Tooltip({
     closeTooltip(false);
   };
 
+  // A finger cannot hover, so holding it on the trigger shows the help
+  // (lib/touchLongPress.ts), unless the trigger has a menu of its own.
+  const onContextMenu: MouseEventHandler<HTMLElement> = (event) => {
+    trigger.props.onContextMenu?.(event);
+    if (event.defaultPrevented || !isTouchLongPress(event.nativeEvent)) {
+      return;
+    }
+    event.preventDefault();
+    dismissedRef.current = false;
+    openTooltip();
+  };
+
   const onFocus: FocusEventHandler<HTMLElement> = (event) => {
     trigger.props.onFocus?.(event);
     const pressed = pressedRef.current;
@@ -459,6 +474,7 @@ export function Tooltip({
     onPointerEnter,
     onPointerLeave,
     onPointerDown,
+    onContextMenu,
     onFocus,
     onBlur
   });

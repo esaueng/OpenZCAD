@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import {
   Camera,
   Grid3x3,
+  ListPlus,
+  Magnet,
   Maximize2,
   Redo2,
   Ruler,
@@ -27,6 +29,8 @@ import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
 import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import type { TouchModifiers } from './viewer/touchNavigation';
 
 /**
  * Every standard view, in reading order down the flyout. Back, left and
@@ -107,6 +111,12 @@ interface ViewerToolbarProps {
   sectionOutline: SectionOutlineState;
   /** Document units, for the cut area this reports. */
   units: string;
+  /**
+   * Toggles that stand in for modifier keys on a touch screen (L02). Shown
+   * only for a coarse pointer, and only when the workspace owns them.
+   */
+  touchModifiers?: TouchModifiers;
+  onTouchModifiersChange?(next: TouchModifiers): void;
 }
 
 export const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
@@ -154,9 +164,12 @@ export function ViewerToolbar({
   onSectionFlip,
   onExportSectionDxf,
   sectionOutline,
-  units
+  units,
+  touchModifiers,
+  onTouchModifiersChange
 }: ViewerToolbarProps) {
   const keymap = useKeymap();
+  const coarsePointer = useMediaQuery('(pointer: coarse)');
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -370,6 +383,49 @@ export function ViewerToolbar({
           <Redo2 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
+      {coarsePointer && touchModifiers && onTouchModifiersChange && (
+        <>
+          <span className="rail-divider" aria-hidden="true" />
+          <Tooltip
+            label="Multi-select"
+            description="Taps add to or remove from the selection, as Shift or Ctrl does"
+          >
+            <button
+              type="button"
+              className={`rail-button ${touchModifiers.multiSelect ? 'active' : ''}`}
+              onClick={() =>
+                onTouchModifiersChange({
+                  ...touchModifiers,
+                  multiSelect: !touchModifiers.multiSelect
+                })
+              }
+              aria-label="Multi-select"
+              aria-pressed={touchModifiers.multiSelect}
+            >
+              <ListPlus size={16} aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <Tooltip
+            label="Free values"
+            description="Drags and sketching ignore snaps and inference, as Shift does"
+          >
+            <button
+              type="button"
+              className={`rail-button ${touchModifiers.freeValues ? 'active' : ''}`}
+              onClick={() =>
+                onTouchModifiersChange({
+                  ...touchModifiers,
+                  freeValues: !touchModifiers.freeValues
+                })
+              }
+              aria-label="Free values"
+              aria-pressed={touchModifiers.freeValues}
+            >
+              <Magnet size={16} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        </>
+      )}
       <span className="rail-divider" aria-hidden="true" />
       {onMeasure && (
         // First of the viewport group, as on View mode's rail: a reading

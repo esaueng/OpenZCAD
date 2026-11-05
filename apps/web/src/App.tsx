@@ -30241,6 +30241,7 @@ export function App() {
             canRedo={!viewMode && redoAvailable}
             onUndo={handleUndo}
             onRedo={handleRedo}
+            touchHistoryGestures={appSettings.viewport.touchHistoryGestures}
             key={`workspace-view-${resumeViewGeneration}`}
             initialView={initialView}
             onViewChange={handleViewportChange}

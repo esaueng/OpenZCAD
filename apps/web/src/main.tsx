@@ -18,6 +18,7 @@ import '@fontsource/geist-mono/latin-500.css';
 import { installRuntimeErrorCapture } from './lib/activityLog';
 import { mark } from './lib/perf';
 import { loadWhenOnline } from './lib/staleChunk';
+import { installTouchLongPress } from './lib/touchLongPress';
 import './theme/tokens.css';
 import './styles/app.css';
 
@@ -55,6 +56,8 @@ if (import.meta.env.VITE_E2E === '1') {
 
 // Uncaught errors join the activity log (Settings › Activity log).
 installRuntimeErrorCapture();
+// A finger's hold opens context menus and help the chrome otherwise hides.
+installTouchLongPress();
 mark('bundle.evaluated');
 // Prefetch every on-demand chunk once the page has settled. Not in e2e
 // builds, whose specs assert which chunks a flow loads. The helper itself
