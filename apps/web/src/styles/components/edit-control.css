@@ -616,6 +616,9 @@
    the search bar. */
 .edit-refusal.is-bar {
   flex: 0 1 auto;
+  /* The bottom lane lets the stage take clicks through it; its remedies
+     (Keep, Try, Why?) are controls and take their own. */
+  pointer-events: auto;
 }
 
 .edit-refusal.is-bar .edit-refusal-row {
