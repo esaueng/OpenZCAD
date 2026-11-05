@@ -14,6 +14,17 @@ import {
   vec
 } from './support/combination-oracle';
 import { defineLedgerSuite } from './support/combination-matrix-suite';
+import {
+  convexCircleChange,
+  expectedVolume,
+  importedTwinCells,
+  initialModel,
+  runTwinCell,
+  TWIN_VARIANTS,
+  twinCampaignCells,
+  twinReproduction,
+  twinSmokeCells
+} from './support/imported-twin';
 
 /**
  * K10 CI slice: the sphere × cylinder first slice plus one representative
@@ -128,10 +139,39 @@ describe('K10 oracles agree with closed forms', () => {
     );
   });
 
+  it('closes an equal-radius corner as a sphere octant and integrates a tilted post', () => {
+    // A convex fillet of radius r round a circular edge of radius r (a
+    // corner round meeting an equal-radius bottom blend) adds a quarter turn
+    // per corner; with the round's own column the corner is a sphere octant,
+    // so the full turn removes π r³/3 on its own.
+    expect(convexCircleChange(4, 'fillet', 4)).toBeCloseTo(
+      (-Math.PI * 4 ** 3) / 3,
+      9
+    );
+    // The integrated overlap path agrees with the closed-form one when the
+    // post stands upright.
+    const upright = initialModel(
+      TWIN_VARIANTS.find((variant) => variant.id === 'tilted-unblended')!
+    );
+    const closed = expectedVolume({ ...upright, tilt: undefined });
+    const integrated = expectedVolume({
+      ...upright,
+      tilt: { x: 0, y: 0, z: 0 }
+    });
+    expect(Math.abs(integrated.volume - closed.volume)).toBeLessThan(
+      Math.max(4 * integrated.error, 1e-6 * closed.volume)
+    );
+  });
+
   it('keeps cell ids unique and splits the matrix between CI and the campaign', () => {
     const ids = allCells().map((cell) => cell.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(smokeCells().length + campaignCells().length).toBe(ids.length);
+    const twins = importedTwinCells().map((cell) => cell.id);
+    expect(new Set(twins).size).toBe(twins.length);
+    expect(twinSmokeCells().length + twinCampaignCells().length).toBe(
+      twins.length
+    );
   });
 });
 
@@ -139,4 +179,11 @@ defineLedgerSuite(
   'K10 combination matrix: CI slice',
   new URL('./combination-matrix.ledger.json', import.meta.url),
   smokeCells()
+);
+
+defineLedgerSuite(
+  'K10 imported twin: CI slice',
+  new URL('./combination-matrix.imported-twin.ledger.json', import.meta.url),
+  twinSmokeCells(),
+  { run: runTwinCell, reproduction: twinReproduction }
 );
