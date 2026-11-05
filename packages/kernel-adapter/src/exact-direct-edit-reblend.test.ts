@@ -122,7 +122,8 @@ function ladder(
     axisDirection: AXIS,
     axisTolerance: 1e-6,
     radiusTolerance: 6e-5,
-    resize: (sharp, wall) => kernel.resizeCylindricalFace(sharp, wall, newRadius)
+    resize: (sharp, wall) =>
+      kernel.resizeCylindricalFace(sharp, wall, newRadius)
   });
 }
 

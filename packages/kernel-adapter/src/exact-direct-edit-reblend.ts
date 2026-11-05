@@ -278,7 +278,9 @@ export function resizeWallThroughBlends(
   );
   const sharpWalls = wallsAt(sharp, input.sourceRadius);
   if (sharpWalls.length !== 1) {
-    throw new Error('The wall could not be found once its blends were removed.');
+    throw new Error(
+      'The wall could not be found once its blends were removed.'
+    );
   }
   const sharpEdgeCounts = input.blends.map(
     (blend) => supportEdges(kernel, sharp, sharpWalls, blend.support).length
@@ -293,7 +295,9 @@ export function resizeWallThroughBlends(
     const walls = wallsAt(output, input.newRadius);
     const edges = supportEdges(kernel, output, walls, blend.support);
     if (walls.length === 0 || edges.length !== sharpEdgeCounts[index]) {
-      throw new Error('The resized wall does not meet a blend support as before.');
+      throw new Error(
+        'The resized wall does not meet a blend support as before.'
+      );
     }
     // Exact only: a sampled band would be a silent approximation.
     const rebuilt = kernel.filletDetailed(
@@ -346,7 +350,9 @@ export function resizeWallThroughBlends(
     pending.splice(index, 1);
   }
   if (pending.length > 0) {
-    throw new Error('Rebuilding the blends added a band the wall did not have.');
+    throw new Error(
+      'Rebuilding the blends added a band the wall did not have.'
+    );
   }
 
   // The material the removal took and the material the re-blend puts back
