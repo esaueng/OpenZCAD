@@ -707,3 +707,78 @@ describe('the section view help', () => {
     );
   });
 });
+
+describe('touch modifier toggles', () => {
+  function renderWithModifiers(coarse: boolean) {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: coarse && query === '(pointer: coarse)',
+          media: query,
+          addEventListener() {},
+          removeEventListener() {}
+        }) as unknown as MediaQueryList
+    );
+    const onTouchModifiersChange = vi.fn();
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={{ showGrid: true, displayMode: 'shaded-edges' }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+        touchModifiers={{ multiSelect: true, freeValues: false }}
+        onTouchModifiersChange={onTouchModifiersChange}
+      />
+    );
+    return onTouchModifiersChange;
+  }
+
+  it('offers Multi-select and Free values to a coarse pointer', () => {
+    try {
+      const onChange = renderWithModifiers(true);
+      const multi = screen.getByRole('button', { name: 'Multi-select' });
+      const free = screen.getByRole('button', { name: 'Free values' });
+      expect(multi).toHaveAttribute('aria-pressed', 'true');
+      expect(free).toHaveAttribute('aria-pressed', 'false');
+      fireEvent.click(free);
+      expect(onChange).toHaveBeenLastCalledWith({
+        multiSelect: true,
+        freeValues: true
+      });
+      fireEvent.click(multi);
+      expect(onChange).toHaveBeenLastCalledWith({
+        multiSelect: false,
+        freeValues: false
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps them off a mouse or trackpad rail, which has the keys', () => {
+    try {
+      renderWithModifiers(false);
+      expect(screen.queryByRole('button', { name: 'Multi-select' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Free values' })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

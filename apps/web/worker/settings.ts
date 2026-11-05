@@ -343,7 +343,13 @@ export function parseUpdateAppSettingsRequest(
         xrayOpacity: optionalBoundedNumber(
           viewport.xrayOpacity,
           XRAY_OPACITY_BOUNDS
-        )
+        ),
+        // Optional, like zoomToCursor: a client from before touch gestures
+        // keeps saving, and its save carries the stored value forward.
+        touchHistoryGestures:
+          typeof viewport.touchHistoryGestures === 'boolean'
+            ? viewport.touchHistoryGestures
+            : DEFAULT_APP_SETTINGS.viewport.touchHistoryGestures
       },
       sketching: {
         gridVisible:
@@ -947,7 +953,8 @@ export function settingsRequestOmitsKeymap(body: unknown): boolean {
 }
 
 /** Viewport preferences newer than some clients that still save settings. */
-export type CarriedViewportField = 'fieldOfView' | 'xrayOpacity';
+export type CarriedViewportField =
+  'fieldOfView' | 'xrayOpacity' | 'touchHistoryGestures';
 
 /**
  * The viewport preferences a settings PATCH leaves out because its client
@@ -956,7 +963,11 @@ export type CarriedViewportField = 'fieldOfView' | 'xrayOpacity';
 export function settingsRequestOmittedViewportFields(
   body: unknown
 ): CarriedViewportField[] {
-  const fields: CarriedViewportField[] = ['fieldOfView', 'xrayOpacity'];
+  const fields: CarriedViewportField[] = [
+    'fieldOfView',
+    'xrayOpacity',
+    'touchHistoryGestures'
+  ];
   if (!body || typeof body !== 'object') return fields;
   const settings = (body as Record<string, unknown>).settings;
   if (!settings || typeof settings !== 'object') return fields;
@@ -1038,7 +1049,10 @@ export async function updateAppSettings(
   if (options.keepStoredViewportFields?.length) {
     const viewport = { ...settings.viewport };
     for (const field of options.keepStoredViewportFields) {
-      viewport[field] = current.settings.viewport[field] ?? viewport[field];
+      // One field at a time keeps each value with its own type.
+      Object.assign(viewport, {
+        [field]: current.settings.viewport[field] ?? viewport[field]
+      });
     }
     settings = { ...settings, viewport };
   }

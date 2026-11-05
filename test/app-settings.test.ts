@@ -768,6 +768,38 @@ describe('application settings', () => {
     });
   });
 
+  it('reads two- and three-finger history taps as on unless switched off', () => {
+    // Absent from settings written before touch gestures existed.
+    expect(normalizeAppSettings({}).viewport.touchHistoryGestures).toBe(true);
+    expect(
+      normalizeAppSettings({ viewport: { touchHistoryGestures: 'no' } })
+        .viewport.touchHistoryGestures
+    ).toBe(true);
+    expect(
+      normalizeAppSettings({ viewport: { touchHistoryGestures: false } })
+        .viewport.touchHistoryGestures
+    ).toBe(false);
+
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.viewport.touchHistoryGestures = false;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings },
+        'development'
+      ).settings.viewport.touchHistoryGestures
+    ).toBe(false);
+    const legacy = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.touchHistoryGestures;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: legacy },
+        'development'
+      ).settings.viewport.touchHistoryGestures
+    ).toBe(true);
+  });
+
   it('clamps an out-of-range delay at the account boundary too', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.files = {

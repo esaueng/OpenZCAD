@@ -393,7 +393,11 @@ import {
   type DatumAxisRigInput
 } from './viewer/datumAxisRig';
 import { AssemblyViewport } from './viewer/assemblyViewport';
-import { createTouchNavigation } from './viewer/touchNavigation';
+import {
+  createTouchNavigation,
+  NO_TOUCH_MODIFIERS,
+  type TouchModifiers
+} from './viewer/touchNavigation';
 import type { AssemblyViewModel } from '../lib/assembly/assemblyView';
 import { useAssemblyRuntime } from '../lib/assembly/assemblyRuntime';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
@@ -1349,6 +1353,11 @@ export interface ModelViewerProps {
   /** A two-finger tap undoes and a three-finger tap redoes (L02). */
   onTouchHistory?(step: 'undo' | 'redo'): void;
   /**
+   * On-screen stand-ins for modifier keys (L02): multi-select toggles what a
+   * pick adds or removes, free values drops snapping and inference.
+   */
+  touchModifiers?: TouchModifiers;
+  /**
    * The Assemble workspace's view (AS02): component bodies drawn at their
    * solved poses, the rest dimmed, joint glyphs, and the primary button
    * taken over for dragging components and picking joint frames. Null (or
@@ -2234,6 +2243,7 @@ export function ModelViewer({
   viewportImageRef,
   onContextMenu,
   onTouchHistory,
+  touchModifiers = NO_TOUCH_MODIFIERS,
   assemblyView = null
 }: ModelViewerProps) {
   if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
@@ -2349,6 +2359,8 @@ export function ModelViewer({
   onContextMenuRef.current = onContextMenu;
   const onTouchHistoryRef = useRef(onTouchHistory);
   onTouchHistoryRef.current = onTouchHistory;
+  const touchModifiersRef = useRef(touchModifiers);
+  touchModifiersRef.current = touchModifiers;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
@@ -3899,6 +3911,15 @@ export function ModelViewer({
      * cancel or next press.
      */
     const sketchMovePointerGate = new SketchMovePointerGate();
+    // L02: on a touch screen the selection card's toggles stand in for the
+    // keys a finger does not have. Multi-select is Ctrl/⌘ (and Shift's
+    // additive pick); Free values is Shift's "no snaps, exact value".
+    const addsToSelection = (event: MouseEvent) =>
+      event.shiftKey || touchModifiersRef.current.multiSelect;
+    const togglesSelection = (event: MouseEvent) =>
+      event.ctrlKey || event.metaKey || touchModifiersRef.current.multiSelect;
+    const freeValue = (event: MouseEvent) =>
+      event.shiftKey || touchModifiersRef.current.freeValues;
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
     /**
@@ -6514,7 +6535,7 @@ export function ModelViewer({
       if (result?.region) {
         onSelectRegionRef.current(result.region, {
           additive: event.shiftKey,
-          toggle: event.ctrlKey || event.metaKey
+          toggle: togglesSelection(event)
         });
         return;
       }
@@ -6565,7 +6586,7 @@ export function ModelViewer({
       }
       onSelectTopologyRef.current(
         result?.selection ?? null,
-        event.shiftKey,
+        addsToSelection(event),
         detail
       );
     }
@@ -7721,7 +7742,7 @@ export function ModelViewer({
       }
       latestSketchPointerEvent = event;
       sketchPointerOnCanvas = true;
-      if (event.shiftKey) {
+      if (freeValue(event)) {
         activeSketchSnap = null;
         sketchSnapCycle = 0;
         hideSketchSnapMarker();
@@ -8373,7 +8394,7 @@ export function ModelViewer({
         mode.tool !== 'select' &&
         mode.tool !== 'project' &&
         mode.inferenceEnabled &&
-        !event.shiftKey
+        !freeValue(event)
       ) {
         showSketchCenterInference(point, snapTargetsRef.current);
       }
@@ -8508,7 +8529,7 @@ export function ModelViewer({
       }
       if (mode.tool === 'line' && gesture.chainAnchor) {
         const locked =
-          mode.inferenceEnabled && !event.shiftKey
+          mode.inferenceEnabled && !freeValue(event)
             ? axisLockPoint(gesture.chainAnchor, point)
             : { point, lockedAxis: null };
         rig.setInProgress([gesture.chainAnchor, locked.point], false);
@@ -8761,7 +8782,7 @@ export function ModelViewer({
           drag.grab,
           to,
           drag.startRotation,
-          event.shiftKey
+          freeValue(event)
         );
         drag.preview = rotateTextObject(drag.original, rotation);
         positionSketchDimLabel(event, `${formatNumber(rotation)}°`, false);
@@ -8776,7 +8797,7 @@ export function ModelViewer({
           !drag.anchored &&
           !activeSketchSnap &&
           mode.snapStep &&
-          !event.shiftKey &&
+          !freeValue(event) &&
           raw
         ) {
           // A curve grabbed between its points has no point of its own on
@@ -8788,7 +8809,7 @@ export function ModelViewer({
             y: drag.grab.y + Math.round((raw.y - drag.grab.y) / step) * step
           };
         }
-        if (mode.inferenceEnabled && !event.shiftKey) {
+        if (mode.inferenceEnabled && !freeValue(event)) {
           // An exact snap wins; without one the move infers horizontal or
           // vertical travel from where the drag began, as a line does from
           // its anchor.
@@ -9068,7 +9089,7 @@ export function ModelViewer({
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         event.preventDefault();
         const drag = moveDrag;
-        const fine = event.shiftKey;
+        const fine = freeValue(event);
         const translation = { ...drag.startTranslation };
         const rotation = { ...drag.startRotation };
         setRayFromEvent(event);
@@ -9242,7 +9263,7 @@ export function ModelViewer({
             edgeDrag.initialValue + projected / edgeDrag.pixelsPerUnit
           );
           // Blends want finer steps than moves; tenths feel right.
-          const value = event.shiftKey
+          const value = freeValue(event)
             ? Math.round(raw * 100) / 100
             : Math.round(raw * 10) / 10;
           if (value !== rig.value()) {
@@ -9284,7 +9305,7 @@ export function ModelViewer({
             renderer.domElement.style.cursor = 'grabbing';
             return;
           }
-          const snapped = event.shiftKey
+          const snapped = freeValue(event)
             ? raw
             : snapCylinderRadius(
                 raw,
@@ -9315,7 +9336,7 @@ export function ModelViewer({
             offsetDrag.initialOffset + screenDragValue(offsetDrag, dx, dy);
           // Zoom-adaptive snapping, matching the move gizmo; Shift = free.
           const snap = chooseMoveSnapStep(1 / offsetDrag.pixelsPerUnit);
-          const value = event.shiftKey
+          const value = freeValue(event)
             ? Math.round(raw * 100) / 100
             : Math.round(raw / snap) * snap;
           if (Math.abs(value - rig.value()) > 1e-9) {
@@ -9408,7 +9429,9 @@ export function ModelViewer({
           // Angles in whole degrees and lengths in tenths, unless Shift asks
           // for the free value.
           const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-          const value = event.shiftKey ? next : Math.round(next / step) * step;
+          const value = freeValue(event)
+            ? next
+            : Math.round(next / step) * step;
           if (value !== draggedRig.value()) {
             draggedRig.setValue(value);
             onCommandHandlePreviewRef.current?.(
@@ -10011,7 +10034,7 @@ export function ModelViewer({
         );
         if (curveId) {
           event.preventDefault();
-          onPickCurveRef.current?.(curveId, event.shiftKey);
+          onPickCurveRef.current?.(curveId, addsToSelection(event));
           requestRender();
           return;
         }
@@ -10459,7 +10482,7 @@ export function ModelViewer({
             if (profile) {
               onSelectRegionRef.current(profile, {
                 additive: event.shiftKey,
-                toggle: event.ctrlKey || event.metaKey
+                toggle: togglesSelection(event)
               });
             }
           }
@@ -10612,7 +10635,7 @@ export function ModelViewer({
           // continuing a chain when one is open. Same locking as a click.
           const anchor = gesture.chainAnchor ?? gesture.pressPoint;
           const locked =
-            mode.inferenceEnabled && !event.shiftKey
+            mode.inferenceEnabled && !freeValue(event)
               ? axisLockPoint(anchor, point)
               : { point, lockedAxis: null };
           const object = lineObjectFromPoints(anchor, locked.point);
@@ -10633,7 +10656,7 @@ export function ModelViewer({
             onSketchDrawingChangeRef.current(true);
           } else {
             const locked =
-              mode.inferenceEnabled && !event.shiftKey
+              mode.inferenceEnabled && !freeValue(event)
                 ? axisLockPoint(gesture.chainAnchor, point)
                 : { point, lockedAxis: null };
             const object = lineObjectFromPoints(
@@ -11008,7 +11031,7 @@ export function ModelViewer({
       if (picked?.selection) {
         onSelectTopologyRef.current(
           { bodyId: picked.selection.bodyId, kind: 'body' },
-          event.shiftKey
+          addsToSelection(event)
         );
         return;
       }
