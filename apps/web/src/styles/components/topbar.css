@@ -156,9 +156,14 @@
   box-shadow: 0 0 0 2px var(--color-accent-dim);
 }
 
+/* The document unit beside the name. It names what every typed value
+   means, so it reads in the muted shade (7:1 on the island in the dark
+   theme) at medium weight rather than the subtle one, where 12px mono sat
+   at the edge of legible. */
 .breadcrumb .mono {
   font-size: var(--fs-xs);
-  color: var(--color-text-subtle);
+  font-weight: var(--fw-medium);
+  color: var(--color-text-muted);
 }
 
 /* The encryption indicator beside the project name (ADR-024 Phase 4): a
@@ -185,10 +190,6 @@
 .encryption-menu[open] > .encryption-indicator {
   color: var(--color-text);
   background: var(--color-surface-hover);
-}
-
-.encryption-menu.is-unverified > .encryption-indicator {
-  color: var(--color-text-subtle);
 }
 
 .encryption-menu.is-warning > .encryption-indicator,

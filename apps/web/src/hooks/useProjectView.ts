@@ -29,6 +29,13 @@ export interface ProjectViewDefaults {
   pointerNavigation: 'auto' | 'mouse' | 'trackpad';
 }
 
+type ProjectViewSnapshot = Omit<
+  ProjectViewState,
+  'camera' | 'hiddenReferences'
+> & {
+  camera: ViewportCameraState;
+};
+
 export interface ProjectView {
   projection: ProjectionMode;
   setProjection: Dispatch<SetStateAction<ProjectionMode>>;
@@ -46,6 +53,10 @@ export interface ProjectView {
   setSketchVisibility: Dispatch<
     SetStateAction<Readonly<Record<string, boolean>>>
   >;
+  hiddenDatumIds: ReadonlySet<string>;
+  setHiddenDatumIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
+  hiddenReferenceImageIds: ReadonlySet<string>;
+  setHiddenReferenceImageIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
   /** Applies a project's remembered view, falling back to the defaults. */
   restore(projectId: string, defaults: ProjectViewDefaults): void;
   /** The viewport reported a live pose; keep it immediately available. */
@@ -54,8 +65,8 @@ export interface ProjectView {
   onCameraSettled(projectId: string | null, camera: ViewportCameraState): void;
   /** Persist a settled cut; intermediate slider frames remain in memory. */
   persistSection(section: SectionViewSettings | undefined): void;
-  apply(view: ProjectViewState): void;
-  snapshot(): ProjectViewState | null;
+  apply(view: ProjectViewSnapshot): void;
+  snapshot(): ProjectViewSnapshot | null;
   /** Closing a project: drop the remembered pose so the next one refits. */
   forget(): void;
 }
@@ -64,9 +75,8 @@ const NO_SKETCH_VISIBILITY: Readonly<Record<string, boolean>> = {};
 
 /**
  * Per-project viewport preferences — camera pose, projection, display
- * settings, which bodies are hidden and which sketches were shown or hidden
- * by hand — and their persistence. All of it is this device's view, kept
- * beside the document and never in it.
+ * settings and object visibility choices — and their persistence. All of it
+ * is this device's view, kept beside the document and never in it.
  *
  * Two things used to write the same payload from different places: the
  * viewport reporting a new camera pose, and an effect watching the settings
@@ -87,6 +97,13 @@ export function useProjectView(projectId: string | null): ProjectView {
   );
   const [sketchVisibility, setSketchVisibility] =
     useState<Readonly<Record<string, boolean>>>(NO_SKETCH_VISIBILITY);
+  const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const [hiddenReferenceImageIds, setHiddenReferenceImageIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const savedHiddenReferencesProject = useRef<string | null>(null);
   /**
    * The last pose the viewport reported. Held in a ref because the settings
    * effect below needs to persist it without re-running on every orbit.
@@ -95,9 +112,7 @@ export function useProjectView(projectId: string | null): ProjectView {
   // A reload can interrupt the controller's damping/settle timer. Keep its
   // latest pose on pagehide too; idle frames still never write storage.
   const flushView = useRef<() => void>(() => {});
-  flushView.current = () => {
-    if (projectId && cameraRef.current) persist(projectId, cameraRef.current);
-  };
+  flushView.current = persistCurrentView;
   useEffect(() => {
     const flush = () => flushView.current();
     const hidden = () => {
@@ -111,41 +126,62 @@ export function useProjectView(projectId: string | null): ProjectView {
     };
   }, []);
 
+  function hiddenReferences(): ProjectViewState['hiddenReferences'] {
+    return hiddenDatumIds.size || hiddenReferenceImageIds.size
+      ? {
+          datumIds: [...hiddenDatumIds],
+          imageIds: [...hiddenReferenceImageIds]
+        }
+      : undefined;
+  }
+
   function persist(
     id: string,
-    camera: ViewportCameraState,
+    camera: ViewportCameraState | null,
     next?: Partial<{
       projection: ProjectionMode;
       settings: ViewerSettings;
       hiddenBodyIds: ReadonlySet<string>;
     }>
   ) {
+    const references = hiddenReferences();
+    savedHiddenReferencesProject.current = references ? id : null;
     saveProjectView(id, {
       camera,
       projection: next?.projection ?? projection,
       settings: next?.settings ?? settings,
       hiddenBodyIds: [...(next?.hiddenBodyIds ?? hiddenBodyIds)],
+      hiddenReferences: references,
       ...(Object.keys(sketchVisibility).length > 0
         ? { sketchVisibility: { ...sketchVisibility } }
         : {})
     });
   }
 
+  function persistCurrentView() {
+    if (!projectId) return;
+    const camera = cameraRef.current;
+    // Reference-only projects may have no camera pose yet. Persist their
+    // hidden IDs anyway, including when the last hidden object is shown.
+    if (
+      camera ||
+      hiddenDatumIds.size ||
+      hiddenReferenceImageIds.size ||
+      savedHiddenReferencesProject.current === projectId
+    ) {
+      persist(projectId, camera);
+    }
+  }
+
   // Persist when the surrounding view settings change. Gesture-time camera
   // changes only refresh `cameraRef`; their final pose is saved through
   // `onCameraSettled` once the controller reports that motion has stopped.
-  useEffect(() => {
-    const camera = cameraRef.current;
-    if (!projectId || !camera) {
-      return;
-    }
-    persist(projectId, camera);
-    // `persist` reads the current projection/settings/hidden set directly.
-    // Only the fields worth re-persisting on are listed.
-  }, [
+  useEffect(persistCurrentView, [
     projectId,
     hiddenBodyIds,
     sketchVisibility,
+    hiddenDatumIds,
+    hiddenReferenceImageIds,
     projection,
     settings.displayMode,
     settings.showGrid,
@@ -162,8 +198,15 @@ export function useProjectView(projectId: string | null): ProjectView {
     setHiddenBodyIds,
     sketchVisibility,
     setSketchVisibility,
+    hiddenDatumIds,
+    setHiddenDatumIds,
+    hiddenReferenceImageIds,
+    setHiddenReferenceImageIds,
     restore(id, defaults) {
       const saved = loadProjectView(id);
+      savedHiddenReferencesProject.current = saved?.hiddenReferences
+        ? id
+        : null;
       const camera = saved?.camera ?? null;
       cameraRef.current = camera;
       setInitialView(camera);
@@ -179,6 +222,8 @@ export function useProjectView(projectId: string | null): ProjectView {
       });
       setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));
       setSketchVisibility(saved?.sketchVisibility ?? NO_SKETCH_VISIBILITY);
+      setHiddenDatumIds(new Set(saved?.hiddenReferences?.datumIds));
+      setHiddenReferenceImageIds(new Set(saved?.hiddenReferences?.imageIds));
     },
     onCameraChange(_id, camera) {
       cameraRef.current = camera;
@@ -216,13 +261,14 @@ export function useProjectView(projectId: string | null): ProjectView {
       setProjection(view.projection);
       setSettings((current) => ({ ...current, ...view.settings }));
       setHiddenBodyIds(new Set(view.hiddenBodyIds));
-      // A view from another device carries no sketch choices; this device's
-      // own stay, and are written back with the applied view.
+      // A view from another device leaves this device's reference visibility
+      // choices in place. When it has no sketch choices, those also stay.
       const sketches = view.sketchVisibility ?? sketchVisibility;
       if (view.sketchVisibility) setSketchVisibility(view.sketchVisibility);
       if (projectId) {
         saveProjectView(projectId, {
           ...view,
+          hiddenReferences: hiddenReferences(),
           ...(Object.keys(sketches).length > 0
             ? { sketchVisibility: { ...sketches } }
             : {})

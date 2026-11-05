@@ -26,10 +26,11 @@
   --lane-right: calc(var(--lane-start) + var(--right-dock-w, 0px));
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
-  /* The bottom-left corner under the left rail: the upright scale bar
-     (200px at most, its value under it, and a gap) and, in a sketch, the
-     readout's rows under that. The rail stands on what they take. */
-  --scale-rule-reserve: 232px;
+  /* The bottom-left corner under the left rail: the scale bar lying in the
+     search bar's row, or stepped up over it where that row is too short
+     (18px, a gap) and, in a sketch, the readout's rows under that. The rail
+     stands on what they take. */
+  --scale-rule-reserve: calc(var(--command-bar-h) + 18px + var(--island-gap));
   --readout-rows: 0px;
   --readout-reserve: calc(var(--readout-rows) + var(--scale-rule-reserve));
   /* The bottom-right corner of the model, measured from the right dock's
@@ -38,16 +39,16 @@
      so it can be the room between them less twice this before its ends run
      under the cube. */
   --stage-corner-w: calc(
-    var(--lane-end) - var(--right-panels-w) + 144px + 12px
+    var(--lane-end) - var(--right-panels-w) + var(--cube-size) + 32px + 12px
   );
   /* The room between the docks, which the bottom corners stand in. */
   --stage-between-docks: calc(
     100vw - var(--left-dock-w, 0px) - var(--right-dock-w, 0px)
   );
-  /* How far the corner's cube stack (88px, 4px off the edge) stands above
-     the window's bottom edge, with a few pixels to spare. The right lane
-     stops a gap above it, so no card in the lane ever reaches the cube. */
-  --stage-corner-h: 96px;
+  /* How far the corner's cube stack (--cube-size, 4px off the edge) stands
+     above the window's bottom edge, with a few pixels to spare. The right
+     lane stops a gap above it, so no card in the lane ever reaches the cube. */
+  --stage-corner-h: calc(var(--cube-size) + 8px);
   /* The notice lane's status row, which the cube steps above where it
      shares that band: a 28px toast 8px over the bar. The cube's offset
      adds an island gap above it. More would lift a phone's instrument
@@ -499,15 +500,23 @@
   right: calc(var(--lane-end) - var(--right-peek-w, 0px));
 }
 
-/* The scale bar stands upright against the model's left edge — the
-   window's, or the left dock's inner edge when a panel is docked there —
-   under the left rail, which lifts to stand on it in a short window
-   (--readout-reserve). It is narrower than the lanes' start, so the search
-   bar never reaches it. */
+/* The scale bar lies in the search bar's row at the model's left edge —
+   the window's, or the left dock's inner edge when a panel is docked there —
+   centred on the bar's height, and ends short of the bar
+   (ViewportScaleIndicator measures the room). Where the row is too short
+   for a readable rule it steps up over the bar instead. */
 .workspace.column-layout .viewport-scale-indicator {
   left: calc(var(--island-gap) + var(--left-dock-w, 0px));
   right: auto;
-  bottom: calc(var(--island-gap) + var(--readout-rows));
+  bottom: calc(
+    var(--island-gap) + (var(--command-bar-h) - 18px) / 2 + var(--readout-rows)
+  );
+}
+
+/* Stepped up, it stands on the lane's foot: over the bar and over the
+   pick's guidance card when one is up, which would otherwise cover it. */
+.workspace.column-layout .viewport-scale-indicator.is-raised {
+  bottom: calc(var(--lane-base) + var(--readout-rows));
 }
 
 /* The sketch rail is the tall one, with Finish at its foot: it keeps the
@@ -1127,6 +1136,17 @@
   --notice-end: var(--lane-right);
 }
 
+/* The guidance height is measured onto the viewer area (WorkspaceReadout),
+   below the workspace where the foot is first worked out, so there it read
+   as 0 and the refusal sat squarely on the guidance row under it. Worked out
+   again where the height is set, the notices stand above the row. */
+.workspace.column-layout .viewer-area {
+  --lane-base: calc(
+    var(--island-gap) + var(--command-bar-h) +
+      var(--workspace-guidance-h, 0px) + 8px
+  );
+}
+
 /* Only these notices consume the status height. Keeping it on the viewer
    made a toast appearing/disappearing restyle every object/history row. */
 .workspace.column-layout .viewer-area {
@@ -1509,10 +1529,13 @@
 @media (max-width: 520px) {
   .workspace.column-layout {
     --lane-right: var(--island-gap);
+    /* A phone keeps the compact cube: the stage is too short for more. */
+    --cube-size: 88px;
     /* The cube stands above the search bar and its status row (below), and
        the lane above it. */
     --stage-corner-h: calc(
-      var(--island-gap) * 2 + var(--command-bar-h) + var(--status-row-h) + 92px
+      var(--island-gap) * 2 + var(--command-bar-h) + var(--status-row-h) +
+        var(--cube-size) + 4px
     );
   }
 
@@ -1650,7 +1673,7 @@
 
 /* In the same range the search lane stops mirroring the readout's reserve on
    the right, which left it W − 520px wide (80px at a 600px window). Above
-   960px it only has to clear the orientation cube in the corner, the 144px
+   960px it only has to clear the orientation cube in the corner, the width
    the scale bar also steps around; at 960px and below the cube already
    stands above the search row (workspace-column.css), so the lane runs to
    the island gap as on a phone and is W − 270px wide (the rule for every
@@ -1688,7 +1711,7 @@
     --lane-right: calc(var(--island-gap) + var(--right-dock-w, 0px));
     /* The cube stands 52px up here (workspace-column.css); the right lane
        stops above it all the same. */
-    --stage-corner-h: calc(52px + 92px);
+    --stage-corner-h: calc(52px + var(--cube-size) + 4px);
   }
 }
 
@@ -1816,7 +1839,7 @@
    on a phone, and the right lane stops above it. */
 @media (min-width: 521px) and (max-width: 960px) and (max-height: 657px) {
   .workspace.column-layout {
-    --stage-corner-h: calc(56px + var(--status-row-h) + 92px);
+    --stage-corner-h: calc(56px + var(--status-row-h) + var(--cube-size) + 4px);
   }
 
   .workspace.column-layout .viewer-rail-stack,

@@ -17,6 +17,7 @@ import {
 } from '../lib/statusLifetime';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
+import { Tooltip } from './Tooltip';
 
 /**
  * A message worth going back to the log for: a warning, or a refusal worded
@@ -141,9 +142,15 @@ export function WorkspaceReadout({
       const guidance = lane.querySelector<HTMLElement>(
         '.workspace-hint.is-selection'
       );
+      // The gap belongs to a row that is drawn. A guidance element with no
+      // height (the pick's row while an operation is armed) still added it,
+      // and the notice lane stood 8px up, over the handle's value chip.
+      const guidanceHeight = guidance
+        ? Math.ceil(guidance.getBoundingClientRect().height)
+        : 0;
       viewer.style.setProperty(
         '--workspace-guidance-h',
-        `${guidance ? Math.ceil(guidance.getBoundingClientRect().height) + 8 : 0}px`
+        `${guidanceHeight > 0 ? guidanceHeight + 8 : 0}px`
       );
     };
     measure();
@@ -391,17 +398,21 @@ interface ActivityLogButtonProps {
  */
 export function ActivityLogButton({ onOpenLog }: ActivityLogButtonProps) {
   return (
-    <button
-      type="button"
-      className="rail-button"
-      title="Activity log"
-      aria-label="Open activity log"
-      aria-haspopup="dialog"
-      onClick={onOpenLog}
+    <Tooltip
+      label="Activity log"
+      description="Every status message and warning this session"
     >
-      {/* Not the clock: that is rollback and Restore, one rail up from here. */}
-      <ScrollText size={16} aria-hidden="true" />
-    </button>
+      <button
+        type="button"
+        className="rail-button"
+        aria-label="Open activity log"
+        aria-haspopup="dialog"
+        onClick={onOpenLog}
+      >
+        {/* Not the clock: that is rollback and Restore, one rail up from here. */}
+        <ScrollText size={16} aria-hidden="true" />
+      </button>
+    </Tooltip>
   );
 }
 

@@ -299,6 +299,39 @@ describe('BodyEdgeOverlay tangent batch', () => {
     expect(overlay.idleTangentEdges.userData.topologyKind).toBe('edge');
   });
 
+  it('quiets an edge the kernel calls smooth even where the mesh says sharp', () => {
+    const { mesh, topology } = filletedStep();
+    // The kernel calls the last edge smooth, which the sampled normals
+    // misjudge (a fillet meeting a curved wall), and the first sharp, which
+    // the mesh measures within tangent tolerance: either witness quiets it.
+    const judged = {
+      ...topology,
+      edges: topology.edges.map((edge) =>
+        edge.topologyId === 'edge-2-3'
+          ? { ...edge, isSmooth: true }
+          : edge.topologyId === 'edge-0-1'
+            ? { ...edge, isSmooth: false }
+            : edge
+      )
+    };
+    const overlay = createBodyEdgeOverlay(
+      { bodyId: BODY_ID, topology: judged, mesh },
+      { width: 800, height: 600 }
+    );
+    expect(overlay.ownershipBySegment).toHaveLength(0);
+    expect(
+      overlay.tangentOwnershipBySegment.map((owner) => owner.topologyId)
+    ).toEqual(['edge-0-1', 'edge-1-2', 'edge-2-3']);
+    // Without a mesh the verdict still quiets the smooth edge.
+    const meshless = createBodyEdgeOverlay(
+      { bodyId: BODY_ID, topology: judged },
+      { width: 800, height: 600 }
+    );
+    expect(
+      meshless.tangentOwnershipBySegment.map((owner) => owner.topologyId)
+    ).toEqual(['edge-2-3']);
+  });
+
   it('draws every edge sharp when the mesh is not given', () => {
     const overlay = overlayFor(false);
     expect(overlay.ownershipBySegment).toHaveLength(3);

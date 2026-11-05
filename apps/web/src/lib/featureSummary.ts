@@ -1,6 +1,135 @@
-import type { FeatureNode, ParamValue, UnitSystem } from '@openzcad/shared';
+import type {
+  BooleanOperation,
+  DirectEditOperation,
+  FeatureNode,
+  ParamValue,
+  UnitSystem,
+  Vector3
+} from '@openzcad/shared';
 import { unitLabel } from './measurements';
 import { evalParamValue, formatNumber } from './model';
+
+/**
+ * "5 edges · r 2 mm": a blend over several edges says how many, so two
+ * fillets of one radius still read apart. A single edge needs no count.
+ */
+function withEdgeCount(
+  edgeHashes: readonly number[] | undefined,
+  value: string
+): string {
+  const count = new Set(edgeHashes ?? []).size;
+  return count > 1 ? `${count} edges · ${value}` : value;
+}
+
+const BOOLEAN_JOINERS: Record<BooleanOperation, string> = {
+  union: ' + ',
+  subtract: ' − ',
+  intersect: ' ∩ '
+};
+
+/**
+ * A Boolean's operands by name, "Box 1 + Cylinder 1" (a subtract reads
+ * target − tools), or how many there are when any one cannot be named.
+ */
+function booleanOperands(
+  operation: BooleanOperation,
+  bodyIds: readonly string[],
+  bodyName?: (bodyId: string) => string | undefined
+): string | null {
+  if (bodyIds.length === 0) return null;
+  const names = bodyIds.map((bodyId) => bodyName?.(bodyId)?.trim());
+  if (names.every((name): name is string => Boolean(name))) {
+    return names.join(BOOLEAN_JOINERS[operation]);
+  }
+  return `${bodyIds.length} bod${bodyIds.length === 1 ? 'y' : 'ies'}`;
+}
+
+/** The app's Z-up face names, as the selection readout gives them. */
+const NORMAL_FACE_NAMES: Record<string, string> = {
+  'z:1': 'Top',
+  'z:-1': 'Bottom',
+  'x:1': 'Right',
+  'x:-1': 'Left',
+  'y:1': 'Back',
+  'y:-1': 'Front'
+};
+
+/** "box.face.x-max" and its kin, for a face whose normal is not on an axis. */
+const LINEAGE_FACE_NAMES: Record<string, string> = {
+  'z-max': 'Top',
+  'z-min': 'Bottom',
+  'x-max': 'Right',
+  'x-min': 'Left',
+  'y-max': 'Back',
+  'y-min': 'Front'
+};
+
+function faceDirectionName(
+  normal: Vector3 | undefined,
+  lineageName: string | undefined
+): string | null {
+  if (normal) {
+    const magnitude = Math.hypot(normal.x, normal.y, normal.z);
+    if (magnitude > 1e-9) {
+      for (const axis of ['x', 'y', 'z'] as const) {
+        const component = normal[axis] / magnitude;
+        if (Math.abs(component) >= 0.999) {
+          return NORMAL_FACE_NAMES[`${axis}:${component > 0 ? 1 : -1}`]!;
+        }
+      }
+    }
+  }
+  const side = /\.face\.([xyz]-(?:min|max))$/.exec(lineageName ?? '')?.[1];
+  return side ? LINEAGE_FACE_NAMES[side]! : null;
+}
+
+/**
+ * The face a direct edit moved and by how much, so a run of seven
+ * "Offset face" rows reads "Bottom · +12.5 mm", "Right · −13.5 mm" … rather
+ * than seven identical names.
+ */
+function directEditSummary(
+  operation: DirectEditOperation,
+  num: (value: ParamValue | undefined) => string | null,
+  unit: string
+): string | null {
+  switch (operation.kind) {
+    case 'offset-face': {
+      const offset = num(operation.offset);
+      if (offset === null) return null;
+      const signed = offset.startsWith('-')
+        ? `−${offset.slice(1)}`
+        : offset === '0'
+          ? offset
+          : `+${offset}`;
+      const face = faceDirectionName(
+        operation.sourceNormal,
+        operation.faceReference?.lineageName
+      );
+      return face ? `${face} · ${signed} ${unit}` : `${signed} ${unit}`;
+    }
+    case 'set-face-distance': {
+      const distance = num(operation.distance);
+      return distance === null ? null : `${distance} ${unit} apart`;
+    }
+    case 'resize-cylindrical-face':
+    case 'resize-blend': {
+      const radius = num(
+        operation.kind === 'resize-blend'
+          ? operation.newRadius
+          : operation.radius
+      );
+      return radius === null ? null : `r ${radius} ${unit}`;
+    }
+    case 'resize-through-hole':
+    case 'resize-imported-blind-hole': {
+      const diameter = num(operation.diameter);
+      return diameter === null ? null : `⌀ ${diameter} ${unit}`;
+    }
+    default:
+      return null;
+  }
+}
 
 /**
  * The one short value a history row shows beside a feature's name — the
@@ -10,13 +139,19 @@ import { evalParamValue, formatNumber } from './model';
  * Lengths are in the document's own units, as every parametric value is
  * stored; angles are degrees. A value that does not evaluate returns null
  * rather than a guess: the row then shows nothing, never a wrong number.
- * Kinds without a single driving value (booleans, transforms, imports,
- * sketches) return null too.
+ * A Boolean names its operands instead of a value; other kinds without a
+ * single driving value (transforms, imports, sketches) return null.
  */
 export function featureValueSummary(
   feature: FeatureNode,
   scope: Record<string, number>,
-  units: UnitSystem
+  units: UnitSystem,
+  /**
+   * A body's display name, for the kinds whose inputs are bodies (a
+   * Boolean's operands). Without it, or for a body it cannot name, those
+   * rows fall back to a count.
+   */
+  bodyName?: (bodyId: string) => string | undefined
 ): string | null {
   const unit = unitLabel('length', units);
   const num = (value: ParamValue | undefined): string | null => {
@@ -218,9 +353,10 @@ export function featureValueSummary(
         return null;
       }
       const end = data.endRadius === undefined ? null : num(data.endRadius);
-      return end !== null
-        ? `r ${radius}–${end} ${unit}`
-        : `r ${radius} ${unit}`;
+      return withEdgeCount(
+        data.edgeHashes,
+        end !== null ? `r ${radius}–${end} ${unit}` : `r ${radius} ${unit}`
+      );
     }
     case 'chamfer': {
       const distance = num(data.distance);
@@ -229,13 +365,23 @@ export function featureValueSummary(
       }
       const second = data.distance2 === undefined ? null : num(data.distance2);
       if (second !== null) {
-        return `${distance} × ${second} ${unit}`;
+        return withEdgeCount(
+          data.edgeHashes,
+          `${distance} × ${second} ${unit}`
+        );
       }
       const angle = data.angleDeg === undefined ? null : num(data.angleDeg);
-      return angle !== null
-        ? `${distance} ${unit} × ${angle}°`
-        : `${distance} ${unit}`;
+      return withEdgeCount(
+        data.edgeHashes,
+        angle !== null
+          ? `${distance} ${unit} × ${angle}°`
+          : `${distance} ${unit}`
+      );
     }
+    case 'boolean':
+      return booleanOperands(data.operation, data.targetBodyIds, bodyName);
+    case 'direct-edit':
+      return directEditSummary(data.operation, num, unit);
     case 'pattern': {
       const count = num(data.count);
       if (count === null) {

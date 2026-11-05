@@ -75,7 +75,7 @@ describe('project camera pose persistence', () => {
   });
 });
 
-describe('sketch visibility on this device', () => {
+describe('remembered views on this device', () => {
   const defaults = {
     projection: 'perspective' as const,
     showGrid: true,
@@ -165,5 +165,82 @@ describe('sketch visibility on this device', () => {
     // Another project starts with none.
     act(() => second.result.current.restore('project-2', defaults));
     expect(second.result.current.sketchVisibility).toEqual({});
+  });
+
+  it('restores hidden datums and images only for their project', () => {
+    const projectId = 'references';
+    const first = renderHook(() => useProjectView(projectId));
+    act(() => first.result.current.onCameraSettled(projectId, settledPose));
+    act(() => {
+      first.result.current.setHiddenDatumIds(new Set(['plane-a', 'axis-b']));
+      first.result.current.setHiddenReferenceImageIds(new Set(['image-a']));
+    });
+    first.unmount();
+
+    const reopened = renderHook(({ id }) => useProjectView(id), {
+      initialProps: { id: projectId }
+    });
+    act(() => reopened.result.current.restore(projectId, defaults));
+    expect(reopened.result.current.hiddenDatumIds).toEqual(
+      new Set(['plane-a', 'axis-b'])
+    );
+    expect(reopened.result.current.hiddenReferenceImageIds).toEqual(
+      new Set(['image-a'])
+    );
+    expect(reopened.result.current.snapshot()).not.toHaveProperty(
+      'hiddenReferences'
+    );
+
+    act(() =>
+      reopened.result.current.apply({
+        camera: transientPose,
+        projection: 'orthographic',
+        settings: { showGrid: false, displayMode: 'wireframe' },
+        hiddenBodyIds: []
+      })
+    );
+    expect(
+      workspaceSession.loadProjectView(projectId)?.hiddenReferences
+    ).toEqual({
+      datumIds: ['plane-a', 'axis-b'],
+      imageIds: ['image-a']
+    });
+
+    act(() => {
+      reopened.result.current.restore('other-project', defaults);
+      reopened.rerender({ id: 'other-project' });
+    });
+    expect(reopened.result.current.hiddenDatumIds).toEqual(new Set());
+    expect(reopened.result.current.hiddenReferenceImageIds).toEqual(new Set());
+    expect(
+      workspaceSession.loadProjectView(projectId)?.hiddenReferences
+    ).toEqual({
+      datumIds: ['plane-a', 'axis-b'],
+      imageIds: ['image-a']
+    });
+  });
+
+  it('remembers and clears hidden references before the viewport has a pose', () => {
+    const projectId = 'reference-only';
+    const first = renderHook(() => useProjectView(projectId));
+    act(() =>
+      first.result.current.setHiddenReferenceImageIds(new Set(['image-a']))
+    );
+    expect(workspaceSession.loadProjectView(projectId)).toMatchObject({
+      camera: null,
+      hiddenReferences: { datumIds: [], imageIds: ['image-a'] }
+    });
+    first.unmount();
+
+    const reopened = renderHook(() => useProjectView(projectId));
+    act(() => reopened.result.current.restore(projectId, defaults));
+    expect(reopened.result.current.initialView).toBeNull();
+    expect(reopened.result.current.hiddenReferenceImageIds).toEqual(
+      new Set(['image-a'])
+    );
+    act(() => reopened.result.current.setHiddenReferenceImageIds(new Set()));
+    expect(workspaceSession.loadProjectView(projectId)).not.toHaveProperty(
+      'hiddenReferences'
+    );
   });
 });

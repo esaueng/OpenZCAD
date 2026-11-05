@@ -6,6 +6,7 @@ import type {
   SelectionCalloutVerb
 } from '../lib/selectionCallout';
 import type { ToolId } from '../lib/tools';
+import { refusalIsExpandable } from '../lib/selectionCalloutView';
 import { textLabelSegments } from '../lib/topologyLabels';
 import {
   SelectionRail,
@@ -326,11 +327,12 @@ describe('SelectionRefusal', () => {
     );
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('The face would run into another part.');
-    fireEvent.click(within(alert).getByRole('button', { name: 'Edit Boss' }));
-    fireEvent.click(within(alert).getByRole('button', { name: 'Keep 4 mm' }));
-    fireEvent.click(
-      within(alert).getByRole('button', { name: 'View details' })
-    );
+    // The ways out stand beside the sentence, outside its live region.
+    expect(within(alert).queryAllByRole('button')).toEqual([]);
+    const row = alert.closest<HTMLElement>('.selection-callout-diagnostic')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Edit Boss' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Keep 4 mm' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'View details' }));
     expect(onEditCulprit).toHaveBeenCalledWith('feature-7');
     expect(onKeepLastValid).toHaveBeenCalledOnce();
     expect(onViewDetails).toHaveBeenCalledOnce();
@@ -339,5 +341,94 @@ describe('SelectionRefusal', () => {
   it('draws nothing while the operation stands', () => {
     const { container } = render(<SelectionRefusal operation={operation()} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('a long refusal in the notice lane', () => {
+  const message =
+    'Fillet could not be created on the selected closed edge with radius 1. ' +
+    'The modeling engine could not trim the cylindrical face beside it. ' +
+    'Smaller radii failed the same way, so the size is not the cause.';
+  const refused = (text: string, title = 'Fillet') =>
+    operation({ title, phase: 'failed', error: { message: text } });
+  const rowOf = () =>
+    screen
+      .getByRole('alert')
+      .closest<HTMLElement>('.selection-callout-diagnostic')!;
+
+  it('opens folded, keeps the whole sentence for the alert, and unfolds on More', () => {
+    render(<SelectionRefusal operation={refused(message)} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(message);
+    const row = rowOf();
+    expect(row).toHaveClass('is-expandable');
+    expect(row).not.toHaveClass('is-expanded');
+    const more = screen.getByRole('button', { name: 'More' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(more).toHaveAttribute('aria-controls', alert.id);
+    // The toggle is not inside the live region it controls.
+    expect(alert).not.toContainElement(more);
+    fireEvent.click(more);
+    expect(row).toHaveClass('is-expanded');
+    const less = screen.getByRole('button', { name: 'Less' });
+    expect(less).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(less);
+    expect(row).not.toHaveClass('is-expanded');
+  });
+
+  it('does not unfold from a click on the sentence, so it can be selected and copied', () => {
+    render(<SelectionRefusal operation={refused(message)} />);
+    fireEvent.click(screen.getByRole('alert'));
+    expect(rowOf()).not.toHaveClass('is-expanded');
+  });
+
+  it('opens folded again for any other refusal, including a return to an earlier one', () => {
+    const other =
+      'Chamfer could not be created on 2 selected edges with distance 3. ' +
+      'Try a smaller distance.';
+    const { rerender } = render(
+      <SelectionRefusal operation={refused(message)} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(rowOf()).toHaveClass('is-expanded');
+    rerender(<SelectionRefusal operation={refused(other)} />);
+    expect(rowOf()).not.toHaveClass('is-expanded');
+    rerender(<SelectionRefusal operation={refused(message)} />);
+    expect(rowOf()).not.toHaveClass('is-expanded');
+    // The same sentence from another operation is another refusal too.
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    rerender(<SelectionRefusal operation={refused(message, 'Chamfer')} />);
+    expect(rowOf()).not.toHaveClass('is-expanded');
+  });
+
+  it('leaves a one-sentence refusal as it is, with no toggle', () => {
+    render(
+      <SelectionRefusal
+        operation={refused('The face would run into another part.')}
+      />
+    );
+    expect(rowOf()).not.toHaveClass('is-expandable');
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+  });
+});
+
+describe('refusalIsExpandable', () => {
+  it.each([
+    ['a single short sentence', 'The face would run into another part.', false],
+    ['two short sentences', 'Radius too large. Try 2 mm.', true],
+    [
+      'a second sentence that starts with a number',
+      'Radius is invalid. 2 edges could not be trimmed.',
+      true
+    ],
+    [
+      'a decimal inside one sentence',
+      'Fillet refused at radius 1.5 here.',
+      false
+    ],
+    ['exactly 90 characters', 'x'.repeat(90), false],
+    ['91 characters', 'x'.repeat(91), true]
+  ])('%s', (_case, text, expected) => {
+    expect(refusalIsExpandable(text)).toBe(expected);
   });
 });

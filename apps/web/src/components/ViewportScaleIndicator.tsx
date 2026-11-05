@@ -1,23 +1,53 @@
 import { Grid3x3 } from 'lucide-react';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { formatViewportScale, type ViewportScale } from '@openzcad/viewport';
+import {
+  DEFAULT_SCALE_BAR_MAX_WIDTH_PX,
+  chooseViewportScale,
+  formatViewportScale,
+  type ViewportScale
+} from '@openzcad/viewport';
 import { watchStageTheme } from '../lib/stagePalette';
 
 const BAR_HEIGHT_PX = 18;
 const DIVISIONS = 10;
 /**
- * Wider than a phone the rule stands upright at the model's left edge; on a
- * phone it lies along the foot, under the measurement sheet, as it always
- * has. Keep in step with the ruler rules in quiet-stage.css.
+ * Room kept for the value beside the rule ("1000 mm" in the 13px mono label
+ * is about 55px) and the gaps on either side of it.
  */
-const UPRIGHT_QUERY = '(min-width: 621px)';
+const LABEL_RESERVE_PX = 72;
+/** Clearance between the label and the search bar. */
+const BAR_CLEARANCE_PX = 12;
+/**
+ * The shortest rule worth drawing beside the search bar. With less room the
+ * rule steps up over the bar instead (`is-raised`), where it has the width.
+ */
+const MIN_BESIDE_BAR_PX = 60;
 
-function prefersUpright(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia(UPRIGHT_QUERY).matches
-  );
+/**
+ * How long the rule may be where it stands: its full length unless it shares
+ * the search bar's row, where it ends short of the bar. Returns `raise` when
+ * that row has too little room for a readable rule.
+ *
+ * The rule used to stand upright against the window's left edge, its value
+ * in the corner under it, where it read as a clipped vertical tick strip.
+ * Lying down beside the bar it reads as a scale bar does on a drawing.
+ */
+export function scaleRuleRoom(
+  rule: { left: number; top: number; bottom: number },
+  bar: { left: number; top: number; bottom: number } | null
+): { maxWidthPx: number; raise: boolean } {
+  const sharesRow =
+    bar !== null && rule.top < bar.bottom && bar.top < rule.bottom;
+  if (!sharesRow || bar.left <= rule.left) {
+    return { maxWidthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX, raise: false };
+  }
+  const room = bar.left - rule.left - LABEL_RESERVE_PX - BAR_CLEARANCE_PX;
+  return room < MIN_BESIDE_BAR_PX
+    ? { maxWidthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX, raise: true }
+    : {
+        maxWidthPx: Math.min(DEFAULT_SCALE_BAR_MAX_WIDTH_PX, room),
+        raise: false
+      };
 }
 
 export type ViewportScaleSink = (scale: ViewportScale | null) => void;
@@ -49,27 +79,19 @@ function readRuleColors(canvas: HTMLCanvasElement): RuleColors {
   };
 }
 
-/**
- * Draws the rule `lengthPx` long. Lying down, the ticks rise from the
- * baseline along its foot; upright, the baseline runs down its left side
- * and the ticks reach right, into the model. The drawing is the lying rule
- * turned a quarter, so both read the same.
- */
+/** Draws the rule `lengthPx` long, its ticks rising from the baseline. */
 function drawRule(
   canvas: HTMLCanvasElement,
   lengthPx: number,
-  { primary, secondary, accent }: RuleColors,
-  upright: boolean
+  { primary, secondary, accent }: RuleColors
 ) {
   const cssWidth = Math.max(lengthPx, 1);
   const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.setProperty('--viewport-scale-length', `${cssWidth}px`);
   const along = Math.max(1, Math.round(cssWidth * pixelRatio));
   const across = Math.round(BAR_HEIGHT_PX * pixelRatio);
-  const width = upright ? across : along;
-  const height = upright ? along : across;
-  if (canvas.width !== width) canvas.width = width;
-  if (canvas.height !== height) canvas.height = height;
+  if (canvas.width !== along) canvas.width = along;
+  if (canvas.height !== across) canvas.height = across;
 
   const context = canvas.getContext('2d');
   if (!context) {
@@ -77,14 +99,7 @@ function drawRule(
   }
   context.setTransform(1, 0, 0, 1, 0, 0);
   context.clearRect(0, 0, canvas.width, canvas.height);
-  // Upright: the lying rule's x runs up the canvas (its start at the foot,
-  // like a measured height) and its y runs left to right, mirrored so the
-  // baseline is on the left.
-  if (upright) {
-    context.setTransform(0, -pixelRatio, -pixelRatio, 0, across, along);
-  } else {
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  }
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
 
   const left = 1;
   const right = Math.max(cssWidth - 1, left);
@@ -136,27 +151,75 @@ export function ViewportScaleIndicator({
   // a zoom or a face drag, where a style read after the frame's DOM writes
   // forced a synchronous style recalculation each time.
   const colorsRef = useRef<RuleColors | null>(null);
-  const [upright, setUpright] = useState(prefersUpright);
+  // Layout is read only when something around the rule resizes, never per
+  // frame: the bar redraws on every frame of a zoom.
+  const maxWidthRef = useRef(DEFAULT_SCALE_BAR_MAX_WIDTH_PX);
+  const [measureTick, setMeasureTick] = useState(0);
+  const measureRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-    const query = window.matchMedia(UPRIGHT_QUERY);
-    const follow = () => setUpright(query.matches);
-    follow();
-    query.addEventListener('change', follow);
-    return () => query.removeEventListener('change', follow);
+    const root = rootRef.current;
+    const area = root?.closest('.viewer-area');
+    if (!root) return;
+    const measure = () => {
+      if (root.hidden) return;
+      const raised = root.classList.contains('is-raised');
+      if (raised) root.classList.remove('is-raised');
+      const rule = root.getBoundingClientRect();
+      const bar = area
+        ?.querySelector<HTMLElement>('.command-bar-row')
+        ?.getBoundingClientRect();
+      const room = scaleRuleRoom(rule, bar && bar.width > 0 ? bar : null);
+      root.classList.toggle('is-raised', room.raise);
+      if (room.maxWidthPx !== maxWidthRef.current || room.raise !== raised) {
+        maxWidthRef.current = room.maxWidthPx;
+        setMeasureTick((tick) => tick + 1);
+      }
+    };
+    measureRef.current = measure;
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    for (const target of [
+      area,
+      area?.querySelector('.command-bar-lane'),
+      area?.querySelector('.command-bar-row')
+    ]) {
+      if (target) observer?.observe(target);
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      if (measureRef.current === measure) measureRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
-    const update = (scale: ViewportScale | null) => {
-      lastScaleRef.current = scale;
+    const update = (offered: ViewportScale | null) => {
+      lastScaleRef.current = offered;
+      // The viewer offers the longest rule (200px); where the rule stands
+      // may have less room, so the step is chosen again under that cap.
+      const scale =
+        offered && offered.widthPx > maxWidthRef.current
+          ? chooseViewportScale(
+              offered.value / offered.widthPx,
+              maxWidthRef.current
+            )
+          : offered;
       const root = rootRef.current;
       const canvas = canvasRef.current;
       const value = valueRef.current;
       if (!root || !canvas || !value) {
         return;
       }
-      if (root.hidden !== (scale === null)) root.hidden = scale === null;
+      if (root.hidden !== (scale === null)) {
+        root.hidden = scale === null;
+        // Hidden, it had no box to measure the room from.
+        if (scale) measureRef.current?.();
+      }
       if (!scale) {
         lastRenderedRef.current = null;
         return;
@@ -175,7 +238,7 @@ export function ViewportScaleIndicator({
       }
 
       colorsRef.current ??= readRuleColors(canvas);
-      drawRule(canvas, scale.widthPx, colorsRef.current, upright);
+      drawRule(canvas, scale.widthPx, colorsRef.current);
       // Replacing even identical output text invalidates ancestor :has()
       // selectors across the workspace on every zoom frame. Only the rule's
       // pixel length changes between steps of the model-space scale.
@@ -189,7 +252,7 @@ export function ViewportScaleIndicator({
     };
 
     scaleSinkRef.current = update;
-    // A new orientation redraws the rule it already has.
+    // New room redraws the rule it already has.
     lastRenderedRef.current = null;
     update(lastScaleRef.current);
     // The rule's colours are baked into the canvas, so a theme change has to
@@ -205,7 +268,7 @@ export function ViewportScaleIndicator({
         scaleSinkRef.current = null;
       }
     };
-  }, [scaleSinkRef, units, upright]);
+  }, [scaleSinkRef, units, measureTick]);
 
   return (
     // One image named by its label ("Viewport scale … : 20 mm"), not a live
@@ -214,7 +277,7 @@ export function ViewportScaleIndicator({
     // div was never exposed at all.
     <div
       ref={rootRef}
-      className={`viewport-scale-indicator${upright ? ' is-upright' : ''}`}
+      className="viewport-scale-indicator"
       data-testid="viewport-scale-indicator"
       role="img"
       hidden

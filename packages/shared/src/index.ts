@@ -2657,8 +2657,9 @@ export interface EdgeTopology {
    *   hemispheres that share one exact witness, so both patches hash
    *   identically. Two edges reporting a common hash therefore do not
    *   necessarily touch the same face. This is the identity scheme failing
-   *   closed as designed, and it is a live product limit — face picks on
-   *   spheres are unavailable for the same reason.
+   *   closed as designed: a hash alone cannot pick a sphere patch. The
+   *   patches' lineage references can (`primitive.sphere.face.z-max` /
+   *   `z-min`, proved by the pole each trimmed patch holds).
    * - **Not sufficient for an edge run on its own.** Two edges on opposite
    *   sides of a box's top face share that face. A run also needs vertex
    *   incidence, which `vertexIds` publishes.

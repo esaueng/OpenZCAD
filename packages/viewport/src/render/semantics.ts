@@ -28,8 +28,10 @@ export const SELECTION_SEMANTICS = {
      * shaded view. Drawn at full strength, a filleted shoulder read as four
      * hard rings across what the shading shows as one smooth surface; this
      * faint, it still marks where a pick will land without claiming a corner.
+     * At 0.3 the rims still read as creases on a light body; hover and
+     * selection draw them at full strength regardless.
      */
-    tangentEdgeOpacity: 0.3
+    tangentEdgeOpacity: 0.18
   },
   /** Under the pointer, not yet committed to. */
   hover: {

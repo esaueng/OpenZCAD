@@ -54,7 +54,7 @@ export function canReuseBlendPreview(
 /**
  * The feature a new fillet or chamfer creates, as the kernel names it. The
  * command's label is the generic "Fillet edges"; the kernel attributes a
- * refusal to the new feature's own name ("Fillet edges 4"), so the preview
+ * refusal to the new feature's own name ("Fillet 4"), so the preview
  * and the commit both judge against that. Null for a command that reserves
  * no new blend feature.
  */

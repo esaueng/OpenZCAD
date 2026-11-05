@@ -2,6 +2,7 @@ import { revealModelPanel } from './openzcad-fixtures';
 import { deflateSync } from 'node:zlib';
 import type { Locator, Page } from '@playwright/test';
 import {
+  clickGhostPlane,
   clickWorldPoint,
   createPrimitiveInPlace,
   enterCommandValue,
@@ -267,25 +268,29 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   const before = (await storedProject(page, projectName)).project;
 
   // Insert: the file dialog opens, then the Image command asks for a plane.
-  // A click on the Top (XY) ghost plane, clear of the box, puts the picture
-  // there, centred where it was clicked (on the sketch snap), 100 mm wide at
+  // A click on the Top (XY) ghost plane puts the picture there, centred
+  // where it was clicked (on the sketch snap), 100 mm wide at
   // its own 2:1 aspect, drawn from its decoded pixels. Nothing is added yet.
   await insertImage(page);
   const imageBar = page.getByRole('group', { name: 'Image command' });
   await expect(imageBar).toContainText('Pick a plane or flat face');
-  await clickWorldPoint(page, [3, -2, 0]);
+  const clicked = await clickGhostPlane(page, 'XY');
   await expect(imageBar).toContainText('Click to move it');
   await expect
     .poll(async () => drawnImages(canvas))
     .toEqual([
       expect.objectContaining({
-        center: { x: 3, y: -2, z: 0 },
         normal: { x: 0, y: 0, z: 1 },
         width: 100,
         height: 50,
         textured: true
       })
     ]);
+  // The sketch snap moves it at most one grid step from the click.
+  const { center } = (await drawnImages(canvas))[0]!;
+  expect(center.z).toBe(0);
+  expect(Math.abs(center.x - clicked[0])).toBeLessThan(5);
+  expect(Math.abs(center.y - clicked[1])).toBeLessThan(5);
   const objects = page.getByRole('list', { name: 'Objects' });
   await revealModelPanel(page, 'Objects');
   await expect(
@@ -305,9 +310,9 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   await options.click();
   await expect(imageBar).toContainText('Click the first of two points');
   // (Both clear of the command bar along the canvas's bottom edge.)
-  await clickWorldPoint(page, [-2, -2, 0]);
+  await clickWorldPoint(page, [center.x - 5, center.y, 0]);
   await expect(imageBar).toContainText('Click the second point');
-  await clickWorldPoint(page, [8, -2, 0]);
+  await clickWorldPoint(page, [center.x + 5, center.y, 0]);
   await expect(imageBar).toContainText('Tap the distance');
   await enterCommandValue(page, 'span', '15');
   await expect
@@ -323,7 +328,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
     .poll(async () => drawnImages(canvas))
     .toEqual([
       expect.objectContaining({
-        center: { x: 3, y: -2, z: 0 },
+        center,
         opacity: 0.3
       })
     ]);
@@ -337,7 +342,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
 
   // A datum plane carries it: 8 above Top, it follows the plane.
   await page.getByRole('button', { name: /^Plane — / }).click();
-  await clickWorldPoint(page, [3, -2, 0]);
+  await clickGhostPlane(page, 'XY');
   await enterCommandValue(page, 'offset', '8');
   await finishInPlaceCommand(page, 'Plane');
   await expect(
@@ -375,7 +380,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
     name: 'Bracket plan',
     rotationDeg: 90,
     opacity: 0.3,
-    center: { u: 3, v: -2 }
+    center: { u: center.x, v: center.y }
   });
   expect(image!.width).toBeCloseTo(60, 0);
   expect(image!.plane).toMatchObject({ type: 'datum' });
@@ -395,7 +400,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
     'reference-image.update'
   ]);
 
-  // Undo puts it back on Top; it survives a reload, pixels and all.
+  // Undo puts it back on Top, and Redo reattaches it to the datum.
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect
     .poll(async () => (await drawnImages(canvas))[0]?.center.z)
@@ -407,9 +412,19 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/, {
     timeout: 20_000
   });
+  // Hide both references, then reload with no document edit in between.
+  await objects.getByRole('button', { name: 'Hide plane Plane 1' }).click();
+  await objects.getByRole('button', { name: 'Hide image Bracket plan' }).click();
   await page.reload();
-  // Reopening the project, then reading and decoding the picture, outlasts
-  // the default poll on a loaded runner.
+  const showPlane = objects.getByRole('button', { name: 'Show plane Plane 1' });
+  const showImage = objects.getByRole('button', {
+    name: 'Show image Bracket plan'
+  });
+  await expect(showPlane).toBeVisible({ timeout: 20_000 });
+  await expect(showImage).toBeVisible();
+  await expect.poll(async () => drawnImages(canvas)).toEqual([]);
+  await showPlane.click();
+  await showImage.click();
   await expect
     .poll(async () => drawnImages(canvas), { timeout: 20_000 })
     .toEqual([expect.objectContaining({ textured: true })]);
@@ -418,6 +433,9 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   // A device without the picture resolves it from the archived artifact.
   await forgetSourceBlobs(page);
   await page.reload();
+  await expect(
+    objects.getByRole('button', { name: 'Hide plane Plane 1' })
+  ).toBeVisible({ timeout: 20_000 });
   // Reopening the project, then reading and decoding the picture, outlasts
   // the default poll on a loaded runner.
   await expect
@@ -508,7 +526,7 @@ test('an image canceled while it is placed adds nothing', async ({ page }) => {
   await insertImage(page);
   const imageBar = page.getByRole('group', { name: 'Image command' });
   await expect(imageBar).toContainText('Pick a plane or flat face');
-  await clickWorldPoint(page, [0, 0, 0]);
+  await clickGhostPlane(page, 'XY');
   await expect.poll(async () => (await drawnImages(canvas)).length).toBe(1);
   await page.keyboard.press('Escape');
   await expect(imageBar).toHaveCount(0);

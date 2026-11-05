@@ -73,6 +73,11 @@ export interface CommandContext {
 
 export interface CommandSelection {
   edgeCount: number;
+  /**
+   * How the picked edges read when a count would mislead: a rim the boolean
+   * split into four arcs is "the closed edge" the user clicked.
+   */
+  edgeNoun?: string;
   faceSelected: boolean;
   bodyCount: number;
   regionCount: number;
@@ -161,7 +166,7 @@ export function commandContextLabel(
 ): string | null {
   switch (commandContextKind(selection)) {
     case 'edges':
-      return plural(selection.edgeCount, 'edge', 'edges');
+      return selection.edgeNoun ?? plural(selection.edgeCount, 'edge', 'edges');
     case 'face':
       return '1 face';
     case 'region':

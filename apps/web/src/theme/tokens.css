@@ -179,6 +179,9 @@
   --fw-semibold: 600;
   --fw-bold: 700;
 
+  /* The view cube's drawn size; the stage corners are measured from it. */
+  --cube-size: 112px;
+
   --lh-tight: 1.35;
   --lh-normal: 1.5;
   --lh-loose: 1.7;
