@@ -1,9 +1,9 @@
 {
   "summary": {
     "qualified": 25,
-    "typed-refusal": 2,
+    "typed-refusal": 5,
     "untyped-refusal": 12,
-    "wrong": 3,
+    "wrong": 0,
     "timeout": 0
   },
   "cells": {
@@ -30,7 +30,7 @@
     "box×cylinder/aligned/union/no-modifier/step-roundtrip": "qualified",
     "box×cylinder/aligned/union/fillet-seam/none": "qualified",
     "box×cylinder/aligned/union/fillet-seam/source-grow": "untyped-refusal",
-    "box×cylinder/aligned/union/fillet-seam/direct-grow": "wrong",
+    "box×cylinder/aligned/union/fillet-seam/direct-grow": "typed-refusal",
     "box×cylinder/aligned/union/cap-offset/none": "qualified",
     "box×cylinder/aligned/subtract/no-modifier/none": "qualified",
     "box×cylinder/aligned/subtract/no-modifier/direct-grow": "qualified",
@@ -42,10 +42,10 @@
     "cylinder×cylinder/aligned/union/no-modifier/none": "untyped-refusal",
     "cylinder×cylinder/aligned/subtract/no-modifier/none": "qualified",
     "cylinder×cylinder/aligned/subtract/no-modifier/direct-grow": "untyped-refusal",
-    "cylinder×cylinder/off-centre/subtract/no-modifier/source-grow": "wrong",
+    "cylinder×cylinder/off-centre/subtract/no-modifier/source-grow": "typed-refusal",
     "box×cone/aligned/subtract/no-modifier/none": "qualified",
     "box×torus/aligned/union/no-modifier/none": "typed-refusal",
-    "box×torus/aligned/subtract/no-modifier/none": "wrong",
+    "box×torus/aligned/subtract/no-modifier/none": "typed-refusal",
     "box×sphere/aligned/subtract/no-modifier/none": "typed-refusal",
     "box×sphere/raised/union/no-modifier/none": "untyped-refusal",
     "box×box/coincident/union/no-modifier/none": "qualified"

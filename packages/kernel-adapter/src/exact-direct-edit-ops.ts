@@ -108,6 +108,7 @@ import { preparedFaceMove } from './exact-prepared-face-move';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
 import { resizeChamferedThroughHole } from './exact-chamfered-hole';
+import { assertWallResizeAccepted } from './result-acceptance';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -2209,6 +2210,21 @@ export function applyDirectEdit(
         : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
     );
   }
+  // A wall under a seam blend can come back at the new radius, closed and
+  // valid, with the blend left at the old size and capped off by a new face
+  // (K10, box×cylinder seam fillet). Hash-only seam fillets route here from
+  // `cylinderPrimitiveAncestry.ts`, so this is reachable in the app.
+  assertWallResizeAccepted(kernel, {
+    sourceSolid: solid,
+    sourceWall: face,
+    sourceRadius: geometry.radius,
+    output,
+    newRadius,
+    axisPoint: geometry.axisStart,
+    axisDirection: axisDir,
+    axisTolerance,
+    radiusTolerance
+  });
   if (deferOutputLineage || !journal) return { solids: [output] };
   const relation = moveFacesJournalFaceMap(
     kernel,
