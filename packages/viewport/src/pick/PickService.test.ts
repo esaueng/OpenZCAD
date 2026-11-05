@@ -508,6 +508,23 @@ describe('inside-corner edge picking', () => {
     }
   });
 
+  it('widens the band for a fingertip, and only for touch', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(insideCornerBody([11, 12]));
+    const { service } = makeService({ bodyGroup });
+    const at = (dy: number, pointerType: string) =>
+      service.pick({ ...offsetEvent(dy), pointerType })?.kind;
+
+    // About 14.7 px for touch, 7.7 px for a mouse or pen.
+    expect(at(12, 'touch')).toBe('edge');
+    expect(at(-12, 'touch')).toBe('edge');
+    expect(at(12, 'mouse')).toBe('face');
+    expect(at(12, 'pen')).toBe('face');
+    expect(at(18, 'touch')).toBe('face');
+    // The band follows each event rather than sticking after a touch.
+    expect(service.pick(offsetEvent(12))?.kind).toBe('face');
+  });
+
   it('still gives the face a pointer outside the edge band', () => {
     const bodyGroup = new THREE.Group();
     bodyGroup.add(insideCornerBody([11, 12]));

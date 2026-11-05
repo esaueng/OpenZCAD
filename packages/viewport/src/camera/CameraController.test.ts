@@ -1238,3 +1238,81 @@ describe('CameraController field of view', () => {
     }
   );
 });
+
+describe('CameraController touch pinch', () => {
+  /** Lets the damping tail of an external gesture land. */
+  function settle(controller: CameraController) {
+    let now = 2_000;
+    for (let frame = 0; frame < 600 && controller.stepOrbit(now); frame += 1) {
+      now += 1000 / 60;
+    }
+  }
+
+  it.each(['perspective', 'orthographic'] as const)(
+    'zooms %s by the spread ratio about the midpoint, in for a spread',
+    (projection) => {
+      const { controller } = createController();
+      controller.applyProjection(projection);
+      const distance = orbitDistance(controller);
+      const zoom = (controller.activeCamera as THREE.OrthographicCamera).zoom;
+      controller.beginPinchDrag();
+      // The canvas centre lies on the target, so the target stays put.
+      controller.zoomByPinch(2, 400, 300);
+      controller.zoomByPinch(1.5, 400, 300);
+      controller.endOrbitDrag();
+      if (projection === 'perspective') {
+        expect(orbitDistance(controller)).toBeCloseTo(distance / 3, 9);
+      } else {
+        expect(
+          (controller.activeCamera as THREE.OrthographicCamera).zoom
+        ).toBeCloseTo(zoom * 3, 9);
+      }
+      controller.dispose();
+    }
+  );
+
+  it('pans content with the finger and keeps the viewing distance', () => {
+    const { controller } = createController();
+    const target = controller.controls.target.clone();
+    const distance = orbitDistance(controller);
+    const right = new THREE.Vector3().setFromMatrixColumn(
+      controller.activeCamera.matrixWorld,
+      0
+    );
+    controller.beginPinchDrag();
+    controller.panByPixels(40, 0);
+    controller.endOrbitDrag();
+    settle(controller);
+    const moved = controller.controls.target.clone().sub(target);
+    // Content moving right means the view moving left.
+    expect(moved.dot(right)).toBeLessThan(0);
+    expect(orbitDistance(controller)).toBeCloseTo(distance, 9);
+    controller.dispose();
+  });
+
+  it('does nothing outside a pinch, or with panning or zoom turned off', () => {
+    const { controller } = createController();
+    const before = controller.capture();
+    controller.panByPixels(40, 10);
+    controller.zoomByPinch(2, 400, 300);
+    expect(controller.capture()).toEqual(before);
+    controller.beginPinchDrag();
+    controller.controls.enablePan = false;
+    controller.controls.enableZoom = false;
+    controller.panByPixels(40, 10);
+    controller.zoomByPinch(2, 400, 300);
+    controller.zoomByPinch(Number.NaN, 400, 300);
+    controller.endOrbitDrag();
+    settle(controller);
+    // The damping steps re-derive the pose, so compare within rounding.
+    const after = controller.capture();
+    after.position.forEach((value, index) =>
+      expect(value).toBeCloseTo(before.position[index]!, 9)
+    );
+    after.target.forEach((value, index) =>
+      expect(value).toBeCloseTo(before.target[index]!, 9)
+    );
+    expect(after.orthographicZoom).toBe(before.orthographicZoom);
+    controller.dispose();
+  });
+});

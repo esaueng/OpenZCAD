@@ -74,5 +74,6 @@
   "text-authoring.spec.ts": 7,
   "through-hole-chamfer-resize.spec.ts": 60,
   "tool-rail-pins.spec.ts": 6,
+  "touch-navigation.spec.ts": 12,
   "viewport.spec.ts": 12
 }

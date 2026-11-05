@@ -897,6 +897,12 @@ export function ViewerShell({
         onResizePrimitiveFace={onResizePrimitiveFace}
         onMovePreviewChange={onMovePreviewChange}
         onContextMenu={onContextMenu}
+        onTouchHistory={(step) => {
+          if (step === 'undo' ? canUndo : canRedo) {
+            if (step === 'undo') onUndo();
+            else onRedo();
+          }
+        }}
         assemblyView={assemblyView}
       />
       {dockLayout && !hideViewerToolbar && (
