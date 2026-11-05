@@ -70,6 +70,7 @@
   "start-tile-reorder.spec.ts": 2,
   "status-lifetime.spec.ts": 4.7,
   "stl-mesh-compat.spec.ts": 60,
+  "tablet-layout.spec.ts": 4,
   "text-authoring.spec.ts": 7,
   "through-hole-chamfer-resize.spec.ts": 60,
   "tool-rail-pins.spec.ts": 6,
