@@ -810,7 +810,7 @@ export function NumericKeypad({
               ? `${applyName} (Enter)`
               : state === 'checking'
                 ? 'Checking the value…'
-                : undefined
+                : applyName
           }
           aria-describedby={describedBy}
           onClick={commit}
