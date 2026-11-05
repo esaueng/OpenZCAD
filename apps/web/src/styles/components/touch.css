@@ -1,0 +1,42 @@
+/* ─────────────────────────────────────────────────────────────
+   Touch and Pencil hygiene (L02 slice 1, docs/plans/ipad-touch-plan).
+
+   iPadOS Safari treats a press-and-hold on the model as a request to select
+   text or show a callout, and a flick on a non-scrolling surface as a
+   rubber-band of the whole page. Neither belongs to a CAD canvas. Fields
+   inside the viewport (the keypad, label editors) opt back in: WebKit will
+   not let a field inherit `user-select: none` and still take typing.
+   ───────────────────────────────────────────────────────────── */
+
+html,
+body {
+  overscroll-behavior: none;
+}
+
+/* Desktop pointers keep native text selection over the viewport's labels. */
+@media (pointer: coarse) {
+  /* iOS zooms the whole page into a focused field drawn under 16 px and
+     leaves it zoomed. No field rule in these stylesheets is larger than
+     16 px (touchContracts.test.ts), so this only ever raises one. */
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  .app-shell {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .viewer-host {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .viewer-host
+    :is(input, textarea, [contenteditable]:not([contenteditable='false'])) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
