@@ -3381,6 +3381,19 @@ export function ModelViewer({
     if (viewerArea) areaObserver.observe(viewerArea, { childList: true });
     watchPanelLayer();
 
+    // A file warning can arrive after the model stops drawing. Its lane is
+    // outside the canvas, so its content changing must reposition value chips.
+    const activityObserver = new MutationObserver(() => requestRender());
+    const activityLane = viewerArea?.querySelector('.activity-lane');
+    if (activityLane) {
+      activityObserver.observe(activityLane, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['style', 'class']
+      });
+    }
+
     const rightClickGesture = new RightClickGestureTracker();
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
@@ -7060,17 +7073,22 @@ export function ModelViewer({
 
     /**
      * The top of the stage's bottom lane (the guidance line and the search
-     * bar, or a running command's bar), from the canvas's top. Null when
-     * nothing is drawn there.
+     * bar, a running command's bar, and file activity), from the canvas's top.
+     * Null when nothing is drawn there.
      */
     function bottomLaneTop(): number | null {
-      const lane = renderer.domElement
-        .closest('.workspace')
-        ?.querySelector<HTMLElement>('.command-bar-lane');
-      if (!lane) return null;
-      const rect = lane.getBoundingClientRect();
-      return rect.height > 0
-        ? rect.top - renderer.domElement.getBoundingClientRect().top
+      const lanes = [
+        ...(renderer.domElement
+          .closest('.workspace')
+          ?.querySelectorAll<HTMLElement>(
+            '.command-bar-lane, .activity-lane > *'
+          ) ?? [])
+      ]
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      return lanes.length > 0
+        ? Math.min(...lanes.map((rect) => rect.top)) -
+            renderer.domElement.getBoundingClientRect().top
         : null;
     }
 
@@ -11682,6 +11700,7 @@ export function ModelViewer({
       pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
       panelObserver.disconnect();
+      activityObserver.disconnect();
       retireCommandDragRef.current = null;
       areaObserver.disconnect();
       stopWatchingTheme();

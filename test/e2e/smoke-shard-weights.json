@@ -76,5 +76,6 @@
   "through-hole-chamfer-resize.spec.ts": 60,
   "tool-rail-pins.spec.ts": 6,
   "touch-navigation.spec.ts": 12,
-  "viewport.spec.ts": 12
+  "viewport.spec.ts": 12,
+  "visual-selection-fillet-edit.spec.ts": 6
 }

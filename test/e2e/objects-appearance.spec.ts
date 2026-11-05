@@ -162,6 +162,11 @@ for (const width of [1440, 390]) {
       await expect(swatch).toHaveCSS('--body-color', '#5f8fe8');
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expect(swatch).toHaveCSS('--body-color', '#a78bfa');
+      // The swatch reflects the edit before its device/account writes finish.
+      // Reopen only after the save indicator promises that edit is durable.
+      await expect(
+        page.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible();
       await page.reload();
       await expectBodyCount(page, 2);
       if (
