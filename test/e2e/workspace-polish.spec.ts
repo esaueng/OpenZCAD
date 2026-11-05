@@ -611,8 +611,15 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   // cold reopen. Drag it there, save the document, and verify the presentation
   // clamp keeps the label reachable without changing the stored dimension.
   const railStack = page.locator('.viewer-rail-stack');
-  await expect(canvasDimension).toBeVisible();
-  const beforeDrag = await canvasDimension.boundingBox();
+  // Undo/redo can replace the projected label between a visibility check and
+  // the next protocol call. Capture the visible box in the retried read.
+  let beforeDrag = await canvasDimension.boundingBox();
+  await expect
+    .poll(async () => {
+      beforeDrag = await canvasDimension.boundingBox();
+      return beforeDrag;
+    })
+    .not.toBeNull();
   const railBounds = await railStack.boundingBox();
   expect(beforeDrag).not.toBeNull();
   expect(railBounds).not.toBeNull();
