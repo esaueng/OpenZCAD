@@ -30299,6 +30299,8 @@ export function App() {
                       </Tooltip>
                     );
                   })}
+                  {/* The panels above; the layout and the log below. */}
+                  <span className="rail-divider" aria-hidden="true" />
                   <ViewOptionsMenu
                     options={panelLayout.options}
                     preset={matchingPreset(panelLayout)}

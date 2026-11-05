@@ -58,12 +58,22 @@ describe('sketch flyouts', () => {
     const css = sheet('quiet-stage.css');
     const selector =
       '.viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts)';
-    const short = css.slice(css.indexOf('@media (max-height: 600px)'));
+    // The short-window block that overrides the rule, which must follow it
+    // to win. Not the sheet's first such block: other short-window blocks
+    // (the rail's toolbox) come earlier and say nothing about the flyouts.
+    const base = css.indexOf(`${selector} {`);
+    expect(base).toBeGreaterThanOrEqual(0);
+    const shortAt = css.indexOf('@media (max-height: 600px)', base);
+    expect(shortAt).toBeGreaterThan(base);
+    const short = css.slice(shortAt);
+    // The override is inside that block, not in a later one.
+    const nextMedia = short.indexOf('@media', 1);
+    expect(short.indexOf(`${selector} {`)).toBeGreaterThan(0);
+    expect(
+      nextMedia < 0 || short.indexOf(`${selector} {`) < nextMedia
+    ).toBe(true);
     const maxHeight =
       rule(short, selector).match(/max-height:\s*([^;]+);/)?.[1] ?? '';
-    expect(css.indexOf('@media (max-height: 600px)')).toBeGreaterThan(
-      css.indexOf(`${selector} {`)
-    );
     expect(maxHeight).toMatch(/var\(--readout-reserve\)\s*\+/);
     expect(maxHeight).not.toMatch(/-\s*var\(--readout-reserve\)/);
   });
