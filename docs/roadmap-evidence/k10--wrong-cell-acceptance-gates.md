@@ -1,0 +1,5 @@
+---
+row: K10
+---
+
+2026-11-05 acceptance gates for the K10 `wrong` cells (`packages/kernel-adapter/src/result-acceptance.ts`, `result-acceptance.test.ts`). A subtract whose overlap could not be measured refuses as `cut_kept_tool_material` when a point the kernel classifies inside the target, the tool and the result proves the cut kept material. A direct wall resize refuses as `resize_left_blend_behind` when a curved face meeting the wall no longer meets the resized wall, and as `resize_volume_mismatch` when its volume change is beyond 3× of the swept sleeve. Cuts and intersects are held to strict validation. On the `669d1e2` pin, 81 wrong cells become typed refusals (box − torus 70, seam-blend resize 8, tangent drill 3), plus one grazing drill whose B-rep fails strict validation. The ledgers stand at 724 qualified, 521 typed, 176 untyped and 13 wrong (including #1265's typed resize refusals). The 13 Steinmetz cells stay wrong: their body is exact (exact ellipse edges, clean validation), and the kernel's volume integration is 1.25e-5 low, which is reported upstream.

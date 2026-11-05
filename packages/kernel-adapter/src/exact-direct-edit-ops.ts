@@ -10,6 +10,8 @@ import {
   sameAnalyticCarrier
 } from './exact-lineage-builders';
 import type { RemusKernel } from './remus-runtime';
+import { resizeCylindricalFaceTyped } from './exact-direct-edit-refusal';
+import { kernelRefusalCategoryOf } from './kernel-refusal';
 import { resolveParamValue } from '@openzcad/document-core';
 import { type Vec3 } from '@openzcad/geometry';
 import {
@@ -108,6 +110,7 @@ import { preparedFaceMove } from './exact-prepared-face-move';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
 import { resizeChamferedThroughHole } from './exact-chamfered-hole';
+import { assertWallResizeAccepted } from './result-acceptance';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -2209,6 +2212,21 @@ export function applyDirectEdit(
         : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
     );
   }
+  // A wall under a seam blend can come back at the new radius, closed and
+  // valid, with the blend left at the old size and capped off by a new face
+  // (K10, box×cylinder seam fillet). Hash-only seam fillets route here from
+  // `cylinderPrimitiveAncestry.ts`, so this is reachable in the app.
+  assertWallResizeAccepted(kernel, {
+    sourceSolid: solid,
+    sourceWall: face,
+    sourceRadius: geometry.radius,
+    output,
+    newRadius,
+    axisPoint: geometry.axisStart,
+    axisDirection: axisDir,
+    axisTolerance,
+    radiusTolerance
+  });
   if (deferOutputLineage || !journal) return { solids: [output] };
   const relation = moveFacesJournalFaceMap(
     kernel,
@@ -2267,13 +2285,17 @@ function resizeCylindricalFaceExactly(
   concavity: 'hole' | 'boss'
 ): number {
   try {
-    return kernel.resizeCylindricalFace(solid, face, toRadius);
+    return resizeCylindricalFaceTyped(kernel, solid, face, toRadius);
   } catch (error) {
     // Only a change inside the band is worth a detour. The refusal is told
     // by size, not by its wording: the kernel reports it as an exact-only
     // refusal or, when the boolean hands back the untouched solid, through
     // its volume gate, and either sentence may change in any release.
     if (Math.abs(toRadius - fromRadius) > SLEEVE_BAND * fromRadius) throw error;
+    // A refusal the kernel classifies as `unsupported` — a rim that meets a
+    // sphere or a blend, a partial wall it cannot reverse — is a statement
+    // about the geometry, not the size, so no waypoint can clear it.
+    if (kernelRefusalCategoryOf(error) === 'unsupported') throw error;
     const inward = [0.85, 0.7].map(
       (factor) => factor * Math.min(fromRadius, toRadius)
     );
@@ -2284,7 +2306,7 @@ function resizeCylindricalFaceExactly(
       concavity === 'hole' ? [...inward, ...outward] : [...outward, ...inward];
     for (const waypoint of waypoints) {
       try {
-        const via = kernel.resizeCylindricalFace(solid, face, waypoint);
+        const via = resizeCylindricalFaceTyped(kernel, solid, face, waypoint);
         const wall = Array.from(kernel.getSolidFaces(via)).filter((handle) => {
           const measured = measureFaceGeometry(kernel, handle);
           if (
@@ -2313,7 +2335,7 @@ function resizeCylindricalFaceExactly(
           );
         });
         if (wall.length !== 1) continue;
-        return kernel.resizeCylindricalFace(via, wall[0]!, toRadius);
+        return resizeCylindricalFaceTyped(kernel, via, wall[0]!, toRadius);
       } catch {
         // This waypoint is blocked; the other direction may not be.
       }

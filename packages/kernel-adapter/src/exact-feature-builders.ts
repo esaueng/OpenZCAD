@@ -1,6 +1,11 @@
 import { faceReferenceRepairCandidate } from './exact-reference-resolution';
 import { buildGearFeature } from './exact-gear';
 import { buildThreadFeature } from './exact-thread';
+import { requireValidSolid } from './kernel-validation';
+import {
+  cutKeptToolMaterialRefusal,
+  cutRetainedToolMaterialWitness
+} from './result-acceptance';
 import {
   carryAnalyticFaces,
   holeLineage,
@@ -2113,6 +2118,7 @@ function combineBooleanOperands(
         targetName,
         bodyName(document, data.targetBodyIds[index]!)
       ];
+      let overlapMeasured = false;
       if (subtracting) {
         try {
           // An intersect that refuses says nothing either way, and a
@@ -2125,6 +2131,7 @@ function combineBooleanOperands(
             kernel.copySolid(tool)
           );
           if (common.status === 'ok') {
+            overlapMeasured = true;
             sharedWithTools += kernel.volume(
               common.solid,
               MEASUREMENT_DEFLECTION
@@ -2160,6 +2167,21 @@ function combineBooleanOperands(
               ctx.cancellation,
               operandNames
             ));
+      // Where the overlap could not be measured the removed-volume gate
+      // below has nothing to compare against. Measured on the pin: a box
+      // minus a torus half-embedded in its top face refuses the exact
+      // intersect, yet `cutDetailed` reports `ok` and returns the box
+      // untouched. A point the kernel classifies inside the target, the
+      // tool and the cut settles that the cut did not take.
+      if (subtracting && !overlapMeasured && coaxial === null) {
+        const witness = cutRetainedToolMaterialWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (witness) throw cutKeptToolMaterialRefusal('subtract', witness);
+      }
       if (!pairwiseOperands) {
         probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;
       } else if (coaxial !== null) {
@@ -2174,6 +2196,18 @@ function combineBooleanOperands(
       }
     }
     solid = unifyBooleanFaces(kernel, solid);
+    // Unions pass the strict gate in `fuseUniformSolidChecked`; a cut or an
+    // intersect was only ever held to the relaxed validator, which accepts
+    // a body the strict one rejects. Measured on the pin: a cross drill
+    // internally tangent to its bar's wall cuts to a closed body with an
+    // inner wire wound like its outer one and an edge whose faces disagree
+    // in orientation, holding 2.2 mm³ more than the exact figure.
+    requireValidSolid(
+      kernel,
+      solid,
+      `${subtracting ? 'Subtract' : 'Intersect'} refused: the result is not ` +
+        'a valid solid. The target and tools were left unchanged.'
+    );
     // A cut that removes too little of the material it demonstrably
     // overlaps. A cross-drilled shaft can come back closed, valid,
     // and nearly unchanged even though its bore has positive-volume

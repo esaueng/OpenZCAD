@@ -4,7 +4,7 @@ import type {
   FeatureWarning
 } from '@openzcad/shared';
 import type { CommandDiagnostic } from './interaction/machine';
-import { plainRefusal } from './refusalLanguage';
+import { plainRefusal, type RefusalClassification } from './refusalLanguage';
 
 /**
  * A refusal in the two pieces the card shows: the sentence a person reads,
@@ -19,9 +19,9 @@ import { plainRefusal } from './refusalLanguage';
  */
 export function splitRefusal(
   text: string,
-  category?: string
+  classification?: string | RefusalClassification
 ): Pick<CommandDiagnostic, 'message' | 'detail' | 'category'> {
-  return plainRefusal(text, category);
+  return plainRefusal(text, classification);
 }
 
 /** Returns a kernel warning attributed to one named feature, without its prefix. */
@@ -104,6 +104,7 @@ export function refusingWarningDetail(
   reason: string;
   category?: string;
   advice?: BlendRefusalAdvice;
+  kernelRefusal?: FeatureWarning['kernelRefusal'];
 } | null {
   if (!featureWarnings) {
     const reason = warningForFeature(featureName, warnings);
@@ -122,7 +123,10 @@ export function refusingWarningDetail(
         failure.message.replace(/^Feature "[^"]+":\s*/, '').trim() ||
         'This operation does not produce valid geometry.',
       ...(failure.kernelRefusal
-        ? { category: failure.kernelRefusal.category }
+        ? {
+            category: failure.kernelRefusal.category,
+            kernelRefusal: failure.kernelRefusal
+          }
         : {}),
       ...(failure.blendAdvice ? { advice: failure.blendAdvice } : {})
     };
@@ -149,7 +153,10 @@ export function validatedFeatureRejection(
   );
   if (warning) {
     return {
-      ...splitRefusal(warning.reason, warning.category),
+      ...splitRefusal(
+        warning.reason,
+        warning.kernelRefusal ?? warning.category
+      ),
       ...(warning.advice ? { advice: warning.advice } : {}),
       ...(input.featureId
         ? {

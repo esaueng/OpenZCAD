@@ -70,6 +70,54 @@ const CATEGORY_SENTENCES: Readonly<Record<string, string>> = {
   internal: 'The exact kernel failed internally on this operation.'
 };
 
+/**
+ * The kernel's typed record of a refusal, as `FeatureWarning.kernelRefusal`
+ * carries it. Only the fields the copy branches on.
+ */
+export interface RefusalClassification {
+  category: string;
+  code?: string;
+  reason?: string;
+  neighborSurfaceType?: string;
+}
+
+const FREEFORM_NEIGHBOR =
+  "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet.";
+const CURVED_NEIGHBOR =
+  "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead.";
+const PARTIAL_WALL =
+  "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead.";
+
+/**
+ * The sentence for a refused face move the kernel typed, read from its code
+ * and cause rather than its prose. Null when the record does not name a cause
+ * this table has a sentence for; the prose table below then still applies,
+ * because untyped paths (move-faces, previews) reach the same sentences.
+ */
+function typedSentence(typed: RefusalClassification): string | null {
+  if (typed.code !== 'unsupported_move_face') {
+    return null;
+  }
+  switch (typed.reason) {
+    case 'unsupported_neighbor':
+      switch (typed.neighborSurfaceType) {
+        case 'nurbs':
+        case 'bspline':
+          return FREEFORM_NEIGHBOR;
+        case 'sphere':
+        case 'torus':
+        case 'cone':
+          return CURVED_NEIGHBOR;
+        default:
+          return null;
+      }
+    case 'partial_reversed_wall':
+      return PARTIAL_WALL;
+    default:
+      return null;
+  }
+}
+
 const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
   {
     pattern: /unsupported STEP entity:/i,
@@ -123,14 +171,12 @@ const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
     // fillet's edge selection (docs/plans/kernel-robustness-plan-2026-11-05.md).
     pattern:
       /move-face does not support face [^:]*\((?:nurbs|bspline)\): face is adjacent/i,
-    sentence:
-      "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet."
+    sentence: FREEFORM_NEIGHBOR
   },
   {
     pattern:
       /move-face does not support face [^:]*\((?:sphere|torus|cone)\): face is adjacent/i,
-    sentence:
-      "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead."
+    sentence: CURVED_NEIGHBOR
   },
   {
     // A hole wall that does not run between two whole circles — a blind bore
@@ -138,8 +184,7 @@ const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
     // partial wall only on the outside of a boss with planar sides. Editing
     // the tool's source size rebuilds the cut and works.
     pattern: /partial-cylinder resize currently requires/i,
-    sentence:
-      "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead."
+    sentence: PARTIAL_WALL
   },
   {
     // A local face move sweeps the face and lets only its edge neighbours
@@ -205,7 +250,13 @@ function looksLikeKernelText(sentence: string): boolean {
  * Splits `<sentence>\n<detail>` and translates the sentence when the kernel
  * wrote it.
  */
-export function plainRefusal(text: string, category?: string): PlainRefusal {
+export function plainRefusal(
+  text: string,
+  classification?: string | RefusalClassification
+): PlainRefusal {
+  const typed = typeof classification === 'object' ? classification : undefined;
+  const category =
+    typeof classification === 'string' ? classification : typed?.category;
   const separator = text.indexOf('\n');
   const sentence = (separator < 0 ? text : text.slice(0, separator)).trim();
   const tail = separator < 0 ? '' : text.slice(separator + 1).trim();
@@ -216,6 +267,11 @@ export function plainRefusal(text: string, category?: string): PlainRefusal {
     return tail
       ? { message: sentence, detail: tail, ...classified }
       : { message: sentence, ...classified };
+  }
+  const byCode = typed ? typedSentence(typed) : null;
+  if (byCode) {
+    const detail = [sentence, tail].filter(Boolean).join('\n');
+    return { message: byCode, detail, ...classified };
   }
   const translation = TRANSLATIONS.find(({ pattern }) =>
     pattern.test(sentence)
