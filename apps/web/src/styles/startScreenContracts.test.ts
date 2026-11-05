@@ -153,3 +153,26 @@ describe('workspace reveal', () => {
     }
   });
 });
+
+describe('start screen card names and flags', () => {
+  // 5 Nov 2026 review: series names ("PRM-0401-2026-1…") were cut to one
+  // line, so they read alike; a conflict and a failed save were a bare dot
+  // told apart by colour alone.
+  it('gives a card name two lines', () => {
+    const name = rule(css, '.start-tile-name');
+    expect(name).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(name).toMatch(/white-space:\s*normal/);
+  });
+
+  it('keeps the warning icon on a grid card that needs a decision', () => {
+    expect(css).not.toMatch(
+      /\.start-tile-grid:not\(\.is-list\)\s+\.start-tile-badge\.is-(?:conflict|sync-failed)\s+svg\s*\{[^}]*display:\s*none/
+    );
+    expect(
+      rule(
+        css,
+        '.start-tile-grid:not(.is-list) .start-tile-badge.is-sync-failed'
+      )
+    ).not.toMatch(/width:\s*8px/);
+  });
+});

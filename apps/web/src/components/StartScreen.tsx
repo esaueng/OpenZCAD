@@ -2532,20 +2532,27 @@ export function StartScreen({
       };
     }
     const saved = accountableProjects.length;
+    // Archived projects are saved too, but the Projects count leaves them
+    // out: a number here that differs from it read as missing projects.
+    const archived = shelves.archived.length;
     return {
       tone: 'saved',
       Icon: CloudCheck,
       text:
         saved === 0
           ? 'Signed in'
-          : saved === 1
-            ? '1 saved'
-            : `All ${saved} saved`,
+          : archived > 0
+            ? 'All saved'
+            : saved === 1
+              ? '1 saved'
+              : `All ${saved} saved`,
       ...(saved > 0 && {
         title:
           saved === 1
             ? '1 project saved to your account.'
-            : `All ${saved} projects saved to your account.`
+            : archived > 0
+              ? `All ${saved} projects saved to your account, including ${archived} archived.`
+              : `All ${saved} projects saved to your account.`
       })
     };
   }

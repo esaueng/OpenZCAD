@@ -910,6 +910,26 @@ describe('StartScreen library shell', () => {
     expect(screen.queryByRole('button', { name: /to my account/ })).toBeNull();
   });
 
+  it('keeps archived parts out of the saved count beside Projects', () => {
+    // 5 Nov 2026: "All 108 saved" sat under a Projects count of 106; the
+    // two archived parts made the difference and read as missing projects.
+    const archivedPart: ProjectSummary = {
+      ...localProject,
+      projectId: toProjectId('archived-part'),
+      name: 'Archived part',
+      organization: { status: 'archived', pinned: false, sortOrder: 0 }
+    };
+    renderStartScreen({
+      projects: [localProject, archivedPart],
+      cloudProjectIds: new Set([localProject.projectId, archivedPart.projectId])
+    });
+
+    expect(screen.getByText('All saved')).toHaveAttribute(
+      'title',
+      'All 2 projects saved to your account, including 1 archived.'
+    );
+  });
+
   it('offers sign-in in one line when signed out', () => {
     // Settings' footer explains signing in; the card used to repeat it as a
     // paragraph, a third copy of the same nag. The sentence names the state
