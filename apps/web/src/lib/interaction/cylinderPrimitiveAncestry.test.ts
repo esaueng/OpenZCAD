@@ -13,6 +13,8 @@ import {
 } from '@openzcad/document-core';
 import {
   toUserId,
+  type EdgeTopologyReferenceV5,
+  type EdgeWitnessV1,
   type FaceTopologyReferenceV5,
   type FaceWitnessV1,
   type FeatureId
@@ -20,7 +22,8 @@ import {
 import {
   primitiveBoxFaceAncestor,
   primitiveCylinderHeightAncestor,
-  primitiveCylinderRadiusAncestor
+  primitiveCylinderRadiusAncestor,
+  primitiveCylinderScale
 } from './cylinderPrimitiveAncestry';
 
 function cylinderDocument() {
@@ -590,6 +593,207 @@ describe('box side ancestry', () => {
     };
     expect(
       primitiveBoxFaceAncestor(fillet.document, fillet.bodyId, reference, 123)
+    ).toBeNull();
+  });
+});
+
+describe('cylinder radius across a boolean', () => {
+  function bossOnSphere(operation: 'union' | 'subtract' | 'intersect') {
+    const sphere = addPrimitiveFeature(
+      createProjectDocument('Boss on sphere', toUserId('user_ancestry')),
+      {
+        name: 'Sphere',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 73.5 }
+      }
+    );
+    const cylinder = addPrimitiveFeature(sphere, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 6, height: 64.1 }
+    });
+    const cylinderBodyId = cylinder.bodyOrder[1]!;
+    const placed = transformBody(cylinder, {
+      name: 'Move',
+      targetBodyId: cylinderBodyId,
+      translation: { x: 0, y: 0, z: 58 },
+      rotationDeg: { x: 20, y: 10, z: 0 }
+    }).document;
+    const joined = booleanBodies(placed, {
+      name: 'Combine',
+      operation,
+      targetBodyIds: [sphere.bodyOrder[0]!, cylinderBodyId]
+    });
+    const wall: FaceTopologyReferenceV5 = {
+      kind: 'face',
+      producingFeatureId: listFeaturesInOrder(joined.document).at(-1)!
+        .featureId,
+      lineageName: 'boolean.face.operand.1.primitive.cylinder.face.wall',
+      currentHash: 321,
+      witnessVersion: 1,
+      witness: {} as FaceWitnessV1
+    };
+    const cylinderFeatureId = listFeaturesInOrder(cylinder).at(-1)!.featureId;
+    return { joined, wall, cylinderFeatureId, cylinderBodyId };
+  }
+
+  it('resizes the consumed cylinder behind a union or subtract wall', () => {
+    for (const operation of ['union', 'subtract'] as const) {
+      const { joined, wall, cylinderFeatureId } = bossOnSphere(operation);
+      expect(
+        primitiveCylinderRadiusAncestor(
+          joined.document,
+          joined.bodyId,
+          wall,
+          321
+        )?.featureId,
+        operation
+      ).toBe(cylinderFeatureId);
+      // A rotation does not change a radius, and nothing scaled the operand.
+      expect(
+        primitiveCylinderScale(joined.document, joined.bodyId, wall, 321)
+      ).toBe(1);
+      // Without the wall's role the boolean stays a hard boundary.
+      expect(
+        primitiveCylinderRadiusAncestor(joined.document, joined.bodyId)
+      ).toBeNull();
+    }
+  });
+
+  it('follows the wall through a referenced cap offset and a seam fillet', () => {
+    const { joined, wall, cylinderFeatureId } = bossOnSphere('union');
+    const capped = directEditBody(joined.document, {
+      name: 'Offset face',
+      targetBodyId: joined.bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: 654,
+        faceReference: {
+          ...wall,
+          lineageName: 'boolean.face.operand.1.primitive.cylinder.face.cap.end',
+          currentHash: 654
+        },
+        sourceSurfaceType: 'plane',
+        sourceArea: 113,
+        sourceCenter: { x: 0, y: 0, z: 122 },
+        sourceNormal: { x: 0, y: 0, z: 1 },
+        offset: 5
+      }
+    }).document;
+    const seam: EdgeTopologyReferenceV5 = {
+      kind: 'edge',
+      producingFeatureId: wall.producingFeatureId,
+      lineageName:
+        'boolean.edge.between.operand.0.primitive.box.face.z-max|operand.1.primitive.cylinder.face.wall',
+      currentHash: 101,
+      witnessVersion: 1,
+      witness: {} as EdgeWitnessV1
+    };
+    const named = filletEdges(capped, {
+      name: 'Fillet edges',
+      targetBodyId: joined.bodyId,
+      edgeHashes: [101],
+      edgeReferences: [seam],
+      size: 2
+    });
+    expect(
+      primitiveCylinderRadiusAncestor(named.document, named.bodyId, wall, 321)
+        ?.featureId
+    ).toBe(cylinderFeatureId);
+  });
+
+  it('keeps a hash-only seam fillet on the local wall resize', () => {
+    // Resizing the operand makes a new seam edge, which a hash cannot find
+    // again; the local resize leaves the seam where the fillet picked it.
+    const { joined, wall } = bossOnSphere('union');
+    const rounded = filletEdges(joined.document, {
+      name: 'Fillet edges',
+      targetBodyId: joined.bodyId,
+      edgeHashes: [101, 102],
+      size: 2
+    });
+    expect(
+      primitiveCylinderRadiusAncestor(
+        rounded.document,
+        rounded.bodyId,
+        wall,
+        321
+      )
+    ).toBeNull();
+  });
+
+  it('requires a current wall role published by that boolean', () => {
+    const { joined, wall } = bossOnSphere('union');
+    for (const candidate of [
+      { ...wall, currentHash: 322 },
+      { ...wall, producingFeatureId: sourceFeatureId(joined.document) },
+      ...[
+        'boolean.face.operand.0.primitive.cylinder.face.wall',
+        'boolean.face.operand.7.primitive.cylinder.face.wall',
+        'boolean.face.operand.1.primitive.cylinder.face.cap.end',
+        'boolean.face.shared.primitive.cylinder.face.wall',
+        'boolean.face.operand.1.boolean.face.operand.0.primitive.cylinder.face.wall'
+      ].map((lineageName) => ({ ...wall, lineageName }))
+    ]) {
+      expect(
+        primitiveCylinderRadiusAncestor(
+          joined.document,
+          joined.bodyId,
+          candidate,
+          321
+        ),
+        candidate.lineageName
+      ).toBeNull();
+    }
+  });
+
+  it('does not cross an intersect, a kept source or a copied source', () => {
+    const intersected = bossOnSphere('intersect');
+    expect(
+      primitiveCylinderRadiusAncestor(
+        intersected.joined.document,
+        intersected.joined.bodyId,
+        intersected.wall,
+        321
+      )
+    ).toBeNull();
+    const { joined, wall, cylinderBodyId } = bossOnSphere('union');
+    const kept = updateFeature(joined.document, {
+      featureId: wall.producingFeatureId,
+      data: { keepOriginals: 'all' }
+    });
+    expect(
+      primitiveCylinderRadiusAncestor(kept, joined.bodyId, wall, 321)
+    ).toBeNull();
+    const copied = transformBody(joined.document, {
+      name: 'Copy source',
+      targetBodyId: cylinderBodyId,
+      translation: { x: 50, y: 0, z: 0 },
+      copy: true
+    }).document;
+    expect(
+      primitiveCylinderRadiusAncestor(copied, joined.bodyId, wall, 321)
+    ).toBeNull();
+  });
+
+  it('keeps an earlier local wall resize authoritative', () => {
+    const { joined, wall } = bossOnSphere('union');
+    const resized = directEditBody(joined.document, {
+      name: 'Resize Cylinder',
+      targetBodyId: joined.bodyId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: 321,
+        faceReference: wall,
+        sourceRadius: 6,
+        sourceAxisStart: { x: 0, y: 0, z: 58 },
+        sourceAxisEnd: { x: 0, y: 0, z: 122.1 },
+        concavity: 'boss',
+        radius: 7
+      }
+    }).document;
+    expect(
+      primitiveCylinderRadiusAncestor(resized, joined.bodyId, wall, 321)
     ).toBeNull();
   });
 });
