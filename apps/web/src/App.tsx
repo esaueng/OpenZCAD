@@ -23469,7 +23469,13 @@ export function App() {
       return null;
     }
     const profile =
-      doc && primitiveCylinderRadiusAncestor(doc, target.bodyId as BodyId)
+      doc &&
+      primitiveCylinderRadiusAncestor(
+        doc,
+        target.bodyId as BodyId,
+        target.reference,
+        target.hash
+      )
         ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
         : null;
     const vector = (value: readonly [number, number, number]) => ({
@@ -23666,15 +23672,24 @@ export function App() {
     }
 
     // Preserve the parametric source edit through any uninterrupted chain of
-    // fillet/chamfer result bodies. Their stored lineage regenerates the exact
+    // fillet/chamfer result bodies and across one union or subtract that
+    // consumed the cylinder. Their stored lineage regenerates the exact
     // downstream B-reps; arbitrary result features and direct edits remain on
     // the strict generic cylindrical-face path.
     const primitive = primitiveCylinderRadiusAncestor(
       base,
-      target.bodyId as BodyId
+      target.bodyId as BodyId,
+      target.reference,
+      target.hash
     );
     if (primitive?.data.featureKind === 'primitive') {
-      const scale = primitiveCylinderScale(base, target.bodyId as BodyId) ?? 1;
+      const scale =
+        primitiveCylinderScale(
+          base,
+          target.bodyId as BodyId,
+          target.reference,
+          target.hash
+        ) ?? 1;
       const localRadius =
         typeof radius === 'number'
           ? radius / scale

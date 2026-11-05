@@ -185,6 +185,15 @@ export function selectionFeature(
     if (face.reference?.lineageName === 'modifier.cylinder.face.wall') {
       return primitiveCylinderRadiusAncestor(document, body.bodyId);
     }
+    if (face.reference?.lineageName.startsWith('boolean.face.operand.')) {
+      const wallOwner = primitiveCylinderRadiusAncestor(
+        document,
+        body.bodyId,
+        face.reference,
+        face.hash
+      );
+      if (wallOwner) return wallOwner;
+    }
   } else {
     const edge = body.topology?.edges.find((candidate) => candidate === entry);
     if (!edge || edge.displayRole === 'seam') return null;
