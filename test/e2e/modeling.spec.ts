@@ -1640,13 +1640,13 @@ test('preflights and splits a box into two live half bodies', async ({
   ).toBeVisible();
 
   // U09: Split runs in place. The body, then the Right (YZ) ghost plane
-  // (clicked clear of the box), which lies on the box's x = 0 face where
+  // (clicked through the box), which lies on the box's x = 0 face where
   // the kernel refuses a split; sliding it 5 along +X crosses the interior.
   await page.getByRole('button', { name: /^Split/ }).click();
   await pickObjectsBody(page, 'Box 1');
   const splitBar = page.getByRole('group', { name: 'Split command' });
   await expect(splitBar).toContainText('Pick a plane or flat face');
-  await clickWorldPoint(page, [0, -3, 4]);
+  await clickWorldPoint(page, [0, 3, 4]);
   await expect(splitBar).toContainText('the cutting plane contains edge');
   await expect(
     splitBar.getByRole('button', { name: 'Done', exact: true })
@@ -3565,7 +3565,7 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   // keeps its default name, "Split".
   await page.getByRole('button', { name: /^Split/ }).click();
   await pickObjectsBody(page, 'Box 1');
-  await clickWorldPoint(page, [0, -3, 4]);
+  await clickWorldPoint(page, [0, 3, 4]);
   await enterCommandValue(page, 'offset', '5');
   await finishInPlaceCommand(page, 'Split');
   const row = page.locator('.feature-row-main', { hasText: /^Split/ });

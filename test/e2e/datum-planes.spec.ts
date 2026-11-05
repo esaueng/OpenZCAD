@@ -164,11 +164,11 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   await expectBodyCount(page, 1);
 
   // U09: the Plane runs in place. An offset plane 8 above Top (XY): its
-  // ghost plane clicked clear of the box, then 8 on the offset chip.
+  // ghost plane clicked through the box, then 8 on the offset chip.
   await page.getByRole('button', { name: /^Plane — / }).click();
   const planeBar = page.getByRole('group', { name: 'Plane command' });
   await expect(planeBar).toContainText('Pick a plane');
-  await clickWorldPoint(page, [3, -2, 0]);
+  await clickWorldPoint(page, [3, 2, 0]);
   await expect(planeBar).toContainText('Drag the offset');
   await enterCommandValue(page, 'offset', '8');
   await finishInPlaceCommand(page, 'Plane');
