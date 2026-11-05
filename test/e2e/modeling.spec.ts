@@ -3147,7 +3147,11 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   // toggles that card; Measurements opens it explicitly in either state.
   const boxMeasurements = await featureCardFromHistory(
     page,
-    page.locator('.feature-row', { hasText: 'Box' })
+    // Matched by its name, not its value: a boolean row now names its
+    // operands ("Box 1 − Cylinder"), which also contain "Box".
+    page.locator('.feature-row', {
+      has: page.locator('.feature-row-main', { hasText: 'Box' })
+    })
   );
   await expect(boxMeasurements).toContainText('34560');
 
