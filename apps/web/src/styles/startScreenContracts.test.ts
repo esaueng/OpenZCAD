@@ -176,3 +176,15 @@ describe('start screen card names and flags', () => {
     ).not.toMatch(/width:\s*8px/);
   });
 });
+
+describe('start screen shelf groups', () => {
+  it('styles the Pinned and Projects labels as the column eyebrow', () => {
+    // 5 Nov 2026: the groups were unlabelled, so a short Pinned row read as
+    // a gap in the grid.
+    const label = rule(css, '.start-group-label');
+    expect(label).toMatch(/font-family:\s*var\(--font-mono\)/);
+    expect(label).toMatch(/text-transform:\s*uppercase/);
+    // A negative bottom margin would put a folder's 7px tab on the label.
+    expect(label).toMatch(/margin:\s*0;/);
+  });
+});

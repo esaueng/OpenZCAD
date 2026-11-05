@@ -1259,6 +1259,23 @@
   gap: var(--sp-3);
 }
 
+/* Pinned and Projects, over their groups: the column's mono eyebrow. The
+   body's row gap below it leaves room for a folder's 7px tab; the margin
+   above sets the label off from the group before it. */
+.start-group-label {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.start-tile-grid + .start-group-label {
+  margin-top: var(--sp-3);
+}
+
 /* Card size (Settings › Appearance): the narrowest a card may be. Small is
    the original; the preview keeps its 16:10, so it grows with the card. */
 .start-tile-grid.is-small {

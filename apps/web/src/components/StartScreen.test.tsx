@@ -1940,12 +1940,17 @@ describe('StartScreen sidebar and shelf edge', () => {
     { ...localProject, projectId: toProjectId('loose'), name: 'Loose part' }
   ];
 
-  it('groups pinned cards first with no labels, as inside a folder', () => {
-    // The cards' own pins mark the group.
+  it('groups pinned cards first under Pinned and Projects labels', () => {
+    // 5 Nov 2026: unlabelled, the Pinned group's short first row read as a
+    // gap in the grid rather than a group.
     const { container } = renderStartScreen({ projects: pinnedAndLoose() });
     const body = container.querySelector('.start-body')!;
     expect(body.querySelectorAll(':scope > .start-tile-grid')).toHaveLength(2);
-    expect(body.querySelector('h3')).toBeNull();
+    expect(
+      [...body.querySelectorAll(':scope > h3.start-group-label')].map(
+        (label) => label.textContent
+      )
+    ).toEqual(['Pinned', 'Projects']);
   });
 
   it('counts projects, not tiles, in the Pinned tab and group labels', () => {
@@ -1981,6 +1986,11 @@ describe('StartScreen sidebar and shelf edge', () => {
       name: /^Pinned/
     });
     expect(pinnedFilter).toHaveTextContent('Pinned3');
+    // The grid shows the folder as one tile; the tab says why it counts 3.
+    expect(pinnedFilter).toHaveAttribute(
+      'title',
+      '3 projects, 2 of them in pinned folders'
+    );
 
     fireEvent.click(pinnedFilter);
     expect(
