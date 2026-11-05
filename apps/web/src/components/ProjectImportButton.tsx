@@ -1,3 +1,4 @@
+import { fileAccept } from '../lib/appleTouch';
 import { useRef } from 'react';
 import { Upload } from 'lucide-react';
 
@@ -38,7 +39,7 @@ export function ProjectImportButton({
       <input
         ref={input}
         type="file"
-        accept=".openzcad"
+        accept={fileAccept('.openzcad')}
         aria-label="Import project backup"
         hidden
         onChange={(event) => {

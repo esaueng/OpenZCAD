@@ -188,6 +188,29 @@ describe('workspace session persistence', () => {
     expect(reloaded).toHaveProperty('sketch-500', false);
   });
 
+  it('round-trips hidden reference IDs and ignores invalid entries', () => {
+    const storage = new MemoryStorage();
+    const hiddenReferences = { datumIds: ['plane-a'], imageIds: ['image-a'] };
+    saveProjectView('project-1', { ...view, hiddenReferences }, storage);
+    expect(loadProjectView('project-1', storage)).toEqual({
+      ...view,
+      hiddenReferences
+    });
+
+    const raw = JSON.parse(storage.getItem(WORKSPACE_SESSION_STORAGE_KEY)!) as {
+      views: Record<string, Record<string, unknown>>;
+    };
+    raw.views['project-1']!.hiddenReferences = {
+      datumIds: ['plane-a', 3, ''],
+      imageIds: 'image-a'
+    };
+    storage.setItem(WORKSPACE_SESSION_STORAGE_KEY, JSON.stringify(raw));
+    expect(loadProjectView('project-1', storage)).toEqual({
+      ...view,
+      hiddenReferences: { datumIds: ['plane-a'], imageIds: [] }
+    });
+  });
+
   it('keeps the field of view a pose was framed at, dropping a bad one', () => {
     const storage = new MemoryStorage();
     saveProjectView(
@@ -195,14 +218,14 @@ describe('workspace session persistence', () => {
       { ...view, camera: { ...view.camera, fieldOfView: 60 } },
       storage
     );
-    expect(loadProjectView('project-1', storage)?.camera.fieldOfView).toBe(60);
+    expect(loadProjectView('project-1', storage)?.camera?.fieldOfView).toBe(60);
     saveProjectView(
       'project-1',
       { ...view, camera: { ...view.camera, fieldOfView: Number.NaN } },
       storage
     );
     const reloaded = loadProjectView('project-1', storage);
-    expect(reloaded?.camera.position).toEqual(view.camera.position);
+    expect(reloaded?.camera?.position).toEqual(view.camera.position);
     expect(reloaded?.camera).not.toHaveProperty('fieldOfView');
   });
 

@@ -349,7 +349,11 @@ export function parseUpdateAppSettingsRequest(
         touchHistoryGestures:
           typeof viewport.touchHistoryGestures === 'boolean'
             ? viewport.touchHistoryGestures
-            : DEFAULT_APP_SETTINGS.viewport.touchHistoryGestures
+            : DEFAULT_APP_SETTINGS.viewport.touchHistoryGestures,
+        pencilDrawsOnly:
+          typeof viewport.pencilDrawsOnly === 'boolean'
+            ? viewport.pencilDrawsOnly
+            : DEFAULT_APP_SETTINGS.viewport.pencilDrawsOnly
       },
       sketching: {
         gridVisible:
@@ -954,7 +958,7 @@ export function settingsRequestOmitsKeymap(body: unknown): boolean {
 
 /** Viewport preferences newer than some clients that still save settings. */
 export type CarriedViewportField =
-  'fieldOfView' | 'xrayOpacity' | 'touchHistoryGestures';
+  'fieldOfView' | 'xrayOpacity' | 'touchHistoryGestures' | 'pencilDrawsOnly';
 
 /**
  * The viewport preferences a settings PATCH leaves out because its client
@@ -966,7 +970,8 @@ export function settingsRequestOmittedViewportFields(
   const fields: CarriedViewportField[] = [
     'fieldOfView',
     'xrayOpacity',
-    'touchHistoryGestures'
+    'touchHistoryGestures',
+    'pencilDrawsOnly'
   ];
   if (!body || typeof body !== 'object') return fields;
   const settings = (body as Record<string, unknown>).settings;

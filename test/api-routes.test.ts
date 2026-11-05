@@ -1427,6 +1427,7 @@ describe('worker api routes', () => {
     custom.viewport.fieldOfView = 70;
     custom.viewport.xrayOpacity = 60;
     custom.viewport.touchHistoryGestures = false;
+    custom.viewport.pencilDrawsOnly = false;
     let storedSettings = structuredClone(custom);
     let storedRevision = 1;
     const prepare = vi.fn((query: string) => {
@@ -1470,6 +1471,7 @@ describe('worker api routes', () => {
     delete legacy.viewport.fieldOfView;
     delete legacy.viewport.xrayOpacity;
     delete legacy.viewport.touchHistoryGestures;
+    delete legacy.viewport.pencilDrawsOnly;
     legacy.appearance.theme = 'dark';
     const saved = await worker.fetch(
       patch('/api/settings', { settings: legacy, expectedRevision: 1 }),
@@ -1481,6 +1483,7 @@ describe('worker api routes', () => {
     expect(storedSettings.viewport.xrayOpacity).toBe(60);
     // Switched off on an iPad, it stays off when a desktop tab saves.
     expect(storedSettings.viewport.touchHistoryGestures).toBe(false);
+    expect(storedSettings.viewport.pencilDrawsOnly).toBe(false);
 
     // A client that sends them is honoured.
     const changed = structuredClone(storedSettings);

@@ -1,4 +1,10 @@
 import {
+  CAD_IMPORT_ACCEPT,
+  fileAccept,
+  persistStorageForInstalledApp
+} from './lib/appleTouch';
+import { registerOfflineShell } from './lib/offlineShell';
+import {
   localHistoryAppend,
   retainLocalHistoryAppend,
   type LocalHistoryAppend
@@ -2286,6 +2292,13 @@ export function App() {
       countReactCommit();
     }
   });
+  // An installed (Home Screen) app keeps its local projects under storage
+  // pressure and opens offline (L02). Here rather than in the entry, which
+  // stays as small as it was.
+  useEffect(() => {
+    void persistStorageForInstalledApp();
+    registerOfflineShell();
+  }, []);
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
@@ -3226,6 +3239,10 @@ export function App() {
     setHiddenBodyIds,
     sketchVisibility: sketchVisibilityOverrides,
     setSketchVisibility: setSketchVisibilityOverrides,
+    hiddenDatumIds,
+    setHiddenDatumIds,
+    hiddenReferenceImageIds,
+    setHiddenReferenceImageIds,
     restore: restoreProjectView,
     apply: applyProjectView,
     snapshot: projectViewSnapshot,
@@ -11540,14 +11557,6 @@ export function App() {
   // the project view: absent means the default — a sketch whose profile a
   // feature consumed hides itself, everything else shows. View state on this
   // device, persisted beside the camera and deliberately not in the document.
-  /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
-  const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
-    () => new Set()
-  );
-  /** I05 reference images hidden by their eye toggle: view state too. */
-  const [hiddenReferenceImageIds, setHiddenReferenceImageIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
   /** The reference image whose card is open, with the Image tool. */
   const [openReferenceImageId, setOpenReferenceImageId] =
     useState<ReferenceImageId | null>(null);
@@ -23517,7 +23526,13 @@ export function App() {
       return null;
     }
     const profile =
-      doc && primitiveCylinderRadiusAncestor(doc, target.bodyId as BodyId)
+      doc &&
+      primitiveCylinderRadiusAncestor(
+        doc,
+        target.bodyId as BodyId,
+        target.reference,
+        target.hash
+      )
         ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
         : null;
     const vector = (value: readonly [number, number, number]) => ({
@@ -23714,15 +23729,24 @@ export function App() {
     }
 
     // Preserve the parametric source edit through any uninterrupted chain of
-    // fillet/chamfer result bodies. Their stored lineage regenerates the exact
+    // fillet/chamfer result bodies and across one union or subtract that
+    // consumed the cylinder. Their stored lineage regenerates the exact
     // downstream B-reps; arbitrary result features and direct edits remain on
     // the strict generic cylindrical-face path.
     const primitive = primitiveCylinderRadiusAncestor(
       base,
-      target.bodyId as BodyId
+      target.bodyId as BodyId,
+      target.reference,
+      target.hash
     );
     if (primitive?.data.featureKind === 'primitive') {
-      const scale = primitiveCylinderScale(base, target.bodyId as BodyId) ?? 1;
+      const scale =
+        primitiveCylinderScale(
+          base,
+          target.bodyId as BodyId,
+          target.reference,
+          target.hash
+        ) ?? 1;
       const localRadius =
         typeof radius === 'number'
           ? radius / scale
@@ -30398,6 +30422,7 @@ export function App() {
             onUndo={handleUndo}
             onRedo={handleRedo}
             touchHistoryGestures={appSettings.viewport.touchHistoryGestures}
+            pencilDrawsOnly={appSettings.viewport.pencilDrawsOnly}
             key={`workspace-view-${resumeViewGeneration}`}
             initialView={initialView}
             onViewChange={handleViewportChange}
@@ -32161,7 +32186,7 @@ export function App() {
           <input
             ref={projectImportInputRef}
             type="file"
-            accept=".openzcad"
+            accept={fileAccept('.openzcad')}
             hidden
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
@@ -32172,7 +32197,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
+            accept={fileAccept(CAD_IMPORT_ACCEPT)}
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {

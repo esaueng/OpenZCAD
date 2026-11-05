@@ -768,6 +768,24 @@ describe('application settings', () => {
     });
   });
 
+  it('reads Pencil-only drawing as on unless switched off', () => {
+    expect(normalizeAppSettings({}).viewport.pencilDrawsOnly).toBe(true);
+    expect(
+      normalizeAppSettings({ viewport: { pencilDrawsOnly: false } }).viewport
+        .pencilDrawsOnly
+    ).toBe(false);
+    const legacy = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.pencilDrawsOnly;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: legacy },
+        'development'
+      ).settings.viewport.pencilDrawsOnly
+    ).toBe(true);
+  });
+
   it('reads two- and three-finger history taps as on unless switched off', () => {
     // Absent from settings written before touch gestures existed.
     expect(normalizeAppSettings({}).viewport.touchHistoryGestures).toBe(true);

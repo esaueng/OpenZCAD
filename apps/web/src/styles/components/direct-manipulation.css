@@ -1516,10 +1516,9 @@
   box-sizing: border-box;
   width: 100%;
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  align-items: center;
-  padding: 10px 12px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
   color: var(--color-text);
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
@@ -1527,24 +1526,148 @@
   box-shadow: var(--shadow-2);
 }
 
-.sketch-plane-prompt span:first-child {
+.sketch-plane-head {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
 }
 
-.sketch-plane-prompt strong {
+.sketch-plane-head strong {
   font-size: var(--fs-sm);
 }
 
-.sketch-plane-prompt small {
+.sketch-plane-hint {
+  margin-top: -6px;
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
+  line-height: 1.4;
 }
 
-/* Distance from the principal plane the next sketch starts on. Sits between
-   the prompt copy and the plane buttons because it qualifies the pick that
-   follows rather than being an action of its own. */
+/*
+ * Mouse parity for the Escape that leaves plane picking. Muted so it reads as
+ * a way out rather than a fourth plane to choose.
+ */
+.sketch-plane-dismiss {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 6px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sketch-plane-dismiss kbd {
+  padding: 1px 4px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.sketch-plane-dismiss:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+/* One tile per principal plane, keyed to the ghost plane's colour in the
+   viewport so the card and the view say the same thing. */
+.sketch-plane-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sketch-plane-tile {
+  --plane-hue: var(--color-handle-z);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 7px;
+  row-gap: 1px;
+  align-items: center;
+  min-width: 0;
+  padding: 7px 8px;
+  color: var(--color-text);
+  text-align: left;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.sketch-plane-tile.is-xz {
+  --plane-hue: var(--color-handle-y);
+}
+
+.sketch-plane-tile.is-yz {
+  --plane-hue: var(--color-handle-x);
+}
+
+.sketch-plane-tile:hover,
+.sketch-plane-tile:focus-visible {
+  background: color-mix(in srgb, var(--plane-hue) 12%, var(--color-surface-1));
+  border-color: color-mix(in srgb, var(--plane-hue) 60%, transparent);
+}
+
+/* The ghost panel's shape in miniature: a tinted square, corners cut. */
+.sketch-plane-swatch {
+  grid-row: span 2;
+  width: 14px;
+  height: 14px;
+  background: color-mix(in srgb, var(--plane-hue) 28%, transparent);
+  border: 1.5px solid var(--plane-hue);
+  border-radius: 3px;
+}
+
+.sketch-plane-name {
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sketch-plane-id {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.04em;
+}
+
+.sketch-plane-datums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sketch-plane-datum {
+  padding: 5px 10px;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.sketch-plane-datum:hover:not(:disabled) {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-dim);
+}
+
+.sketch-plane-datum:disabled {
+  color: var(--color-text-subtle);
+  cursor: not-allowed;
+}
+
+/* Distance from the principal plane the next sketch starts on. Last, as a
+   qualifier of the pick rather than an action of its own. */
 .sketch-plane-offset {
   display: flex;
   gap: 6px;
@@ -1554,11 +1677,12 @@
 }
 
 .sketch-plane-offset input {
-  width: 64px;
+  width: 72px;
   padding: 4px 6px;
   color: var(--color-text);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
   text-align: right;
   background: var(--color-surface-1);
   border: 1px solid var(--color-border-strong);
@@ -1567,44 +1691,6 @@
 
 .sketch-plane-offset-units {
   color: var(--color-text-subtle);
-}
-
-.sketch-plane-buttons {
-  display: flex;
-  gap: 4px;
-}
-
-.sketch-plane-buttons button {
-  padding: 5px 10px;
-  color: var(--color-text);
-  font-size: var(--fs-xs);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.sketch-plane-buttons button:hover {
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
-}
-
-/*
- * Mouse parity for the Escape that leaves plane picking. Muted so it reads as
- * a way out rather than a fourth plane to choose.
- */
-.sketch-plane-buttons .sketch-plane-dismiss {
-  margin-left: var(--sp-1);
-  padding: 5px 9px;
-  color: var(--color-text-muted);
-  font-size: var(--fs-sm);
-  line-height: 1;
-  background: transparent;
-  border-color: transparent;
-}
-
-.sketch-plane-buttons .sketch-plane-dismiss:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
 }
 
 /* One-click return to the source sketch after a region extrude. Below the
