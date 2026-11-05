@@ -1,0 +1,20 @@
+{
+  "cells": {
+    "sphere×cylinder/off-axis/union/no-modifier/none": "qualified",
+    "sphere×cylinder/off-axis/union/no-modifier/direct-grow": "untyped-refusal",
+    "sphere×cylinder/off-axis/union/no-modifier/direct-shrink": "untyped-refusal",
+    "sphere×cylinder/off-axis/union/no-modifier/source-grow": "qualified",
+    "sphere×cylinder/off-axis/subtract/no-modifier/none": "qualified",
+    "sphere×cylinder/off-axis/subtract/no-modifier/direct-grow": "untyped-refusal",
+    "sphere×cylinder/off-axis/subtract/no-modifier/direct-shrink": "untyped-refusal",
+    "sphere×cylinder/off-axis/subtract/no-modifier/source-grow": "qualified",
+    "sphere×cylinder/tilted/union/no-modifier/none": "qualified",
+    "sphere×cylinder/tilted/union/no-modifier/direct-grow": "untyped-refusal",
+    "sphere×cylinder/tilted/union/no-modifier/direct-shrink": "untyped-refusal",
+    "sphere×cylinder/tilted/union/no-modifier/source-grow": "qualified",
+    "sphere×cylinder/tilted/subtract/no-modifier/none": "qualified",
+    "sphere×cylinder/tilted/subtract/no-modifier/direct-grow": "untyped-refusal",
+    "sphere×cylinder/tilted/subtract/no-modifier/direct-shrink": "untyped-refusal",
+    "sphere×cylinder/tilted/subtract/no-modifier/source-grow": "qualified"
+  }
+}
