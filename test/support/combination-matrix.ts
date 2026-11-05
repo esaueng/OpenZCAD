@@ -898,14 +898,14 @@ function withToolDimension(model: Model, key: string, value: number): Model {
 
 // --------------------------------------------------------------- the runner
 
-interface Session {
+export interface Session {
   adapter: ExactKernelAdapter;
   deadline: number;
 }
 
-class CellTimeout extends Error {}
+export class CellTimeout extends Error {}
 
-async function sync(
+export async function sync(
   session: Session,
   document: ProjectDocument,
   bodyId?: BodyId
@@ -924,7 +924,10 @@ async function sync(
 }
 
 /** The refusal a sync carries, or null when every feature built. */
-function refusal(derived: DerivedState, step: string): CellOutcome | null {
+export function refusal(
+  derived: DerivedState,
+  step: string
+): CellOutcome | null {
   const featureWarnings = derived.featureWarnings ?? [];
   const blocking = featureWarnings.filter(
     (warning) => warning.kind === 'build-failed' || warning.kind === 'refusal'
@@ -1264,7 +1267,7 @@ async function buildStage(session: Session, cell: Cell): Promise<Stage> {
   return blocked ? { ...next, stopped: blocked } : next;
 }
 
-function census(body: BodyRepresentation): string {
+export function census(body: BodyRepresentation): string {
   return `${body.topology?.faces.length ?? 0}f/${body.topology?.edges.length ?? 0}e`;
 }
 
@@ -1336,7 +1339,7 @@ function wallCheck(
       };
 }
 
-function sameBody(
+export function sameBody(
   left: BodyRepresentation,
   right: BodyRepresentation
 ): boolean {
