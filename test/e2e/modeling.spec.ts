@@ -2045,7 +2045,7 @@ test('applies an assistant-created sketch and same-proposal extrude', { tag: '@c
 test('resumes a clarified request from an OpenRouter Responses stream', async ({
   page
 }) => {
-  await stubApi(page, { assistantEnabled: true });
+  await stubApi(page, { assistantEnabled: true, commandFoldClosed: true });
   const consoleErrors: string[] = [];
   const assistantRequests: Array<Record<string, unknown>> = [];
   page.on('console', (message) => {
@@ -2354,7 +2354,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
 test('rejects a disconnected Union proposed by the assistant before commit', async ({
   page
 }) => {
-  await stubApi(page, { assistantEnabled: true });
+  await stubApi(page, { assistantEnabled: true, commandFoldClosed: true });
   await page.route('**/api/assistant/status', (route) =>
     route.fulfill({
       json: {
@@ -3216,7 +3216,8 @@ test('keeps parameter names visible in the 252px Build sidebar', async ({
   const parameterName = page.locator('.param-name', {
     hasText: 'mount_inset'
   });
-  await expect(parameterName).toHaveText('mount_inset');
+  await expect(parameterName).toContainText('Mount inset');
+  await expect(parameterName.locator('code')).toHaveText('mount_inset');
   await expect
     .poll(() =>
       parameterName.evaluate(

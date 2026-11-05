@@ -948,7 +948,10 @@ describe('StartScreen library shell', () => {
   it("leaves the closed project's status out and keeps news to one line", () => {
     const carried =
       'Chamfer could not be created on 1 selected edge with distance 1. The modeling engine could not join this chamfer to the existing fillet or chamfer.';
-    const props = startScreenProps({ status: carried });
+    const props = startScreenProps({
+      status: carried,
+      previousWorkspaceStatus: carried
+    });
     const { rerender } = render(<StartScreen {...props} />);
     expect(document.querySelector('.start-status')).toBeNull();
     expect(screen.queryByText(/Chamfer could not/)).toBeNull();
@@ -958,6 +961,16 @@ describe('StartScreen library shell', () => {
     const line = document.querySelector('.start-status');
     expect(line).toHaveTextContent(news);
     expect(line).toHaveAttribute('title', news);
+  });
+
+  it('shows a creation refusal already present when the library remounts', () => {
+    renderStartScreen({
+      status: 'Creation refused for this test.',
+      previousWorkspaceStatus: 'Created Previous project.'
+    });
+    expect(document.querySelector('.start-status')).toHaveTextContent(
+      'Creation refused for this test.'
+    );
   });
 
   it('turns the sentence over to a save run and its failures', () => {
