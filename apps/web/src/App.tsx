@@ -1,4 +1,10 @@
 import {
+  CAD_IMPORT_ACCEPT,
+  fileAccept,
+  persistStorageForInstalledApp
+} from './lib/appleTouch';
+import { registerOfflineShell } from './lib/offlineShell';
+import {
   localHistoryAppend,
   retainLocalHistoryAppend,
   type LocalHistoryAppend
@@ -758,8 +764,8 @@ import {
 } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
-import type { KeypadRequest } from './components/NumericKeypad';
-import type { DimensionMode } from './lib/keypad';
+import type { KeypadRequest, KeypadUiState } from './components/NumericKeypad';
+import type { DimensionMode, PreviewVerdict } from './lib/keypad';
 import { evaluateKeypadInput } from './lib/keypad';
 import {
   inPlacePanelSections,
@@ -1175,9 +1181,9 @@ const LazySelectionReadout = lazyWithStaleChunkNotice(() =>
     default: module.SelectionReadout
   }))
 );
-const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
-  import('./components/SelectionRail').then((module) => ({
-    default: module.SelectionRefusal
+const LazyEditRefusal = lazyWithStaleChunkNotice(() =>
+  import('./components/EditRefusal').then((module) => ({
+    default: module.EditRefusal
   }))
 );
 // The first-model tour shows once per device; nobody else pays for it.
@@ -1377,7 +1383,7 @@ const CommandCard = withSuspense(LazyCommandCard);
 
 const SelectionReadout = withSuspense(LazySelectionReadout);
 
-const SelectionRefusal = withSuspense(LazySelectionRefusal);
+const EditRefusal = withSuspense(LazyEditRefusal);
 
 const WorkspaceTour = withSuspense(LazyWorkspaceTour);
 
@@ -2295,6 +2301,13 @@ export function App() {
       countReactCommit();
     }
   });
+  // An installed (Home Screen) app keeps its local projects under storage
+  // pressure and opens offline (L02). Here rather than in the entry, which
+  // stays as small as it was.
+  useEffect(() => {
+    void persistStorageForInstalledApp();
+    registerOfflineShell();
+  }, []);
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
@@ -3235,6 +3248,10 @@ export function App() {
     setHiddenBodyIds,
     sketchVisibility: sketchVisibilityOverrides,
     setSketchVisibility: setSketchVisibilityOverrides,
+    hiddenDatumIds,
+    setHiddenDatumIds,
+    hiddenReferenceImageIds,
+    setHiddenReferenceImageIds,
     restore: restoreProjectView,
     apply: applyProjectView,
     snapshot: projectViewSnapshot,
@@ -3754,6 +3771,16 @@ export function App() {
    * this on screen as the model's state, and the card offers to keep it.
    */
   const [lastValidPreview, setLastValidPreview] = useState<number | null>(null);
+  /**
+   * The kernel's verdict on the last value previewed, built or refused. The
+   * edit control is Ready only once the value it shows has one, so Enter
+   * never applies an earlier value's preview against newer input.
+   */
+  const [previewVerdict, setPreviewVerdict] = useState<PreviewVerdict | null>(
+    null
+  );
+  /** What the open edit control says, for the guidance row's key hints. */
+  const [keypadUi, setKeypadUi] = useState<KeypadUiState | null>(null);
   /** New exact blend faces, computed once when an edge-fillet preview lands. */
   const [previewBlendFaces, setPreviewBlendFaces] = useState<
     TopologySelection[]
@@ -4405,7 +4432,13 @@ export function App() {
     new LivePreview<RadiusPreviewCandidate, GeometryReadyState>({
       ...cylinderRadiusExact,
       publish: (preview) => {
-        if (preview) recoverPreviewInteraction();
+        if (preview) {
+          setPreviewVerdict({
+            value: preview.document.radius,
+            status: 'built'
+          });
+          recoverPreviewInteraction();
+        }
         reusableRadiusPreview.current = preview
           ? { candidate: preview.document }
           : null;
@@ -4454,6 +4487,10 @@ export function App() {
           : null;
         if (!preview) return;
         if (preview.document.radius === cylinderRadiusHandValue.current) {
+          setPreviewVerdict({
+            value: preview.document.radius,
+            status: 'built'
+          });
           recoverPreviewInteraction();
         }
       },
@@ -4499,6 +4536,9 @@ export function App() {
           value: offset,
           ms: performance.now() - buildStarted
         });
+        // Nothing to preview (no plan for this value): no verdict will come.
+        if (!(base && plan && candidate && current.mode === 'face'))
+          setPreviewVerdict({ value: offset, status: 'unchecked' });
         return base && plan && candidate && current.mode === 'face'
           ? {
               selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
@@ -4570,6 +4610,7 @@ export function App() {
         });
         setRenderedOffsetPreview(preview.document.offset);
         setLastValidPreview(preview.document.offset);
+        setPreviewVerdict({ value: preview.document.offset, status: 'built' });
         recoverPreviewInteraction();
         // Once a gesture has gone slow, the chip says "catching up" only
         // while the hand is actually ahead of the published geometry.
@@ -4778,6 +4819,10 @@ export function App() {
           derived: preview.derived.derived
         });
         setLastValidPreview(preview.document.distance);
+        setPreviewVerdict({
+          value: preview.document.distance,
+          status: 'built'
+        });
         recoverPreviewInteraction();
         setPreviewDeferred(
           regionExtrudePreview.degraded && regionExtrudePreview.lagging
@@ -11558,14 +11603,6 @@ export function App() {
   // the project view: absent means the default — a sketch whose profile a
   // feature consumed hides itself, everything else shows. View state on this
   // device, persisted beside the camera and deliberately not in the document.
-  /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
-  const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
-    () => new Set()
-  );
-  /** I05 reference images hidden by their eye toggle: view state too. */
-  const [hiddenReferenceImageIds, setHiddenReferenceImageIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
   /** The reference image whose card is open, with the Image tool. */
   const [openReferenceImageId, setOpenReferenceImageId] =
     useState<ReferenceImageId | null>(null);
@@ -23846,6 +23883,15 @@ export function App() {
   function handleCylinderRadiusPreview(radius: number, exactGeometry = true) {
     const current = interactionRef.current;
     if (
+      current.mode === 'face' &&
+      current.op === 'resize-cylinder-radius' &&
+      current.target.radius !== undefined &&
+      !isValidCylinderRadius(radius, current.target.radius)
+    ) {
+      // Not a radius the kernel is asked about; the commit refuses it.
+      setPreviewVerdict({ value: radius, status: 'unchecked' });
+    }
+    if (
       current.mode !== 'face' ||
       current.phase === 'validating' ||
       current.op !== 'resize-cylinder-radius' ||
@@ -23871,11 +23917,13 @@ export function App() {
     ) {
       cylinderRadiusPreview.clear();
       setLastValidPreview(null);
+      setPreviewVerdict({ value: radius, status: 'unchecked' });
       recoverPreviewInteraction();
       return;
     }
     if (exactGeometry) {
-      cylinderRadiusPreview.request(radius);
+      if (!cylinderRadiusPreview.request(radius))
+        setPreviewVerdict({ value: radius, status: 'unchecked' });
     } else {
       // A simple standalone cylinder is projected with a disposable viewport
       // transform during drag. Drop any older worker result so it cannot flash
@@ -24194,7 +24242,8 @@ export function App() {
           }
           reportPreviewFailure(
             preview.derived.rejection.message,
-            preview.document.size
+            preview.document.size,
+            preview.derived.rejection.advice
           );
           return;
         }
@@ -24214,6 +24263,7 @@ export function App() {
             : []
         );
         setLastValidPreview(preview.document.size);
+        setPreviewVerdict({ value: preview.document.size, status: 'built' });
         recoverPreviewInteraction();
         setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
@@ -24253,7 +24303,8 @@ export function App() {
           ) {
             reportPreviewFailure(
               preview.derived.rejection.message,
-              preview.document.size
+              preview.document.size,
+              preview.derived.rejection.advice
             );
           }
           return;
@@ -24297,6 +24348,8 @@ export function App() {
     stopEdgeRestCheck();
     reusableEdgePreview.current = null;
     if (edgePreview.request(size)) queueEdgeRestCheck(size);
+    // A size the preview will not judge (zero) is settled here, unchecked.
+    else setPreviewVerdict({ value: size, status: 'unchecked' });
   }
   /** Ends the drag's work; what is on screen stays until `clearEdgePreview`. */
   function stopEdgePreview() {
@@ -24552,6 +24605,30 @@ export function App() {
       unitKind: 'length'
     });
     return true;
+  }
+
+  /**
+   * "Try 2.5 mm" from a refusal no editor is open for (a refused drag): opens
+   * the edge's control with the size the adapter proved, previewing it, so
+   * Enter applies exactly what was proved and nothing else.
+   */
+  function tryRefusalSize(size: number) {
+    if (!handleOpenEdgeKeypad(size)) return;
+    setKeypad((current) =>
+      current
+        ? {
+            ...current,
+            initial: String(Math.round(size * 100) / 100),
+            selectInitial: false
+          }
+        : current
+    );
+  }
+
+  /** "Pick another edge": leaves the refused pick, and its value, behind. */
+  function pickAnotherAfterRefusal() {
+    if (keypadRef.current) cancelOpenKeypad();
+    clearSelection();
   }
 
   function handleEdgeCancel() {
@@ -24902,11 +24979,20 @@ export function App() {
    * owns the diagnostic — the status line does not repeat it. The next value
    * that builds recovers all of it (see `recoverPreviewInteraction`).
    */
-  function reportPreviewFailure(message: string, value: number) {
+  function reportPreviewFailure(
+    message: string,
+    value: number,
+    /** The adapter's structured verdict, when the rejection carried one. */
+    advice?: CommandDiagnostic['advice']
+  ) {
     if (!isOperationState(interactionRef.current)) {
       return;
     }
-    const diagnostic = splitRefusal(message);
+    setPreviewVerdict({ value, status: 'refused' });
+    const diagnostic: CommandDiagnostic = {
+      ...splitRefusal(message),
+      ...(advice ? { advice } : {})
+    };
     dispatchInteraction({
       type: 'validation-failed',
       diagnostic,
@@ -24942,10 +25028,12 @@ export function App() {
       if (Math.abs(offset) <= 1e-9) {
         regionExtrudePreview.clear();
         setPreviewDeferred(false);
+        setPreviewVerdict({ value: offset, status: 'unchecked' });
         recoverPreviewInteraction();
         return;
       }
-      regionExtrudePreview.request(offset);
+      if (!regionExtrudePreview.request(offset))
+        setPreviewVerdict({ value: offset, status: 'unchecked' });
       return;
     }
     if (
@@ -24959,6 +25047,7 @@ export function App() {
     if (!exactGeometry) {
       offsetPreview.clear();
       setPreviewDeferred(false);
+      setPreviewVerdict({ value: offset, status: 'unchecked' });
       recoverPreviewInteraction();
       if (offsetHandleTarget?.stepProfilePreview && Math.abs(offset) > 1e-9) {
         const target = current.target;
@@ -24980,10 +25069,14 @@ export function App() {
     if (Math.abs(offset) <= 1e-9) {
       offsetPreview.clear();
       setPreviewDeferred(false);
+      setPreviewVerdict({ value: offset, status: 'unchecked' });
       recoverPreviewInteraction();
       return;
     }
-    offsetPreview.request(offset);
+    // A value the preview turns away (a slow gesture past its budget) gets
+    // no verdict to wait for: the commit checks it exactly instead.
+    if (!offsetPreview.request(offset))
+      setPreviewVerdict({ value: offset, status: 'unchecked' });
     setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
   }
 
@@ -29362,6 +29455,7 @@ export function App() {
             ? tweakModeHint
             : (commandPromptText(interaction, cylinderDimensionMode, {
                 refusalShown: Boolean(calloutWithOperation?.operation?.error),
+                ...(keypad && keypadUi ? { editor: keypadUi } : {}),
                 ...(edgeSelectionNaming && interaction.mode === 'edges'
                   ? { edgeNoun: edgeSelectionNaming.noun }
                   : {})
@@ -30412,6 +30506,7 @@ export function App() {
             onUndo={handleUndo}
             onRedo={handleRedo}
             touchHistoryGestures={appSettings.viewport.touchHistoryGestures}
+            pencilDrawsOnly={appSettings.viewport.pencilDrawsOnly}
             key={`workspace-view-${resumeViewGeneration}`}
             initialView={initialView}
             onViewChange={handleViewportChange}
@@ -30934,6 +31029,14 @@ export function App() {
                       {...(keypad.kind === 'extrude'
                         ? { onEntryError: setRegionExtrudeEntryError }
                         : {})}
+                      // A value the kernel checks as it is typed is Ready
+                      // only once the value on screen has built.
+                      {...(keypad.kind === 'edge' ||
+                      keypad.kind === 'offset' ||
+                      keypad.kind === 'radius'
+                        ? { verdict: previewVerdict }
+                        : {})}
+                      onUiStateChange={setKeypadUi}
                       onPreview={(value, raw) => {
                         if (
                           keypad.kind === 'sketch-dimension' ||
@@ -30970,16 +31073,29 @@ export function App() {
                         isOperationState(interaction) &&
                         interaction.phase === 'failed'
                       }
+                      checking={
+                        isOperationState(interaction) &&
+                        interaction.phase === 'validating'
+                      }
+                      // The refusal is explained on the control that made
+                      // it: the short line, its proved remedies, and Why?.
+                      refusal={
+                        calloutWithOperation?.operation?.error
+                          ? {
+                              operation: calloutWithOperation.operation,
+                              onPickAnother: pickAnotherAfterRefusal,
+                              pickAnotherLabel:
+                                interaction.mode === 'edges'
+                                  ? 'Pick another edge'
+                                  : 'Pick another face'
+                            }
+                          : null
+                      }
                       commitDisabledReason={
                         interaction.mode !== 'idle' &&
                         interaction.mode !== 'sketch' &&
                         interaction.error
-                          ? // The notice lane carries the full sentence and
-                            // its ways out; the keypad points there rather
-                            // than repeating the paragraph over the model.
-                            calloutWithOperation?.operation?.error
-                            ? 'This value did not build. The note below says why.'
-                            : interaction.error.message
+                          ? interaction.error.message
                           : null
                       }
                       onCommit={(value, raw) => {
@@ -31709,13 +31825,6 @@ export function App() {
           {/* File metadata joins initial preparation independently of the
               model's frame-ready signal, so neither waits on the other. */}
           {artifactsProjectId !== doc.projectId && <WorkspacePending />}
-          {calloutWithOperation?.operation?.error && (
-            // The refusal joins the notice lane, over the status row, with
-            // its ways out; the handle stays live on the model.
-            <div className="selection-refusal-lane">
-              <SelectionRefusal operation={calloutWithOperation.operation} />
-            </div>
-          )}
           {/* The same lane as the status toast, and in front of it: while a
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
@@ -31762,6 +31871,25 @@ export function App() {
                   label={railPick.label}
                   detail={railPick.detail}
                   detailDiameter={railPick.detailDiameter}
+                />
+              ) : null
+            }
+            // A refusal with no editor open (a refused drag) is explained in
+            // the guidance row: the same line, remedies and Why? the control
+            // shows, where the eye returns when the model has nothing to say.
+            notice={
+              !keypad && calloutWithOperation?.operation?.error ? (
+                <EditRefusal
+                  operation={calloutWithOperation.operation}
+                  variant="bar"
+                  unitLabel={displayLengthName(doc.units)}
+                  onTrySize={tryRefusalSize}
+                  onPickAnother={pickAnotherAfterRefusal}
+                  pickAnotherLabel={
+                    interaction.mode === 'edges'
+                      ? 'Pick another edge'
+                      : 'Pick another face'
+                  }
                 />
               ) : null
             }
@@ -32145,7 +32273,7 @@ export function App() {
           <input
             ref={projectImportInputRef}
             type="file"
-            accept=".openzcad"
+            accept={fileAccept('.openzcad')}
             hidden
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
@@ -32156,7 +32284,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
+            accept={fileAccept(CAD_IMPORT_ACCEPT)}
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {

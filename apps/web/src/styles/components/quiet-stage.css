@@ -1149,31 +1149,20 @@
 
 /* Only these notices consume the status height. Keeping it on the viewer
    made a toast appearing/disappearing restyle every object/history row. */
-.workspace.column-layout .viewer-area {
-  /* Guidance is measured on this element. Resolve its height here, rather
-     than on the ancestor workspace where the custom property is absent. */
-  --lane-base: calc(
-    var(--island-gap) + var(--command-bar-h) +
-      var(--workspace-guidance-h, 0px) + 8px
-  );
-}
-
-.viewer-area :is(.toast, .selection-refusal-lane) {
+.viewer-area .toast {
   --lane-status: 0px;
 }
 
 /* The status row holds a 28px toast or the 58px activity pill. The hint
    reads inside the bar and takes no row. */
-.viewer-area:has(.workspace-toast:not(.hidden))
-  :is(.toast, .selection-refusal-lane) {
+.viewer-area:has(.workspace-toast:not(.hidden)) .toast {
   --lane-status: 40px;
 }
 
 /* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap.
    The lane in the selector matches the specificity of the two rules above,
    which stay in the DOM while the pill is up; source order then wins. */
-.viewer-area:has(.activity-lane > .activity-pill)
-  :is(.toast, .selection-refusal-lane) {
+.viewer-area:has(.activity-lane > .activity-pill) .toast {
   --lane-status: 70px;
 }
 
@@ -1189,7 +1178,7 @@
 .viewer-area:has(.toast:not(.closing)):has(
     .workspace-toast.ready:not(.hidden)
   ):not(:has(.activity-pill))
-  :is(.toast, .selection-refusal-lane) {
+  .toast {
   --lane-status: 0px;
 }
 
@@ -4208,7 +4197,9 @@ button.model-panel-grip[aria-expanded='true'] {
     width: auto;
     padding: 5px 4px;
     direction: rtl;
-    max-height: calc((100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2);
+    max-height: calc(
+      (100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2
+    );
   }
 
   .instrument-rail > .sketch-relations .sketch-relation {
@@ -4341,7 +4332,7 @@ button.model-panel-grip[aria-expanded='true'] {
    it claims its own lane height. */
 :where(.workspace:not(.with-assistant))
   .viewer-area:has(.in-place-command)
-  :is(.toast, .selection-refusal-lane) {
+  .toast {
   --lane-status: calc(var(--in-place-command-h, 38px) + 10px);
 }
 
@@ -4354,7 +4345,7 @@ button.model-panel-grip[aria-expanded='true'] {
 
 :where(.workspace:not(.with-assistant))
   .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden))
-  :is(.toast, .selection-refusal-lane) {
+  .toast {
   --lane-status: calc(var(--in-place-command-h, 38px) + 50px);
 }
 

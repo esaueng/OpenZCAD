@@ -1378,7 +1378,9 @@ export function shouldShowGroundShadow(
  */
 export function tuneShadowFrustum(
   light: THREE.DirectionalLight,
-  radius: number
+  radius: number,
+  /** Texels per edge; a touch device asks for fewer (L02). */
+  mapSize = 3072
 ) {
   // 1.6 still clears the cast shadow of a model lit from above and to the side,
   // and covers 1.9x less area than 2.2 did — every texel gets that much finer.
@@ -1394,7 +1396,7 @@ export function tuneShadowFrustum(
   // 3072 rather than 4096: with the tighter frustum this still lands about 2x
   // finer than the old 2048, at roughly half the shadow-texture memory of a
   // 4096 map.
-  light.shadow.mapSize.set(3072, 3072);
+  light.shadow.mapSize.set(mapSize, mapSize);
   light.shadow.bias = -0.0002;
   light.shadow.normalBias = 0.02;
   light.shadow.radius = 3;

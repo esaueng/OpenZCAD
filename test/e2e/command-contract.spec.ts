@@ -486,11 +486,11 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await expect(chip).toHaveAttribute('data-state', 'warning', READ_TIMEOUT);
   await page.mouse.up();
   // The Selection card carries the operation and marks it Failed; the
-  // refusal itself stands in the notice lane.
+  // refusal itself stands in the guidance row as Not built · Why?.
   const operationChip = page.locator('.selection-callout-chip[role="region"]');
   await expect(operationChip).toContainText('Failed');
   await expect(
-    page.locator('.selection-refusal-lane').getByRole('alert')
+    page.locator('.edit-refusal.is-bar').getByRole('alert')
   ).toBeVisible();
 
   // One press: the chip's operation, its refusal, the kept preview, the handle and its

@@ -214,6 +214,8 @@ interface ViewerShellProps {
   onRedo(): void;
   /** Two- and three-finger taps undo and redo (Settings › Viewport). */
   touchHistoryGestures?: boolean;
+  /** After a Pencil is used, fingers only navigate a sketch. */
+  pencilDrawsOnly?: boolean;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -458,6 +460,7 @@ export function ViewerShell({
   onUndo,
   onRedo,
   touchHistoryGestures = true,
+  pencilDrawsOnly = true,
   projection,
   initialView,
   onViewChange,
@@ -917,6 +920,7 @@ export function ViewerShell({
           }
         }}
         touchModifiers={touchModifiers}
+        pencilDrawsOnly={pencilDrawsOnly}
         assemblyView={assemblyView}
       />
       {dockLayout && !hideViewerToolbar && (

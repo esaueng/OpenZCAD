@@ -1,3 +1,4 @@
+import { saveFile } from './saveFile';
 import { documentAssetsWithHistory } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
@@ -338,12 +339,7 @@ export async function createProjectBackup(
 }
 
 export function downloadBackupFile(name: string, contents: Blob): void {
-  const url = URL.createObjectURL(contents);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  void saveFile(name, contents);
 }
 
 /**

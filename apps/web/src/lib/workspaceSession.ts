@@ -9,6 +9,11 @@ export type { ViewportCameraState };
 
 type Vector3Tuple = ViewportCameraState['position'];
 
+interface HiddenReferences {
+  datumIds: string[];
+  imageIds: string[];
+}
+
 export const WORKSPACE_SESSION_STORAGE_KEY = 'openzcad-workspace-session:v1';
 
 const WORKSPACE_SESSION_VERSION = 1;
@@ -20,7 +25,7 @@ const MAX_SAVED_PROJECT_VIEWS = 20;
  */
 
 export interface ProjectViewState {
-  camera: ViewportCameraState;
+  camera: ViewportCameraState | null;
   projection: ProjectionMode;
   settings: ViewerSettings;
   hiddenBodyIds: string[];
@@ -30,6 +35,8 @@ export interface ProjectViewState {
    * this device's own choices; an id with no entry follows the default.
    */
   sketchVisibility?: Record<string, boolean>;
+  /** Datum and image visibility choices kept on this device. */
+  hiddenReferences?: HiddenReferences;
 }
 
 interface StoredProjectView extends ProjectViewState {
@@ -143,6 +150,19 @@ function parseSketchVisibility(
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+function parseHiddenReferences(value: unknown): HiddenReferences | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { datumIds, imageIds } = value as Partial<HiddenReferences>;
+  const readIds = (ids: unknown): string[] =>
+    Array.isArray(ids)
+      ? ids.filter(
+          (id): id is string => typeof id === 'string' && id.length > 0
+        )
+      : [];
+  const hidden = { datumIds: readIds(datumIds), imageIds: readIds(imageIds) };
+  return hidden.datumIds.length || hidden.imageIds.length ? hidden : undefined;
+}
+
 /** A recorded field of view, or nothing: a bad one reads as unrecorded. */
 function withFieldOfView(
   value: unknown
@@ -163,14 +183,15 @@ function parseStoredView(value: unknown): StoredProjectView | null {
   const camera = candidate.camera;
   const settings = candidate.settings;
   if (
-    !camera ||
-    !isVector3Tuple(camera.position) ||
-    !isVector3Tuple(camera.target) ||
-    !Number.isFinite(camera.orthographicZoom) ||
-    camera.orthographicZoom <= 0 ||
-    (camera.orthographicHalfHeight !== undefined &&
-      (!Number.isFinite(camera.orthographicHalfHeight) ||
-        camera.orthographicHalfHeight <= 0)) ||
+    (camera !== null &&
+      (!camera ||
+        !isVector3Tuple(camera.position) ||
+        !isVector3Tuple(camera.target) ||
+        !Number.isFinite(camera.orthographicZoom) ||
+        camera.orthographicZoom <= 0 ||
+        (camera.orthographicHalfHeight !== undefined &&
+          (!Number.isFinite(camera.orthographicHalfHeight) ||
+            camera.orthographicHalfHeight <= 0)))) ||
     !isProjectionMode(candidate.projection) ||
     !settings ||
     typeof settings.showGrid !== 'boolean' ||
@@ -182,8 +203,9 @@ function parseStoredView(value: unknown): StoredProjectView | null {
   ) {
     return null;
   }
+  const hiddenReferences = parseHiddenReferences(candidate.hiddenReferences);
   return {
-    camera: {
+    camera: camera && {
       position: [...camera.position],
       target: [...camera.target],
       orthographicZoom: camera.orthographicZoom,
@@ -199,6 +221,7 @@ function parseStoredView(value: unknown): StoredProjectView | null {
     },
     hiddenBodyIds: [...candidate.hiddenBodyIds],
     ...withSketchVisibility(parseSketchVisibility(candidate.sketchVisibility)),
+    ...(hiddenReferences ? { hiddenReferences } : {}),
     updatedAt: candidate.updatedAt
   };
 }
@@ -388,17 +411,14 @@ export function loadProjectView(
     return null;
   }
   return {
-    camera: {
-      position: [...view.camera.position],
-      target: [...view.camera.target],
-      orthographicZoom: view.camera.orthographicZoom,
-      orthographicHalfHeight: view.camera.orthographicHalfHeight,
-      ...withFieldOfView(view.camera.fieldOfView)
-    },
+    camera: view.camera,
     projection: view.projection,
     settings: { ...view.settings },
     hiddenBodyIds: [...view.hiddenBodyIds],
-    ...withSketchVisibility(view.sketchVisibility)
+    ...withSketchVisibility(view.sketchVisibility),
+    ...(view.hiddenReferences
+      ? { hiddenReferences: view.hiddenReferences }
+      : {})
   };
 }
 

@@ -1,3 +1,4 @@
+import { saveFile } from './saveFile';
 import {
   evaluateExpression,
   isValidParameterName,
@@ -244,13 +245,7 @@ export function downloadText(
   value: string,
   contentType = 'text/plain'
 ): void {
-  const blob = new Blob([value], { type: contentType });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(url);
+  void saveFile(name, new Blob([value], { type: contentType }));
 }
 
 /** File-safe stem derived from the project name (e.g. for exports). */

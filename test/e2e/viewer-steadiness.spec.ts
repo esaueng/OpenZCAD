@@ -251,8 +251,6 @@ test('notice offsets stay local without inheriting through model rows', async ({
     status.className = 'workspace-toast hidden';
     const action = document.createElement('div');
     action.className = 'toast closing';
-    const refusal = document.createElement('div');
-    refusal.className = 'selection-refusal-lane';
     const activity = document.createElement('div');
     activity.className = 'activity-lane';
     const pill = document.createElement('div');
@@ -261,19 +259,18 @@ test('notice offsets stay local without inheriting through model rows', async ({
     const command = document.createElement('div');
     command.className = 'in-place-command';
     // Read final offsets of these synthetic notices, without transition interpolation.
-    for (const node of [action, refusal]) {
+    for (const node of [action]) {
       node.style.transition = 'none';
       node.style.animation = 'none';
     }
     const read = () => ({
       action: parseFloat(getComputedStyle(action).bottom),
-      refusal: parseFloat(getComputedStyle(refusal).bottom),
       row: getComputedStyle(root.querySelector('.body-row')!).getPropertyValue(
         '--lane-status'
       )
     });
     try {
-      root.append(status, action, refusal);
+      root.append(status, action);
       const base = read();
       status.className = 'workspace-toast running';
       const running = read();
@@ -303,12 +300,11 @@ test('notice offsets stay local without inheriting through model rows', async ({
         settled
       };
     } finally {
-      for (const node of [status, action, refusal, activity, command])
-        node.remove();
+      for (const node of [status, action, activity, command]) node.remove();
       for (const { node, className } of originals) node.className = className;
     }
   });
-  for (const key of ['action', 'refusal'] as const) {
+  for (const key of ['action'] as const) {
     expect(states.running[key] - states.base[key]).toBeCloseTo(40, 0);
     expect(states.active[key] - states.base[key]).toBeCloseTo(70, 0);
     expect(states.inCommand[key] - states.base[key]).toBeCloseTo(

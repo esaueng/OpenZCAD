@@ -33,6 +33,12 @@ export interface TouchNavigationHost {
   pressCancel(event: PointerEvent): void;
   /** Drops an unclaimed press without selecting anything. */
   abandonPress(pointerId: number): void;
+  /**
+   * When true, a first finger only navigates: it never reaches the
+   * viewport's press handling, so it cannot draw, pick or tap-select
+   * (a sketch tool while a Pencil does the drawing).
+   */
+  navigationOnly?(): boolean;
   /** False where the view must not turn (a sketch faces its plane). */
   canOrbit(): boolean;
   /** Starts an orbit pivoting on the point under the press. */
@@ -60,6 +66,12 @@ export interface TouchNavigation {
   cancel(event: PointerEvent): boolean;
   /** Whether a touch sequence is in progress (a native dblclick is not ours). */
   readonly active: boolean;
+  /**
+   * Drops the fingers in progress (a palm, once a Pencil lands), ending any
+   * navigation and pending press, and returns their pointer ids so the
+   * caller can keep ignoring them until they lift.
+   */
+  abandon(): number[];
   dispose(): void;
 }
 
@@ -187,7 +199,10 @@ export function createTouchNavigation(
       const first = routes.size === 0;
       latest.set(event.pointerId, event);
       const gestures = recognizer.down(sample(event));
-      if (first) {
+      if (first && host.navigationOnly?.()) {
+        pressEvent = event;
+        routes.set(event.pointerId, 'gesture');
+      } else if (first) {
         pressEvent = event;
         host.pressDown(event);
         if (host.pressClaimed(event)) {
@@ -239,7 +254,13 @@ export function createTouchNavigation(
       return true;
     },
 
-    dispose() {
+    abandon() {
+      const pointers = [...routes.keys()];
+      // A finger the viewport was dragging with is cancelled there too.
+      for (const [pointerId, route] of routes) {
+        const event = latest.get(pointerId);
+        if (route === 'claimed' && event) host.pressCancel(event);
+      }
       if (timer !== null) host.clearTimer(timer);
       timer = null;
       apply(recognizer.reset(), null);
@@ -247,6 +268,12 @@ export function createTouchNavigation(
       endNavigation();
       routes.clear();
       latest.clear();
+      pressEvent = null;
+      return pointers;
+    },
+
+    dispose() {
+      this.abandon();
     }
   };
 }

@@ -201,10 +201,13 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   await page.keyboard.press('Enter');
   const filletKeypad = page.getByRole('dialog', { name: 'Radius value' });
   await expect(filletKeypad).toBeVisible();
-  // The commit control names what it applies rather than showing a bare tick.
-  await expect(
-    filletKeypad.getByRole('button', { name: 'Apply radius' })
-  ).toHaveText(/Apply radius/);
+  // The commit control is the control's ✓, named for what it applies: to
+  // assistive tech by its name, to a pointer by its title.
+  const applyRadius = filletKeypad.getByRole('button', {
+    name: 'Apply radius'
+  });
+  await expect(applyRadius).toHaveAccessibleName('Apply radius');
+  await expect(applyRadius).toHaveAttribute('title', /^Apply radius|^Checking/);
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'View', exact: true }).click();
