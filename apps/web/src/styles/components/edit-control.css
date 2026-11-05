@@ -377,6 +377,54 @@
   }
 }
 
+/* A control away from the pick (the phone sheet, the dock at the stage's
+   foot) carries the operation switch as its first segment; the tag left at
+   the pick steps aside, so one switch shows and it sits with the value. */
+.keypad-operation {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  align-self: stretch;
+  margin-right: 2px;
+  padding: 0 8px 0 7px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-right: var(--border-thin);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  cursor: pointer;
+}
+
+.keypad-operation:hover {
+  background: var(--color-surface-hover);
+}
+
+.keypad-operation:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.keypad-operation > svg {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.viewer-area:has(.numeric-keypad[data-operation]) .handle-label-chip {
+  visibility: hidden;
+}
+
+@media (any-pointer: coarse) {
+  .keypad-operation {
+    min-height: 44px;
+    padding: 0 12px 0 10px;
+  }
+}
+
 /* ── A refused edit, on its control ─────────────────────────
    One line under the value (or the compact "Not built · Why?" in the
    guidance row when no control is open): the status in words, a short

@@ -1,8 +1,16 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within
+} from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLayoutEffect } from 'react';
 import {
   NumericKeypad,
+  operationTagLabel,
   resetKeypadPointerForTests,
   type KeypadRequest
 } from './NumericKeypad';
@@ -1020,5 +1028,206 @@ describe('help shown by hovering the unit', () => {
       key: 'Escape'
     });
     expect(onCancel).toHaveBeenCalledOnce();
+  });
+});
+
+describe('the operation switch, away from the pick', () => {
+  /** Answers the phone query as `phone` says, and a touch pointer. */
+  function stubPhone(phone: boolean) {
+    window.matchMedia = (query: string) => ({
+      matches: query === '(max-width: 560px)' ? phone : false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false
+    });
+  }
+
+  /**
+   * A host holding the viewport's operation tag, which switches between its
+   * two operations when pressed, as the edge's Fillet/Chamfer tag does.
+   */
+  function mount(
+    request: KeypadRequest,
+    tagText: string | null,
+    other = 'Chamfer ▾'
+  ) {
+    const host = document.createElement('div');
+    Object.defineProperties(host, {
+      clientWidth: { value: 1000, configurable: true },
+      clientHeight: { value: 800 }
+    });
+    document.body.append(host);
+    const onTag = vi.fn();
+    // The viewport draws the tag outside React and rewrites its text; the
+    // test does the same, through a ref, beside the control.
+    const attachTag = (tag: HTMLSpanElement | null) => {
+      if (!tag || tagText === null || tag.dataset.testid) return;
+      tag.dataset.testid = 'direct-manipulation-mode';
+      tag.textContent = tagText;
+      tag.addEventListener('click', () => {
+        onTag();
+        tag.textContent = tag.textContent === tagText ? other : tagText;
+      });
+    };
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    const anchor = {
+      current: null as ((point: { x: number; y: number } | null) => void) | null
+    };
+    const view = render(
+      <>
+        {tagText !== null && (
+          <span className="handle-label-chip" role="button" ref={attachTag} />
+        )}
+        <NumericKeypad
+          request={request}
+          units="mm"
+          scope={{}}
+          anchorRef={anchor}
+          onPreview={() => undefined}
+          onCommit={onCommit}
+          onCancel={onCancel}
+        />
+      </>,
+      { container: host }
+    );
+    return {
+      anchor,
+      onTag,
+      onCommit,
+      onCancel,
+      keypad: () => screen.getByRole('dialog'),
+      done: () => {
+        view.unmount();
+        host.remove();
+      }
+    };
+  }
+
+  const edge: KeypadRequest = {
+    kind: 'edge',
+    label: 'Radius',
+    initial: '2',
+    unitKind: 'length'
+  };
+
+  it('reads a switch from the tag’s ▾, and nothing from a name alone', () => {
+    const tag = document.createElement('span');
+    tag.textContent = 'Fillet ▾';
+    expect(operationTagLabel(tag)).toBe('Fillet');
+    tag.textContent = ' Total ▾ ';
+    expect(operationTagLabel(tag)).toBe('Total');
+    tag.textContent = 'Diameter';
+    expect(operationTagLabel(tag)).toBeNull();
+    tag.textContent = '▾';
+    expect(operationTagLabel(tag)).toBeNull();
+    expect(operationTagLabel(null)).toBeNull();
+  });
+
+  it('leads the phone sheet with the operation, which switches without applying', async () => {
+    stubPhone(true);
+    const view = mount(edge, 'Fillet ▾');
+    try {
+      const keypad = view.keypad();
+      expect(keypad).toHaveAttribute('data-placement', 'sheet');
+      // The tag at the pick steps aside for the one in the sheet.
+      expect(keypad).toHaveAttribute('data-operation', '');
+      const row = keypad.querySelector('.keypad-value-row')!;
+      const segment = within(keypad).getByRole('button', { name: 'Fillet' });
+      expect(row.firstElementChild).toBe(segment);
+      fireEvent.click(segment);
+      expect(view.onTag).toHaveBeenCalledTimes(1);
+      expect(view.onCommit).not.toHaveBeenCalled();
+      expect(view.onCancel).not.toHaveBeenCalled();
+      // It says what the tag says once the switch is made.
+      expect(
+        await within(keypad).findByRole('button', { name: 'Chamfer' })
+      ).toBeInTheDocument();
+    } finally {
+      view.done();
+    }
+  });
+
+  it('comes along when the control docks at the foot of the stage', () => {
+    stubPhone(false);
+    const view = mount(edge, 'Fillet ▾');
+    try {
+      const keypad = view.keypad();
+      act(() => view.anchor.current?.({ x: 500, y: 300 }));
+      // Beside the pick the tag there is the switch; the control has none.
+      expect(keypad).not.toHaveAttribute('data-placement', 'docked');
+      expect(
+        within(keypad).queryByRole('button', { name: 'Fillet' })
+      ).toBeNull();
+      expect(keypad).not.toHaveAttribute('data-operation');
+      act(() => view.anchor.current?.(null));
+      expect(keypad).toHaveAttribute('data-placement', 'docked');
+      expect(keypad).toHaveAttribute('data-operation', '');
+      fireEvent.click(within(keypad).getByRole('button', { name: 'Fillet' }));
+      expect(view.onTag).toHaveBeenCalledTimes(1);
+      expect(view.onCommit).not.toHaveBeenCalled();
+      // Enter in the field still applies; the segment never did.
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      expect(view.onCommit).toHaveBeenCalledTimes(1);
+    } finally {
+      view.done();
+    }
+  });
+
+  it('carries the Total/Offset switch of a face offset too', () => {
+    stubPhone(true);
+    const view = mount(
+      { kind: 'offset', label: 'Total', initial: '10', unitKind: 'length' },
+      'Total ▾',
+      'Offset ▾'
+    );
+    try {
+      fireEvent.click(
+        within(view.keypad()).getByRole('button', { name: 'Total' })
+      );
+      expect(view.onTag).toHaveBeenCalledTimes(1);
+      expect(view.onCommit).not.toHaveBeenCalled();
+    } finally {
+      view.done();
+    }
+  });
+
+  it('adds nothing for a tag that only names the value, or an entry without one', () => {
+    stubPhone(true);
+    const named = mount(
+      {
+        kind: 'radius',
+        label: 'Radius',
+        initial: '5',
+        unitKind: 'length',
+        dimensionMode: 'radius'
+      },
+      'Radius'
+    );
+    try {
+      expect(named.keypad()).not.toHaveAttribute('data-operation');
+      expect(named.keypad().querySelector('.keypad-operation')).toBeNull();
+    } finally {
+      named.done();
+    }
+    // A sketch dimension never switches, whatever a stale tag still says.
+    const sketch = mount(
+      {
+        kind: 'sketch-dimension',
+        label: 'Length',
+        initial: '5',
+        unitKind: 'length'
+      },
+      'Fillet ▾'
+    );
+    try {
+      expect(sketch.keypad().querySelector('.keypad-operation')).toBeNull();
+    } finally {
+      sketch.done();
+    }
   });
 });

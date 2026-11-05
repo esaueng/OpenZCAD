@@ -7,7 +7,13 @@ import {
   type KeyboardEvent,
   type MutableRefObject
 } from 'react';
-import { Check, Delete, Ellipsis, LoaderCircle } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  Delete,
+  Ellipsis,
+  LoaderCircle
+} from 'lucide-react';
 import type { UnitSystem } from '@openzcad/shared';
 import {
   appendKeypadKey,
@@ -304,6 +310,27 @@ function valueChipBox(
   };
 }
 
+/** The operation tag the viewport draws beside a handle's value chip. */
+const OPERATION_TAG_SELECTOR = '[data-testid="direct-manipulation-mode"]';
+
+/**
+ * The operation the handle's tag switches (Fillet/Chamfer on an edge,
+ * Total/Offset on a face), or null when the tag only names the value (a
+ * radius line's Diameter/Radius) or there is none. The viewport marks a
+ * switch with a trailing ▾.
+ */
+export function operationTagLabel(tag: Element | null): string | null {
+  const text = tag?.textContent?.trim() ?? '';
+  if (!text.endsWith('▾')) return null;
+  const label = text.slice(0, -1).trim();
+  return label === '' ? null : label;
+}
+
+/** Placements that leave the pick, and its operation tag, behind. */
+function detachedPlacement(side: string | null): boolean {
+  return side === 'sheet' || side === 'docked';
+}
+
 /**
  * How far down the host the keypad may reach: to the top of the bottom lane
  * (the guidance row and the search bar, where a command's Done stands),
@@ -374,6 +401,11 @@ export function NumericKeypad({
   const [explaining, setExplaining] = useState(false);
   // The value last handed to the live preview: only its verdict counts.
   const [previewed, setPreviewed] = useState<number | null>(null);
+  // Where the control settled: a phone sheet or a dock at the stage's foot
+  // stands away from the pick, so the operation tag comes along with it.
+  const [placement, setPlacement] = useState<string | null>(null);
+  // What the handle's operation tag switches, mirrored for those placements.
+  const [operation, setOperation] = useState<string | null>(null);
   const reasonId = useId();
   const gridId = useId();
   const helpId = useId();
@@ -447,6 +479,7 @@ export function NumericKeypad({
       root.style.left = `${placement.x}px`;
       root.style.top = `${placement.y}px`;
       root.dataset.placement = placement.side;
+      setPlacement(placement.side);
     };
     const measure = (host: HTMLElement) => {
       root.style.maxHeight = `${Math.max(0, keypadFloor(host) - 16)}px`;
@@ -469,6 +502,7 @@ export function NumericKeypad({
         root.style.removeProperty('top');
         root.style.removeProperty('max-height');
         root.dataset.placement = 'sheet';
+        setPlacement('sheet');
         positioned = true;
         return;
       }
@@ -556,6 +590,42 @@ export function NumericKeypad({
       anchorRef.current = null;
     };
   }, [anchorRef, request.fixedClientAnchor, request.commandValueId]);
+
+  // The operation tag (Fillet ▾, Total ▾) stays at the pick; a control that
+  // stands away from it carries the same switch as its first segment. Only
+  // an edge or a face offset has one, and the tag stays its one source: the
+  // segment says what it says and presses it, so a switch here is the very
+  // switch the tag makes, and it never applies the value.
+  const switchable = request.kind === 'edge' || request.kind === 'offset';
+  useLayoutEffect(() => {
+    const host = rootRef.current?.parentElement;
+    const tag = switchable
+      ? host?.querySelector<HTMLElement>(OPERATION_TAG_SELECTOR)
+      : null;
+    if (!tag) {
+      setOperation(null);
+      return;
+    }
+    const read = () => setOperation(operationTagLabel(tag));
+    read();
+    const observer =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(read);
+    observer?.observe(tag, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+    return () => observer?.disconnect();
+  }, [switchable]);
+  const operationShown =
+    operation !== null && detachedPlacement(placement) ? operation : null;
+  const switchOperation = () => {
+    rootRef.current?.parentElement
+      ?.querySelector<HTMLElement>(OPERATION_TAG_SELECTOR)
+      ?.click();
+  };
 
   useLayoutEffect(() => {
     inputRef.current?.focus();
@@ -711,6 +781,8 @@ export function NumericKeypad({
       className="numeric-keypad"
       data-state={state}
       data-grid={gridOpen ? 'open' : 'closed'}
+      // The tag at the pick steps aside while the control carries it.
+      data-operation={operationShown === null ? undefined : ''}
       role="dialog"
       // The visible label may be a glyph ("⌀", "R"); the names are in words.
       aria-label={`${spokenValueName(label)} value`}
@@ -751,6 +823,17 @@ export function NumericKeypad({
           stands where the value chip stood, beside the operation tag, so the
           two read as one control. */}
       <div className="keypad-value-row" ref={rowRef}>
+        {operationShown !== null && (
+          <button
+            type="button"
+            className="keypad-operation"
+            title="Switch operation"
+            onClick={switchOperation}
+          >
+            {operationShown}
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+        )}
         <span className="keypad-label">{label}</span>
         <input
           ref={inputRef}
