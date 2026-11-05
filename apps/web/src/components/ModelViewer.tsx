@@ -53,6 +53,8 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
 import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
+import { pointerSlack } from '../lib/pointerSlack';
+import { TouchLoupe } from './viewer/touchLoupe';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type {
@@ -3662,6 +3664,7 @@ export function ModelViewer({
       initialValue: number;
     } | null = null;
     const hud = new HudLayer(host);
+    const touchLoupe = new TouchLoupe(host);
     const dragHud = hud.create('direct-edit-hud');
     // Assemble (AS02) takes the primary button while its view is shown. Its
     // own picker ignores the selection filter: a joint frame needs the exact
@@ -4123,7 +4126,8 @@ export function ModelViewer({
             context.activeCamera,
             canvasWidth(),
             canvasHeight()
-          )
+          ),
+        SNAP_RADIUS_PX * pointerSlack(event)
       );
     }
 
@@ -6563,8 +6567,10 @@ export function ModelViewer({
     }
 
     /** Six screen pixels at the orbit target, in world units. */
-    function curvePickThreshold(): number {
-      return worldPerPixelAt(cameraRig.controls.target) * 6;
+    function curvePickThreshold(event: PointerEvent): number {
+      return (
+        worldPerPixelAt(cameraRig.controls.target) * 6 * pointerSlack(event)
+      );
     }
 
     function setRayFromEvent(event: PointerEvent | MouseEvent) {
@@ -7719,7 +7725,9 @@ export function ModelViewer({
         const resolved = resolveSketchSnap(
           point,
           targets,
-          mode.snapTolerancePx * sketchWorldPerPixel(mode.basis.origin),
+          mode.snapTolerancePx *
+            pointerSlack(event) *
+            sketchWorldPerPixel(mode.basis.origin),
           {
             lockedId: activeSketchSnap?.id,
             cycle: sketchSnapCycle
@@ -8085,7 +8093,9 @@ export function ModelViewer({
       if (mode.tool === 'spline') {
         const reach = Math.max(
           0.5,
-          sketchWorldPerPixel(mode.basis.origin) * mode.snapTolerancePx
+          sketchWorldPerPixel(mode.basis.origin) *
+            mode.snapTolerancePx *
+            pointerSlack(event)
         );
         const action = splineClickAction(points, point, reach);
         if (action === 'close') {
@@ -8647,7 +8657,8 @@ export function ModelViewer({
             ? sketchHandleAtScreen(
                 pointer,
                 grabScreen,
-                sketchObjectRotatable(data)
+                sketchObjectRotatable(data),
+                pointerSlack(event)
               )
             : null;
         if (hit === 'translate') {
@@ -8677,7 +8688,7 @@ export function ModelViewer({
           const own = resolveSketchSnap(
             press,
             snapTargetsForObject(data, resolve, id),
-            mode.snapTolerancePx * perPixel
+            mode.snapTolerancePx * pointerSlack(event) * perPixel
           );
           handle = 'translate';
           grab = own ? { x: own.target.x, y: own.target.y } : press;
@@ -9085,7 +9096,7 @@ export function ModelViewer({
                   },
                   moveCenterTargets,
                   [drag.axis],
-                  drag.worldPerPixel * SNAP_RADIUS_PX
+                  drag.worldPerPixel * SNAP_RADIUS_PX * pointerSlack(event)
                 );
             if (aligned && aligned.matches.length > 0) {
               translation[drag.axis] = aligned.translation[drag.axis];
@@ -9138,7 +9149,7 @@ export function ModelViewer({
                       host.clientWidth,
                       host.clientHeight
                     ),
-                  SNAP_RADIUS_PX
+                  SNAP_RADIUS_PX * pointerSlack(event)
                 );
           if (snapped) {
             // Land the handle itself on the point, so what the glyph marks is
@@ -9183,7 +9194,7 @@ export function ModelViewer({
                   },
                   moveCenterTargets,
                   ['x', 'y', 'z'],
-                  drag.worldPerPixel * SNAP_RADIUS_PX
+                  drag.worldPerPixel * SNAP_RADIUS_PX * pointerSlack(event)
                 );
             if (aligned && aligned.matches.length > 0) {
               for (const match of aligned.matches) {
@@ -9432,7 +9443,7 @@ export function ModelViewer({
           setRayFromEvent(event);
           const curveId = curvePickerRig.pick(
             context.raycaster.ray,
-            curvePickThreshold()
+            curvePickThreshold(event)
           );
           curvePickerRig.setHover(curveId);
           if (curveId) {
@@ -9996,7 +10007,7 @@ export function ModelViewer({
         setRayFromEvent(event);
         const curveId = curvePickerRig.pick(
           context.raycaster.ray,
-          curvePickThreshold()
+          curvePickThreshold(event)
         );
         if (curveId) {
           event.preventDefault();
@@ -11078,9 +11089,22 @@ export function ModelViewer({
         const press = gestures.active;
         return press?.pointerId === event.pointerId && press.captured;
       },
-      pressMove: handlePointerMove,
-      pressUp: handlePointerUp,
-      pressCancel: handlePointerCancel,
+      pressMove: (event) => {
+        handlePointerMove(event);
+        // A finger drawing or moving sketch geometry hides its own point.
+        if (sketchModeRef.current) {
+          touchLoupe.follow(event.clientX, event.clientY);
+          requestRender();
+        }
+      },
+      pressUp: (event) => {
+        touchLoupe.hide();
+        handlePointerUp(event);
+      },
+      pressCancel: (event) => {
+        touchLoupe.hide();
+        handlePointerCancel(event);
+      },
       abandonPress: (pointerId) => {
         if (boxSelect?.pointerId === pointerId) {
           boxSelect = null;
@@ -11516,6 +11540,13 @@ export function ModelViewer({
         renderStarted = performance.now();
         renderer.render(scene, context.activeCamera);
       }
+      // Read while this frame is still the drawing buffer's.
+      if (touchLoupe.visible) {
+        touchLoupe.capture(
+          renderer.domElement,
+          sketchSnapMarker.hidden ? null : sketchSnapMarker.title || null
+        );
+      }
       const renderMs = performance.now() - renderStarted;
       if (!interactionShaderWarmup.isScheduled) {
         const warmupEdges = context.edgeOverlaysByBodyId.values().next().value;
@@ -11699,6 +11730,7 @@ export function ModelViewer({
       cubeLink = null;
       cubeOverlay.dispose();
       touchNavigation.dispose();
+      touchLoupe.dispose();
       for (const type of SAFARI_GESTURE_EVENTS) {
         host.removeEventListener(type, preventPageGesture);
       }

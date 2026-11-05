@@ -183,9 +183,17 @@ Timing and ownership rules:
      search button. Handles stay drawn without hover; only their hover
      highlight is missing, and Pencil hover (slice 6) restores it.
 5. **Touch sketching.**
-   - Line, arc and spline are drawn press–drag–release per segment, with a
-     live preview and chaining from the last end.
-   - An offset magnifier shows the snap target under the finger.
+   - Line and arc already draw press–drag–release per segment with a live
+     preview, and sketch tools are claimed presses in slice 3, so they run
+     unchanged under a finger.
+   - A finger gets twice each screen tolerance (`lib/pointerSlack.ts`):
+     sketch snaps, the move and offset snaps, the measure snap, the sketch
+     grab dot and the ring's band (the dot never grows into the ring), and
+     curve picks. The axis picker's 7 px tube is scaled per frame inside its
+     rig and stays as it is.
+   - An offset magnifier (`viewer/touchLoupe.ts`) follows a finger dragging
+     sketch geometry: twice the canvas under the finger with a crosshair,
+     above the finger (below near the top edge), naming the snap it took.
 6. **Apple Pencil**, as above.
 7. **Home Screen app and files.**
    - `viewport-fit=cover` and safe-area insets for the top bar, stage,

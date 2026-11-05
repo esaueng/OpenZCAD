@@ -1623,16 +1623,23 @@ export const SKETCH_ROTATE_RING_BAND_PX = 7;
 export function sketchHandleAtScreen(
   pointer: SketchPoint,
   grab: SketchPoint,
-  rotatable: boolean
+  rotatable: boolean,
+  /** `pointerSlack`: a finger widens the dot and the ring's band, not the ring. */
+  slack = 1
 ): SketchMoveHandle | null {
   const distance = Math.hypot(pointer.x - grab.x, pointer.y - grab.y);
-  if (distance <= SKETCH_GRAB_RADIUS_PX) {
+  const ringBand = SKETCH_ROTATE_RING_BAND_PX * slack;
+  // The dot may not grow into the ring's band, or the ring is unreachable.
+  const grabRadius = Math.min(
+    SKETCH_GRAB_RADIUS_PX * slack,
+    SKETCH_ROTATE_RING_RADIUS_PX - ringBand
+  );
+  if (distance <= grabRadius) {
     return 'translate';
   }
   if (
     rotatable &&
-    Math.abs(distance - SKETCH_ROTATE_RING_RADIUS_PX) <=
-      SKETCH_ROTATE_RING_BAND_PX
+    Math.abs(distance - SKETCH_ROTATE_RING_RADIUS_PX) <= ringBand
   ) {
     return 'rotate';
   }

@@ -264,3 +264,46 @@ test.describe('touch stand-ins for keys and right-click', () => {
     await expect(page.getByRole('menu')).toBeVisible();
   });
 });
+
+test.describe('touch sketching', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('a finger draws a circle with a magnifier over the point it hides', async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Touch sketch');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).tap();
+    await page.getByRole('button', { name: 'Top (XY)' }).tap();
+    const tools = page.getByRole('toolbar', { name: 'Sketch tools' });
+    await expect(tools).toBeVisible();
+    const circle = tools.getByRole('button', { name: /^Circle/ });
+    await circle.tap();
+    await expect(circle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.viewport-dock-grid')).not.toHaveText('');
+
+    const box = (await page
+      .locator('.viewer-host canvas')
+      .first()
+      .boundingBox())!;
+    const center: Point = [box.x + box.width * 0.4, box.y + box.height * 0.5];
+    const cdp = await page.context().newCDPSession(page);
+    const loupe = page.locator('.touch-loupe');
+    await touch(cdp, 'touchStart', [center]);
+    for (let step = 1; step <= 6; step += 1) {
+      await touch(cdp, 'touchMove', [[center[0] + step * 12, center[1]]]);
+    }
+    await expect(loupe).toBeVisible();
+    // It sits clear of the finger, never under it.
+    const shown = (await loupe.boundingBox())!;
+    expect(shown.y + shown.height).toBeLessThan(center[1]);
+    await touch(cdp, 'touchEnd', []);
+    await expect(loupe).toBeHidden();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Sketch 01 started.'
+    );
+  });
+});
