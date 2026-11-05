@@ -377,7 +377,8 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData, Vector3 } from '@openzcad/shared';
 import {
   buildPlanePickerRig,
-  ghostPlaneTakesPick
+  ghostPlaneTakesPick,
+  preferredGhostHit
 } from './viewer/planePickerRig';
 import {
   buildAxisPickerRig,
@@ -4808,9 +4809,10 @@ export function ModelViewer({
     }
 
     /**
-     * Nearest ghost plane under the pointer, or null. The callers weigh it
-     * against the model pick with ghostPlaneTakesPick: it wins through faces,
-     * but not over edges, vertices, regions or a face in its own plane.
+     * The ghost plane the pointer means (see preferredGhostHit), or null.
+     * The callers weigh it against the model pick with ghostPlaneTakesPick:
+     * it wins through faces, but not over edges, vertices, regions or a face
+     * in its own plane.
      */
     function pickGhostPlane(
       event: PointerEvent | MouseEvent
@@ -4820,7 +4822,7 @@ export function ModelViewer({
         return null;
       }
       picker.setRayFromEvent(event);
-      const hit = picker.intersect(rig.targets(), false)[0];
+      const hit = preferredGhostHit(picker.intersect(rig.targets(), false));
       const plane = hit?.object.userData.pickPlane as PlaneId | undefined;
       return plane
         ? {

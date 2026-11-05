@@ -37,7 +37,7 @@ const GAP_PX = 6;
 const CHAMFER_PX = 16;
 /** Trim of the small fillet on each chamfer vertex; under half a chamfer edge. */
 const FILLET_PX = 5;
-const FILLET_SEGMENTS = 4;
+const FILLET_SEGMENTS = 8;
 /** Height of the label's ink (cap height of the two letters). */
 const LABEL_INK_PX = 13;
 /**
@@ -51,8 +51,8 @@ const MIN_WORLD_PER_PIXEL = 1.5 / 220;
 /** Screen size of a committed datum plane's unit quad (datumPlaneRig). */
 const DATUM_SCREEN_EXTENT_PX = 170;
 
-const BORDER_WIDTH_PX = 1.5;
-const HOVER_BORDER_WIDTH_PX = 2.5;
+const BORDER_WIDTH_PX = 2;
+const HOVER_BORDER_WIDTH_PX = 3;
 
 interface PanelLook {
   fill: number;
@@ -60,9 +60,9 @@ interface PanelLook {
   label: number;
 }
 /** Idle, hovered, and the other two while one is hovered. */
-const IDLE: PanelLook = { fill: 0.09, border: 0.6, label: 0.95 };
+const IDLE: PanelLook = { fill: 0.09, border: 0.85, label: 0.95 };
 const HOVER: PanelLook = { fill: 0.3, border: 1, label: 1 };
-const DIMMED: PanelLook = { fill: 0.04, border: 0.22, label: 0.3 };
+const DIMMED: PanelLook = { fill: 0.04, border: 0.3, label: 0.3 };
 /** Hidden border opacity relative to the visible one. */
 const HIDDEN_BORDER_SCALE = 0.45;
 
@@ -109,8 +109,8 @@ export interface PlanePickerRig {
    */
   setOffset(offset: number): void;
   /**
-   * World points on a panel that a ray from `camera` reaches before any
-   * other panel, from the outer corner inward. For tests that click a ghost
+   * World points on a panel that a ray from `camera` picks over any other
+   * panel (see preferredGhostHit), from the outer corner inward. For tests that click a ghost
    * plane.
    */
   exposedPoints(plane: PlaneId, camera: THREE.Camera): THREE.Vector3[];
@@ -139,6 +139,41 @@ export function ghostPlaneTakesPick(
   // distance is in world units and the pick depth buffer is not exact.
   const tolerance = Math.max(1e-6, 1e-4 * ghostDistance);
   return Math.abs(model.distance - ghostDistance) > tolerance;
+}
+
+/**
+ * Which of the ghost panels under one ray the pointer means. From the usual
+ * viewing octant the panels overlap on screen — the upright XZ panel stands
+ * in front of much of XY — so the nearest hit would make the farther panel
+ * hard to reach. Instead each hit is scored by how far inside its own panel
+ * it lands (distance to the nearest panel edge, in panel pixels) and the
+ * deepest wins; ties go to the nearer hit. Where XZ covers XY, the ray
+ * crosses XZ just above its bottom edge while landing well inside XY, so XY
+ * takes most of its own area back and XZ keeps its body.
+ */
+export function preferredGhostHit<
+  T extends { object: THREE.Object3D; point: THREE.Vector3; distance: number }
+>(hits: readonly T[]): T | undefined {
+  let best: T | undefined;
+  let bestDepth = -Infinity;
+  const local = new THREE.Vector3();
+  for (const hit of hits) {
+    if (!hit.object.userData.pickPlane) continue;
+    hit.object.worldToLocal(local.copy(hit.point));
+    const depth = Math.min(
+      local.x - GAP_PX,
+      local.y - GAP_PX,
+      EXTENT_PX - local.x,
+      EXTENT_PX - local.y
+    );
+    // Strictly deeper by more than a pixel, so near-equal hits keep the
+    // nearer one (hits arrive nearest first).
+    if (depth > bestDepth + 1) {
+      best = hit;
+      bestDepth = depth;
+    }
+  }
+  return best;
 }
 
 /** The panel outline in its own (right, up) pixel coordinates, CCW, closed. */
@@ -280,15 +315,17 @@ export function buildPlanePickerRig(
     });
     border.name = `plane-picker-border-${plane}`;
     border.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
-    // Behind the part: the same outline, thin, dashed and depth-blind, as on
-    // committed datum planes. The solid border covers it where in plain view.
+    // Behind the part: the same outline, thin and dashed, as on committed
+    // datum planes. It draws only where something nearer has written depth
+    // (GreaterDepth), never under the solid border: drawn depth-blind, its
+    // dashes showed through the translucent border and made it look broken.
     const hidden = createFatLine(outline3, {
       color: PLANE_COLOR[plane],
       linewidth: DATUM_HIDDEN_WIDTH_PX,
       opacity: IDLE.border * HIDDEN_BORDER_SCALE,
-      depthTest: false,
       resolution: options.resolution
     });
+    hidden.material.depthFunc = THREE.GreaterDepth;
     // The datum dash is sized on a unit quad drawn 170 px across; this
     // outline is already in pixels, so the same dash is that much longer.
     Object.assign(hidden.material, {
@@ -431,7 +468,9 @@ export function buildPlanePickerRig(
           } else {
             raycaster.set(eye, point.clone().sub(eye).normalize());
           }
-          const hit = raycaster.intersectObjects(fills, false)[0];
+          const hit = preferredGhostHit(
+            raycaster.intersectObjects(fills, false)
+          );
           if (hit?.object === panel.fill) exposed.push(point);
         }
       }
