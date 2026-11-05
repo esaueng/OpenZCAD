@@ -222,21 +222,6 @@ export async function stubApi(
       }
     })
   );
-  // The baseline is an unencrypted account with no synced folders. Keep
-  // these reads inside the fixture when running against a Worker dev server.
-  await page.route('**/api/e2ee/config', (route) =>
-    route.fulfill({
-      json: {
-        enabled: false,
-        projectsEnabled: false,
-        migrationEnabled: false,
-        defaultOn: false
-      }
-    })
-  );
-  await page.route('**/api/library-folders', (route) =>
-    route.fulfill({ json: { folders: [], revision: 0 } })
-  );
   await page.route('**/api/collaboration/config', (route) =>
     route.fulfill({
       json: {
