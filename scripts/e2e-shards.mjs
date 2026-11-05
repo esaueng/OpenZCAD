@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { changedBrowserSpecs } from './ci-selection.mjs';
 
 /**
  * Balanced Playwright shards for CI.
@@ -78,16 +79,33 @@ export function resolveSuite(env = process.env) {
 }
 
 /** Keep the runner's file filters and Playwright's smoke tag in agreement. */
-export function suiteSpecs(suite, dir = SPEC_DIR) {
+export function suiteSpecs(suite, dir = SPEC_DIR, env = process.env) {
   if (suite !== 'smoke' && suite !== 'full') {
     throw new Error(`Unknown browser suite "${suite}"; use smoke or full.`);
   }
   const specs = listSpecs(dir);
   return suite === 'full'
     ? specs
-    : specs.filter((spec) =>
-        readFileSync(join(dir, spec), 'utf8').includes(SMOKE_TAG)
-      );
+    : [
+        ...new Set([
+          ...specs.filter((spec) =>
+            readFileSync(join(dir, spec), 'utf8').includes(SMOKE_TAG)
+          ),
+          ...changedBrowserSpecs(env.CI_BASE_SHA, specs)
+        ])
+      ].sort();
+}
+
+/** Changed regression files run every case, including cases without a smoke tag. */
+export function smokeGrep(env = process.env) {
+  const changed = changedBrowserSpecs(env.CI_BASE_SHA, listSpecs());
+  const patterns = changed.map((name) =>
+    name
+      .split('/')
+      .at(-1)
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  );
+  return new RegExp([SMOKE_TAG, ...patterns].join('|'));
 }
 
 /** @param {string} value like `3/6` */

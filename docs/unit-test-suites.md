@@ -10,6 +10,10 @@ This intentionally reduces routine regression coverage. Extended geometry,
 encryption state-machine, race and historical cases remain in the full suite.
 New files are full-suite coverage until added to the smoke manifest. Keep
 representative capabilities and guard suites here rather than every variant.
+The staged v7 runner also discovers affected files from the full project and
+unions them with this manifest, so changed regressions are not omitted from
+their own PR. Discovery failures fall back to the complete project. See
+[CI qualification](ci-qualification.md) for activation and daily full runs.
 Manifest entries must be unique existing test files; a stale selection fails
 before running tests. Worker-owned web suites are all retained.
 

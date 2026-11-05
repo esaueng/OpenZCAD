@@ -56,5 +56,9 @@ export function unitTestInclude(project, env = process.env) {
     throw new Error(`Unknown unit project "${project}".`);
   if (resolveUnitSuite(env) === 'full')
     return project === 'root' ? [...ROOT_FULL_INCLUDE] : undefined;
+  if (env.OPENZCAD_UNIT_FILES) {
+    const selection = JSON.parse(env.OPENZCAD_UNIT_FILES);
+    return validateUnitFiles(project, selection[project]);
+  }
   return validateUnitFiles(project, manifest[project]);
 }
