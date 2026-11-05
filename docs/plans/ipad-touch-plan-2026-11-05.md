@@ -127,21 +127,24 @@ Timing and ownership rules:
 ## Slices
 
 1. **Screen scaling and iOS basics.**
-   - `viewport-fit=cover`, keeping pinch-zoom allowed.
-   - `dvh` heights with `vh` fallbacks.
-   - Safe-area insets for the top bar, stage and floating islands.
-   - On the workspace, no page rubber-band scrolling, long-press callout or
-     tap highlight.
-   - Under `pointer: coarse`: 16px form controls and 44px rail, command and
-     Done/Cancel targets.
+   - `dvh` heights, matching the existing overlays. Safari sizes `vh` behind
+     its toolbars.
+   - On the workspace, no page rubber-band scrolling, long-press callout,
+     text selection on the model or tap highlight.
+   - Under `pointer: coarse`: 16px form controls (iOS zooms the page into a
+     smaller focused field) and 44px rail, command and Done/Cancel targets.
    - The keypad keeps its focused field without raising the system keyboard
      (`inputmode="none"` under coarse pointers; a hardware keyboard still
-     types).
+     types). A touch on the field itself raises it, for parameter names.
    - The keypad stays above an open software keyboard (`visualViewport`).
-   - iPad-size layout coverage at 768×1024, 820×1180, 834×1194 and 1024×1366
-     in both orientations. This runs in the existing Chromium project with
-     touch emulation (`pointer: coarse`, `hover: none`), so CI needs no new
+   - iPad-size layout coverage at 768×1024, 820×1180 and 1024×1366 in both
+     orientations. This runs in the existing Chromium project with touch
+     emulation (`pointer: coarse`, `hover: none`), so CI needs no new
      browser install.
+   - `viewport-fit=cover` and safe-area insets move to slice 7. A Safari tab
+     already keeps the page inside the safe area; only the Home Screen app
+     draws under the home indicator, and that needs an audit of every fixed
+     and floating layer.
 2. **Gesture recogniser.** A pure multi-pointer state machine in
    `packages/viewport/src/input/` covering the vocabulary above, unit tested
    with synthetic pointer sequences.
@@ -167,6 +170,8 @@ Timing and ownership rules:
    - An offset magnifier shows the snap target under the finger.
 6. **Apple Pencil**, as above.
 7. **Home Screen app and files.**
+   - `viewport-fit=cover` and safe-area insets for the top bar, stage,
+     floating islands and fixed layers.
    - Manifest, `apple-mobile-web-app-*` tags, and a service worker caching the
      shell and kernel WASM.
    - `navigator.storage.persist()`.

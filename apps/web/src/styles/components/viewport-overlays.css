@@ -144,7 +144,7 @@
      without a ceiling one long name would push the actions off screen. */
   max-width: min(320px, calc(100vw - 16px));
   /* A menu taller than the window scrolls rather than running off it. */
-  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
   overflow-y: auto;
   padding: 4px;
   background: var(--color-surface);

@@ -1645,7 +1645,7 @@
 }
 
 .activity-log-list {
-  max-height: calc(100vh - 300px);
+  max-height: calc(100dvh - 300px);
   min-height: 160px;
   overflow-y: auto;
   margin: 0;
