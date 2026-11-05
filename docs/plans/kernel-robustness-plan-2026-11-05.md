@@ -96,6 +96,62 @@ outside of a boss with radial planar sides. So, without a modifier, editing the
 source shape and replaying works today. This is the route WS4 makes the
 default, and the refusal sentences now point to it.
 
+### Matrix results (widened campaign)
+
+The generator now treats families and axes as data. It covers seven operand
+pairs: sphere×cylinder, box×cylinder, cylinder×cylinder, box×cone, box×torus,
+box×sphere and box×box. Placements are aligned, off-centre, tilted, tangent,
+coincident or stacked face, sliver overlap, equal radius and raised, plus scales
+1e-3 and 1e3. Booleans are union, subtract and intersect in both operand orders.
+Modifiers are a seam or unrelated-edge fillet or chamfer, or a cap offset.
+Follow-ups are a source grow or shrink, a direct resize, a direct offset, blend
+removal, undo/redo, reopen and a STEP round trip. The volume oracles are
+independent: closed forms, inclusion–exclusion with chord-integrated overlap,
+and Pappus or prism sections for blends. Route equivalence compares direct and
+source resizes, and blend removal with deleting the fillet. 1,392 cells run on
+the `2026.1.122` pin: 42 in the CI slice (`test/combination-matrix.test.ts`)
+and 1,350 in the full campaign (`test/combination-matrix.full.test.ts`, full
+suite only).
+
+| State           | Cells |
+| --------------- | ----- |
+| Qualified       | 725   |
+| Typed refusal   | 399   |
+| Untyped refusal | 216   |
+| Wrong           | 94    |
+| Timeout         | 0     |
+
+Wrong cells, each a silent defect with a minimal history in the ledger:
+
+1. **Box − half-embedded torus returns the box unchanged** (70 cells: every
+   box×torus subtract, any placement, modifier or follow-up). The minimal
+   history is a box 60×60×20 and a torus R 15 r 4 moved to (30, 30, 20),
+   then subtract. The result is exactly 72000 mm³ against an oracle of
+   69631.29 mm³, with no warning.
+2. **Direct wall resize under a seam blend loses the blend volume** (8 cells:
+   box×cylinder aligned and off-centre, seam fillet or chamfer, then a
+   direct resize to r 7). After a union and an r 2 seam fillet, the body
+   holds 75031.85 mm³. That is less than the unfilleted r 7 boss
+   (75078.76 mm³); the oracle is 75118.93 mm³.
+3. **Internally tangent cross drill** (3 cells: cylinder×cylinder
+   off-centre subtract, then a source grow to r 7 so the drill touches the
+   bar wall). The volume is 2.2 mm³ high against an exact 1D integral.
+4. **Steinmetz (equal-radius) cross drill** (13 cells). The volume is off by
+   0.071 mm³ (1.3e-5) against the exact 16r³/3, beyond the tolerance.
+
+The largest untyped families are the cylinder×cylinder union (83 cells,
+"open, non-manifold, or inconsistently oriented"). The next is the union
+connectivity check (50 cells). It is right for tangent and stacked operands,
+but it is also wrong for box×sphere raised and sliver unions, which overlap
+yet are refused as "2 disconnected groups". Then come a seam fillet or chamfer
+that loses its edges after a source edit (20 cells, WS5), a chamfer on a
+concave boss seam (14 cells), the direct resize refusals of the first slice,
+and a STEP reimport at the 1e3 scale that our own reader refuses (3 cells).
+Every box×sphere boolean with the sphere centred on the face, and every
+box×torus union and intersect, refuses typed (`exact_only_unattainable`).
+Seam blends on a sphere stay excluded, because one rebuild took 3.5–14
+minutes (root cause 6).
+
 ## Why combinations fail when primitives work
 
 - **Narrow kernel qualification.** Remus fixes are deliberately bounded to the
