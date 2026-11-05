@@ -202,10 +202,9 @@
   animation: oz-spin 0.9s linear infinite;
 }
 
-@keyframes oz-spin {
-  to {
-    transform: rotate(360deg);
-  }
+/* Reduced motion: the words carry the state; the ring rests. */
+[data-reduced-motion='true'] .keypad-state .spin {
+  animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
