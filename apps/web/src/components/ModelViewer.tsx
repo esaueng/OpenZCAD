@@ -55,6 +55,12 @@ import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
 import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
 import { pointerSlack } from '../lib/pointerSlack';
 import { TouchLoupe } from './viewer/touchLoupe';
+import {
+  FrameIntervalMeter,
+  NAVIGATION_PIXEL_RATIO,
+  navigationPixelRatio,
+  shadowMapSizeFor
+} from './viewer/renderBudget';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type {
@@ -2798,6 +2804,11 @@ export function ModelViewer({
     // E2E builds skip antialiasing, shadows and the environment map unless a
     // spec opts back in (viewer/renderProfile.ts).
     const profile = currentRenderProfile();
+    // L02: a touch-first device renders within a tighter budget
+    // (viewer/renderBudget.ts); desktop pointers keep the tuned renderer.
+    const touchFirst =
+      window.matchMedia?.('(pointer: coarse)').matches === true;
+    const shadowMapSize = shadowMapSizeFor(touchFirst);
     const renderer = timed(
       'viewer.renderer',
       () =>
@@ -2941,7 +2952,7 @@ export function ModelViewer({
     const keyLight = new THREE.DirectionalLight('#ffffff', 1.35);
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
-    tuneShadowFrustum(keyLight, 120);
+    tuneShadowFrustum(keyLight, 120, shadowMapSize);
     // Through the helper like every other site, so the refresh count on the
     // canvas starts from a known value rather than being absent until the
     // first thaw.
@@ -11210,14 +11221,21 @@ export function ModelViewer({
       },
       canOrbit: () => cameraRig.controls.enableRotate,
       beginOrbit: (press) => {
+        lowerNavigationResolution();
         pivotOrbitOnCursor(press);
         cameraRig.beginOrbitDrag();
       },
       orbitBy: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
-      beginPinch: () => cameraRig.beginPinchDrag(),
+      beginPinch: () => {
+        lowerNavigationResolution();
+        cameraRig.beginPinchDrag();
+      },
       panBy: (deltaX, deltaY) => cameraRig.panByPixels(deltaX, deltaY),
       zoomBy: (scale, x, y) => cameraRig.zoomByPinch(scale, x, y),
-      endNavigation: () => cameraRig.endOrbitDrag(),
+      endNavigation: () => {
+        cameraRig.endOrbitDrag();
+        restoreNavigationResolution();
+      },
       longPress: openTouchContextMenu,
       doubleTap: handleDoubleClick,
       history: (step) => onTouchHistoryRef.current?.(step),
@@ -11225,6 +11243,51 @@ export function ModelViewer({
       setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
       clearTimer: (handle) => window.clearTimeout(handle)
     });
+    // A device that drops frames navigates at a lower pixel ratio and gets
+    // the full one back at rest. Once it has needed that, it keeps needing
+    // it: the lowered frames are fast, and would otherwise read as healthy.
+    let navigationNeedsLowRes = false;
+    let navigationResolutionLowered = false;
+    function lowerNavigationResolution() {
+      const full = Math.min(window.devicePixelRatio, 2);
+      const lowered = navigationPixelRatio(full, frameMeter.intervalMs);
+      if (lowered !== null) navigationNeedsLowRes = true;
+      if (!navigationNeedsLowRes || full <= NAVIGATION_PIXEL_RATIO) return;
+      renderer.setPixelRatio(NAVIGATION_PIXEL_RATIO);
+      navigationResolutionLowered = true;
+      resizePending = true;
+      requestRender();
+    }
+    function restoreNavigationResolution() {
+      if (!navigationResolutionLowered) return;
+      navigationResolutionLowered = false;
+      applyPixelRatio();
+      resizePending = true;
+      requestRender();
+    }
+    // iPadOS reclaims a background tab's GPU memory by losing the context.
+    // three.js restores its own state; the frozen shadow map and the baked
+    // environment are render targets whose contents went with it.
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      renderer.domElement.dataset.contextLost = 'true';
+    };
+    const handleContextRestored = () => {
+      delete renderer.domElement.dataset.contextLost;
+      if (profile.environment) {
+        const previous = scene.environment;
+        scene.environment = createStudioEnvironment(renderer);
+        previous?.dispose();
+      }
+      refreshShadowMap();
+      resizePending = true;
+      requestRender();
+    };
+    renderer.domElement.addEventListener('webglcontextlost', handleContextLost);
+    renderer.domElement.addEventListener(
+      'webglcontextrestored',
+      handleContextRestored
+    );
     /** When the last finger lifted: the browser's own dblclick follows it. */
     let lastTouchEndAt = Number.NEGATIVE_INFINITY;
     // Palm rejection: a hand resting on the glass while a pen writes. iPadOS
@@ -11327,6 +11390,7 @@ export function ModelViewer({
      * sleep sees the whole idle gap on the clock, which is not animation time.
      */
     let loopWasAnimating = false;
+    const frameMeter = new FrameIntervalMeter();
     const resetAnimationContinuity = () => {
       loopWasAnimating = false;
     };
@@ -11336,6 +11400,7 @@ export function ModelViewer({
       const frameStarted = performance.now();
       const continuous =
         loopWasAnimating && document.visibilityState !== 'hidden';
+      frameMeter.sample(now, continuous);
       // The view cube's widget can remount with the chrome; follow whichever
       // link is current, and push it the camera at once so its hit layer is
       // not waiting for the next turn.
@@ -11858,6 +11923,14 @@ export function ModelViewer({
       cubeLink = null;
       cubeOverlay.dispose();
       touchNavigation.dispose();
+      renderer.domElement.removeEventListener(
+        'webglcontextlost',
+        handleContextLost
+      );
+      renderer.domElement.removeEventListener(
+        'webglcontextrestored',
+        handleContextRestored
+      );
       touchLoupe.dispose();
       for (const type of SAFARI_GESTURE_EVENTS) {
         host.removeEventListener(type, preventPageGesture);
@@ -11984,6 +12057,8 @@ export function ModelViewer({
         (disposable.material as THREE.Material).dispose();
       }
       environment?.dispose();
+      // One rebuilt after a lost context replaced it.
+      if (scene.environment !== environment) scene.environment?.dispose();
       // The key light's shadow map is a render target of its own, which no
       // scene-graph clear reaches.
       keyLight.dispose();
@@ -12816,7 +12891,9 @@ export function ModelViewer({
         const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
         tuneShadowFrustum(
           context.keyLight,
-          Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
+          Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2,
+          // The size the light was created with (viewer/renderBudget.ts).
+          context.keyLight.shadow.mapSize.x
         );
         context.keyLight.position.set(
           sceneCenter.x + 90,

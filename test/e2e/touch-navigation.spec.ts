@@ -5,7 +5,7 @@ import {
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { CDPSession, Locator, Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import { enableFullRender, expect, stubApi, test } from './openzcad-fixtures';
 
 /**
  * L02 slice 3 (docs/plans/ipad-touch-plan-2026-11-05.md): fingers on the 3D
@@ -413,5 +413,45 @@ test.describe('Apple Pencil', () => {
       clickCount: 1,
       pointerType: 'pen'
     });
+  });
+});
+
+test.describe('rendering on a tablet', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('a lost WebGL context comes back drawing, with its shadows rebuilt', async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });
+    await enableFullRender(page);
+    const canvas = await openBlock(page);
+    const refreshes = async () =>
+      Number(
+        await canvas.evaluate(
+          (element) => element.dataset.e2eShadowRefreshes ?? '0'
+        )
+      );
+    const before = await refreshes();
+    // What iPadOS does to a backgrounded tab under memory pressure.
+    await canvas.evaluate((element) => {
+      const gl = (element as HTMLCanvasElement).getContext('webgl2')!;
+      const lose = gl.getExtension('WEBGL_lose_context')!;
+      (window as Window & { __ozLose?: WEBGL_lose_context }).__ozLose = lose;
+      lose.loseContext();
+    });
+    await expect(canvas).toHaveAttribute('data-context-lost', 'true');
+    await canvas.evaluate(() =>
+      (
+        window as Window & { __ozLose?: WEBGL_lose_context }
+      ).__ozLose!.restoreContext()
+    );
+    await expect(canvas).not.toHaveAttribute('data-context-lost');
+    await expect.poll(refreshes).toBeGreaterThan(before);
+    // It draws again: the frame counter moves after the restore.
+    const frames = Number(await canvas.getAttribute('data-e2e-frames'));
+    await page.getByRole('button', { name: /^Fit view/ }).click();
+    await expect
+      .poll(async () => Number(await canvas.getAttribute('data-e2e-frames')))
+      .toBeGreaterThan(frames);
   });
 });
