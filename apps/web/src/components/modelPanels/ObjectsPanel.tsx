@@ -195,9 +195,12 @@ export function modelBodies({
 
 /**
  * Bodies that are an earlier state of a later body rather than an input to
- * it: the target of a fillet, chamfer, direct edit or any other single-body
- * step that writes a new body of its own. A Boolean's operands are not here;
- * they are the sources the result was built from.
+ * it: the target of a fillet, chamfer, hole, shell, offset, direct edit or
+ * any other single-body step that writes one new body of its own. A
+ * Boolean's operands are not here; they are the sources the result was
+ * built from. Nor is a body an operation consumed into several results (a
+ * Split's two halves): no single result is that body's later state, so it
+ * is their source.
  *
  * A union rounded twice consumes three bodies named "Union 1" on the way, so
  * counting them as sources read "4 source bodies" beside a History that shows
@@ -211,10 +214,13 @@ export function earlierBodyVersionIds(
     const data = feature.data as {
       featureKind: string;
       targetBodyId?: unknown;
+      /** A second result body (Split's other half). */
+      secondBodyId?: unknown;
     };
     if (
       data.featureKind !== 'boolean' &&
       typeof data.targetBodyId === 'string' &&
+      typeof data.secondBodyId !== 'string' &&
       feature.bodyId &&
       feature.bodyId !== data.targetBodyId
     ) {
