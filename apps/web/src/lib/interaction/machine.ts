@@ -1,5 +1,6 @@
 import type { ExtrudeChoice } from '../extrudeInference';
 import type {
+  BlendRefusalAdvice,
   ParamValue,
   BoundaryProvenance,
   SketchPlaneRef,
@@ -358,6 +359,12 @@ export interface CommandDiagnostic {
    * came back malformed".
    */
   category?: string;
+  /**
+   * What the adapter's size ladder proved about a refused fillet or chamfer:
+   * a size that builds, or that smaller ones failed too. The control's short
+   * headline and its one-click remedy read this, never the sentence.
+   */
+  advice?: BlendRefusalAdvice;
 }
 
 interface OperationLifecycle {
@@ -1451,7 +1458,10 @@ export function isStaleSelectionError(
 export function refusalRulesOutSize(
   error: CommandDiagnostic | null | undefined
 ): boolean {
-  return /size is not the cause|Smaller (?:radii|distances) (?:were refused|failed)/.test(
+  // The adapter's own verdict when the refusal carries it; the sentence only
+  // for a refusal from a path that does not (a rebuild that predates it).
+  if (error?.advice) return error.advice.kind === 'structural';
+  return /size is not the cause|different size is unlikely|Smaller (?:radii|distances) (?:were refused|failed)/.test(
     error?.message ?? ''
   );
 }

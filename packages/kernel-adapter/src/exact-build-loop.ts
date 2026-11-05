@@ -35,6 +35,7 @@ import {
   type IdleLineageView
 } from './exact-idle-lineage-view';
 import { kernelRefusalRecordOf } from './kernel-refusal';
+import { blendAdviceOf } from './exact-edge-modifiers';
 import {
   firstManualSuppressionIndex,
   passSuppressedFeatureThrough,
@@ -337,7 +338,8 @@ function* buildDocumentHistorySteps(
           feature,
           message,
           'build-failed',
-          kernelRefusalRecordOf(error)
+          kernelRefusalRecordOf(error),
+          blendAdviceOf(error)
         );
       }
       onFeature?.(index, result, idleLineageView?.finish(feature, result));
@@ -421,14 +423,16 @@ function attribute(
   feature: { featureId: FeatureId; name: string },
   message: string,
   kind: FeatureWarning['kind'],
-  kernelRefusal?: FeatureWarning['kernelRefusal']
+  kernelRefusal?: FeatureWarning['kernelRefusal'],
+  blendAdvice?: FeatureWarning['blendAdvice']
 ): void {
   result.featureWarnings.push({
     featureId: feature.featureId,
     featureName: feature.name,
     message,
     kind,
-    ...(kernelRefusal ? { kernelRefusal } : {})
+    ...(kernelRefusal ? { kernelRefusal } : {}),
+    ...(blendAdvice ? { blendAdvice } : {})
   });
 }
 

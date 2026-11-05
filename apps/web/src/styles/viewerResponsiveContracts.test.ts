@@ -170,3 +170,17 @@ describe('a refusal in the command strip (F014)', () => {
     );
   });
 });
+
+describe('a refusal in the bottom lane', () => {
+  it('takes its own clicks, while the lane lets the stage take the rest', () => {
+    // With no control open the refusal stands in the guidance row with its
+    // remedies (Keep, Try, Why?); the lane passes clicks to the stage, and
+    // the canvas under it took every press meant for Keep.
+    expect(
+      rules(sheet('quiet-stage.css'), '.command-bar-lane').join('\n')
+    ).toMatch(/pointer-events:\s*none/);
+    expect(
+      rules(sheet('edit-control.css'), '.edit-refusal.is-bar').join('\n')
+    ).toMatch(/pointer-events:\s*auto/);
+  });
+});

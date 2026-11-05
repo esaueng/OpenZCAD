@@ -11,7 +11,6 @@ import { textLabelSegments } from '../lib/topologyLabels';
 import {
   SelectionRail,
   SelectionReadout,
-  SelectionRefusal,
   VALIDATING_ANNOUNCE_MS
 } from './SelectionRail';
 
@@ -301,114 +300,6 @@ describe('SelectionReadout', () => {
     const readout = screen.getByRole('group', { name: 'Picked' });
     expect(readout).toHaveTextContent('Bracket · Top face');
     expect(readout).toHaveTextContent('2503.45 mm²');
-  });
-});
-
-describe('SelectionRefusal', () => {
-  it('says why it refused, with each way out as a button', () => {
-    const onEditCulprit = vi.fn();
-    const onKeepLastValid = vi.fn();
-    const onViewDetails = vi.fn();
-    render(
-      <SelectionRefusal
-        operation={operation({
-          phase: 'failed',
-          error: {
-            message: 'The face would run into another part.',
-            detail: 'kernel words',
-            culprit: { featureId: 'feature-7', featureName: 'Boss' }
-          },
-          keepLastValidLabel: 'Keep 4 mm',
-          onEditCulprit,
-          onKeepLastValid,
-          onViewDetails
-        })}
-      />
-    );
-    const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent('The face would run into another part.');
-    // The ways out stand beside the sentence, outside its live region.
-    expect(within(alert).queryAllByRole('button')).toEqual([]);
-    const row = alert.closest<HTMLElement>('.selection-callout-diagnostic')!;
-    fireEvent.click(within(row).getByRole('button', { name: 'Edit Boss' }));
-    fireEvent.click(within(row).getByRole('button', { name: 'Keep 4 mm' }));
-    fireEvent.click(within(row).getByRole('button', { name: 'View details' }));
-    expect(onEditCulprit).toHaveBeenCalledWith('feature-7');
-    expect(onKeepLastValid).toHaveBeenCalledOnce();
-    expect(onViewDetails).toHaveBeenCalledOnce();
-  });
-
-  it('draws nothing while the operation stands', () => {
-    const { container } = render(<SelectionRefusal operation={operation()} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-});
-
-describe('a long refusal in the notice lane', () => {
-  const message =
-    'Fillet could not be created on the selected closed edge with radius 1. ' +
-    'The modeling engine could not trim the cylindrical face beside it. ' +
-    'Smaller radii failed the same way, so the size is not the cause.';
-  const refused = (text: string, title = 'Fillet') =>
-    operation({ title, phase: 'failed', error: { message: text } });
-  const rowOf = () =>
-    screen
-      .getByRole('alert')
-      .closest<HTMLElement>('.selection-callout-diagnostic')!;
-
-  it('opens folded, keeps the whole sentence for the alert, and unfolds on More', () => {
-    render(<SelectionRefusal operation={refused(message)} />);
-    const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent(message);
-    const row = rowOf();
-    expect(row).toHaveClass('is-expandable');
-    expect(row).not.toHaveClass('is-expanded');
-    const more = screen.getByRole('button', { name: 'More' });
-    expect(more).toHaveAttribute('aria-expanded', 'false');
-    expect(more).toHaveAttribute('aria-controls', alert.id);
-    // The toggle is not inside the live region it controls.
-    expect(alert).not.toContainElement(more);
-    fireEvent.click(more);
-    expect(row).toHaveClass('is-expanded');
-    const less = screen.getByRole('button', { name: 'Less' });
-    expect(less).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(less);
-    expect(row).not.toHaveClass('is-expanded');
-  });
-
-  it('does not unfold from a click on the sentence, so it can be selected and copied', () => {
-    render(<SelectionRefusal operation={refused(message)} />);
-    fireEvent.click(screen.getByRole('alert'));
-    expect(rowOf()).not.toHaveClass('is-expanded');
-  });
-
-  it('opens folded again for any other refusal, including a return to an earlier one', () => {
-    const other =
-      'Chamfer could not be created on 2 selected edges with distance 3. ' +
-      'Try a smaller distance.';
-    const { rerender } = render(
-      <SelectionRefusal operation={refused(message)} />
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    expect(rowOf()).toHaveClass('is-expanded');
-    rerender(<SelectionRefusal operation={refused(other)} />);
-    expect(rowOf()).not.toHaveClass('is-expanded');
-    rerender(<SelectionRefusal operation={refused(message)} />);
-    expect(rowOf()).not.toHaveClass('is-expanded');
-    // The same sentence from another operation is another refusal too.
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    rerender(<SelectionRefusal operation={refused(message, 'Chamfer')} />);
-    expect(rowOf()).not.toHaveClass('is-expanded');
-  });
-
-  it('leaves a one-sentence refusal as it is, with no toggle', () => {
-    render(
-      <SelectionRefusal
-        operation={refused('The face would run into another part.')}
-      />
-    );
-    expect(rowOf()).not.toHaveClass('is-expandable');
-    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
   });
 });
 

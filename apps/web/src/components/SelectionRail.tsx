@@ -11,13 +11,7 @@ import {
   SquarePen,
   SquareX
 } from 'lucide-react';
-import {
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode
-} from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { useSettledFlag } from '../hooks/useSettledFlag';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
 import {
@@ -29,11 +23,7 @@ import type {
   SelectionCalloutOperation,
   SelectionCalloutVerb
 } from '../lib/selectionCallout';
-import {
-  OPERATION_PHASE_LABELS,
-  REFUSAL_FOLD_LABELS,
-  refusalIsExpandable
-} from '../lib/selectionCalloutView';
+import { OPERATION_PHASE_LABELS } from '../lib/selectionCalloutView';
 import { TOOL_META, type ToolId } from '../lib/tools';
 import type { LabelSegment } from '../lib/topologyLabels';
 import { Tooltip } from './Tooltip';
@@ -297,146 +287,5 @@ export function SelectionReadout({
         </span>
       )}
     </span>
-  );
-}
-
-/**
- * A refused operation, in the notice lane: the plain sentence and its ways
- * out (edit the feature that refused it, keep the last value that built,
- * read the kernel's own words). The handle stays live on the model, so a
- * smaller drag or a new value is still the quickest way out.
- */
-export function SelectionRefusal({
-  operation
-}: {
-  operation: SelectionCalloutOperation;
-}) {
-  const error = operation.error;
-  const message = error?.message ?? '';
-  const rowRef = useRef<HTMLDivElement | null>(null);
-  const textRef = useRef<HTMLSpanElement | null>(null);
-  const messageId = useId();
-  // One refusal is one operation's one sentence. Any change — another
-  // operation, another sentence, or a return to an earlier one — is a new
-  // refusal and opens folded, so the fold never carries over.
-  const identity = `${operation.title}\u0000${message}`;
-  const [fold, setFold] = useState<{
-    identity: string;
-    expanded: boolean;
-    /**
-     * Whether the folded line actually clips: null until laid out, and
-     * still null where nothing is laid out (unit tests), which keeps the
-     * sentence guess.
-     */
-    clips: boolean | null;
-  }>({ identity, expanded: false, clips: null });
-  if (fold.identity !== identity) {
-    setFold({ identity, expanded: false, clips: null });
-  }
-  const expanded = fold.identity === identity && fold.expanded;
-  const clips = fold.identity === identity ? fold.clips : null;
-  const setExpanded = (next: boolean) =>
-    setFold((current) => ({ ...current, expanded: next }));
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    const text = textRef.current;
-    if (!row || !text) return;
-    const area = row.closest<HTMLElement>('.viewer-area');
-    const measure = () => {
-      // Folded, the clamp shows whether anything is hidden; open, the
-      // answer from the folded line stands.
-      if (!expanded && text.clientHeight > 0) {
-        const next = text.scrollHeight > text.clientHeight + 1;
-        setFold((current) =>
-          current.clips === next ? current : { ...current, clips: next }
-        );
-      }
-      // The Undo toast stands on this row, so it is lifted by the row's
-      // real height (plus the lane gap), folded or open, rather than by a
-      // fixed figure an open diagnosis outgrows.
-      if (area && row.offsetHeight > 0) {
-        area.style.setProperty(
-          '--lane-refusal-measured',
-          `${Math.ceil(row.offsetHeight) + 12}px`
-        );
-      }
-    };
-    measure();
-    const observer =
-      typeof ResizeObserver === 'undefined'
-        ? null
-        : new ResizeObserver(measure);
-    observer?.observe(row);
-    observer?.observe(text);
-    return () => {
-      observer?.disconnect();
-      area?.style.removeProperty('--lane-refusal-measured');
-    };
-  }, [identity, expanded]);
-  if (!error) return null;
-  const culprit = error.culprit;
-  const expandable = expanded || (clips ?? refusalIsExpandable(message));
-  return (
-    <div
-      ref={rowRef}
-      className={[
-        'selection-callout-diagnostic',
-        expandable ? 'is-expandable' : '',
-        expanded ? 'is-expanded' : ''
-      ]
-        .filter(Boolean)
-        .join(' ')}
-    >
-      {/* Folded to one line, the whole sentence stays in the DOM and is the
-          live region on its own: only its paint is clipped, and the toggle
-          sits outside the region, so pressing it announces only its own
-          state rather than the whole refusal again. */}
-      <span
-        ref={textRef}
-        id={messageId}
-        className="selection-callout-error"
-        role="alert"
-      >
-        {message}
-      </span>
-      {expandable && (
-        <button
-          type="button"
-          className="selection-callout-recovery selection-callout-expand"
-          aria-expanded={expanded}
-          aria-controls={messageId}
-          onClick={() => setExpanded(!expanded)}
-        >
-          {expanded ? REFUSAL_FOLD_LABELS.less : REFUSAL_FOLD_LABELS.more}
-        </button>
-      )}
-      {culprit && (
-        <button
-          type="button"
-          className="selection-callout-recovery"
-          onClick={() => operation.onEditCulprit(culprit.featureId)}
-        >
-          Edit {culprit.featureName}
-        </button>
-      )}
-      {operation.keepLastValidLabel && (
-        <button
-          type="button"
-          className="selection-callout-recovery"
-          onClick={operation.onKeepLastValid}
-        >
-          {operation.keepLastValidLabel}
-        </button>
-      )}
-      {error.detail && (
-        <button
-          type="button"
-          className="selection-callout-recovery"
-          onClick={operation.onViewDetails}
-        >
-          View details
-        </button>
-      )}
-    </div>
   );
 }

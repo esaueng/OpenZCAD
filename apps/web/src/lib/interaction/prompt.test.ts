@@ -261,7 +261,7 @@ describe('the step describes the operation actually armed', () => {
 
 describe('a refused value', () => {
   const sizeRuledOut =
-    'Fillet could not be created on the selected closed edge with radius 1. Smaller radii failed the same way, so the size is not the cause.';
+    'Fillet could not be created on the selected closed edge with radius 1. Smaller radii failed too, so a different size is unlikely to help.';
 
   it('does not tell the user to try another value once every size failed', () => {
     const refused = faceState('failed', 'offset-face', sizeRuledOut);
@@ -277,7 +277,7 @@ describe('a refused value', () => {
     ).toBe('Offset removes the face. Try another value.');
   });
 
-  it('leaves the sentence to the notice lane when the lane already shows it', () => {
+  it('keeps to the keys once the refusal is on screen with its ways out', () => {
     const shown = { refusalShown: true };
     expect(
       commandPromptText(
@@ -285,14 +285,14 @@ describe('a refused value', () => {
         'diameter',
         shown
       )
-    ).toBe('Pick a different edge or face · Esc clears the selection');
+    ).toBe('Esc clears the selection');
     expect(
       commandPromptText(
         faceState('failed', 'offset-face', 'Offset removes the face.'),
         'diameter',
         shown
       )
-    ).toBe('Try another value · Esc clears the selection');
+    ).toBe('Esc clears the selection');
   });
 
   it('names a split rim as the closed edge it is', () => {
@@ -303,5 +303,26 @@ describe('a refused value', () => {
     ).toBe(
       'Drag the arrow to set the fillet on the closed edge, or type a radius'
     );
+  });
+});
+
+describe('the edit control’s key hints', () => {
+  const hints = (
+    editor: NonNullable<Parameters<typeof commandPromptText>[2]>['editor']
+  ) =>
+    commandPromptText(faceState('exact-entry'), 'diameter', {
+      ...(editor ? { editor } : {})
+    });
+
+  it.each([
+    [{ state: 'ready', explaining: false }, 'Enter apply · Esc cancel'],
+    [{ state: 'checking', explaining: false }, 'Checking… · Esc cancel'],
+    // Enter does nothing on a refused or unreadable value, so it is not offered.
+    [{ state: 'refused', explaining: false }, 'Esc cancel'],
+    [{ state: 'invalid', explaining: false }, 'Esc cancel'],
+    // The first rung of the ladder: an open explanation closes first.
+    [{ state: 'refused', explaining: true }, 'Esc close']
+  ] as const)('reads %o as %s', (editor, text) => {
+    expect(hints(editor)).toBe(text);
   });
 });

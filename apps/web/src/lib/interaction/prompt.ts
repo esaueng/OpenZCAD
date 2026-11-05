@@ -6,7 +6,7 @@ import {
   type InteractionState
 } from './machine';
 import { activeKeymap, keyHint } from '../keymap';
-import type { DimensionMode } from '../keypad';
+import type { DimensionMode, EditControlState } from '../keypad';
 
 /**
  * What the workspace should be telling you to do right now.
@@ -33,11 +33,20 @@ export interface CommandPrompt {
 /** What the workspace knows that the interaction state alone does not. */
 export interface CommandPromptContext {
   /**
-   * The refusal is already on screen in the notice lane, with its ways out,
-   * so the prompt says only what to do next instead of repeating it: the
-   * same paragraph used to run in the lane, the keypad and the status row.
+   * The refusal is already on screen (on the edit control, or as the
+   * guidance row's compact "Not built · Why?"), with its ways out, so the
+   * prompt says only which keys do what instead of repeating it.
    */
   refusalShown?: boolean;
+  /**
+   * The edit control is open at the pick: the prompt is its key hints, true
+   * to what Enter and Escape do in its present state.
+   */
+  editor?: {
+    state: EditControlState;
+    /** An explanation is open, which Escape closes first. */
+    explaining: boolean;
+  };
   /**
    * How the picked edges read when they are not a plain count — a rim the
    * boolean split into four arcs is the one "closed edge" the user clicked.
@@ -164,6 +173,9 @@ export function commandPrompt(
       escape
     };
   }
+  if (context.editor) {
+    return editorHints(context.editor);
+  }
   if (state.phase === 'validating') {
     return { step: 'Checking the exact result…', escape };
   }
@@ -180,6 +192,25 @@ export function commandPrompt(
 }
 
 /**
+ * The edit control's keys, as they act in its state: Enter applies only a
+ * value that built, and Escape climbs its ladder (the explanation, then the
+ * edit; the selection is the rung after the control closes).
+ */
+function editorHints(
+  editor: NonNullable<CommandPromptContext['editor']>
+): CommandPrompt {
+  if (editor.explaining) return { step: '', escape: 'close' };
+  switch (editor.state) {
+    case 'ready':
+      return { step: 'Enter apply', escape: 'cancel' };
+    case 'checking':
+      return { step: 'Checking…', escape: 'cancel' };
+    default:
+      return { step: '', escape: 'cancel' };
+  }
+}
+
+/**
  * The next move after a refused value. "Try another value" is offered only
  * when a different value could build: a stale selection fails at every value,
  * and so does a refusal whose size ladder already failed all the way down.
@@ -191,13 +222,8 @@ function failedStep(
   if (!error) return 'That value did not build. Try another.';
   const stale = isStaleSelectionError(error);
   const sizeRuledOut = refusalRulesOutSize(error);
-  if (refusalShown) {
-    return stale
-      ? 'Re-select, as the note above says'
-      : sizeRuledOut
-        ? 'Pick a different edge or face'
-        : 'Try another value';
-  }
+  // Shown, the refusal carries its own ways out: the prompt keeps to keys.
+  if (refusalShown) return '';
   return stale || sizeRuledOut
     ? error.message
     : `${error.message} Try another value.`;
@@ -213,5 +239,8 @@ export function commandPromptText(
   if (!prompt) {
     return null;
   }
-  return prompt.escape ? `${prompt.step} · Esc ${prompt.escape}` : prompt.step;
+  if (!prompt.escape) return prompt.step;
+  return prompt.step
+    ? `${prompt.step} · Esc ${prompt.escape}`
+    : `Esc ${prompt.escape}`;
 }
