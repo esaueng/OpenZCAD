@@ -3226,6 +3226,10 @@ export function App() {
     setHiddenBodyIds,
     sketchVisibility: sketchVisibilityOverrides,
     setSketchVisibility: setSketchVisibilityOverrides,
+    hiddenDatumIds,
+    setHiddenDatumIds,
+    hiddenReferenceImageIds,
+    setHiddenReferenceImageIds,
     restore: restoreProjectView,
     apply: applyProjectView,
     snapshot: projectViewSnapshot,
@@ -11512,14 +11516,6 @@ export function App() {
   // the project view: absent means the default — a sketch whose profile a
   // feature consumed hides itself, everything else shows. View state on this
   // device, persisted beside the camera and deliberately not in the document.
-  /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
-  const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
-    () => new Set()
-  );
-  /** I05 reference images hidden by their eye toggle: view state too. */
-  const [hiddenReferenceImageIds, setHiddenReferenceImageIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
   /** The reference image whose card is open, with the Image tool. */
   const [openReferenceImageId, setOpenReferenceImageId] =
     useState<ReferenceImageId | null>(null);
