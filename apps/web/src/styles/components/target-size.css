@@ -35,7 +35,7 @@
 @media (pointer: coarse) and (max-height: 900px) {
   .instrument-rail > .viewer-rail {
     display: grid;
-    grid-template-columns: repeat(2, 40px);
+    grid-template-columns: repeat(2, 44px);
     justify-content: center;
     width: calc(var(--rail-w) * 2 - 8px);
   }
@@ -72,6 +72,15 @@
     height: 30px;
   }
 
+  /* Sketch flyouts must clear this wider instrument rail as well as the
+     relations beside it. The ordinary single-column lane is too narrow. */
+  .workspace.column-layout .viewer-area:has(.sketch-relations) {
+    --lane-end: calc(
+      (var(--rail-w) * 2 - 8px) * 2 + var(--island-gap) * 3 +
+        var(--right-panels-w)
+    );
+  }
+
   .instrument-rail .rail-divider {
     grid-column: 1 / -1;
     justify-self: center;
@@ -95,10 +104,46 @@
   inset: min(0px, calc((100% - 24px) / 2));
 }
 /* Touch input needs a larger visible target, rather than overlapping
-   invisible hit areas. The rails and their columns grow together. */
+   invisible hit areas. The rails and their columns grow together. 44 px is
+   the touch minimum (WCAG 2.5.5, Apple HIG); the rail keeps 4 px either side
+   of it. */
 @media (pointer: coarse) {
   .workspace.column-layout {
+    --rail-w: 52px;
+  }
+
+  button.command-rail,
+  .instrument-rail .rail-button,
+  .drawing-rail-button {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .command-tile-pin {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+  }
+
+  .in-place-command-cancel,
+  .in-place-command-done,
+  .in-place-command-options > summary {
+    min-height: 44px;
+  }
+}
+
+/* A phone on its side (no taller than 540 px) has no room for 44 px rows:
+   the three-column tool rail ran past the bottom of the screen and clipped
+   Tools. It keeps the 40 px targets it had; an iPad is never this short. */
+@media (pointer: coarse) and (max-height: 540px) {
+  .workspace.column-layout {
     --rail-w: 48px;
+  }
+
+  .instrument-rail > .viewer-rail {
+    grid-template-columns: repeat(2, 40px);
   }
 
   button.command-rail,
@@ -107,18 +152,6 @@
     width: 40px;
     height: 40px;
     min-width: 40px;
-    min-height: 40px;
-  }
-
-  .command-tile-pin {
-    width: 40px;
-    height: 40px;
-    opacity: 1;
-  }
-
-  .in-place-command-cancel,
-  .in-place-command-done,
-  .in-place-command-options > summary {
     min-height: 40px;
   }
 }

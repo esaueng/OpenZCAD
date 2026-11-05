@@ -748,7 +748,7 @@
 
 .drawing-sheet-list {
   min-width: 240px;
-  max-height: min(480px, calc(100vh - 16px));
+  max-height: min(480px, calc(100dvh - 16px));
 }
 
 /* The count stays put while a long list scrolls under it. */

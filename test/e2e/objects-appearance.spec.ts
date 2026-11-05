@@ -40,7 +40,7 @@ for (const width of [1440, 390]) {
       page.on('console', (message) => {
         if (message.type() === 'error') errors.push(message.text());
       });
-      await stubApi(page);
+      await stubApi(page, { commandFoldClosed: true });
       await page.route('**/api/projects', (route) =>
         route.request().method() === 'POST'
           ? route.fulfill({
@@ -162,6 +162,11 @@ for (const width of [1440, 390]) {
       await expect(swatch).toHaveCSS('--body-color', '#5f8fe8');
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expect(swatch).toHaveCSS('--body-color', '#a78bfa');
+      // The swatch reflects the edit before its device/account writes finish.
+      // Reopen only after the save indicator promises that edit is durable.
+      await expect(
+        page.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible();
       await page.reload();
       await expectBodyCount(page, 2);
       if (
@@ -183,8 +188,9 @@ for (const width of [1440, 390]) {
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect(swatch).toHaveCSS('--body-color', '#a78bfa');
       await swatch.click();
-      // On a phone the popover uses the space below its row, over the list.
-      if (width === 390) await swatch.click();
+      // On a phone the popover covers the list; dismiss it before selecting
+      // another row rather than clicking through its painted surface.
+      if (width === 390) await page.keyboard.press('Escape');
       await otherSwatch.click();
       await expect(editor).toHaveCount(0);
       await expect(

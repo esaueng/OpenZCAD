@@ -1149,6 +1149,15 @@
 
 /* Only these notices consume the status height. Keeping it on the viewer
    made a toast appearing/disappearing restyle every object/history row. */
+.workspace.column-layout .viewer-area {
+  /* Guidance is measured on this element. Resolve its height here, rather
+     than on the ancestor workspace where the custom property is absent. */
+  --lane-base: calc(
+    var(--island-gap) + var(--command-bar-h) +
+      var(--workspace-guidance-h, 0px) + 8px
+  );
+}
+
 .viewer-area :is(.toast, .selection-refusal-lane) {
   --lane-status: 0px;
 }
@@ -1749,7 +1758,7 @@
      the readout (the translate's percentages are its own height), and past
      the band's height the tools scroll while the footer (Finish) stays. */
   --column-band-room: calc(
-    (100vh - var(--stage-top) - var(--island-gap)) / 2 -
+    (100dvh - var(--stage-top) - var(--island-gap)) / 2 -
       var(--readout-reserve) - var(--island-gap)
   );
   transform: translateY(min(-50%, calc(var(--column-band-room) - 100%)));
@@ -1768,11 +1777,11 @@
      does (the translate's percentages are its own height), and never past
      the top islands. */
   --rail-band-room: calc(
-    (100vh - var(--stage-top) - var(--island-gap)) / 2 - var(--stage-corner-h)
+    (100dvh - var(--stage-top) - var(--island-gap)) / 2 - var(--stage-corner-h)
   );
   transform: translateY(
     max(
-      calc((var(--stage-top) + var(--island-gap) - 100vh) / 2),
+      calc((var(--stage-top) + var(--island-gap) - 100dvh) / 2),
       min(-50%, calc(var(--rail-band-room) - 100%))
     )
   );
@@ -1877,7 +1886,7 @@
 .viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts) {
   max-height: max(
     calc(
-      (100vh - var(--stage-top) - var(--island-gap) + 100%) / 2 -
+      (100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2 -
         var(--readout-reserve) - var(--island-gap)
     ),
     100%
@@ -1891,7 +1900,7 @@
 @media (max-height: 600px) {
   .viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts) {
     max-height: max(
-      calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2),
+      calc((100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2),
       calc(var(--readout-reserve) + var(--island-gap) + 100%)
     );
   }
@@ -2174,11 +2183,11 @@ button.command-rail.is-suggested {
     0px,
     calc(
       max(50%, 100% - var(--column-band-room)) -
-        (100vh - var(--stage-top) - var(--island-gap)) / 2
+        (100dvh - var(--stage-top) - var(--island-gap)) / 2
     )
   );
   --sheet-h: calc(
-    100vh - var(--stage-top) - var(--island-gap) * 2 -
+    100dvh - var(--stage-top) - var(--island-gap) * 2 -
       max(var(--readout-reserve), var(--command-bar-h) + 72px)
   );
 }
@@ -3898,6 +3907,7 @@ button.model-panel-grip[aria-expanded='true'] {
   top: 0;
   left: calc(100% + var(--island-gap));
   width: var(--sketch-flyout-w);
+  overflow-wrap: anywhere;
   display: flex;
   flex-direction: column;
   gap: var(--island-gap);
@@ -3981,9 +3991,37 @@ button.model-panel-grip[aria-expanded='true'] {
   overflow: visible;
 }
 
+/* A narrow editor also needs a separate row for Close when its heading
+   and the button no longer fit side by side. */
+.sketch-flyouts .sketch-entity-editor header {
+  flex-wrap: wrap;
+}
+
+.sketch-flyouts .sketch-entity-editor header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* A phone-width flyout puts Apply under Delete rather than past the edge. */
 .sketch-flyouts .sketch-entity-editor footer {
   flex-wrap: wrap;
+}
+
+.sketch-flyouts .sketch-entity-editor footer button {
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 32px;
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.sketch-flyouts .sketch-palette-header > span {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
 }
 
 .sketch-flyouts .sketch-palette {
@@ -4024,6 +4062,39 @@ button.model-panel-grip[aria-expanded='true'] {
 .sketch-flyouts .sketch-palette-content fieldset {
   grid-template-columns: minmax(0, 1fr);
   min-inline-size: 0;
+}
+
+/* The flyout can be narrower than a button's preferred text width when
+   both right rails wrap. Keep its controls inside that shared scrollport. */
+.sketch-flyouts .sketch-palette button,
+.sketch-flyouts .sketch-palette label {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.sketch-flyouts .sketch-palette-select {
+  flex-wrap: wrap;
+}
+
+.sketch-flyouts .sketch-palette-select select {
+  max-width: 100%;
+}
+
+.sketch-flyouts .sketch-palette legend {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.sketch-flyouts .sketch-palette-number > span:last-child {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.sketch-flyouts .sketch-palette-number input {
+  max-width: 100%;
 }
 
 /* Snap spacing's value drops under its name rather than past the edge. */
@@ -4137,7 +4208,7 @@ button.model-panel-grip[aria-expanded='true'] {
     width: auto;
     padding: 5px 4px;
     direction: rtl;
-    max-height: calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2);
+    max-height: calc((100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2);
   }
 
   .instrument-rail > .sketch-relations .sketch-relation {
@@ -5208,7 +5279,9 @@ button.model-panel-grip[aria-expanded='true'] {
 
   .workspace.column-layout:has(.sketch-rail) .workspace-column-float {
     top: var(--stage-top);
-    transform: none;
+    /* Fixed tool strips use this rail as their containing block. A literal
+       none would anchor their 100% left offset to the whole viewport. */
+    transform: translateY(0);
     max-height: calc(
       100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
         var(--island-gap) * 4 - 64px

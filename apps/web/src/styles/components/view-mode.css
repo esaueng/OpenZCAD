@@ -369,7 +369,7 @@
 */
 .view-mode-rail {
   width: 232px;
-  max-height: calc(100vh - var(--stage-top) - var(--island-gap) * 2);
+  max-height: calc(100dvh - var(--stage-top) - var(--island-gap) * 2);
   display: flex;
   flex-direction: column;
   background: var(--color-surface);

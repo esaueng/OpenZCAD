@@ -1065,6 +1065,25 @@ describe('a move edited under the drag', () => {
 });
 
 describe('sketchHandleAtScreen', () => {
+  it('widens the dot and the ring band for a finger, keeping both reachable', () => {
+    const grab = { x: 0, y: 0 };
+    const at = (x: number, slack?: number) =>
+      sketchHandleAtScreen({ x, y: 0 }, grab, true, slack);
+    // Mouse and pen: the drawn dot plus a little.
+    expect(at(14)).toBeNull();
+    // A finger: twice the slack, but never into the ring's band.
+    expect(at(14, 2)).toBe('translate');
+    expect(
+      at(SKETCH_ROTATE_RING_RADIUS_PX - SKETCH_ROTATE_RING_BAND_PX * 2 + 1, 2)
+    ).toBe('rotate');
+    expect(
+      at(SKETCH_ROTATE_RING_RADIUS_PX + SKETCH_ROTATE_RING_BAND_PX + 3)
+    ).toBeNull();
+    expect(
+      at(SKETCH_ROTATE_RING_RADIUS_PX + SKETCH_ROTATE_RING_BAND_PX + 3, 2)
+    ).toBe('rotate');
+  });
+
   it('hits the visible ring edge on an obliquely seen plane', () => {
     // The XY plane seen from well off its normal, as after an orbit.
     const width = 1280;

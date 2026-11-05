@@ -2443,6 +2443,13 @@ export function App() {
       setPendingInvitationToken(null);
       setPendingInvitationError(null);
       const token = captureProjectShareRequest();
+      if (token !== null) {
+        // Retire Settings' focus trap in the same commit that replaces its
+        // page, before the share heading receives keyboard focus.
+        updateSettingsViewState({ open: false });
+        setSettingsOpen(false);
+        setSharingOpen(false);
+      }
       shareOpenAttemptRef.current = null;
       setPendingShareToken(token);
       setSharePage(token === null ? null : { phase: 'loading' });
@@ -2713,6 +2720,9 @@ export function App() {
     }
   }, [projects]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
+  const [artifactsProjectId, setArtifactsProjectId] = useState<string | null>(
+    null
+  );
   /**
    * Which of the open project's save points can actually be opened. Empty
    * until the stores answer, so a row never offers an action before it is
@@ -2970,6 +2980,10 @@ export function App() {
     sticky: false
   }));
   const status = statusEntry.text;
+  const previousWorkspaceStatus = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (doc) previousWorkspaceStatus.current = status;
+  }, [doc, status]);
   /**
    * The stamp of the last status `setStatus` wrote, read synchronously by a
    * toast that restates it: which status a toast repeats is fixed when that
@@ -7040,6 +7054,7 @@ export function App() {
   useEffect(() => {
     if (!doc) {
       setArtifacts([]);
+      setArtifactsProjectId(null);
       return;
     }
     let cancelled = false;
@@ -7049,6 +7064,7 @@ export function App() {
     ).then((artifactList) => {
       if (!cancelled) {
         setArtifacts(artifactList);
+        setArtifactsProjectId(doc.projectId);
       }
     });
     return () => {
@@ -28371,6 +28387,7 @@ export function App() {
           onImportProject={(file) => void handleImportProject(file)}
           projects={projects}
           status={status}
+          previousWorkspaceStatus={previousWorkspaceStatus.current}
           onReloadForUpdate={
             newBuildAvailable ? () => window.location.reload() : undefined
           }
@@ -28650,6 +28667,15 @@ export function App() {
     placement,
     status: panelStatus(panelLayout, id),
     compact: panelLayout.options.compact,
+    commandActive: Boolean(
+      inPlace.active ||
+      measuring ||
+      faceRepair ||
+      datumRepair ||
+      toFacePick ||
+      tool ||
+      interaction.mode === 'sketch'
+    ),
     // A pin that cannot dock (nothing docks at a phone width, and a new
     // column past the footprint cap is refused) docks nothing: the panel
     // stays where it was and the status line says why.
@@ -30286,6 +30312,7 @@ export function App() {
             canRedo={!viewMode && redoAvailable}
             onUndo={handleUndo}
             onRedo={handleRedo}
+            touchHistoryGestures={appSettings.viewport.touchHistoryGestures}
             key={`workspace-view-${resumeViewGeneration}`}
             initialView={initialView}
             onViewChange={handleViewportChange}
@@ -31577,6 +31604,9 @@ export function App() {
       }
       readout={
         <>
+          {/* File metadata joins initial preparation independently of the
+              model's frame-ready signal, so neither waits on the other. */}
+          {artifactsProjectId !== doc.projectId && <WorkspacePending />}
           {calloutWithOperation?.operation?.error && (
             // The refusal joins the notice lane, over the status row, with
             // its ways out; the handle stays live on the model.

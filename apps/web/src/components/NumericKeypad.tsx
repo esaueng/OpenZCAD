@@ -28,6 +28,7 @@ import {
   returnKeypadFocus
 } from '../lib/keypadReturnFocus';
 import { spokenValueName } from '../lib/inPlace/chipNames';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 export interface KeypadRequest {
   /** U09: which in-place command value a `command` entry edits. */
@@ -241,14 +242,25 @@ function chipBoxAround(
  * (the guidance row and the search bar, where a command's Done stands),
  * which is drawn over the stage and would take the keypad's own clicks.
  */
-function keypadFloor(host: HTMLElement): number {
+export function keypadFloor(host: HTMLElement): number {
+  const hostTop = host.getBoundingClientRect().top;
+  let floor = host.clientHeight;
   const lane = host
     .closest('.viewer-area')
     ?.querySelector<HTMLElement>('.command-bar-lane');
-  if (!lane) return host.clientHeight;
-  const top =
-    lane.getBoundingClientRect().top - host.getBoundingClientRect().top;
-  return top > 0 ? Math.min(host.clientHeight, top) : host.clientHeight;
+  if (lane) {
+    const top = lane.getBoundingClientRect().top - hostTop;
+    if (top > 0) floor = Math.min(floor, top);
+  }
+  // A software keyboard shrinks the visual viewport and leaves the layout
+  // viewport (and so the host) as it was. A pinch-zoomed view is the
+  // reader's own framing, not an obstruction, so only an unscaled one counts.
+  const visual = host.ownerDocument.defaultView?.visualViewport;
+  if (visual && Math.abs(visual.scale - 1) < 0.01) {
+    const visibleBottom = visual.offsetTop + visual.height - hostTop;
+    if (visibleBottom > 0) floor = Math.min(floor, visibleBottom);
+  }
+  return floor;
 }
 
 /**
@@ -299,6 +311,13 @@ export function NumericKeypad({
   const gridId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // The pad is the touch keyboard: the field keeps focus (Enter, Escape and
+  // a hardware keyboard still land on it) without raising the system
+  // keyboard over the keys. A deliberate touch on the field itself asks for
+  // the system keyboard, which parameter names need.
+  const coarsePointer = useMediaQuery('(pointer: coarse)');
+  const [systemKeyboard, setSystemKeyboard] = useState(false);
+  const raiseSystemKeyboard = useRef(false);
   // Read on the first render, before the field takes focus below.
   const [returnTarget] = useState(keypadReturnTarget);
   useEffect(() => () => returnKeypadFocus(returnTarget), [returnTarget]);
@@ -443,9 +462,12 @@ export function NumericKeypad({
     if (root.parentElement) observer?.observe(root.parentElement);
     observer?.observe(root);
     window.addEventListener('resize', reposition);
+    const visual = window.visualViewport;
+    visual?.addEventListener('resize', reposition);
     return () => {
       observer?.disconnect();
       window.removeEventListener('resize', reposition);
+      visual?.removeEventListener('resize', reposition);
       anchorRef.current = null;
     };
   }, [anchorRef, request.fixedClientAnchor, request.commandValueId]);
@@ -568,6 +590,25 @@ export function NumericKeypad({
           ref={inputRef}
           className="keypad-value"
           aria-label={spokenValueName(label)}
+          inputMode={coarsePointer && !systemKeyboard ? 'none' : undefined}
+          onPointerDown={(event) => {
+            if (
+              coarsePointer &&
+              !systemKeyboard &&
+              event.pointerType !== 'mouse'
+            ) {
+              raiseSystemKeyboard.current = true;
+              setSystemKeyboard(true);
+            }
+          }}
+          onClick={(event) => {
+            // WebKit raises the keyboard only for a focus made inside the
+            // gesture, and this field was focused before the tap.
+            if (!raiseSystemKeyboard.current) return;
+            raiseSystemKeyboard.current = false;
+            event.currentTarget.blur();
+            event.currentTarget.focus();
+          }}
           value={value}
           aria-invalid={commitRefused || !evaluation.ok}
           spellCheck={false}

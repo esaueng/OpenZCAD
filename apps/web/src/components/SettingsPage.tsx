@@ -1461,6 +1461,20 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
+                <SettingRow
+                  title="Undo with two fingers"
+                  hint="On a touch screen, a two-finger tap undoes and a three-finger tap redoes."
+                >
+                  <Toggle
+                    checked={settings.viewport.touchHistoryGestures}
+                    label="Undo with two fingers"
+                    onChange={(touchHistoryGestures) =>
+                      patch({
+                        viewport: { ...settings.viewport, touchHistoryGestures }
+                      })
+                    }
+                  />
+                </SettingRow>
               </Group>
               {/* Every remappable command with its live keys. A key can mean
                   one thing per context (C is Cylinder in the workspace and
@@ -1752,7 +1766,10 @@ export function SettingsPage({
               {settings.assistant.credentialSource === 'personal' ? (
                 <>
                   <Group title="Model">
-                    <SettingRow title="Provider" hint="Changing provider removes the saved token.">
+                    <SettingRow
+                      title="Provider"
+                      hint="Changing provider removes the saved token."
+                    >
                       <select
                         value={settings.assistant.provider}
                         aria-label="AI provider"

@@ -53,6 +53,8 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
 import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
+import { pointerSlack } from '../lib/pointerSlack';
+import { TouchLoupe } from './viewer/touchLoupe';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type {
@@ -393,6 +395,11 @@ import {
   type DatumAxisRigInput
 } from './viewer/datumAxisRig';
 import { AssemblyViewport } from './viewer/assemblyViewport';
+import {
+  createTouchNavigation,
+  NO_TOUCH_MODIFIERS,
+  type TouchModifiers
+} from './viewer/touchNavigation';
 import type { AssemblyViewModel } from '../lib/assembly/assemblyView';
 import { useAssemblyRuntime } from '../lib/assembly/assemblyRuntime';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
@@ -1345,6 +1352,13 @@ export interface ModelViewerProps {
     y: number,
     selection: TopologySelection | null
   ): void;
+  /** A two-finger tap undoes and a three-finger tap redoes (L02). */
+  onTouchHistory?(step: 'undo' | 'redo'): void;
+  /**
+   * On-screen stand-ins for modifier keys (L02): multi-select toggles what a
+   * pick adds or removes, free values drops snapping and inference.
+   */
+  touchModifiers?: TouchModifiers;
   /**
    * The Assemble workspace's view (AS02): component bodies drawn at their
    * solved poses, the rest dimmed, joint glyphs, and the primary button
@@ -2023,6 +2037,17 @@ const SKETCH_COLOR = 0x6798ff;
 const AUTO_FRAME_MARGIN_NDC = 0.04;
 const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
+/**
+ * How long after the last finger lifts a native dblclick is the browser's
+ * echo of a double tap the touch layer already handled.
+ */
+const TOUCH_DBLCLICK_ECHO_MS = 700;
+/** Safari's non-standard pinch and rotate events, which zoom the page. */
+const SAFARI_GESTURE_EVENTS = [
+  'gesturestart',
+  'gesturechange',
+  'gestureend'
+] as const;
 
 /**
  * A control the keyboard is moving through (focus the browser would ring),
@@ -2219,6 +2244,8 @@ export function ModelViewer({
   moveValuesSetterRef,
   viewportImageRef,
   onContextMenu,
+  onTouchHistory,
+  touchModifiers = NO_TOUCH_MODIFIERS,
   assemblyView = null
 }: ModelViewerProps) {
   if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
@@ -2332,6 +2359,10 @@ export function ModelViewer({
   cylinderDimensionModeRef.current = cylinderDimensionMode;
   const onContextMenuRef = useRef(onContextMenu);
   onContextMenuRef.current = onContextMenu;
+  const onTouchHistoryRef = useRef(onTouchHistory);
+  onTouchHistoryRef.current = onTouchHistory;
+  const touchModifiersRef = useRef(touchModifiers);
+  touchModifiersRef.current = touchModifiers;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
@@ -3364,6 +3395,19 @@ export function ModelViewer({
     if (viewerArea) areaObserver.observe(viewerArea, { childList: true });
     watchPanelLayer();
 
+    // A file warning can arrive after the model stops drawing. Its lane is
+    // outside the canvas, so its content changing must reposition value chips.
+    const activityObserver = new MutationObserver(() => requestRender());
+    const activityLane = viewerArea?.querySelector('.activity-lane');
+    if (activityLane) {
+      activityObserver.observe(activityLane, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['style', 'class']
+      });
+    }
+
     const rightClickGesture = new RightClickGestureTracker();
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
@@ -3633,6 +3677,7 @@ export function ModelViewer({
       initialValue: number;
     } | null = null;
     const hud = new HudLayer(host);
+    const touchLoupe = new TouchLoupe(host);
     const dragHud = hud.create('direct-edit-hud');
     // Assemble (AS02) takes the primary button while its view is shown. Its
     // own picker ignores the selection filter: a joint frame needs the exact
@@ -3869,6 +3914,15 @@ export function ModelViewer({
      * cancel or next press.
      */
     const sketchMovePointerGate = new SketchMovePointerGate();
+    // L02: on a touch screen the selection card's toggles stand in for the
+    // keys a finger does not have. Multi-select is Ctrl/⌘ (and Shift's
+    // additive pick); Free values is Shift's "no snaps, exact value".
+    const addsToSelection = (event: MouseEvent) =>
+      event.shiftKey || touchModifiersRef.current.multiSelect;
+    const togglesSelection = (event: MouseEvent) =>
+      event.ctrlKey || event.metaKey || touchModifiersRef.current.multiSelect;
+    const freeValue = (event: MouseEvent) =>
+      event.shiftKey || touchModifiersRef.current.freeValues;
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
     /**
@@ -4085,7 +4139,8 @@ export function ModelViewer({
             context.activeCamera,
             canvasWidth(),
             canvasHeight()
-          )
+          ),
+        SNAP_RADIUS_PX * pointerSlack(event)
       );
     }
 
@@ -4351,7 +4406,9 @@ export function ModelViewer({
       const otherPanels = [
         ...(renderer.domElement
           .closest('.viewer-area')
-          ?.querySelectorAll<HTMLElement>(MODEL_PANEL_OBSTACLES) ?? [])
+          ?.querySelectorAll<HTMLElement>(
+            `${MODEL_PANEL_OBSTACLES}, .workspace-column, .command-flyout`
+          ) ?? [])
       ]
         .filter((element) => !element.matches(RIGHT_LANE_MODEL_PANELS))
         .map((element) => element.getBoundingClientRect())
@@ -4469,8 +4526,16 @@ export function ModelViewer({
                 {
                   left: stageRect.left + x - halfWidth,
                   right: stageRect.left + x + halfWidth,
-                  top: stageRect.top + y - halfHeight,
-                  bottom: stageRect.top + y + halfHeight
+                  top:
+                    stageRect.top +
+                    y -
+                    halfHeight -
+                    (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT,
+                  bottom:
+                    stageRect.top +
+                    y +
+                    halfHeight -
+                    (chipHeights.get(valueId) ?? 0) * COMMAND_CHIP_LIFT
                 },
                 otherPanels,
                 chipStage,
@@ -5183,11 +5248,17 @@ export function ModelViewer({
         if (!candidateScreen) {
           continue;
         }
+        const clientX = rect.left + candidateScreen.x;
+        const clientY = rect.top + candidateScreen.y;
+        // A screenshot probe must see the surface itself, rather than a
+        // keypad or flyout drawn over the same projected point.
+        if (
+          document.elementFromPoint(clientX, clientY) !== renderer.domElement
+        ) {
+          continue;
+        }
         const stack = picker.pickAll(
-          new MouseEvent('mousemove', {
-            clientX: rect.left + candidateScreen.x,
-            clientY: rect.top + candidateScreen.y
-          })
+          new MouseEvent('mousemove', { clientX, clientY })
         );
         if (
           !stack.some(
@@ -6468,7 +6539,7 @@ export function ModelViewer({
       if (result?.region) {
         onSelectRegionRef.current(result.region, {
           additive: event.shiftKey,
-          toggle: event.ctrlKey || event.metaKey
+          toggle: togglesSelection(event)
         });
         return;
       }
@@ -6519,14 +6590,16 @@ export function ModelViewer({
       }
       onSelectTopologyRef.current(
         result?.selection ?? null,
-        event.shiftKey,
+        addsToSelection(event),
         detail
       );
     }
 
     /** Six screen pixels at the orbit target, in world units. */
-    function curvePickThreshold(): number {
-      return worldPerPixelAt(cameraRig.controls.target) * 6;
+    function curvePickThreshold(event: PointerEvent): number {
+      return (
+        worldPerPixelAt(cameraRig.controls.target) * 6 * pointerSlack(event)
+      );
     }
 
     function setRayFromEvent(event: PointerEvent | MouseEvent) {
@@ -7027,17 +7100,22 @@ export function ModelViewer({
 
     /**
      * The top of the stage's bottom lane (the guidance line and the search
-     * bar, or a running command's bar), from the canvas's top. Null when
-     * nothing is drawn there.
+     * bar, a running command's bar, and file activity), from the canvas's top.
+     * Null when nothing is drawn there.
      */
     function bottomLaneTop(): number | null {
-      const lane = renderer.domElement
-        .closest('.workspace')
-        ?.querySelector<HTMLElement>('.command-bar-lane');
-      if (!lane) return null;
-      const rect = lane.getBoundingClientRect();
-      return rect.height > 0
-        ? rect.top - renderer.domElement.getBoundingClientRect().top
+      const lanes = [
+        ...(renderer.domElement
+          .closest('.workspace')
+          ?.querySelectorAll<HTMLElement>(
+            '.command-bar-lane, .activity-lane > *'
+          ) ?? [])
+      ]
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      return lanes.length > 0
+        ? Math.min(...lanes.map((rect) => rect.top)) -
+            renderer.domElement.getBoundingClientRect().top
         : null;
     }
 
@@ -7670,7 +7748,7 @@ export function ModelViewer({
       }
       latestSketchPointerEvent = event;
       sketchPointerOnCanvas = true;
-      if (event.shiftKey) {
+      if (freeValue(event)) {
         activeSketchSnap = null;
         sketchSnapCycle = 0;
         hideSketchSnapMarker();
@@ -7681,7 +7759,9 @@ export function ModelViewer({
         const resolved = resolveSketchSnap(
           point,
           targets,
-          mode.snapTolerancePx * sketchWorldPerPixel(mode.basis.origin),
+          mode.snapTolerancePx *
+            pointerSlack(event) *
+            sketchWorldPerPixel(mode.basis.origin),
           {
             lockedId: activeSketchSnap?.id,
             cycle: sketchSnapCycle
@@ -8047,7 +8127,9 @@ export function ModelViewer({
       if (mode.tool === 'spline') {
         const reach = Math.max(
           0.5,
-          sketchWorldPerPixel(mode.basis.origin) * mode.snapTolerancePx
+          sketchWorldPerPixel(mode.basis.origin) *
+            mode.snapTolerancePx *
+            pointerSlack(event)
         );
         const action = splineClickAction(points, point, reach);
         if (action === 'close') {
@@ -8322,7 +8404,7 @@ export function ModelViewer({
         mode.tool !== 'select' &&
         mode.tool !== 'project' &&
         mode.inferenceEnabled &&
-        !event.shiftKey
+        !freeValue(event)
       ) {
         showSketchCenterInference(point, snapTargetsRef.current);
       }
@@ -8457,7 +8539,7 @@ export function ModelViewer({
       }
       if (mode.tool === 'line' && gesture.chainAnchor) {
         const locked =
-          mode.inferenceEnabled && !event.shiftKey
+          mode.inferenceEnabled && !freeValue(event)
             ? axisLockPoint(gesture.chainAnchor, point)
             : { point, lockedAxis: null };
         rig.setInProgress([gesture.chainAnchor, locked.point], false);
@@ -8609,7 +8691,8 @@ export function ModelViewer({
             ? sketchHandleAtScreen(
                 pointer,
                 grabScreen,
-                sketchObjectRotatable(data)
+                sketchObjectRotatable(data),
+                pointerSlack(event)
               )
             : null;
         if (hit === 'translate') {
@@ -8639,7 +8722,7 @@ export function ModelViewer({
           const own = resolveSketchSnap(
             press,
             snapTargetsForObject(data, resolve, id),
-            mode.snapTolerancePx * perPixel
+            mode.snapTolerancePx * pointerSlack(event) * perPixel
           );
           handle = 'translate';
           grab = own ? { x: own.target.x, y: own.target.y } : press;
@@ -8710,7 +8793,7 @@ export function ModelViewer({
           drag.grab,
           to,
           drag.startRotation,
-          event.shiftKey
+          freeValue(event)
         );
         drag.preview = rotateTextObject(drag.original, rotation);
         positionSketchDimLabel(event, `${formatNumber(rotation)}°`, false);
@@ -8725,7 +8808,7 @@ export function ModelViewer({
           !drag.anchored &&
           !activeSketchSnap &&
           mode.snapStep &&
-          !event.shiftKey &&
+          !freeValue(event) &&
           raw
         ) {
           // A curve grabbed between its points has no point of its own on
@@ -8737,7 +8820,7 @@ export function ModelViewer({
             y: drag.grab.y + Math.round((raw.y - drag.grab.y) / step) * step
           };
         }
-        if (mode.inferenceEnabled && !event.shiftKey) {
+        if (mode.inferenceEnabled && !freeValue(event)) {
           // An exact snap wins; without one the move infers horizontal or
           // vertical travel from where the drag began, as a line does from
           // its anchor.
@@ -9017,7 +9100,7 @@ export function ModelViewer({
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         event.preventDefault();
         const drag = moveDrag;
-        const fine = event.shiftKey;
+        const fine = freeValue(event);
         const translation = { ...drag.startTranslation };
         const rotation = { ...drag.startRotation };
         setRayFromEvent(event);
@@ -9047,7 +9130,7 @@ export function ModelViewer({
                   },
                   moveCenterTargets,
                   [drag.axis],
-                  drag.worldPerPixel * SNAP_RADIUS_PX
+                  drag.worldPerPixel * SNAP_RADIUS_PX * pointerSlack(event)
                 );
             if (aligned && aligned.matches.length > 0) {
               translation[drag.axis] = aligned.translation[drag.axis];
@@ -9100,7 +9183,7 @@ export function ModelViewer({
                       host.clientWidth,
                       host.clientHeight
                     ),
-                  SNAP_RADIUS_PX
+                  SNAP_RADIUS_PX * pointerSlack(event)
                 );
           if (snapped) {
             // Land the handle itself on the point, so what the glyph marks is
@@ -9145,7 +9228,7 @@ export function ModelViewer({
                   },
                   moveCenterTargets,
                   ['x', 'y', 'z'],
-                  drag.worldPerPixel * SNAP_RADIUS_PX
+                  drag.worldPerPixel * SNAP_RADIUS_PX * pointerSlack(event)
                 );
             if (aligned && aligned.matches.length > 0) {
               for (const match of aligned.matches) {
@@ -9191,7 +9274,7 @@ export function ModelViewer({
             edgeDrag.initialValue + projected / edgeDrag.pixelsPerUnit
           );
           // Blends want finer steps than moves; tenths feel right.
-          const value = event.shiftKey
+          const value = freeValue(event)
             ? Math.round(raw * 100) / 100
             : Math.round(raw * 10) / 10;
           if (value !== rig.value()) {
@@ -9233,7 +9316,7 @@ export function ModelViewer({
             renderer.domElement.style.cursor = 'grabbing';
             return;
           }
-          const snapped = event.shiftKey
+          const snapped = freeValue(event)
             ? raw
             : snapCylinderRadius(
                 raw,
@@ -9264,7 +9347,7 @@ export function ModelViewer({
             offsetDrag.initialOffset + screenDragValue(offsetDrag, dx, dy);
           // Zoom-adaptive snapping, matching the move gizmo; Shift = free.
           const snap = chooseMoveSnapStep(1 / offsetDrag.pixelsPerUnit);
-          const value = event.shiftKey
+          const value = freeValue(event)
             ? Math.round(raw * 100) / 100
             : Math.round(raw / snap) * snap;
           if (Math.abs(value - rig.value()) > 1e-9) {
@@ -9357,7 +9440,9 @@ export function ModelViewer({
           // Angles in whole degrees and lengths in tenths, unless Shift asks
           // for the free value.
           const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-          const value = event.shiftKey ? next : Math.round(next / step) * step;
+          const value = freeValue(event)
+            ? next
+            : Math.round(next / step) * step;
           if (value !== draggedRig.value()) {
             draggedRig.setValue(value);
             onCommandHandlePreviewRef.current?.(
@@ -9392,7 +9477,7 @@ export function ModelViewer({
           setRayFromEvent(event);
           const curveId = curvePickerRig.pick(
             context.raycaster.ray,
-            curvePickThreshold()
+            curvePickThreshold(event)
           );
           curvePickerRig.setHover(curveId);
           if (curveId) {
@@ -9956,11 +10041,11 @@ export function ModelViewer({
         setRayFromEvent(event);
         const curveId = curvePickerRig.pick(
           context.raycaster.ray,
-          curvePickThreshold()
+          curvePickThreshold(event)
         );
         if (curveId) {
           event.preventDefault();
-          onPickCurveRef.current?.(curveId, event.shiftKey);
+          onPickCurveRef.current?.(curveId, addsToSelection(event));
           requestRender();
           return;
         }
@@ -10408,7 +10493,7 @@ export function ModelViewer({
             if (profile) {
               onSelectRegionRef.current(profile, {
                 additive: event.shiftKey,
-                toggle: event.ctrlKey || event.metaKey
+                toggle: togglesSelection(event)
               });
             }
           }
@@ -10561,7 +10646,7 @@ export function ModelViewer({
           // continuing a chain when one is open. Same locking as a click.
           const anchor = gesture.chainAnchor ?? gesture.pressPoint;
           const locked =
-            mode.inferenceEnabled && !event.shiftKey
+            mode.inferenceEnabled && !freeValue(event)
               ? axisLockPoint(anchor, point)
               : { point, lockedAxis: null };
           const object = lineObjectFromPoints(anchor, locked.point);
@@ -10582,7 +10667,7 @@ export function ModelViewer({
             onSketchDrawingChangeRef.current(true);
           } else {
             const locked =
-              mode.inferenceEnabled && !event.shiftKey
+              mode.inferenceEnabled && !freeValue(event)
                 ? axisLockPoint(gesture.chainAnchor, point)
                 : { point, lockedAxis: null };
             const object = lineObjectFromPoints(
@@ -10957,7 +11042,7 @@ export function ModelViewer({
       if (picked?.selection) {
         onSelectTopologyRef.current(
           { bodyId: picked.selection.bodyId, kind: 'body' },
-          event.shiftKey
+          addsToSelection(event)
         );
         return;
       }
@@ -10990,10 +11075,13 @@ export function ModelViewer({
       const pointerType = (event as PointerEvent).pointerType;
       // Touch and pen long-presses arrive as contextmenu PointerEvents rather
       // than a secondary-button pointerup. Use that native gesture without
-      // changing the mouse right-click path above.
+      // changing the mouse right-click path above. While a finger is down the
+      // touch layer times its own long press, so the browser's is not a
+      // second menu.
       if (
         pointerType &&
         pointerType !== 'mouse' &&
+        !(pointerType === 'touch' && touchNavigation.active) &&
         !sketchModeRef.current &&
         !assemblyViewport.active &&
         showTopologyPickList(event, true, true)
@@ -11007,24 +11095,129 @@ export function ModelViewer({
     // beneath). The host wrapper sees the event whichever layer was hit.
     host.addEventListener('contextmenu', handleContextMenu);
 
-    renderer.domElement.addEventListener(
-      'pointermove',
-      handlePointerMove,
-      true
-    );
-    renderer.domElement.addEventListener(
-      'pointerdown',
-      handlePointerDown,
-      true
-    );
-    renderer.domElement.addEventListener('pointerup', handlePointerUp, true);
+    // L02: fingers navigate unless the first one lands on something to drag
+    // (viewer/touchNavigation.ts). Mouse and pen take the handlers above.
+    const openTouchContextMenu = (event: PointerEvent) => {
+      // Build's pick list and context menu act on topology; Assemble has
+      // neither. The same order as a stationary right-click.
+      if (assemblyViewport.active) return;
+      if (showTopologyPickList(event, true, true)) return;
+      onContextMenuRef.current(
+        event.clientX,
+        event.clientY,
+        pick(event)?.selection ?? null
+      );
+    };
+    const touchNavigation = createTouchNavigation({
+      pressDown: handlePointerDown,
+      pressClaimed: (event) => {
+        // Another pointer holds a sketch move and the gate ignores this one:
+        // it stays ignored, as it was before touch had a layer of its own.
+        if (sketchMovePointerGate.ignores(event.pointerId)) return true;
+        if (sketchMoveRef.current?.pointerId === event.pointerId) return true;
+        // A band is only a selection waiting to happen, unless it was the
+        // armed face, which a drag pushes.
+        if (boxSelect?.pointerId === event.pointerId) {
+          return Boolean(boxSelect.faceGrab);
+        }
+        const press = gestures.active;
+        return press?.pointerId === event.pointerId && press.captured;
+      },
+      pressMove: (event) => {
+        handlePointerMove(event);
+        // A finger drawing or moving sketch geometry hides its own point.
+        if (sketchModeRef.current) {
+          touchLoupe.follow(event.clientX, event.clientY);
+          requestRender();
+        }
+      },
+      pressUp: (event) => {
+        touchLoupe.hide();
+        handlePointerUp(event);
+      },
+      pressCancel: (event) => {
+        touchLoupe.hide();
+        handlePointerCancel(event);
+      },
+      abandonPress: (pointerId) => {
+        if (boxSelect?.pointerId === pointerId) {
+          boxSelect = null;
+          hud.hide(selectionBand);
+        }
+        gestures.release(pointerId, '');
+      },
+      canOrbit: () => cameraRig.controls.enableRotate,
+      beginOrbit: (press) => {
+        pivotOrbitOnCursor(press);
+        cameraRig.beginOrbitDrag();
+      },
+      orbitBy: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
+      beginPinch: () => cameraRig.beginPinchDrag(),
+      panBy: (deltaX, deltaY) => cameraRig.panByPixels(deltaX, deltaY),
+      zoomBy: (scale, x, y) => cameraRig.zoomByPinch(scale, x, y),
+      endNavigation: () => cameraRig.endOrbitDrag(),
+      longPress: openTouchContextMenu,
+      doubleTap: handleDoubleClick,
+      history: (step) => onTouchHistoryRef.current?.(step),
+      now: () => performance.now(),
+      setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
+      clearTimer: (handle) => window.clearTimeout(handle)
+    });
+    /** When the last finger lifted: the browser's own dblclick follows it. */
+    let lastTouchEndAt = Number.NEGATIVE_INFINITY;
+    const routePointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        // OrbitControls would run its own one-finger rotate and pinch beside
+        // these; it listens on this element after this capture listener.
+        event.stopImmediatePropagation();
+        touchNavigation.down(event);
+        return;
+      }
+      handlePointerDown(event);
+    };
+    const routePointerMove = (event: PointerEvent) => {
+      if (!touchNavigation.move(event)) handlePointerMove(event);
+    };
+    const routePointerUp = (event: PointerEvent) => {
+      if (!touchNavigation.up(event)) {
+        handlePointerUp(event);
+      } else if (!touchNavigation.active) {
+        lastTouchEndAt = performance.now();
+      }
+    };
+    const routePointerCancel = (event: PointerEvent) => {
+      if (!touchNavigation.cancel(event)) {
+        handlePointerCancel(event);
+      } else if (!touchNavigation.active) {
+        lastTouchEndAt = performance.now();
+      }
+    };
+    const routeDoubleClick = (event: MouseEvent) => {
+      // A double tap already ran as one; this is the browser's echo of it.
+      if (
+        touchNavigation.active ||
+        performance.now() - lastTouchEndAt < TOUCH_DBLCLICK_ECHO_MS
+      ) {
+        return;
+      }
+      handleDoubleClick(event);
+    };
+    // Safari's own pinch would zoom the page around the canvas.
+    const preventPageGesture = (event: Event) => event.preventDefault();
+    for (const type of SAFARI_GESTURE_EVENTS) {
+      host.addEventListener(type, preventPageGesture, { passive: false });
+    }
+
+    renderer.domElement.addEventListener('pointermove', routePointerMove, true);
+    renderer.domElement.addEventListener('pointerdown', routePointerDown, true);
+    renderer.domElement.addEventListener('pointerup', routePointerUp, true);
     renderer.domElement.addEventListener(
       'pointercancel',
-      handlePointerCancel,
+      routePointerCancel,
       true
     );
     renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
-    renderer.domElement.addEventListener('dblclick', handleDoubleClick);
+    renderer.domElement.addEventListener('dblclick', routeDoubleClick);
     renderer.domElement.addEventListener('contextmenu', handleContextMenu);
 
     const lastQuaternion = new THREE.Quaternion();
@@ -11381,6 +11574,13 @@ export function ModelViewer({
         renderStarted = performance.now();
         renderer.render(scene, context.activeCamera);
       }
+      // Read while this frame is still the drawing buffer's.
+      if (touchLoupe.visible) {
+        touchLoupe.capture(
+          renderer.domElement,
+          sketchSnapMarker.hidden ? null : sketchSnapMarker.title || null
+        );
+      }
       const renderMs = performance.now() - renderStarted;
       if (!interactionShaderWarmup.isScheduled) {
         const warmupEdges = context.edgeOverlaysByBodyId.values().next().value;
@@ -11554,6 +11754,7 @@ export function ModelViewer({
       pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
       panelObserver.disconnect();
+      activityObserver.disconnect();
       retireCommandDragRef.current = null;
       areaObserver.disconnect();
       stopWatchingTheme();
@@ -11563,24 +11764,29 @@ export function ModelViewer({
       releaseCubeLink = null;
       cubeLink = null;
       cubeOverlay.dispose();
+      touchNavigation.dispose();
+      touchLoupe.dispose();
+      for (const type of SAFARI_GESTURE_EVENTS) {
+        host.removeEventListener(type, preventPageGesture);
+      }
       renderer.domElement.removeEventListener(
         'pointermove',
-        handlePointerMove,
+        routePointerMove,
         true
       );
       renderer.domElement.removeEventListener(
         'pointerdown',
-        handlePointerDown,
+        routePointerDown,
         true
       );
       renderer.domElement.removeEventListener(
         'pointerup',
-        handlePointerUp,
+        routePointerUp,
         true
       );
       renderer.domElement.removeEventListener(
         'pointercancel',
-        handlePointerCancel,
+        routePointerCancel,
         true
       );
       renderer.domElement.removeEventListener(
@@ -11661,7 +11867,7 @@ export function ModelViewer({
         handleDocumentPointerDown,
         true
       );
-      renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
+      renderer.domElement.removeEventListener('dblclick', routeDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       host.removeEventListener('contextmenu', handleContextMenu);
       discardCylinderRadiusProxy();

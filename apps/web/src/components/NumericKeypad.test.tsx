@@ -1,12 +1,16 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLayoutEffect } from 'react';
-import { NumericKeypad, type KeypadRequest } from './NumericKeypad';
+import {
+  keypadFloor,
+  NumericKeypad,
+  type KeypadRequest
+} from './NumericKeypad';
 import { prepareCommandChip } from '../lib/inPlace/chipNames';
 
 /** Answers `(pointer: fine)` as a mouse (true) or a touch screen (false). */
 function stubPointer(fine: boolean) {
-  window.matchMedia = ((query: string) => ({
+  window.matchMedia = (query: string) => ({
     matches: query === '(pointer: fine)' ? fine : false,
     media: query,
     onchange: null,
@@ -15,7 +19,7 @@ function stubPointer(fine: boolean) {
     addListener: () => undefined,
     removeListener: () => undefined,
     dispatchEvent: () => false
-  }));
+  });
 }
 
 // Most of this file exercises the keys and unit chips, which a touch screen
@@ -617,9 +621,7 @@ describe('on a mouse-and-keyboard device', () => {
     expect(screen.queryByRole('button', { name: '7' })).toBeNull();
     expect(screen.queryByRole('radiogroup', { name: 'Entry unit' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Apply height' })).toBeEnabled();
-    expect(
-      screen.getByText('Other units: 2cm, 1in')
-    ).toBeInTheDocument();
+    expect(screen.getByText('Other units: 2cm, 1in')).toBeInTheDocument();
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('button', { name: '7' })).toBeInTheDocument();
@@ -678,5 +680,118 @@ describe('a refused value', () => {
     expect(
       screen.getByRole('dialog', { name: 'Radius value' })
     ).toHaveAttribute('data-state', 'checking');
+  });
+});
+
+describe('the keypad on a touch screen', () => {
+  function matchPointer(coarse: boolean) {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: coarse && query === '(pointer: coarse)',
+          media: query,
+          addEventListener() {},
+          removeEventListener() {}
+        }) as unknown as MediaQueryList
+    );
+  }
+
+  it('keeps the system keyboard down while the pad has the field', () => {
+    matchPointer(true);
+    try {
+      const { input } = setup('10');
+      expect(input).toHaveFocus();
+      expect(input).toHaveAttribute('inputmode', 'none');
+      fireEvent.click(screen.getByRole('button', { name: '5' }));
+      expect(input).toHaveFocus();
+      expect(input).toHaveAttribute('inputmode', 'none');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['touch', 'pen'])(
+    'raises the system keyboard for a %s on the field itself',
+    (pointerType) => {
+      matchPointer(true);
+      try {
+        const { input } = setup('10');
+        fireEvent.pointerDown(input, { pointerType });
+        expect(input).not.toHaveAttribute('inputmode');
+        const blur = vi.fn();
+        input.addEventListener('blur', blur);
+        fireEvent.click(input);
+        // Refocused inside the gesture, which is what WebKit raises it for.
+        expect(blur).toHaveBeenCalledTimes(1);
+        expect(input).toHaveFocus();
+        fireEvent.click(input);
+        expect(blur).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  );
+
+  it('leaves a mouse and a fine pointer with an ordinary field', () => {
+    matchPointer(true);
+    try {
+      const { input } = setup('10');
+      fireEvent.pointerDown(input, { pointerType: 'mouse' });
+      expect(input).toHaveAttribute('inputmode', 'none');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    cleanup();
+    matchPointer(false);
+    try {
+      const { input } = setup('10');
+      expect(input).not.toHaveAttribute('inputmode');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('the keypad floor', () => {
+  function hostOf(height: number) {
+    const host = document.createElement('div');
+    Object.defineProperty(host, 'clientHeight', { value: height });
+    return host;
+  }
+
+  function withVisualViewport(
+    viewport: { height: number; offsetTop: number; scale: number } | undefined,
+    run: () => void
+  ) {
+    const previous = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+    Object.defineProperty(window, 'visualViewport', {
+      value: viewport,
+      configurable: true
+    });
+    try {
+      run();
+    } finally {
+      if (previous) Object.defineProperty(window, 'visualViewport', previous);
+      else Reflect.deleteProperty(window, 'visualViewport');
+    }
+  }
+
+  it('stops above an open software keyboard', () => {
+    withVisualViewport({ height: 500, offsetTop: 0, scale: 1 }, () => {
+      expect(keypadFloor(hostOf(800))).toBe(500);
+    });
+    withVisualViewport({ height: 500, offsetTop: 120, scale: 1 }, () => {
+      expect(keypadFloor(hostOf(800))).toBe(620);
+    });
+  });
+
+  it('ignores a pinch-zoomed view and a browser without the API', () => {
+    withVisualViewport({ height: 300, offsetTop: 0, scale: 2 }, () => {
+      expect(keypadFloor(hostOf(800))).toBe(800);
+    });
+    withVisualViewport(undefined, () => {
+      expect(keypadFloor(hostOf(800))).toBe(800);
+    });
   });
 });
