@@ -393,6 +393,7 @@ import {
   type DatumAxisRigInput
 } from './viewer/datumAxisRig';
 import { AssemblyViewport } from './viewer/assemblyViewport';
+import { createTouchNavigation } from './viewer/touchNavigation';
 import type { AssemblyViewModel } from '../lib/assembly/assemblyView';
 import { useAssemblyRuntime } from '../lib/assembly/assemblyRuntime';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
@@ -1345,6 +1346,8 @@ export interface ModelViewerProps {
     y: number,
     selection: TopologySelection | null
   ): void;
+  /** A two-finger tap undoes and a three-finger tap redoes (L02). */
+  onTouchHistory?(step: 'undo' | 'redo'): void;
   /**
    * The Assemble workspace's view (AS02): component bodies drawn at their
    * solved poses, the rest dimmed, joint glyphs, and the primary button
@@ -2023,6 +2026,17 @@ const SKETCH_COLOR = 0x6798ff;
 const AUTO_FRAME_MARGIN_NDC = 0.04;
 const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
+/**
+ * How long after the last finger lifts a native dblclick is the browser's
+ * echo of a double tap the touch layer already handled.
+ */
+const TOUCH_DBLCLICK_ECHO_MS = 700;
+/** Safari's non-standard pinch and rotate events, which zoom the page. */
+const SAFARI_GESTURE_EVENTS = [
+  'gesturestart',
+  'gesturechange',
+  'gestureend'
+] as const;
 
 /**
  * A control the keyboard is moving through (focus the browser would ring),
@@ -2219,6 +2233,7 @@ export function ModelViewer({
   moveValuesSetterRef,
   viewportImageRef,
   onContextMenu,
+  onTouchHistory,
   assemblyView = null
 }: ModelViewerProps) {
   if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
@@ -2332,6 +2347,8 @@ export function ModelViewer({
   cylinderDimensionModeRef.current = cylinderDimensionMode;
   const onContextMenuRef = useRef(onContextMenu);
   onContextMenuRef.current = onContextMenu;
+  const onTouchHistoryRef = useRef(onTouchHistory);
+  onTouchHistoryRef.current = onTouchHistory;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
@@ -11006,10 +11023,13 @@ export function ModelViewer({
       const pointerType = (event as PointerEvent).pointerType;
       // Touch and pen long-presses arrive as contextmenu PointerEvents rather
       // than a secondary-button pointerup. Use that native gesture without
-      // changing the mouse right-click path above.
+      // changing the mouse right-click path above. While a finger is down the
+      // touch layer times its own long press, so the browser's is not a
+      // second menu.
       if (
         pointerType &&
         pointerType !== 'mouse' &&
+        !(pointerType === 'touch' && touchNavigation.active) &&
         !sketchModeRef.current &&
         !assemblyViewport.active &&
         showTopologyPickList(event, true, true)
@@ -11023,24 +11043,116 @@ export function ModelViewer({
     // beneath). The host wrapper sees the event whichever layer was hit.
     host.addEventListener('contextmenu', handleContextMenu);
 
-    renderer.domElement.addEventListener(
-      'pointermove',
-      handlePointerMove,
-      true
-    );
-    renderer.domElement.addEventListener(
-      'pointerdown',
-      handlePointerDown,
-      true
-    );
-    renderer.domElement.addEventListener('pointerup', handlePointerUp, true);
+    // L02: fingers navigate unless the first one lands on something to drag
+    // (viewer/touchNavigation.ts). Mouse and pen take the handlers above.
+    const openTouchContextMenu = (event: PointerEvent) => {
+      // Build's pick list and context menu act on topology; Assemble has
+      // neither. The same order as a stationary right-click.
+      if (assemblyViewport.active) return;
+      if (showTopologyPickList(event, true, true)) return;
+      onContextMenuRef.current(
+        event.clientX,
+        event.clientY,
+        pick(event)?.selection ?? null
+      );
+    };
+    const touchNavigation = createTouchNavigation({
+      pressDown: handlePointerDown,
+      pressClaimed: (event) => {
+        // Another pointer holds a sketch move and the gate ignores this one:
+        // it stays ignored, as it was before touch had a layer of its own.
+        if (sketchMovePointerGate.ignores(event.pointerId)) return true;
+        if (sketchMoveRef.current?.pointerId === event.pointerId) return true;
+        // A band is only a selection waiting to happen, unless it was the
+        // armed face, which a drag pushes.
+        if (boxSelect?.pointerId === event.pointerId) {
+          return Boolean(boxSelect.faceGrab);
+        }
+        const press = gestures.active;
+        return press?.pointerId === event.pointerId && press.captured;
+      },
+      pressMove: handlePointerMove,
+      pressUp: handlePointerUp,
+      pressCancel: handlePointerCancel,
+      abandonPress: (pointerId) => {
+        if (boxSelect?.pointerId === pointerId) {
+          boxSelect = null;
+          hud.hide(selectionBand);
+        }
+        gestures.release(pointerId, '');
+      },
+      canOrbit: () => cameraRig.controls.enableRotate,
+      beginOrbit: (press) => {
+        pivotOrbitOnCursor(press);
+        cameraRig.beginOrbitDrag();
+      },
+      orbitBy: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
+      beginPinch: () => cameraRig.beginPinchDrag(),
+      panBy: (deltaX, deltaY) => cameraRig.panByPixels(deltaX, deltaY),
+      zoomBy: (scale, x, y) => cameraRig.zoomByPinch(scale, x, y),
+      endNavigation: () => cameraRig.endOrbitDrag(),
+      longPress: openTouchContextMenu,
+      doubleTap: handleDoubleClick,
+      history: (step) => onTouchHistoryRef.current?.(step),
+      now: () => performance.now(),
+      setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
+      clearTimer: (handle) => window.clearTimeout(handle)
+    });
+    /** When the last finger lifted: the browser's own dblclick follows it. */
+    let lastTouchEndAt = Number.NEGATIVE_INFINITY;
+    const routePointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        // OrbitControls would run its own one-finger rotate and pinch beside
+        // these; it listens on this element after this capture listener.
+        event.stopImmediatePropagation();
+        touchNavigation.down(event);
+        return;
+      }
+      handlePointerDown(event);
+    };
+    const routePointerMove = (event: PointerEvent) => {
+      if (!touchNavigation.move(event)) handlePointerMove(event);
+    };
+    const routePointerUp = (event: PointerEvent) => {
+      if (!touchNavigation.up(event)) {
+        handlePointerUp(event);
+      } else if (!touchNavigation.active) {
+        lastTouchEndAt = performance.now();
+      }
+    };
+    const routePointerCancel = (event: PointerEvent) => {
+      if (!touchNavigation.cancel(event)) {
+        handlePointerCancel(event);
+      } else if (!touchNavigation.active) {
+        lastTouchEndAt = performance.now();
+      }
+    };
+    const routeDoubleClick = (event: MouseEvent) => {
+      // A double tap already ran as one; this is the browser's echo of it.
+      if (
+        touchNavigation.active ||
+        performance.now() - lastTouchEndAt < TOUCH_DBLCLICK_ECHO_MS
+      ) {
+        return;
+      }
+      handleDoubleClick(event);
+    };
+    // Safari's own pinch would zoom the page around the canvas.
+    const preventPageGesture = (event: Event) => event.preventDefault();
+    for (const type of SAFARI_GESTURE_EVENTS) {
+      host.addEventListener(type, preventPageGesture, { passive: false });
+    }
+
+    renderer.domElement.addEventListener('pointermove', routePointerMove, true);
+    renderer.domElement.addEventListener('pointerdown', routePointerDown, true);
+    renderer.domElement.addEventListener('pointerup', routePointerUp, true);
     renderer.domElement.addEventListener(
       'pointercancel',
-      handlePointerCancel,
+      routePointerCancel,
       true
     );
     renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
-    renderer.domElement.addEventListener('dblclick', handleDoubleClick);
+    renderer.domElement.addEventListener('dblclick', routeDoubleClick);
     renderer.domElement.addEventListener('contextmenu', handleContextMenu);
 
     const lastQuaternion = new THREE.Quaternion();
@@ -11579,24 +11691,28 @@ export function ModelViewer({
       releaseCubeLink = null;
       cubeLink = null;
       cubeOverlay.dispose();
+      touchNavigation.dispose();
+      for (const type of SAFARI_GESTURE_EVENTS) {
+        host.removeEventListener(type, preventPageGesture);
+      }
       renderer.domElement.removeEventListener(
         'pointermove',
-        handlePointerMove,
+        routePointerMove,
         true
       );
       renderer.domElement.removeEventListener(
         'pointerdown',
-        handlePointerDown,
+        routePointerDown,
         true
       );
       renderer.domElement.removeEventListener(
         'pointerup',
-        handlePointerUp,
+        routePointerUp,
         true
       );
       renderer.domElement.removeEventListener(
         'pointercancel',
-        handlePointerCancel,
+        routePointerCancel,
         true
       );
       renderer.domElement.removeEventListener(
@@ -11677,7 +11793,7 @@ export function ModelViewer({
         handleDocumentPointerDown,
         true
       );
-      renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
+      renderer.domElement.removeEventListener('dblclick', routeDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       host.removeEventListener('contextmenu', handleContextMenu);
       discardCylinderRadiusProxy();

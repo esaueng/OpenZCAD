@@ -869,6 +869,82 @@ export class CameraController {
     this.options.requestRender();
   }
 
+  /**
+   * Starts a two-finger pan and zoom owned by the viewport's touch layer,
+   * ended by `endOrbitDrag`. Unlike an orbit it keeps a held roll, as wheel
+   * pan and zoom do, so a sketch stays right-way-up while it is navigated.
+   */
+  beginPinchDrag() {
+    if (this.disposed || this.externalOrbitActive) {
+      return;
+    }
+    this.cancelTween();
+    this.externalOrbitActive = true;
+    this.beginGesture();
+  }
+
+  /**
+   * Pans by a finger's screen travel during an external drag. Content
+   * follows the finger, as the trackpad pan does: the point under it stays
+   * under it at the orbit target's depth.
+   */
+  panByPixels(deltaX: number, deltaY: number) {
+    if (
+      this.disposed ||
+      !this.externalOrbitActive ||
+      !this.orbit.enablePan ||
+      !Number.isFinite(deltaX) ||
+      !Number.isFinite(deltaY)
+    ) {
+      return;
+    }
+    this.orbit.pan(deltaX, deltaY);
+    this.orbit.update();
+    this.options.requestRender();
+  }
+
+  /**
+   * Zooms by a pinch's change in finger spread (above 1 spreads apart, in)
+   * about a client point, as the wheel zooms about the cursor. Applied at
+   * once rather than queued: the fingers already move smoothly.
+   */
+  zoomByPinch(scale: number, clientX: number, clientY: number) {
+    if (
+      this.disposed ||
+      !this.externalOrbitActive ||
+      !this.orbit.enableZoom ||
+      !Number.isFinite(scale) ||
+      scale <= 0 ||
+      !Number.isFinite(clientX) ||
+      !Number.isFinite(clientY)
+    ) {
+      return;
+    }
+    const rect = this.options.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+    this.zoomPointerNdc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    // Spreading the fingers apart brings the model closer: distance scales
+    // by the inverse of the spread ratio.
+    if (
+      applyAnchoredZoom(
+        this.active,
+        this.orbit.target,
+        this.zoomPointerNdc,
+        -Math.log(scale),
+        this.options.zoomToCursor(),
+        this.zoomScratch
+      )
+    ) {
+      this.orbit.update();
+      this.options.requestRender();
+    }
+  }
+
   /** Releases an external orbit into the same short damping tail as canvas. */
   endOrbitDrag() {
     if (this.disposed || !this.externalOrbitActive) {
