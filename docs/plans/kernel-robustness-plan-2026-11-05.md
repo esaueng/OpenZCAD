@@ -141,9 +141,13 @@ Wrong cells, each a silent defect with a minimal history in the ledger:
 
 The largest untyped families are the cylinder×cylinder union (83 cells,
 "open, non-manifold, or inconsistently oriented"). The next is the union
-connectivity check (50 cells). It is right for tangent and stacked operands,
-but it is also wrong for box×sphere raised and sliver unions, which overlap
-yet are refused as "2 disconnected groups". Then come a seam fillet or chamfer
+connectivity check (50 cells). It is right for tangent and stacked operands.
+The box×sphere raised and sliver unions (27 cells) overlap but were refused
+as "2 disconnected groups", because the pin has no certified box/sphere
+distance and refuses their exact intersection. An interior-point witness now
+proves their overlap, and those cells refuse with the actual reason instead:
+the kernel's fuse fails strict validation ("1 shared edges have inconsistent
+face orientations"), an upstream defect. Then come a seam fillet or chamfer
 that loses its edges after a source edit (20 cells, WS5), a chamfer on a
 concave boss seam (14 cells), the direct resize refusals of the first slice,
 and a STEP reimport at the 1e3 scale that our own reader refuses (3 cells).

@@ -9,6 +9,7 @@ import {
   certifiedSolidDistance,
   fuseUniformSolidChecked,
   isFaceConnectedSolid,
+  sharedInteriorPoint,
   solidsHavePositiveExactIntersection,
   solidsShareMaterialOrTouch,
   verdictRefusesUnion
@@ -591,4 +592,214 @@ describe('certified curved union connectivity', () => {
       adapter.dispose();
     }
   });
+});
+
+/**
+ * K10: a 60×60×20 box and an r10 sphere whose centre sits above the top face.
+ * The pin has no certified box/sphere distance and refuses their exact
+ * intersection, so the gate used to call these overlapping pairs "2
+ * disconnected groups". Each shared volume is the spherical cap below z = 20,
+ * πh²(3r − h)/3 with h = 20 − (z − r): a closed form independent of the
+ * kernel.
+ */
+const SPHERE_RADIUS = 10;
+const capVolume = (centerZ: number) => {
+  const h = 20 - (centerZ - SPHERE_RADIUS);
+  return (Math.PI * h * h * (3 * SPHERE_RADIUS - h)) / 3;
+};
+
+function boxAndSphere(
+  kernel: RemusKernel,
+  center: [number, number, number]
+): [number, number] {
+  return [
+    kernel.makeBox(60, 60, 20),
+    move(kernel, kernel.makeSphere(SPHERE_RADIUS, 32), ...center)
+  ];
+}
+
+function gateConnectivity(kernel: RemusKernel, solids: number[]) {
+  return analyzeUnionConnectivity(
+    solids.map((solid) => {
+      const b = kernel.boundingBox(solid);
+      return {
+        solid,
+        bounds: {
+          min: { x: b[0]!, y: b[1]!, z: b[2]! },
+          max: { x: b[3]!, y: b[4]!, z: b[5]! }
+        }
+      };
+    }),
+    (left, right) => certifiedSolidDistance(kernel, left, right),
+    (left, right) =>
+      solidsHavePositiveExactIntersection(kernel, left, right) ||
+      solidsShareMaterialOrTouch(kernel, left, right)
+  );
+}
+
+describe('interior-point overlap proof', () => {
+  it.each([
+    { placement: 'raised', centerZ: 24 },
+    { placement: 'sliver', centerZ: 30 - 1e-3 }
+  ])(
+    'proves the $placement box/sphere overlap the distance query cannot',
+    ({ centerZ }) => {
+      const kernel = new RemusKernel();
+      try {
+        const [plate, sphere] = boxAndSphere(kernel, [30, 30, centerZ]);
+        const before = serialized(kernel, [plate, sphere]);
+        expect(capVolume(centerZ)).toBeGreaterThan(0);
+        expect(certifiedSolidDistance(kernel, plate, sphere)).toBeNull();
+        const witness = sharedInteriorPoint(kernel, plate, sphere);
+        expect(witness).not.toBeNull();
+        // Checked against the analytic solids, not the kernel's classifier.
+        const [x, y, z] = witness!;
+        expect(Math.min(x, 60 - x, y, 60 - y, z, 20 - z)).toBeGreaterThan(0);
+        expect(Math.hypot(x - 30, y - 30, z - centerZ)).toBeLessThan(
+          SPHERE_RADIUS
+        );
+        expect(gateConnectivity(kernel, [plate, sphere])).toMatchObject({
+          connected: true,
+          componentCount: 1
+        });
+        expect(serialized(kernel, [plate, sphere])).toEqual(before);
+      } finally {
+        kernel.free();
+      }
+    }
+  );
+
+  it.each([
+    // Tangent to the top face: the boxes share only the plane z = 20.
+    { placement: 'tangent', center: [30, 30, 30] as [number, number, number] },
+    { placement: '1 mm gap', center: [30, 30, 31] as [number, number, number] },
+    // The boxes overlap on [0, 3]³, but the box corner is 12.1 from the
+    // centre: a 2.1 gap the boxes cannot see.
+    {
+      placement: 'near corner',
+      center: [-7, -7, -7] as [number, number, number]
+    }
+  ])('finds no witness for a $placement sphere', ({ center }) => {
+    const kernel = new RemusKernel();
+    try {
+      const [plate, sphere] = boxAndSphere(kernel, center);
+      expect(sharedInteriorPoint(kernel, plate, sphere)).toBeNull();
+      expect(solidsHavePositiveExactIntersection(kernel, plate, sphere)).toBe(
+        false
+      );
+      expect(gateConnectivity(kernel, [plate, sphere]).connected).toBe(false);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it('finds no witness between face-stacked boxes', () => {
+    const kernel = new RemusKernel();
+    try {
+      const lower = kernel.makeBox(10, 10, 10);
+      const upper = move(kernel, kernel.makeBox(10, 10, 10), 3, 3, 10);
+      expect(sharedInteriorPoint(kernel, lower, upper)).toBeNull();
+      // Face contact still connects through the certified planar distance.
+      expect(gateConnectivity(kernel, [lower, upper]).connected).toBe(true);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  async function unionWarnings(
+    second: {
+      primitiveKind: 'sphere' | 'cylinder';
+      dimensions: Record<string, number>;
+    },
+    translation: { x: number; y: number; z: number }
+  ): Promise<string[]> {
+    const adapter = await createExactKernelAdapter();
+    try {
+      let document = addPrimitiveFeature(
+        createProjectDocument('K10 union gate', toUserId('union-test')),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 60, height: 60, depth: 20 }
+        }
+      );
+      const plate = document.bodyOrder.at(-1)!;
+      document = addPrimitiveFeature(document, { name: 'Tool', ...second });
+      const moved = transformBody(document, {
+        name: 'Place tool',
+        targetBodyId: document.bodyOrder.at(-1)!,
+        translation
+      });
+      const united = booleanBodies(moved.document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [plate, moved.bodyId]
+      });
+      const result = await adapter.syncDocument(united.document);
+      return (result.featureWarnings ?? [])
+        .filter((warning) => warning.featureName === 'Union')
+        .map((warning) => warning.message);
+    } finally {
+      adapter.dispose();
+    }
+  }
+
+  it.each([
+    { placement: 'raised', z: 24 },
+    { placement: 'sliver', z: 30 - 1e-3 }
+  ])(
+    'does not call the overlapping $placement box/sphere union disconnected',
+    async ({ z }) => {
+      const messages = await unionWarnings(
+        { primitiveKind: 'sphere', dimensions: { radius: SPHERE_RADIUS } },
+        { x: 30, y: 30, z }
+      );
+      expect(messages.join('\n')).not.toContain('disconnected');
+      // The pin's fuse of this pair fails strict validation ("1 shared edges
+      // have inconsistent face orientations"); that is the refusal it earns.
+      // Flip this to an exact-volume assertion (60·60·20 + 4/3·π·r³ −
+      // capVolume) once the kernel returns a valid fuse.
+      // A proved move may ride along after the sentence.
+      expect(
+        messages.filter((message) =>
+          message.startsWith(
+            'Feature "Union": Union produced an open, non-manifold, or inconsistently oriented result.'
+          )
+        )
+      ).toHaveLength(1);
+    },
+    120_000
+  );
+
+  it.each<{
+    placement: string;
+    tool: {
+      primitiveKind: 'sphere' | 'cylinder';
+      dimensions: Record<string, number>;
+    };
+    translation: { x: number; y: number; z: number };
+  }>([
+    {
+      placement: 'gapped sphere',
+      tool: { primitiveKind: 'sphere', dimensions: { radius: 10 } },
+      translation: { x: 30, y: 30, z: 31 }
+    },
+    {
+      placement: 'side-tangent cylinder',
+      tool: {
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 6, height: 30 }
+      },
+      translation: { x: 66, y: 30, z: 5 }
+    }
+  ])(
+    'still refuses a $placement union as disconnected',
+    async ({ tool, translation }) => {
+      const messages = await unionWarnings(tool, translation);
+      expect(
+        messages.some((message) => message.includes('2 disconnected groups'))
+      ).toBe(true);
+    },
+    120_000
+  );
 });
