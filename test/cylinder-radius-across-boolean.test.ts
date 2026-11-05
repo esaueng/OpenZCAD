@@ -80,12 +80,16 @@ describe('a cylinder radius drag across a boolean', () => {
         const cap = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
           (face) => face.geometry?.surfaceType === 'plane'
         )!;
+        // The cap drag itself would now grow the source Cylinder (see
+        // `source-first-routing-across-boolean.test.ts`); the explicit local
+        // Offset Face records the lineage offset this case replays.
         const plan = planFaceOffset({
           document: { ...manager.document, derived },
           bodyId,
           face: cap,
           faceHash: cap.hash,
-          offset: 5
+          offset: 5,
+          localOnly: true
         });
         expect(plan?.kind).toBe('direct-edit');
         manager.execute(plan!.command);
