@@ -267,13 +267,16 @@ if (
         );
       }
     }
+    // Weight files describe the static suite. A PR's changed-file overlay
+    // must not persist untagged regressions in the smoke manifest.
+    const specs = suiteSpecs(suite, SPEC_DIR, {});
     const next = mergeWeights(
       readWeights(weightsPath),
       weightsFromReports(reports),
-      suiteSpecs(suite)
+      specs
     );
     writeFileSync(weightsPath, `${JSON.stringify(next, null, 2)}\n`);
-    for (const shard of partitionSpecs(suiteSpecs(suite), next, rest.length)) {
+    for (const shard of partitionSpecs(specs, next, rest.length)) {
       console.error(`${Math.round(shard.seconds)}s ${shard.files.join(' ')}`);
     }
   } else {

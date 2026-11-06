@@ -103,7 +103,13 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'Controls',
     detail: 'Mouse, trackpad, and shortcuts',
     group: 'Workspace',
-    settings: ['Scroll wheel', 'Middle-button drag', 'Zoom toward the pointer'],
+    settings: [
+      'Scroll wheel',
+      'Middle-button drag',
+      'Zoom toward the pointer',
+      'Undo with two fingers',
+      'Only Apple Pencil draws'
+    ],
     searchTerms: [
       'shortcuts',
       'keyboard',

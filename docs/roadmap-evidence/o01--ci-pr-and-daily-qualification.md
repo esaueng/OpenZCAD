@@ -16,8 +16,16 @@ found a root dense-oracle timeout and 58 browser failures plus one flaky case.
 The root oracle now uses a closed-interval candidate sweep, retaining all 120
 curves, 4,000 chords, crossing arithmetic and the five-second deadline, with
 differential checks against its original scan and repeated coverage probes.
-Browser findings remain visible for separate triage under the owner's CI-only
-scope. Full browser qualification uses one attempt and retains failure contexts;
+The repair integrates current main without dropping either side's unit
+manifest entries. Static smoke assertions and weight refreshes now exclude
+the changed-file overlay, with real Git-fixture coverage for untagged additions,
+edits and deletions. Settings search includes the touch-history and Pencil
+controls. The workspace-switch Revolve regression waits for a ready non-text
+keyboard target; its original failure reproduced twice under concurrency,
+then all 12 repeated spec executions passed with two workers and no retries.
+The four formerly failing journeys also pass in isolation; complete hosted
+qualification remains the queue-admission requirement.
+Full browser qualification uses one attempt and retains failure contexts;
 routine PR browsers run critical and changed journeys, with complete units on
 broad inputs. Immutable-pin activation remains pending; this staging is not
 evidence of a completed rollout. See `docs/ci-qualification.md`
