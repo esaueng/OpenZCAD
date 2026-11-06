@@ -23,7 +23,9 @@ export function raiseFeatureWarning(
   result: ExactBuildResult,
   feature: WarningFeature,
   reason: string,
-  kind: FeatureWarning['kind']
+  kind: FeatureWarning['kind'],
+  /** The refusal's typed record, when the raising site classified it. */
+  kernelRefusal?: FeatureWarning['kernelRefusal']
 ): number {
   const message = `Feature "${feature.name}": ${reason}`;
   const index = result.warnings.length;
@@ -32,7 +34,8 @@ export function raiseFeatureWarning(
     featureId: feature.featureId,
     featureName: feature.name,
     message,
-    kind
+    kind,
+    ...(kernelRefusal ? { kernelRefusal } : {})
   });
   return index;
 }

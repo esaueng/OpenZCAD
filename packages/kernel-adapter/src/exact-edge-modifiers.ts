@@ -13,8 +13,11 @@ import {
   blendReportIsVertexBlend,
   reportBlendRefusal,
   type BlendOperation,
-  type BlendQuality
+  type BlendQuality,
+  type BlendRefusal
 } from './exact-blend-refusal';
+import { ADAPTER_REFUSALS } from './adapter-refusal';
+import { KernelRefusal } from './kernel-refusal';
 import { surfaceTypeOf } from './exact-sync-memo';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
 import {
@@ -95,7 +98,7 @@ function applyTypedBlend(
   target: number,
   handles: Uint32Array,
   size: number,
-  reportRefusal: ((message: string) => void) | undefined,
+  reportRefusal: EdgeModifierRefusalSink | undefined,
   /** Distance-angle chamfer only: the bevel angle in radians. */
   chamferAngleRadians?: number,
   /** Receives the kernel's disclosed quality of a successful blend. */
@@ -111,7 +114,7 @@ function applyTypedBlend(
       chamferAngleRadians
     );
     if (outcome.status === 'refused') {
-      reportRefusal?.(reportBlendRefusal(outcome.refusal));
+      reportRefusal?.(reportBlendRefusal(outcome.refusal), outcome.refusal);
       return null;
     }
     reportQuality?.(outcome.quality);
@@ -143,8 +146,10 @@ export function applyEdgeModifier(
    * Receives the refusal text: the typed refusal's stable code ahead of the
    * kernel's own detail sentence when the kernel refused, and this
    * adapter's when it declined a result the kernel was willing to return.
+   * The typed refusal rides along when the kernel's typed twin refused, so
+   * a caller can record its classification without reading the text.
    */
-  reportRefusal?: (message: string) => void,
+  reportRefusal?: EdgeModifierRefusalSink,
   /** Receives construction history only after the same result is accepted. */
   reportEvolution?: (payload: FaceEvolutionPayloadV1) => void,
   /** Chamfer only: bevel angle in radians, strictly inside (0, π/2). */
@@ -942,17 +947,47 @@ function trimmingFailureAdvice(
 }
 
 /**
+ * Where a refused edge modifier reports itself: the refusal text, and the
+ * kernel's typed refusal when its typed twin is what refused.
+ */
+export type EdgeModifierRefusalSink = (
+  message: string,
+  refusal?: BlendRefusal
+) => void;
+
+/**
  * A refused fillet or chamfer thrown out of its builder: the sentence as the
  * error message, and the verdict beside it for the build loop to record on
  * the feature's warning (`FeatureWarning.blendAdvice`).
+ *
+ * It is a {@link KernelRefusal}, so the warning also carries a typed record:
+ * the kernel's own classification when its typed twin refused the requested
+ * size, and the adapter's `edge_modifier_refused` when an acceptance rule
+ * declined a result the kernel returned. The sentence is the ladder's and is
+ * unchanged; nothing branches on it.
  */
-export class EdgeModifierRefusalError extends Error {
+export class EdgeModifierRefusalError extends KernelRefusal {
+  readonly operation?: string;
+
   constructor(
     message: string,
-    readonly blendAdvice: BlendRefusalAdvice | null
+    readonly blendAdvice: BlendRefusalAdvice | null,
+    kernelRefusal: BlendRefusal | null = null
   ) {
-    super(message);
+    const adapter = ADAPTER_REFUSALS.edge_modifier_refused;
+    super({
+      family: 'blend',
+      category: kernelRefusal?.category ?? adapter.category,
+      kernelCode: kernelRefusal?.kernelCode ?? 'edge_modifier_refused',
+      kernelMessage: kernelRefusal?.kernelMessage ?? message,
+      reason: message,
+      message,
+      ...(kernelRefusal ? { cause: kernelRefusal } : {})
+    });
     this.name = 'EdgeModifierRefusalError';
+    if (kernelRefusal) {
+      this.operation = kernelRefusal.operation;
+    }
   }
 }
 

@@ -197,6 +197,28 @@ box×torus union and intersect, refuses typed (`exact_only_unattainable`).
 Seam blends on a sphere stay excluded, because one rebuild took 3.5–14
 minutes (root cause 6).
 
+**Adapter refusals typed (WS2).** Of the 217 untyped cells on main at
+`fa245170` (173 full, 3 CI slice, 41 imported twin), 207 were refusals the
+adapter raised itself. Each now carries a stable code from
+`packages/kernel-adapter/src/adapter-refusal.ts` on `FeatureWarning.kernelRefusal`,
+with the sentence unchanged:
+
+| Source                                                   | Code                                                                              | Cells |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------- | ----- |
+| Union strict solid gate                                  | `boolean`/`fuse` `union_not_solid` (`invalid_topology`)                           | 111   |
+| Union connectivity check                                 | `boolean`/`fuse` `union_disconnected` (`invalid_input`)                           | 22    |
+| Lost edge after a source edit                            | `reference` `reference_missing` (`invalid_input`)                                 | 20    |
+| Edge-modifier ladder (closed rim, smaller-size advice)   | the blend twin's own code and category, now relayed                               | 51    |
+| Non-positive radius, blend radius and edge-modifier size | `radius_not_positive`, `blend_radius_negative`, `edge_modifier_size_not_positive` | 3     |
+
+Every transition is untyped → typed. The 10 cells that stay untyped are kernel
+prose with no typed twin on the pin: blend removal and resize through
+`resizeBlend` / `resizeBlendWithEvolution` (`unsupported-support-pair` on a
+plane × cone seam, 6 cells; `radius-too-large`, 1 imported-twin cell), and
+the STEP reader's `parse error` on the 1e3-scale round trip (3 cells,
+`importStepWithReport`). The ledgers now stand at 758 qualified, 727 typed
+refusals, 10 untyped refusals and 13 wrong.
+
 ## Why combinations fail when primitives work
 
 - **Narrow kernel qualification.** Remus fixes are deliberately bounded to the

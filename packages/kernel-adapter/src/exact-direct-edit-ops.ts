@@ -11,6 +11,7 @@ import {
 } from './exact-lineage-builders';
 import type { RemusKernel } from './remus-runtime';
 import { resizeCylindricalFaceTyped } from './exact-direct-edit-refusal';
+import { AdapterRefusal } from './adapter-refusal';
 import { kernelRefusalCategoryOf } from './kernel-refusal';
 import { resolveParamValue } from '@openzcad/document-core';
 import { type Vec3 } from '@openzcad/geometry';
@@ -1974,7 +1975,10 @@ export function applyDirectEdit(
       'blend radius'
     );
     if (!Number.isFinite(newRadius) || newRadius < 0) {
-      throw new Error('Blend radius must be zero or greater.');
+      throw new AdapterRefusal(
+        'blend_radius_negative',
+        'Blend radius must be zero or greater.'
+      );
     }
     if (Math.abs(newRadius - snapshot.radius) <= radiusTolerance) {
       // A binding may start at the recorded radius, and an upstream edit may
@@ -2106,7 +2110,10 @@ export function applyDirectEdit(
   }
   const newRadius = resolveParamValue(operation.radius, scope, 'radius');
   if (!Number.isFinite(newRadius) || newRadius <= GEOMETRY_EPSILON) {
-    throw new Error('Radius must be greater than zero.');
+    throw new AdapterRefusal(
+      'radius_not_positive',
+      'Radius must be greater than zero.'
+    );
   }
   if (Math.abs(newRadius - geometry.radius) <= radiusTolerance) {
     // A gesture that lands on the current radius is a no-op the user should
