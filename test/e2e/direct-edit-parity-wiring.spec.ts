@@ -9,6 +9,9 @@ import { join, resolve } from 'node:path';
 import type { Page } from '@playwright/test';
 import type { GeometryBodyRepresentation } from '@openzcad/shared';
 import type { DirectEditFixtureObservation } from '../../apps/web/src/lib/directEditFixture';
+interface ParityWorkerWindow extends Window {
+  __parityWorkerEvents?: { type?: string }[];
+}
 import {
   clickWorldPoint,
   setSelectionFilter,
@@ -133,6 +136,19 @@ async function selectCylinder(page: Page, radius = 6) {
 async function openPart(page: Page, mode: 'history' | 'step') {
   mkdirSync(evidence, { recursive: true });
   await stubApi(page, { panelLayout: null });
+  await page.addInitScript(() => {
+    const events: { type?: string }[] = [];
+    (window as ParityWorkerWindow).__parityWorkerEvents = events;
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(...args: ConstructorParameters<typeof Worker>) {
+        super(...args);
+        this.addEventListener('message', (e) =>
+          events.push({ type: (e.data as { type?: string })?.type })
+        );
+      }
+    };
+  });
   const wasm: Promise<{ url: string; hash?: string }>[] = [];
   page.on('response', (r) => {
     if (/remus.*\.wasm$/.test(r.url()))
@@ -186,7 +202,16 @@ async function openPart(page: Page, mode: 'history' | 'step') {
     expect(loaded.some((r) => r.hash === expected)).toBe(true);
   writeFileSync(
     join(evidence, `${mode}-runtime.json`),
-    JSON.stringify({ loaded }, null, 2)
+    JSON.stringify(
+      {
+        loaded,
+        metadata: (await (
+          await page.request.get('/build-meta.json')
+        ).json()) as unknown
+      },
+      null,
+      2
+    )
   );
   await page.getByRole('button', { name: 'Fit view (F)' }).click();
   await waitForStillViewport(page);
@@ -356,6 +381,9 @@ for (const mode of ['history', 'step'] as const) {
         await pick();
         const selection = await page.locator('.selection-readout').innerText();
         const t = performance.now();
+        const eventCount = await page.evaluate(
+          () => (window as ParityWorkerWindow).__parityWorkerEvents?.length ?? 0
+        );
         await entry(page, value);
         const dialog = page.getByRole('dialog');
         await expect
@@ -363,20 +391,34 @@ for (const mode of ['history', 'step'] as const) {
             async () =>
               changed(await rendered(page)) ||
               (await dialog.innerText()).includes('Solid unchanged') ||
-              (await page
-                .getByText('Exact entry', { exact: true })
-                .isVisible()),
+              (await page.evaluate(
+                (n) =>
+                  (window as ParityWorkerWindow).__parityWorkerEvents
+                    ?.slice(n)
+                    .some((e) => e.type === 'preview-geometry') ?? false,
+                eventCount
+              )),
             { timeout: 60_000 }
           )
           .toBe(true);
-        const exactEntry = await page
-          .getByText('Exact entry', { exact: true })
-          .isVisible();
-        const previewMs = exactEntry ? null : performance.now() - t;
+        await page
+          .locator('.viewer-host canvas')
+          .evaluate(
+            () =>
+              new Promise<void>((resolve) =>
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() => resolve())
+                )
+              )
+          );
+        const previewMs = performance.now() - t;
         const screenshot = await picture(page, `${mode}-cumulative-${label}`);
         const preview = await rendered(page);
+        const previewMode = changed(preview)
+          ? 'rendered-target'
+          : 'worker-settled/no-target-change';
         const text = await dialog.innerText();
-        if (!changed(preview) && !exactEntry) {
+        if (!changed(preview) && text.includes('Solid unchanged')) {
           const diagnostic = (await diagnostics(page))
             .filter(
               (e) =>
@@ -459,7 +501,7 @@ for (const mode of ['history', 'step'] as const) {
             value,
             selection,
             previewMs,
-            previewMode: exactEntry ? 'exact-entry' : 'live',
+            previewMode,
             refusalMs,
             refused,
             diagnostic,
@@ -517,7 +559,7 @@ for (const mode of ['history', 'step'] as const) {
             value,
             selection,
             previewMs,
-            previewMode: exactEntry ? 'exact-entry' : 'live',
+            previewMode,
             refusalMs,
             screenshot: refusalScreenshot,
             refused,
@@ -541,7 +583,7 @@ for (const mode of ['history', 'step'] as const) {
           value,
           selection,
           previewMs,
-          previewMode: exactEntry ? 'exact-entry' : 'live',
+          previewMode,
           commitMs: performance.now() - commitStart,
           screenshot,
           cancelUnchanged: true,
@@ -690,18 +732,12 @@ for (const mode of ['history', 'step'] as const) {
                 g?.surfaceType === 'cylinder' &&
                 Math.abs((g.radius ?? 0) - radius) < 1e-5
             );
-            return (
-              previewed ||
-              (await page.getByText('Exact entry', { exact: true }).isVisible())
-            );
+            return previewed;
           },
           { timeout: 60_000 }
         )
         .toBe(true);
-      const exactEntry = await page
-        .getByText('Exact entry', { exact: true })
-        .isVisible();
-      const previewMs = exactEntry ? null : performance.now() - t;
+      const previewMs = performance.now() - t;
       const screenshot = await picture(page, `${mode}-A2-R${radius}`);
       const commitStart = performance.now();
       await apply(page);
@@ -722,7 +758,7 @@ for (const mode of ['history', 'step'] as const) {
       rows.push({
         radius,
         previewMs,
-        previewMode: exactEntry ? 'exact-entry' : 'live',
+        previewMode: 'rendered-target',
         commitMs,
         screenshot,
         committedScreenshot,

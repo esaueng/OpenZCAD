@@ -121,6 +121,8 @@ for (const f of readdirSync(root)
   .filter((f) => /^(history|step)-.*\.json$/.test(f))
   .sort()) {
   const r = JSON.parse(readFileSync(join(root, f), 'utf8'));
+  // Phase 3 also keeps wiring journals and runtime identities in this folder.
+  if (!r.mode || !r.id) continue;
   const path = r.previewScreenshot ?? r.selectedScreenshot ?? r.errorScreenshot;
   lines.push(
     `| ${r.mode} | ${esc(r.id)} | ${esc(r.selectionText)}; ${esc(r.tool)} | ${ms(r.previewMs)} / ${ms(r.commitMs)} | ${r.cancelUnchanged ? 'yes' : 'unverified'} / ${r.undoUnchanged ? 'yes' : '—'} | ${esc(r.harnessError ?? r.uiGap ?? r.commitStatus ?? r.previewText)} | ${path ? link(cleanPath(path), 'PNG') : '—'} | ${link(join(root, f), 'JSON')} |`

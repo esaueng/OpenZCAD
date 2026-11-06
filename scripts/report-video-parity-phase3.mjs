@@ -12,6 +12,19 @@ const esc = (s) =>
     .replaceAll('|', '\\|')
     .replaceAll('\n', '<br>');
 const ms = (n) => (typeof n === 'number' ? n.toFixed(1) : '—');
+const topology = (b) => {
+  if (!b) return 'unmeasured';
+  const surfaces =
+    b.surfaces ??
+    (b.geometry ?? []).reduce((counts, g) => {
+      const type = g?.surfaceType ?? 'unknown';
+      counts[type] = (counts[type] ?? 0) + 1;
+      return counts;
+    }, {});
+  return `${b.faces} faces; ${Object.entries(surfaces)
+    .map(([type, count]) => `${count} ${type}`)
+    .join(', ')}`;
+};
 const link = (path, label) =>
   `[${label}](${relative('docs/qa', path).replaceAll('\\', '/')})`;
 const shot = (r, dir) => {
@@ -83,7 +96,7 @@ for (const mode of ['history', 'step']) {
   const a2 = read(join(dir, `${mode}-A2-wired.json`));
   for (const r of a2?.rows ?? [])
     lines.push(
-      `| ${mode} | A2 R${r.radius} | ${r.after?.[0]?.faces} faces; ${r.previewMode} | ${ms(r.previewMs)} / ${ms(r.commitMs)} | Undo to original: ${a2.undoUnchanged} | ${shot(r, dir)} |`
+      `| ${mode} | A2 R${r.radius} | ${topology(r.after?.[0])}; ${r.previewMode} | ${ms(r.previewMs)} / ${ms(r.commitMs)} | Undo to original: ${a2.undoUnchanged} | ${shot(r, dir)} |`
     );
   for (const [id, label] of [
     ['A6-wired', 'A6 single pick → 7 edges'],
@@ -115,7 +128,7 @@ for (const mode of ['history', 'step']) {
           .join('\n')
       : null;
     lines.push(
-      `| ${mode} | ${r.label} ${r.value} | ${esc(r.harnessError ?? refusal ?? `changed; ${r.after?.[0]?.faces} faces`)} | ${ms(r.previewMs)} / ${ms(r.commitMs ?? r.refusalMs)}${r.previewMode ? `; ${r.previewMode}` : ''} | ${r.cancelUnchanged ?? r.unchanged ?? 'unverified'} | ${shot(r, dir)} ${link(join(dir, `${mode}-cumulative.json`), 'JSON')} |`
+      `| ${mode} | ${r.label} ${r.value} | ${esc(r.harnessError ?? refusal ?? `changed; ${topology(r.after?.[0])}`)} | ${ms(r.previewMs)} / ${ms(r.commitMs ?? r.refusalMs)}${r.previewMode ? `; ${r.previewMode}` : ''} | ${r.cancelUnchanged ?? r.unchanged ?? 'unverified'} | ${shot(r, dir)} ${link(join(dir, `${mode}-cumulative.json`), 'JSON')} |`
     );
   }
   lines.push(

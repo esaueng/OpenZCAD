@@ -551,6 +551,13 @@ test(
     await expect(
       page.getByRole('heading', { name: 'History 3' })
     ).toBeVisible();
+    // The latest body's source tag is now direct-edit. Its original STEP
+    // feature still owns the imported edit path, including on the pinned kernel.
+    await page.keyboard.press('Escape');
+    await expect(editFillet).not.toBeVisible();
+    expect(await readBlend(canvas, true)).not.toBeNull();
+    await expect(editFillet).toBeVisible();
+    await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
     expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
       []
     );
