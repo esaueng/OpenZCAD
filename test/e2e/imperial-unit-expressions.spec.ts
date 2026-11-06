@@ -125,7 +125,7 @@ test('refuses an angle typed into a box size in an inch project', async ({
   await page.getByTestId('command-handle-width').click();
   await entry.fill('30 deg');
   await expect(entry).toHaveAttribute('aria-invalid', 'true');
-  await expect(keypad.locator('.keypad-expr-preview')).toHaveText(
+  await expect(keypad.locator('.keypad-warning')).toHaveText(
     /expected a length, not an angle or area/
   );
   // Enter refuses it; the width stays the one shown.

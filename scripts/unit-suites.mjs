@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
+import process from 'node:process';
 
 export const ROOT_FULL_INCLUDE = [
   'test/**/*.test.ts',
@@ -56,5 +57,9 @@ export function unitTestInclude(project, env = process.env) {
     throw new Error(`Unknown unit project "${project}".`);
   if (resolveUnitSuite(env) === 'full')
     return project === 'root' ? [...ROOT_FULL_INCLUDE] : undefined;
+  if (env.OPENZCAD_UNIT_FILES) {
+    const selection = JSON.parse(env.OPENZCAD_UNIT_FILES);
+    return validateUnitFiles(project, selection[project]);
+  }
   return validateUnitFiles(project, manifest[project]);
 }

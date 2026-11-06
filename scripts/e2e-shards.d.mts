@@ -15,7 +15,12 @@ export type E2eSuite = 'smoke' | 'full';
 export function resolveSuite(
   env?: Record<string, string | undefined>
 ): E2eSuite;
-export function suiteSpecs(suite: E2eSuite, dir?: string): string[];
+export function suiteSpecs(
+  suite: E2eSuite,
+  dir?: string,
+  env?: Record<string, string | undefined>
+): string[];
+export function smokeGrep(env?: Record<string, string | undefined>): RegExp;
 
 export function parseShard(value: string): { shard: number; total: number };
 

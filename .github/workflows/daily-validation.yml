@@ -1,0 +1,134 @@
+name: Full application qualification
+
+on:
+  schedule:
+    - cron: '37 7 * * *'
+  workflow_dispatch:
+  # Exercise the complete new workflow on its implementation PR as well.
+  pull_request:
+    paths:
+      - .github/workflows/daily-validation.yml
+      - scripts/ci-qualification-report.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-qualification-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  OPENZCAD_UNIT_SUITE: full
+  OPENZCAD_E2E_SUITE: full
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:coverage --reporter=default --reporter=json --outputFile.json=qualification-root.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: qualification-root
+          path: |
+            qualification-root.json
+            coverage/
+          if-no-files-found: error
+          retention-days: 7
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openzcad/web test:full --coverage --reporter=default --reporter=json --outputFile.json=qualification-web.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: qualification-web
+          path: |
+            apps/web/qualification-web.json
+            apps/web/coverage/
+          if-no-files-found: error
+          retention-days: 7
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      - name: Run the full browser partition
+        env:
+          SHARD: ${{ matrix.shard }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: qualification-browser.json
+        run: |
+          specs="$(node scripts/e2e-shards.mjs --suite full "$SHARD/6")"
+          pnpm test:e2e:full --retries=0 --reporter=dot,json $specs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: qualification-browser-${{ matrix.shard }}
+          path: |
+            qualification-browser.json
+            test-results/
+          if-no-files-found: error
+          retention-days: 7
+  report:
+    if: always()
+    needs: [unit, web, browser]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Record verdict and last green main qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/ci-qualification-report.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: qualification-receipt
+          path: qualification-receipt.json
+          if-no-files-found: error
+          retention-days: 30

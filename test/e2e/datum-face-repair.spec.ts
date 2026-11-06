@@ -15,7 +15,13 @@ import {
 } from '@openzcad/shared';
 import type { Locator } from '@playwright/test';
 import { faceSketchAttachment } from '../../apps/web/src/lib/faceSketchAttachment';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  waitForStillViewport,
+  clickWorldPoint
+} from './openzcad-fixtures';
 
 /**
  * R01: an offset plane whose source face was deleted is re-attached from its
@@ -117,23 +123,15 @@ test('re-picks a lost datum face, and Measure takes the click over while armed',
   await expect(page.getByRole('contentinfo')).not.toContainText('Rebuilding', {
     timeout: 60_000
   });
-  const bounds = (await canvas.boundingBox())!;
-  let target: { x: number; y: number } | null = null;
-  for (let row = 3; row < 8 && !target; row += 1) {
-    for (let column = 3; column < 8 && !target; column += 1) {
-      const x = bounds.x + (bounds.width * column) / 10;
-      const y = bounds.y + (bounds.height * row) / 10;
-      await page.mouse.click(x, y);
-      await page.waitForTimeout(150);
-      if (await canvas.getAttribute('data-e2e-selected-face')) {
-        target = { x, y };
-      }
-    }
-  }
-  expect(target).not.toBeNull();
+  await waitForStillViewport(page);
+  // The remaining box spans (30, 0, 0) to (50, 20, 8). Re-project
+  // its top-face center for every click: switching workspaces can move the
+  // camera, so a pixel found before Tweak no longer names the same face.
+  const clickFace = () => clickWorldPoint(page, [40, 10, 8]);
+  await clickFace();
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', /./);
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
-  const point = target!;
 
   const arm = async () => {
     await page
@@ -151,25 +149,36 @@ test('re-picks a lost datum face, and Measure takes the click over while armed',
     .getByRole('button', { name: 'Measure', exact: true })
     .first();
   await measure.click();
-  await page.mouse.click(point.x, point.y);
+  await expect(measure).toHaveAttribute('aria-pressed', 'true');
+  await clickFace();
   await page.waitForTimeout(3_000);
   expect(await drawnDatumCount(canvas)).toBe(0);
   await measure.click();
+  await expect(measure).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('Escape');
 
   // Armed, then Tweak: a locked workspace disarms it, and back in Build the
   // click is an ordinary selection.
   await arm();
   await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Tweak', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Build', exact: true }).click();
-  await page.mouse.click(point.x, point.y);
+  await expect(
+    page.getByRole('button', { name: 'Build', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await waitForStillViewport(page);
+  await clickFace();
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', /./);
   await page.waitForTimeout(3_000);
   expect(await drawnDatumCount(canvas)).toBe(0);
   await page.keyboard.press('Escape');
 
   // Armed again with nothing else in the way, the same click repairs it.
+  await expect(measure).toHaveAttribute('aria-pressed', 'false');
   await arm();
-  await page.mouse.click(point.x, point.y);
+  await clickFace();
   await expect.poll(() => drawnDatumCount(canvas), { timeout: 30_000 }).toBe(1);
   await expect(page.getByRole('contentinfo')).toContainText(
     '"Lid plane" follows the re-picked face.'

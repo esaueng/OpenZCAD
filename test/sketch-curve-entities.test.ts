@@ -20,6 +20,7 @@ import {
   type SketchRegionObject
 } from '@openzcad/geometry';
 import type { ParamValue, SketchObjectData } from '@openzcad/shared';
+import { densePolylineCrosses } from './support/densePolylineCrossing';
 
 /**
  * I01 (schema v27): ellipse and spline sketch entities through region and
@@ -485,43 +486,6 @@ describe('spline regions', () => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
       return seed / 2147483648;
     };
-    const denseCrosses = (points: CurvePoint[]) => {
-      const n = points.length - 1;
-      // Disjoint closed bounding boxes cannot contain a proper crossing.
-      // Cull only those pairs; retain all 4,000 chords and the exact predicate.
-      const bounds = points.slice(1).map((point, index) => ({
-        minX: Math.min(points[index]!.x, point.x),
-        maxX: Math.max(points[index]!.x, point.x),
-        minY: Math.min(points[index]!.y, point.y),
-        maxY: Math.max(points[index]!.y, point.y)
-      }));
-      for (let i = 0; i < n; i += 1) {
-        for (let j = i + 2; j < n; j += 1) {
-          const a = bounds[i]!;
-          const b = bounds[j]!;
-          if (
-            a.maxX < b.minX ||
-            b.maxX < a.minX ||
-            a.maxY < b.minY ||
-            b.maxY < a.minY
-          )
-            continue;
-          const a0 = points[i]!;
-          const a1 = points[i + 1]!;
-          const b0 = points[j]!;
-          const b1 = points[j + 1]!;
-          const d =
-            (a1.x - a0.x) * (b1.y - b0.y) - (a1.y - a0.y) * (b1.x - b0.x);
-          if (d === 0) continue;
-          const r =
-            ((b0.x - a0.x) * (b1.y - b0.y) - (b0.y - a0.y) * (b1.x - b0.x)) / d;
-          const q =
-            ((b0.x - a0.x) * (a1.y - a0.y) - (b0.y - a0.y) * (a1.x - a0.x)) / d;
-          if (r > 0 && r < 1 && q > 0 && q < 1) return true;
-        }
-      }
-      return false;
-    };
     let crossings = 0;
     for (let trial = 0; trial < 120; trial += 1) {
       const count = 4 + Math.floor(random() * 3);
@@ -533,7 +497,7 @@ describe('spline regions', () => {
       const dense = Array.from({ length: 4001 }, (_, index) =>
         splinePoint(curve, index / 4000)
       );
-      const expected = denseCrosses(dense);
+      const expected = densePolylineCrosses(dense);
       crossings += expected ? 1 : 0;
       expect(splineSelfIntersection(curve, 1e-6) !== null).toBe(expected);
     }
