@@ -10,6 +10,21 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type BodyRepresentation } from '@openzcad/shared';
+import { approximateBlendAdvisory } from '../../packages/kernel-adapter/src/exact-edge-modifiers';
+
+/**
+ * The R5 junction band has no closed form, so the kernel fits it as NURBS
+ * and the feature discloses that (owner decision, 2026-11-06). It is the one
+ * warning a build of this history is expected to carry.
+ */
+export const JUNCTION_FILLET_DISCLOSURE = `Feature "Junction fillet": ${approximateBlendAdvisory('fillet')}`;
+
+function throwOnUnexpected(warnings: readonly string[]) {
+  const unexpected = warnings.filter(
+    (warning) => warning !== JUNCTION_FILLET_DISCLOSURE
+  );
+  if (unexpected.length) throw new Error(unexpected.join('\n'));
+}
 
 export function unionEndFace(body: BodyRepresentation) {
   const face = body.topology?.faces.find(
@@ -71,7 +86,7 @@ export async function filletedUnion(adapter: ExactKernelAdapter) {
     size: 5
   });
   const derived = await adapter.syncDocument(rounded.document);
-  if (derived.warnings.length) throw new Error(derived.warnings.join('\n'));
+  throwOnUnexpected(derived.warnings);
   const bodyId = rounded.bodyId;
   const top = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
     (face) =>
@@ -94,7 +109,7 @@ export async function filletedUnion(adapter: ExactKernelAdapter) {
     }
   });
   const final = await adapter.syncDocument(edited.document);
-  if (final.warnings.length) throw new Error(final.warnings.join('\n'));
+  throwOnUnexpected(final.warnings);
   edited.document.derived = final;
   return {
     document: edited.document,

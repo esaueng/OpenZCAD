@@ -14,6 +14,7 @@ import {
 } from '@openzcad/shared';
 import { RemusKernel } from './remus-runtime';
 import { createExactKernelAdapter } from './exact';
+import { approximateBlendAdvisory } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
   variableBlendRefusalMessage,
@@ -412,7 +413,14 @@ describe('variable blends through the document', { timeout: 120_000 }, () => {
       const constantDerived = await adapter.syncDocument(constant.document);
       expect(constantDerived.warnings).toEqual([]);
       const variableDerived = await adapter.syncDocument(variable.document);
-      expect(variableDerived.warnings).toEqual([]);
+      // The kernel fits a variable band as NURBS (`filletVariableDetailed`
+      // reports `quality: "approximate"`), so the feature discloses it.
+      expect(variableDerived.warnings).toEqual([
+        `Feature "Round": ${approximateBlendAdvisory('fillet')}`
+      ]);
+      expect(
+        variableDerived.featureWarnings?.map((warning) => warning.kind)
+      ).toEqual(['advisory']);
 
       // 1 → 3 takes more out than a constant 2 does, end to end through the
       // document, not only at the kernel boundary.

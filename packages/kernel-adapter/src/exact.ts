@@ -156,6 +156,7 @@ import {
 } from './preview-face-geometry-cache';
 import {
   hasRefusingFeatureWarning,
+  displayMeshGapsAdvisory,
   raiseFeatureWarning
 } from './exact-feature-warnings';
 import {
@@ -214,6 +215,7 @@ import {
   SyncReadMemo,
   TopologyWitnessStore,
   edgeToFaceMapOf,
+  surfaceTypeOf,
   withSyncReadMemo
 } from './exact-sync-memo';
 import {
@@ -3674,11 +3676,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ) {
           // The B-rep passed validation, so the solid is kept; only its
           // display tessellation has gaps. Say so instead of letting the
-          // viewport show holes that look like missing geometry.
+          // viewport show holes that look like missing geometry. Only a body
+          // with no NURBS face may be called exact here: a NURBS face can be
+          // an approximate blend fit, which its feature discloses on its own.
+          const hasNurbsFace = shape.solids.some((solid) =>
+            Array.from(kernel.getSolidFaces(solid)).some(
+              (face) => surfaceTypeOf(kernel, face) === 'bspline'
+            )
+          );
           raiseFeatureWarning(
             build,
             feature,
-            'The result is a valid solid, but its display mesh has gaps, so the viewport can show holes that are not in the model. Volume, measurements and STEP export use the exact solid.',
+            displayMeshGapsAdvisory(hasNurbsFace),
             'advisory'
           );
         }

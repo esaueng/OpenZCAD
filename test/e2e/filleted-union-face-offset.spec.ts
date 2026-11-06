@@ -147,7 +147,9 @@ for (const longHistory of [false, true])
           )
         )
         .toBeGreaterThan(0);
-      await expect(page.locator('.feature-row')).toHaveCount(featuresBeforeDrag);
+      await expect(page.locator('.feature-row')).toHaveCount(
+        featuresBeforeDrag
+      );
       await page.keyboard.press('Escape');
       await page.mouse.up();
       await page.keyboard.up('Shift');
@@ -163,7 +165,10 @@ for (const longHistory of [false, true])
       await expect(page.getByRole('contentinfo')).toContainText(
         'width set to 35.59 mm'
       );
-      await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+      // The one warning is the junction band's approximate-surface disclosure.
+      await expect(page.getByRole('contentinfo')).toContainText(
+        /warnings1(?!\d)/
+      );
       await expect.poll(endX).toBeCloseTo(35.59, 4);
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
@@ -217,7 +222,10 @@ for (const longHistory of [false, true])
         fileMenu.getByRole('button', { name: /^Export STEP/ })
       ).toBeEnabled({ timeout: 120_000 });
       await page.keyboard.press('Escape');
-      await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+      // The one warning is the junction band's approximate-surface disclosure.
+      await expect(page.getByRole('contentinfo')).toContainText(
+        /warnings1(?!\d)/
+      );
       await expect(
         page.locator('.feature-row-main', { hasText: 'Junction fillet' })
       ).toHaveCount(1);

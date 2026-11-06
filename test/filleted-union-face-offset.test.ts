@@ -14,7 +14,11 @@ import {
   faceOffsetBaseline,
   planFaceOffset
 } from '../apps/web/src/lib/interaction/faceOffsetPlan';
-import { filletedUnion, unionEndFace } from './support/filleted-union';
+import {
+  JUNCTION_FILLET_DISCLOSURE,
+  filletedUnion,
+  unionEndFace
+} from './support/filleted-union';
 
 describe('filleted union end-face resizing', { timeout: 120_000 }, () => {
   let adapter: ExactKernelAdapter;
@@ -46,7 +50,7 @@ describe('filleted union end-face resizing', { timeout: 120_000 }, () => {
       });
       expect(plan?.kind).toBe('primitive-dimension');
       const after = await adapter.syncDocument(plan!.command.apply(document));
-      expect(after.warnings).toEqual([]);
+      expect(after.warnings).toEqual([JUNCTION_FILLET_DISCLOSURE]);
       const changed = after.bodyRepresentations[bodyId]!;
       expect(unionEndFace(changed).geometry!.center.x).toBeCloseTo(
         30 + offset,
@@ -86,11 +90,11 @@ describe('filleted union end-face resizing', { timeout: 120_000 }, () => {
     const manager = new CommandManager(document);
     manager.execute(plan.command);
     const resized = await adapter.syncDocument(manager.document);
-    expect(resized.warnings).toEqual([]);
+    expect(resized.warnings).toEqual([JUNCTION_FILLET_DISCLOSURE]);
     const expected = resized.bodyRepresentations[bodyId]!;
     manager.undo();
     const undone = await adapter.syncDocument(manager.document);
-    expect(undone.warnings).toEqual([]);
+    expect(undone.warnings).toEqual([JUNCTION_FILLET_DISCLOSURE]);
     expect(
       unionEndFace(undone.bodyRepresentations[bodyId]!).geometry!.center.x
     ).toBe(30);
@@ -103,7 +107,7 @@ describe('filleted union end-face resizing', { timeout: 120_000 }, () => {
     const fresh = await createExactKernelAdapter();
     try {
       const after = await fresh.syncDocument(reopened);
-      expect(after.warnings).toEqual([]);
+      expect(after.warnings).toEqual([JUNCTION_FILLET_DISCLOSURE]);
       expect(after.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
         expected.volume,
         6

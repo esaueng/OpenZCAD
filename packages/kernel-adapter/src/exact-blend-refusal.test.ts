@@ -3,6 +3,7 @@ import { RemusKernel } from './remus-runtime';
 import {
   BlendRefusal,
   blendOutcome,
+  blendQualityOf,
   blendRefusalOf,
   blendReportIsVertexBlend,
   reportBlendRefusal
@@ -46,8 +47,36 @@ describe('typed blend outcome', { timeout: 60_000 }, () => {
       expect(outcome.status).toBe('ok');
       if (outcome.status === 'ok') {
         expect(kernel.validateSolidRelaxed(outcome.solid)).toBe(0);
+        // A box edge rounds and bevels with closed-form surfaces.
+        expect(outcome.quality).toEqual({
+          approximate: false,
+          approximateFaces: []
+        });
       }
     }
+  });
+
+  it('reads a disclosed-approximate verdict from the typed details', () => {
+    expect(blendQualityOf({ quality: 'exact', engine: 'walking' })).toEqual({
+      approximate: false,
+      approximateFaces: []
+    });
+    expect(blendQualityOf(undefined)).toEqual({
+      approximate: false,
+      approximateFaces: []
+    });
+    expect(
+      blendQualityOf({ quality: 'approximate', approximateFaces: [7, 9] })
+    ).toEqual({ approximate: true, approximateFaces: [7, 9] });
+    // The verdict is the quality; a missing or malformed face list never
+    // turns an approximate result into an exact one.
+    expect(blendQualityOf({ quality: 'approximate' })).toEqual({
+      approximate: true,
+      approximateFaces: []
+    });
+    expect(
+      blendQualityOf({ quality: 'approximate', approximateFaces: ['x', 3] })
+    ).toEqual({ approximate: true, approximateFaces: [3] });
   });
 
   it('refuses an unfittable radius as internal with the cliff code', () => {

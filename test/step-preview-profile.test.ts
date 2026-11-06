@@ -8,7 +8,11 @@ import {
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import { stepPreviewProfile } from '../apps/web/src/lib/interaction/stepPreviewProfile';
 import { roundedPlateDocument } from './support/rounded-plate';
-import { filletedUnion, unionEndFace } from './support/filleted-union';
+import {
+  JUNCTION_FILLET_DISCLOSURE,
+  filletedUnion,
+  unionEndFace
+} from './support/filleted-union';
 
 function side(body: BodyRepresentation, axis: 'x' | 'y', sense: 1 | -1) {
   return body.topology!.faces.find(
@@ -136,7 +140,7 @@ describe('whole-body step previews for planar face offsets', () => {
         })!;
         expect(plan.kind).toBe('primitive-dimension');
         const after = await adapter.syncDocument(plan.command.apply(document));
-        expect(after.warnings).toEqual([]);
+        expect(after.warnings).toEqual([JUNCTION_FILLET_DISCLOSURE]);
         const exact = after.bodyRepresentations[bodyId]!;
         expect(bounds(preview).min).toEqual(bounds(body.mesh.vertices).min);
         expect(bounds(preview).max[0]).toBeCloseTo(exact.bbox.max.x, 4);
