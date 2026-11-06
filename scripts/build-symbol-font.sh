@@ -18,8 +18,8 @@ set -euo pipefail
 
 MATH_PACKAGE='@fontsource/noto-sans-math@5.3.0'
 MATH_FILE='noto-sans-math-latin-400-normal.woff2'
-# ⌀ ∠ Δ ∥ ⊥ ⊕ □ ◇ ◎ ▾ ∅ ‐
-MATH_GLYPHS='U+2300,U+2220,U+0394,U+2225,U+22A5,U+2295,U+25A1,U+25C7,U+25CE,U+25BE,U+2205,U+2010'
+# ⌀ ∠ Δ ∥ ∩ ⊥ ⊕ □ ◇ ◎ ▾ ∅ ‐
+MATH_GLYPHS='U+2300,U+2220,U+0394,U+2225,U+2229,U+22A5,U+2295,U+25A1,U+25C7,U+25CE,U+25BE,U+2205,U+2010'
 
 SYMBOL_PACKAGE='@fontsource/noto-sans-symbols-2@5.3.0'
 SYMBOL_FILE='noto-sans-symbols-2-symbols-400-normal.woff2'

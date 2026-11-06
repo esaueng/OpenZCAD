@@ -23,6 +23,10 @@ edits and deletions. Settings search includes the touch-history and Pencil
 controls. The workspace-switch Revolve regression waits for a ready non-text
 keyboard target; its original failure reproduced twice under concurrency,
 then all 12 repeated spec executions passed with two workers and no retries.
+Full root validation also exposed an intersection symbol introduced on main
+without font coverage. The pinned math-font subset and its CSS range now
+include U+2229, with an explicit glyph regression assertion and a passing
+interface-wide coverage audit.
 The four formerly failing journeys also pass in isolation; complete hosted
 qualification remains the queue-admission requirement.
 Full browser qualification uses one attempt and retains failure contexts;
