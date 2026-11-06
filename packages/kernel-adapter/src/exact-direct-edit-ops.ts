@@ -12,7 +12,10 @@ import {
 import type { RemusKernel } from './remus-runtime';
 import { resizeCylindricalFaceTyped } from './exact-direct-edit-refusal';
 import { AdapterRefusal } from './adapter-refusal';
-import { kernelRefusalCategoryOf } from './kernel-refusal';
+import {
+  kernelRefusalCategoryOf,
+  kernelRefusalRecordOf
+} from './kernel-refusal';
 import { resolveParamValue } from '@openzcad/document-core';
 import { type Vec3 } from '@openzcad/geometry';
 import {
@@ -2008,7 +2011,10 @@ export function applyDirectEdit(
       `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
     );
     let lineage: RemusLineageState | undefined;
-    if (evolution && producingFeatureId) {
+    if (
+      evolution?.evolution.provenance === 'construction' &&
+      producingFeatureId
+    ) {
       const resultCandidates = topologyCandidatesForSolid(kernel, output);
       const generatedBlendFaces = new Set(
         evolution.evolution.generated
@@ -2030,6 +2036,8 @@ export function applyDirectEdit(
         generatedBlendFaces
       });
     } else if (newRadius > GEOMETRY_EPSILON) {
+      // An inferred blend-group journal is not construction history. Only
+      // assign this edit's own semantic role to a unique measured output band.
       const candidates = topologyCandidatesForSolid(kernel, output);
       const matching = candidates.filter((candidate) => {
         if (candidate.kind !== 'face') {
@@ -2228,6 +2236,10 @@ export function applyDirectEdit(
     // app.
     assertWallResizeAccepted(kernel, acceptance(output));
   } catch (error) {
+    // The blend-group route already tried the supported resize strategies.
+    // Keep its typed diameter limit, leaving older kernels' ladder unchanged.
+    if (kernelRefusalRecordOf(error)?.code === 'cylinder-diameter-unbuildable')
+      throw error;
     // WS6 ladder, step 2: remove the bands incident to the wall, resize the
     // sharp wall, rebuild the bands at their recognised radius. Only a wall
     // whose every curved neighbour is a proven band qualifies, and only a

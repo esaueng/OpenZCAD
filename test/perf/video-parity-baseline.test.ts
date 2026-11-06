@@ -2,6 +2,7 @@
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { it, expect } from 'vitest';
 import { createExactKernelAdapter } from '../../packages/kernel-adapter/src/exact';
 import {
@@ -65,7 +66,10 @@ it.skipIf(!input)(
     mkdirSync(out, { recursive: true });
     const rows: unknown[] = [];
     const report: Record<string, unknown> = {
-      appSource: '45ecfcad0aa15ea6c4ca88cce6f5a9f741818e9f',
+      appSource: execFileSync('git', ['rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).trim(),
       rows
     };
     const save = () =>

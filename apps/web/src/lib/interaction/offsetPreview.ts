@@ -7,7 +7,11 @@ import type {
 } from '@openzcad/shared';
 import type { AffectedFeatureTarget } from '../affectedFeatureTargets';
 import { directEditRejection } from '../directEdit';
-import { splitRefusal, validatedFeatureRejection } from '../featureValidation';
+import {
+  refusingWarningDetail,
+  splitRefusal,
+  validatedFeatureRejection
+} from '../featureValidation';
 import type { CommandDiagnostic } from './machine';
 
 export interface OffsetPreviewFaceTarget {
@@ -70,7 +74,14 @@ export function offsetPreviewRejection(
     bodyPresent: Boolean(input.derived.bodyRepresentations[input.bodyId]),
     documentMoved: input.documentMoved
   });
-  return message ? splitRefusal(message) : null;
+  const warning = refusingWarningDetail(
+    input.label,
+    input.derived.warnings,
+    input.derived.featureWarnings
+  );
+  return message
+    ? splitRefusal(message, warning?.kernelRefusal ?? warning?.category)
+    : null;
 }
 
 function length(vector: Vector3): number {

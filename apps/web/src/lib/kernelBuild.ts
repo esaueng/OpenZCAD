@@ -45,6 +45,19 @@ export function resolveKernelBuild(env: KernelBuildEnv): KernelBuild {
 
 export const KERNEL_BUILD: KernelBuild = resolveKernelBuild(import.meta.env);
 
+/** Blend-group edits and exact mixed tangent chamfers shipped together in 125.
+ * Unknown/prerelease identities keep the previous selection behavior.
+ */
+export function supportsBlendGroupEdits(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:\+[^\s]+)?$/.exec(version);
+  if (!match) return false;
+  const [year, series, release] = match.slice(1).map(Number);
+  return (
+    year! > 2026 ||
+    (year === 2026 && (series! > 1 || (series === 1 && release! >= 125)))
+  );
+}
+
 /**
  * Abbreviates a full commit the way git does. Anything that is not a 40-hex
  * sha — `unknown`, or an already-short sha — is passed through untouched

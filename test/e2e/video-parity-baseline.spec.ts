@@ -329,8 +329,9 @@ for (const mode of ['history', 'step'] as const)
         let previewCompleted = true;
         await expect
           .poll(
-            () =>
-              page.evaluate(
+            async () =>
+              (await keypad.getByRole('alert').isVisible()) ||
+              (await page.evaluate(
                 (n) =>
                   (window as ParityWindow).__parityEvents
                     .slice(n)
@@ -338,7 +339,7 @@ for (const mode of ['history', 'step'] as const)
                       /geometry|refus|error|built/.test(e.type ?? '')
                     ),
                 eventCount
-              ),
+              )),
             { timeout: 12_000 }
           )
           .toBe(true)
@@ -353,6 +354,11 @@ for (const mode of ['history', 'step'] as const)
         row[previewCompleted ? 'previewMs' : 'previewObservationMs'] =
           performance.now() - t;
         row.previewCompletionObserved = previewCompleted;
+        row.previewCompletionKind = (await keypad
+          .getByRole('alert')
+          .isVisible())
+          ? 'visible-refusal'
+          : 'worker';
         row.preview = await state(page);
         row.previewText = await keypad.innerText();
         row.status = await page.getByRole('contentinfo').innerText();

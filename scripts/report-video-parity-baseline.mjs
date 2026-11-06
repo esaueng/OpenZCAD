@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 const root = process.argv[2] ?? 'artifacts/video-parity';
 const dest = process.argv[3] ?? 'docs/qa/video-parity-measurements.md';
+const scope = process.argv[4] ?? 'video-parity-baseline.md';
 const report = JSON.parse(readFileSync(join(root, 'adapter.json'), 'utf8'));
 const esc = (s) =>
   String(s ?? '—')
@@ -50,7 +51,7 @@ const screenshotFor = (r) => {
 let lines = [
   '# Supplied direct-edit workflow: measured attempts',
   '',
-  'Generated from the local evidence. Read [scope and reproduction](video-parity-baseline.md) before interpreting passes. Times are single samples on a shared Windows host, not a performance guarantee. Preview and full adapter sync are different measurements. Browser times include automation and polling.',
+  `Generated from the local evidence. Read [scope and reproduction](${scope}) before interpreting passes. Times are single samples on a shared Windows host, not a performance guarantee. Preview and full adapter sync are different measurements. Browser times include automation and polling.`,
   '',
   '## Adapter attempts',
   '',

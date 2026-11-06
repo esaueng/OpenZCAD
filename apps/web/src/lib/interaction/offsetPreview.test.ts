@@ -72,7 +72,9 @@ describe('offset preview face resolution', () => {
   it('rejects a face on the wrong plane or analytic carrier', () => {
     const tilted = plane('tilted', point(0, 0, 14), point(1, 0, 0));
     const wrongHeight = plane('wrong-height', point(0, 0, 13));
-    expect(resolveOffsetPreviewFace([tilted, wrongHeight], target, 4)).toBeNull();
+    expect(
+      resolveOffsetPreviewFace([tilted, wrongHeight], target, 4)
+    ).toBeNull();
   });
 });
 
@@ -126,6 +128,32 @@ describe('offset preview validation', () => {
 });
 
 describe('offsetPreviewRejection for a blend preview', () => {
+  it('retains the typed diameter cause for a direct preview without validation targets', () => {
+    const rejection = offsetPreviewRejection({
+      label: 'Resize Cylinder',
+      bodyId: toBodyId('body'),
+      documentMoved: false,
+      derived: {
+        bodyRepresentations: { [toBodyId('body')]: {} },
+        warnings: [],
+        featureWarnings: [
+          {
+            featureId: toFeatureId('resize'),
+            featureName: 'Resize Cylinder',
+            message: 'opaque refusal',
+            kind: 'refusal',
+            kernelRefusal: {
+              family: 'direct-edit',
+              category: 'unsupported',
+              code: 'cylinder-diameter-unbuildable'
+            }
+          }
+        ]
+      }
+    });
+    expect(rejection?.headline).toContain('smaller diameter');
+    expect(rejection?.detail).toBe('opaque refusal');
+  });
   it('names the kernel refusal without the feature prefix when the blend fails to build', () => {
     const rejection = offsetPreviewRejection({
       label: 'Fillet edges',
