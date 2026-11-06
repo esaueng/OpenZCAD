@@ -54,6 +54,7 @@
     "packages/viewport/src/render/edgeOverlay.test.ts",
     "test/api-routes.test.ts",
     "test/app-settings.test.ts",
+    "test/approximate-blend-disclosure.test.ts",
     "test/assistant-anthropic.test.ts",
     "test/assistant.test.ts",
     "test/auth.test.ts",
