@@ -151,11 +151,12 @@ test(
     await page.mouse.move(rect.x + handle.x, rect.y + handle.y);
     await page.mouse.down();
     await page.keyboard.down('Shift');
+    // Move to each asserted reversal target without adding unobserved
+    // interpolated frames. Every height, bound and worker-count check stays.
     for (const height of [36, 76, 31, 56, 16, 26]) {
       await page.mouse.move(
         rect.x + handle.x + handle.dx * handle.scale * (height - 26),
-        rect.y + handle.y + handle.dy * handle.scale * (height - 26),
-        { steps: 4 }
+        rect.y + handle.y + handle.dy * handle.scale * (height - 26)
       );
       await expect(canvas).toHaveAttribute(
         'data-e2e-height-proxy-offset',

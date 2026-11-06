@@ -40,6 +40,11 @@ its old pixel was proven to hit empty canvas. The gear preview journey waits
 for committed undo/redo heights before reload, and encrypted STEP coverage
 requires exactly one import source apart from separately encrypted thumbnails,
 retaining the all-object ciphertext and fresh-browser checks.
+Extrude repair also waits for the canceled editor to unmount and projects
+the roof-face center directly from History's action menu. Constraint-control
+hit tests re-scroll after flyout reflow. Gear previews retain all six asserted
+reversal targets and committed drag paths while omitting unobserved pointer
+interpolations, preserving every assertion and the 120-second deadline.
 Evidence validation reuses parsed row IDs within a fold instead of parsing
 the full wide ledger per fragment. A 250-row regression retains escaped/code
 pipes and validates every resulting row; all refusal rules and the five-second

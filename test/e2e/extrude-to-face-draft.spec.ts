@@ -26,6 +26,7 @@ import {
   waitForStillViewport,
   barChoice,
   chooseBarOption,
+  clickWorldPoint,
   editExtrudeFromHistory,
   chooseInPlaceOption,
   extrudeBar
@@ -294,8 +295,6 @@ test('shows an unresolved to-face extrude and repairs it by re-picking a face', 
     endCondition: 'to-face',
     toFace: underside.target
   }).document;
-  // The roof's top face (z = 19) is what the re-pick will reach.
-  const roofTop = await faceOf(document, roof.bodyId, 1);
   const ceilingFeature = listFeaturesInOrder(document).find(
     (feature) => feature.name === 'Ceiling'
   )!;
@@ -307,7 +306,7 @@ test('shows an unresolved to-face extrude and repairs it by re-picking a face', 
     { featureId: ceilingFeature.featureId }
   );
 
-  const canvas = await open(page, document);
+  await open(page, document);
   // Only the roof is drawn: the post is unresolved, said by name.
   await expectBodyCount(page, 1);
   const row = page.locator('.feature-row', { hasText: 'Post' }).last();
@@ -324,14 +323,19 @@ test('shows an unresolved to-face extrude and repairs it by re-picking a face', 
   );
   await expect(unresolved.getByRole('button', { name: 'Done' })).toBeDisabled();
   await unresolved.getByRole('button', { name: 'Cancel' }).click();
-  const point = await pointOverFace(page, canvas, roofTop.topologyId);
+  await expect(unresolved).toHaveCount(0);
+  await waitForStillViewport(page);
+  await expect(row).toHaveClass(/\bfailed\b/);
 
-  await row.locator('.feature-row-main').click({ button: 'right' });
+  await row
+    .getByRole('button', { name: 'More actions for Post', exact: true })
+    .click();
   await page.getByRole('menuitem', { name: 'Re-pick face…' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Re-pick the face "Post" reaches'
   );
-  await page.mouse.click(point.x, point.y);
+  // The roof's top face is centered at (10, 10, 19).
+  await clickWorldPoint(page, [10, 10, 19]);
   await expect(page.getByRole('contentinfo')).toContainText(
     '"Post" reaches the re-picked face.',
     { timeout: 60_000 }
