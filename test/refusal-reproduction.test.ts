@@ -13,7 +13,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { DirectEditFixture } from '../apps/web/src/lib/directEditFixture';
 import { buildRefusalReproduction } from '../apps/web/src/lib/refusalReproduction';
 import { replayFixture } from './direct-edit-corpus/replay';
-import { sphereCylinderUnionInputs } from './support/sphere-cylinder-union';
+import { filletedSphereBoss } from './support/sphere-boss-seam-fillet';
 
 /**
  * WS3: a "Save reproduction" bundle built from a real refusal must replay
@@ -57,22 +57,9 @@ function roundTrip(fixture: DirectEditFixture): DirectEditFixture {
 
 describe('saved refusal reproductions replay through the corpus', () => {
   it('reproduces the sphere-boss direct resize refusal', async () => {
-    const { document, sphere, cylinder } = sphereCylinderUnionInputs();
-    const manager = new CommandManager(document);
-    manager.execute(
-      commandFactories.booleanBodies({
-        name: 'Combine',
-        operation: 'union',
-        targetBodyIds: [sphere, cylinder]
-      })
-    );
-    const bodyId = manager.document.bodyOrder.at(-1)!;
-    const base = await adapter.syncDocument(manager.document);
-    const wall = base.bodyRepresentations[bodyId]?.topology?.faces.find(
-      (face) =>
-        face.geometry?.surfaceType === 'cylinder' &&
-        Math.abs((face.geometry.radius ?? 0) - 6) < 1e-6
-    );
+    // The seam-filleted boss: the plain boss on a sphere resizes since Remus
+    // #1558, but a wall meeting the freeform fillet band still refuses typed.
+    const { manager, bodyId, wall } = await filletedSphereBoss(adapter);
     expect(wall).toBeDefined();
     const { candidate, warning } = await refusedCandidate(
       (m) =>
@@ -143,7 +130,7 @@ describe('saved refusal reproductions replay through the corpus', () => {
     expect(result.outcome).toBe('refused');
     expect(result.message).toBe(fixture.observed.message);
     expect(result.message).toBe(
-      "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead."
+      "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet."
     );
     expect(result.warningKind).toBe(warning.kind);
     expect(result.kernelRefusal).toEqual(warning.kernelRefusal);
