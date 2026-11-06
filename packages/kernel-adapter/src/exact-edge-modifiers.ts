@@ -3,6 +3,7 @@
  * finds whether a smaller modifier would succeed, the blend-subset remedy,
  * and the user-facing failure message. Kernel-mutating, but stateless.
  */
+import type { BlendRefusalAdvice } from '@openzcad/shared';
 import type { FaceEvolutionPayloadV1, RemusKernel } from './remus-runtime';
 import { displayOnlyBlendsActive } from './display-only-blends';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
@@ -17,6 +18,7 @@ import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
 import {
   countBlendFaces,
   blendFaceRadii,
+  isBlendFace,
   selectionTouchesBlendFace
 } from './exact-brep';
 import {
@@ -744,7 +746,161 @@ export function blendSubsetRemedy(
   return `The kernel could not build these edges together. Try the adjoining edge groups in separate ${featureKind} features.`;
 }
 
+/**
+ * How many closed loops the selection makes when every selected edge lies on
+ * one, or `null` when any edge belongs to an open run.
+ *
+ * A boolean leaves the rim of a unioned cylinder as four quarter arcs, and a
+ * user who clicked one circle reads "4 selected edges" as a miscount — and
+ * "try fewer edges at once" as advice they cannot follow, since the circle is
+ * the smallest thing they can pick. Joined by shared vertex handles, so arcs
+ * that only meet geometrically do not count as one loop.
+ */
+export function closedEdgeLoopCount(
+  kernel: RemusKernel,
+  selected: readonly number[]
+): number | null {
+  if (selected.length === 0) return null;
+  try {
+    const parent = new Map<number, number>();
+    const find = (vertex: number): number => {
+      let root = vertex;
+      while (parent.get(root) !== root) root = parent.get(root)!;
+      parent.set(vertex, root);
+      return root;
+    };
+    const degree = new Map<number, number>();
+    for (const edge of selected) {
+      const vertices = Array.from(kernel.getEdgeVertexHandles(edge));
+      const start = vertices[0];
+      if (start === undefined) return null;
+      const end = vertices[1] ?? start;
+      for (const vertex of [start, end]) {
+        if (!parent.has(vertex)) parent.set(vertex, vertex);
+        degree.set(vertex, (degree.get(vertex) ?? 0) + 1);
+      }
+      parent.set(find(start), find(end));
+    }
+    if ([...degree.values()].some((count) => count !== 2)) return null;
+    return new Set([...parent.keys()].map(find)).size;
+  } catch {
+    return null;
+  }
+}
+
+/** How a refused selection is named at the head of the sentence. */
+function selectionPhrase(
+  kernel: RemusKernel,
+  selected: readonly number[]
+): { phrase: string; count: number } {
+  const loops =
+    selected.length > 1 ? closedEdgeLoopCount(kernel, selected) : null;
+  if (loops !== null && loops < selected.length) {
+    return loops === 1
+      ? { phrase: 'the selected closed edge', count: 1 }
+      : { phrase: `${loops} selected closed edges`, count: loops };
+  }
+  return {
+    phrase: `${selected.length} selected edge${selected.length === 1 ? '' : 's'}`,
+    count: selected.length
+  };
+}
+
+const SURFACE_WORDS: Record<string, string> = {
+  plane: 'flat',
+  cylinder: 'cylindrical',
+  cone: 'conical',
+  sphere: 'spherical',
+  torus: 'rounded'
+};
+
+/**
+ * The kernel could not trim a face beside the selection to the new blend.
+ *
+ * Remus names the face it gave up on (`trimming-failure: blend: trimming
+ * failure on face Id(352)`), and a refusal that survives the whole size
+ * ladder is not a size problem. Measured on a unioned r6 cylinder whose wall
+ * also carries an r2 junction fillet: its top rim is refused with this code
+ * at every radius down to 0.125, by every blend engine, alone or as all four
+ * arcs, and a chamfer is refused the same way — while the same rim rounds
+ * when it is filleted in the same feature as the junction edges.
+ */
+function trimmingFailureAdvice(
+  kernel: RemusKernel,
+  target: number,
+  reported: string | null,
+  featureKind: 'fillet' | 'chamfer',
+  priorBlendFace?: (face: number) => boolean
+): { text: string; besideBlend: boolean } | null {
+  if (!reported?.includes('trimming-failure')) return null;
+  const face = Number(/face Id\((\d+)\)/.exec(reported)?.[1]);
+  let surface = '';
+  let besideBlend = false;
+  if (Number.isInteger(face)) {
+    try {
+      const word = SURFACE_WORDS[kernel.getSurfaceType(face)];
+      if (word) surface = `${word} `;
+      const ownEdges = new Set(kernel.getFaceEdges(face));
+      besideBlend = Array.from(kernel.getSolidFaces(target)).some(
+        (other) =>
+          other !== face &&
+          isBlendFace(kernel, target, other) &&
+          (priorBlendFace?.(other) ?? true) &&
+          Array.from(kernel.getFaceEdges(other)).some((edge) =>
+            ownEdges.has(edge)
+          )
+      );
+    } catch {
+      // The face only explains the refusal; the code alone still holds.
+    }
+  }
+  const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
+  return {
+    besideBlend,
+    text: besideBlend
+      ? `The modeling engine could not trim the ${surface}face beside it, which also meets an earlier fillet or chamfer. Smaller ${sizes} failed too, so a different size is unlikely to help. Try a different edge, or try adding this edge to that earlier feature so both are built together.`
+      : `The modeling engine could not trim the ${surface}face beside it. Smaller ${sizes} failed too, so a different size is unlikely to help. Try a different edge, or change the geometry next to it first.`
+  };
+}
+
+/**
+ * A refused fillet or chamfer thrown out of its builder: the sentence as the
+ * error message, and the verdict beside it for the build loop to record on
+ * the feature's warning (`FeatureWarning.blendAdvice`).
+ */
+export class EdgeModifierRefusalError extends Error {
+  constructor(
+    message: string,
+    readonly blendAdvice: BlendRefusalAdvice | null
+  ) {
+    super(message);
+    this.name = 'EdgeModifierRefusalError';
+  }
+}
+
+/** The structured verdict a thrown edge-modifier refusal carries, if any. */
+export function blendAdviceOf(error: unknown): BlendRefusalAdvice | undefined {
+  return error instanceof EdgeModifierRefusalError
+    ? (error.blendAdvice ?? undefined)
+    : undefined;
+}
+
+/**
+ * The cause-aware sentence for a refused fillet or chamfer, as
+ * {@link edgeModifierRefusal} words it. Kept for callers that only show text.
+ */
 export function edgeModifierFailureMessage(
+  ...args: Parameters<typeof edgeModifierRefusal>
+): string {
+  return edgeModifierRefusal(...args).message;
+}
+
+/**
+ * A refused fillet or chamfer: the sentence a person reads, and the same
+ * verdict as data (`BlendRefusalAdvice`) for a control to branch on. The two
+ * are produced together so they cannot disagree.
+ */
+export function edgeModifierRefusal(
   kernel: RemusKernel,
   target: number,
   selected: number[],
@@ -764,16 +920,33 @@ export function edgeModifierFailureMessage(
    * made (`priorBlendFaceTest`). Without it every one counts.
    */
   priorBlendFace?: (face: number) => boolean
-): string {
+): { message: string; advice: BlendRefusalAdvice | null } {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
   const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
-  const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
+  const named = selectionPhrase(kernel, selected);
+  const prefix = `${label} could not be created on ${named.phrase} with ${dimension} ${size}.`;
+  const structural = (
+    cause: Extract<BlendRefusalAdvice, { kind: 'structural' }>['cause'],
+    sentence: string
+  ) => ({
+    message: `${prefix} ${sentence}`,
+    advice: {
+      operation: featureKind,
+      edges: named.count,
+      reason: sentence,
+      kind: 'structural' as const,
+      cause
+    }
+  });
   if (featureKind === 'chamfer' && selected.length > 0) {
     try {
       const smooth = new Set(kernel.getSolidSmoothEdges(target));
       if (selected.every((edge) => smooth.has(edge))) {
-        return `${prefix} These faces already meet smoothly at the selected boundary. Select a sharp edge.`;
+        return structural(
+          'smooth-boundary',
+          'These faces already meet smoothly at the selected boundary. Select a sharp edge.'
+        );
       }
     } catch {
       // A failed continuity query cannot establish that a boundary is smooth.
@@ -832,7 +1005,17 @@ export function edgeModifierFailureMessage(
       // user asked for, angle and all. Quoting a size proved for a DIFFERENT
       // operation is the same defect wearing the kernel's clothes: distance
       // 10 builds symmetrically on a 30x18x24 box and is refused at 80°.
-      return `${prefix} Try a smaller ${dimension}: ${dimension} ${quoted} builds here.`;
+      const sentence = `Try a smaller ${dimension}: ${dimension} ${quoted} builds here.`;
+      return {
+        message: `${prefix} ${sentence}`,
+        advice: {
+          operation: featureKind,
+          edges: named.count,
+          reason: `${dimension === 'radius' ? 'Radius' : 'Distance'} ${size} is too large here; ${dimension} ${quoted} builds.`,
+          kind: 'smaller-size',
+          size: quoted
+        }
+      };
     }
     smallerSizesRefused = true;
     // Named before the topology causes because it explains the whole body
@@ -840,10 +1023,16 @@ export function edgeModifierFailureMessage(
     // degree wedge refuses all 12 of its edges at every radius from 0.4 down
     // to 0.002, while the same profile at 360 rounds 4 of its 6.
     if (partialRevolveTarget) {
-      return `${prefix} This body is a partial revolve, and the kernel cannot blend the edges of a revolved wedge at any ${dimension} yet — revolve a full turn and ${featureKind} the result, or apply the ${label.toLowerCase()} before the body is cut back to a wedge.`;
+      return structural(
+        'partial-revolve',
+        `This body is a partial revolve, and the kernel cannot blend the edges of a revolved wedge yet — revolve a full turn and ${featureKind} the result, or apply the ${label.toLowerCase()} before the body is cut back to a wedge.`
+      );
     }
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
-      return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
+      return structural(
+        'closed-rim',
+        `Closed rim edges (such as hole rims) could not be ${verb} on this body, and smaller ${featureKind === 'fillet' ? 'radii' : 'distances'} failed too — deselect the rim edge and try again.`
+      );
     }
     // Sharing a corner is NOT itself a refusal: all twelve edges of a plain
     // box meet at corners and round together at every radius tried. Only the
@@ -853,29 +1042,57 @@ export function edgeModifierFailureMessage(
     // the English around it.
     const subsetRemedy = blendSubsetRemedy(reported, featureKind);
     if (subsetRemedy) {
-      return `${prefix} ${subsetRemedy}`;
+      return structural('edge-groups', subsetRemedy);
     }
     if (blendReportIsVertexBlend(reported)) {
-      return `${prefix} The kernel could not build the shared corner for this complete selection. Try the adjoining edge groups in separate ${featureKind} features.`;
+      return structural(
+        'shared-corner',
+        `The kernel could not build the shared corner for this complete selection. Try the adjoining edge groups in separate ${featureKind} features.`
+      );
     }
     if (selectionTouchesBlendFace(kernel, target, selected, priorBlendFace)) {
       if (featureKind === 'chamfer') {
-        return `${prefix} The modeling engine could not join this chamfer to the existing fillet or chamfer. Smaller distances were refused too. The last valid body is unchanged.`;
+        return structural(
+          'ends-on-blend',
+          'The modeling engine could not join this chamfer to the existing fillet or chamfer. Smaller distances were refused too. The last valid body is unchanged.'
+        );
       }
-      return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
+      return structural(
+        'ends-on-blend',
+        `Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, this edge may not be possible to blend on this body yet.`
+      );
+    }
+    const trimming = trimmingFailureAdvice(
+      kernel,
+      target,
+      reported,
+      featureKind,
+      priorBlendFace
+    );
+    if (trimming) {
+      return structural(
+        trimming.besideBlend ? 'trim-face-beside-blend' : 'trim-face',
+        trimming.text
+      );
     }
   } catch {
     // Diagnosis is best-effort; fall through to the generic message.
   }
   if (smallerSizesRefused) {
-    // No cause was named, but the ladder proved the size is not it: telling
-    // the user to shrink the value sent them round the same refusal.
+    // No cause was named, but every smaller size on the ladder refused too:
+    // telling the user to shrink the value sent them round the same refusal.
     const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
-    if (selected.length === 1) {
-      return `${prefix} Smaller ${sizes} were refused too. The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.`;
+    if (named.count === 1) {
+      return structural(
+        'neighbor-faces',
+        `Smaller ${sizes} were refused too. The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.`
+      );
     }
     const gerund = featureKind === 'fillet' ? 'rounding' : 'chamfering';
-    return `${prefix} Smaller ${sizes} were refused too, so the size is not the cause. Try ${gerund} fewer edges at once, or different edges.`;
+    return structural(
+      'unknown',
+      `Smaller ${sizes} were refused too, so a different size is unlikely to help. Try ${gerund} fewer edges at once, or different edges.`
+    );
   }
-  return `${prefix} Try a smaller ${dimension}.`;
+  return { message: `${prefix} Try a smaller ${dimension}.`, advice: null };
 }

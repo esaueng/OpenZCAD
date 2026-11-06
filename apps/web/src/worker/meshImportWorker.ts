@@ -1,21 +1,27 @@
 import type { MeshImportFormat } from '@openzcad/kernel-adapter/mesh-import-formats';
 import type { UnitSystem } from '@openzcad/shared';
+import { meshExtent } from '../lib/importUnits';
 
-export interface MeshImportWorkerRequest {
-  type: 'import';
+export type MeshImportWorkerInput =
+  | {
+      type: 'import';
+      format: MeshImportFormat;
+      file: File;
+      /**
+       * The units of the document the mesh is being imported into.
+       *
+       * Required rather than defaulted: the import's rebuild check has to be run
+       * at the scale the document will store, and a caller that forgets to say
+       * which that is reintroduces a file that reports success and then rebuilds
+       * to nothing.
+       */
+      units: UnitSystem;
+    }
+  | { type: 'import-stl'; file: File };
+
+export type MeshImportWorkerRequest = MeshImportWorkerInput & {
   requestId: string;
-  format: MeshImportFormat;
-  file: File;
-  /**
-   * The units of the document the mesh is being imported into.
-   *
-   * Required rather than defaulted: the import's rebuild check has to be run
-   * at the scale the document will store, and a caller that forgets to say
-   * which that is reintroduces a file that reports success and then rebuilds
-   * to nothing.
-   */
-  units: UnitSystem;
-}
+};
 
 export type MeshImportWorkerResult =
   | {
@@ -26,6 +32,7 @@ export type MeshImportWorkerResult =
       vertices: Float64Array;
       indices: Uint32Array;
       triangleCount: number;
+      extent?: number[];
       /** The length unit the file declared, when it declares one. */
       sourceUnit?: string;
     }
@@ -47,10 +54,26 @@ export type MeshImportWorkerResult =
  */
 self.onmessage = async (event: MessageEvent<MeshImportWorkerRequest>) => {
   const request = event.data;
-  if (request.type !== 'import') {
-    return;
-  }
   try {
+    if (request.type === 'import-stl') {
+      const { parseStl } = await import('@openzcad/io-stl');
+      const { vertices, indices, triangleCount } = parseStl(
+        await request.file.arrayBuffer(),
+        request.file.name,
+        true
+      );
+      const result: MeshImportWorkerResult = {
+        type: 'result',
+        requestId: request.requestId,
+        ok: true,
+        vertices,
+        indices,
+        triangleCount,
+        extent: meshExtent(vertices)
+      };
+      self.postMessage(result, { transfer: [vertices.buffer, indices.buffer] });
+      return;
+    }
     const { importMeshFile } = await import('@openzcad/kernel-adapter/exact');
     const mesh = await importMeshFile(
       request.format,

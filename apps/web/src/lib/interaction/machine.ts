@@ -1,5 +1,6 @@
 import type { ExtrudeChoice } from '../extrudeInference';
 import type {
+  BlendRefusalAdvice,
   ParamValue,
   BoundaryProvenance,
   SketchPlaneRef,
@@ -358,6 +359,12 @@ export interface CommandDiagnostic {
    * came back malformed".
    */
   category?: string;
+  /**
+   * What the adapter's size ladder proved about a refused fillet or chamfer:
+   * a size that builds, or that smaller ones failed too. The control's short
+   * headline and its one-click remedy read this, never the sentence.
+   */
+  advice?: BlendRefusalAdvice;
 }
 
 interface OperationLifecycle {
@@ -1443,6 +1450,22 @@ export function isStaleSelectionError(
   return /no longer exists/.test(error?.message ?? '');
 }
 
+/**
+ * The refusal already proved a smaller value fails too (the kernel adapter
+ * walks a size ladder before it says so), so "try another value" would send
+ * the user round the same refusal at every size they type.
+ */
+export function refusalRulesOutSize(
+  error: CommandDiagnostic | null | undefined
+): boolean {
+  // The adapter's own verdict when the refusal carries it; the sentence only
+  // for a refusal from a path that does not (a rebuild that predates it).
+  if (error?.advice) return error.advice.kind === 'structural';
+  return /size is not the cause|different size is unlikely|Smaller (?:radii|distances) (?:were refused|failed)/.test(
+    error?.message ?? ''
+  );
+}
+
 function lifecycleHint(
   state: Extract<InteractionState, { mode: 'face' | 'edges' | 'region' }>,
   armedHint: string
@@ -1458,7 +1481,9 @@ function lifecycleHint(
       phase: state.phase,
       hint: isStaleSelectionError(state.error)
         ? 'Esc closes the tool.'
-        : 'Adjust the value and try again.',
+        : refusalRulesOutSize(state.error)
+          ? 'Pick a different edge or face, or Esc to close the tool.'
+          : 'Adjust the value and try again.',
       error: state.error ?? {
         message: 'The exact operation was rejected.'
       }

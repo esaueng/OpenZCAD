@@ -80,6 +80,16 @@ const ALLOWANCES: readonly ProseAllowance[] = [
       'blend family: fillet/chamfer have no typed twin on the pin, and the ' +
       'kernel names its measured blend ceiling only in its refusal prose; ' +
       'this aims the probe ladder and is never quoted.'
+  },
+  {
+    file: 'exact-edge-modifiers.ts',
+    fragment: 'face Id\\(',
+    reason:
+      'blend family: the refusal kind comes from the stable ' +
+      '`trimming-failure` code, but the pin names the face it could not ' +
+      'trim only inside that refusal prose. It only words the advice ' +
+      '(the face’s surface, whether it meets an earlier blend); if the ' +
+      'sentence changes, the advice falls back to its generic wording.'
   }
 ];
 

@@ -5,10 +5,11 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import type {
-  GeometryBodyRepresentation,
-  BodyTopology,
-  MeshGeometry
+import {
+  MAX_MESH_SOLID_CONVERSION_TRIANGLES,
+  type GeometryBodyRepresentation,
+  type BodyTopology,
+  type MeshGeometry
 } from '@openzcad/shared';
 import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
@@ -626,8 +627,12 @@ export function createBodyMaterial(body: GeometryBodyRepresentation) {
     keepProgram(
       new THREE.MeshPhongMaterial({
         color: body.color,
-        shininess: 38,
-        specular: '#667487',
+        // A broad, dim highlight: at shininess 38 and #667487 every fillet
+        // corner and torus band carried a small white hotspot under the key
+        // light that read as a rendering glitch rather than a curve; at 18
+        // and #465160 the spherical corners still flared.
+        shininess: 14,
+        specular: '#2f3641',
         transparent: translucent,
         opacity,
         // Translucent walls must not write depth or back faces and interior
@@ -670,9 +675,25 @@ export function createObjectForBody(
   body: GeometryBodyRepresentation,
   resolution?: FatLineResolution
 ): THREE.Object3D {
-  const geometry = geometryFromMesh(body.mesh, body.topology);
+  // Large STL references have source facets and no CAD topology. Use their
+  // existing buffers without building smoothing groups or an edge overlay.
+  const largeReference =
+    body.meshReference === true &&
+    body.mesh.indices.length > MAX_MESH_SOLID_CONVERSION_TRIANGLES * 3;
+  const geometry = largeReference
+    ? new THREE.BufferGeometry()
+        .setAttribute(
+          'position',
+          new THREE.BufferAttribute(body.mesh.vertices, 3)
+        )
+        .setIndex(new THREE.BufferAttribute(body.mesh.indices, 1))
+    : geometryFromMesh(body.mesh, body.topology);
   const material = createBodyMaterial(body);
   const mesh = new THREE.Mesh(geometry, material);
+  if (largeReference) {
+    material.flatShading = true;
+    mesh.userData.meshFacetWireframe = true;
+  }
   mesh.name = body.name;
   mesh.renderOrder = VIEWPORT_RENDER_ORDER.BODY_FACE;
   mesh.castShadow = true;
@@ -681,7 +702,7 @@ export function createObjectForBody(
   // bands across otherwise planar analytic faces.
   mesh.receiveShadow = false;
 
-  if (!body.topology?.edges.length) {
+  if (!largeReference && !body.topology?.edges.length) {
     // A deferred-topology preview outlines its B-rep face boundaries; only a
     // body without face ranges falls back to tessellated feature edges.
     const boundary = topologyBoundaryOutlines.get(geometry);
@@ -738,6 +759,7 @@ export function sameBodyRenderGeometry(
   if (a && b && a.session === b.session && a.geometry !== b.geometry)
     return false;
   return (
+    previous.meshReference === next.meshReference &&
     equalProjectionValue(previous.mesh, next.mesh) &&
     equalProjectionValue(
       previous.topology?.faces.flatMap((face) => [
@@ -1374,7 +1396,9 @@ export function shouldShowGroundShadow(
  */
 export function tuneShadowFrustum(
   light: THREE.DirectionalLight,
-  radius: number
+  radius: number,
+  /** Texels per edge; a touch device asks for fewer (L02). */
+  mapSize = 3072
 ) {
   // 1.6 still clears the cast shadow of a model lit from above and to the side,
   // and covers 1.9x less area than 2.2 did — every texel gets that much finer.
@@ -1390,7 +1414,7 @@ export function tuneShadowFrustum(
   // 3072 rather than 4096: with the tighter frustum this still lands about 2x
   // finer than the old 2048, at roughly half the shadow-texture memory of a
   // 4096 map.
-  light.shadow.mapSize.set(3072, 3072);
+  light.shadow.mapSize.set(mapSize, mapSize);
   light.shadow.bias = -0.0002;
   light.shadow.normalBias = 0.02;
   light.shadow.radius = 3;

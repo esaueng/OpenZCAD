@@ -28,7 +28,11 @@ import { type KernelUnifyReport, validationReport } from './kernel-validation';
 import { exactBooleanOutcome, exactFuseAll } from './exact-boolean-refusal';
 import { analyzeUnionConnectivity, type UnionBounds } from './union-connectivity';
 import type { ExactShape } from './exact-types';
-import { GEOMETRY_EPSILON, transformMatrix } from './exact-math';
+import {
+  DIRECT_EDIT_TOLERANCE,
+  GEOMETRY_EPSILON,
+  transformMatrix
+} from './exact-math';
 
 export interface UnionFuseOperand {
   solid: number;
@@ -783,12 +787,92 @@ export function certifiedSolidDistance(
   return distance;
 }
 
-/** A positive exact intersection proves shared material, never box overlap. */
+/** Fractions of the box overlap probed for a shared interior point. */
+const INTERIOR_WITNESS_FRACTIONS = [0.5, 0.25, 0.75] as const;
+
+function strictlyInside(
+  kernel: RemusKernel,
+  solid: number,
+  point: readonly [number, number, number],
+  tolerance: number
+): boolean {
+  try {
+    // `classifyPoint` is the exact B-rep classifier (it resolves a sphere
+    // wall to 1e-8 on the pin). `classifyPointRobust` is a tessellation-based
+    // second opinion that errs toward "outside" near a curved wall, so
+    // requiring both can only miss a witness, never invent one.
+    return (
+      kernel.classifyPoint(solid, point[0], point[1], point[2], tolerance) ===
+        'inside' &&
+      kernel.classifyPointRobust(
+        solid,
+        point[0],
+        point[1],
+        point[2],
+        tolerance
+      ) === 'inside'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A point strictly inside both solids, or null. Interiors are open, so
+ * such a point proves positive shared volume without measuring it. That
+ * matters where the kernel has no certified distance and refuses the exact
+ * intersection (a box against a sphere or a 1 µm sliver on the pin), and
+ * a gate reading "no proof" as "no contact" called overlapping bodies
+ * disconnected. Only the boxes' common region is probed. A tangent or
+ * stacked pair has a degenerate common box and never yields a witness, and
+ * neither does a pair that merely shares a box.
+ */
+export function sharedInteriorPoint(
+  kernel: RemusKernel,
+  left: number,
+  right: number
+): readonly [number, number, number] | null {
+  const a = kernel.boundingBox(left);
+  const b = kernel.boundingBox(right);
+  const min = [0, 1, 2].map((axis) => Math.max(a[axis]!, b[axis]!));
+  const max = [0, 1, 2].map((axis) => Math.min(a[axis + 3]!, b[axis + 3]!));
+  const spans = [0, 1, 2].map((axis) => max[axis]! - min[axis]!);
+  const scale = Math.max(1, ...[...a, ...b].map((value) => Math.abs(value)));
+  const minSpan = Math.min(...spans);
+  if (!(minSpan > GEOMETRY_EPSILON * scale)) return null;
+  // A point classified inside must clear the boundary by this much, so a
+  // witness sits well off both walls rather than on a rounding error.
+  const tolerance = Math.min(DIRECT_EDIT_TOLERANCE * scale, minSpan / 8);
+  for (const fx of INTERIOR_WITNESS_FRACTIONS) {
+    for (const fy of INTERIOR_WITNESS_FRACTIONS) {
+      for (const fz of INTERIOR_WITNESS_FRACTIONS) {
+        const point = [
+          min[0]! + spans[0]! * fx,
+          min[1]! + spans[1]! * fy,
+          min[2]! + spans[2]! * fz
+        ] as const;
+        if (
+          strictlyInside(kernel, left, point, tolerance) &&
+          strictlyInside(kernel, right, point, tolerance)
+        ) {
+          return point;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Exact proof of shared material, never box overlap: a point strictly inside
+ * both solids, or a positive exact intersection.
+ */
 export function solidsHavePositiveExactIntersection(
   kernel: RemusKernel,
   left: number,
   right: number
 ): boolean {
+  if (sharedInteriorPoint(kernel, left, right) !== null) return true;
   let commonSolid: number | undefined;
   try {
     const common = exactBooleanOutcome(kernel, 'intersect', left, right);

@@ -6,11 +6,11 @@ import type {
   SelectionCalloutVerb
 } from '../lib/selectionCallout';
 import type { ToolId } from '../lib/tools';
+import { refusalIsExpandable } from '../lib/selectionCalloutView';
 import { textLabelSegments } from '../lib/topologyLabels';
 import {
   SelectionRail,
   SelectionReadout,
-  SelectionRefusal,
   VALIDATING_ANNOUNCE_MS
 } from './SelectionRail';
 
@@ -303,41 +303,23 @@ describe('SelectionReadout', () => {
   });
 });
 
-describe('SelectionRefusal', () => {
-  it('says why it refused, with each way out as a button', () => {
-    const onEditCulprit = vi.fn();
-    const onKeepLastValid = vi.fn();
-    const onViewDetails = vi.fn();
-    render(
-      <SelectionRefusal
-        operation={operation({
-          phase: 'failed',
-          error: {
-            message: 'The face would run into another part.',
-            detail: 'kernel words',
-            culprit: { featureId: 'feature-7', featureName: 'Boss' }
-          },
-          keepLastValidLabel: 'Keep 4 mm',
-          onEditCulprit,
-          onKeepLastValid,
-          onViewDetails
-        })}
-      />
-    );
-    const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent('The face would run into another part.');
-    fireEvent.click(within(alert).getByRole('button', { name: 'Edit Boss' }));
-    fireEvent.click(within(alert).getByRole('button', { name: 'Keep 4 mm' }));
-    fireEvent.click(
-      within(alert).getByRole('button', { name: 'View details' })
-    );
-    expect(onEditCulprit).toHaveBeenCalledWith('feature-7');
-    expect(onKeepLastValid).toHaveBeenCalledOnce();
-    expect(onViewDetails).toHaveBeenCalledOnce();
-  });
-
-  it('draws nothing while the operation stands', () => {
-    const { container } = render(<SelectionRefusal operation={operation()} />);
-    expect(container).toBeEmptyDOMElement();
+describe('refusalIsExpandable', () => {
+  it.each([
+    ['a single short sentence', 'The face would run into another part.', false],
+    ['two short sentences', 'Radius too large. Try 2 mm.', true],
+    [
+      'a second sentence that starts with a number',
+      'Radius is invalid. 2 edges could not be trimmed.',
+      true
+    ],
+    [
+      'a decimal inside one sentence',
+      'Fillet refused at radius 1.5 here.',
+      false
+    ],
+    ['exactly 90 characters', 'x'.repeat(90), false],
+    ['91 characters', 'x'.repeat(91), true]
+  ])('%s', (_case, text, expected) => {
+    expect(refusalIsExpandable(text)).toBe(expected);
   });
 });

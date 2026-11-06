@@ -1,6 +1,11 @@
 import { faceReferenceRepairCandidate } from './exact-reference-resolution';
 import { buildGearFeature } from './exact-gear';
 import { buildThreadFeature } from './exact-thread';
+import { requireValidSolid } from './kernel-validation';
+import {
+  cutKeptToolMaterialRefusal,
+  cutRetainedToolMaterialWitness
+} from './result-acceptance';
 import {
   carryAnalyticFaces,
   holeLineage,
@@ -33,6 +38,7 @@ import {
 } from '@openzcad/geometry';
 import {
   FULL_REVOLVE_ANGLE_DEG,
+  MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   UNIT_TO_MM,
   isDatumPlaneRef,
   type DatumPlaneSource,
@@ -66,7 +72,8 @@ import {
 } from './exact-cylinder-ops';
 import {
   applyEdgeModifier,
-  edgeModifierFailureMessage
+  EdgeModifierRefusalError,
+  edgeModifierRefusal
 } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
@@ -152,7 +159,8 @@ import {
 } from './imported-mesh';
 import {
   importedMeshStl,
-  importedMeshTriangles
+  importedMeshTriangles,
+  validateImportedMeshTriangles
 } from './imported-mesh-payload';
 import {
   extrudeVolumeTolerance,
@@ -298,28 +306,34 @@ function buildImportedMeshFeature(
       // orientation, so the document's triangle soup goes back through
       // it rather than being re-derived here — embedded or referenced alike.
       const triangles = importedMeshTriangles(data, importSources);
-      // Validate persisted data before entering the conversion fallback.
-      const stl = importedMeshStl({
+      const source = {
         sourceName: data.sourceName,
         triangleCount: data.triangleCount,
         ...triangles
-      });
+      };
       const advisories: string[] = [];
       let refusal: string | undefined;
       let solid: number | undefined;
-      try {
-        solid = importMeshSolid(kernel, stl, (message) => {
-          advisories.push(message);
-          advise(message);
-        });
-      } catch (error) {
-        if (
-          !(error instanceof MeshConversionError) ||
-          data.triangleCount === 0
-        ) {
-          throw error;
+      if (data.triangleCount > MAX_MESH_SOLID_CONVERSION_TRIANGLES) {
+        validateImportedMeshTriangles(source);
+        refusal = `The mesh exceeds the ${MAX_MESH_SOLID_CONVERSION_TRIANGLES.toLocaleString('en-US')}-triangle solid conversion limit.`;
+      } else {
+        // A malformed payload must refuse before the conversion fallback.
+        const stl = importedMeshStl(source);
+        try {
+          solid = importMeshSolid(kernel, stl, (message) => {
+            advisories.push(message);
+            advise(message);
+          });
+        } catch (error) {
+          if (
+            !(error instanceof MeshConversionError) ||
+            data.triangleCount === 0
+          ) {
+            throw error;
+          }
+          refusal = error.message;
         }
-        refusal = error.message;
       }
       if (solid !== undefined) {
         shape = { solids: [solid] };
@@ -332,8 +346,14 @@ function buildImportedMeshFeature(
         }
       } else {
         const mesh = {
-          vertices: Float64Array.from(triangles.vertices),
-          indices: Uint32Array.from(triangles.indices)
+          vertices:
+            triangles.vertices instanceof Float64Array
+              ? triangles.vertices
+              : Float64Array.from(triangles.vertices),
+          indices:
+            triangles.indices instanceof Uint32Array
+              ? triangles.indices
+              : Uint32Array.from(triangles.indices)
         };
         shape = { solids: [], referenceMesh: mesh };
         advise(
@@ -2112,6 +2132,7 @@ function combineBooleanOperands(
         targetName,
         bodyName(document, data.targetBodyIds[index]!)
       ];
+      let overlapMeasured = false;
       if (subtracting) {
         try {
           // An intersect that refuses says nothing either way, and a
@@ -2124,6 +2145,7 @@ function combineBooleanOperands(
             kernel.copySolid(tool)
           );
           if (common.status === 'ok') {
+            overlapMeasured = true;
             sharedWithTools += kernel.volume(
               common.solid,
               MEASUREMENT_DEFLECTION
@@ -2159,6 +2181,21 @@ function combineBooleanOperands(
               ctx.cancellation,
               operandNames
             ));
+      // Where the overlap could not be measured the removed-volume gate
+      // below has nothing to compare against. Measured on the pin: a box
+      // minus a torus half-embedded in its top face refuses the exact
+      // intersect, yet `cutDetailed` reports `ok` and returns the box
+      // untouched. A point the kernel classifies inside the target, the
+      // tool and the cut settles that the cut did not take.
+      if (subtracting && !overlapMeasured && coaxial === null) {
+        const witness = cutRetainedToolMaterialWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (witness) throw cutKeptToolMaterialRefusal('subtract', witness);
+      }
       if (!pairwiseOperands) {
         probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;
       } else if (coaxial !== null) {
@@ -2173,6 +2210,18 @@ function combineBooleanOperands(
       }
     }
     solid = unifyBooleanFaces(kernel, solid);
+    // Unions pass the strict gate in `fuseUniformSolidChecked`; a cut or an
+    // intersect was only ever held to the relaxed validator, which accepts
+    // a body the strict one rejects. Measured on the pin: a cross drill
+    // internally tangent to its bar's wall cuts to a closed body with an
+    // inner wire wound like its outer one and an edge whose faces disagree
+    // in orientation, holding 2.2 mm³ more than the exact figure.
+    requireValidSolid(
+      kernel,
+      solid,
+      `${subtracting ? 'Subtract' : 'Intersect'} refused: the result is not ` +
+        'a valid solid. The target and tools were left unchanged.'
+    );
     // A cut that removes too little of the material it demonstrably
     // overlaps. A cross-drilled shaft can come back closed, valid,
     // and nearly unchanged even though its bore has positive-volume
@@ -2434,27 +2483,26 @@ function buildEdgeModifierFeature(
         )
       );
     }
-    throw new Error(
-      edgeModifierFailureMessage(
-        kernel,
-        target,
-        selected,
-        data.featureKind,
-        size,
-        result.partialRevolveBodies.has(data.targetBodyId),
-        reportedRefusal,
-        chamferAngleRadians,
-        priorBlendFaceTest(
-          document,
-          feature.featureId,
-          // The lineage is keyed by the stored solid's handles, which
-          // describe `target` only when it was not collapsed from several.
-          storedTarget.solids.length === 1 && storedTarget.solids[0] === target
-            ? storedTarget.lineage
-            : undefined
-        )
+    const refusal = edgeModifierRefusal(
+      kernel,
+      target,
+      selected,
+      data.featureKind,
+      size,
+      result.partialRevolveBodies.has(data.targetBodyId),
+      reportedRefusal,
+      chamferAngleRadians,
+      priorBlendFaceTest(
+        document,
+        feature.featureId,
+        // The lineage is keyed by the stored solid's handles, which
+        // describe `target` only when it was not collapsed from several.
+        storedTarget.solids.length === 1 && storedTarget.solids[0] === target
+          ? storedTarget.lineage
+          : undefined
       )
     );
+    throw new EdgeModifierRefusalError(refusal.message, refusal.advice);
   }
   const rootPrimitive = modifierChainRootPrimitive(document, data.targetBodyId);
   const primitiveFallbackLineage =

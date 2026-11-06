@@ -314,14 +314,113 @@ describe('featureValueSummary', () => {
     ).toBe('30 teeth, enveloping wheel for 1-start worm');
   });
 
-  it('returns null for kinds without one driving value', () => {
+  it('names a Boolean by its operands, or counts them when it cannot', () => {
+    const union = feature({
+      featureKind: 'boolean',
+      operation: 'union',
+      targetBodyIds: ['body_box', 'body_cylinder']
+    } as Partial<FeatureData> & Pick<FeatureData, 'featureKind'>);
+    const names: Record<string, string> = {
+      body_box: 'Box 1',
+      body_cylinder: 'Cylinder 1'
+    };
+    expect(
+      featureValueSummary(union, {}, 'mm', (bodyId) => names[bodyId])
+    ).toBe('Box 1 + Cylinder 1');
+    expect(featureValueSummary(union, {}, 'mm')).toBe('2 bodies');
+    const subtract = feature({
+      featureKind: 'boolean',
+      operation: 'subtract',
+      targetBodyIds: ['body_box', 'body_cylinder']
+    } as Partial<FeatureData> & Pick<FeatureData, 'featureKind'>);
+    expect(
+      featureValueSummary(subtract, {}, 'mm', (bodyId) => names[bodyId])
+    ).toBe('Box 1 − Cylinder 1');
+  });
+
+  it('counts the edges of a blend over several', () => {
     expect(
       featureValueSummary(
-        feature({ featureKind: 'boolean', operation: 'union' }),
+        feature({
+          featureKind: 'fillet',
+          radius: 2,
+          edgeHashes: [1, 2, 3, 4, 5]
+        }),
         {},
         'mm'
       )
-    ).toBeNull();
+    ).toBe('5 edges · r 2 mm');
+    expect(
+      featureValueSummary(
+        feature({ featureKind: 'fillet', radius: 2, edgeHashes: [9] }),
+        {},
+        'mm'
+      )
+    ).toBe('r 2 mm');
+    expect(
+      featureValueSummary(
+        feature({ featureKind: 'chamfer', distance: 1, edgeHashes: [1, 2] }),
+        {},
+        'mm'
+      )
+    ).toBe('2 edges · 1 mm');
+  });
+
+  it('tells a run of offset-face rows apart by face and signed distance', () => {
+    const offset = (
+      sourceNormal: { x: number; y: number; z: number },
+      value: number,
+      lineageName?: string
+    ) =>
+      feature({
+        featureKind: 'direct-edit',
+        targetBodyId: 'body_union',
+        operation: {
+          kind: 'offset-face',
+          faceHash: 1,
+          sourceSurfaceType: 'plane',
+          sourceArea: 1,
+          sourceCenter: { x: 0, y: 0, z: 0 },
+          sourceNormal,
+          offset: value,
+          ...(lineageName
+            ? {
+                faceReference: {
+                  kind: 'face',
+                  producingFeatureId: 'feat_union',
+                  lineageName,
+                  currentHash: 1,
+                  witnessVersion: 1,
+                  witness: {}
+                }
+              }
+            : {})
+        }
+      } as unknown as Partial<FeatureData> & Pick<FeatureData, 'featureKind'>);
+    expect(
+      featureValueSummary(offset({ x: 0, y: 0, z: -1 }, 12.5), {}, 'mm')
+    ).toBe('Bottom · +12.5 mm');
+    expect(
+      featureValueSummary(offset({ x: 1, y: 0, z: 0 }, -13.5), {}, 'mm')
+    ).toBe('Right · −13.5 mm');
+    // A tilted face falls back to the lineage side it was made from.
+    expect(
+      featureValueSummary(
+        offset(
+          { x: 0.6, y: 0, z: 0.8 },
+          5.5,
+          'boolean.face.operand.1.primitive.box.face.z-max'
+        ),
+        {},
+        'mm'
+      )
+    ).toBe('Top · +5.5 mm');
+    expect(
+      featureValueSummary(offset({ x: 0.6, y: 0, z: 0.8 }, 2), {}, 'mm')
+    ).toBe('+2 mm');
+  });
+
+  it('returns null for kinds without one driving value', () => {
     expect(
       featureValueSummary(feature({ featureKind: 'sketch' }), {}, 'mm')
     ).toBeNull();

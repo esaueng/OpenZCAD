@@ -1,3 +1,4 @@
+import { CAD_IMPORT_ACCEPT, fileAccept } from '../lib/appleTouch';
 import { ProjectImportButton } from './ProjectImportButton';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
@@ -884,7 +885,7 @@ export function TopBar({
                 ref={importInputRef}
                 type="file"
                 aria-label="Import STEP or a mesh file…"
-                accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
+                accept={fileAccept(CAD_IMPORT_ACCEPT)}
                 multiple
                 hidden
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {

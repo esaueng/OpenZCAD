@@ -115,7 +115,9 @@ async function armChamferedTopCapOffset(page: Page) {
     allEdges: 2,
     size: '1'
   });
-  await expectConsumedBodyCount(page, 1);
+  // The body before the blend is an earlier state of the same body, a step
+  // in History rather than a source body: nothing goes behind the toggle.
+  await expectConsumedBodyCount(page, 0);
   await expect(
     page.locator('.body-row', { hasText: 'Cylinder 1' })
   ).toBeVisible();
@@ -815,9 +817,9 @@ test('keeps the last value that built when a drag is released on a refusal', asy
   // The model still shows the last value that built, and the card offers to
   // keep it instead of sending the hand back to find it.
   expect(await readAxisLength()).toBeCloseTo(lastValid, 4);
-  // The refusal and its Keep stand in the notice lane.
+  // The refusal and its Keep stand in the guidance row, no control open.
   await page
-    .locator('.selection-refusal-lane')
+    .locator('.edit-refusal.is-bar')
     .getByRole('button', { name: /^Keep / })
     .click();
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -892,9 +894,9 @@ test('retains the last accepted shape when release validation beats an invalid p
     path: retainedPreview,
     contentType: 'image/png'
   });
-  // The refusal and its Keep stand in the notice lane.
+  // The refusal and its Keep stand in the guidance row, no control open.
   await page
-    .locator('.selection-refusal-lane')
+    .locator('.edit-refusal.is-bar')
     .getByRole('button', { name: /^Keep / })
     .click();
   await expect(page.getByRole('contentinfo')).toContainText(

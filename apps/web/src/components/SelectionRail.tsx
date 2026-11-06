@@ -2,6 +2,7 @@ import {
   Anchor,
   ArrowUpFromDot,
   BrushCleaning,
+  CircleAlert,
   Diameter,
   Eraser,
   Info,
@@ -195,6 +196,15 @@ export function SelectionRail({
   );
 }
 
+/** What each phase mark's tooltip says, in words a user would use. */
+const PHASE_TOOLTIPS: Partial<
+  Record<NonNullable<SelectionCalloutOperation['phase']>, string>
+> = {
+  'exact-entry': 'Typing an exact value',
+  validating: 'Checking the exact result',
+  failed: 'This value did not build'
+};
+
 function PhaseMarker({
   phase
 }: {
@@ -214,13 +224,27 @@ function PhaseMarker({
   }
   // A mark under the verb, its tone the phase's; the words are for
   // assistive tech and the tooltip, since the rail has no room for a pill.
+  // A refusal is a mark worth explaining: a bare red dot under the verbs
+  // read as a recording light, so it is an alert glyph with a tooltip that
+  // says what failed and where the reason is.
+  const failed = phase === 'failed';
   return (
-    <span
-      className={`selection-callout-phase selection-rail-phase phase-${phase}`}
-      title={label}
+    <Tooltip
+      label={PHASE_TOOLTIPS[phase] ?? label}
+      description={
+        failed
+          ? 'The reason and the ways out are in the note above the search bar.'
+          : undefined
+      }
     >
-      <span className="visually-hidden">{label}</span>
-    </span>
+      <span
+        className={`selection-callout-phase selection-rail-phase phase-${phase}${failed ? ' has-icon' : ''}`}
+        tabIndex={failed ? 0 : undefined}
+      >
+        {failed && <CircleAlert size={14} aria-hidden="true" />}
+        <span className="visually-hidden">{label}</span>
+      </span>
+    </Tooltip>
   );
 }
 
@@ -263,53 +287,5 @@ export function SelectionReadout({
         </span>
       )}
     </span>
-  );
-}
-
-/**
- * A refused operation, in the notice lane: the plain sentence and its ways
- * out (edit the feature that refused it, keep the last value that built,
- * read the kernel's own words). The handle stays live on the model, so a
- * smaller drag or a new value is still the quickest way out.
- */
-export function SelectionRefusal({
-  operation
-}: {
-  operation: SelectionCalloutOperation;
-}) {
-  const error = operation.error;
-  if (!error) return null;
-  const culprit = error.culprit;
-  return (
-    <div className="selection-callout-diagnostic" role="alert">
-      <span className="selection-callout-error">{error.message}</span>
-      {culprit && (
-        <button
-          type="button"
-          className="selection-callout-recovery"
-          onClick={() => operation.onEditCulprit(culprit.featureId)}
-        >
-          Edit {culprit.featureName}
-        </button>
-      )}
-      {operation.keepLastValidLabel && (
-        <button
-          type="button"
-          className="selection-callout-recovery"
-          onClick={operation.onKeepLastValid}
-        >
-          {operation.keepLastValidLabel}
-        </button>
-      )}
-      {error.detail && (
-        <button
-          type="button"
-          className="selection-callout-recovery"
-          onClick={operation.onViewDetails}
-        >
-          View details
-        </button>
-      )}
-    </div>
   );
 }

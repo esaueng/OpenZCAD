@@ -55,6 +55,12 @@ import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
 import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
 import { pointerSlack } from '../lib/pointerSlack';
 import { TouchLoupe } from './viewer/touchLoupe';
+import {
+  FrameIntervalMeter,
+  NAVIGATION_PIXEL_RATIO,
+  navigationPixelRatio,
+  shadowMapSizeFor
+} from './viewer/renderBudget';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type {
@@ -375,7 +381,11 @@ type SketchMoveEvent = Extract<
 >;
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData, Vector3 } from '@openzcad/shared';
-import { buildPlanePickerRig } from './viewer/planePickerRig';
+import {
+  buildPlanePickerRig,
+  ghostPlaneTakesPick,
+  preferredGhostHit
+} from './viewer/planePickerRig';
 import {
   buildAxisPickerRig,
   type AxisPickerCandidate
@@ -1360,6 +1370,11 @@ export interface ModelViewerProps {
    */
   touchModifiers?: TouchModifiers;
   /**
+   * After a pen is first used, a finger in a sketch drawing tool only
+   * navigates; the pen draws (Settings › Viewport, L02).
+   */
+  pencilDrawsOnly?: boolean;
+  /**
    * The Assemble workspace's view (AS02): component bodies drawn at their
    * solved poses, the rest dimmed, joint glyphs, and the primary button
    * taken over for dragging components and picking joint frames. Null (or
@@ -2042,6 +2057,11 @@ const RIGHT_PAN_TARGET_EPSILON = 1e-9;
  * echo of a double tap the touch layer already handled.
  */
 const TOUCH_DBLCLICK_ECHO_MS = 700;
+/**
+ * How long after a pen lifts a new finger is still taken for the hand that
+ * held it, rather than a gesture (L02 slice 6).
+ */
+const PALM_REJECT_AFTER_PEN_MS = 300;
 /** Safari's non-standard pinch and rotate events, which zoom the page. */
 const SAFARI_GESTURE_EVENTS = [
   'gesturestart',
@@ -2246,6 +2266,7 @@ export function ModelViewer({
   onContextMenu,
   onTouchHistory,
   touchModifiers = NO_TOUCH_MODIFIERS,
+  pencilDrawsOnly = true,
   assemblyView = null
 }: ModelViewerProps) {
   if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
@@ -2363,6 +2384,8 @@ export function ModelViewer({
   onTouchHistoryRef.current = onTouchHistory;
   const touchModifiersRef = useRef(touchModifiers);
   touchModifiersRef.current = touchModifiers;
+  const pencilDrawsOnlyRef = useRef(pencilDrawsOnly);
+  pencilDrawsOnlyRef.current = pencilDrawsOnly;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
@@ -2781,6 +2804,11 @@ export function ModelViewer({
     // E2E builds skip antialiasing, shadows and the environment map unless a
     // spec opts back in (viewer/renderProfile.ts).
     const profile = currentRenderProfile();
+    // L02: a touch-first device renders within a tighter budget
+    // (viewer/renderBudget.ts); desktop pointers keep the tuned renderer.
+    const touchFirst =
+      window.matchMedia?.('(pointer: coarse)').matches === true;
+    const shadowMapSize = shadowMapSizeFor(touchFirst);
     const renderer = timed(
       'viewer.renderer',
       () =>
@@ -2924,7 +2952,7 @@ export function ModelViewer({
     const keyLight = new THREE.DirectionalLight('#ffffff', 1.35);
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
-    tuneShadowFrustum(keyLight, 120);
+    tuneShadowFrustum(keyLight, 120, shadowMapSize);
     // Through the helper like every other site, so the refresh count on the
     // canvas starts from a known value rather than being absent until the
     // first thaw.
@@ -2980,6 +3008,9 @@ export function ModelViewer({
       const datumColor = readDatumColor(host);
       datumPlaneRigRef.current?.setColor(datumColor);
       datumAxisRigRef.current?.setColor(datumColor);
+      planePickerRigRef.current?.setBackdrop(
+        readStagePalette(host).backdropMiddle
+      );
       requestRender();
     });
 
@@ -4792,9 +4823,10 @@ export function ModelViewer({
     }
 
     /**
-     * Nearest ghost plane under the pointer, or null. Distance-compared with
-     * the solid pick by the callers, so a plane in front of the model wins
-     * the click and a face in front of a plane still wins its own.
+     * The ghost plane the pointer means (see preferredGhostHit), or null.
+     * The callers weigh it against the model pick with ghostPlaneTakesPick:
+     * it wins through faces, but not over edges, vertices, regions or a face
+     * in its own plane.
      */
     function pickGhostPlane(
       event: PointerEvent | MouseEvent
@@ -4804,7 +4836,7 @@ export function ModelViewer({
         return null;
       }
       picker.setRayFromEvent(event);
-      const hit = picker.intersect(rig.targets(), false)[0];
+      const hit = preferredGhostHit(picker.intersect(rig.targets(), false));
       const plane = hit?.object.userData.pickPlane as PlaneId | undefined;
       return plane
         ? {
@@ -6084,12 +6116,15 @@ export function ModelViewer({
           resolve?: (value: {
             box: { min: number[]; max: number[] } | null;
             points: { x: number; y: number }[];
+            /** A world point on each ghost plane no other one covers. */
+            ghostPlanePoints: Record<string, number[] | null> | null;
           }) => void;
         }>
       ).detail;
       if (!detail?.resolve) {
         return;
       }
+      const ghostRig = planePickerRigRef.current;
       const object = bodiesRef.current
         .filter((body) => !body.consumed)
         .map((body) => context.objectsByBodyId.get(body.bodyId))
@@ -6101,6 +6136,32 @@ export function ModelViewer({
           box && !box.isEmpty()
             ? { min: box.min.toArray(), max: box.max.toArray() }
             : null,
+        ghostPlanePoints: ghostRig
+          ? Object.fromEntries(
+              (['XY', 'XZ', 'YZ'] as const).map((plane) => [
+                plane,
+                // The first point a real click there would give this plane:
+                // not covered by another panel, nor near a model edge.
+                ghostRig
+                  .exposedPoints(plane, context.activeCamera)
+                  .find((point) => {
+                    const projected = point
+                      .clone()
+                      .project(context.activeCamera);
+                    const probe = new MouseEvent('mousemove', {
+                      clientX: rect.left + ((projected.x + 1) / 2) * rect.width,
+                      clientY: rect.top + ((1 - projected.y) / 2) * rect.height
+                    });
+                    const ghost = pickGhostPlane(probe);
+                    return (
+                      ghost?.plane === plane &&
+                      ghostPlaneTakesPick(ghost.distance, pick(probe))
+                    );
+                  })
+                  ?.toArray() ?? null
+              ])
+            )
+          : null,
         points: (detail.points ?? []).map((point) => {
           const projected = new THREE.Vector3(...point).project(
             context.activeCamera
@@ -6481,10 +6542,11 @@ export function ModelViewer({
       );
       depthCycle = stepped.cycle;
       const result = stepped.candidate;
-      // A ghost plane in front of whatever the stack resolved starts the
-      // sketch instead: it is armed precisely to be clicked.
+      // A ghost plane starts the sketch instead, even through a face in
+      // front of it: it is armed precisely to be clicked, and it sits where
+      // a part at the origin usually is (see ghostPlaneTakesPick).
       const ghost = facesOnly ? null : pickGhostPlane(event);
-      if (ghost && (!result || ghost.distance < result.distance)) {
+      if (ghost && ghostPlaneTakesPick(ghost.distance, result)) {
         planePickerRigRef.current?.setHover(null);
         onPickPlaneRef.current(ghost.plane, ghost.point);
         return;
@@ -6887,11 +6949,12 @@ export function ModelViewer({
         updateMeasurePreview(event);
         return;
       }
-      // A ghost plane nearer than the solid under the cursor owns the hover:
-      // the click will start a sketch on it, not select the face behind.
+      // A ghost plane under the cursor owns the hover wherever its click
+      // would win (see ghostPlaneTakesPick): the click will start a sketch
+      // on it, not select the face.
       const ghost = pickGhostPlane(event);
       const solid = pick(event);
-      if (ghost && (!solid || ghost.distance < solid.distance)) {
+      if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
         planePickerRigRef.current?.setHover(ghost.plane);
         applyHover(null);
         renderer.domElement.style.cursor = 'pointer';
@@ -11146,16 +11209,33 @@ export function ModelViewer({
         }
         gestures.release(pointerId, '');
       },
+      // Once a Pencil is in use, it draws; a finger moves the view.
+      navigationOnly: () => {
+        const mode = sketchModeRef.current;
+        return (
+          penSeen &&
+          pencilDrawsOnlyRef.current &&
+          mode !== null &&
+          mode.tool !== 'select'
+        );
+      },
       canOrbit: () => cameraRig.controls.enableRotate,
       beginOrbit: (press) => {
+        lowerNavigationResolution();
         pivotOrbitOnCursor(press);
         cameraRig.beginOrbitDrag();
       },
       orbitBy: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
-      beginPinch: () => cameraRig.beginPinchDrag(),
+      beginPinch: () => {
+        lowerNavigationResolution();
+        cameraRig.beginPinchDrag();
+      },
       panBy: (deltaX, deltaY) => cameraRig.panByPixels(deltaX, deltaY),
       zoomBy: (scale, x, y) => cameraRig.zoomByPinch(scale, x, y),
-      endNavigation: () => cameraRig.endOrbitDrag(),
+      endNavigation: () => {
+        cameraRig.endOrbitDrag();
+        restoreNavigationResolution();
+      },
       longPress: openTouchContextMenu,
       doubleTap: handleDoubleClick,
       history: (step) => onTouchHistoryRef.current?.(step),
@@ -11163,22 +11243,97 @@ export function ModelViewer({
       setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
       clearTimer: (handle) => window.clearTimeout(handle)
     });
+    // A device that drops frames navigates at a lower pixel ratio and gets
+    // the full one back at rest. Once it has needed that, it keeps needing
+    // it: the lowered frames are fast, and would otherwise read as healthy.
+    let navigationNeedsLowRes = false;
+    let navigationResolutionLowered = false;
+    function lowerNavigationResolution() {
+      const full = Math.min(window.devicePixelRatio, 2);
+      const lowered = navigationPixelRatio(full, frameMeter.intervalMs);
+      if (lowered !== null) navigationNeedsLowRes = true;
+      if (!navigationNeedsLowRes || full <= NAVIGATION_PIXEL_RATIO) return;
+      renderer.setPixelRatio(NAVIGATION_PIXEL_RATIO);
+      navigationResolutionLowered = true;
+      resizePending = true;
+      requestRender();
+    }
+    function restoreNavigationResolution() {
+      if (!navigationResolutionLowered) return;
+      navigationResolutionLowered = false;
+      applyPixelRatio();
+      resizePending = true;
+      requestRender();
+    }
+    // iPadOS reclaims a background tab's GPU memory by losing the context.
+    // three.js restores its own state; the frozen shadow map and the baked
+    // environment are render targets whose contents went with it.
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      renderer.domElement.dataset.contextLost = 'true';
+    };
+    const handleContextRestored = () => {
+      delete renderer.domElement.dataset.contextLost;
+      if (profile.environment) {
+        const previous = scene.environment;
+        scene.environment = createStudioEnvironment(renderer);
+        previous?.dispose();
+      }
+      refreshShadowMap();
+      resizePending = true;
+      requestRender();
+    };
+    renderer.domElement.addEventListener('webglcontextlost', handleContextLost);
+    renderer.domElement.addEventListener(
+      'webglcontextrestored',
+      handleContextRestored
+    );
     /** When the last finger lifted: the browser's own dblclick follows it. */
     let lastTouchEndAt = Number.NEGATIVE_INFINITY;
+    // Palm rejection: a hand resting on the glass while a pen writes. iPadOS
+    // rejects most palms itself; these catch the contacts it lets through.
+    let penSeen = false;
+    let penPointerId: number | null = null;
+    let penLiftedAt = Number.NEGATIVE_INFINITY;
+    /** Fingers ignored until they lift: palms, and touches a pen displaced. */
+    const rejectedTouches = new Set<number>();
     const routePointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'pen') {
+        penSeen = true;
+        penPointerId = event.pointerId;
+        // Whatever the fingers were doing was most likely the palm landing.
+        for (const id of touchNavigation.abandon()) rejectedTouches.add(id);
+      }
       if (event.pointerType === 'touch') {
         // OrbitControls would run its own one-finger rotate and pinch beside
         // these; it listens on this element after this capture listener.
         event.stopImmediatePropagation();
+        if (
+          penPointerId !== null ||
+          performance.now() - penLiftedAt < PALM_REJECT_AFTER_PEN_MS
+        ) {
+          rejectedTouches.add(event.pointerId);
+          return;
+        }
         touchNavigation.down(event);
         return;
       }
       handlePointerDown(event);
     };
     const routePointerMove = (event: PointerEvent) => {
+      if (rejectedTouches.has(event.pointerId)) return;
       if (!touchNavigation.move(event)) handlePointerMove(event);
     };
+    /** True when the event was a rejected finger's, now forgotten. */
+    const releaseRejected = (event: PointerEvent) => {
+      if (event.pointerId === penPointerId) {
+        penPointerId = null;
+        penLiftedAt = performance.now();
+      }
+      return rejectedTouches.delete(event.pointerId);
+    };
     const routePointerUp = (event: PointerEvent) => {
+      if (releaseRejected(event)) return;
       if (!touchNavigation.up(event)) {
         handlePointerUp(event);
       } else if (!touchNavigation.active) {
@@ -11186,6 +11341,7 @@ export function ModelViewer({
       }
     };
     const routePointerCancel = (event: PointerEvent) => {
+      if (releaseRejected(event)) return;
       if (!touchNavigation.cancel(event)) {
         handlePointerCancel(event);
       } else if (!touchNavigation.active) {
@@ -11234,6 +11390,7 @@ export function ModelViewer({
      * sleep sees the whole idle gap on the clock, which is not animation time.
      */
     let loopWasAnimating = false;
+    const frameMeter = new FrameIntervalMeter();
     const resetAnimationContinuity = () => {
       loopWasAnimating = false;
     };
@@ -11243,6 +11400,7 @@ export function ModelViewer({
       const frameStarted = performance.now();
       const continuous =
         loopWasAnimating && document.visibilityState !== 'hidden';
+      frameMeter.sample(now, continuous);
       // The view cube's widget can remount with the chrome; follow whichever
       // link is current, and push it the camera at once so its hit layer is
       // not waiting for the next turn.
@@ -11765,6 +11923,14 @@ export function ModelViewer({
       cubeLink = null;
       cubeOverlay.dispose();
       touchNavigation.dispose();
+      renderer.domElement.removeEventListener(
+        'webglcontextlost',
+        handleContextLost
+      );
+      renderer.domElement.removeEventListener(
+        'webglcontextrestored',
+        handleContextRestored
+      );
       touchLoupe.dispose();
       for (const type of SAFARI_GESTURE_EVENTS) {
         host.removeEventListener(type, preventPageGesture);
@@ -11891,6 +12057,8 @@ export function ModelViewer({
         (disposable.material as THREE.Material).dispose();
       }
       environment?.dispose();
+      // One rebuilt after a lost context replaced it.
+      if (scene.environment !== environment) scene.environment?.dispose();
       // The key light's shadow map is a render target of its own, which no
       // scene-graph clear reaches.
       keyLight.dispose();
@@ -12723,7 +12891,9 @@ export function ModelViewer({
         const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
         tuneShadowFrustum(
           context.keyLight,
-          Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
+          Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2,
+          // The size the light was created with (viewer/renderBudget.ts).
+          context.keyLight.shadow.mapSize.x
         );
         context.keyLight.position.set(
           sceneCenter.x + 90,
@@ -14074,7 +14244,10 @@ export function ModelViewer({
     if (!context || !planePickerArmed) {
       return;
     }
-    const rig = buildPlanePickerRig();
+    const rig = buildPlanePickerRig({
+      resolution: context.fatLineResolution(),
+      backdrop: readStagePalette(context.renderer.domElement).backdropMiddle
+    });
     // The render loop sizes it against the live camera on the next frame;
     // this only keeps the first frame from drawing a unit-sized sliver.
     rig.setScale(0.05);

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import type {
+  EdgeTopology,
   GeometryBodyRepresentation,
   EdgeTopologyReferenceV5,
   TopologySelection
@@ -69,6 +70,24 @@ const TANGENT_EDGE_OPACITY = SELECTION_SEMANTICS.idle.tangentEdgeOpacity;
 
 function edgeKey(owner: Pick<EdgeSegmentOwner, 'bodyId' | 'topologyId'>) {
   return `${owner.bodyId}:${owner.topologyId}`;
+}
+
+/**
+ * Whether a resting edge draws in the quiet tangent ink.
+ *
+ * Either witness is enough. The kernel's G1 verdict (`EdgeTopology.isSmooth`)
+ * catches curved pairs whose sampled normals drift past the mesh threshold
+ * in `tangentEdgeIds` — a fillet rolling into a cylinder wall drew as a hard
+ * black ring across a smooth surface. The mesh keeps the near-tangent creases
+ * the kernel calls sharp: where two r2 fillets meet at a box corner the
+ * surfaces cross a few degrees apart, and a full-strength line there drew a
+ * corner the shading does not show.
+ */
+export function drawsAsTangent(
+  edge: Pick<EdgeTopology, 'topologyId' | 'isSmooth'>,
+  meshTangentIds: ReadonlySet<string>
+): boolean {
+  return edge.isSmooth === true || meshTangentIds.has(edge.topologyId);
 }
 
 /** Converts a connected xyz polyline into disjoint xyz/xyz segment pairs. */
@@ -375,7 +394,7 @@ export class BodyEdgeOverlay extends THREE.Group {
         continue;
       }
       this.entriesByKey.set(edgeKey(owner), { owner, positions });
-      const batch = tangentIds.has(edge.topologyId) ? tangent : sharp;
+      const batch = drawsAsTangent(edge, tangentIds) ? tangent : sharp;
       batch.positions.push(...positions);
       const segmentCount = positions.length / 6;
       for (let index = 0; index < segmentCount; index += 1) {

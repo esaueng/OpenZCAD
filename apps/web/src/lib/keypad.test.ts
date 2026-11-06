@@ -4,7 +4,9 @@ import {
   convertDimensionInput,
   dimensionModeForInput,
   evaluateKeypadInput,
+  editControlState,
   keypadClampPosition,
+  keypadInPlacePosition,
   typedUnitValue
 } from './keypad';
 
@@ -50,6 +52,150 @@ describe('keypadClampPosition', () => {
       VIEWPORT
     );
     expect(placement.y).toBe(8);
+  });
+});
+
+describe('keypadInPlacePosition', () => {
+  const CONTROL = { width: 260, height: 40 };
+  const chip = { left: 400, top: 190, right: 470, bottom: 214 };
+
+  it('takes the value chip’s place, its row centred on the chip', () => {
+    expect(keypadInPlacePosition(chip, CONTROL, VIEWPORT, [], 36)).toEqual({
+      x: 400,
+      y: 202 - 18,
+      side: 'over'
+    });
+  });
+
+  it('moves only as far as it must to clear a docked panel', () => {
+    const placement = keypadInPlacePosition(
+      { left: 760, top: 190, right: 830, bottom: 214 },
+      CONTROL,
+      VIEWPORT,
+      [{ x: 900, width: 100 }],
+      40
+    );
+    expect(placement.side).toBe('over');
+    expect(placement.x + CONTROL.width).toBeLessThanOrEqual(900 - 8);
+    expect(placement.y).toBe(182);
+  });
+
+  it('stays on screen at the edges', () => {
+    const top = keypadInPlacePosition(
+      { left: 2, top: 1, right: 60, bottom: 25 },
+      CONTROL,
+      VIEWPORT
+    );
+    expect(top.x).toBe(8);
+    expect(top.y).toBe(8);
+    const bottom = keypadInPlacePosition(
+      { left: 400, top: 690, right: 470, bottom: 714 },
+      CONTROL,
+      VIEWPORT
+    );
+    expect(bottom.y + CONTROL.height).toBeLessThanOrEqual(VIEWPORT.height - 8);
+  });
+
+  it.each([
+    ['off screen', null, []],
+    ['past the edge', { left: -90, top: 190, right: -20, bottom: 214 }, []],
+    [
+      'under a docked panel',
+      { left: 40, top: 190, right: 110, bottom: 214 },
+      [{ x: 0, width: 300 }]
+    ]
+  ] as const)(
+    'docks at the foot of the stage, in the widest free gap, when the chip is %s',
+    (_, box, bands) => {
+      const placement = keypadInPlacePosition(box, CONTROL, VIEWPORT, [
+        ...bands,
+        { x: 0, width: 300 }
+      ]);
+      expect(placement.side).toBe('docked');
+      expect(placement.y).toBe(VIEWPORT.height - CONTROL.height - 8);
+      expect(placement.x).toBeGreaterThanOrEqual(300 + 8);
+      expect(placement.x + CONTROL.width).toBeLessThanOrEqual(
+        VIEWPORT.width - 8
+      );
+    }
+  );
+});
+
+describe('editControlState', () => {
+  const base = {
+    entryOk: true,
+    previewed: 2 as number | null,
+    verdict: null as ReturnType<typeof built> | null | undefined,
+    hostChecking: false,
+    hostRefused: false,
+    hostDisabled: false
+  };
+  const built = (value: number) => ({ value, status: 'built' as const });
+
+  it('is Ready only once the value on screen has built', () => {
+    expect(editControlState({ ...base, verdict: null })).toBe('checking');
+    expect(editControlState({ ...base, verdict: built(2) })).toBe('ready');
+  });
+
+  it('never lets an earlier value’s preview stand for newer input', () => {
+    // 2 built; 25 is typed and not answered yet.
+    expect(
+      editControlState({ ...base, previewed: 25, verdict: built(2) })
+    ).toBe('checking');
+  });
+
+  it('is Not built for the value refused, and checks a new one afresh', () => {
+    const refused = { value: 5, status: 'refused' as const };
+    expect(
+      editControlState({
+        ...base,
+        previewed: 5,
+        verdict: refused,
+        hostRefused: true
+      })
+    ).toBe('refused');
+    expect(
+      editControlState({
+        ...base,
+        previewed: 4,
+        verdict: refused,
+        hostRefused: true
+      })
+    ).toBe('checking');
+  });
+
+  it('counts a value the host settled without the kernel as ready', () => {
+    expect(
+      editControlState({
+        ...base,
+        previewed: 0,
+        verdict: { value: 0, status: 'unchecked' }
+      })
+    ).toBe('ready');
+  });
+
+  it('is Ready on its untouched prefill, which is what the model already is', () => {
+    expect(editControlState({ ...base, previewed: null })).toBe('ready');
+  });
+
+  it('puts an unevaluable entry and a commit in flight first', () => {
+    expect(
+      editControlState({ ...base, entryOk: false, verdict: built(2) })
+    ).toBe('invalid');
+    expect(
+      editControlState({ ...base, verdict: built(2), hostChecking: true })
+    ).toBe('checking');
+  });
+
+  it('falls back to the host’s flags where the host checks nothing', () => {
+    const unchecked = { ...base, verdict: undefined };
+    expect(editControlState(unchecked)).toBe('ready');
+    expect(editControlState({ ...unchecked, hostDisabled: true })).toBe(
+      'checking'
+    );
+    expect(
+      editControlState({ ...unchecked, hostDisabled: true, hostRefused: true })
+    ).toBe('refused');
   });
 });
 

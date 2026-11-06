@@ -2657,8 +2657,9 @@ export interface EdgeTopology {
    *   hemispheres that share one exact witness, so both patches hash
    *   identically. Two edges reporting a common hash therefore do not
    *   necessarily touch the same face. This is the identity scheme failing
-   *   closed as designed, and it is a live product limit — face picks on
-   *   spheres are unavailable for the same reason.
+   *   closed as designed: a hash alone cannot pick a sphere patch. The
+   *   patches' lineage references can (`primitive.sphere.face.z-max` /
+   *   `z-min`, proved by the pole each trimmed patch holds).
    * - **Not sufficient for an edge run on its own.** Two edges on opposite
    *   sides of a box's top face share that face. A run also needs vertex
    *   incidence, which `vertexIds` publishes.
@@ -3346,7 +3347,8 @@ export interface FeatureWarning {
    * not: `invalid_topology` from a boolean is a pair the engine would not
    * combine, and from a validation it is a body that came back malformed.
    * `operation` is present only for a family that names one — the booleans
-   * do, a validation has no operand pair to name.
+   * do, a validation has no operand pair to name; a `direct-edit` refusal
+   * names the edit (`resize-cylindrical-face`).
    *
    * This carried only booleans when it was introduced. Every family with a
    * typed twin on the pin now travels on the same field rather than growing
@@ -3360,12 +3362,68 @@ export interface FeatureWarning {
       | 'import'
       | 'blend'
       | 'gear'
-      | 'thread';
+      | 'thread'
+      | 'direct-edit';
     operation?: string;
     category: string;
     code: string;
+    /**
+     * The kernel's cause code, for a refusal whose `code` covers several
+     * causes. A refused cylindrical-face resize (`unsupported_move_face`)
+     * says `unsupported_neighbor`, `partial_reversed_wall` or `unclassified`
+     * here. A string for the same reason `category` is one.
+     */
+    reason?: string;
+    /** The surface type of the neighbour that blocked the edit, if named. */
+    neighborSurfaceType?: string;
   };
+  /**
+   * What the adapter's size ladder proved about a refused fillet or chamfer.
+   * Present only on an edge-modifier refusal. The headline a control shows
+   * branches on this rather than on `message`, which is product copy.
+   */
+  blendAdvice?: BlendRefusalAdvice;
 }
+
+/**
+ * The verdict of a refused fillet or chamfer, as data.
+ *
+ * - `smaller-size`: the probe ladder BUILT `size` exactly, so it is safe to
+ *   offer as a one-click remedy.
+ * - `structural`: every smaller size on the ladder was refused too. `cause`
+ *   names what the adapter could attribute, `unknown` when nothing was.
+ *   Smaller sizes failing is evidence, not proof, that no size builds.
+ */
+export type BlendRefusalAdvice = {
+  operation: 'fillet' | 'chamfer';
+  /** How many edges the refused feature selected ("this edge", "these"). */
+  edges: number;
+  /**
+   * The cause in a sentence, without the "Fillet could not be created on …"
+   * preamble `message` opens with: what an explanation shows under a
+   * headline that already says the feature was not built.
+   */
+  reason: string;
+} & (
+  | {
+      kind: 'smaller-size';
+      size: number;
+    }
+  | {
+      kind: 'structural';
+      cause:
+        | 'trim-face'
+        | 'trim-face-beside-blend'
+        | 'closed-rim'
+        | 'ends-on-blend'
+        | 'shared-corner'
+        | 'edge-groups'
+        | 'partial-revolve'
+        | 'smooth-boundary'
+        | 'neighbor-faces'
+        | 'unknown';
+    }
+);
 
 /** Explicit, bounded foreground analysis; never part of canonical history. */
 export interface EditAnalysisRequest {
@@ -4447,6 +4505,11 @@ export interface AppSettings {
     xrayOpacity: number;
     /** On a touch screen, two- and three-finger taps undo and redo. */
     touchHistoryGestures: boolean;
+    /**
+     * Once an Apple Pencil (any pen) is used, only it draws sketch geometry;
+     * fingers navigate.
+     */
+    pencilDrawsOnly: boolean;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -4601,7 +4664,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     pointerNavigation: 'auto',
     fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
     xrayOpacity: XRAY_OPACITY_BOUNDS.default,
-    touchHistoryGestures: true
+    touchHistoryGestures: true,
+    pencilDrawsOnly: true
   },
   sketching: {
     gridVisible: true,

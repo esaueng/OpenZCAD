@@ -23,6 +23,7 @@ import {
   type RemusTopologyCandidate
 } from './remus-lineage';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
+import { sphereWitnessTieResolver } from './exact-sphere-patches';
 
 export interface IdleLineageView {
   lineages: Map<BodyId, RemusLineageState | undefined>;
@@ -293,7 +294,8 @@ export class IdleLineageViewBuilder {
           },
           topologyCandidatesForSolid(kernel, transformed.solids[index]!),
           Array.from(matrix),
-          allowUniformScale
+          allowUniformScale,
+          sphereWitnessTieResolver(kernel, solid, Array.from(matrix))
         );
       });
       view.lineages.set(outputId, mergeRemusLineageStates(lineages));

@@ -5,6 +5,7 @@ import {
   computeFitPose,
   createAxesGizmo,
   createBodyMaterial,
+  createObjectForBody,
   createFatLineMaterial,
   createGradientBackdrop,
   createShadowCatcher,
@@ -21,6 +22,7 @@ import {
   VIEWPORT_RENDER_ORDER
 } from './scene';
 import { reuseRenderBodies } from './scene';
+import { applyDisplayMode } from '../scene/objects';
 import { boxFullyInView, VIEW_DIRECTIONS } from '../camera/views';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 
@@ -102,6 +104,31 @@ describe('createBodyMaterial', () => {
     expect(material.depthWrite).toBe(false);
     expect(material.stencilWrite).toBe(false);
   });
+});
+
+it('renders large mesh references directly from their facet buffers', () => {
+  const vertices = Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0);
+  const indices = new Uint32Array(200_001 * 3);
+  for (let i = 0; i < indices.length; i++) indices[i] = i % 3;
+  const object = createObjectForBody(
+    bodyFixture({
+      mesh: { kind: 'mesh', vertices, indices },
+      meshReference: true
+    })
+  ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+  expect(object.geometry.getAttribute('position').array).toBe(vertices);
+  expect(object.geometry.getIndex()?.array).toBe(indices);
+  expect(object.children).toHaveLength(0);
+  expect(object.material.flatShading).toBe(true);
+  const group = new THREE.Group();
+  group.add(object);
+  applyDisplayMode(group, 'wireframe');
+  expect(object.material.visible).toBe(true);
+  expect(object.material.wireframe).toBe(true);
+  applyDisplayMode(group, 'shaded-edges');
+  expect(object.material.wireframe).toBe(false);
+  object.geometry.dispose();
+  object.material.dispose();
 });
 
 describe('opacity-only body updates', () => {

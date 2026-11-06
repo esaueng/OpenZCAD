@@ -20,12 +20,14 @@ export const TANGENT_EDGE_MAX_ANGLE = THREE.MathUtils.degToRad(12);
  * rim where a fillet rolls into the wall, or the joint between two halves of
  * one cylinder.
  *
- * The kernel publishes no smoothness, so this compares the faces on the
- * display mesh, which is welded at face boundaries. At every mesh vertex two
- * faces share, each face's own normal there is the angle-weighted mean of its
- * triangles at that vertex — the smoothing the face is shaded with. A face
- * pair is tangent when that angle stays within `TANGENT_EDGE_MAX_ANGLE` at
- * every vertex they share, and an edge is tangent when its pair is.
+ * It complements the kernel's own verdict (`EdgeTopology.isSmooth`;
+ * `drawsAsTangent` accepts either witness). It compares the faces on the
+ * display mesh, which is welded at face boundaries. At every
+ * mesh vertex two faces share, each face's own normal there is the
+ * angle-weighted mean of its triangles at that vertex — the smoothing the
+ * face is shaded with. A face pair is tangent when that angle stays within
+ * `TANGENT_EDGE_MAX_ANGLE` at every vertex they share, and an edge is tangent
+ * when its pair is.
  *
  * It errs towards sharp, which is how every edge drew before: an edge with no
  * face pair, faces the hashes cannot tell apart (a sphere's two hemispheres

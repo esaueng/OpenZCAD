@@ -194,22 +194,48 @@ Timing and ownership rules:
    - An offset magnifier (`viewer/touchLoupe.ts`) follows a finger dragging
      sketch geometry: twice the canvas under the finger with a crosshair,
      above the finger (below near the top edge), naming the snap it took.
-6. **Apple Pencil**, as above.
+6. **Apple Pencil**, as above, with these specifics:
+   - Pen events already take the mouse path, so Pencil taps, handle drags,
+     strokes, empty-space marquee and hover preselection need no new code.
+   - Pencil mode: after the first pen pointer, a finger in a sketch drawing
+     tool only navigates (`navigationOnly`); finger taps elsewhere still
+     select. Settings › Viewport "Only Apple Pencil draws", on by default.
+   - Palm rejection: fingers that land while a pen is down, or within
+     300 ms of its lift, are ignored until they lift, and a pen landing
+     drops (and cancels) any finger gesture in progress.
+   - `getCoalescedEvents()` is deferred: the drag paths sample once per
+     frame and there is no freehand stroke yet that would use the extra
+     samples.
 7. **Home Screen app and files.**
-   - `viewport-fit=cover` and safe-area insets for the top bar, stage,
-     floating islands and fixed layers.
-   - Manifest, `apple-mobile-web-app-*` tags, and a service worker caching the
-     shell and kernel WASM.
-   - `navigator.storage.persist()`.
-   - `navigator.share({ files })` export.
-   - iOS-safe `accept` filters, with the file checked after picking.
-   - Delayed revoke of the download blob URL in `lib/model.ts`, with a
-     regression test.
-8. **Rendering limits.**
-   - Lower pixel ratio during gestures.
-   - Smaller shadow map on coarse pointers or low memory.
-   - `webglcontextlost`/`webglcontextrestored` recovery.
-   - WASM and GPU memory measured on iPad, recorded under W01.
+   - A manifest (`display: standalone`), `apple-mobile-web-app-*` tags and
+     theme colours. The default status-bar style keeps the page below the
+     status bar and inside the safe area, so `viewport-fit=cover` and
+     safe-area insets are not needed and are dropped from the plan.
+   - An installed app asks for persistent storage; a browser tab never
+     does (Firefox would prompt for it).
+   - An offline shell (`public/sw.js`), registered only by an installed app
+     in a production build: network-first pages with the last good one kept
+     for offline, cache-first content-hashed `/assets/` (kernel WASM
+     included, capped at 400), everything else untouched.
+   - Exports offer the share sheet on a touch screen that can share files
+     (Save to Files, AirDrop, another app), falling back to a download.
+   - No `accept` filter on an Apple touch device: its Files picker greys out
+     `.step`, `.openzcad` and `.shapr`; imports check the format after
+     picking.
+   - Download blob URLs live for a minute instead of being revoked at click
+     time (WebKit could cancel the save).
+8. **Rendering limits** (`viewer/renderBudget.ts`).
+   - A coarse-pointer device gets a 2048² key-light shadow map instead of
+     3072² (about 17 MB of GPU memory instead of 38 MB); desktops are
+     unchanged.
+   - A device dropping below 45 frames a second navigates at a 1.25 pixel
+     ratio and gets its full ratio back at rest; once it has needed this it
+     keeps it for the session, so the faster lowered frames cannot flip it
+     back. Fast devices never change resolution.
+   - A lost WebGL context (iPadOS reclaiming a background tab) is restored
+     drawing: the baked environment is rebuilt and the frozen shadow map
+     refreshed.
+   - WASM and GPU memory on iPad stays a device measurement under W01.
 
 Later and optional: Pencil draw-to-sketch shape recognition, and a native iPad
 shell.

@@ -17,6 +17,7 @@ import {
 } from '../lib/statusLifetime';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
+import { Tooltip } from './Tooltip';
 
 /**
  * A message worth going back to the log for: a warning, or a refusal worded
@@ -61,6 +62,11 @@ interface WorkspaceReadoutProps {
    * which only the guidance makes way for.
    */
   pick?: ReactNode;
+  /**
+   * A refused edit with no control open to explain it (a refused drag): the
+   * compact "Not built · Why?", read after the pick and before the key hints.
+   */
+  notice?: ReactNode;
   /**
    * U09: an in-place command's bar. It takes the guidance row while a
    * command runs, so its step is read where every hint is.
@@ -111,6 +117,7 @@ export function WorkspaceReadout({
   prompt,
   instructionDetails = null,
   pick = null,
+  notice = null,
   commandRow = null,
   projectName,
   featureCount,
@@ -124,7 +131,8 @@ export function WorkspaceReadout({
 }: WorkspaceReadoutProps) {
   const laneRef = useRef<HTMLDivElement>(null);
   const hasCommandRow = commandRow !== null;
-  const hasSelectionGuidance = !hasCommandRow && pick !== null;
+  const hasSelectionGuidance =
+    !hasCommandRow && (pick !== null || notice !== null);
   useLayoutEffect(() => {
     const lane = laneRef.current;
     const viewer = lane?.closest<HTMLElement>('.viewer-area');
@@ -141,9 +149,15 @@ export function WorkspaceReadout({
       const guidance = lane.querySelector<HTMLElement>(
         '.workspace-hint.is-selection'
       );
+      // The gap belongs to a row that is drawn. A guidance element with no
+      // height (the pick's row while an operation is armed) still added it,
+      // and the notice lane stood 8px up, over the handle's value chip.
+      const guidanceHeight = guidance
+        ? Math.ceil(guidance.getBoundingClientRect().height)
+        : 0;
       viewer.style.setProperty(
         '--workspace-guidance-h',
-        `${guidance ? Math.ceil(guidance.getBoundingClientRect().height) + 8 : 0}px`
+        `${guidanceHeight > 0 ? guidanceHeight + 8 : 0}px`
       );
     };
     measure();
@@ -264,7 +278,8 @@ export function WorkspaceReadout({
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
   const syncLabel = WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel;
-  const hasGuidance = commandRow == null && Boolean((prompt && !shown) || pick);
+  const hasGuidance =
+    commandRow == null && Boolean((prompt && !shown) || pick || notice);
   // Always in the tree, as the page's contentinfo landmark: what the status
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
@@ -280,7 +295,19 @@ export function WorkspaceReadout({
         ref={laneRef}
       >
         {commandRow ??
-          ((prompt && !shown) || pick ? (
+          (notice ? (
+            // A block, not the hint's paragraph: the notice holds buttons and
+            // an explanation that opens above the row.
+            <div className="workspace-hint is-selection has-notice">
+              {pick}
+              {notice}
+              {prompt && !shown ? (
+                <span className="workspace-hint-text" aria-hidden="true">
+                  {prompt}
+                </span>
+              ) : null}
+            </div>
+          ) : (prompt && !shown) || pick ? (
             <p className={`workspace-hint${pick ? ' is-selection' : ''}`}>
               {pick}
               {prompt && !shown ? (
@@ -391,17 +418,21 @@ interface ActivityLogButtonProps {
  */
 export function ActivityLogButton({ onOpenLog }: ActivityLogButtonProps) {
   return (
-    <button
-      type="button"
-      className="rail-button"
-      title="Activity log"
-      aria-label="Open activity log"
-      aria-haspopup="dialog"
-      onClick={onOpenLog}
+    <Tooltip
+      label="Activity log"
+      description="Every status message and warning this session"
     >
-      {/* Not the clock: that is rollback and Restore, one rail up from here. */}
-      <ScrollText size={16} aria-hidden="true" />
-    </button>
+      <button
+        type="button"
+        className="rail-button"
+        aria-label="Open activity log"
+        aria-haspopup="dialog"
+        onClick={onOpenLog}
+      >
+        {/* Not the clock: that is rollback and Restore, one rail up from here. */}
+        <ScrollText size={16} aria-hidden="true" />
+      </button>
+    </Tooltip>
   );
 }
 

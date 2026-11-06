@@ -243,8 +243,8 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
   const initialLabel = await indicator.textContent();
-  // The scale bar resizes with zoom; nothing around it may move. It stands
-  // upright beside the verb rail, the nearest chrome.
+  // The scale bar resizes with zoom; nothing around it may move. It lies in
+  // the search bar's row under the verb rail, the nearest chrome.
   const dock = page.locator('.workspace-column-float');
   const control = dock.getByRole('button').first();
   const initialDock = await dock.boundingBox();
@@ -255,15 +255,16 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     expect(await dock.boundingBox()).toEqual(initialDock);
     expect(await control.boundingBox()).toEqual(initialControl);
   };
-  // Upright, the rule's length is its height; it stays 18px across.
+  // Lying down, the rule's length is its width; it stays 18px across. It
+  // ends short of the search bar, so a narrower window may cap it below 200.
   const ruleLength = () =>
     rule.evaluate((element) => {
       const bounds = element.getBoundingClientRect();
-      return { length: bounds.height, across: bounds.width };
+      return { length: bounds.width, across: bounds.height };
     });
   const initial = await ruleLength();
   expect(initial.across).toBeCloseTo(18, 0);
-  expect(initial.length).toBeGreaterThanOrEqual(80);
+  expect(initial.length).toBeGreaterThanOrEqual(48);
   expect(initial.length).toBeLessThanOrEqual(200.1);
 
   // Dispatch explicit wheel notches to the canvas so this layout regression
@@ -282,7 +283,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     )
     .not.toBe(initialLabel);
   const zoomed = await ruleLength();
-  expect(zoomed.length).toBeGreaterThanOrEqual(80);
+  expect(zoomed.length).toBeGreaterThanOrEqual(48);
   expect(zoomed.length).toBeLessThanOrEqual(200.1);
   const zoomedLabel = await indicator.textContent();
   await expect
@@ -1727,7 +1728,7 @@ test('an orbit draws the view cube without touching the page', async ({
   // The viewer paints the cube into its own canvas; the SVG stays as the
   // unpainted click, focus and accessibility surface.
   await expect(cube).toHaveAttribute('data-overlay', 'viewer');
-  await expect(canvas).toHaveAttribute('data-e2e-cube-overlay', '88');
+  await expect(canvas).toHaveAttribute('data-e2e-cube-overlay', '112');
   await expect(page.getByRole('button', { name: 'Front view' })).toBeVisible();
 
   // Firefox repaints the whole page for any DOM change in a frame, and an
@@ -2495,8 +2496,11 @@ test('clicking a cube corner past its drawn facet snaps to that isometric view',
         const x = vertex[0] + (cx - vertex[0]) * t;
         const y = vertex[1] + (cy - vertex[1]) * t;
         if (inside(target, x, y) && !inside(drawn, x, y)) {
-          const clientX = box.left + x;
-          const clientY = box.top + y;
+          // The cube draws at --cube-size over its 88-unit viewBox.
+          const scale =
+            box.width / (svg as SVGSVGElement).viewBox.baseVal.width;
+          const clientX = box.left + x * scale;
+          const clientY = box.top + y * scale;
           const top = document.elementFromPoint(clientX, clientY);
           return {
             x: clientX,

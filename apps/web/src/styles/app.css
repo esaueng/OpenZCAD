@@ -49,6 +49,8 @@
 @import './components/corner-slot.css';
 /* The pick's verbs ride the rail the quiet stage just placed. */
 @import './components/selection-rail.css';
+/* The in-viewport edit control: value, state, refusal, keypad. */
+@import './components/edit-control.css';
 /* After every sizing rule: it only adds hit area, never moves a control. */
 @import './components/target-size.css';
 /* Touch-only browser behaviour; it sizes nothing. */

@@ -1,3 +1,4 @@
+import { DOWNLOAD_URL_LIFETIME_MS } from './saveFile';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -221,6 +222,7 @@ describe('desktop bridge', () => {
   });
 
   it('downloads binary exports through a blob anchor in the browser', async () => {
+    vi.useFakeTimers();
     const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:mesh');
     const revokeObjectURL = vi.fn();
     vi.stubGlobal('URL', {
@@ -244,7 +246,11 @@ describe('desktop bridge', () => {
     expect(blob.type).toBe('model/stl');
     expect(blob.size).toBe(3);
     expect(click).toHaveBeenCalledOnce();
+    // Released once the browser has read it, not at click time (WebKit).
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(DOWNLOAD_URL_LIFETIME_MS);
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mesh');
+    vi.useRealTimers();
     expect(invoke).not.toHaveBeenCalled();
   });
 

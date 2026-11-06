@@ -35,13 +35,17 @@ export async function withHydratedDocument<T extends Record<string, unknown>>(
 }
 
 /** Waits on the production workspace summary instead of viewport chrome. */
-export async function expectBodyCount(page: Page, count: number) {
+export async function expectBodyCount(
+  page: Page,
+  count: number,
+  timeout?: number
+) {
   const bodyLabel = `${count} ${count === 1 ? 'body' : 'bodies'}`;
   await expect(
     page
       .getByRole('group', { name: 'Workspace status' })
       .getByLabel(new RegExp(` · \\d+ features? · ${bodyLabel}\\. Sync `))
-  ).toBeVisible();
+  ).toBeVisible({ timeout });
 }
 
 /**
@@ -1543,6 +1547,44 @@ export async function clickWorldPoint(
   );
   await page.mouse.move(point!.x, point!.y);
   await page.mouse.click(point!.x, point!.y);
+}
+
+/**
+ * Clicks an armed ghost plane (XY, XZ or YZ) where no other ghost plane is in
+ * front of it, and returns the world point clicked. The panels cover only
+ * their positive quadrants and overlap on screen from most views, so a fixed
+ * world point can land on the wrong one.
+ */
+export async function clickGhostPlane(
+  page: Page,
+  plane: 'XY' | 'XZ' | 'YZ'
+): Promise<[number, number, number]> {
+  const canvas = page.locator('.viewer-host canvas');
+  let at: number[] | null = null;
+  await expect
+    .poll(async () => {
+      at = await canvas.evaluate(
+        (element, id) =>
+          new Promise<number[] | null>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-project-points', {
+                detail: {
+                  points: [],
+                  resolve: (state: {
+                    ghostPlanePoints: Record<string, number[] | null> | null;
+                  }) => resolve(state.ghostPlanePoints?.[id] ?? null)
+                }
+              })
+            );
+          }),
+        plane
+      );
+      return at !== null;
+    })
+    .toBe(true);
+  const point = at! as unknown as [number, number, number];
+  await clickWorldPoint(page, point);
+  return point;
 }
 
 /** Picks a datum plane for an in-place Mirror or Split from its Objects row. */
