@@ -102,8 +102,12 @@ describe('saved refusal reproductions replay through the corpus', () => {
       PRIVATE_FEATURE
     );
     expect(warning.kind).toBe('build-failed');
-    // The move-face family has no typed twin on the pin yet.
-    expect(warning.kernelRefusal).toBeUndefined();
+    // Typed since the pin carries resizeCylindricalFaceDetailed (#1265).
+    expect(warning.kernelRefusal).toMatchObject({
+      family: 'direct-edit',
+      category: 'unsupported',
+      code: 'unsupported_move_face'
+    });
 
     const fixture = roundTrip(
       buildRefusalReproduction({

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { parseStl, writeAsciiStl } from '@openzcad/io-stl';
 import { coincidentBoxSoup } from '../support/mesh-import-fixtures';
 import {
@@ -104,6 +104,73 @@ for (const fixture of cases) {
     }
   );
 }
+
+test('500,000 STL facets survive import, undo, redo, reload and binary export', async ({
+  page
+}, testInfo) => {
+  test.setTimeout(240_000);
+  // Chromium's software WebGL can take several seconds to upload and draw
+  // the full source mesh on each rebuild.
+  const rebuildTimeout = 60_000;
+  const triangleCount = 500_000;
+  const bytes = Buffer.alloc(84 + triangleCount * 50);
+  bytes.writeUInt32LE(triangleCount, 80);
+  for (let triangle = 0; triangle < triangleCount; triangle++) {
+    const x = triangle % 1000;
+    const y = Math.floor(triangle / 1000);
+    const offset = 84 + triangle * 50 + 12;
+    bytes.writeFloatLE(x, offset);
+    bytes.writeFloatLE(y, offset + 4);
+    bytes.writeFloatLE(x + 1, offset + 12);
+    bytes.writeFloatLE(y, offset + 16);
+    bytes.writeFloatLE(x, offset + 24);
+    bytes.writeFloatLE(y + 1, offset + 28);
+  }
+  const source = testInfo.outputPath('scan.stl');
+  writeFileSync(source, bytes);
+  await stubApi(page);
+  await seedUnitlessImportUnits(page);
+  await page.route('**/api/session', (route) => route.fulfill({ json: null }));
+  await createProject(page, 'Large STL reference');
+  await page.getByLabel(/^Import STEP or /).setInputFiles(source);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'as a mesh reference',
+    { timeout: 60_000 }
+  );
+  await expectBodyCount(page, 1, rebuildTimeout);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expectBodyCount(page, 0, rebuildTimeout);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expectBodyCount(page, 1, rebuildTimeout);
+  await expect(page.locator('.save-state')).toHaveClass(
+    /\bis-(?:local|local-source|synced)(?:\s|$)/,
+    { timeout: rebuildTimeout }
+  );
+  await page.reload();
+  await expectBodyCount(page, 1, rebuildTimeout);
+  const inspector = await bodyCardFromHistory(page);
+  await expect(inspector).toContainText('Unavailable for mesh reference');
+  await page.keyboard.press('Escape');
+  const menu = page.locator('details.file-menu');
+  await menu.locator('summary').click();
+  await menu.getByRole('button', { name: /Export mesh/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Export mesh' });
+  await expect(
+    dialog.getByRole('radio', { name: 'STL (binary)' })
+  ).toBeChecked();
+  const pending = page.waitForEvent('download');
+  await dialog.getByRole('button', { name: 'Export STL', exact: true }).click();
+  const downloaded = readFileSync(await (await pending).path());
+  const parsed = parseStl(
+    new Uint8Array(downloaded).buffer,
+    'roundtrip.stl',
+    true
+  );
+  expect(parsed.triangleCount).toBe(triangleCount);
+  expect(parsed.vertices.subarray(-9)).toEqual(
+    Float64Array.of(999, 499, 0, 1000, 499, 0, 999, 500, 0)
+  );
+});
 
 test('private STL imports through the browser file picker', async ({
   page

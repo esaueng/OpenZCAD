@@ -139,11 +139,56 @@ Wrong cells, each a silent defect with a minimal history in the ledger:
 4. **Steinmetz (equal-radius) cross drill** (13 cells). The volume is off by
    0.071 mm³ (1.3e-5) against the exact 16r³/3, beyond the tolerance.
 
+**Acceptance gates (K10 wrong-cell follow-up).** On the `669d1e2` pin the
+same four defects reproduce. The adapter now refuses the first three by name
+(`packages/kernel-adapter/src/result-acceptance.ts`), with no oracle or
+tolerance changed. With the typed cylindrical-face resize refusals (#1265)
+also merged, the ledgers stand at 724 qualified, 521 typed refusals, 176
+untyped refusals and 13 wrong:
+
+| Defect                    | Gate                                                                                                                                                                                                                    | Cells         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| Box − torus unchanged     | A subtract whose exact intersect refused is checked on a grid over the overlap box: a point the kernel classifies inside target, tool and result refuses (`cut_kept_tool_material`). `cutDetailed` itself reports `ok`. | 70 → typed    |
+| Resize under a seam blend | The curved faces meeting the wall must still meet the resized wall, and the volume change must lie within 3× of the swept sleeve (`resize_left_blend_behind`, `resize_volume_mismatch`).                                | 8 → typed     |
+| Tangent cross drill       | Caught by the same point witness: the cut keeps tool material near the tangency (its body also fails strict validation).                                                                                                | 3 → typed     |
+| Steinmetz cross drill     | Not gated: the body is exact. See below.                                                                                                                                                                                | 13 stay wrong |
+
+Measured on the r 7 boss: the kernel leaves the r 6 fillet band in place and
+caps it with a new downward annulus π(7² − 6²) at the band's top. The 46.9 mm³
+groove underneath is missing material, and the volume change equals the bare
+sleeve π(7² − 6²)·18 exactly, so only the face census can see it.
+`cylinderPrimitiveAncestry.ts` routes hash-only seam fillets to this resize,
+so the app now shows that refusal where it used to commit the groove.
+
+Cuts and intersects are now also held to strict validation
+(`solid_validation_failed`), the bar unions already had to clear. That turns
+one previously qualified cell into a typed refusal:
+`cylinder×cylinder/tangent/subtract/no-modifier/source-grow`, an r 7 drill
+grazing the bar wall. Its volume was inside tolerance, but the validator
+reports an inner wire on the periodic wall wound like its outer wire and one
+edge with inconsistently oriented faces. That is the same signature as the
+tangent drill. One untyped refusal also becomes typed.
+
+**Steinmetz is a kernel measurement defect, not a body defect.** The
+equal-radius cut's four intersection edges are exact `ELLIPSE` curves, lying
+within 5e-15 of both cylinders, and strict validation is clean. Cut plus
+intersect volumes sum to the bar exactly (18849.5559). The intersect measures
+5333.2664 against the exact 16r³/3 = 5333.3333. `volume()` at any deflection
+and `massProperties` with refinement (eps 1e-11, depth 24) all converge on
+that same value, 1.25e-5 low. So the integrator handles the trimmed cylinder
+faces, whose ellipses cross at the two singular points, short of the exact
+domain. That is reported upstream rather than masked, and the 13 cells stay
+`wrong` until the kernel measures them correctly.
+
 The largest untyped families are the cylinder×cylinder union (83 cells,
 "open, non-manifold, or inconsistently oriented"). The next is the union
-connectivity check (50 cells). It is right for tangent and stacked operands,
-but it is also wrong for box×sphere raised and sliver unions, which overlap
-yet are refused as "2 disconnected groups". Then come a seam fillet or chamfer
+connectivity check (50 cells). It is right for tangent and stacked operands.
+The box×sphere raised and sliver unions (27 cells) overlap but were refused
+as "2 disconnected groups", because the pin has no certified box/sphere
+distance and refuses their exact intersection. An interior-point witness now
+proves their overlap, and those cells refuse with the actual reason instead:
+the kernel's fuse fails strict validation ("1 shared edges have inconsistent
+face orientations"), an upstream defect. Then come a seam fillet or chamfer
 that loses its edges after a source edit (20 cells, WS5), a chamfer on a
 concave boss seam (14 cells), the direct resize refusals of the first slice,
 and a STEP reimport at the 1e3 scale that our own reader refuses (3 cells).
@@ -357,6 +402,48 @@ the first R-slice of the K10 ledger records it.
 - R7's two sentences are the copy bar for WS2. A refusal names the outcome in
   one sentence and keeps the last valid body. Kernel detail stays behind
   "View details".
+
+**R-slice results (2026-11-05, Remus `2026.1.123`).** The imported-twin
+family (`test/support/imported-twin.ts`) builds the twin from a block
+(60 × 40 × 20), an r 6 post, an r 2 seam fillet, an r 1 rim fillet and r 4
+vertical rounds, round-trips it through STEP and edits the import, which has
+no construction history. Its 74 cells (5 in the CI slice) are 28 qualified,
+1 typed refusal, 43 untyped refusals and 2 wrong. Oracles are closed forms,
+Pappus sections and the integrated block/post overlap. The one exception is
+a single tangent-ended edge, which uses a labelled interval.
+
+- **The twin itself.** A post tilted about X does not fuse (typed
+  `quality_refused`). Tilted 15° about Y it fuses, but its elliptical seam
+  takes neither a fillet nor a chamfer. An upright post's seam takes a
+  fillet but not a chamfer. Every edit therefore runs on two fallback twins:
+  `upright`, with a filleted seam, and `tilted-unblended`, a Y-tilted post
+  with a sharp seam. The import recognises every blend as an analytic band.
+- **R1, R3 and R4 pass.** Cap offsets move with their rim fillet. Top and
+  side block offsets re-limit the seam band and the rounds. The seam band
+  resizes and removes in place, and a corner round resizes.
+- **R2 fails, as the plan expected, and on the upright twin it is wrong,
+  not refused.** `resize-cylindrical-face` builds an exact, closed body, but
+  both blend bands keep their r 6 carriers. The result is 16 faces instead
+  of 14 and misses the oracle by −127 mm³ (r 7) and +108 mm³ (r 5). On the
+  tilted twin, the same edit refuses untyped against the torus rim fillet.
+  After the acceptance gates (#1266) and typed resize refusals (#1265) merged,
+  all four R2 cells refuse typed (`resize_left_blend_behind` on the upright
+  twin). The 74 cells now stand at 28 qualified, 5 typed refusals, 41 untyped
+  refusals and 0 wrong.
+- **R5 and R6 depend on size.** A fillet of r 1.5 on one bottom edge spreads
+  round the whole tangent chain and qualifies. An equal-radius r 4 chain
+  closes its corners as sphere octants. An r 1.5 chain, a chamfer chain
+  beside the rounds, and r 4 then r 1.5 sequential chains all qualify. At
+  r 3 the same chains and edge refuse with "radius 1.5 builds here", and an
+  r 2 top chain after an r 4 bottom chain refuses too.
+- **R7 is half there.** All four refusals keep the last valid body and show
+  a plain, non-generic sentence, but none is typed. A negative radius or
+  size passes the command layer and is refused only by the adapter during
+  the rebuild, not before it.
+- **R9 passes.** Each edit is its own `direct-edit` row. Reopen and
+  undo/redo reproduce the body. Moving the first cap offset from 5 to 3
+  re-resolves the later round resize without a new pick.
+- **R8** is viewport behaviour and has no cell.
 
 ## Milestones
 

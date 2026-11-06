@@ -35,13 +35,17 @@ export async function withHydratedDocument<T extends Record<string, unknown>>(
 }
 
 /** Waits on the production workspace summary instead of viewport chrome. */
-export async function expectBodyCount(page: Page, count: number) {
+export async function expectBodyCount(
+  page: Page,
+  count: number,
+  timeout?: number
+) {
   const bodyLabel = `${count} ${count === 1 ? 'body' : 'bodies'}`;
   await expect(
     page
       .getByRole('group', { name: 'Workspace status' })
       .getByLabel(new RegExp(` · \\d+ features? · ${bodyLabel}\\. Sync `))
-  ).toBeVisible();
+  ).toBeVisible({ timeout });
 }
 
 /**

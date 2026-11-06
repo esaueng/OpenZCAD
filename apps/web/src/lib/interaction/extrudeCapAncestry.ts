@@ -6,6 +6,10 @@ import {
   type FeatureNode,
   type ProjectDocument
 } from '@openzcad/shared';
+import {
+  booleanOperandRole,
+  booleanOperandSource
+} from './cylinderPrimitiveAncestry';
 
 /**
  * The far cap of a one-sided extrude, under every vocabulary that names it:
@@ -14,6 +18,9 @@ import {
  */
 const FAR_CAP_LINEAGE =
   /^(?:boolean\.face\.tool\.)?sweep\.face\.cap\.end(?:\.|$)/;
+
+/** The far cap of a new-body extrude, as a union or subtract operand. */
+const OPERAND_FAR_CAP_ROLE = /^sweep\.face\.cap\.end(?:\.|$)/;
 
 export interface ExtrudeCapAncestor {
   feature: FeatureNode;
@@ -45,24 +52,75 @@ export function extrudeCapAncestor(
   faceReference: FaceTopologyReferenceV5 | undefined,
   faceHash: number
 ): ExtrudeCapAncestor | null {
-  if (
-    !faceReference ||
-    faceReference.currentHash !== faceHash ||
-    !FAR_CAP_LINEAGE.test(faceReference.lineageName)
-  ) {
+  if (!faceReference || faceReference.currentHash !== faceHash) return null;
+  const operand = booleanOperandRole(faceReference.lineageName);
+  if (operand && OPERAND_FAR_CAP_ROLE.test(operand.role)) {
+    return extrudeCapAcrossBoolean(
+      document,
+      bodyId,
+      faceReference,
+      operand.operandIndex
+    );
+  }
+  if (!FAR_CAP_LINEAGE.test(faceReference.lineageName)) {
     return null;
   }
   const feature = listFeaturesInOrder(document).find(
     (candidate) => candidate.featureId === faceReference.producingFeatureId
   );
-  if (
-    !feature ||
-    feature.bodyId !== bodyId ||
-    isFeatureSuppressed(feature) ||
-    feature.data.featureKind !== 'extrude'
-  ) {
+  if (!feature || feature.bodyId !== bodyId || isFeatureSuppressed(feature)) {
     return null;
   }
+  return storedDistanceCap(feature, 1);
+}
+
+/**
+ * A free-body extrude's far cap after one union or subtract consumed that
+ * body, under the bounded WS4 crossing contract (see
+ * `booleanOperandSource`). Only a new-body extrude qualifies: an add or cut
+ * already merged into another body, so the operand's own body is not the
+ * extrude's. In-place moves between are transparent; a scale is not, since
+ * the stored distance would no longer be the drag's length.
+ */
+function extrudeCapAcrossBoolean(
+  document: ProjectDocument,
+  bodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5,
+  operandIndex: number
+): ExtrudeCapAncestor | null {
+  const chain = booleanOperandSource(
+    document,
+    bodyId,
+    faceReference,
+    operandIndex,
+    {
+      matches: (feature) =>
+        feature.data.featureKind === 'extrude' &&
+        (feature.data.operation ?? 'new') === 'new'
+    },
+    {
+      // An earlier move of this same cap has its own baseline.
+      allowsDirectEdit: (operation) =>
+        operation.kind === 'offset-face' &&
+        operation.faceReference !== undefined &&
+        !OPERAND_FAR_CAP_ROLE.test(
+          booleanOperandRole(operation.faceReference.lineageName)?.role ??
+            operation.faceReference.lineageName
+        )
+    }
+  );
+  if (!chain || chain.scale !== 1) return null;
+  // A subtract tool's far cap is the cut's floor, facing back out of it.
+  const crossedTool =
+    chain.crossed?.operation === 'subtract' && chain.crossed.operandIndex > 0;
+  return storedDistanceCap(chain.primitive, crossedTool ? -1 : 1);
+}
+
+function storedDistanceCap(
+  feature: FeatureNode,
+  facing: 1 | -1
+): ExtrudeCapAncestor | null {
+  if (feature.data.featureKind !== 'extrude') return null;
   const { distance, symmetric, backDistance, operation, endCondition } =
     feature.data;
   if (
@@ -78,9 +136,11 @@ export function extrudeCapAncestor(
     return null;
   }
   const outward: 1 | -1 = distance > 0 ? 1 : -1;
+  const sense: 1 | -1 =
+    operation === 'cut' ? (outward === 1 ? -1 : 1) : outward;
   return {
     feature,
     distance,
-    sense: operation === 'cut' ? (outward === 1 ? -1 : 1) : outward
+    sense: facing === 1 ? sense : sense === 1 ? -1 : 1
   };
 }

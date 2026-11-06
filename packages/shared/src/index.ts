@@ -3347,7 +3347,8 @@ export interface FeatureWarning {
    * not: `invalid_topology` from a boolean is a pair the engine would not
    * combine, and from a validation it is a body that came back malformed.
    * `operation` is present only for a family that names one — the booleans
-   * do, a validation has no operand pair to name.
+   * do, a validation has no operand pair to name; a `direct-edit` refusal
+   * names the edit (`resize-cylindrical-face`).
    *
    * This carried only booleans when it was introduced. Every family with a
    * typed twin on the pin now travels on the same field rather than growing
@@ -3361,10 +3362,20 @@ export interface FeatureWarning {
       | 'import'
       | 'blend'
       | 'gear'
-      | 'thread';
+      | 'thread'
+      | 'direct-edit';
     operation?: string;
     category: string;
     code: string;
+    /**
+     * The kernel's cause code, for a refusal whose `code` covers several
+     * causes. A refused cylindrical-face resize (`unsupported_move_face`)
+     * says `unsupported_neighbor`, `partial_reversed_wall` or `unclassified`
+     * here. A string for the same reason `category` is one.
+     */
+    reason?: string;
+    /** The surface type of the neighbour that blocked the edit, if named. */
+    neighborSurfaceType?: string;
   };
   /**
    * What the adapter's size ladder proved about a refused fillet or chamfer.

@@ -124,6 +124,21 @@ describe('STL parsing', () => {
     );
   });
 
+  it('accepts exactly 500,000 binary triangles as packed geometry', () => {
+    const count = 500_000;
+    const buffer = new ArrayBuffer(84 + count * 50);
+    const view = new DataView(buffer);
+    view.setUint32(80, count, true);
+    view.setFloat32(buffer.byteLength - 6, 2.5, true);
+    const parsed = parseStl(buffer, 'limit.stl', true);
+    expect(parsed.triangleCount).toBe(count);
+    expect(parsed.vertices).toBeInstanceOf(Float64Array);
+    expect(parsed.vertices).toHaveLength(count * 9);
+    expect(parsed.vertices.at(-1)).toBe(2.5);
+    expect(parsed.indices).toBeInstanceOf(Uint32Array);
+    expect(parsed.indices.at(-1)).toBe(count * 3 - 1);
+  });
+
   it('refuses an ASCII STL whose only vertices are malformed as ASCII', () => {
     // Malformed coordinates still read as a vertex statement, so the file
     // reaches the ASCII reader's refusal instead of a binary one.
@@ -163,14 +178,28 @@ describe('STL parsing', () => {
     expect(() => parseStl(buffer, 'nan.stl')).toThrow(/non-finite/);
   });
 
-  it('rejects an ASCII STL that exceeds the triangle budget', () => {
-    // Whole facets: the reader refuses a vertex statement outside one.
-    const facet =
-      'facet normal 0 0 0\nouter loop\nvertex 0 0 0\nvertex 0 0 0\nvertex 0 0 0\nendloop\nendfacet\n';
-    const text = `solid big\n${facet.repeat(MAX_IMPORT_TRIANGLES + 1)}endsolid big\n`;
-    const buffer = new TextEncoder().encode(text).buffer;
-    expect(() => parseStl(buffer, 'big.stl')).toThrow(/browser import limit/);
-  });
+  it.each([500_000, 500_001])(
+    'applies the ASCII STL limit at %i triangles',
+    (count) => {
+      // Whole facets: the reader refuses a vertex statement outside one.
+      const facet =
+        'facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n';
+      const text = `solid big\n${facet.repeat(count)}endsolid big\n`;
+      const buffer = new TextEncoder().encode(text).buffer;
+      if (count === 500_001) {
+        expect(() => parseStl(buffer, 'big.stl', true)).toThrow(
+          /browser import limit/
+        );
+      } else {
+        const parsed = parseStl(buffer, 'big.stl', true);
+        expect(parsed.triangleCount).toBe(count);
+        expect(parsed.vertices.slice(-9)).toEqual(
+          Float64Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0)
+        );
+        expect(parsed.indices.at(-1)).toBe(count * 3 - 1);
+      }
+    }
+  );
 
   describe('ASCII facet structure', () => {
     function asciiStlText(

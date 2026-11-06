@@ -80,12 +80,16 @@ describe('a cylinder radius drag across a boolean', () => {
         const cap = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
           (face) => face.geometry?.surfaceType === 'plane'
         )!;
+        // The cap drag itself would now grow the source Cylinder (see
+        // `source-first-routing-across-boolean.test.ts`); the explicit local
+        // Offset Face records the lineage offset this case replays.
         const plan = planFaceOffset({
           document: { ...manager.document, derived },
           bodyId,
           face: cap,
           faceHash: cap.hash,
-          offset: 5
+          offset: 5,
+          localOnly: true
         });
         expect(plan?.kind).toBe('direct-edit');
         manager.execute(plan!.command);
@@ -149,11 +153,15 @@ describe('a cylinder radius drag across a boolean', () => {
     120_000
   );
 
-  it('keeps a hash-only seam fillet on the local wall resize', async () => {
+  it('keeps a hash-only seam fillet on the local wall resize, which removes, resizes and re-blends it', async () => {
     // Box ∪ boss with its seam filleted. The kernel's evolution declines to
     // trace the seam, so the fillet holds a hash. A source radius edit would
-    // make a new seam and lose that pick; the local resize keeps it and
-    // succeeds, so the drag must not cross the union here.
+    // make a new seam and lose that pick, so the drag must not cross the
+    // union here. The kernel's own local resize leaves the fillet band at
+    // r 6 capped by a new annulus — a 46.9 mm³ groove (K10) — so the adapter
+    // takes the WS6 ladder instead: remove the band, resize the sharp wall,
+    // rebuild the band at r 2. The body must match the closed form (Pappus)
+    // in both directions.
     let document = addPrimitiveFeature(
       createProjectDocument('Boss on a plate', toUserId('user_boss_plate')),
       {
@@ -223,26 +231,60 @@ describe('a cylinder radius drag across a boolean', () => {
         wall!.hash
       )
     ).toBeNull();
-    const local = new CommandManager(rounded.document).runTransaction(
-      'Resize',
-      [
-        commandFactories.directEditBody({
-          name: 'Resize Cylinder',
-          targetBodyId: rounded.bodyId,
-          operation: {
-            kind: 'resize-cylindrical-face',
-            faceHash: wall!.hash,
-            ...(wall!.reference ? { faceReference: wall!.reference } : {}),
-            sourceRadius: 6,
-            sourceAxisStart: wall!.geometry!.axisStart!,
-            sourceAxisEnd: wall!.geometry!.axisEnd!,
-            concavity: 'boss',
-            radius: 7
-          }
-        })
-      ]
-    );
-    const { wall: resized } = await wallOf(local, rounded.bodyId);
-    expect(resized?.geometry?.radius).toBeCloseTo(7, 9);
+    for (const radius of [7, 5]) {
+      const local = new CommandManager(rounded.document).runTransaction(
+        'Resize',
+        [
+          commandFactories.directEditBody({
+            name: 'Resize Cylinder',
+            targetBodyId: rounded.bodyId,
+            operation: {
+              kind: 'resize-cylindrical-face',
+              faceHash: wall!.hash,
+              ...(wall!.reference ? { faceReference: wall!.reference } : {}),
+              sourceRadius: 6,
+              sourceAxisStart: wall!.geometry!.axisStart!,
+              sourceAxisEnd: wall!.geometry!.axisEnd!,
+              concavity: 'boss',
+              radius
+            }
+          })
+        ]
+      );
+      const bodyId = local.bodyOrder.at(-1)!;
+      const derived = await adapter.syncDocument(local);
+      expect(derived.featureWarnings ?? []).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId]!;
+      // Block, the boss above it, and the seam ring: the fillet spandrel
+      // ρ²(1 − π/4) swept round the axis at r + ρ(10 − 3π)/(12 − 3π).
+      const rho = 2;
+      const ring =
+        2 *
+        Math.PI *
+        (radius + (rho * (10 - 3 * Math.PI)) / (12 - 3 * Math.PI)) *
+        rho *
+        rho *
+        (1 - Math.PI / 4);
+      expect(body.volume).toBeCloseTo(
+        60 * 60 * 20 + Math.PI * radius * radius * 20 + ring,
+        3
+      );
+      const faces = body.topology!.faces;
+      expect(
+        faces.filter(
+          (face) =>
+            face.geometry?.surfaceType === 'cylinder' &&
+            Math.abs((face.geometry.radius ?? 0) - radius) < 1e-9
+        )
+      ).toHaveLength(1);
+      expect(
+        faces.filter((face) => face.geometry?.surfaceType === 'torus')
+      ).toHaveLength(1);
+      expect(
+        isClosedConsistentlyOrientedMesh(
+          inspectTriangleMeshClosure(body.mesh.vertices, body.mesh.indices)
+        )
+      ).toBe(true);
+    }
   }, 120_000);
 });

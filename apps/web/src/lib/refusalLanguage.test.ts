@@ -265,4 +265,44 @@ describe('plainRefusal with the kernel category', () => {
       category: 'quality_refused'
     });
   });
+
+  /**
+   * A refused face move the kernel typed is read from its code and cause.
+   * The prose here matches no table entry, so the sentence can only have come
+   * from the record (Remus #1550, `resizeCylindricalFaceDetailed`).
+   */
+  it('names a typed face-move refusal from its code and cause', () => {
+    const raw = 'an opaque kernel sentence';
+    const typed = (reason: string, neighborSurfaceType?: string) => ({
+      category: 'unsupported',
+      code: 'unsupported_move_face',
+      reason,
+      ...(neighborSurfaceType ? { neighborSurfaceType } : {})
+    });
+    const cases: ReadonlyArray<[ReturnType<typeof typed>, string]> = [
+      [
+        typed('unsupported_neighbor', 'sphere'),
+        "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead."
+      ],
+      [
+        typed('unsupported_neighbor', 'nurbs'),
+        "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet."
+      ],
+      [
+        typed('partial_reversed_wall'),
+        "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead."
+      ]
+    ];
+    for (const [record, sentence] of cases) {
+      expect(plainRefusal(raw, record), record.reason).toEqual({
+        message: sentence,
+        detail: raw,
+        category: 'unsupported'
+      });
+    }
+    // A cause with no sentence of its own falls back to the category.
+    expect(plainRefusal(raw, typed('unclassified')).message).toBe(
+      'The exact kernel does not support this combination of shapes yet.'
+    );
+  });
 });

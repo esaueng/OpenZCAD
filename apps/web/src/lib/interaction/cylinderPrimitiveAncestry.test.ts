@@ -16,11 +16,15 @@ import {
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
   type FaceTopologyReferenceV5,
+  type BodyId,
   type FaceWitnessV1,
   type FeatureId
 } from '@openzcad/shared';
 import {
   primitiveBoxFaceAncestor,
+  primitiveConeCapAncestor,
+  primitiveCurvedFaceAncestor,
+  primitiveCylinderCapAncestor,
   primitiveCylinderHeightAncestor,
   primitiveCylinderRadiusAncestor,
   primitiveCylinderScale
@@ -795,5 +799,380 @@ describe('cylinder radius across a boolean', () => {
     expect(
       primitiveCylinderRadiusAncestor(resized, joined.bodyId, wall, 321)
     ).toBeNull();
+  });
+});
+
+describe('source-first routing across a boolean (WS4)', () => {
+  function plateAnd(
+    primitiveKind: 'cylinder' | 'cone' | 'sphere' | 'torus',
+    operation: 'union' | 'subtract' | 'intersect',
+    order: 'plate-first' | 'tool-first' = 'plate-first'
+  ) {
+    const plate = addPrimitiveFeature(
+      createProjectDocument('WS4 routing', toUserId('user_ancestry')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 40, depth: 10 }
+      }
+    );
+    const tool = addPrimitiveFeature(plate, {
+      name: 'Tool',
+      primitiveKind,
+      dimensions:
+        primitiveKind === 'cone'
+          ? { bottomRadius: 6, topRadius: 3, height: 20 }
+          : primitiveKind === 'torus'
+            ? { majorRadius: 10, minorRadius: 3 }
+            : primitiveKind === 'sphere'
+              ? { radius: 8 }
+              : { radius: 5, height: 20 }
+    });
+    const [plateBodyId, toolBodyId] = tool.bodyOrder as [BodyId, BodyId];
+    const placed = transformBody(tool, {
+      name: 'Place',
+      targetBodyId: toolBodyId,
+      translation: { x: 20, y: 20, z: 4 }
+    }).document;
+    const joined = booleanBodies(placed, {
+      name: 'Combine',
+      operation,
+      targetBodyIds:
+        order === 'plate-first'
+          ? [plateBodyId, toolBodyId]
+          : [toolBodyId, plateBodyId]
+    });
+    const booleanId = listFeaturesInOrder(joined.document).at(-1)!.featureId;
+    const toolIndex = order === 'plate-first' ? 1 : 0;
+    const face = (role: string, operandIndex = toolIndex) =>
+      ({
+        kind: 'face',
+        producingFeatureId: booleanId,
+        lineageName: `boolean.face.operand.${operandIndex}.${role}`,
+        currentHash: 321,
+        witnessVersion: 1,
+        witness: {} as FaceWitnessV1
+      }) satisfies FaceTopologyReferenceV5;
+    const toolFeatureId = listFeaturesInOrder(tool).at(-1)!.featureId;
+    return {
+      document: joined.document,
+      bodyId: joined.bodyId,
+      plateBodyId,
+      toolBodyId,
+      toolFeatureId,
+      booleanId,
+      face
+    };
+  }
+
+  it('drives a cylinder cap across a union or subtract, inverting a cut tool', () => {
+    for (const [operation, order, side, sense] of [
+      ['union', 'plate-first', 'end', 1],
+      ['subtract', 'plate-first', 'start', -1],
+      // The cylinder as the subtract's target keeps its own orientation.
+      ['subtract', 'tool-first', 'end', 1]
+    ] as const) {
+      const { document, bodyId, face, toolFeatureId } = plateAnd(
+        'cylinder',
+        operation,
+        order
+      );
+      const reference = face(`primitive.cylinder.face.cap.${side}`);
+      expect(
+        primitiveCylinderCapAncestor(document, bodyId, reference, 321),
+        `${operation} ${order}`
+      ).toMatchObject({
+        primitive: { featureId: toolFeatureId },
+        side,
+        scale: 1,
+        sense
+      });
+    }
+  });
+
+  it('refuses a cap across an intersect, a kept or copied source, or a stale role', () => {
+    const intersected = plateAnd('cylinder', 'intersect');
+    expect(
+      primitiveCylinderCapAncestor(
+        intersected.document,
+        intersected.bodyId,
+        intersected.face('primitive.cylinder.face.cap.end'),
+        321
+      )
+    ).toBeNull();
+    const { document, bodyId, face, booleanId, toolBodyId } = plateAnd(
+      'cylinder',
+      'union'
+    );
+    const cap = face('primitive.cylinder.face.cap.end');
+    const kept = updateFeature(document, {
+      featureId: booleanId,
+      data: { keepOriginals: 'tools' }
+    });
+    expect(primitiveCylinderCapAncestor(kept, bodyId, cap, 321)).toBeNull();
+    const copied = transformBody(document, {
+      name: 'Copy',
+      targetBodyId: toolBodyId,
+      translation: { x: 60, y: 0, z: 0 },
+      copy: true
+    }).document;
+    expect(primitiveCylinderCapAncestor(copied, bodyId, cap, 321)).toBeNull();
+    for (const candidate of [
+      { ...cap, currentHash: 322 },
+      face('primitive.cylinder.face.cap.end', 0),
+      face('primitive.cylinder.face.cap.end', 2)
+    ]) {
+      expect(
+        primitiveCylinderCapAncestor(document, bodyId, candidate, 321),
+        candidate.lineageName
+      ).toBeNull();
+    }
+  });
+
+  it('keeps an earlier move of the same cap and a hash-only blend local', () => {
+    const { document, bodyId, face, toolFeatureId } = plateAnd(
+      'cylinder',
+      'union'
+    );
+    const cap = face('primitive.cylinder.face.cap.end');
+    const offset = (lineageName: string) =>
+      directEditBody(document, {
+        name: 'Offset face',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: 654,
+          faceReference: { ...cap, lineageName, currentHash: 654 },
+          sourceSurfaceType: 'plane',
+          sourceArea: 78.5,
+          sourceCenter: { x: 20, y: 20, z: 24 },
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          offset: 2
+        }
+      }).document;
+    expect(
+      primitiveCylinderCapAncestor(offset(cap.lineageName), bodyId, cap, 321)
+    ).toBeNull();
+    // A planar offset of another face replays on the resized operand.
+    expect(
+      primitiveCylinderCapAncestor(
+        offset('boolean.face.operand.0.primitive.box.face.z-min'),
+        bodyId,
+        cap,
+        321
+      )?.primitive.featureId
+    ).toBe(toolFeatureId);
+    const rounded = filletEdges(document, {
+      name: 'Fillet edges',
+      targetBodyId: bodyId,
+      edgeHashes: [101],
+      size: 1
+    });
+    expect(
+      primitiveCylinderCapAncestor(rounded.document, rounded.bodyId, cap, 321)
+    ).toBeNull();
+  });
+
+  it('drives a cone cap by its height, and only a cone cap', () => {
+    const { document, bodyId, face, toolFeatureId } = plateAnd(
+      'cone',
+      'subtract'
+    );
+    expect(
+      primitiveConeCapAncestor(
+        document,
+        bodyId,
+        face('primitive.cone.face.cap.start'),
+        321
+      )
+    ).toMatchObject({
+      primitive: { featureId: toolFeatureId },
+      side: 'start',
+      sense: -1
+    });
+    expect(
+      primitiveCylinderCapAncestor(
+        document,
+        bodyId,
+        face('primitive.cone.face.cap.start'),
+        321
+      )
+    ).toBeNull();
+    expect(
+      primitiveConeCapAncestor(
+        document,
+        bodyId,
+        face('primitive.cylinder.face.cap.start'),
+        321
+      )
+    ).toBeNull();
+  });
+
+  it('owns sphere patches, a cone wall and a torus shell across a union or subtract', () => {
+    for (const [kind, role] of [
+      ['sphere', 'primitive.sphere.face.z-max'],
+      ['sphere', 'primitive.sphere.face.z-min'],
+      ['cone', 'primitive.cone.face.wall'],
+      ['torus', 'primitive.torus.face.shell']
+    ] as const) {
+      for (const operation of ['union', 'subtract'] as const) {
+        const { document, bodyId, face, toolFeatureId } = plateAnd(
+          kind,
+          operation
+        );
+        expect(
+          primitiveCurvedFaceAncestor(document, bodyId, face(role), 321)
+            ?.featureId,
+          `${operation} ${role}`
+        ).toBe(toolFeatureId);
+      }
+      const intersected = plateAnd(kind, 'intersect');
+      expect(
+        primitiveCurvedFaceAncestor(
+          intersected.document,
+          intersected.bodyId,
+          intersected.face(role),
+          321
+        )
+      ).toBeNull();
+    }
+    // The role must name the operand's own kind.
+    const { document, bodyId, face } = plateAnd('sphere', 'union');
+    expect(
+      primitiveCurvedFaceAncestor(
+        document,
+        bodyId,
+        face('primitive.torus.face.shell'),
+        321
+      )
+    ).toBeNull();
+  });
+});
+
+describe('box side across a subtract', () => {
+  function filletedPlateMinusPin(neighbour: string) {
+    const plate = addPrimitiveFeature(
+      createProjectDocument('Plate minus pin', toUserId('user_ancestry')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 40, depth: 10 }
+      }
+    );
+    const pin = addPrimitiveFeature(plate, {
+      name: 'Pin',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 5, height: 20 }
+    });
+    const [plateBodyId, pinBodyId] = pin.bodyOrder as [BodyId, BodyId];
+    const cut = booleanBodies(pin, {
+      name: 'Cut',
+      operation: 'subtract',
+      targetBodyIds: [plateBodyId, pinBodyId]
+    });
+    const booleanId = listFeaturesInOrder(cut.document).at(-1)!.featureId;
+    const reference = (lineageName: string, currentHash: number) =>
+      ({
+        kind: 'face',
+        producingFeatureId: booleanId,
+        lineageName,
+        currentHash,
+        witnessVersion: 1,
+        witness: {} as FaceWitnessV1
+      }) satisfies FaceTopologyReferenceV5;
+    const corner: EdgeTopologyReferenceV5 = {
+      kind: 'edge',
+      producingFeatureId: booleanId,
+      lineageName: 'boolean.edge.operand.0.primitive.box.edge.z.x-min.y-min',
+      currentHash: 900,
+      witnessVersion: 1,
+      witness: {} as EdgeWitnessV1
+    };
+    const rounded = filletEdges(cut.document, {
+      name: 'Fillet edges',
+      targetBodyId: cut.bodyId,
+      edgeHashes: [900],
+      edgeReferences: [corner],
+      size: 2
+    });
+    const side = reference(
+      'boolean.face.operand.0.primitive.box.face.x-max',
+      1
+    );
+    const faces = [
+      side,
+      reference(neighbour, 2),
+      reference('boolean.face.operand.0.primitive.box.face.y-max', 3)
+    ];
+    const document = {
+      ...rounded.document,
+      derived: {
+        ...rounded.document.derived,
+        bodyRepresentations: {
+          [rounded.bodyId]: {
+            topology: {
+              faces: faces.map((face) => ({
+                hash: face.currentHash,
+                reference: face
+              })),
+              edges: [
+                { hash: 11, adjacentFaceHashes: [1, 2] },
+                { hash: 12, adjacentFaceHashes: [1, 3] }
+              ]
+            }
+          }
+        }
+      }
+    } as unknown as typeof rounded.document;
+    return {
+      document,
+      bodyId: rounded.bodyId,
+      side,
+      boxFeatureId: listFeaturesInOrder(plate)[0]!.featureId
+    };
+  }
+
+  it('resizes the target box when every neighbour of the side is its own', () => {
+    const { document, bodyId, side, boxFeatureId } = filletedPlateMinusPin(
+      'modifier.fillet.face.band-between.boolean.face.operand.0.primitive.box.face.x-max|boolean.face.operand.0.primitive.box.face.y-min'
+    );
+    expect(primitiveBoxFaceAncestor(document, bodyId, side, 1)).toMatchObject({
+      primitive: { featureId: boxFeatureId },
+      dimension: 'width',
+      side: 'max'
+    });
+  });
+
+  it('keeps the side local where the tool reaches it, or for a tool side', () => {
+    for (const neighbour of [
+      'boolean.face.operand.1.primitive.cylinder.face.wall',
+      'modifier.fillet.face.band-between.boolean.face.operand.0.primitive.box.face.x-max|boolean.face.operand.1.primitive.cylinder.face.wall'
+    ]) {
+      const { document, bodyId, side } = filletedPlateMinusPin(neighbour);
+      expect(
+        primitiveBoxFaceAncestor(document, bodyId, side, 1),
+        neighbour
+      ).toBeNull();
+    }
+    const { document, bodyId, side } = filletedPlateMinusPin(
+      'boolean.face.operand.0.primitive.box.face.z-max'
+    );
+    // An unnamed neighbour proves nothing either.
+    const unnamed = structuredClone(document);
+    delete (
+      unnamed.derived.bodyRepresentations[bodyId]!.topology!.faces[1] as {
+        reference?: unknown;
+      }
+    ).reference;
+    expect(primitiveBoxFaceAncestor(unnamed, bodyId, side, 1)).toBeNull();
+    // A subtract's tool side and a min side never cross.
+    for (const lineageName of [
+      'boolean.face.operand.1.primitive.box.face.x-max',
+      'boolean.face.operand.0.primitive.box.face.x-min'
+    ]) {
+      expect(
+        primitiveBoxFaceAncestor(document, bodyId, { ...side, lineageName }, 1)
+      ).toBeNull();
+    }
   });
 });

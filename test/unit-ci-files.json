@@ -37,6 +37,7 @@
     "packages/kernel-adapter/src/remus-modeling-operations.test.ts",
     "packages/kernel-adapter/src/remus-native-vertices.test.ts",
     "packages/kernel-adapter/src/remus-runtime.test.ts",
+    "packages/kernel-adapter/src/result-acceptance.test.ts",
     "packages/kernel-adapter/src/union-unify-gate.test.ts",
     "packages/mls/src/boundary.test.ts",
     "packages/mls/src/certification.test.ts",
@@ -149,11 +150,13 @@
     "test/unit-runtime-budget.test.ts",
     "test/combination-matrix.test.ts",
     "test/sphere-boss-resize-refusal.test.ts",
+    "test/sphere-boss-seam-fillet-resize.test.ts",
     "test/parity/parity.test.ts",
     "test/direct-edit-corpus/corpus.test.ts",
     "test/refusal-reproduction.test.ts",
     "test/project-diagnostics.test.ts",
     "test/cylinder-radius-across-boolean.test.ts",
+    "test/source-first-routing-across-boolean.test.ts",
     "test/sphere-patch-lineage.test.ts"
   ],
   "web": [

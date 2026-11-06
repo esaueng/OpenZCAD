@@ -18,6 +18,7 @@ import type {
 } from '@openzcad/shared';
 import {
   primitiveBoxFaceAncestor,
+  primitiveConeCapAncestor,
   primitiveCylinderCapAncestor
 } from './cylinderPrimitiveAncestry';
 import { extrudeCapAncestor } from './extrudeCapAncestry';
@@ -379,23 +380,36 @@ export function planFaceOffset(
     };
   }
 
+  const coneCap =
+    !input.localOnly &&
+    primitiveConeCapAncestor(document, bodyId, face.reference, faceHash);
   const cylinder =
     !input.localOnly &&
-    primitiveCylinderCapAncestor(document, bodyId, face.reference, faceHash);
+    (primitiveCylinderCapAncestor(document, bodyId, face.reference, faceHash) ||
+      coneCap);
   if (cylinder) {
-    const localOffset = Math.round(offset * 1000) / 1000 / cylinder.scale;
-    const localExact =
-      typeof exact === 'string' && cylinder.scale !== 1
-        ? `(${exact}) / ${cylinder.scale}`
+    const kind = coneCap ? 'Cone' : 'Cylinder';
+    // A subtract tool's cap faces back out of the cut: pulling it outward
+    // shortens the tool.
+    const localOffset =
+      (cylinder.sense * Math.round(offset * 1000)) / 1000 / cylinder.scale;
+    const signedExact =
+      typeof exact === 'string' && cylinder.sense === -1
+        ? `-(${exact})`
         : exact;
+    const localExact =
+      typeof signedExact === 'string' && cylinder.scale !== 1
+        ? `(${signedExact}) / ${cylinder.scale}`
+        : signedExact;
+    const label = `Resize ${kind} Height`;
     const plan = dimensionEdit(
       document,
       cylinder.primitive,
       'height',
       localOffset,
       localExact,
-      'Resize Cylinder Height',
-      'That distance would leave the cylinder with no height.',
+      label,
+      `That distance would leave the ${kind.toLowerCase()} with no height.`,
       false
     );
     if (plan?.kind === 'primitive-dimension') {
@@ -406,8 +420,8 @@ export function planFaceOffset(
           plan.command,
           'z',
           typeof localExact === 'string' ? localExact : localOffset,
-          'Resize Cylinder Height',
-          'Move Cylinder Base'
+          label,
+          `Move ${kind} Base`
         );
         if (!command) return null;
         plan.command = command;
@@ -497,15 +511,17 @@ export function faceOffsetBaseline(
   if (extrude) {
     return { total: extrude.distance, sense: extrude.sense };
   }
-  const cylinder = primitiveCylinderCapAncestor(
-    document,
-    bodyId,
-    face.reference,
-    faceHash
-  );
+  const cylinder =
+    primitiveCylinderCapAncestor(document, bodyId, face.reference, faceHash) ??
+    primitiveConeCapAncestor(document, bodyId, face.reference, faceHash);
   const primitive =
     cylinder?.primitive.data.featureKind === 'primitive'
-      ? { node: cylinder.primitive, dimension: 'height', scale: cylinder.scale }
+      ? {
+          node: cylinder.primitive,
+          dimension: 'height',
+          scale: cylinder.scale,
+          sense: cylinder.sense
+        }
       : (() => {
           const box = primitiveBoxFaceAncestor(
             document,
@@ -517,7 +533,8 @@ export function faceOffsetBaseline(
             ? {
                 node: box.primitive,
                 dimension: box.dimension,
-                scale: box.scale
+                scale: box.scale,
+                sense: 1 as const
               }
             : null;
         })();
@@ -534,7 +551,9 @@ export function faceOffsetBaseline(
         primitive.dimension,
         document.units
       ) * primitive.scale;
-    return Number.isFinite(total) ? { total, sense: 1 } : undefined;
+    return Number.isFinite(total)
+      ? { total, sense: primitive.sense }
+      : undefined;
   } catch {
     return undefined;
   }
