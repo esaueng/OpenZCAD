@@ -186,13 +186,22 @@ function parseAsciiStl(
   let index = 0;
   /** Where the token `next` last returned starts. */
   let start = 0;
+  // Match exactly the ASCII separators accepted by isSeparator. Native
+  // scanning avoids a JavaScript call/coverage branch for every character
+  // of a large file; unlike \S, it does not accept Unicode whitespace.
+  const tokens = /[^\t\n\v\f\r ]+/g;
   /** The next token, or null at the end of the text. */
   const next = (): string | null => {
-    while (index < length && isSeparator(text.charCodeAt(index))) index += 1;
-    if (index >= length) return null;
-    start = index;
-    while (index < length && !isSeparator(text.charCodeAt(index))) index += 1;
-    return text.slice(start, index);
+    // Lookahead and solid-name handling can rewind index independently.
+    tokens.lastIndex = index;
+    const token = tokens.exec(text);
+    if (token === null) {
+      index = length;
+      return null;
+    }
+    start = token.index;
+    index = tokens.lastIndex;
+    return token[0];
   };
   /** A token's keyword, lower-cased, or '' for any other token. */
   const keywordOf = (token: string): string => {

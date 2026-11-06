@@ -171,6 +171,24 @@ describe('roadmap evidence fragments', () => {
     expect(rowOf(out, 'A01')).toContain('Glimpse counters. First. Second.');
   });
 
+  it('folds many fragments in a ledger with wide evidence cells', () => {
+    const evidence = `${'Existing delivery history. '.repeat(80)}\`x | y\` and a\\|b.`;
+    const ids = Array.from({ length: 250 }, (_, index) => `R${index}`);
+    const header = ['| ID | Status | Evidence |', '| --- | --- | --- |'];
+    const ledger = [
+      ...header,
+      ...ids.map((id) => `| ${id} | Partial | ${evidence} |`)
+    ].join('\n');
+    const out = foldEvidence(
+      ledger,
+      ids.map((id) => fragment(id, `Recorded ${id}.`))
+    );
+    expect(out.split('\n')).toEqual([
+      ...header,
+      ...ids.map((id) => `| ${id} | Partial | ${evidence} Recorded ${id}. |`)
+    ]);
+  });
+
   it('refuses unknown rows and competing state changes without writing', () => {
     expect(() => foldEvidence(LEDGER, [fragment('Z99', 'x')])).toThrow(
       /matches 0 ledger rows/

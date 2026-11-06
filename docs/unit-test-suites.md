@@ -10,6 +10,10 @@ This intentionally reduces routine regression coverage. Extended geometry,
 encryption state-machine, race and historical cases remain in the full suite.
 New files are full-suite coverage until added to the smoke manifest. Keep
 representative capabilities and guard suites here rather than every variant.
+The staged v7 runner also discovers affected files from the full project and
+unions them with this manifest, so changed regressions are not omitted from
+their own PR. Discovery failures fall back to the complete project. See
+[CI qualification](ci-qualification.md) for activation and daily full runs.
 Manifest entries must be unique existing test files; a stale selection fails
 before running tests. Worker-owned web suites are all retained.
 
@@ -89,8 +93,10 @@ coverage and scan-floor assertions inspect that same result. These checks
 assert correctness and ownership, not elapsed-time performance. Global test
 timeouts, worker limits, replay counts and assertion thresholds are unchanged.
 The dense spline oracle still checks all 120 seeded trials and all 4,000
-chords. It skips intersection arithmetic only for segment pairs with
-provably disjoint closed bounding boxes, retaining its default test deadline.
+chords. A sweep over sorted closed x intervals skips provably disjoint pairs,
+retaining the original crossing arithmetic, chord order and default test
+deadline. Differential fixtures retain the original quadratic pair scan as
+an independent check of candidate discovery.
 Repeated STEP byte comparisons supply a fixed timestamp through the public
 export options, since the API defaults to export time. The checkpoint test
 advances the clock across a second while retaining equality of every byte,

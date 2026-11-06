@@ -378,6 +378,11 @@ test('switching workspace ends an in-place Revolve', async ({ page }) => {
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000
   });
+  // A rendered body can arrive before startup finishes handing focus back
+  // from Search commands. Keep the shortcut on a ready, non-text control.
+  const revolve = page.getByRole('button', { name: /^Revolve \(R\)/ });
+  await expect(revolve).toBeEnabled();
+  await revolve.focus();
   await page.keyboard.press('r');
   const bar = page.getByRole('group', { name: 'Revolve command' });
   await expect(bar).toBeVisible();
