@@ -1,4 +1,5 @@
-import type { Locator } from '@playwright/test';
+import type { ProjectDocument } from '@openzcad/shared';
+import type { Locator, Page } from '@playwright/test';
 import { spurGearDocument } from '../support/spur-gear';
 import {
   test,
@@ -14,6 +15,41 @@ interface PreviewWindow extends Window {
   holdEdit: boolean;
   releaseEdit(): void;
 }
+
+/** The rendered redo can precede its device transaction. Read its commit. */
+const storedHeight = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<unknown>((resolve, reject) => {
+        const open = indexedDB.open('openzcad-v2');
+        open.onerror = () =>
+          reject(open.error ?? new Error('Could not open project storage.'));
+        open.onsuccess = () => {
+          const db = open.result;
+          const transaction = db.transaction('projects', 'readonly');
+          const all = transaction.objectStore('projects').getAll();
+          transaction.oncomplete = () => {
+            db.close();
+            const project = (all.result as ProjectDocument[]).find(
+              (candidate) => candidate.name === 'Gear height preview'
+            );
+            const blank = Object.values(project?.nodes ?? {}).find(
+              (node) => node.kind === 'feature' && node.name === 'Blank'
+            );
+            resolve(
+              blank?.kind === 'feature' &&
+                blank.data.featureKind === 'primitive'
+                ? blank.data.dimensions.height
+                : null
+            );
+          };
+          transaction.onabort = () => {
+            db.close();
+            reject(transaction.error ?? new Error('Project read aborted.'));
+          };
+        };
+      })
+  );
 
 const rendered = (canvas: Locator) =>
   canvas.evaluate(
@@ -219,10 +255,12 @@ test(
     await expect
       .poll(async () => (await rendered(canvas)).max[2]!)
       .toBeCloseTo(56, 2);
+    await expect.poll(() => storedHeight(page)).toBe(56);
     await page.getByRole('button', { name: 'Redo', exact: true }).click();
     await expect
       .poll(async () => (await rendered(canvas)).max[2]!)
       .toBeCloseTo(26, 2);
+    await expect.poll(() => storedHeight(page)).toBe(26);
     await page.reload();
     await expectBodyCount(page, 1);
     await expect

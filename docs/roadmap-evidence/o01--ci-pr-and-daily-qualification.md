@@ -35,6 +35,15 @@ The checkpoint-module fault test uses Save-Data to isolate the explicit import
 from idle prefetch, retaining its exact request-count and persistence checks.
 The imperial-unit refusal reads the validation warning, and the unresolved
 extrude waits for History's failed-feature state before opening its editor.
+The datum repair journey re-projects the known face after workspace changes;
+its old pixel was proven to hit empty canvas. The gear preview journey waits
+for committed undo/redo heights before reload, and encrypted STEP coverage
+requires exactly one import source apart from separately encrypted thumbnails,
+retaining the all-object ciphertext and fresh-browser checks.
+Evidence validation reuses parsed row IDs within a fold instead of parsing
+the full wide ledger per fragment. A 250-row regression retains escaped/code
+pipes and validates every resulting row; all refusal rules and the five-second
+deadline remain unchanged.
 The ASCII STL tokenizer now scans native token matches with the same six
 ASCII separators, preserving lookahead, grammar and refusal behavior. Eight
 separator regressions and the existing 500,000/500,001-triangle boundary tests

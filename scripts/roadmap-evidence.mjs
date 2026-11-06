@@ -158,12 +158,20 @@ const ANCHOR = /<a id="([^"]+)"><\/a>/;
  * owner rows win and unanchored rows are matched only when none does.
  */
 export function findRows(lines, row) {
+  return findRowsWithCache(lines, row, new Map());
+}
+
+function findRowsWithCache(lines, row, firstCells) {
   const wanted = row.trim();
   const anchored = [];
   const unanchored = [];
   lines.forEach((line, index) => {
     if (!isTableRow(line) || isDelimiter(line)) return;
-    const first = splitRow(line)[0] ?? '';
+    let first = firstCells.get(index);
+    if (first === undefined) {
+      first = splitRow(line)[0] ?? '';
+      firstCells.set(index, first);
+    }
     const anchor = ANCHOR.exec(first);
     const shown = first.replace(ANCHOR, '').trim();
     if (
@@ -187,13 +195,16 @@ const escapeCell = (text) => text.replace(/(?<!\\)\|/g, '\\|');
  */
 export function foldEvidence(markdown, fragments) {
   const lines = markdown.split('\n');
+  // Placement reads the original ledger; writes happen only after every
+  // fragment has been validated. Parse each wide row once for this fold.
+  const firstCells = new Map();
   const errors = [];
   const stateSetters = new Map();
   const placed = [];
   for (const fragment of [...fragments].sort((a, b) =>
     a.name.localeCompare(b.name)
   )) {
-    const hits = findRows(lines, fragment.row);
+    const hits = findRowsWithCache(lines, fragment.row, firstCells);
     if (hits.length !== 1) {
       errors.push(
         `${fragment.name}: row "${fragment.row}" matches ${hits.length} ledger rows, expected 1`

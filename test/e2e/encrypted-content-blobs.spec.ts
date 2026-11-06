@@ -165,17 +165,23 @@ test('imports a STEP file into an encrypted project and resolves it in a fresh b
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  // One encrypted blob, named by the saved head.
+  // One encrypted import source, named by the saved head. A separate shelf
+  // thumbnail may already have uploaded by the time the document is saved.
   await expect
     .poll(() => count(server, 'SELECT COUNT(*) AS n FROM e2ee_version_blobs'), {
       timeout: SYNC_BUDGET_MS
     })
     .toBeGreaterThan(0);
-  expect(count(server, 'SELECT COUNT(*) AS n FROM e2ee_content_blobs')).toBe(1);
+  const sources = server.db
+    .prepare(
+      "SELECT blob_id, kind FROM e2ee_content_blobs WHERE kind != 'thumbnail'"
+    )
+    .all() as { blob_id: string; kind: string }[];
+  expect(sources).toEqual([
+    { blob_id: expect.any(String), kind: 'import-source' }
+  ]);
   expect(count(server, 'SELECT COUNT(*) AS n FROM artifacts')).toBe(0);
-  const { blob_id: blobId } = server.db
-    .prepare('SELECT blob_id FROM e2ee_content_blobs')
-    .get() as { blob_id: string };
+  const { blob_id: blobId } = sources[0]!;
   // The account holds ciphertext only: neither the file nor its name.
   const stored = [
     JSON.stringify(server.db.prepare('SELECT * FROM e2ee_content_blobs').all()),
