@@ -72,6 +72,7 @@ import {
 } from './exact-cylinder-ops';
 import {
   applyEdgeModifier,
+  approximateBlendAdvisory,
   EdgeModifierRefusalError,
   edgeModifierRefusal
 } from './exact-edge-modifiers';
@@ -2456,6 +2457,7 @@ function buildEdgeModifierFeature(
   }
   let reportedRefusal: string | null = null;
   let evolution: FaceEvolutionPayloadV1 | null = null;
+  let approximate = false;
   const sourceCandidates = topologyCandidatesForSolid(kernel, target);
   const modified = applyEdgeModifier(
     kernel,
@@ -2471,7 +2473,11 @@ function buildEdgeModifierFeature(
     },
     chamferAngleRadians,
     variableRadius,
-    chamferSecondDistance
+    chamferSecondDistance,
+    false,
+    (quality) => {
+      approximate = quality.approximate;
+    }
   );
   if (modified === null) {
     if (variableRadius || chamferSecondDistance !== undefined) {
@@ -2558,6 +2564,16 @@ function buildEdgeModifierFeature(
           )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  if (approximate) {
+    // The owner's rule (kernel robustness plan, 2026-11-06): an approximate
+    // blend is allowed only when it is disclosed. Say so on the feature.
+    raiseFeatureWarning(
+      result,
+      feature,
+      approximateBlendAdvisory(data.featureKind),
+      'advisory'
+    );
+  }
   // Only a feature that actually rebuilt earns a repair: a thrown
   // modifier above skips this, and the legacy selection stays as it
   // was for the user to fix.

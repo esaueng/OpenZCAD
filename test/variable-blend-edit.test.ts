@@ -8,6 +8,7 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type FeatureData } from '@openzcad/shared';
 import { edgeModifierCommand } from '../apps/web/src/lib/edgeModifierEdit';
+import { approximateBlendAdvisory } from '../packages/kernel-adapter/src/exact-edge-modifiers';
 
 const user = toUserId('user_variable_blend_edit');
 
@@ -41,7 +42,9 @@ describe('variable blend edits', { timeout: 120_000 }, () => {
     const { kernel, manager, body } = await plateWithVerticalEdges();
     try {
       const verticalEdges = body
-        .topology!.edges.filter((edge) => Math.abs((edge.length ?? 0) - 10) < 1e-6)
+        .topology!.edges.filter(
+          (edge) => Math.abs((edge.length ?? 0) - 10) < 1e-6
+        )
         .map((edge) => edge.hash);
       expect(verticalEdges.length).toBe(4);
       const edgeHashes = [verticalEdges[0]!];
@@ -73,7 +76,11 @@ describe('variable blend edits', { timeout: 120_000 }, () => {
       expect(variableData.endRadius).toBe(3);
       expect(variableData.radiusLaw).toBe('scurve');
       const variableGeometry = await kernel.syncDocument(manager.document);
-      expect(variableGeometry.warnings).toEqual([]);
+      // A variable band is a NURBS fit, disclosed on the feature; the
+      // constant blend it returns to below is exact and carries nothing.
+      expect(variableGeometry.warnings).toEqual([
+        `Feature "Round": ${approximateBlendAdvisory('fillet')}`
+      ]);
       const variableVolume =
         variableGeometry.bodyRepresentations[feature.bodyId!]!.volume;
       expect(variableVolume).not.toBeCloseTo(constantVolume, 6);

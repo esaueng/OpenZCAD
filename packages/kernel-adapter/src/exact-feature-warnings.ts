@@ -85,3 +85,15 @@ export function hasRefusingFeatureWarning(
       (entry.kind === 'build-failed' || entry.kind === 'refusal')
   );
 }
+
+/**
+ * The advisory for a valid solid whose display tessellation has gaps.
+ *
+ * Volume, measurements and STEP export read the B-rep, not the display mesh.
+ * The sentence calls that B-rep exact only when it has no NURBS face: a NURBS
+ * face may be an approximate blend fit (disclosed by its own feature), and
+ * this advice must not claim exactness for it.
+ */
+export function displayMeshGapsAdvisory(hasNurbsFace: boolean): string {
+  return `The result is a valid solid, but its display mesh has gaps, so the viewport can show holes that are not in the model. Volume, measurements and STEP export use ${hasNurbsFace ? 'the solid model, not the display mesh' : 'the exact solid'}.`;
+}

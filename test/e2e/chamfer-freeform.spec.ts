@@ -185,7 +185,10 @@ for (const curved of [false, true]) {
       await keypad.getByRole('button', { name: 'Apply distance' }).click();
       const status = page.getByRole('contentinfo');
       await expect(status).toContainText('Chamfered 1 edge at 0.5 mm.');
-      await expect(status).toContainText('warnings0');
+      // A chamfer along the spline rim is a NURBS fit, so its feature
+      // carries the approximate-blend advisory (owner decision,
+      // 2026-11-06); the planar edge beside the wall chamfers exactly.
+      await expect(status).toContainText(`warnings${curved ? 1 : 0}`);
       await expect(
         page.getByRole('heading', { name: 'History 2' })
       ).toBeVisible();
@@ -207,7 +210,7 @@ for (const curved of [false, true]) {
       await expect
         .poll(() => faceCounts(page), { timeout: 60_000 })
         .toEqual([7]);
-      await expect(status).toContainText('warnings0');
+      await expect(status).toContainText(`warnings${curved ? 1 : 0}`);
       await waitForStillViewport(page);
       if (await simpleView.isVisible()) await simpleView.click();
       await page.keyboard.press('Escape');
