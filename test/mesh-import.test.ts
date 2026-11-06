@@ -5,12 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument, importMeshBody } from '@openzcad/document-core';
 import { solidFromTriangles, solidVolume } from '@openzcad/geometry';
+import { parseStl, writeAsciiStl } from '@openzcad/io-stl';
 import {
-  MAX_IMPORT_TRIANGLES,
-  parseStl,
-  writeAsciiStl
-} from '@openzcad/io-stl';
-import {
+  MAX_MESH_FILE_IMPORT_TRIANGLES,
   MESH_IMPORT_POLICIES,
   meshImportFormatForFileName,
   meshImportTooLargeMessage,
@@ -706,7 +703,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
           `v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2${' 3'.repeat(triangles)}\n`
         );
         await expect(importMeshFile('obj', polygon, 'mm')).rejects.toThrow(
-          `OBJ has more than ${MAX_IMPORT_TRIANGLES} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
+          `OBJ has more than ${MAX_MESH_FILE_IMPORT_TRIANGLES} triangles; the browser import limit is ${MAX_MESH_FILE_IMPORT_TRIANGLES}.`
         );
         expect(importObj).not.toHaveBeenCalled();
       } finally {
@@ -730,10 +727,10 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
         const polygon = new TextEncoder().encode(
           `o part${firstEnding}v 0 0 0${followingEnding}` +
             `v 1 0 0${followingEnding}v 0 1 0${followingEnding}` +
-            `f 1 2${' 3'.repeat(MAX_IMPORT_TRIANGLES + 1)}${followingEnding}`
+            `f 1 2${' 3'.repeat(MAX_MESH_FILE_IMPORT_TRIANGLES + 1)}${followingEnding}`
         );
         await expect(importMeshFile('obj', polygon, 'mm')).rejects.toThrow(
-          `OBJ has more than ${MAX_IMPORT_TRIANGLES} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
+          `OBJ has more than ${MAX_MESH_FILE_IMPORT_TRIANGLES} triangles; the browser import limit is ${MAX_MESH_FILE_IMPORT_TRIANGLES}.`
         );
         expect(importObj).not.toHaveBeenCalled();
       } finally {
@@ -749,7 +746,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     });
     try {
       const faces = new TextEncoder().encode(
-        `f 1 2 3\rg${' part'.repeat(MAX_IMPORT_TRIANGLES + 1)}\rf 1 2 3\r`
+        `f 1 2 3\rg${' part'.repeat(MAX_MESH_FILE_IMPORT_TRIANGLES + 1)}\rf 1 2 3\r`
       );
       await expect(importMeshFile('obj', faces, 'mm')).rejects.toThrow(
         'OBJ preflight reached the translator'

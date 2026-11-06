@@ -176,6 +176,32 @@ describe('holding a mesh import payload', () => {
     expect(meshImportRunResult('rejected', false)).toBe('refused');
     expect(meshImportRunResult('failed', false)).toBe('refused');
   });
+
+  it.each(['unavailable', 'ready'] as const)(
+    'refuses a required reference if storage is %s and the payload cannot be written',
+    async (readiness) => {
+      const store: MeshPayloadStore = {
+        ensureLocalProjectStorage: async () => readiness,
+        putSourceBlobIfAbsent: vi
+          .fn()
+          .mockRejectedValue(new Error('Quota exceeded')),
+        deleteSourceBlobIfUnreferenced: vi.fn(),
+        releaseSourceBlobClaim: vi.fn()
+      };
+      await expect(
+        holdImportedMeshPayload({
+          triangles,
+          marks: marks(),
+          newId,
+          store,
+          requireReference: true
+        })
+      ).rejects.toThrow('Large STL imports require browser storage');
+      expect(store.putSourceBlobIfAbsent).toHaveBeenCalledTimes(
+        readiness === 'ready' ? 1 : 0
+      );
+    }
+  );
 });
 
 describe('archiving a mesh import', () => {
@@ -466,44 +492,46 @@ describe(
   'backups of a project holding an imported mesh',
   { timeout: 60_000 },
   () => {
-    it('restores the backup it exports for a 25k-triangle STL import', async () => {
-      const parsed = parseStl(binaryStl(25_000), 'download.stl');
-      const hold = await holdImportedMeshPayload({
-        triangles: meshInDocumentUnits(parsed, 'mm'),
-        marks: marks(),
-        newId
-      });
-      const manager = new CommandManager(
-        createProjectDocument('Mesh backup', user)
-      );
-      manager.execute(
-        importedMeshCommand(parsed, hold.form, 'artifact_local_mesh')
-      );
-      const document: ProjectDocument = manager.document;
-      await saveLocalProject(document);
-      await hold.settle('committed', document);
-      expect(documentStructureError(document)).toBeNull();
+    it.each([25_000, 500_000])(
+      'restores a backup with %i STL triangles',
+      async (count) => {
+        const parsed = parseStl(binaryStl(count), 'download.stl', true);
+        const hold = await holdImportedMeshPayload({
+          triangles: meshInDocumentUnits(parsed, 'mm'),
+          marks: marks(),
+          newId
+        });
+        const manager = new CommandManager(
+          createProjectDocument('Mesh backup', user)
+        );
+        manager.execute(
+          importedMeshCommand(parsed, hold.form, 'artifact_local_mesh')
+        );
+        const document: ProjectDocument = manager.document;
+        await saveLocalProject(document);
+        await hold.settle('committed', document);
+        expect(documentStructureError(document)).toBeNull();
 
-      const exported = await createProjectBackup(document, false);
-      // Before references: "Project document holds more than 500000 values."
-      const backup = await parseProjectBackup(exported);
-      expect(backup.sources).toHaveLength(1);
+        const exported = await createProjectBackup(document, false);
+        // Before references: "Project document holds more than 500000 values."
+        const backup = await parseProjectBackup(exported);
+        expect(backup.sources).toHaveLength(1);
 
-      // The restored copy carries the payload into a fresh device's blob store,
-      // and its triangles are the ones imported.
-      globalThis.indexedDB = new IDBFactory();
-      await saveImportedProject(backup);
-      const ref = (hold.form as { meshPayloadRef: { checksumSha256: string } })
-        .meshPayloadRef;
-      const restored = await loadSourceBlob(ref.checksumSha256);
-      expect(restored).not.toBeNull();
-      const decoded = decodeImportedMeshPayload(restored!);
-      expect(decoded.vertices.length).toBe(parsed.vertices.length);
-      expect(decoded.vertices[12_345]).toBe(parsed.vertices[12_345]);
-      expect(Array.from(decoded.indices.subarray(0, 6))).toEqual(
-        parsed.indices.slice(0, 6)
-      );
-    });
+        // The restored copy carries the payload into a fresh device's blob store,
+        // and its triangles are the ones imported.
+        globalThis.indexedDB = new IDBFactory();
+        await saveImportedProject(backup);
+        const ref = (
+          hold.form as { meshPayloadRef: { checksumSha256: string } }
+        ).meshPayloadRef;
+        const restored = await loadSourceBlob(ref.checksumSha256);
+        expect(restored).not.toBeNull();
+        const decoded = decodeImportedMeshPayload(restored!);
+        expect(decoded.vertices.length).toBe(parsed.vertices.length);
+        expect(decoded.vertices[12_345]).toBe(parsed.vertices[12_345]);
+        expect(decoded.indices.slice(0, 6)).toEqual(parsed.indices.slice(0, 6));
+      }
+    );
 
     it('refuses a backup whose mesh payload is missing', async () => {
       const hold = await holdImportedMeshPayload({

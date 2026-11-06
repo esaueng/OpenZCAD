@@ -1,5 +1,6 @@
 import {
   encodeImportedMeshPayload,
+  MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   type ProjectDocument
 } from '@openzcad/shared';
 
@@ -96,6 +97,7 @@ export async function holdImportedMeshPayload(deps: {
   /** Unique per call. `crypto.randomUUID` in the app. */
   newId(): string;
   store?: MeshPayloadStore;
+  requireReference?: boolean;
 }): Promise<MeshPayloadHold> {
   const store = deps.store ?? localMeshPayloadStore;
   const embedded: MeshPayloadHold = {
@@ -110,11 +112,19 @@ export async function holdImportedMeshPayload(deps: {
     // A blocked schema upgrade or denied storage is not a refusal: the mesh
     // embeds, exactly as every mesh import did before references.
     if ((await store.ensureLocalProjectStorage()) !== 'ready') {
+      if (deps.requireReference)
+        throw new Error('Local project storage is unavailable.');
       return embedded;
     }
     bytes = encodeImportedMeshPayload(deps.triangles);
     stored = await store.putSourceBlobIfAbsent(bytes, { claimId });
-  } catch {
+  } catch (cause) {
+    if (deps.requireReference) {
+      throw new Error(
+        'Large STL imports require browser storage. The mesh could not be stored on this device.',
+        { cause }
+      );
+    }
     return embedded;
   }
   const checksumSha256 = stored.ref.checksumSha256;
@@ -155,10 +165,12 @@ export async function holdImportedMeshPayload(deps: {
 export function holdMeshImport(
   mesh: MillimetreMesh,
   units: UnitSystem,
-  marks: { inFlight: InFlightImportChecksums; abandoned: Set<string> }
+  marks: { inFlight: InFlightImportChecksums; abandoned: Set<string> },
+  reading: UnitSystem = 'mm'
 ): Promise<MeshPayloadHold> {
   return holdImportedMeshPayload({
-    triangles: meshInDocumentUnits(mesh, units),
+    triangles: meshInDocumentUnits(mesh, units, reading),
+    requireReference: mesh.triangleCount > MAX_MESH_SOLID_CONVERSION_TRIANGLES,
     marks,
     newId: () => crypto.randomUUID()
   });

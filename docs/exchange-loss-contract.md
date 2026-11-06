@@ -66,6 +66,14 @@ reimport is one imported-mesh body whatever the file held. When an STL, OBJ
 or PLY was written in a unit other than millimetres, the reimport is only
 the right size if the import is told that unit.
 
+STL import accepts up to 500,000 triangles per file within 128 MiB. Files
+with more than 200,000 triangles need browser storage and open as mesh
+references. They retain their source facets for display and STL export.
+Solid modeling, solid volume and STEP export require a solid body. Use
+binary STL for a large mesh round trip, since full-precision ASCII can
+exceed the source byte limit. Reopening these bodies requires a build that
+supports the larger STL limit.
+
 ## Sketch formats
 
 | Format                  | Keeps                                                                                        | Drops                                                                                                                                                            |

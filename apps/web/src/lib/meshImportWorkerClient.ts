@@ -3,7 +3,7 @@ import {
   meshImportTooLargeMessage,
   type MeshImportFormat
 } from '@openzcad/kernel-adapter/mesh-import-formats';
-import type { UnitSystem } from '@openzcad/shared';
+import { MAX_SOURCE_IMPORT_BYTES, type UnitSystem } from '@openzcad/shared';
 
 export {
   meshImportFormatForFileName,
@@ -14,6 +14,7 @@ import { describeWorkerFailure } from './workerFailure';
 import { isChunkLoadError } from './staleChunk';
 
 import type {
+  MeshImportWorkerInput,
   MeshImportWorkerRequest,
   MeshImportWorkerResult
 } from '../worker/meshImportWorker';
@@ -59,6 +60,41 @@ export function importMeshFileInDisposableWorker(
       new Error(meshImportTooLargeMessage(format, file.size))
     );
   }
+  return readMeshInWorker({ type: 'import', file, format, units }, signal).then(
+    ({ vertices, indices, triangleCount, sourceUnit }) => ({
+      vertices: Array.from(vertices),
+      indices: Array.from(indices),
+      triangleCount,
+      ...(sourceUnit === undefined ? {} : { sourceUnit })
+    })
+  );
+}
+
+/** STL is unitless and returns transferable geometry without starting Remus. */
+export function importStlInDisposableWorker(file: File, signal: AbortSignal) {
+  if (file.size > MAX_SOURCE_IMPORT_BYTES) {
+    const limitMiB = MAX_SOURCE_IMPORT_BYTES / (1024 * 1024);
+    return Promise.reject(
+      new Error(
+        `STL import is limited to ${limitMiB} MiB. Try binary STL for a smaller file.`
+      )
+    );
+  }
+  return readMeshInWorker({ type: 'import-stl', file }, signal).then(
+    ({ vertices, indices, triangleCount, extent }) => ({
+      name: file.name,
+      vertices,
+      indices,
+      triangleCount,
+      extent: extent ?? null
+    })
+  );
+}
+
+function readMeshInWorker(
+  input: MeshImportWorkerInput,
+  signal?: AbortSignal
+): Promise<Extract<MeshImportWorkerResult, { ok: true }>> {
   if (signal?.aborted) {
     return Promise.reject(abortError());
   }
@@ -104,18 +140,7 @@ export function importMeshFileInDisposableWorker(
         return;
       }
       if (result.ok) {
-        finish(() =>
-          resolve({
-            // The document holds a mesh as plain arrays; the typed arrays are
-            // only how it crossed `postMessage`.
-            vertices: Array.from(result.vertices),
-            indices: Array.from(result.indices),
-            triangleCount: result.triangleCount,
-            ...(result.sourceUnit === undefined
-              ? {}
-              : { sourceUnit: result.sourceUnit })
-          })
-        );
+        finish(() => resolve(result));
       } else if (isChunkLoadError(result.error)) {
         finish(() => {
           void describeWorkerFailure(result.error).then(({ message }) =>
@@ -127,11 +152,8 @@ export function importMeshFileInDisposableWorker(
       }
     };
     const request: MeshImportWorkerRequest = {
-      type: 'import',
-      requestId,
-      format,
-      file,
-      units
+      ...input,
+      requestId
     };
     worker.postMessage(request);
   });

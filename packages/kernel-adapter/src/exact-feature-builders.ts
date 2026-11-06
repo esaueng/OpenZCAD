@@ -38,6 +38,7 @@ import {
 } from '@openzcad/geometry';
 import {
   FULL_REVOLVE_ANGLE_DEG,
+  MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   UNIT_TO_MM,
   isDatumPlaneRef,
   type DatumPlaneSource,
@@ -158,7 +159,8 @@ import {
 } from './imported-mesh';
 import {
   importedMeshStl,
-  importedMeshTriangles
+  importedMeshTriangles,
+  validateImportedMeshTriangles
 } from './imported-mesh-payload';
 import {
   extrudeVolumeTolerance,
@@ -304,28 +306,34 @@ function buildImportedMeshFeature(
       // orientation, so the document's triangle soup goes back through
       // it rather than being re-derived here — embedded or referenced alike.
       const triangles = importedMeshTriangles(data, importSources);
-      // Validate persisted data before entering the conversion fallback.
-      const stl = importedMeshStl({
+      const source = {
         sourceName: data.sourceName,
         triangleCount: data.triangleCount,
         ...triangles
-      });
+      };
       const advisories: string[] = [];
       let refusal: string | undefined;
       let solid: number | undefined;
-      try {
-        solid = importMeshSolid(kernel, stl, (message) => {
-          advisories.push(message);
-          advise(message);
-        });
-      } catch (error) {
-        if (
-          !(error instanceof MeshConversionError) ||
-          data.triangleCount === 0
-        ) {
-          throw error;
+      if (data.triangleCount > MAX_MESH_SOLID_CONVERSION_TRIANGLES) {
+        validateImportedMeshTriangles(source);
+        refusal = `The mesh exceeds the ${MAX_MESH_SOLID_CONVERSION_TRIANGLES.toLocaleString('en-US')}-triangle solid conversion limit.`;
+      } else {
+        // A malformed payload must refuse before the conversion fallback.
+        const stl = importedMeshStl(source);
+        try {
+          solid = importMeshSolid(kernel, stl, (message) => {
+            advisories.push(message);
+            advise(message);
+          });
+        } catch (error) {
+          if (
+            !(error instanceof MeshConversionError) ||
+            data.triangleCount === 0
+          ) {
+            throw error;
+          }
+          refusal = error.message;
         }
-        refusal = error.message;
       }
       if (solid !== undefined) {
         shape = { solids: [solid] };
@@ -338,8 +346,14 @@ function buildImportedMeshFeature(
         }
       } else {
         const mesh = {
-          vertices: Float64Array.from(triangles.vertices),
-          indices: Uint32Array.from(triangles.indices)
+          vertices:
+            triangles.vertices instanceof Float64Array
+              ? triangles.vertices
+              : Float64Array.from(triangles.vertices),
+          indices:
+            triangles.indices instanceof Uint32Array
+              ? triangles.indices
+              : Uint32Array.from(triangles.indices)
         };
         shape = { solids: [], referenceMesh: mesh };
         advise(

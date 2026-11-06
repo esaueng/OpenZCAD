@@ -1,7 +1,8 @@
-import { MAX_IMPORT_TRIANGLES, writeAsciiStl } from '@openzcad/io-stl';
+import { writeAsciiStl } from '@openzcad/io-stl';
 import { UNIT_TO_MM, type UnitSystem } from '@openzcad/shared';
 
 import {
+  MAX_MESH_FILE_IMPORT_TRIANGLES,
   MESH_IMPORT_POLICIES,
   meshImportTooLargeMessage,
   type MeshImportFormat,
@@ -148,9 +149,9 @@ export async function importMeshFile(
     if (triangleCount === 0) {
       throw new Error(`This ${policy.label} file contains no triangles.`);
     }
-    if (triangleCount > MAX_IMPORT_TRIANGLES) {
+    if (triangleCount > MAX_MESH_FILE_IMPORT_TRIANGLES) {
       throw new Error(
-        `${policy.label} has ${triangleCount} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
+        `${policy.label} has ${triangleCount} triangles; the browser import limit is ${MAX_MESH_FILE_IMPORT_TRIANGLES}.`
       );
     }
     verifyMeshRebuilds(kernel, policy, vertices, indices, documentUnits);
@@ -214,10 +215,10 @@ function assertObjTriangleBudget(
         )
           break;
         references += 1;
-        if (references > 2 && ++triangles > MAX_IMPORT_TRIANGLES) {
+        if (references > 2 && ++triangles > MAX_MESH_FILE_IMPORT_TRIANGLES) {
           throw new Error(
-            `${policy.label} has more than ${MAX_IMPORT_TRIANGLES} triangles; ` +
-              `the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
+            `${policy.label} has more than ${MAX_MESH_FILE_IMPORT_TRIANGLES} triangles; ` +
+              `the browser import limit is ${MAX_MESH_FILE_IMPORT_TRIANGLES}.`
           );
         }
         while (index < data.length && !isBlank(data[index])) {
@@ -275,9 +276,12 @@ function tessellatePlacements(
       }
       tessellated.set(placement.solid, facets);
     }
-    if (indices.length + facets.triangles.length > MAX_IMPORT_TRIANGLES * 3) {
+    if (
+      indices.length + facets.triangles.length >
+      MAX_MESH_FILE_IMPORT_TRIANGLES * 3
+    ) {
       throw new Error(
-        `Mesh exceeds the browser import limit of ${MAX_IMPORT_TRIANGLES} triangles.`
+        `Mesh exceeds the browser import limit of ${MAX_MESH_FILE_IMPORT_TRIANGLES} triangles.`
       );
     }
     const base = vertices.length / 3;

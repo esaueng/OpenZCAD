@@ -1,17 +1,26 @@
-export interface ParsedStl {
+export interface ParsedStl<Vertices = number[], Indices = number[]> {
   name: string;
   triangleCount: number;
   format: 'ascii' | 'binary';
   /** Flat xyz triples, three vertices per triangle. */
-  vertices: number[];
+  vertices: Vertices;
   /** Sequential triangle indices into `vertices`. */
-  indices: number[];
+  indices: Indices;
 }
+
+export type PackedStl = ParsedStl<
+  Float64Array<ArrayBuffer>,
+  Uint32Array<ArrayBuffer>
+>;
+type StlGeometry = ParsedStl<
+  number[] | PackedStl['vertices'],
+  number[] | PackedStl['indices']
+>;
 
 const BINARY_STL_HEADER_BYTES = 84;
 const BINARY_STL_TRIANGLE_BYTES = 50;
 /** One coordinate as an ASCII STL writes it: a plain decimal, nothing else. */
-const ASCII_COORDINATE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+const ASCII_COORDINATE = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/;
 /**
  * The words that open or close an ASCII STL statement. A token after a
  * vertex's third coordinate must be one of them.
@@ -29,7 +38,7 @@ const ASCII_KEYWORDS = new Set([
 ]);
 
 /** Guard against imports that would stall the browser tab. */
-export const MAX_IMPORT_TRIANGLES = 200_000;
+export const MAX_IMPORT_TRIANGLES = 500_000;
 
 export class StlParseError extends Error {
   constructor(message: string) {
@@ -46,12 +55,24 @@ function assertTriangleBudget(triangleCount: number): void {
   }
 }
 
-function parseBinaryStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
+function sequentialIndices(triangleCount: number, packed: boolean) {
+  const length = triangleCount * 3;
+  const indices = packed ? new Uint32Array(length) : new Array<number>(length);
+  for (let index = 0; index < length; index++) indices[index] = index;
+  return indices;
+}
+
+function parseBinaryStl(
+  buffer: ArrayBuffer,
+  fileName: string,
+  packed: boolean
+): StlGeometry {
   const view = new DataView(buffer);
   const triangleCount = view.getUint32(80, true);
   assertTriangleBudget(triangleCount);
-  const vertices: number[] = [];
-  const indices: number[] = [];
+  const vertices: StlGeometry['vertices'] = packed
+    ? new Float64Array(triangleCount * 9)
+    : [];
   let offset = BINARY_STL_HEADER_BYTES;
   for (let i = 0; i < triangleCount; i++) {
     offset += 12; // skip the stored facet normal; recomputed on export
@@ -62,13 +83,15 @@ function parseBinaryStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
         throw new StlParseError('Binary STL contains a non-finite vertex.');
       }
-      vertices.push(x, y, z);
+      const vertex = i * 9 + v * 3;
+      vertices[vertex] = x;
+      vertices[vertex + 1] = y;
+      vertices[vertex + 2] = z;
       offset += 12;
     }
     offset += 2; // attribute byte count
-    const base = i * 3;
-    indices.push(base, base + 1, base + 2);
   }
+  const indices = sequentialIndices(triangleCount, packed);
   return { name: fileName, triangleCount, format: 'binary', vertices, indices };
 }
 
@@ -151,8 +174,14 @@ function hasVertexStatement(text: string): boolean {
  * normal is not read — exports recompute it — so an exporter's `facet normal
  * nan nan nan` on a degenerate facet is not a refusal.
  */
-function parseAsciiStl(text: string, fileName: string): ParsedStl {
-  const vertices: number[] = [];
+function parseAsciiStl(
+  text: string,
+  fileName: string,
+  packed: boolean
+): StlGeometry {
+  let vertices: StlGeometry['vertices'] = packed
+    ? new Float64Array(1024 * 9)
+    : [];
   const length = text.length;
   let index = 0;
   /** Where the token `next` last returned starts. */
@@ -344,6 +373,13 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
       // Charged per facet, so an oversized file is refused before its
       // vertices are all held in memory.
       assertTriangleBudget(facets);
+      if (vertices instanceof Float64Array && facets * 9 > vertices.length) {
+        const grown = new Float64Array(
+          Math.min(vertices.length * 2, MAX_IMPORT_TRIANGLES * 9)
+        );
+        grown.set(vertices);
+        vertices = grown;
+      }
       facetVertices = 0;
     } else if (keyword === 'vertex') {
       a = next();
@@ -367,7 +403,10 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
           `ASCII STL facet ${facets} has more than three vertices.`
         );
       }
-      vertices.push(x, y, z);
+      const vertex = (facets - 1) * 9 + facetVertices * 3;
+      vertices[vertex] = x;
+      vertices[vertex + 1] = y;
+      vertices[vertex + 2] = z;
       facetVertices += 1;
       afterVertex = true;
     } else if (keyword === 'endfacet') {
@@ -392,11 +431,10 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     throw new StlParseError('ASCII STL contains no facets.');
   }
   const triangleCount = facets;
-  const indices: number[] = [];
-  for (let i = 0; i < triangleCount; i++) {
-    const base = i * 3;
-    indices.push(base, base + 1, base + 2);
+  if (vertices instanceof Float64Array) {
+    vertices = vertices.subarray(0, triangleCount * 9);
   }
+  const indices = sequentialIndices(triangleCount, packed);
   return { name: fileName, triangleCount, format: 'ascii', vertices, indices };
 }
 
@@ -407,14 +445,25 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
  * emit it too), so a complete declared binary payload takes precedence,
  * including files with trailing padding.
  */
-export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
+export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl;
+/** Packed geometry can be transferred from a worker without cloning it. */
+export function parseStl(
+  buffer: ArrayBuffer,
+  fileName: string,
+  packed: true
+): PackedStl;
+export function parseStl(
+  buffer: ArrayBuffer,
+  fileName: string,
+  packed = false
+): StlGeometry {
   if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
     const declared = new DataView(buffer).getUint32(80, true);
     if (
       BINARY_STL_HEADER_BYTES + declared * BINARY_STL_TRIANGLE_BYTES <=
       buffer.byteLength
     ) {
-      return parseBinaryStl(buffer, fileName);
+      return parseBinaryStl(buffer, fileName, packed);
     }
   }
 
@@ -431,14 +480,14 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
       hasVertexStatement(text) ||
       buffer.byteLength < BINARY_STL_HEADER_BYTES
     ) {
-      return parseAsciiStl(text, fileName);
+      return parseAsciiStl(text, fileName, packed);
     }
   }
 
   if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
     const declared = new DataView(buffer).getUint32(80, true);
     assertBinaryStlLength(buffer.byteLength, declared);
-    return parseBinaryStl(buffer, fileName);
+    return parseBinaryStl(buffer, fileName, packed);
   }
   throw new StlParseError('File is too small to be a valid STL.');
 }

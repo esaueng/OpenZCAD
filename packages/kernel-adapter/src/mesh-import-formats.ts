@@ -1,5 +1,3 @@
-import { MAX_IMPORT_TRIANGLES } from '@openzcad/io-stl';
-
 /**
  * The mesh interchange formats an import can take, beside STL.
  *
@@ -42,6 +40,9 @@ export interface MeshImportPolicy {
 
 const MIB = 1024 * 1024;
 
+/** Triangle budget for the 3MF, OBJ, GLB and PLY translators. */
+export const MAX_MESH_FILE_IMPORT_TRIANGLES = 200_000;
+
 /**
  * The entity fence sits at three times the document's own triangle ceiling.
  * A mesh the document would accept is therefore never refused by the budget —
@@ -50,7 +51,7 @@ const MIB = 1024 * 1024;
  * inside the parser, before it has built a solid the import would only throw
  * away.
  */
-const MAX_MESH_ENTITIES = MAX_IMPORT_TRIANGLES * 3;
+const MAX_MESH_ENTITIES = MAX_MESH_FILE_IMPORT_TRIANGLES * 3;
 
 export const MESH_IMPORT_POLICIES: {
   readonly [K in MeshImportFormat]: MeshImportPolicy;

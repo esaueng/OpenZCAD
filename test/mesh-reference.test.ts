@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createProjectDocument,
   importMeshBody,
@@ -12,7 +13,12 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { parseStl } from '@openzcad/io-stl';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  encodeImportedMeshPayload,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
+import { loadRemusTranslators } from '../packages/kernel-adapter/src/remus-runtime';
 import { coincidentBoxSoup } from './support/mesh-import-fixtures';
 
 const user = toUserId('user_mesh_reference');
@@ -31,6 +37,60 @@ describe('STL mesh references', { timeout: 60_000 }, () => {
     adapter = await createExactKernelAdapter();
   });
   afterAll(() => adapter.dispose());
+
+  it.each([200_000, 200_001])(
+    'routes a stored mesh with %i facets',
+    async (triangleCount) => {
+      const indices = new Uint32Array(triangleCount * 3);
+      for (let i = 0; i < indices.length; i++) indices[i] = i % 3;
+      const bytes = encodeImportedMeshPayload({
+        vertices: Float64Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0),
+        indices
+      });
+      const { document, bodyId } = importMeshBody(
+        createProjectDocument('Stored mesh', user),
+        {
+          name: 'Scan',
+          sourceName: 'scan.stl',
+          artifactId: 'artifact_scan',
+          triangleCount,
+          meshPayloadRef: {
+            marker: 'openzcad-source-ref',
+            version: 1,
+            hashAlgorithm: 'sha256',
+            checksumSha256: createHash('sha256').update(bytes).digest('hex'),
+            logicalBytes: bytes.byteLength
+          }
+        }
+      );
+      const stored = await createExactKernelAdapter({
+        resolveSourceBytes: async () => bytes
+      });
+      const translator = vi
+        .spyOn(await loadRemusTranslators(), 'importStl')
+        .mockImplementation(() => {
+          throw new Error('Solid conversion attempted');
+        });
+      try {
+        const state = await stored.syncDocument(document);
+        expect(translator).toHaveBeenCalledTimes(
+          triangleCount === 200_000 ? 1 : 0
+        );
+        expect(state.bodyRepresentations[bodyId]?.meshReference).toBe(true);
+        expect(state.bodyRepresentations[bodyId]?.mesh.indices.length).toBe(
+          triangleCount * 3
+        );
+        expect(state.featureWarnings?.[0]?.message).toContain(
+          triangleCount === 200_000
+            ? 'Solid conversion attempted'
+            : '200,000-triangle solid conversion limit'
+        );
+      } finally {
+        translator.mockRestore();
+        stored.dispose();
+      }
+    }
+  );
 
   it('keeps non-manifold facets across cached replay and a fresh-device reopen', async () => {
     const { document, bodyId } = reference();
