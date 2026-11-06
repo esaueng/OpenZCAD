@@ -12,6 +12,12 @@ describe('workflow runner policy', () => {
       'ci-recovery.yml': ['ubuntu-24.04'],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci-v6.yml': Array(6).fill('*fleet-runner'),
+      'fleet-ci-v7.yml': [
+        'ubuntu-24.04',
+        ...Array<string>(8).fill('*fleet-runner')
+      ],
+      'daily-validation.yml': Array(4).fill('ubuntu-24.04'),
+      'kernel-pin.yml': ['ubuntu-24.04'],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'desktop-native.yml': ['ubuntu-latest'],

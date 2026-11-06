@@ -7,7 +7,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WEIGHT_SECONDS,
@@ -59,7 +60,9 @@ describe('balanced e2e shards', () => {
   });
 
   it('runs only tagged files in smoke shards, with every file assigned once', () => {
-    const smoke = suiteSpecs('smoke');
+    // This contract describes the static manifest, without a PR's changed
+    // regressions. v7 also passes CI_BASE_SHA to these unit-test workers.
+    const smoke = suiteSpecs('smoke', SPEC_DIR, {});
     const smokeWeights = readWeights(SMOKE_WEIGHTS_PATH);
     expect(smoke.length).toBeGreaterThan(CI_SHARDS);
     expect(smoke.length).toBeLessThan(specs.length);
@@ -73,6 +76,78 @@ describe('balanced e2e shards', () => {
       );
     }
     expect(suiteSpecs('full')).toEqual(specs);
+  });
+
+  it('adds changed untagged regressions without changing the static smoke contract', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-changed-specs-'));
+    const specDir = join(dir, SPEC_DIR);
+    mkdirSync(specDir, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=example-user',
+          '-c',
+          'user.email=example-user@example.invalid',
+          '-c',
+          'commit.gpgsign=false',
+          '-c',
+          `core.hooksPath=${join(dir, 'no-hooks')}`,
+          ...args
+        ],
+        { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      ).trim();
+    const select = (suite: string, env: Record<string, string>) => {
+      // A separate process gives changedPaths a real fixture checkout without
+      // changing the Vitest worker's working directory or mocking Git.
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import { suiteSpecs } from ${JSON.stringify(new URL('../scripts/e2e-shards.mjs', import.meta.url).href)};
+           console.log(JSON.stringify(suiteSpecs(process.argv[1], undefined, JSON.parse(process.argv[2]))));`,
+          suite,
+          JSON.stringify(env)
+        ],
+        { cwd: dir, encoding: 'utf8' }
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(result.stdout) as string[];
+    };
+    try {
+      writeFileSync(join(specDir, 'tagged.spec.ts'), `tag: '${SMOKE_TAG}'`);
+      writeFileSync(join(specDir, 'untagged.spec.ts'), '// regression');
+      git('init', '--quiet');
+      git('add', '.');
+      git('commit', '--quiet', '-m', 'Synthetic browser baseline');
+      const base = git('rev-parse', 'HEAD');
+      writeFileSync(
+        join(specDir, 'untagged.spec.ts'),
+        '// repaired regression'
+      );
+      writeFileSync(join(specDir, 'new.spec.ts'), '// new regression');
+      git('add', '.');
+      git('commit', '--quiet', '-m', 'Synthetic changed regressions');
+      const env = { CI_BASE_SHA: base };
+      expect(select('smoke', env)).toEqual([
+        'new.spec.ts',
+        'tagged.spec.ts',
+        'untagged.spec.ts'
+      ]);
+      expect(select('smoke', {})).toEqual(['tagged.spec.ts']);
+
+      rmSync(join(specDir, 'untagged.spec.ts'));
+      git('add', '-u');
+      git('commit', '--quiet', '-m', 'Synthetic regression deletion');
+      // Deletions select the full browser project. The static contract still
+      // runs in the same workers and must not try to select the deleted file.
+      expect(select('full', env)).toEqual(['new.spec.ts', 'tagged.spec.ts']);
+      expect(select('smoke', {})).toEqual(['tagged.spec.ts']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('never overwrites full-suite weights with smoke measurements or vice versa', () => {
@@ -100,6 +175,48 @@ describe('balanced e2e shards', () => {
           `Cannot update ${target} weights from a ${reported} report.`
         );
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps smoke weight updates independent of an ambient PR comparison', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-static-weights-'));
+    try {
+      mkdirSync(join(dir, SPEC_DIR), { recursive: true });
+      writeFileSync(
+        join(dir, SPEC_DIR, 'tagged.spec.ts'),
+        `tag: '${SMOKE_TAG}'`
+      );
+      writeFileSync(join(dir, SPEC_DIR, 'untagged.spec.ts'), '// regression');
+      writeFileSync(join(dir, SMOKE_WEIGHTS_PATH), '{"tagged.spec.ts": 5}');
+      const report = join(dir, 'report.json');
+      writeFileSync(
+        report,
+        JSON.stringify({
+          config: { metadata: { e2eSuite: 'smoke' } },
+          suites: []
+        })
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL('../scripts/e2e-shards.mjs', import.meta.url)),
+          '--suite',
+          'smoke',
+          '--update',
+          report
+        ],
+        {
+          cwd: dir,
+          env: { ...process.env, CI_BASE_SHA: 'unavailable-pr-comparison' },
+          encoding: 'utf8'
+        }
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(readWeights(join(dir, SMOKE_WEIGHTS_PATH))).toEqual({
+        'tagged.spec.ts': 5
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

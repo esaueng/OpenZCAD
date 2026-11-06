@@ -36,11 +36,19 @@ for (const width of [1440, 390]) {
     const stageMiddle = stageTop + (900 - stageTop - ISLAND_GAP) / 2;
     const rulerReserve = await page
       .locator('.workspace')
-      .evaluate((element) =>
-        Number.parseFloat(
-          getComputedStyle(element).getPropertyValue('--scale-rule-reserve')
-        )
-      );
+      .evaluate((element) => {
+        // Custom properties preserve calc(...) text. Let layout resolve the
+        // actual length instead of parsing that expression as a number.
+        const probe = document.createElement('div');
+        probe.style.cssText =
+          'position:absolute;visibility:hidden;pointer-events:none;width:0;height:var(--scale-rule-reserve)';
+        element.appendChild(probe);
+        try {
+          return probe.getBoundingClientRect().height;
+        } finally {
+          probe.remove();
+        }
+      });
     const columnBandBottom = 900 - ISLAND_GAP * 2 - rulerReserve;
     // The rail's entry slides it in over 200ms; measure once it has landed.
     // A taller rail lifts just enough to clear the bottom-left scale ruler.

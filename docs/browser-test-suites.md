@@ -11,6 +11,11 @@ breakpoint/theme combinations and historical regressions. It is not run on
 ordinary PRs. An untagged new regression is therefore full-suite coverage only.
 Tag a representative user journey when adding a major capability; keep the
 smoke suite small instead of tagging every variant.
+The staged v7 workflow additionally selects changed regression files and
+runs all their cases, including untagged cases. It adds combined-tree queue
+journeys and daily full qualification; see [CI qualification](ci-qualification.md)
+for the activation sequence. The active v6 workflow retains its current
+selection until the separate activation PR lands.
 
 ## Running a suite
 

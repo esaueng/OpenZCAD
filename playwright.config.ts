@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { register } from 'node:module';
 import { defineConfig } from '@playwright/test';
-import { resolveSuite, SMOKE_TAG } from './scripts/e2e-shards.mjs';
+import { resolveSuite, smokeGrep } from './scripts/e2e-shards.mjs';
 import {
   privateArtifactPaths,
   privatePlaywrightOutput
@@ -75,7 +75,7 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   // Regular CI exercises representative journeys. Local runs retain the full
   // regression suite; OPENZCAD_E2E_SUITE=full opts CI into it explicitly.
-  grep: suite === 'smoke' ? new RegExp(SMOKE_TAG) : undefined,
+  grep: suite === 'smoke' ? smokeGrep() : undefined,
   metadata: { e2eSuite: suite },
   // Tests in one file run on different workers, so a long file such as
   // modeling.spec.ts (53 tests) does not serialise a CI shard onto one

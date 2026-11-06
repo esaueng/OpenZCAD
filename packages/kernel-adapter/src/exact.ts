@@ -160,6 +160,7 @@ import {
   displayMeshGapsAdvisory,
   raiseFeatureWarning
 } from './exact-feature-warnings';
+import { adapterRefusalRecord } from './adapter-refusal';
 import {
   collectRecognizedImportedFeatures,
   importedProofDisplayDimensions,
@@ -3657,7 +3658,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             build,
             feature,
             'Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.',
-            'refusal'
+            'refusal',
+            adapterRefusalRecord('union_not_solid')
           );
         } else if (
           !requiresStrictUnionValidation &&

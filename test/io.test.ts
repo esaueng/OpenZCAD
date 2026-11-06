@@ -202,6 +202,34 @@ describe('STL parsing', () => {
   );
 
   describe('ASCII facet structure', () => {
+    it.each([' ', '\t', '\n', '\r', '\v', '\f'])(
+      'accepts ASCII token separator %j without changing the triangle',
+      (separator) => {
+        const text = (
+          'solid probe facet normal 0 0 1 outer loop vertex 0 0 0 ' +
+          'vertex 1 0 0 vertex 0 1 0 endloop endfacet endsolid probe'
+        ).replaceAll(' ', separator);
+        const parsed = parseStl(
+          new TextEncoder().encode(text).buffer,
+          'whitespace.stl'
+        );
+        expect(parsed.triangleCount).toBe(1);
+        expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      }
+    );
+
+    it.each(['\u00a0', '\u2003'])(
+      'does not silently accept Unicode whitespace %j inside a coordinate',
+      (separator) => {
+        const text =
+          `solid probe\nfacet normal 0 0 1\nouter loop\nvertex 0${separator}0 0\n` +
+          'vertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid probe\n';
+        expect(() =>
+          parseStl(new TextEncoder().encode(text).buffer, 'invalid.stl')
+        ).toThrow(/facet 1 has a vertex that is not three finite numbers/);
+      }
+    );
+
     function asciiStlText(
       facets: string[][],
       keyword: (word: string) => string = (word) => word

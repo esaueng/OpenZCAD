@@ -158,8 +158,11 @@ async function expectReachable(control: Locator) {
   await control.click({ trial: true });
   await expect(control).toBeInViewport({ ratio: 1 });
   await expect
-    .poll(() =>
-      control.evaluate((element) => {
+    .poll(async () => {
+      // The shared flyout may reflow after its initial expansion/scroll.
+      // Keep bringing the actual control into view before hit-testing it.
+      await control.scrollIntoViewIfNeeded();
+      return control.evaluate((element) => {
         const bounds = element.getBoundingClientRect();
         const hit = document.elementFromPoint(
           bounds.x + bounds.width / 2,
@@ -168,8 +171,8 @@ async function expectReachable(control: Locator) {
         return hit === element || element.contains(hit)
           ? null
           : (hit?.outerHTML.slice(0, 240) ?? 'No element at the control');
-      })
-    )
+      });
+    })
     .toBeNull();
 }
 

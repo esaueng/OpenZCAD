@@ -165,6 +165,7 @@ export const REFUSAL_FAMILIES = [
   'blend',
   'gear',
   'thread',
+  'reference',
   'other',
   'none'
 ] as const;

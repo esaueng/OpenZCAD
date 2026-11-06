@@ -1,8 +1,8 @@
 {
   "summary": {
     "qualified": 26,
-    "typed-refusal": 13,
-    "untyped-refusal": 3,
+    "typed-refusal": 16,
+    "untyped-refusal": 0,
     "wrong": 0,
     "timeout": 0
   },
@@ -29,7 +29,7 @@
     "box×cylinder/aligned/union/no-modifier/reopen": "qualified",
     "box×cylinder/aligned/union/no-modifier/step-roundtrip": "qualified",
     "box×cylinder/aligned/union/fillet-seam/none": "qualified",
-    "box×cylinder/aligned/union/fillet-seam/source-grow": "untyped-refusal",
+    "box×cylinder/aligned/union/fillet-seam/source-grow": "typed-refusal",
     "box×cylinder/aligned/union/fillet-seam/direct-grow": "qualified",
     "box×cylinder/aligned/union/cap-offset/none": "qualified",
     "box×cylinder/aligned/subtract/no-modifier/none": "qualified",
@@ -39,7 +39,7 @@
     "box×cylinder/aligned/intersect/no-modifier/none": "qualified",
     "box×cylinder/aligned@1e3/union/no-modifier/none": "qualified",
     "box×cylinder/coincident/subtract/no-modifier/none": "qualified",
-    "cylinder×cylinder/aligned/union/no-modifier/none": "untyped-refusal",
+    "cylinder×cylinder/aligned/union/no-modifier/none": "typed-refusal",
     "cylinder×cylinder/aligned/subtract/no-modifier/none": "qualified",
     "cylinder×cylinder/aligned/subtract/no-modifier/direct-grow": "typed-refusal",
     "cylinder×cylinder/off-centre/subtract/no-modifier/source-grow": "typed-refusal",
@@ -47,7 +47,7 @@
     "box×torus/aligned/union/no-modifier/none": "typed-refusal",
     "box×torus/aligned/subtract/no-modifier/none": "typed-refusal",
     "box×sphere/aligned/subtract/no-modifier/none": "typed-refusal",
-    "box×sphere/raised/union/no-modifier/none": "untyped-refusal",
+    "box×sphere/raised/union/no-modifier/none": "typed-refusal",
     "box×box/coincident/union/no-modifier/none": "qualified"
   }
 }

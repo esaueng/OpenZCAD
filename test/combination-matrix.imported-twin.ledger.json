@@ -1,8 +1,8 @@
 {
   "summary": {
     "qualified": 4,
-    "typed-refusal": 0,
-    "untyped-refusal": 1,
+    "typed-refusal": 1,
+    "untyped-refusal": 0,
     "wrong": 0,
     "timeout": 0
   },
@@ -11,6 +11,6 @@
     "imported-twin/upright/R1/cap-up": "qualified",
     "imported-twin/upright/R2/wall-grow": "qualified",
     "imported-twin/upright/R4/seam-grow": "qualified",
-    "imported-twin/tilted/twin/import": "untyped-refusal"
+    "imported-twin/tilted/twin/import": "typed-refusal"
   }
 }

@@ -1,5 +1,6 @@
 import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
 import { fingerprintOfTopologySignature as fingerprintOfSignature } from '@openzcad/shared';
+import { AdapterRefusal } from './adapter-refusal';
 export { fingerprintOfSignature };
 
 /**
@@ -237,7 +238,8 @@ export function unresolvedReferenceError(
   candidateCount: number
 ): Error {
   if (Number.isInteger(hash) && hash >= 1 && hash <= candidateCount) {
-    return new Error(
+    return new AdapterRefusal(
+      'reference_positional',
       `A selected ${kind} was saved by an older version of OpenZCAD that ` +
         `recorded positions instead of geometry. Re-select the ${kind}` +
         `${kind === 'edge' ? 's' : '(s)'} and re-create this feature.`
@@ -245,11 +247,15 @@ export function unresolvedReferenceError(
   }
   // This feature was saved without stable references, so no parameter value
   // can bring the orphaned hash back — say what actually repairs it.
-  return new Error(
+  return new AdapterRefusal(
+    'reference_missing',
     `A selected ${kind} no longer exists. Re-select the ${kind}${kind === 'edge' ? 's' : '(s)'} and re-create this feature.`
   );
 }
 
 export function ambiguousReferenceError(kind: 'edge' | 'face'): Error {
-  return new Error(`A selected ${kind} is geometrically ambiguous.`);
+  return new AdapterRefusal(
+    'reference_ambiguous',
+    `A selected ${kind} is geometrically ambiguous.`
+  );
 }
