@@ -132,7 +132,8 @@ export interface ModelPanelSource {
   parameterQuantitySuggestions?: Readonly<Record<string, ParameterKind>>;
   onViewActivityLog(): void;
   /** Saves the held refused rebuild as a reproduction; absent when none is. */
-  onSaveRefusalReproduction?: (() => void) | undefined;
+  refusalReproductionFor?:
+    ((name: string, message: string) => (() => void) | undefined) | undefined;
   parameterMinimums?: Record<string, number>;
   onDeleteParameter(name: string): void;
   onRenameParameter(name: string, newName: string): string | null;

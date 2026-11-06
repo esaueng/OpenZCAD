@@ -30,7 +30,7 @@ interface ParameterRowProps extends ToggleBindingProps {
   onSet(name: string, expression: string): void | Promise<string | null>;
   onViewDetails?(): void;
   /** Present only while a refused rebuild is held to save as a reproduction. */
-  onSaveReproduction?(): void;
+  reproductionFor?(message: string): (() => void) | undefined;
   minimum?: number;
   onPreview?(name: string, expression: string | null): void;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
@@ -124,7 +124,7 @@ export function ParameterRow({
   value,
   onSet,
   onViewDetails,
-  onSaveReproduction,
+  reproductionFor,
   onPreview,
   minimum,
   onDelete,
@@ -295,6 +295,7 @@ export function ParameterRow({
     }
   }
 
+  const saveReproduction = error ? reproductionFor?.(error.message) : undefined;
   const describable = onDescribe && parameter.exposed === true;
   const formattedValue = value === undefined ? 'err' : formatNumber(value);
   const showValue =
@@ -567,12 +568,12 @@ export function ParameterRow({
                   View details
                 </button>
               ) : null}
-              {error.detailsAvailable && onSaveReproduction ? (
+              {error.detailsAvailable && saveReproduction ? (
                 <button
                   type="button"
                   className="activity-log-link"
                   title={SAVE_REPRODUCTION_HINT}
-                  onClick={onSaveReproduction}
+                  onClick={saveReproduction}
                 >
                   {SAVE_REPRODUCTION_LABEL}
                 </button>

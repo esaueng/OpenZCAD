@@ -100,7 +100,15 @@ function refusal(
     featureId: featureId as FeatureWarning['featureId'],
     featureName: 'Resize',
     message: 'Feature "Resize": move-face does not support face 13 (sphere)',
-    kind
+    kind,
+    kernelRefusal: {
+      family: 'direct-edit',
+      operation: 'resize-cylindrical-face',
+      category: 'unsupported',
+      code: 'unsupported_move_face',
+      reason: 'unsupported_neighbor',
+      neighborSurfaceType: 'sphere'
+    }
   };
 }
 
@@ -114,11 +122,15 @@ describe('refusal harvest', () => {
       warningKind: 'build-failed',
       featureKind: 'direct-edit',
       directEditKind: 'resize-cylindrical-face',
+      family: 'direct-edit',
+      kernelOperation: 'resize-cylindrical-face',
+      category: 'unsupported',
+      code: 'unsupported_move_face',
       targetSurface: 'cylinder',
       neighbourSurfaces: ['plane', 'sphere']
     });
     expect(kernelRefusedBucket(observation)).toBe(
-      'direct-edit.resize-cylindrical-face|none|none|none|none|build-failed|cylinder|plane+sphere'
+      'direct-edit.resize-cylindrical-face|direct-edit|resize-cylindrical-face|unsupported|unsupported_move_face|build-failed|cylinder|plane+sphere'
     );
   });
 

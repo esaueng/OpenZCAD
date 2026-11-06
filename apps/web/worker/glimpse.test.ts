@@ -140,7 +140,7 @@ it('keeps client and relay wire vocabularies aligned', async () => {
 
 it('relays only canonical kernel_refused buckets and nothing beside them', async () => {
   const bucket =
-    'direct-edit.resize-cylindrical-face|none|none|none|none|build-failed|cylinder|plane+sphere';
+    'direct-edit.resize-cylindrical-face|direct-edit|resize-cylindrical-face|unsupported|unsupported_move_face|build-failed|cylinder|plane+sphere';
   expect(parseUsage({ event: 'kernel_refused', bucket })).toEqual({
     level: 'optional',
     event: 'kernel_refused',
@@ -154,7 +154,7 @@ it('relays only canonical kernel_refused buckets and nothing beside them', async
     },
     {
       event: 'kernel_refused',
-      bucket: bucket.replace('none|build', 'feat_0b1c|build')
+      bucket: bucket.replace('unsupported_move_face|', 'feat_0b1c|')
     },
     { event: 'kernel_refused', bucket, featureName: 'Acme' },
     { event: 'kernel_refused', bucket, geometry: { radius: 6 } }
@@ -163,6 +163,15 @@ it('relays only canonical kernel_refused buckets and nothing beside them', async
   }
   const client = await import('../src/lib/glimpseContract');
   const relay = await import('./glimpseContract');
+  for (const operation of client.REFUSAL_DIRECT_EDIT_OPERATIONS) {
+    const direct = `direct-edit.${operation}|direct-edit|${operation}|unsupported|unsupported_move_face|build-failed|cylinder|sphere`;
+    expect(
+      parseUsage({ event: 'kernel_refused', bucket: direct })
+    ).not.toBeNull();
+    expect(relay.parseKernelRefusedBucket(direct)).toEqual(
+      client.parseKernelRefusedBucket(direct)
+    );
+  }
   for (const candidate of [
     bucket,
     'boolean|boolean|cut|internal|operation_failed|build-failed|none|none',

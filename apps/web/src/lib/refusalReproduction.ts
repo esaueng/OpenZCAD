@@ -108,21 +108,22 @@ function neutralNames(document: ProjectDocument): Map<string, string> {
   return names;
 }
 
-/** Replaces every quoted occurrence of an original name with its neutral one. */
+/** Replace names literally, longest first, without reprocessing neutral labels. */
 function renameInText(
   text: string,
   renames: ReadonlyArray<readonly [string, string]>
 ): string {
-  let result = text;
-  for (const [from, to] of renames) {
-    if (from.length === 0) continue;
-    result = result
-      .split(`"${from}"`)
-      .join(`"${to}"`)
-      .split(`“${from}”`)
-      .join(`“${to}”`);
-  }
-  return result;
+  const replacements = new Map<string, string>();
+  for (const [name, neutral] of renames)
+    if (name.length > 0 && !replacements.has(name))
+      replacements.set(name, neutral);
+  const names = [...replacements.keys()].sort((a, b) => b.length - a.length);
+  if (names.length === 0) return text;
+  const pattern = new RegExp(
+    names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+    'g'
+  );
+  return text.replace(pattern, (name) => replacements.get(name)!);
 }
 
 function sanitizedReproductionDocument(
@@ -218,8 +219,19 @@ export function buildRefusalReproduction(
   const reason =
     warning.message.replace(/^Feature "[^"]+":\s*/, '').trim() ||
     'This operation does not produce valid geometry.';
+  // Include trimmed features and omitted imported models: their names can
+  // still occur in the refusing feature's sentence or kernel details.
+  const names = neutralNames(input.document);
+  const renames: Array<readonly [string, string]> = [
+    ...(sanitized?.renames ?? []),
+    ...Object.values(input.document.nodes).flatMap((node) => {
+      const neutral = names.get(node.id);
+      return neutral === undefined ? [] : [[node.name, neutral] as const];
+    })
+  ];
+  renames.push([input.document.name, REPRODUCTION_DOCUMENT_NAME]);
   const plain = splitRefusal(
-    sanitized ? renameInText(reason, sanitized.renames) : reason,
+    renameInText(reason, renames),
     warning.kernelRefusal?.category
   );
   const upstream = listFeaturesInOrder(input.document);

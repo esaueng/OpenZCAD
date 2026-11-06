@@ -164,7 +164,7 @@ it('offers Save reproduction beside View details when the host holds one', async
       value={58}
       onSet={async () => 'holder_height must be at least 56.910504 mm.'}
       onViewDetails={vi.fn()}
-      onSaveReproduction={onSaveReproduction}
+      reproductionFor={() => onSaveReproduction}
     />
   );
   const input = screen.getByLabelText('Expression for holder_height');

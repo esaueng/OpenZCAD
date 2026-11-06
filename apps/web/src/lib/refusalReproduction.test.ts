@@ -193,6 +193,49 @@ describe('refusal reproduction sanitizer', () => {
     });
   });
 
+  it('replaces literal names without rewriting the neutral labels it inserted', () => {
+    const { document, cutFeatureId } = privateDocument();
+    const fixture = buildRefusalReproduction({
+      document: { ...document, name: 'Body' },
+      warning: warningFor(cutFeatureId, {
+        message: 'Left housing body belongs to Body.',
+        kernelRefusal: undefined
+      }),
+      kernel: KERNEL
+    });
+    expect(fixture.observed.message).toBe('Body 1 belongs to Reproduction.');
+    const literal = 'Private [A]+(B)';
+    const importedName = buildRefusalReproduction({
+      document: { ...document, name: literal },
+      warning: warningFor(cutFeatureId, {
+        message: `The model ${literal} refused.`,
+        kernelRefusal: undefined
+      }),
+      kernel: KERNEL
+    });
+    expect(JSON.stringify(importedName.observed)).not.toContain(literal);
+    expect(importedName.observed.message).toBe(
+      'The model Reproduction refused.'
+    );
+  });
+
+  it('removes names in every quoting style, unquoted text and kernel details', () => {
+    const { document, cutFeatureId } = privateDocument();
+    const fixture = buildRefusalReproduction({
+      document,
+      warning: warningFor(cutFeatureId, {
+        message: `Feature "Housing cut": Left housing body meets 'Right housing body' in Hidden Bracket Co.\nKernel detail: Housing cut, “Left housing”, Trailing gusset.`,
+        kernelRefusal: undefined
+      }),
+      kernel: KERNEL
+    });
+    const observed = JSON.stringify(fixture.observed);
+    for (const name of PRIVATE.slice(0, 6))
+      expect(observed).not.toContain(name);
+    expect(fixture.observed.message).toContain("Body 1 meets 'Body 2'");
+    expect(fixture.observed.detail).toContain('boolean 1');
+  });
+
   it('omits an imported document rather than its unsanitized source metadata', () => {
     const imported = importStepBody(
       createProjectDocument('Imported', toUserId('user_secret_owner')),
@@ -208,7 +251,7 @@ describe('refusal reproduction sanitizer', () => {
       document: imported,
       warning: warningFor(feature.featureId, {
         featureName: 'Vendor part',
-        message: 'Feature "Vendor part": could not read',
+        message: 'Feature "Vendor part": Vendor part could not read Imported',
         kernelRefusal: undefined
       }),
       kernel: KERNEL,
@@ -217,6 +260,10 @@ describe('refusal reproduction sanitizer', () => {
     expect(fixture.document).toBeNull();
     expect(fixture.documentOmitted).toBe('imported-source');
     expect(JSON.stringify(fixture)).not.toContain('customer-secret.step');
+    expect(JSON.stringify(fixture)).not.toContain('Vendor part');
+    expect(fixture.observed.detail ?? fixture.observed.message).not.toContain(
+      'Imported'
+    );
   });
 
   it('refuses a warning that names no feature in the document', () => {

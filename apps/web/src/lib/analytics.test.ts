@@ -256,9 +256,10 @@ describe('kernel_refused aggregate', () => {
     const observation = {
       featureKind: 'direct-edit',
       directEditKind: 'resize-cylindrical-face',
-      family: 'blend',
+      family: 'direct-edit',
+      kernelOperation: 'resize-cylindrical-face',
       category: 'unsupported',
-      code: 'move_face_unsupported',
+      code: 'unsupported_move_face',
       warningKind: 'build-failed',
       targetSurface: 'cylinder',
       neighbourSurfaces: ['sphere', 'plane', 'plane'],
@@ -274,7 +275,7 @@ describe('kernel_refused aggregate', () => {
       {
         event: 'kernel_refused',
         bucket:
-          'direct-edit.resize-cylindrical-face|blend|none|unsupported|move_face_unsupported|build-failed|cylinder|plane+sphere'
+          'direct-edit.resize-cylindrical-face|direct-edit|resize-cylindrical-face|unsupported|unsupported_move_face|build-failed|cylinder|plane+sphere'
       }
     ]);
     const wire = JSON.stringify(sentBodies());

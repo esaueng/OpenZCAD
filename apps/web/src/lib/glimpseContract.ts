@@ -158,6 +158,7 @@ export const REFUSAL_OPERATIONS = [
 ] as const;
 export const REFUSAL_FAMILIES = [
   'boolean',
+  'direct-edit',
   'validation',
   'healing',
   'import',
@@ -168,6 +169,7 @@ export const REFUSAL_FAMILIES = [
   'none'
 ] as const;
 export const REFUSAL_KERNEL_OPERATIONS = [
+  ...REFUSAL_DIRECT_EDIT_OPERATIONS,
   'cut',
   'fuse',
   'intersect',

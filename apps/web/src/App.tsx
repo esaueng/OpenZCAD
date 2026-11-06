@@ -33,10 +33,8 @@ import {
   durationBucket,
   trackKernelRefusal
 } from './lib/analytics';
-import {
-  createRefusalHarvester,
-  type RefusalHarvester
-} from './lib/refusalHarvest';
+import type { RefusalCapture } from './lib/refusalHarvest';
+import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
   buildRefusalReproduction,
   reproductionFileName
@@ -4033,43 +4031,16 @@ export function App() {
     sharedThumbnailCapture,
     geometryBusy || Boolean(doc && geometry.state.phase !== 'ready')
   );
-  /**
-   * WS3 refusal harvest. Every candidate rebuild passes through
-   * `syncCandidate`; a refusal it introduces is held in session memory so the
-   * user can explicitly save a reproduction, and counted once (opt-in, fixed
-   * vocabulary) through the consent-gated Glimpse client.
-   */
-  const [refusalReproductionReady, setRefusalReproductionReady] =
-    useState(false);
-  const refusalHarvesterRef = useRef<RefusalHarvester | null>(null);
-  if (refusalHarvesterRef.current === null) {
-    refusalHarvesterRef.current = createRefusalHarvester({
-      track: trackKernelRefusal,
-      onCapture: () => setRefusalReproductionReady(true),
-      onClear: () => setRefusalReproductionReady(false)
-    });
-  }
-  const liveFeatureWarningsRef = useRef<readonly FeatureWarning[]>([]);
-  liveFeatureWarningsRef.current = attributedFeatureWarnings();
-  const syncCandidate: typeof geometry.syncOnce = (document, ...rest) =>
-    geometry.syncOnce(document, ...rest).then((derived) => {
-      try {
-        refusalHarvesterRef.current?.observe(document, derived, {
-          featureWarnings: liveFeatureWarningsRef.current,
-          derived: managerRef.current?.document.derived
-        });
-      } catch {
-        // Harvesting is diagnostics; it never fails the rebuild it watched.
-      }
-      return derived;
-    });
-  const harvestProjectId = doc?.projectId;
-  const harvestVersion = doc?.version;
-  useEffect(() => {
-    // A capture belongs to the attempt it was made in: a refusal never moves
-    // the document, so a commit or a project switch has moved on from it.
-    refusalHarvesterRef.current?.clear();
-  }, [harvestProjectId, harvestVersion]);
+  // Only user edit attempts are harvested. Copies, baseline/lineage builds
+  // and assistant analysis stay on the unobserved geometry API.
+  const refusalHarvest = useRefusalHarvest({
+    document: doc,
+    currentDocument: () => managerRef.current?.document,
+    warnings: attributedFeatureWarnings(),
+    rebuild: geometry.syncOnce,
+    track: trackKernelRefusal
+  });
+  const { syncCandidate, syncParameterCandidate } = refusalHarvest;
   const reachProjectionBuilderRef = useRef(geometry.syncOnce);
   reachProjectionBuilderRef.current = geometry.syncOnce;
   const reachProjectionRequestRef = useRef<{
@@ -13213,7 +13184,7 @@ export function App() {
       const { document, saveStates } = await buildDemoSeed(
         definition,
         session?.userId ?? localUserId,
-        (candidate) => syncCandidate(candidate)
+        (candidate) => geometry.syncOnce(candidate)
       );
       // Every revision the launcher promises is stored as a save state, so
       // Rev A and Rev B can be restored rather than listed as "not stored".
@@ -14162,7 +14133,7 @@ export function App() {
             // This device may not have the exact source revision cached. The
             // kernel stays in the browser, so rebuild the copy here rather
             // than asking cloud persistence to store a derived projection.
-            const derived = await syncCandidate(copied).catch(() => null);
+            const derived = await geometry.syncOnce(copied).catch(() => null);
             if (derived) {
               localCopy = { ...copied, derived };
             }
@@ -15403,7 +15374,7 @@ export function App() {
       const preflight = await preflightCadPatch(
         current,
         proposal,
-        (candidate, analysis) => syncCandidate(candidate, analysis)
+        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
       );
       const live = managerRef.current?.document;
       if (
@@ -15498,14 +15469,14 @@ export function App() {
         const pending = preflightCadPatch(
           current,
           proposal,
-          (candidate, analysis) => syncCandidate(candidate, analysis)
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
         );
         [preflight] = await Promise.all([pending, holdNextExactCheckForE2E()]);
       } else {
         preflight = await preflightCadPatch(
           current,
           proposal,
-          (candidate, analysis) => syncCandidate(candidate, analysis)
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
         );
       }
       const live = managerRef.current?.document;
@@ -16992,9 +16963,8 @@ export function App() {
   }
 
   /** "Save reproduction": the held refusal as a corpus fixture, locally. */
-  function handleSaveRefusalReproduction() {
-    const capture = refusalHarvesterRef.current?.latest();
-    if (!capture) {
+  function handleSaveRefusalReproduction(capture: RefusalCapture) {
+    if (capture.document.projectId !== managerRef.current?.document.projectId) {
       setStatus('There is no refused rebuild to save in this session.');
       return;
     }
@@ -17019,9 +16989,14 @@ export function App() {
       setStatus(errorMessage(error, 'Saving the reproduction failed.'));
     }
   }
-  const saveRefusalReproduction = refusalReproductionReady
-    ? handleSaveRefusalReproduction
-    : undefined;
+  function saveRefusalReproduction(
+    owner: string,
+    diagnostic?: string | CommandDiagnostic | null
+  ): (() => void) | undefined {
+    return refusalHarvest.reproductionFor(
+      owner, diagnostic, handleSaveRefusalReproduction
+    );
+  }
 
   function handleExportDiagnostics() {
     if (!doc) {
@@ -18859,7 +18834,7 @@ export function App() {
         {
           rebuildWithLineage: async () => {
             addLineageDemand([selection.bodyId]);
-            const derived = await syncCandidate(base, undefined, [
+            const derived = await geometry.syncOnce(base, undefined, [
               ...new Set([...lineageDemand, selection.bodyId])
             ]);
             return { ...base, derived };
@@ -20855,7 +20830,7 @@ export function App() {
       const stale = (): Attempt =>
         sameOwner() ? { kind: 'moved' } : { kind: 'refused', message: moved };
       base = await exactWarningBaseline(base, (document) =>
-        syncCandidate(document)
+        geometry.syncOnce(document)
       );
       if (!current()) return stale();
       const parameterCommand = commandFactories.setParameter({
@@ -20919,7 +20894,7 @@ export function App() {
       try {
         derived = await parameterChecks.request(() => {
           if (!current()) return Promise.reject(new ParameterCheckStale());
-          return syncCandidate(prospective);
+          return syncParameterCandidate(name, prospective);
         });
       } catch (error) {
         if (error instanceof ParameterCheckStale) return stale();
@@ -25701,10 +25676,13 @@ export function App() {
       : 0;
   // Read through a ref, like the verbs, so the handlers' identity never
   // refills the chip.
+  const calloutSaveReproduction = saveRefusalReproduction(
+    'operation', calloutOperationModel?.error
+  );
   const calloutOperationActions = {
     onEditCulprit: handleEditCulpritFeature,
     onViewDetails: openActivityLog,
-    onSaveReproduction: handleSaveRefusalReproduction,
+    onSaveReproduction: calloutSaveReproduction,
     onKeepLastValid: () => keepLastValid?.keep(),
     onSelectAllEdges: () => {
       if (edgeModifierBody) handleSelectAllEdges(edgeModifierBody);
@@ -25725,7 +25703,7 @@ export function App() {
         interaction.edges.length < calloutEdgeCount
           ? calloutEdgeCount
           : null,
-        refusalReproductionReady
+        Boolean(calloutSaveReproduction)
       ])
     : '';
   const calloutWithOperation = useMemo<SelectionCalloutContent | null>(() => {
@@ -25755,7 +25733,7 @@ export function App() {
         onEditCulprit: (featureId) => handlers().onEditCulprit(featureId),
         onViewDetails: () => handlers().onViewDetails(),
         ...(saveReady
-          ? { onSaveReproduction: () => handlers().onSaveReproduction() }
+          ? { onSaveReproduction: () => handlers().onSaveReproduction?.() }
           : {}),
         onKeepLastValid: () => handlers().onKeepLastValid(),
         onSelectAllEdges: () => handlers().onSelectAllEdges()
@@ -29377,6 +29355,9 @@ export function App() {
     baseToolCard && interaction.mode === 'sketch'
       ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
+  const toolCardSaveReproduction = saveRefusalReproduction(
+    'operation', contextualToolCard?.error
+  );
   // The column's header already names the sketch and carries Finish, so the
   // card would say the same thing twice over the viewport. Only the card is
   // dropped: the entity editor, keypad and rail render in the same branch
@@ -29922,7 +29903,9 @@ export function App() {
       }}
       parameterQuantitySuggestions={parameterQuantitySuggestions}
       onViewActivityLog={openActivityLog}
-      onSaveRefusalReproduction={saveRefusalReproduction}
+      refusalReproductionFor={(name, message) =>
+        saveRefusalReproduction(`parameter:${name}`, message)
+      }
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
       }
@@ -31357,8 +31340,8 @@ export function App() {
               onAction={handleSelectionAction}
               onEditCulprit={handleEditCulpritFeature}
               onViewDetails={openActivityLog}
-              {...(saveRefusalReproduction
-                ? { onSaveReproduction: saveRefusalReproduction }
+              {...(toolCardSaveReproduction
+                ? { onSaveReproduction: toolCardSaveReproduction }
                 : {})}
               {...(keepLastValid ? { keepLastValid } : {})}
               // Never up in sketch mode (the column header names the
@@ -31757,7 +31740,7 @@ export function App() {
               onApply={handleApplyPatch}
               onPreview={handlePreviewPatch}
               onAnalyze={async (document, analysis) =>
-                syncCandidate(document, analysis)
+                geometry.syncOnce(document, analysis)
               }
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
