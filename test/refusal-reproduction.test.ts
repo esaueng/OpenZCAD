@@ -69,11 +69,11 @@ describe('saved refusal reproductions replay through the corpus', () => {
             targetBodyId: bodyId,
             operation: {
               kind: 'resize-cylindrical-face',
-              faceHash: wall!.hash,
-              ...(wall!.reference ? { faceReference: wall!.reference } : {}),
+              faceHash: wall.hash,
+              ...(wall.reference ? { faceReference: wall.reference } : {}),
               sourceRadius: 6,
-              sourceAxisStart: wall!.geometry!.axisStart!,
-              sourceAxisEnd: wall!.geometry!.axisEnd!,
+              sourceAxisStart: wall.geometry!.axisStart!,
+              sourceAxisEnd: wall.geometry!.axisEnd!,
               concavity: 'boss',
               radius: 7
             }
