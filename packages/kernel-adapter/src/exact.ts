@@ -107,6 +107,7 @@ export type {
 } from './exact-section';
 import {
   BODY_OPACITY_METADATA_KEY,
+  MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   UNIT_TO_MM,
   bodyDisplayColor,
   importedSourceReferenceOf,
@@ -5031,7 +5032,8 @@ function documentNeedsTranslators(document: ProjectDocument): boolean {
   return listNodesByKind(document, 'feature').some(
     (feature) =>
       feature.featureKind === 'imported-step' ||
-      feature.featureKind === 'imported-mesh'
+      (feature.data.featureKind === 'imported-mesh' &&
+        feature.data.triangleCount <= MAX_MESH_SOLID_CONVERSION_TRIANGLES)
   );
 }
 

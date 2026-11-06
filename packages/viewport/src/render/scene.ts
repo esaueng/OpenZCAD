@@ -5,10 +5,11 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import type {
-  GeometryBodyRepresentation,
-  BodyTopology,
-  MeshGeometry
+import {
+  MAX_MESH_SOLID_CONVERSION_TRIANGLES,
+  type GeometryBodyRepresentation,
+  type BodyTopology,
+  type MeshGeometry
 } from '@openzcad/shared';
 import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
@@ -674,9 +675,25 @@ export function createObjectForBody(
   body: GeometryBodyRepresentation,
   resolution?: FatLineResolution
 ): THREE.Object3D {
-  const geometry = geometryFromMesh(body.mesh, body.topology);
+  // Large STL references have source facets and no CAD topology. Use their
+  // existing buffers without building smoothing groups or an edge overlay.
+  const largeReference =
+    body.meshReference === true &&
+    body.mesh.indices.length > MAX_MESH_SOLID_CONVERSION_TRIANGLES * 3;
+  const geometry = largeReference
+    ? new THREE.BufferGeometry()
+        .setAttribute(
+          'position',
+          new THREE.BufferAttribute(body.mesh.vertices, 3)
+        )
+        .setIndex(new THREE.BufferAttribute(body.mesh.indices, 1))
+    : geometryFromMesh(body.mesh, body.topology);
   const material = createBodyMaterial(body);
   const mesh = new THREE.Mesh(geometry, material);
+  if (largeReference) {
+    material.flatShading = true;
+    mesh.userData.meshFacetWireframe = true;
+  }
   mesh.name = body.name;
   mesh.renderOrder = VIEWPORT_RENDER_ORDER.BODY_FACE;
   mesh.castShadow = true;
@@ -685,7 +702,7 @@ export function createObjectForBody(
   // bands across otherwise planar analytic faces.
   mesh.receiveShadow = false;
 
-  if (!body.topology?.edges.length) {
+  if (!largeReference && !body.topology?.edges.length) {
     // A deferred-topology preview outlines its B-rep face boundaries; only a
     // body without face ranges falls back to tessellated feature edges.
     const boundary = topologyBoundaryOutlines.get(geometry);
@@ -742,6 +759,7 @@ export function sameBodyRenderGeometry(
   if (a && b && a.session === b.session && a.geometry !== b.geometry)
     return false;
   return (
+    previous.meshReference === next.meshReference &&
     equalProjectionValue(previous.mesh, next.mesh) &&
     equalProjectionValue(
       previous.topology?.faces.flatMap((face) => [

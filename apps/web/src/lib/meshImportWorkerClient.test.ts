@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MESH_IMPORT_POLICIES } from '@openzcad/kernel-adapter/mesh-import-formats';
+import { MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
 
-import { importMeshFileInDisposableWorker } from './meshImportWorkerClient';
+import {
+  importMeshFileInDisposableWorker,
+  importStlInDisposableWorker
+} from './meshImportWorkerClient';
 import type {
   MeshImportWorkerRequest,
   MeshImportWorkerResult
@@ -85,7 +89,7 @@ describe('mesh import worker client', () => {
       'mm'
     );
     const worker = FakeWorker.latest!;
-    expect(worker.request?.format).toBe('obj');
+    expect(worker.request).toMatchObject({ type: 'import', format: 'obj' });
 
     worker.onmessage?.({
       data: {
@@ -116,6 +120,44 @@ describe('mesh import worker client', () => {
       triangleCount: 1
     });
     expect(worker.terminated).toBe(true);
+  });
+
+  it('refuses oversized STL before reading and suggests binary STL', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    await expect(
+      importStlInDisposableWorker(
+        fileOfSize('large.stl', MAX_SOURCE_IMPORT_BYTES + 1),
+        new AbortController().signal
+      )
+    ).rejects.toThrow('Try binary STL');
+    expect(FakeWorker.created).toBe(0);
+  });
+
+  it('returns the STL buffers without copying and terminates a cancelled parse', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const controller = new AbortController();
+    const file = new File([''], 'mesh.stl');
+    const pending = importStlInDisposableWorker(file, controller.signal);
+    const worker = FakeWorker.latest!;
+    expect(worker.request).toMatchObject({ type: 'import-stl', file });
+    const vertices = Float64Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0);
+    const indices = Uint32Array.of(0, 1, 2);
+    reply(worker, {
+      ok: true,
+      vertices,
+      indices,
+      triangleCount: 1,
+      extent: [1, 1, 0]
+    });
+    const parsed = await pending;
+    expect(parsed.vertices).toBe(vertices);
+    expect(parsed.indices).toBe(indices);
+    expect(parsed.extent).toEqual([1, 1, 0]);
+
+    const cancelled = importStlInDisposableWorker(file, controller.signal);
+    controller.abort();
+    await expect(cancelled).rejects.toHaveProperty('name', 'AbortError');
+    expect(FakeWorker.latest?.terminated).toBe(true);
   });
 
   it('carries a declared source unit back to the caller', async () => {
@@ -180,7 +222,7 @@ describe('mesh import worker client', () => {
     );
     const worker = FakeWorker.latest!;
 
-    expect(worker.request?.units).toBe('m');
+    expect(worker.request).toMatchObject({ type: 'import', units: 'm' });
 
     reply(worker, {
       ok: false,
