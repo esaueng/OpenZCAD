@@ -7,7 +7,11 @@ import type {
   SelectionCalloutVerbId
 } from '../lib/selectionCallout';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
-import { OPERATION_PHASE_LABELS as PHASE_LABELS } from '../lib/selectionCalloutView';
+import {
+  OPERATION_PHASE_LABELS as PHASE_LABELS,
+  SAVE_REPRODUCTION_HINT,
+  SAVE_REPRODUCTION_LABEL
+} from '../lib/selectionCalloutView';
 import { CardHeader } from './CardHeader';
 import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
@@ -39,6 +43,11 @@ interface ToolCardProps {
   /** Opens the Activity log, where the full kernel diagnostic is retained. */
   onViewDetails?(): void;
   /**
+   * Downloads a sanitized reproduction of the refused rebuild. Present only
+   * while one is held; the user's click is the only way it is written.
+   */
+  onSaveReproduction?(): void;
+  /**
    * Commits the value the last passing preview showed. After a refusal at
    * release the model on screen is already that value; this keeps it rather
    * than sending the hand back to find it.
@@ -68,6 +77,7 @@ export function ToolCard({
   onAction,
   onEditCulprit,
   onViewDetails,
+  onSaveReproduction,
   keepLastValid,
   selectAllEdges,
   verbs = [],
@@ -163,6 +173,16 @@ export function ToolCard({
                   onClick={onViewDetails}
                 >
                   View details
+                </button>
+              ) : null}
+              {model.error.detail && onSaveReproduction ? (
+                <button
+                  type="button"
+                  className="activity-log-link"
+                  title={SAVE_REPRODUCTION_HINT}
+                  onClick={onSaveReproduction}
+                >
+                  {SAVE_REPRODUCTION_LABEL}
                 </button>
               ) : null}
             </span>

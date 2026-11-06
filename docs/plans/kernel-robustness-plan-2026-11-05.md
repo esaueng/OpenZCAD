@@ -329,6 +329,11 @@ Each accepted step is recorded as ordinary history. This ladder is meant to
 replace, not add to, the cylinder-specific workaround ring; each workaround is
 retired only when the ladder passes its original oracles.
 
+Step 2 may rebuild a blend at the quality the original blend already had (see
+[Owner decision: approximate re-fillets](#owner-decision-approximate-re-fillets-2026-11-06)):
+an approximate band may come back approximate, disclosed; an exact band must
+come back exact or the step refuses.
+
 ### WS7 — Kernel capability, ordered by the WS1 ledger (K07, K08)
 
 Upstream Remus work, prioritized by the cells WS1 and WS3 show users reach:
@@ -343,6 +348,10 @@ Upstream Remus work, prioritized by the cells WS1 and WS3 show users reach:
 
 A kernel change counts toward a cell only when the whole WS1 family for that
 cell passes on the installed packages, not a single witness.
+
+A WS7.2 blend rebuilt against a curved support may be a disclosed approximate
+(NURBS, within tolerance) band when the blend it replaces was already one; see
+the owner decision below.
 
 ## Reference behaviour: direct edits on an imported blended body
 
@@ -444,6 +453,26 @@ a single tangent-ended edge, which uses a labelled interval.
   undo/redo reproduce the body. Moving the first cap offset from 5 to 3
   re-resolves the later round resize without a new pick.
 - **R8** is viewport behaviour and has no cell.
+
+### Owner decision: approximate re-fillets (2026-11-06)
+
+Disclosed approximate re-fillets are allowed. When an edit rebuilds a blend
+(R2, the WS6 re-blend step, WS7.2), the new band may have the same approximate
+quality — a NURBS surface within tolerance — that the original band already
+had, and the result is disclosed as approximate. An exact blend is never
+silently rebuilt approximately: it comes back exact or the edit refuses. This
+is a quality-preservation rule, not a widened tolerance, and it stays inside
+"What not to do" below.
+
+This unblocks the direct resize of the filleted boss on a sphere. OpenZCAD
+#1271 lists the kernel steps still missing; they are being implemented
+upstream. For that cell, M2's "exact" exit signal reads as "exact, or
+approximate exactly where the source fillet already was, and disclosed".
+
+The fillet feature itself now discloses an approximate band: when the kernel
+reports `quality: "approximate"`, the feature carries an advisory saying the
+blend surface is approximate, and the display-mesh advice no longer claims
+that volume and STEP export are exact for that band.
 
 ## Milestones
 

@@ -154,3 +154,24 @@ it('leaves the preview alone when an untouched row unmounts', () => {
   unmount();
   expect(onPreview).not.toHaveBeenCalled();
 });
+
+it('offers Save reproduction beside View details when the host holds one', async () => {
+  const user = userEvent.setup();
+  const onSaveReproduction = vi.fn();
+  render(
+    <ParameterRow
+      parameter={parameter()}
+      value={58}
+      onSet={async () => 'holder_height must be at least 56.910504 mm.'}
+      onViewDetails={vi.fn()}
+      reproductionFor={() => onSaveReproduction}
+    />
+  );
+  const input = screen.getByLabelText('Expression for holder_height');
+  await user.clear(input);
+  await user.type(input, '55{Enter}');
+  await user.click(
+    await screen.findByRole('button', { name: 'Save reproduction' })
+  );
+  expect(onSaveReproduction).toHaveBeenCalledOnce();
+});

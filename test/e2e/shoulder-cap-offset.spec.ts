@@ -178,7 +178,9 @@ test(
     await verifyExport(page, 19.1, 16);
     await offsetTo(page, 19.1, 24.1, 5);
     await verifyExport(page, 24.1, 19);
-    await expect(page.getByRole('contentinfo')).toContainText('warnings1');
+    // The display-mesh advisory plus the R5 fillet's approximate-blend
+    // advisory: its band is a NURBS fit (owner decision, 2026-11-06).
+    await expect(page.getByRole('contentinfo')).toContainText('warnings2');
   }
 );
 

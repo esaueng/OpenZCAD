@@ -12,8 +12,10 @@ import {
   blendOutcome,
   blendReportIsVertexBlend,
   reportBlendRefusal,
-  type BlendOperation
+  type BlendOperation,
+  type BlendQuality
 } from './exact-blend-refusal';
+import { surfaceTypeOf } from './exact-sync-memo';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
 import {
   countBlendFaces,
@@ -95,7 +97,9 @@ function applyTypedBlend(
   size: number,
   reportRefusal: ((message: string) => void) | undefined,
   /** Distance-angle chamfer only: the bevel angle in radians. */
-  chamferAngleRadians?: number
+  chamferAngleRadians?: number,
+  /** Receives the kernel's disclosed quality of a successful blend. */
+  reportQuality?: (quality: BlendQuality) => void
 ): number | null {
   try {
     const outcome = blendOutcome(
@@ -110,6 +114,7 @@ function applyTypedBlend(
       reportRefusal?.(reportBlendRefusal(outcome.refusal));
       return null;
     }
+    reportQuality?.(outcome.quality);
     return outcome.solid;
   } catch (error) {
     // The typed twins answer as data, so a throw is the harness failing
@@ -158,12 +163,22 @@ export function applyEdgeModifier(
    */
   chamferSecondDistance?: number,
   /** Diagnostic probes require an exact result before applying these guards. */
-  requireExactResult = false
+  requireExactResult = false,
+  /**
+   * Receives whether the accepted result's new faces are an approximate
+   * (NURBS, within tolerance) fit rather than exact blend surfaces. Called
+   * only for a result this function returns. See {@link blendResultQuality}.
+   */
+  reportQuality?: (quality: BlendQuality) => void
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
   let modified: number;
   let evolution: FaceEvolutionPayloadV1 | undefined;
+  let typedQuality: BlendQuality | undefined;
+  const recordQuality = (quality: BlendQuality) => {
+    typedQuality = quality;
+  };
   if (requireExactResult) {
     // The ladder and its refinement recommend constant blends. Keep the
     // requested edit's existing policy separate from this stronger proof.
@@ -212,7 +227,9 @@ export function applyEdgeModifier(
               target,
               handles,
               size,
-              reportRefusal
+              reportRefusal,
+              undefined,
+              recordQuality
             ) ?? target;
         }
       } else {
@@ -223,7 +240,9 @@ export function applyEdgeModifier(
             target,
             handles,
             size,
-            reportRefusal
+            reportRefusal,
+            undefined,
+            recordQuality
           ) ?? target;
       }
     } catch (error) {
@@ -261,7 +280,8 @@ export function applyEdgeModifier(
               handles,
               size,
               reportRefusal,
-              chamferAngleRadians
+              chamferAngleRadians,
+              recordQuality
             );
             if (angled === null) {
               return null;
@@ -276,7 +296,8 @@ export function applyEdgeModifier(
             handles,
             size,
             reportRefusal,
-            chamferAngleRadians
+            chamferAngleRadians,
+            recordQuality
           );
           if (angled === null) {
             return null;
@@ -294,7 +315,9 @@ export function applyEdgeModifier(
             target,
             handles,
             size,
-            reportRefusal
+            reportRefusal,
+            undefined,
+            recordQuality
           );
           if (bevelled === null) {
             return null;
@@ -308,7 +331,9 @@ export function applyEdgeModifier(
           target,
           handles,
           size,
-          reportRefusal
+          reportRefusal,
+          undefined,
+          recordQuality
         );
         if (bevelled === null) {
           return null;
@@ -410,7 +435,60 @@ export function applyEdgeModifier(
   if (evolution) {
     reportEvolution?.(evolution);
   }
+  if (reportQuality) {
+    reportQuality(
+      typedQuality ?? blendResultQuality(kernel, target, modified, evolution)
+    );
+  }
   return modified;
+}
+
+/**
+ * The advisory a fillet or chamfer carries when its blend surface is an
+ * approximate fit. Advisory, not a refusal: the body is valid and kept. It
+ * says what is approximate and that downstream quantities inherit it, so
+ * nothing else on the card may imply the band is exact.
+ */
+export function approximateBlendAdvisory(
+  featureKind: 'fillet' | 'chamfer'
+): string {
+  return `This ${featureKind} is approximate: its blend surface is a NURBS fit within modeling tolerance, not an exact ${featureKind} surface. Volume, measurements and STEP export use that approximate surface.`;
+}
+
+/**
+ * The quality of a blend result whose entry point reported none.
+ *
+ * The evolution and variable entry points return no `quality`. The kernel's
+ * own definition is that a result is approximate when it introduces a NURBS
+ * face — a sampled blend wall with no closed form — so the same question is
+ * asked of the faces the blend created: the evolution payload's generated
+ * and unresolved results when there is one, and otherwise any NURBS face
+ * beyond the ones the target already had. An unresolved result that was an
+ * existing NURBS face is over-disclosed rather than missed.
+ */
+export function blendResultQuality(
+  kernel: RemusKernel,
+  target: number,
+  modified: number,
+  evolution?: FaceEvolutionPayloadV1
+): BlendQuality {
+  const isNurbs = (face: number) => surfaceTypeOf(kernel, face) === 'bspline';
+  if (evolution) {
+    const created = new Set<number>();
+    for (const relation of evolution.evolution.generated) {
+      for (const face of relation.results) created.add(face);
+    }
+    for (const unresolved of evolution.evolution.unresolvedResults) {
+      created.add(unresolved.result);
+    }
+    const approximateFaces = [...created].filter(isNurbs);
+    return { approximate: approximateFaces.length > 0, approximateFaces };
+  }
+  const before = Array.from(kernel.getSolidFaces(target)).filter(isNurbs);
+  const after = Array.from(kernel.getSolidFaces(modified)).filter(isNurbs);
+  return after.length > before.length
+    ? { approximate: true, approximateFaces: after }
+    : { approximate: false, approximateFaces: [] };
 }
 
 /**

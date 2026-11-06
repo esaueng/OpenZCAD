@@ -97,3 +97,56 @@ consent/API/census checks: 99 root and 62 web passed. The full unrelated browser
 suite was not rerun. The master cloud switch is rechecked from persisted storage
 on every send, including startup and other-tab changes; regression coverage
 protects this boundary. Hosted checks and production verification are separate.
+
+## Kernel refusal harvest (WS3)
+
+When a user edit's candidate rebuild introduces a refusal the build on screen did not
+already have, an opted-in browser sends one `kernel_refused` observation. Its
+bucket is the whole payload, eight fields joined by `|` in a fixed order:
+
+`operation|family|kernelOperation|category|code|warningKind|target|neighbours`
+
+- `operation`: the refusing feature's kind, or `direct-edit.<operation kind>`.
+- `family`, `kernelOperation`, `category`, `code`: `FeatureWarning.kernelRefusal`
+  (`none` when the kernel gave no classification). The closed vocabulary includes
+  `direct-edit` and the direct-edit operation names, including
+  `resize-cylindrical-face`, in both the client and relay.
+- `warningKind`: `build-failed` or `refusal`; advisories and suppressions are
+  never reported.
+- `target`, `neighbours`: the surface types (`plane`, `cylinder`, `cone`,
+  `sphere`, `torus`, `bspline`, `other`) of the picked face and of the faces
+  sharing an edge with it, or the faces an edge modifier's edges bound. Read
+  from topology the build already published; `none` when it is not on hand.
+
+Every field except `code` is a closed list; a value outside it is sent as
+`other`. `code` is the kernel's stable identifier, which the pin does not
+enumerate: it must be lower-case words joined by underscores (no digits),
+at most 48 characters, and must not start with one of the app's id prefixes.
+Anything else is `other`. The bucket is capped at 200 characters. The client,
+the relay and the report parser share `parseKernelRefusedBucket`, which only
+accepts a bucket in canonical form, so no geometry, dimension, name, hash, id,
+file name or free text can pass. Repeated previews of one edit (same base
+document state and cell) count once per page; the de-duplication key stays in
+the page. The Glimpse service must mirror this vocabulary before it records
+the event; until then the relay forwards it and the service drops it.
+Background copy/demo, baseline, lineage and assistant-analysis rebuilds do not
+enter the harvester and cannot replace or clear a user edit's capture. Replies
+from superseded edits, a prior project or a prior document version are ignored.
+
+**Save reproduction** is separate and never automatic. Beside a refusal's
+**View details** (operation card, selection chip and Parameters row; not Tweak
+mode or share links), and only on the parameter row or operation showing the
+latest user edit's captured refusal in the current project. A later user edit
+that builds, a commit or a project switch
+withdraws it — it downloads an `openzcad-direct-edit-fixture` (format 2, `feature-build` op): the
+feature history up to and including the refused feature, the kernel pin and
+the refusal record. Project, part, body, feature and sketch names become
+neutral labels (also inside the refusal text), user ids and project ids are
+replaced, and later features, the command log, revisions, assets, parameter
+descriptions, drawings, folders, reference images, assemblies and branch
+provenance are removed. Parameter names, sketch geometry (including sketch
+text) and generated feature/body ids remain because the rebuild reads them.
+Imported STEP/mesh documents are saved without the model. The file can be
+dropped into `test/direct-edit-corpus/fixtures/` and replayed.
+Name replacement covers unquoted text, all quoting styles and kernel details,
+including names of trimmed features and documents whose model is omitted.

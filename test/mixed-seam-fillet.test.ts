@@ -5,6 +5,12 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { mixedSeamFixture } from './fixtures/mixed-seam';
 import { displayOnlyBlendsSupported } from '../packages/kernel-adapter/src/display-only-blends';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { approximateBlendAdvisory } from '../packages/kernel-adapter/src/exact-edge-modifiers';
+
+/** The seam band is a NURBS fit, which the feature discloses (2026-11-06). */
+const DISCLOSED = [
+  `Feature "Three-edge round": ${approximateBlendAdvisory('fillet')}`
+];
 
 describe('mixed cylinder seam fillet', { timeout: 120_000 }, () => {
   it('adopts the touching-feature kernel together with its display-only preview switch', () => {
@@ -39,7 +45,7 @@ describe('mixed cylinder seam fillet', { timeout: 120_000 }, () => {
         expect(listFeaturesInOrder(manager.document)).toHaveLength(count + 1);
         const resultId = listFeaturesInOrder(manager.document).at(-1)!.bodyId!;
         const built = await adapter.syncDocument(manager.document);
-        expect(built.warnings).toEqual([]);
+        expect(built.warnings).toEqual(DISCLOSED);
         const body = built.bodyRepresentations[resultId]!;
         expect(body.volume).toBeGreaterThan(fixture.volume + 1);
         expect(body.volume).toBeLessThan(fixture.volume + 10);
@@ -55,7 +61,7 @@ describe('mixed cylinder seam fillet', { timeout: 120_000 }, () => {
         manager.redo();
         expect(listFeaturesInOrder(manager.document)).toHaveLength(count + 1);
         const redone = await adapter.syncDocument(manager.document);
-        expect(redone.warnings).toEqual([]);
+        expect(redone.warnings).toEqual(DISCLOSED);
         expect(redone.bodyRepresentations[resultId]!.volume).toBeCloseTo(
           expectedVolume,
           6

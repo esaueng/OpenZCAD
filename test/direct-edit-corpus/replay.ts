@@ -18,6 +18,8 @@ import type {
   EdgeTopology,
   EdgeTopologyReferenceV5,
   FaceTopology,
+  FeatureNode,
+  FeatureWarning,
   ProjectDocument
 } from '@openzcad/shared';
 
@@ -45,6 +47,12 @@ export interface ReplayResult {
   volumeAfter?: number;
   warnings: string[];
   route?: FaceOffsetRoute;
+  /**
+   * `feature-build` only: the attributed refusal record, so a replay can be
+   * compared with the capture on the kernel's own taxonomy, not just copy.
+   */
+  warningKind?: FeatureWarning['kind'];
+  kernelRefusal?: FeatureWarning['kernelRefusal'];
 }
 
 const FILLET_FEATURE_NAME = 'Fillet edges';
@@ -104,6 +112,9 @@ export async function replayFixture(
     );
   }
   const document = normalizeDocument(fixture.document);
+  if (fixture.edit.op === 'feature-build') {
+    return replayFeatureBuild(adapter, fixture, document);
+  }
   const targetBodyId = fixture.edit.targetBodyId as BodyId;
   const before = await adapter.syncDocument(document);
   const body = before.bodyRepresentations[targetBodyId];
@@ -152,6 +163,57 @@ export async function replayFixture(
     ...(resultBody ? { volumeAfter: resultBody.volume } : {}),
     warnings: after.warnings,
     ...(route ? { route } : {})
+  };
+}
+
+/**
+ * A `feature-build` document already holds the refused feature, so replay is
+ * one rebuild judged by the shipped feature gate. There is no "before" body:
+ * `volumeBefore` is NaN, and nothing in the corpus reads it for this op.
+ */
+async function replayFeatureBuild(
+  adapter: ExactKernelAdapter,
+  fixture: DirectEditFixture,
+  document: ProjectDocument
+): Promise<ReplayResult> {
+  const featureId = fixture.edit.featureId;
+  const feature = Object.values(document.nodes).find(
+    (node): node is FeatureNode =>
+      node.kind === 'feature' && node.featureId === featureId
+  );
+  if (!feature) {
+    throw new Error(
+      `Fixture "${fixture.name}": feature ${featureId ?? '(unstated)'} is ` +
+        'not in the document.'
+    );
+  }
+  const after = await adapter.syncDocument(document);
+  const resultBody = feature.bodyId
+    ? after.bodyRepresentations[feature.bodyId]
+    : undefined;
+  const rejection = validatedFeatureRejection({
+    featureName: feature.name,
+    featureId: feature.featureId,
+    warnings: after.warnings,
+    ...(after.featureWarnings
+      ? { featureWarnings: after.featureWarnings }
+      : {}),
+    bodyPresent: feature.bodyId === undefined || resultBody !== undefined,
+    documentMoved: false
+  });
+  const attributed = after.featureWarnings?.find(
+    (warning) => warning.featureId === feature.featureId
+  );
+  return {
+    outcome: rejection === null ? 'committed' : 'refused',
+    ...(rejection === null ? {} : { message: rejection.message }),
+    volumeBefore: Number.NaN,
+    ...(resultBody ? { volumeAfter: resultBody.volume } : {}),
+    warnings: after.warnings,
+    ...(attributed ? { warningKind: attributed.kind } : {}),
+    ...(attributed?.kernelRefusal
+      ? { kernelRefusal: attributed.kernelRefusal }
+      : {})
   };
 }
 
@@ -288,6 +350,8 @@ function buildCommand(
     case 'edit-fillet':
     case 'remove-face-feature':
       throw new Error(`Unsupported in replay v1: ${edit.op}`);
+    case 'feature-build':
+      throw new Error('A feature-build fixture replays without a command.');
   }
 }
 

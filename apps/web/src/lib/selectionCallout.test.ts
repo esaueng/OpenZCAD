@@ -591,6 +591,33 @@ describe('renderSelectionCallout', () => {
       expect(filled.onViewDetails).toHaveBeenCalledTimes(1);
     });
 
+    it('adds Save reproduction after View details only when one is held', () => {
+      const element = document.createElement('div');
+      const onSaveReproduction = vi.fn();
+      const filled = operation({
+        phase: 'failed',
+        error: { message: 'Refused.', detail: 'kernel words' },
+        onSaveReproduction
+      });
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ verbs: edgeVerbs, operation: filled })
+      );
+      const recovery = [
+        ...element.querySelectorAll<HTMLButtonElement>(
+          '.selection-callout-recovery'
+        )
+      ];
+      expect(recovery.map((button) => button.textContent)).toEqual([
+        'View details',
+        'Save reproduction'
+      ]);
+      recovery[1]?.click();
+      expect(onSaveReproduction).toHaveBeenCalledTimes(1);
+      expect(filled.onViewDetails).not.toHaveBeenCalled();
+    });
+
     it('offers every edge of the body until all are picked', () => {
       const element = document.createElement('div');
       const filled = operation({ selectAllEdgesCount: 12 });

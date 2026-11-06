@@ -126,6 +126,8 @@ export interface SelectionCalloutOperation {
   selectAllEdgesCount?: number | undefined;
   onEditCulprit(featureId: string): void;
   onViewDetails(): void;
+  /** Present only while a refused rebuild is held to save as a reproduction. */
+  onSaveReproduction?: (() => void) | undefined;
   onKeepLastValid(): void;
   onSelectAllEdges(): void;
 }

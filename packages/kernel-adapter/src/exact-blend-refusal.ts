@@ -97,8 +97,42 @@ export function blendRefusalOf(error: unknown): BlendRefusal | null {
 }
 
 export type BlendOutcome =
-  | { status: 'ok'; solid: number }
+  | {
+      status: 'ok';
+      solid: number;
+      /** The kernel's disclosed quality; see {@link blendQualityOf}. */
+      quality: BlendQuality;
+    }
   | { status: 'refused'; refusal: BlendRefusal };
+
+/**
+ * What a successful blend disclosed about its own surfaces.
+ *
+ * `approximate` is the kernel's `details.quality === "approximate"`: the
+ * result introduced a NURBS face fitted within tolerance rather than an
+ * exact blend surface. `approximateFaces` lists those faces when the kernel
+ * named them; it may be empty even when `approximate` is true.
+ */
+export interface BlendQuality {
+  approximate: boolean;
+  approximateFaces: number[];
+}
+
+export function blendQualityOf(
+  details: Record<string, unknown> | undefined
+): BlendQuality {
+  if (details?.quality !== 'approximate') {
+    return { approximate: false, approximateFaces: [] };
+  }
+  return {
+    approximate: true,
+    approximateFaces: Array.isArray(details.approximateFaces)
+      ? details.approximateFaces.filter(
+          (face): face is number => typeof face === 'number'
+        )
+      : []
+  };
+}
 
 function detailedResult(
   kernel: RemusKernel,
@@ -153,7 +187,11 @@ export function blendOutcome(
     angleRadians
   );
   if (detailed.status === 'ok') {
-    return { status: 'ok', solid: detailed.value };
+    return {
+      status: 'ok',
+      solid: detailed.value,
+      quality: blendQualityOf(detailed.details)
+    };
   }
   const details = detailed.details ?? {};
   return {

@@ -5,7 +5,19 @@ import {
 } from './cloudMode';
 import { isDesktopApp } from './desktopBridge';
 
-import { expandedMetric, type Report } from './glimpseContract';
+import type { REFUSAL_SURFACES } from './glimpseContract';
+import {
+  expandedMetric,
+  formatKernelRefusedBucket,
+  KERNEL_REFUSED_EVENT,
+  REFUSAL_CATEGORIES,
+  REFUSAL_CODE_PATTERN,
+  REFUSAL_FAMILIES,
+  REFUSAL_KERNEL_OPERATIONS,
+  REFUSAL_OPERATIONS,
+  type KernelRefusedBucket,
+  type Report
+} from './glimpseContract';
 // Glimpse optional analytics: app-scoped consent preference, never a visitor ID.
 const CONSENT_KEY = 'openzcad.glimpse.consent.v1';
 const EVENTS = [
@@ -133,6 +145,118 @@ export function trackUsage(event: UsageEvent, elapsedMs?: number): void {
 export function trackDetail(event: string, bucket = 'none'): void {
   if (expandedMetric(event, bucket, 'openzcad'))
     sendMetric(event, bucket, true);
+}
+/**
+ * What a kernel refusal may report, before it is reduced to the wire bucket.
+ * Every field is optional and untrusted: a value outside its fixed list is
+ * reported as `other`, never forwarded, so a caller cannot widen the payload
+ * by passing more (or more specific) data than the contract names.
+ */
+export interface KernelRefusalObservation {
+  /** The refusing feature's kind (`FeatureKind`). */
+  featureKind?: string;
+  /** For a direct edit, its operation kind. */
+  directEditKind?: string;
+  /** `FeatureWarning.kernelRefusal`, when the kernel classified it. */
+  family?: string;
+  kernelOperation?: string;
+  category?: string;
+  code?: string;
+  /** `FeatureWarning.kind`; only refusing kinds are reported. */
+  warningKind?: string;
+  /** Kernel surface-type words of the target face and its neighbours. */
+  targetSurface?: string;
+  neighbourSurfaces?: readonly string[];
+}
+function listed<T extends string>(
+  list: readonly T[],
+  value: string | undefined,
+  absent: T
+): T | 'other' {
+  if (value === undefined || value === '') return absent;
+  return (list as readonly string[]).includes(value) ? (value as T) : 'other';
+}
+/** The kernel's surface-type word reduced to the fixed vocabulary. */
+export function surfaceBucket(
+  surface: string | undefined
+): (typeof REFUSAL_SURFACES)[number] {
+  switch ((surface ?? '').toLowerCase()) {
+    case 'plane':
+    case 'planar':
+      return 'plane';
+    case 'cylinder':
+    case 'cylindrical':
+      return 'cylinder';
+    case 'cone':
+    case 'conical':
+      return 'cone';
+    case 'sphere':
+    case 'spherical':
+      return 'sphere';
+    case 'torus':
+    case 'toroidal':
+      return 'torus';
+    case 'bspline':
+    case 'nurbs':
+    case 'b_spline_surface':
+    case 'bspline_surface':
+      return 'bspline';
+    default:
+      return 'other';
+  }
+}
+/** The `kernel_refused` bucket for one observation, or null when not reportable. */
+export function kernelRefusedBucket(
+  observation: KernelRefusalObservation
+): string | null {
+  const warningKind = observation.warningKind;
+  if (warningKind !== 'build-failed' && warningKind !== 'refusal') return null;
+  const featureKind = listed(
+    REFUSAL_OPERATIONS,
+    observation.featureKind,
+    'other'
+  );
+  const operation =
+    featureKind === 'direct-edit' && observation.directEditKind
+      ? listed(
+          REFUSAL_OPERATIONS,
+          `direct-edit.${observation.directEditKind}`,
+          'other'
+        )
+      : featureKind;
+  const code = observation.code;
+  const bucket: KernelRefusedBucket = {
+    operation,
+    family: listed(REFUSAL_FAMILIES, observation.family, 'none'),
+    kernelOperation: listed(
+      REFUSAL_KERNEL_OPERATIONS,
+      observation.kernelOperation,
+      'none'
+    ),
+    category: listed(REFUSAL_CATEGORIES, observation.category, 'none'),
+    code:
+      code === undefined || code === ''
+        ? 'none'
+        : REFUSAL_CODE_PATTERN.test(code)
+          ? code
+          : 'other',
+    warningKind,
+    target:
+      observation.targetSurface === undefined
+        ? 'none'
+        : surfaceBucket(observation.targetSurface),
+    neighbours: [
+      ...new Set((observation.neighbourSurfaces ?? []).map(surfaceBucket))
+    ]
+  };
+  return formatKernelRefusedBucket(bucket);
+}
+/** Opt-in aggregate count of one kernel refusal; a no-op without consent. */
+export function trackKernelRefusal(
+  observation: KernelRefusalObservation
+): void {
+  const bucket = kernelRefusedBucket(observation);
+  if (bucket) trackDetail(KERNEL_REFUSED_EVENT, bucket);
 }
 export function sizeBucket(bytes: number): string | null {
   if (!Number.isSafeInteger(bytes) || bytes < 0) return null;
