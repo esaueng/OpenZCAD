@@ -110,6 +110,11 @@ import {
   rebuildFaceDistance
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
+import {
+  preparedGroupEdit,
+  preparedCommitNeedsEvolution,
+  releasePreparedGroupEdit
+} from './exact-prepared-group-edit';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
 import { resizeChamferedThroughHole } from './exact-chamfered-hole';
@@ -1992,8 +1997,36 @@ export function applyDirectEdit(
       }
       throw new Error('Blend radius must differ from its current radius.');
     }
-    const sourceCandidates = topologyCandidatesForSolid(kernel, solid);
+    const sourceCandidates = deferOutputLineage
+      ? []
+      : topologyCandidatesForSolid(kernel, solid);
+    const prepared =
+      operation.surfaceClass === 'cylinder'
+        ? preparedGroupEdit(
+            kernel,
+            solid,
+            face,
+            'blend',
+            snapshot.radius,
+            deferOutputLineage
+          )
+        : null;
+    let preparedOutput: number | undefined;
+    let needsEvolution = false;
+    if (prepared) {
+      try {
+        if (deferOutputLineage)
+          return { solids: [prepared.preview(newRadius)] };
+        // Commit rebuilds the canonical result with the authoritative journal.
+        const journal = decodeRemusMoveFacesJournal(prepared.commit(newRadius));
+        preparedOutput = journal.solid;
+        needsEvolution = preparedCommitNeedsEvolution(kernel, journal.op);
+      } catch {
+        releasePreparedGroupEdit(kernel);
+      }
+    }
     const evolution =
+      (preparedOutput === undefined || needsEvolution) &&
       operation.surfaceClass === 'cylinder'
         ? kernel.resizeBlendWithEvolution(
             solid,
@@ -2004,6 +2037,7 @@ export function applyDirectEdit(
         : null;
     const output =
       evolution?.result.solid ??
+      preparedOutput ??
       kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
     requireValidSolid(
       kernel,
@@ -2151,6 +2185,21 @@ export function applyDirectEdit(
     ? []
     : topologyCandidatesForSolid(kernel, solid);
   const sourceRadius = geometry.radius;
+  const prepared = preparedGroupEdit(
+    kernel,
+    solid,
+    face,
+    'cylinder',
+    sourceRadius,
+    deferOutputLineage
+  );
+  if (prepared && deferOutputLineage) {
+    try {
+      return { solids: [prepared.preview(newRadius)] };
+    } catch {
+      releasePreparedGroupEdit(kernel);
+    }
+  }
   const axisStart = geometry.axisStart;
   const plainResize = (
     fromSolid: number,
@@ -2161,7 +2210,9 @@ export function applyDirectEdit(
     if (journaled) {
       try {
         journal = decodeRemusMoveFacesJournal(
-          kernel.resizeCylindricalFaceJournaled(fromSolid, wall, newRadius)
+          prepared && fromSolid === solid && wall === face
+            ? prepared.commit(newRadius)
+            : kernel.resizeCylindricalFaceJournaled(fromSolid, wall, newRadius)
         );
       } catch {
         // Older or unqualified resize constructions can still use the exact

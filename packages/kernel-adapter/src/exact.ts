@@ -65,6 +65,7 @@ export type {
 import {
   findSketch,
   getParameterScope,
+  resolveParamValue,
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
@@ -146,6 +147,10 @@ import type {
 export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
 import { releasePreparedFaceMove } from './exact-prepared-face-move';
+import {
+  hasPreparedGroupEdit,
+  releasePreparedGroupEdit
+} from './exact-prepared-group-edit';
 import {
   blendRegionKeyOfHashes,
   measureOwnedFaceGeometry,
@@ -891,6 +896,8 @@ export interface ExactKernelAdapter {
     faceReference?: FaceTopologyReferenceV5;
   }): Promise<FaceRecognitionSummary>;
   dispose(): void;
+  /** End disposable drag work on the serialized worker owner. */
+  releaseEditPreview?(): void;
 }
 
 export type MassPropertiesRead =
@@ -1313,6 +1320,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   private invalidateHistoryCache(): void {
+    if (this.historyKernel) releasePreparedGroupEdit(this.historyKernel);
     this.clearCurrentMassSnapshot();
     this.historyCheckpoints = [];
     this.historyCheckpointOwners.clear();
@@ -1557,7 +1565,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const deferredDirectEditFeatureId =
       deferTerminalFaceLineage &&
       terminal?.data.featureKind === 'direct-edit' &&
-      terminal.data.operation.kind === 'offset-face'
+      ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
+        terminal.data.operation.kind
+      )
         ? terminal.featureId
         : undefined;
     // Only a drag preview keeps a prepared face move; any other sync ends it.
@@ -1590,7 +1600,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // blends display-only, then replay them checked again on release.
     const terminalOffset =
       terminal?.data.featureKind === 'direct-edit' &&
-      terminal.data.operation.kind === 'offset-face';
+      ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
+        terminal.data.operation.kind
+      );
     const checkpointIndices = tailCheckpointIndices(
       historyCheckpointIndices(features.length, this.maxHistoryCheckpoints),
       features.length - (terminalOffset ? 2 : 1),
@@ -2351,6 +2363,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.invalidateHistoryCache();
       throw error;
     } finally {
+      if (!deferTerminalFaceLineage) releasePreparedGroupEdit(activeKernel);
       // Cancelled jobs also allocated geometry. Charge completed replay work
       // before yielding ownership, otherwise an edit storm evades recycling.
       if (
@@ -3430,6 +3443,42 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               };
             })
           );
+          // A resize names its band explicitly. Preserve that display role
+          // on a unique measured result without running whole-body recognition
+          // or publishing a persistent topology reference for a drag frame.
+          const previewEdit = listFeaturesInOrder(document).at(-1);
+          if (
+            !consumed &&
+            previewEdit?.data.featureKind === 'direct-edit' &&
+            previewEdit.data.targetBodyId === bodyId &&
+            previewEdit.data.operation.kind === 'resize-blend'
+          ) {
+            const operation = previewEdit.data.operation;
+            const radius = resolveParamValue(
+              operation.newRadius,
+              getParameterScope(document).scope,
+              'radius'
+            );
+            const matching = faces.filter(
+              (f) =>
+                f.geometry?.surfaceType === operation.surfaceClass &&
+                Math.abs(
+                  ((operation.surfaceClass === 'torus'
+                    ? f.geometry.minorRadius
+                    : f.geometry.radius) ?? Infinity) - radius
+                ) < 1e-6
+            );
+            if (matching.length === 1 && matching[0]!.geometry) {
+              matching[0]!.geometry = {
+                ...matching[0]!.geometry,
+                featureType: 'blend',
+                blendRadius: radius,
+                editableDimension: 'blendRadius',
+                blendRegionFaceCount: 1,
+                blendRegionKey: `blend:${matching[0]!.hash}`
+              };
+            }
+          }
           geometryRepresentations[bodyId] = {
             ...metadata,
             mesh: projection.mesh,
@@ -4905,6 +4954,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     } finally {
       kernel.free();
     }
+  }
+
+  releaseEditPreview(): void {
+    const kernel = this.historyKernel;
+    if (!kernel) return;
+    if (hasPreparedGroupEdit(kernel)) {
+      const source = this.historyCheckpoints.at(-1);
+      try {
+        if (source) kernel.restore(source.checkpointId);
+      } catch {
+        this.invalidateHistoryCache();
+        return;
+      }
+    }
+    releasePreparedGroupEdit(kernel);
+    releasePreparedFaceMove(kernel);
   }
 
   dispose(): void {

@@ -184,6 +184,7 @@ export interface GeometryWorkerApi {
     document: ProjectDocument,
     options?: { signal?: AbortSignal; deferTopology?: boolean }
   ): Promise<GeometryReadyState>;
+  releaseEditPreview?(document: ProjectDocument): void;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
    * rebuild) so a dialog can narrate progress. Aborting the `signal` rejects
@@ -1084,6 +1085,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return posted.ok
         ? posted.promise
         : Promise.reject(new Error('Geometry worker unavailable.'));
+    },
+    releaseEditPreview(document) {
+      workerRef.current?.postMessage({
+        type: 'release-edit-preview',
+        requestId: crypto.randomUUID(),
+        document: documentForRebuild(document)
+      });
     },
     previewGeometry(document, options) {
       if (options?.signal?.aborted)

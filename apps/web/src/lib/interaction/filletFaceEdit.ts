@@ -3,6 +3,7 @@ import { geometryTolerance } from '@openzcad/geometry';
 import { supportsBlendGroupEdits } from '../kernelBuild';
 import type {
   BodyRepresentation,
+  BodyId,
   DirectEditOperation,
   FaceGeometry,
   FaceTopology,
@@ -17,8 +18,8 @@ import type {
 
 const FILLET_FACE_LINEAGE_PREFIX = 'modifier.fillet.face.band-between.';
 
-/** Re-edit only this handle's own latest resize, retaining its original pins.
- * A downstream feature makes this an ordinary new direct edit instead.
+/** Re-edit only an inferred network's own latest resize, retaining its pins.
+ * An isolated band or downstream feature keeps ordinary append history.
  */
 export function revisableBlendResize(
   document: ProjectDocument,
@@ -32,7 +33,11 @@ export function revisableBlendResize(
   operation: Extract<DirectEditOperation, { kind: 'resize-blend' }>;
 } | null {
   const feature = listFeaturesInOrder(document).at(-1);
-  return reference?.lineageName === 'direct-edit.resize-blend.band' &&
+  const bands = document.derived.bodyRepresentations[
+    bodyId as BodyId
+  ]?.topology?.faces.filter((f) => f.geometry?.featureType === 'blend');
+  return (bands?.length ?? 0) > 1 &&
+    reference?.lineageName === 'direct-edit.resize-blend.band' &&
     reference.producingFeatureId === featureId &&
     featureId &&
     feature?.featureId === featureId &&

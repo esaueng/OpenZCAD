@@ -114,6 +114,12 @@ describe('fillet face editing', () => {
       producingFeatureId: owner,
       lineageName: 'direct-edit.resize-blend.band'
     };
+    const body = {
+      topology: { faces: [blendFace('first-band')], edges: [] }
+    } as unknown as BodyRepresentation;
+    edited.derived.bodyRepresentations[bodyId] = body;
+    expect(revisableBlendResize(edited, bodyId, owner, reference)).toBeNull();
+    body.topology!.faces.push(blendFace('second-band'));
     expect(revisableBlendResize(edited, bodyId, owner, reference)).toEqual({
       featureId: owner,
       operation

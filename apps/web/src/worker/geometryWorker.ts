@@ -66,6 +66,11 @@ export type GeometryBinaryExportFormat = Extract<
 
 export type GeometryWorkerRequest =
   | {
+      type: 'release-edit-preview';
+      document: ProjectDocument;
+      requestId: string;
+    }
+  | {
       type: 'preview-geometry';
       document: ProjectDocument;
       requestId: string;
@@ -619,6 +624,12 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     return; // Cancelled while queued; the caller already dropped its promise.
   }
   const request = job.request;
+  if (request.type === 'release-edit-preview') {
+    const exact =
+      exactKernelStatus === 'ready' ? await exactKernelPromise : null;
+    exact?.releaseEditPreview?.();
+    return;
+  }
   const document = request.document;
   const workerStartedMs = performance.now();
   const queueMs = workerStartedMs - job.queuedAtMs;

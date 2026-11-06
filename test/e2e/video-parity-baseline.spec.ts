@@ -14,13 +14,15 @@ import {
 } from './openzcad-fixtures';
 
 const input = process.env.VIDEO_PARITY_INPUT;
+const round2 = process.env.VIDEO_PARITY_ROUND2 === '1';
+const baseFaces = round2 ? 16 : 15;
 type WorkerEvent = { at: number; type?: string; requestId?: string };
 type ParityWindow = typeof window & { __parityEvents: WorkerEvent[] };
 const out = resolve(process.env.VIDEO_PARITY_OUT ?? 'artifacts/video-parity');
 const sha = (s: string | Buffer) =>
   createHash('sha256').update(s).digest('hex');
 const cases = [
-  { id: 'A1-short', select: 'cap', value: '22' },
+  { id: 'A1-short', select: 'cap', value: round2 ? '26' : '22' },
   { id: 'A1-long', select: 'cap', value: '61.2' },
   { id: 'A1-invalid', select: 'cap', value: '-4' },
   { id: 'A2-concave', select: 'blend', value: '2' },
@@ -212,7 +214,7 @@ for (const mode of ['history', 'step'] as const)
             },
             { timeout: 45_000 }
           )
-          .toBe(15);
+          .toBe(baseFaces);
         await page.getByRole('button', { name: 'Fit view (F)' }).click();
         await waitForStillViewport(page);
         await expect(page.getByRole('contentinfo')).not.toContainText(
@@ -264,6 +266,15 @@ for (const mode of ['history', 'step'] as const)
                 .getByRole('button', { name: /^Bottom view/ })
                 .click();
               await waitForStillViewport(page);
+            } else if (round2 && ['boundary', 'convex'].includes(c.select)) {
+              await page
+                .getByRole('button', { name: 'Standard views', exact: true })
+                .click();
+              await page
+                .getByRole('group', { name: 'Standard views', exact: true })
+                .getByRole('button', { name: /^Left view/ })
+                .click();
+              await waitForStillViewport(page);
             } else {
               await page
                 .getByRole('button', {
@@ -280,10 +291,14 @@ for (const mode of ['history', 'step'] as const)
               c.select === 'end'
                 ? [30, 11, 24]
                 : c.select === 'boundary'
-                  ? [20, 18, 24]
+                  ? round2
+                    ? [0, 18, 10]
+                    : [20, 18, 24]
                   : c.select === 'bottom'
                     ? [20, 0, 0]
-                    : [20, 1.171572875, 22.828427125];
+                    : round2
+                      ? [1.171572875, 14, 22.828427125]
+                      : [20, 1.171572875, 22.828427125];
             await clickWorldPoint(page, point);
             if ('chain' in c && c.chain) {
               const projected = (await event(page, 'project-points', {
@@ -418,7 +433,7 @@ for (const mode of ['history', 'step'] as const)
               .toHaveCount(0, { timeout: 20_000 })
               .catch(() => {});
             await expect(page.getByRole('contentinfo')).not.toContainText(
-              /Checking geometry|Checking the exact result|Rebuilding|Preparing model|Starting geometry|Loading exact/,
+              /Checking geometry|Checking the exact result|Rebuilding|Preparing model|Starting geometry|Loading exact|Building:/,
               { timeout: 60_000 }
             );
             row.commitMs = performance.now() - start;
@@ -474,7 +489,7 @@ test('history A8 pointer previews and cancel', async ({ page }) => {
       },
       { timeout: 45_000 }
     )
-    .toBe(15);
+    .toBe(baseFaces);
   await page.getByRole('button', { name: 'Fit view (F)' }).click();
   await waitForStillViewport(page);
   const before = await state(page);
@@ -560,7 +575,7 @@ test('history A7 sequential diameters with preview cancel', async ({
       },
       { timeout: 45_000 }
     )
-    .toBe(15);
+    .toBe(baseFaces);
   const original = await state(page);
   const rows: unknown[] = [];
   let radius = 6;

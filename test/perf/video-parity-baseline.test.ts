@@ -37,6 +37,7 @@ import type {
 } from '@openzcad/shared';
 
 const input = process.env.VIDEO_PARITY_INPUT;
+const round2 = process.env.VIDEO_PARITY_ROUND2 === '1';
 const out = process.env.VIDEO_PARITY_OUT ?? 'artifacts/video-parity';
 const digest = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -73,7 +74,10 @@ it.skipIf(!input)(
       rows
     };
     const save = () =>
-      writeFileSync(join(out, 'adapter.json'), JSON.stringify(report, null, 2));
+      writeFileSync(
+        join(out, process.env.VIDEO_PARITY_REPORT ?? 'adapter.json'),
+        JSON.stringify(report, null, 2)
+      );
     const source = (filleted = true, step = false): ProjectDocument => {
       const name = filleted ? 'Gentle-Gecko-W-Fillet' : 'Gentle-Gecko';
       if (!step)
@@ -147,16 +151,37 @@ it.skipIf(!input)(
         const bottom = edges.find(
           (e) =>
             e.displayRole !== 'seam' &&
+            (!round2 ||
+              Array.from(e.points).every(
+                (v, i) => i % 3 !== 1 || Math.abs(v) < 1e-5
+              )) &&
             Array.from(e.points).every(
               (v, i) => i % 3 !== 2 || Math.abs(v) < 1e-5
             )
         );
-        const boundary = edges.find((e) => e.hash === 4186093139);
+        const boundary = edges.find((e) =>
+          round2
+            ? Array.from(e.points).every((v, i) =>
+                i % 3 === 0
+                  ? Math.abs(v) < 1e-5
+                  : i % 3 === 1
+                    ? Math.abs(v - 18) < 1e-5
+                    : true
+              )
+            : e.hash === 4186093139
+        );
+        report[`${mode}Boundary`] = boundary;
         const attempt = async (
           label: string,
           candidate: ProjectDocument,
           selection: unknown
         ) => {
+          if (process.env.VIDEO_PARITY_RAW_ONLY === '1') return;
+          if (
+            process.env.VIDEO_PARITY_CASE &&
+            !label.includes(process.env.VIDEO_PARITY_CASE)
+          )
+            return;
           const row: Record<string, unknown> = {
             mode,
             label,
@@ -221,7 +246,7 @@ it.skipIf(!input)(
             digest(summary(body));
           save();
         };
-        for (const offset of [-14, 25.2, -40]) {
+        for (const offset of [round2 ? -10 : -14, 25.2, -40]) {
           const g = cap.geometry!;
           await attempt(
             `A1 cap offset ${offset}`,
@@ -439,6 +464,11 @@ it.skipIf(!input)(
       const rawRows: unknown[] = [];
       report.raw = rawRows;
       const raw = (label: string, fn: () => number) => {
+        if (
+          process.env.VIDEO_PARITY_CASE &&
+          !label.includes(process.env.VIDEO_PARITY_CASE)
+        )
+          return;
         const start = performance.now();
         try {
           const result = fn();
@@ -468,7 +498,7 @@ it.skipIf(!input)(
       const cap = fs
         .filter((x) => x.g?.normal?.z && x.g.normal.z > 0.99)
         .sort((a, b) => b.g!.center.z - a.g!.center.z)[0]!.f;
-      for (const distance of [-14, 25.2, -40])
+      for (const distance of [round2 ? -10 : -14, 25.2, -40])
         raw(`A1 ${distance}`, () =>
           k.moveFaces(solid, new Uint32Array([cap]), distance)
         );
@@ -503,7 +533,12 @@ it.skipIf(!input)(
         k.chamfer(solid, new Uint32Array(chain.map((x) => edge(x.hash))), 0.8)
       );
       for (const [label, hash, kind, size] of [
-        ['A3 boundary', 4186093139, 'fillet', 1],
+        [
+          'A3 boundary',
+          round2 ? (report.stepBoundary as { hash: number }).hash : 4186093139,
+          'fillet',
+          1
+        ],
         ['A4 R1.5', 2936011938, 'fillet', 1.5],
         ['A4 R3.7', 2936011938, 'fillet', 3.7],
         ['A4 C0.7', 2936011938, 'chamfer', 0.7],
