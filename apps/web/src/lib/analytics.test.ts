@@ -233,3 +233,160 @@ it('honors a persisted cloud-off choice on cold boot and after another tab chang
   analytics.trackDetail('error_runtime');
   expect(send).toHaveBeenCalledOnce();
 });
+
+describe('kernel_refused aggregate', () => {
+  /** Values that must never reach the wire, planted in every field. */
+  const FORBIDDEN = [
+    'Customer bracket.step',
+    'feat_1234',
+    'body_abcd',
+    'user@example.com',
+    '12.5',
+    '0x1f2e',
+    'Acme Housing'
+  ];
+  function sentBodies(): unknown[] {
+    return send.mock.calls.map(([, options]): unknown =>
+      JSON.parse(typeof options?.body === 'string' ? options.body : '')
+    );
+  }
+
+  it('sends one fixed-vocabulary bucket and nothing else after opt-in', () => {
+    analytics.setAnalyticsEnabled(true);
+    const observation = {
+      featureKind: 'direct-edit',
+      directEditKind: 'resize-cylindrical-face',
+      family: 'direct-edit',
+      kernelOperation: 'resize-cylindrical-face',
+      category: 'unsupported',
+      code: 'unsupported_move_face',
+      warningKind: 'build-failed',
+      targetSurface: 'cylinder',
+      neighbourSurfaces: ['sphere', 'plane', 'plane'],
+      // Extra fields a careless caller might pass; none may travel.
+      featureName: 'Acme Housing',
+      featureId: 'feat_1234',
+      message: 'Feature "Acme Housing": failed on body_abcd',
+      radius: 12.5,
+      faceHash: 0x1f2e
+    } as Parameters<typeof analytics.trackKernelRefusal>[0];
+    analytics.trackKernelRefusal(observation);
+    expect(sentBodies()).toEqual([
+      {
+        event: 'kernel_refused',
+        bucket:
+          'direct-edit.resize-cylindrical-face|direct-edit|resize-cylindrical-face|unsupported|unsupported_move_face|build-failed|cylinder|plane+sphere'
+      }
+    ]);
+    const wire = JSON.stringify(sentBodies());
+    for (const value of FORBIDDEN) expect(wire).not.toContain(value);
+  });
+
+  it('reduces any value outside a fixed list to other, never forwarding it', () => {
+    analytics.setAnalyticsEnabled(true);
+    for (const value of FORBIDDEN) {
+      analytics.trackKernelRefusal({
+        featureKind: value,
+        directEditKind: value,
+        family: value,
+        kernelOperation: value,
+        category: value,
+        code: value,
+        warningKind: 'refusal',
+        targetSurface: value,
+        neighbourSurfaces: [value, value]
+      });
+    }
+    const bodies = sentBodies() as { event: string; bucket: string }[];
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(Object.keys(body).sort()).toEqual(['bucket', 'event']);
+      expect(body.bucket).toBe(
+        'other|other|other|other|other|refusal|other|other'
+      );
+    }
+    const wire = JSON.stringify(bodies);
+    for (const value of FORBIDDEN) expect(wire).not.toContain(value);
+  });
+
+  it('bounds the code to a short snake_case kernel identifier', () => {
+    expect(
+      analytics.kernelRefusedBucket({
+        featureKind: 'boolean',
+        code: `a${'b'.repeat(48)}`,
+        warningKind: 'build-failed'
+      })
+    ).toBe('boolean|none|none|none|other|build-failed|none|none');
+    expect(
+      analytics.kernelRefusedBucket({
+        featureKind: 'boolean',
+        code: 'operation_failed',
+        family: 'boolean',
+        kernelOperation: 'cut',
+        category: 'internal',
+        warningKind: 'build-failed'
+      })
+    ).toBe(
+      'boolean|boolean|cut|internal|operation_failed|build-failed|none|none'
+    );
+  });
+
+  it('reports only refusing warnings, and only with consent', () => {
+    const observation = {
+      featureKind: 'fillet',
+      warningKind: 'build-failed'
+    };
+    analytics.trackKernelRefusal(observation);
+    expect(send).not.toHaveBeenCalled();
+    analytics.setAnalyticsEnabled(true);
+    analytics.trackKernelRefusal({ ...observation, warningKind: 'advisory' });
+    analytics.trackKernelRefusal({ ...observation, warningKind: 'suppressed' });
+    expect(send).not.toHaveBeenCalled();
+    analytics.trackKernelRefusal(observation);
+    expect(send).toHaveBeenCalledOnce();
+    expect(analytics.diagnosticReport().rows).toEqual([
+      {
+        event: 'kernel_refused',
+        bucket: 'fillet|none|none|none|none|build-failed|none|none',
+        count: 1
+      }
+    ]);
+  });
+});
+
+describe('kernel_refused wire contract', () => {
+  it('parses only canonical buckets', async () => {
+    const contract = await import('./glimpseContract');
+    const valid =
+      'boolean|boolean|cut|internal|operation_failed|build-failed|none|none';
+    expect(contract.parseKernelRefusedBucket(valid)).not.toBeNull();
+    expect(contract.expandedMetric('kernel_refused', valid, 'openzcad')).toBe(
+      true
+    );
+    expect(contract.expandedMetric('kernel_refused', valid, 'openfea')).toBe(
+      false
+    );
+    for (const bucket of [
+      '',
+      'none',
+      // free text in each position
+      'Acme|boolean|cut|internal|operation_failed|build-failed|none|none',
+      'boolean|boolean|cut|internal|Operation Failed|build-failed|none|none',
+      'boolean|boolean|cut|internal|operation_failed|advisory|none|none',
+      'boolean|boolean|cut|internal|operation_failed|build-failed|disc|none',
+      // non-canonical neighbour order and duplicates
+      'boolean|boolean|cut|internal|x|build-failed|none|sphere+plane',
+      'boolean|boolean|cut|internal|x|build-failed|none|plane+plane',
+      // extra or missing fields
+      `${valid}|extra`,
+      'boolean|boolean|cut|internal|operation_failed|build-failed|none',
+      `boolean|boolean|cut|internal|${'a'.repeat(300)}|build-failed|none|none`
+    ]) {
+      expect(contract.parseKernelRefusedBucket(bucket), bucket).toBeNull();
+      expect(
+        contract.expandedMetric('kernel_refused', bucket, 'openzcad'),
+        bucket
+      ).toBe(false);
+    }
+  });
+});

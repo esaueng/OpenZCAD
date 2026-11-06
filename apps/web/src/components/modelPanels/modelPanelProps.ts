@@ -131,6 +131,9 @@ export interface ModelPanelSource {
   /** F05: each unitless parameter's suggested quantity, by name. */
   parameterQuantitySuggestions?: Readonly<Record<string, ParameterKind>>;
   onViewActivityLog(): void;
+  /** Saves the held refused rebuild as a reproduction; absent when none is. */
+  refusalReproductionFor?:
+    ((name: string, message: string) => (() => void) | undefined) | undefined;
   parameterMinimums?: Record<string, number>;
   onDeleteParameter(name: string): void;
   onRenameParameter(name: string, newName: string): string | null;

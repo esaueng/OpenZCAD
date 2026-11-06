@@ -226,11 +226,42 @@ describe('ToolCard', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'View details' }));
     expect(onViewDetails).toHaveBeenCalledOnce();
+    // Nothing to save unless the host holds a reproduction.
+    expect(
+      screen.queryByRole('button', { name: 'Save reproduction' })
+    ).toBeNull();
 
     await userEvent.click(
       screen.getByRole('button', { name: 'Edit Lower rim fillet' })
     );
     expect(onEditCulprit).toHaveBeenCalledWith('feat_lower_rim');
+  });
+
+  it('offers to save a reproduction beside the details, only on request', async () => {
+    const onSaveReproduction = vi.fn();
+    render(
+      <ToolCard
+        model={{
+          icon: 'fillet',
+          title: 'Fillet',
+          eyebrow: 'create',
+          hint: 'Adjust the value and try again.',
+          phase: 'failed',
+          error: {
+            message: 'Fillet could not be created on 1 selected edge.',
+            detail: 'kernel words'
+          }
+        }}
+        onViewDetails={vi.fn()}
+        onSaveReproduction={onSaveReproduction}
+        onClose={vi.fn()}
+      />
+    );
+    expect(onSaveReproduction).not.toHaveBeenCalled();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Save reproduction' })
+    );
+    expect(onSaveReproduction).toHaveBeenCalledOnce();
   });
 
   it('offers to keep the last value that built after a refusal', async () => {

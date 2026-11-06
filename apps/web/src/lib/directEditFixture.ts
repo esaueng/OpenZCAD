@@ -1,4 +1,8 @@
-import type { ProjectDocument, Vector3 } from '@openzcad/shared';
+import type {
+  FeatureWarning,
+  ProjectDocument,
+  Vector3
+} from '@openzcad/shared';
 
 /**
  * One direct-edit attempt, in the form the refusal corpus replays.
@@ -11,16 +15,30 @@ import type { ProjectDocument, Vector3 } from '@openzcad/shared';
  */
 export const DIRECT_EDIT_FIXTURE_FORMAT =
   'openzcad-direct-edit-fixture' as const;
-export const DIRECT_EDIT_FIXTURE_FORMAT_VERSION = 1 as const;
+/**
+ * Version 2 adds the `feature-build` op. A version 1 file is still read:
+ * every field it carries kept its meaning.
+ */
+export const DIRECT_EDIT_FIXTURE_FORMAT_VERSION = 2 as const;
+export const DIRECT_EDIT_FIXTURE_READABLE_VERSIONS = [1, 2] as const;
 
-/** Interaction operations the corpus knows how to replay. */
+/**
+ * Interaction operations the corpus knows how to replay.
+ *
+ * `feature-build` is different in kind from the six gestures: its `document`
+ * already CONTAINS the refused feature (as the last feature in history, with
+ * everything after it trimmed), so replay is one rebuild judged by the shipped
+ * feature gate. It is what a "Save reproduction" from a refusal writes, and it
+ * covers every feature kind — booleans, modifiers, direct edits — alike.
+ */
 export type DirectEditFixtureOp =
   | 'offset-face'
   | 'resize-cylinder-radius'
   | 'edit-fillet'
   | 'remove-face-feature'
   | 'fillet'
-  | 'chamfer';
+  | 'chamfer'
+  | 'feature-build';
 
 export type DirectEditFixtureOutcome =
   'committed' | 'refused' | 'preview-failed' | 'preview-degraded';
@@ -56,6 +74,12 @@ export interface DirectEditFixtureEdit {
   edges?: DirectEditFixtureEdge[];
   /** Offset distance, radius, or modifier size — whatever the op takes. */
   value: number;
+  /** `feature-build` only: the refused feature, present in `document`. */
+  featureId?: string;
+  /** `feature-build` only: that feature's kind. */
+  featureKind?: string;
+  /** `feature-build` of a direct edit only: its operation kind. */
+  operationKind?: string;
 }
 
 export interface DirectEditFixtureObservation {
@@ -70,6 +94,10 @@ export interface DirectEditFixtureObservation {
   /** Feature kinds in history order, before the edit. */
   upstreamFeatureKinds: string[];
   documentVersion: number;
+  /** `FeatureWarning.kind` of the refusal, when the rebuild attributed it. */
+  warningKind?: FeatureWarning['kind'];
+  /** The kernel's own classification of the refusal, when it gave one. */
+  kernelRefusal?: FeatureWarning['kernelRefusal'];
   timings?: {
     /** Exact preview rebuild durations during the gesture, in ms. */
     previewMs?: number[];
@@ -81,7 +109,7 @@ export interface DirectEditFixtureObservation {
 
 export interface DirectEditFixture {
   format: typeof DIRECT_EDIT_FIXTURE_FORMAT;
-  formatVersion: typeof DIRECT_EDIT_FIXTURE_FORMAT_VERSION;
+  formatVersion: (typeof DIRECT_EDIT_FIXTURE_READABLE_VERSIONS)[number];
   /** Kebab-case, unique; the corpus uses it as the file stem. */
   name: string;
   capturedAt: string;

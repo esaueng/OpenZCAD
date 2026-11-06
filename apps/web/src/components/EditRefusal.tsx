@@ -3,6 +3,10 @@ import { AlertTriangle, X } from 'lucide-react';
 import type { SelectionCalloutOperation } from '../lib/selectionCallout';
 import { formatNumber } from '../lib/model';
 import { REFUSAL_STATUS_LABELS, refusalSummary } from '../lib/refusalSummary';
+import {
+  SAVE_REPRODUCTION_HINT,
+  SAVE_REPRODUCTION_LABEL
+} from '../lib/selectionCalloutView';
 
 export interface EditRefusalProps {
   /** The refused operation: its error, title and ways out. */
@@ -187,7 +191,7 @@ export function EditRefusal({
                 {`Edit “${culprit.featureName}”`}
               </button>
             )}
-            
+
             {onPickAnother && summary.pickAnother && (
               <button
                 type="button"
@@ -204,6 +208,16 @@ export function EditRefusal({
                 onClick={operation.onViewDetails}
               >
                 Technical details
+              </button>
+            )}
+            {error.detail && operation.onSaveReproduction && (
+              <button
+                type="button"
+                className="edit-refusal-action is-quiet"
+                title={SAVE_REPRODUCTION_HINT}
+                onClick={operation.onSaveReproduction}
+              >
+                {SAVE_REPRODUCTION_LABEL}
               </button>
             )}
           </div>

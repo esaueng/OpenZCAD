@@ -30,8 +30,15 @@ import {
   trackParts,
   trackSize,
   isAnalyticsEnabled,
-  durationBucket
+  durationBucket,
+  trackKernelRefusal
 } from './lib/analytics';
+import type { RefusalCapture } from './lib/refusalHarvest';
+import { useRefusalHarvest } from './hooks/useRefusalHarvest';
+import {
+  buildRefusalReproduction,
+  reproductionFileName
+} from './lib/refusalReproduction';
 import {
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
@@ -4024,6 +4031,16 @@ export function App() {
     sharedThumbnailCapture,
     geometryBusy || Boolean(doc && geometry.state.phase !== 'ready')
   );
+  // Only user edit attempts are harvested. Copies, baseline/lineage builds
+  // and assistant analysis stay on the unobserved geometry API.
+  const refusalHarvest = useRefusalHarvest({
+    document: doc,
+    currentDocument: () => managerRef.current?.document,
+    warnings: attributedFeatureWarnings(),
+    rebuild: geometry.syncOnce,
+    track: trackKernelRefusal
+  });
+  const { syncCandidate, syncParameterCandidate } = refusalHarvest;
   const reachProjectionBuilderRef = useRef(geometry.syncOnce);
   reachProjectionBuilderRef.current = geometry.syncOnce;
   const reachProjectionRequestRef = useRef<{
@@ -4426,7 +4443,7 @@ export function App() {
       // answer a release; a display-only snapshot cannot author a commit.
       derive: async (candidate) => {
         const derived = await radiusRestRebuilds.start(candidate, () =>
-          geometry.syncOnce(candidate.document)
+          syncCandidate(candidate.document)
         );
         const rejection = offsetPreviewRejection({
           ...candidate,
@@ -4730,7 +4747,7 @@ export function App() {
           base: candidate.base,
           input: candidate.input,
           choice: candidate.choice,
-          derive: (document) => geometry.syncOnce(document),
+          derive: (document) => syncCandidate(document),
           ...(candidate.faceAttachment
             ? { faceAttachment: candidate.faceAttachment }
             : {})
@@ -4818,7 +4835,7 @@ export function App() {
 
   const { run: executeValidatedDirectEdit } = useDirectEditCommit({
     manager: () => managerRef.current,
-    derive: (document) => geometry.syncOnce(document),
+    derive: (document) => syncCandidate(document),
     commit: (command, derived) => executeCommand(command, derived),
     onValidationStart: (value) => {
       stopCylinderRadiusRestCheck();
@@ -5000,7 +5017,7 @@ export function App() {
   }
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
-    derive: (document) => geometry.syncOnce(document),
+    derive: (document) => syncCandidate(document),
     deriveCancellable: rebuildImportInDisposableWorker,
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
@@ -5058,7 +5075,7 @@ export function App() {
         candidate.command.validate(base);
         return candidate.command.apply(base);
       },
-      derive: (document) => geometry.syncOnce(document),
+      derive: (document) => syncCandidate(document),
       publish: (preview) => {
         const bodyId = edgeFormCandidate.current?.bodyId;
         const extrude = edgeFormCandidate.current?.extrude;
@@ -16945,6 +16962,42 @@ export function App() {
     });
   }
 
+  /** "Save reproduction": the held refusal as a corpus fixture, locally. */
+  function handleSaveRefusalReproduction(capture: RefusalCapture) {
+    if (capture.document.projectId !== managerRef.current?.document.projectId) {
+      setStatus('There is no refused rebuild to save in this session.');
+      return;
+    }
+    try {
+      const fixture = buildRefusalReproduction({
+        document: capture.document,
+        warning: capture.warning,
+        kernel: KERNEL_BUILD
+      });
+      const fileName = reproductionFileName(fixture);
+      downloadText(
+        fileName,
+        `${JSON.stringify(fixture, null, 2)}\n`,
+        'application/json'
+      );
+      setStatus(
+        fixture.document
+          ? `Saved a sanitized reproduction to ${fileName}. Nothing was uploaded.`
+          : `Saved ${fileName} without the model: imported geometry is not sanitized. Nothing was uploaded.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Saving the reproduction failed.'));
+    }
+  }
+  function saveRefusalReproduction(
+    owner: string,
+    diagnostic?: string | CommandDiagnostic | null
+  ): (() => void) | undefined {
+    return refusalHarvest.reproductionFor(
+      owner, diagnostic, handleSaveRefusalReproduction
+    );
+  }
+
   function handleExportDiagnostics() {
     if (!doc) {
       setStatus('Open a project before exporting diagnostics.');
@@ -19038,7 +19091,7 @@ export function App() {
       base,
       sketchId,
       commands,
-      (document) => geometry.syncOnce(document)
+      (document) => syncCandidate(document)
     );
     const refusal = sketchEditRaceRefusal(
       base,
@@ -20841,7 +20894,7 @@ export function App() {
       try {
         derived = await parameterChecks.request(() => {
           if (!current()) return Promise.reject(new ParameterCheckStale());
-          return geometry.syncOnce(prospective);
+          return syncParameterCandidate(name, prospective);
         });
       } catch (error) {
         if (error instanceof ParameterCheckStale) return stale();
@@ -21717,7 +21770,7 @@ export function App() {
         ? inPlaceEditSeedFor(current, feature)
         : null;
     },
-    derive: (document) => geometry.syncOnce(document),
+    derive: (document) => syncCandidate(document),
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
@@ -23364,7 +23417,7 @@ export function App() {
         } = await extrudeInference();
         const agreement = {
           ...options,
-          derive: (document: ProjectDocument) => geometry.syncOnce(document)
+          derive: (document: ProjectDocument) => syncCandidate(document)
         };
         // Every selected region on its own, a text glyph included: the
         // stored input names a whole word once.
@@ -24201,7 +24254,7 @@ export function App() {
       ...edgeBlendExact,
       derive: async (candidate) => {
         const derived = await previewRebuilds.start(candidate, () =>
-          geometry.syncOnce(candidate.document)
+          syncCandidate(candidate.document)
         );
         return { derived, rejection: edgePreviewRejection(candidate, derived) };
       },
@@ -25623,9 +25676,13 @@ export function App() {
       : 0;
   // Read through a ref, like the verbs, so the handlers' identity never
   // refills the chip.
+  const calloutSaveReproduction = saveRefusalReproduction(
+    'operation', calloutOperationModel?.error
+  );
   const calloutOperationActions = {
     onEditCulprit: handleEditCulpritFeature,
     onViewDetails: openActivityLog,
+    onSaveReproduction: calloutSaveReproduction,
     onKeepLastValid: () => keepLastValid?.keep(),
     onSelectAllEdges: () => {
       if (edgeModifierBody) handleSelectAllEdges(edgeModifierBody);
@@ -25645,23 +25702,24 @@ export function App() {
         interaction.mode === 'edges' &&
         interaction.edges.length < calloutEdgeCount
           ? calloutEdgeCount
-          : null
+          : null,
+        Boolean(calloutSaveReproduction)
       ])
     : '';
   const calloutWithOperation = useMemo<SelectionCalloutContent | null>(() => {
     if (!selectionCallout || !calloutOperationKey) {
       return selectionCallout;
     }
-    const [title, phase, badge, error, keepLabel, edgeCount] = JSON.parse(
-      calloutOperationKey
-    ) as [
-      string,
-      SelectionCalloutOperation['phase'] | null,
-      SelectionCalloutOperation['badge'] | null,
-      SelectionCalloutOperation['error'] | null,
-      string | null,
-      number | null
-    ];
+    const [title, phase, badge, error, keepLabel, edgeCount, saveReady] =
+      JSON.parse(calloutOperationKey) as [
+        string,
+        SelectionCalloutOperation['phase'] | null,
+        SelectionCalloutOperation['badge'] | null,
+        SelectionCalloutOperation['error'] | null,
+        string | null,
+        number | null,
+        boolean
+      ];
     const handlers = () => calloutOperationHandlers.current;
     return {
       ...selectionCallout,
@@ -25674,6 +25732,9 @@ export function App() {
         selectAllEdgesCount: edgeCount ?? undefined,
         onEditCulprit: (featureId) => handlers().onEditCulprit(featureId),
         onViewDetails: () => handlers().onViewDetails(),
+        ...(saveReady
+          ? { onSaveReproduction: () => handlers().onSaveReproduction?.() }
+          : {}),
         onKeepLastValid: () => handlers().onKeepLastValid(),
         onSelectAllEdges: () => handlers().onSelectAllEdges()
       }
@@ -29294,6 +29355,9 @@ export function App() {
     baseToolCard && interaction.mode === 'sketch'
       ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
+  const toolCardSaveReproduction = saveRefusalReproduction(
+    'operation', contextualToolCard?.error
+  );
   // The column's header already names the sketch and carries Finish, so the
   // card would say the same thing twice over the viewport. Only the card is
   // dropped: the entity editor, keypad and rail render in the same branch
@@ -29839,6 +29903,9 @@ export function App() {
       }}
       parameterQuantitySuggestions={parameterQuantitySuggestions}
       onViewActivityLog={openActivityLog}
+      refusalReproductionFor={(name, message) =>
+        saveRefusalReproduction(`parameter:${name}`, message)
+      }
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
       }
@@ -31273,6 +31340,9 @@ export function App() {
               onAction={handleSelectionAction}
               onEditCulprit={handleEditCulpritFeature}
               onViewDetails={openActivityLog}
+              {...(toolCardSaveReproduction
+                ? { onSaveReproduction: toolCardSaveReproduction }
+                : {})}
               {...(keepLastValid ? { keepLastValid } : {})}
               // Never up in sketch mode (the column header names the
               // sketch), so a close is always a clear.

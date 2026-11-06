@@ -15,6 +15,7 @@ export type ParametersPanelProps = Pick<
   | 'onSetParameterQuantity'
   | 'parameterQuantitySuggestions'
   | 'onViewActivityLog'
+  | 'refusalReproductionFor'
   | 'onPreviewParameter'
   | 'onDeleteParameter'
   | 'onRenameParameter'
@@ -43,6 +44,7 @@ export function ParametersPanel({
   onSetParameterQuantity,
   parameterQuantitySuggestions,
   onViewActivityLog,
+  refusalReproductionFor,
   onPreviewParameter,
   onDeleteParameter,
   onRenameParameter,
@@ -71,6 +73,12 @@ export function ParametersPanel({
               parameterQuantitySuggestions?.[parameter.name] ?? null
             }
             onViewDetails={onViewActivityLog}
+            {...(refusalReproductionFor
+              ? {
+                  reproductionFor: (message: string) =>
+                    refusalReproductionFor(parameter.name, message)
+                }
+              : {})}
             onPreview={onPreviewParameter}
             onDelete={onDeleteParameter}
             onRename={onRenameParameter}
