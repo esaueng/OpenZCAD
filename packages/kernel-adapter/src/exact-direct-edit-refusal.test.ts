@@ -11,7 +11,7 @@ import {
 
 /**
  * The resize twin's envelope, mapped without reading its sentence. The kernel
- * itself is exercised end to end in `test/sphere-boss-resize-refusal.test.ts`;
+ * itself is exercised end to end in `test/sphere-boss-resize.test.ts` (the seam-filleted refusal);
  * these fakes pin the mapping, including a message that matches no prose
  * pattern, so the fields can only have come from the typed details.
  */

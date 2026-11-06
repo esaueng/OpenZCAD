@@ -149,7 +149,7 @@
     "test/sketch-editing.test.ts",
     "test/sketch-regions.test.ts",
     "test/source-first-routing-across-boolean.test.ts",
-    "test/sphere-boss-resize-refusal.test.ts",
+    "test/sphere-boss-resize.test.ts",
     "test/sphere-boss-seam-fillet-resize.test.ts",
     "test/sphere-cylinder-union.test.ts",
     "test/sphere-patch-lineage.test.ts",
