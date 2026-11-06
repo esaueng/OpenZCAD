@@ -105,6 +105,8 @@ import {
   amendFeatureWarning,
   raiseFeatureWarning
 } from './exact-feature-warnings';
+import { AdapterRefusal, adapterRefusalRecord } from './adapter-refusal';
+import type { BlendRefusal } from './exact-blend-refusal';
 import {
   resolveEdgeModifierEdges,
   resolveFeatureFaces
@@ -894,7 +896,8 @@ function buildExtrudeFeature(
         if (pierced) combined = combine(pierced);
       }
       if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
-        throw new Error(
+        throw new AdapterRefusal(
+          'union_not_solid',
           'Union produced an open, non-manifold, or inconsistently ' +
             'oriented result. Adjust the overlap or placement and try again.'
         );
@@ -2095,7 +2098,13 @@ function combineBooleanOperands(
       approximationTolerance: MEASUREMENT_DEFLECTION
     });
     if (droppedOperand) {
-      raiseFeatureWarning(result, feature, droppedOperand, 'refusal');
+      raiseFeatureWarning(
+        result,
+        feature,
+        droppedOperand,
+        'refusal',
+        adapterRefusalRecord('union_dropped_operand')
+      );
     }
     if (
       !connectivity.connected &&
@@ -2110,7 +2119,8 @@ function combineBooleanOperands(
         result,
         feature,
         disconnectedUnionWarning(connectivity, document.units),
-        'refusal'
+        'refusal',
+        adapterRefusalRecord('union_disconnected')
       );
     }
   } else {
@@ -2301,7 +2311,8 @@ function combineBooleanOperands(
       feature,
       'Union produced an open, non-manifold, or inconsistently ' +
         'oriented result. Adjust the overlap or placement and try again.',
-      'refusal'
+      'refusal',
+      adapterRefusalRecord('union_not_solid')
     );
   }
   // Naming the move that works is only possible here, where the
@@ -2400,7 +2411,10 @@ function buildEdgeModifierFeature(
     document.units
   );
   if (size <= GEOMETRY_EPSILON) {
-    throw new Error('Edge modifier size must be greater than zero.');
+    throw new AdapterRefusal(
+      'edge_modifier_size_not_positive',
+      'Edge modifier size must be greater than zero.'
+    );
   }
   let chamferAngleRadians: number | undefined;
   if (data.featureKind === 'chamfer' && data.angleDeg !== undefined) {
@@ -2456,6 +2470,10 @@ function buildEdgeModifierFeature(
     }
   }
   let reportedRefusal: string | null = null;
+  // The kernel's typed refusal of the requested size, kept beside its text
+  // so the thrown refusal carries the kernel's classification. Cleared by a
+  // later untyped report (an acceptance rule declining the kernel's result).
+  let reportedKernelRefusal: BlendRefusal | null = null;
   let evolution: FaceEvolutionPayloadV1 | null = null;
   let approximate = false;
   const sourceCandidates = topologyCandidatesForSolid(kernel, target);
@@ -2465,8 +2483,9 @@ function buildEdgeModifierFeature(
     selected,
     data.featureKind,
     size,
-    (message) => {
+    (message, kernelRefusal) => {
       reportedRefusal = message;
+      reportedKernelRefusal = kernelRefusal ?? null;
     },
     (payload) => {
       evolution = payload;
@@ -2508,7 +2527,11 @@ function buildEdgeModifierFeature(
           : undefined
       )
     );
-    throw new EdgeModifierRefusalError(refusal.message, refusal.advice);
+    throw new EdgeModifierRefusalError(
+      refusal.message,
+      refusal.advice,
+      reportedKernelRefusal
+    );
   }
   const rootPrimitive = modifierChainRootPrimitive(document, data.targetBodyId);
   const primitiveFallbackLineage =

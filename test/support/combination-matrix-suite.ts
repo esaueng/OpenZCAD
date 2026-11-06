@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createExactKernelAdapter,
@@ -35,7 +35,7 @@ const MATRIX_RUNNER: LedgerRunner<Cell> = {
  *   every cell ran, so a filtered run never truncates it); review the diff.
  * - `K10_CELL=<id>` runs a single cell and prints its outcome.
  * - `K10_FILTER=<regex>` runs the cells whose id matches.
- * - `K10_REPORT=<path>` writes each recorded cell's evidence there.
+ * - `K10_REPORT=<path>` appends each recorded cell's evidence there.
  * - `K10_SHRINK=1` shrinks each cell that leaves its ledger state and is
  *   not qualified to the smallest history in the same state.
  */
@@ -72,7 +72,10 @@ export function defineLedgerSuite<C extends { id: string } = Cell>(
           `${outcome.state.padEnd(15)} ${id} — ${outcome.evidence}`
       );
       const report = `${title}\n${lines.join('\n')}\n${JSON.stringify(summarize(recorded))}\n`;
-      if (process.env.K10_REPORT) writeFileSync(process.env.K10_REPORT, report);
+      // Appended, so the suites of one file (the full campaign has two) each
+      // keep their evidence in a single report.
+      if (process.env.K10_REPORT)
+        appendFileSync(process.env.K10_REPORT, report);
       else console.info(report);
       if (Object.keys(recorded).length === cells.length) {
         writeFileSync(

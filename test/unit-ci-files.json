@@ -52,6 +52,7 @@
     "packages/viewport/src/input/touchGestures.test.ts",
     "packages/viewport/src/render/coplanarBodies.test.ts",
     "packages/viewport/src/render/edgeOverlay.test.ts",
+    "test/adapter-refusal.test.ts",
     "test/api-routes.test.ts",
     "test/app-settings.test.ts",
     "test/approximate-blend-disclosure.test.ts",

@@ -3363,7 +3363,8 @@ export interface FeatureWarning {
       | 'blend'
       | 'gear'
       | 'thread'
-      | 'direct-edit';
+      | 'direct-edit'
+      | 'reference';
     operation?: string;
     category: string;
     code: string;
